@@ -182,12 +182,12 @@ genesis/current `HeightContext`; the legacy local `consensus_mode` selector cann
 The returned `SumeragiV2Config` is a versioned Norito value containing only fixed-width integers:
 protocol and mode, cadence, the one round deadline and derived one-fifth retransmission interval,
 finite transaction/body/queue/ready-work bounds, consensus-key policy, and (in NPoS mode) the
-epoch, VRF, election, and reconfiguration policy. Its domain-separated hash is the canonical
+epoch, election, and reconfiguration policy. Its domain-separated hash is the canonical
 shared-config fingerprint used by the adapter, peer gate, status API, and rollout checker.
 
 Peer admission also checks a distinct, domain-separated genesis fingerprint. Its canonical Norito
 projection contains the chain and protocol, genesis-selected mode, cadence, one round timeout,
-finite block bound, signed DA/Nexus context, and (for NPoS) the epoch seed plus VRF, election, and
+finite block bound, signed DA/Nexus context, and (for NPoS) the epoch seed plus election and
 reconfiguration inputs. Legacy collectors, phase-specific/adaptive timeouts, the old global-DA
 boolean, and mutable BLS-domain strings are excluded. The former full-parameter fingerprint is
 available only to archival tooling and is never an input to live v2 admission.
@@ -223,68 +223,37 @@ replay apply that same coordinator-inclusive boundary; a 256-participant receipt
 committee or aggregate-signature work.
 
 For authoritative NPoS validity, `sumeragi_npos_parameters` must exist in committed world state.
-Genesis builders emit it for NPoS chains. VRF scheduling, evidence attribution, and slashing delay
-are read from that committed snapshot; customized node-local fallback values cannot change a
-candidate or follower result. The reserved parameter ID rejects malformed payloads, zero-length
-epochs or VRF windows, windows that reach or exceed the epoch boundary, and zero evidence,
-activation, or slashing bounds. At least one finalized pre-boundary block is therefore reserved
-after the reveal cutoff. An NPoS v2 node that cannot load the committed snapshot fails closed.
+Genesis builders emit it for NPoS chains. Epoch length, election inputs, evidence bounds, and
+slashing delay are read from that committed snapshot; customized node-local fallback values cannot
+change a candidate or follower result. An NPoS v2 node that cannot load the committed snapshot
+fails closed.
 
-### Authenticated NPoS VRF records
+### Authenticated NPoS threshold beacon
 
-Authoritative v2 persists the exact signed commit and reveal messages behind every
-`VrfParticipantRecord`.  Each proof includes the signed epoch, signer index,
-commitment or reveal, and canonical signature bytes.  Candidate validation reconstructs the
-domain-separated `VrfCommit`/`VrfReveal` preimage and verifies it against the signer at that index
-in the frozen `HeightContext` roster.  A summary value without its matching proof, a proof replayed
-from another chain/epoch/index, a commitment/reveal mismatch, duplicate signer, or non-canonical
-ordering makes the candidate invalid.
+First-release NPoS has one randomness path: the adaptive global threshold beacon. Validators send
+`GlobalBeaconPartialSignature` messages for an exact height and view. The dedicated beacon
+lifecycle verifies every share against the active, network-bound DKG session and admits at most one
+canonical share per signer. A finalized pulse is persisted only after threshold aggregation and is
+reverified at the state-application boundary.
 
-At an epoch boundary, context construction requires the exact authenticated current-epoch record
-already present in finalized pre-state. It revalidates the epoch, frozen seed, roster, window
-geometry, canonical participant order, signatures, VRF proofs, and observation heights before
-mixing the canonically signer-ordered on-time reveals into the immediate successor seed. Missing or
-inconsistent pre-state fails context construction. Boundary-height and late reveals remain useful
-for penalty accounting but cannot alter the already frozen successor seed.
+The last committed pre-boundary block must contain the unique finalized pulse for that height. Epoch
+transition reconstructs its chain anchor from canonical block history, verifies the active key
+session and threshold signature again, checks the singleton history tail, and derives both the next
+committee-election seed and `leader_seed` from that pulse. Missing, duplicated, stale,
+foreign-chain, or otherwise inconsistent pulse state fails context construction.
 
-The recorded first-observation height is not covered by the validator signature.  It is therefore
-validated as monotonic admission metadata: a proof absent from committed pre-state must first
-appear at the candidate's own height and in the active commit, reveal, or late-reveal phase.  A
-candidate cannot backdate a proof or introduce a commitment and a late reveal together.  Existing
-proof bytes are immutable across later record extensions.
-
-The first block of every NPoS epoch must carry exactly one current-epoch record. That record freezes
-the epoch length and commit/reveal deadlines from pre-block world state before any parameter update
-in the same block executes. Later valid epoch/window updates are stored in world state for the next
-epoch boundary and cannot move the active windows or make the next height unconstructable.
-
-At `height == epoch_end_height`, every NPoS candidate must carry exactly one finalized seal for the
-current epoch. Its seed, epoch length, window deadlines, roster length, boundary height, signed
-participants, and exact absence partition must match the frozen context and committed pre-state.
-At heights other than the epoch start and boundary, a candidate may omit the record or carry one
-unfinalized monotonic extension. This prevents fabricated participant entries from entering the
-committed observation history while retaining bounded proposal attachments.
-
-Reveal inclusion is not yet backed by a quorum-certified accumulator. Consequently the current
-release does not mix a proposer-carried reveal subset into consensus randomness: next-epoch seeds
-advance by the fixed hash chain `H(current_seed)`, so including or omitting any valid reveal cannot
-grind the leader schedule. Signed reveal proofs remain bounded telemetry and future beacon inputs.
-Reveal mixing may be enabled only with a consensus-certified inclusion root and deterministic
-completeness rule.
-
-Commit-without-reveal and no-participation sets are proposer-observed absence summaries, not
-quorum-certified evidence. A boundary proposer can omit an observation, so those sets are retained
-only as diagnostics and can never authorize jail or slash actions. The next block deterministically
-marks the absence record processed without changing validator status. Economic penalties require
-self-contained, signature-verified equivocation evidence admitted by a prior committed block.
+The pre-release per-validator VRF commit/reveal protocol is not part of the wire enum, runner, or
+signed effects schema. Pre-release frames and effects therefore fail exact decoding instead of
+entering a compatibility-and-rejection branch. There is no alternate hash-chain seed fallback and
+no proposer-selected reveal subset. Economic penalties require self-contained, signature-verified
+equivocation evidence admitted by a prior committed block.
 
 V2 configuration validation fails closed if transaction or body bounds are absent, any adapter
 queue is zero, or a retired mode flip, phase-specific timeout, fast-finality cap, adaptive
 resilience path, or consensus fault-injection switch is supplied. Collector routing, global RBC
 state, adaptive pacemaker settings, and missing-QC recovery parameters are not part of the runtime
-configuration projection. Older fields with those labels, where still exposed by observability
-schemas, are non-authoritative counters and may remain zero. Validators retransmit
-correctness-critical control messages to the whole voting roster.
+configuration projection. Retired field names are rejected by exact configuration and diagnostics
+decoders. Validators retransmit correctness-critical control messages to the whole voting roster.
 
 Authenticated proposal/vote/timeout semantic keys are retained for the current view plus one full
 roster rotation. Capacity is derived from the frozen roster at four keys per validator per retained
@@ -294,7 +263,8 @@ separate reserved progress queue. Thus a valid old-view flood cannot consume the
 needed to form the current QC or TC.
 
 At the local P2P scheduler, authoritative v2 proposals, votes, QCs, timeout votes/certificates,
-commit-certificate responses, and VRF commit/reveal messages use `ConsensusSafety`. This tag is
+commit-certificate responses, and global threshold-beacon partial signatures use
+`ConsensusSafety`. This tag is
 derived after decode and is not part of the wire format. It has independent bounded network-actor,
 per-peer, encrypted-frame, deferred-send, inbound-dispatch, and relay-subscriber queues. Auxiliary
 lane traffic uses `Consensus`; Torii proxy and streaming-control traffic use `Control`. Genesis is
@@ -973,7 +943,7 @@ payload-chunk, and merge-share fanouts from the exact-output worker before
 retry arbitration. A permanently unreachable topology target therefore cannot
 accumulate one old-view owner per timeout until the shared corridor rejects the
 current Proposal or TimeoutVote for every responsive peer. Height-only recovery
-and epoch-wide VRF traffic are outside this view cut. Exact identical topology
+and the height/view-bound threshold-beacon lifecycle remain outside this cleanup. Exact identical topology
 retries reuse their incumbent worker owner, and each frozen target has one
 separate pacemaker reservation so the TimeoutVote needed to certify the cleanup
 view cannot itself be starved by ordinary Safety-class backlog.

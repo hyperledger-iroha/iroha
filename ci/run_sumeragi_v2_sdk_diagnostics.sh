@@ -356,7 +356,7 @@ case "$surface" in
       "${torii_test}::test_get_sumeragi_diagnostics_requires_provisional_identity_hashes"
       "${torii_test}::test_get_sumeragi_diagnostics_enforces_reservation_only_geometry"
       "${torii_test}::test_get_sumeragi_diagnostics_enforces_finalized_identity_pair_and_order"
-      "${torii_test}::test_get_sumeragi_diagnostics_parses_npos_windows_and_byte_seed"
+      "${torii_test}::test_get_sumeragi_diagnostics_parses_npos_epoch_and_byte_seed"
       "${torii_test}::test_get_sumeragi_diagnostics_rejects_native_amx_participant_finality_tampering"
       "${torii_test}::test_get_sumeragi_diagnostics_rejects_noncanonical_quantity_json"
       "${torii_test}::test_get_sumeragi_diagnostics_preserves_exact_quantity_boundaries"
@@ -485,7 +485,7 @@ if len(passed_cases) != expected or any("skipped" in line.lower() for line in li
 PY
     ;;
   kotlin)
-    observed_test_count=43
+    observed_test_count=44
     java_home="$(resolve_java_home)"
     readonly java_home
     readonly gradle_build_root="${temporary_root}/gradle-build"
@@ -517,7 +517,7 @@ PY
       org.hyperledger.iroha.sdk.client.SumeragiHttpTransportContractTest
     ;;
   java)
-    observed_test_count=42
+    observed_test_count=43
     java_home="$(resolve_java_home)"
     readonly java_home
     readonly gradle_build_root="${temporary_root}/gradle-build"

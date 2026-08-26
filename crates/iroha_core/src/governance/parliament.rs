@@ -35,13 +35,17 @@ use iroha_data_model::{
         parliament_execution_failure_root_v1, parliament_public_finding_endorsement_root_v1,
         parliament_quorum_seats_v1, parliament_roster_root_v1,
     },
+    isi::governance::parliament_timed_ovn_required_chunk_blocks_v1,
 };
 use norito::{
     codec::{Decode, Encode},
     derive::{JsonDeserialize, JsonSerialize},
 };
 
-use super::draw::{body_committee_size, derive_attempt_body_plan_v1};
+use super::{
+    draw::{body_committee_size, derive_attempt_body_plan_v1},
+    timed_ovn::TimedOvnParliamentReducerBindingV1,
+};
 
 /// A reducible entity named by [`ParliamentReducerErrorV1`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -413,19 +417,7 @@ enum ParliamentPulseConsumerV1 {
 }
 
 /// One globally unique threshold-beacon output slot.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Encode,
-    Decode,
-    JsonSerialize,
-    JsonDeserialize,
-)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 struct ParliamentPulseSlotV1 {
     beacon_session_id: BeaconSessionId,
     height: u64,
@@ -437,6 +429,69 @@ impl ParliamentPulseSlotV1 {
             beacon_session_id,
             height,
         }
+    }
+
+    fn canonical_json_key(&self) -> String {
+        format!(
+            "{}:{}",
+            hex::encode(self.beacon_session_id.as_bytes()),
+            self.height
+        )
+    }
+
+    fn from_canonical_json_key(encoded: &str) -> Result<Self, norito::json::Error> {
+        let (session_hex, height_text) = encoded.split_once(':').ok_or_else(|| {
+            norito::json::Error::Message(
+                "Parliament pulse-slot key must contain one session/height separator".into(),
+            )
+        })?;
+        let session_bytes: [u8; 32] = hex::decode(session_hex)
+            .map_err(|error| {
+                norito::json::Error::Message(format!(
+                    "invalid Parliament pulse-slot session hex: {error}"
+                ))
+            })?
+            .try_into()
+            .map_err(|_| {
+                norito::json::Error::Message(
+                    "Parliament pulse-slot session must contain exactly 32 bytes".into(),
+                )
+            })?;
+        let height = height_text.parse::<u64>().map_err(|error| {
+            norito::json::Error::Message(format!("invalid Parliament pulse-slot height: {error}"))
+        })?;
+        if session_hex != hex::encode(session_bytes) || height_text != height.to_string() {
+            return Err(norito::json::Error::Message(
+                "Parliament pulse-slot key must use canonical lowercase hex and decimal".into(),
+            ));
+        }
+        Ok(Self::new(BeaconSessionId::new(session_bytes), height))
+    }
+}
+
+impl norito::json::JsonSerialize for ParliamentPulseSlotV1 {
+    fn json_serialize(&self, out: &mut String) {
+        norito::json::write_json_string(&self.canonical_json_key(), out);
+    }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::write_json_string_to(&self.canonical_json_key(), out)
+    }
+}
+
+impl norito::json::JsonDeserialize for ParliamentPulseSlotV1 {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        let encoded = <String as norito::json::JsonDeserialize>::json_deserialize(parser)?;
+        Self::from_canonical_json_key(&encoded)
+    }
+
+    fn json_from_map_key(key: &str) -> Result<Self, norito::json::Error> {
+        Self::from_canonical_json_key(key)
     }
 }
 
@@ -794,6 +849,10 @@ fn timed_ballot_schedule(
     registered_at_height: u64,
     policy: ParliamentTimedOvn,
 ) -> Result<(u64, u64, u64, u64, u64), ParliamentReducerErrorV1> {
+    let minimum_registration_phase_blocks = u64::from(policy.max_corpus_entries)
+        .checked_add(1)
+        .ok_or(ParliamentReducerErrorV1::InvalidBallotSchedule)?;
+    let minimum_survivor_freeze_phase_blocks = u64::from(policy.max_corpus_entries);
     if registered_at_height == 0
         || policy.registration_phase_blocks == 0
         || policy.survivor_freeze_phase_blocks == 0
@@ -802,6 +861,10 @@ fn timed_ballot_schedule(
         || policy.opening_phase_blocks == 0
         || policy.max_ballot_retries > MAX_PARLIAMENT_BALLOT_RETRIES_V1
         || !(1..=MAX_PARLIAMENT_BALLOT_CORPUS_ENTRIES_V1).contains(&policy.max_corpus_entries)
+        || policy.registration_phase_blocks < minimum_registration_phase_blocks
+        || policy.survivor_freeze_phase_blocks < minimum_survivor_freeze_phase_blocks
+        || policy.commitment_phase_blocks
+            < parliament_timed_ovn_required_chunk_blocks_v1(policy.max_corpus_entries)
     {
         return Err(ParliamentReducerErrorV1::InvalidBallotSchedule);
     }
@@ -851,6 +914,16 @@ fn ballot_policy(ballot: &ParliamentBallotStateV1) -> ParliamentTimedOvn {
     }
 }
 
+fn timed_commitment_height_is_in_window(ballot: &ParliamentBallotStateV1, height: u64) -> bool {
+    height > ballot.survivor_freeze_height && height <= ballot.commitment_close_height
+}
+
+fn timed_commitment_completed_in_window(ballot: &ParliamentBallotStateV1) -> bool {
+    ballot
+        .commitment_closed_at_height
+        .is_some_and(|height| timed_commitment_height_is_in_window(ballot, height))
+}
+
 fn classify_ballot_failure(
     ballot: &ParliamentBallotStateV1,
     release_pulse_available: bool,
@@ -875,13 +948,13 @@ fn classify_ballot_failure(
             Some(ParliamentBallotFailureKindV1::CommitmentDeadlineExpired)
         }
         BallotAttemptStatusV1::AwaitingRelease
-            if ballot.commitment_closed_at_height == Some(ballot.commitment_close_height)
+            if timed_commitment_completed_in_window(ballot)
                 && current_height > ballot.opening_deadline_height =>
         {
             Some(ParliamentBallotFailureKindV1::OpeningDeadlineExpired)
         }
         BallotAttemptStatusV1::AwaitingRelease
-            if ballot.commitment_closed_at_height == Some(ballot.commitment_close_height)
+            if timed_commitment_completed_in_window(ballot)
                 && !release_pulse_available
                 && ballot
                     .release_height
@@ -934,7 +1007,7 @@ fn ballot_failure_matches_state(
         && ballot.corpus_root.is_some()
         && ballot.accepted_ballots.is_some()
         && ballot.timed_commitment_root.is_some()
-        && ballot.commitment_closed_at_height == Some(ballot.commitment_close_height);
+        && timed_commitment_completed_in_window(ballot);
 
     match failure_kind {
         ParliamentBallotFailureKindV1::RegistrationDeadlineExpired => {
@@ -1301,6 +1374,52 @@ impl ParliamentAttemptStateV1 {
     #[must_use]
     pub fn ballot(&self, id: &BallotAttemptId) -> Option<&ParliamentBallotStateV1> {
         self.ballots.get(id)
+    }
+
+    /// Return the complete immutable reducer projection that must agree with
+    /// replayed timed-OVN lifecycle evidence during snapshot restoration.
+    #[must_use]
+    pub(crate) fn timed_ovn_reducer_binding(
+        &self,
+        id: &BallotAttemptId,
+    ) -> Option<TimedOvnParliamentReducerBindingV1> {
+        let ballot = self.ballots.get(id)?;
+        Some(TimedOvnParliamentReducerBindingV1 {
+            proposal_content_id: *self.attempt.proposal_content_id.as_bytes(),
+            governance_attempt_id: *self.attempt.id.as_bytes(),
+            body_instance_id: *ballot.attempt.body_instance_id.as_bytes(),
+            ballot_attempt_id: *ballot.attempt.id.as_bytes(),
+            tle_key_session_id: ballot.tle_key_session_id,
+            registration_opened_at_finalized_height: ballot
+                .corpus_root
+                .is_none()
+                .then_some(ballot.registered_at_height),
+            release_height: ballot.release_height,
+            registration_root: ballot.registration_root,
+            registered_voters: ballot.registered_voters,
+            dropout_root: ballot.dropout_root,
+            survivor_root: ballot.survivor_root,
+            survivors: ballot.survivors,
+            no_recovery_root: ballot.no_recovery_root,
+            corpus_root: ballot.corpus_root,
+            accepted_ballots: ballot.accepted_ballots,
+            timed_commitment_root: ballot.timed_commitment_root,
+            opening_root: ballot.opening_root,
+            tally_counts: ballot
+                .tally
+                .map(|tally| [tally.aye, tally.nay, tally.abstain]),
+        })
+    }
+
+    /// Return whether replayed timed-OVN evidence matches every reducer-owned
+    /// field that the lifecycle duplicates.
+    #[must_use]
+    pub(crate) fn timed_ovn_reducer_binding_matches(
+        &self,
+        id: &BallotAttemptId,
+        replayed: &TimedOvnParliamentReducerBindingV1,
+    ) -> bool {
+        self.timed_ovn_reducer_binding(id).as_ref() == Some(replayed)
     }
 
     /// Return the latest private ballot attempt bound to one exact body instance.
@@ -3033,6 +3152,9 @@ impl ParliamentAttemptStateV1 {
             return Err(ParliamentReducerErrorV1::InvalidBallotSchedule);
         }
         let original_seats = body.instance.original_seats;
+        if timed_ovn_policy.max_corpus_entries < original_seats {
+            return Err(ParliamentReducerErrorV1::InvalidBallotSchedule);
+        }
         let predecessor = self.active_ballots.get(&body_instance_id).copied();
         match predecessor {
             None => {
@@ -3180,11 +3302,11 @@ impl ParliamentAttemptStateV1 {
         )
     }
 
-    /// Cheaply authorize the commitment-close checkpoint before corpus replay.
+    /// Cheaply authorize one bounded corpus append during the commitment window.
     ///
     /// # Errors
     /// Returns an error for an inactive attempt, wrong ballot/body binding,
-    /// replayed phase, or a containing height other than the frozen deadline.
+    /// replayed phase, or a containing height outside the frozen window.
     pub(crate) fn precheck_freeze_timed_ovn_corpus(
         &self,
         governance_attempt_id: GovernanceAttemptId,
@@ -3196,7 +3318,7 @@ impl ParliamentAttemptStateV1 {
             ballot_attempt_id,
             BallotAttemptStatusV1::TimedCommitment,
             |ballot| {
-                current_height == ballot.commitment_close_height
+                timed_commitment_height_is_in_window(ballot, current_height)
                     && ballot.survivors_frozen_at_height == Some(ballot.survivor_freeze_height)
             },
         )
@@ -3328,7 +3450,8 @@ impl ParliamentAttemptStateV1 {
     ///
     /// # Errors
     /// Returns an error for replay, survivor-root mutation, a missing survivor
-    /// ballot, zero roots, unknown ballot, or wrong attempt.
+    /// ballot, zero roots, unknown ballot, a completion outside the commitment
+    /// window, or wrong attempt.
     pub fn freeze_timed_ovn_corpus(
         &mut self,
         governance_attempt_id: GovernanceAttemptId,
@@ -3433,7 +3556,7 @@ impl ParliamentAttemptStateV1 {
                 || ballot.release_beacon_session_id != Some(release_beacon_session_id)
                 || ballot.release_height != Some(release_height)
                 || at_height > ballot.opening_deadline_height
-                || ballot.commitment_closed_at_height != Some(ballot.commitment_close_height)
+                || !timed_commitment_completed_in_window(ballot)
             {
                 return Err(ParliamentReducerErrorV1::PulseBindingMismatch);
             }
@@ -3954,7 +4077,17 @@ impl ParliamentAttemptStateV1 {
                 }
                 _ => body_index(),
             },
-            GovernanceAttemptStatusV1::Rejected => body_index().map(|index| index + 1),
+            GovernanceAttemptStatusV1::Rejected => {
+                let index = body_index()?;
+                let current_body = self
+                    .sealed_body_for_role(self.required_bodies[index].body)
+                    .ok_or(ParliamentReducerErrorV1::IncompleteCertificate)?;
+                if current_body.instance.status == BodyInstanceStatusV1::NoResult {
+                    Ok(index)
+                } else {
+                    Ok(index + 1)
+                }
+            }
             GovernanceAttemptStatusV1::Certified
             | GovernanceAttemptStatusV1::Enacted
             | GovernanceAttemptStatusV1::Superseded
@@ -4635,7 +4768,9 @@ impl ParliamentAttemptStateV1 {
                 .bodies
                 .get(&ballot.attempt.body_instance_id)
                 .ok_or(ParliamentReducerErrorV1::ImmutableBindingMismatch)?;
-            if ballot.attempt.original_seats != body.instance.original_seats {
+            if ballot.attempt.original_seats != body.instance.original_seats
+                || ballot.max_corpus_entries < ballot.attempt.original_seats
+            {
                 return Err(ParliamentReducerErrorV1::InvalidBallotCount);
             }
             let election = self
@@ -4850,8 +4985,7 @@ impl ParliamentAttemptStateV1 {
                     if ballot.registration_closed_at_height
                         != Some(ballot.registration_close_height)
                         || ballot.survivors_frozen_at_height != Some(ballot.survivor_freeze_height)
-                        || ballot.commitment_closed_at_height
-                            != Some(ballot.commitment_close_height)
+                        || !timed_commitment_completed_in_window(ballot)
                         || ballot.corpus_root.is_none()
                         || ballot.accepted_ballots.is_none()
                         || ballot.timed_commitment_root.is_none()
@@ -4870,8 +5004,7 @@ impl ParliamentAttemptStateV1 {
                     if ballot.registration_closed_at_height
                         != Some(ballot.registration_close_height)
                         || ballot.survivors_frozen_at_height != Some(ballot.survivor_freeze_height)
-                        || ballot.commitment_closed_at_height
-                            != Some(ballot.commitment_close_height)
+                        || !timed_commitment_completed_in_window(ballot)
                         || ballot.release_pulse_id.is_none()
                         || ballot.opening_height.is_none()
                         || ballot.opening_height < ballot.release_height
@@ -4885,8 +5018,7 @@ impl ParliamentAttemptStateV1 {
                     if ballot.registration_closed_at_height
                         != Some(ballot.registration_close_height)
                         || ballot.survivors_frozen_at_height != Some(ballot.survivor_freeze_height)
-                        || ballot.commitment_closed_at_height
-                            != Some(ballot.commitment_close_height)
+                        || !timed_commitment_completed_in_window(ballot)
                         || ballot.opening_root.is_none()
                         || ballot.opening_height.is_none()
                         || ballot.opening_height < ballot.release_height
@@ -5330,7 +5462,7 @@ fn complete_enacted_fixture_body(
             let ballot_attempt_id = BallotAttemptId::derive_v1(body_instance_id, 0);
             let release_beacon_session_id = BeaconSessionId::new(root(0xD0));
             let tle_key_session_id = TleKeySessionId::new(root(0xD1));
-            let release_height = 7;
+            let release_height = 12;
             let tle_session_id = TleSessionId::derive_v1(
                 ballot_attempt_id,
                 tle_key_session_id,
@@ -5348,13 +5480,13 @@ fn complete_enacted_fixture_body(
                     release_beacon_session_id,
                     3,
                     ParliamentTimedOvn {
-                        registration_phase_blocks: 1,
-                        survivor_freeze_phase_blocks: 1,
+                        registration_phase_blocks: 4,
+                        survivor_freeze_phase_blocks: 3,
                         commitment_phase_blocks: 1,
                         release_delay_blocks: 1,
                         opening_phase_blocks: 1,
                         max_ballot_retries: 2,
-                        max_corpus_entries: 1_000,
+                        max_corpus_entries: 3,
                     },
                     release_height,
                 )
@@ -5371,7 +5503,7 @@ fn complete_enacted_fixture_body(
                     ballot_attempt_id,
                     registration_root,
                     3,
-                    4,
+                    7,
                 )
                 .expect("close enacted-attempt fixture ballot registration");
             attempt
@@ -5382,7 +5514,7 @@ fn complete_enacted_fixture_body(
                     survivor_root,
                     3,
                     no_recovery_root,
-                    5,
+                    10,
                 )
                 .expect("freeze enacted-attempt fixture ballot survivors");
             attempt
@@ -5393,7 +5525,7 @@ fn complete_enacted_fixture_body(
                     survivor_root,
                     3,
                     timed_commitment_root,
-                    6,
+                    11,
                 )
                 .expect("freeze enacted-attempt fixture timed corpus");
             attempt
@@ -5973,14 +6105,56 @@ pub(crate) mod tests {
 
     fn timed_ovn_policy() -> ParliamentTimedOvn {
         ParliamentTimedOvn {
-            registration_phase_blocks: 2,
-            survivor_freeze_phase_blocks: 2,
+            registration_phase_blocks: 4,
+            survivor_freeze_phase_blocks: 3,
             commitment_phase_blocks: 2,
             release_delay_blocks: 4,
             opening_phase_blocks: 2,
             max_ballot_retries: 2,
-            max_corpus_entries: 1_000,
+            max_corpus_entries: 3,
         }
+    }
+
+    #[test]
+    fn timed_ovn_schedule_reserves_one_maximum_chunk_block_per_corpus_slice() {
+        let maximum_policy = ParliamentTimedOvn {
+            registration_phase_blocks: 1_001,
+            survivor_freeze_phase_blocks: 1_000,
+            commitment_phase_blocks: 32,
+            max_corpus_entries: 1_000,
+            ..timed_ovn_policy()
+        };
+        assert!(timed_ballot_schedule(10, maximum_policy).is_ok());
+        assert_eq!(
+            timed_ballot_schedule(
+                10,
+                ParliamentTimedOvn {
+                    commitment_phase_blocks: 31,
+                    ..maximum_policy
+                },
+            ),
+            Err(ParliamentReducerErrorV1::InvalidBallotSchedule)
+        );
+        assert_eq!(
+            timed_ballot_schedule(
+                10,
+                ParliamentTimedOvn {
+                    registration_phase_blocks: 1_000,
+                    ..maximum_policy
+                },
+            ),
+            Err(ParliamentReducerErrorV1::InvalidBallotSchedule)
+        );
+        assert_eq!(
+            timed_ballot_schedule(
+                10,
+                ParliamentTimedOvn {
+                    survivor_freeze_phase_blocks: 999,
+                    ..maximum_policy
+                },
+            ),
+            Err(ParliamentReducerErrorV1::InvalidBallotSchedule)
+        );
     }
 
     #[test]
@@ -6042,7 +6216,7 @@ pub(crate) mod tests {
                 tle_session_id,
                 tle_key_session_id,
                 release_session_id,
-                30,
+                27,
                 timed_ovn_policy(),
                 release_height,
             )
@@ -6069,7 +6243,27 @@ pub(crate) mod tests {
         let ballot_id = BallotAttemptId::derive_v1(body_id, 0);
         let release_beacon_session_id = beacon_session(24);
         let tle_key_session_id = tle_key_session(23);
-        let release_height = 40;
+        let max_corpus_entries = seats.max(accepted);
+        let policy = ParliamentTimedOvn {
+            registration_phase_blocks: u64::from(max_corpus_entries)
+                .checked_add(1)
+                .expect("fixture corpus capacity fits the height domain"),
+            survivor_freeze_phase_blocks: u64::from(max_corpus_entries),
+            commitment_phase_blocks: parliament_timed_ovn_required_chunk_blocks_v1(
+                max_corpus_entries,
+            )
+            .max(2),
+            max_corpus_entries,
+            ..timed_ovn_policy()
+        };
+        let registered_at_height = 27;
+        let (
+            registration_close_height,
+            survivor_freeze_height,
+            commitment_close_height,
+            release_height,
+            _,
+        ) = timed_ballot_schedule(registered_at_height, policy).expect("valid fixture schedule");
         let tle_id = TleSessionId::derive_v1(
             ballot_id,
             tle_key_session_id,
@@ -6085,13 +6279,19 @@ pub(crate) mod tests {
                 tle_id,
                 tle_key_session_id,
                 release_beacon_session_id,
-                30,
-                timed_ovn_policy(),
+                registered_at_height,
+                policy,
                 release_height,
             )
             .expect("register private ballot");
         state
-            .close_ballot_registration(attempt_id, ballot_id, root(19), accepted, 32)
+            .close_ballot_registration(
+                attempt_id,
+                ballot_id,
+                root(19),
+                accepted,
+                registration_close_height,
+            )
             .expect("freeze registration");
         state
             .freeze_ballot_survivors(
@@ -6101,7 +6301,7 @@ pub(crate) mod tests {
                 root(29),
                 accepted,
                 root(22),
-                34,
+                survivor_freeze_height,
             )
             .expect("freeze survivor roster");
         state
@@ -6112,7 +6312,7 @@ pub(crate) mod tests {
                 root(29),
                 accepted,
                 root(25),
-                36,
+                commitment_close_height,
             )
             .expect("freeze complete timed OVN corpus");
         assert_eq!(
@@ -6120,8 +6320,8 @@ pub(crate) mod tests {
                 attempt_id,
                 vec![ballot_id],
                 beacon_session(24),
-                40,
-                39,
+                release_height,
+                release_height - 1,
                 pulse_id(26),
             ),
             Err(ParliamentReducerErrorV1::ReleaseHeightNotReached)
@@ -6131,8 +6331,8 @@ pub(crate) mod tests {
                 attempt_id,
                 vec![ballot_id],
                 beacon_session(24),
-                40,
-                40,
+                release_height,
+                release_height,
                 pulse_id(26),
             )
             .expect("begin timed opening");
@@ -6152,6 +6352,11 @@ pub(crate) mod tests {
         abstain: u32,
     ) -> ParliamentAggregateOutcomeV1 {
         let attempt_id = fixture.state.attempt.id;
+        let result_height = fixture
+            .state
+            .ballot(&fixture.ballot_id)
+            .and_then(|ballot| ballot.opening_height)
+            .expect("fixture ballot opening height");
         fixture
             .state
             .finalize_opened_ballot(
@@ -6174,9 +6379,182 @@ pub(crate) mod tests {
                     nay,
                     abstain,
                 },
-                41,
+                result_height,
             )
             .expect("finalize policy aggregate")
+    }
+
+    #[test]
+    fn sealed_and_released_cross_store_bindings_fail_closed_on_substitution() {
+        let mut fixture = opened_policy_ballot(3, 3);
+        let governance_attempt_id = fixture.state.attempt.id;
+        let expected_sealed = TimedOvnParliamentReducerBindingV1 {
+            proposal_content_id: *fixture.state.attempt.proposal_content_id.as_bytes(),
+            governance_attempt_id: *governance_attempt_id.as_bytes(),
+            body_instance_id: *fixture.body_id.as_bytes(),
+            ballot_attempt_id: *fixture.ballot_id.as_bytes(),
+            tle_key_session_id: Some(tle_key_session(23)),
+            registration_opened_at_finalized_height: None,
+            release_height: Some(40),
+            registration_root: Some(root(19)),
+            registered_voters: Some(3),
+            dropout_root: Some(root(21)),
+            survivor_root: Some(root(29)),
+            survivors: Some(3),
+            no_recovery_root: Some(root(22)),
+            corpus_root: Some(root(20)),
+            accepted_ballots: Some(3),
+            timed_commitment_root: Some(root(25)),
+            opening_root: None,
+            tally_counts: None,
+        };
+        assert_eq!(
+            fixture.state.timed_ovn_reducer_binding(&fixture.ballot_id),
+            Some(expected_sealed)
+        );
+        assert!(
+            fixture
+                .state
+                .timed_ovn_reducer_binding_matches(&fixture.ballot_id, &expected_sealed)
+        );
+
+        let mut substituted_sealed = expected_sealed;
+        substituted_sealed.corpus_root = Some(root(99));
+        assert!(
+            !fixture
+                .state
+                .timed_ovn_reducer_binding_matches(&fixture.ballot_id, &substituted_sealed),
+            "a separately self-consistent sealed lifecycle cannot substitute its corpus root"
+        );
+        substituted_sealed = expected_sealed;
+        substituted_sealed.timed_commitment_root = Some(root(100));
+        assert!(
+            !fixture
+                .state
+                .timed_ovn_reducer_binding_matches(&fixture.ballot_id, &substituted_sealed),
+            "a separately self-consistent sealed lifecycle cannot substitute its transcript root"
+        );
+
+        assert_eq!(
+            finalize_policy(&mut fixture, 2, 1, 0),
+            ParliamentAggregateOutcomeV1::Approved
+        );
+        let expected_released = TimedOvnParliamentReducerBindingV1 {
+            opening_root: Some(root(27)),
+            tally_counts: Some([2, 1, 0]),
+            ..expected_sealed
+        };
+        assert_eq!(
+            fixture.state.timed_ovn_reducer_binding(&fixture.ballot_id),
+            Some(expected_released)
+        );
+        assert!(
+            fixture
+                .state
+                .timed_ovn_reducer_binding_matches(&fixture.ballot_id, &expected_released)
+        );
+
+        let mut substituted_released = expected_released;
+        substituted_released.opening_root = Some(root(101));
+        assert!(
+            !fixture
+                .state
+                .timed_ovn_reducer_binding_matches(&fixture.ballot_id, &substituted_released),
+            "a separately self-consistent released lifecycle cannot substitute its opening root"
+        );
+        substituted_released = expected_released;
+        substituted_released.tally_counts = Some([1, 2, 0]);
+        assert!(
+            !fixture
+                .state
+                .timed_ovn_reducer_binding_matches(&fixture.ballot_id, &substituted_released),
+            "a separately self-consistent released lifecycle cannot substitute its tally"
+        );
+    }
+
+    #[test]
+    fn hidden_ballot_corpus_bound_covers_every_original_seat() {
+        let BodyFixture {
+            mut state, body_id, ..
+        } = sealed_policy_body(3);
+        advance_to_vote(&mut state, body_id);
+        let governance_attempt_id = state.attempt.id;
+        let ballot_id = BallotAttemptId::derive_v1(body_id, 0);
+        let release_beacon_session_id = beacon_session(24);
+        let tle_key_session_id = tle_key_session(23);
+        let release_height = 40;
+        let tle_session_id = TleSessionId::derive_v1(
+            ballot_id,
+            tle_key_session_id,
+            release_beacon_session_id,
+            release_height,
+        );
+        let undersized = ParliamentTimedOvn {
+            max_corpus_entries: 2,
+            ..timed_ovn_policy()
+        };
+        assert_eq!(
+            state.register_ballot_attempt(
+                governance_attempt_id,
+                body_id,
+                ballot_id,
+                0,
+                tle_session_id,
+                tle_key_session_id,
+                release_beacon_session_id,
+                27,
+                undersized,
+                release_height,
+            ),
+            Err(ParliamentReducerErrorV1::InvalidBallotSchedule)
+        );
+
+        state
+            .register_ballot_attempt(
+                governance_attempt_id,
+                body_id,
+                ballot_id,
+                0,
+                tle_session_id,
+                tle_key_session_id,
+                release_beacon_session_id,
+                27,
+                timed_ovn_policy(),
+                release_height,
+            )
+            .expect("register ballot with capacity for every original seat");
+        let mut registration_window_too_short = state.clone();
+        registration_window_too_short
+            .ballots
+            .get_mut(&ballot_id)
+            .expect("registered ballot")
+            .registration_phase_blocks = 3;
+        assert_eq!(
+            registration_window_too_short.validate(),
+            Err(ParliamentReducerErrorV1::InvalidBallotSchedule),
+            "snapshot validation reserves one admission-slack block plus every registration slot"
+        );
+        let mut survivor_window_too_short = state.clone();
+        survivor_window_too_short
+            .ballots
+            .get_mut(&ballot_id)
+            .expect("registered ballot")
+            .survivor_freeze_phase_blocks = 2;
+        assert_eq!(
+            survivor_window_too_short.validate(),
+            Err(ParliamentReducerErrorV1::InvalidBallotSchedule),
+            "snapshot validation reserves one authenticated dropout slot per corpus entry"
+        );
+        state
+            .ballots
+            .get_mut(&ballot_id)
+            .expect("registered ballot")
+            .max_corpus_entries = 2;
+        assert_eq!(
+            state.validate(),
+            Err(ParliamentReducerErrorV1::InvalidBallotCount),
+            "snapshot validation must reject an undersized persisted corpus bound"
+        );
     }
 
     #[test]
@@ -6598,17 +6976,17 @@ pub(crate) mod tests {
                 tle_session_id,
                 tle_key_session_id,
                 release_beacon_session_id,
-                30,
+                27,
                 timed_ovn_policy(),
                 release_height,
             )
             .expect("register ballot");
         assert_eq!(
-            state.close_ballot_registration(id, ballot, root(51), 3, 32),
+            state.close_ballot_registration(id, ballot, root(51), 3, 31),
             Err(ParliamentReducerErrorV1::InvalidBallotCount)
         );
         state
-            .close_ballot_registration(id, ballot, root(51), 2, 32)
+            .close_ballot_registration(id, ballot, root(51), 2, 31)
             .expect("only nonabsent seats register");
         assert_eq!(
             state
@@ -6912,7 +7290,7 @@ pub(crate) mod tests {
                 tle_session_id,
                 tle_key_session_id,
                 release_beacon_session_id,
-                30,
+                27,
                 timed_ovn_policy(),
                 release_height,
             )
@@ -6929,7 +7307,7 @@ pub(crate) mod tests {
             tle_master_public_key: *tle_key.master_public_key().as_bytes(),
         };
         let mut lifecycle =
-            TimedOvnLifecycleStateV1::open_registration(session, 30, release_height, &tle_key)
+            TimedOvnLifecycleStateV1::open_registration(session, 27, release_height, &tle_key)
                 .expect("open casting-context registration");
         let mut rng = StdRng::from_seed([0xA5; 32]);
         for assignment in state.body(&body_id).expect("fixture body").assignments() {
@@ -6981,7 +7359,7 @@ pub(crate) mod tests {
             (registered_snapshot, registered_bindings)
         );
 
-        for stale_height in [29, 32] {
+        for stale_height in [26, 31] {
             let stale_state = casting_state_at_height(
                 state.clone(),
                 lifecycle.clone(),
@@ -7004,7 +7382,7 @@ pub(crate) mod tests {
             .ballots
             .get_mut(&ballot_attempt_id)
             .expect("casting-context ballot")
-            .registration_close_height = 30;
+            .registration_close_height = 27;
         let malformed_schedule_state = casting_state_at_height(
             malformed_schedule,
             lifecycle.clone(),
@@ -7078,7 +7456,7 @@ pub(crate) mod tests {
                 ballot_attempt_id,
                 *roster.roster_root(),
                 3,
-                32,
+                31,
             )
             .expect("advance reducer registration close");
         let closed_state = casting_state_at_height(
@@ -7214,24 +7592,24 @@ pub(crate) mod tests {
                 ),
                 tle_key_session_id,
                 release_beacon_session_id,
-                30,
+                27,
                 timed_ovn_policy(),
                 release_height,
             )
             .expect("register timed ballot");
 
         assert_eq!(
-            state.precheck_close_ballot_registration(attempt_id, ballot_id, 31),
+            state.precheck_close_ballot_registration(attempt_id, ballot_id, 30),
             Err(ParliamentReducerErrorV1::WrongBallotPhaseHeight)
         );
         state
-            .precheck_close_ballot_registration(attempt_id, ballot_id, 32)
+            .precheck_close_ballot_registration(attempt_id, ballot_id, 31)
             .expect("exact registration deadline passes the cheap guard");
         state
-            .close_ballot_registration(attempt_id, ballot_id, root(19), 3, 32)
+            .close_ballot_registration(attempt_id, ballot_id, root(19), 3, 31)
             .expect("close registration");
         assert_eq!(
-            state.precheck_close_ballot_registration(attempt_id, ballot_id, 32),
+            state.precheck_close_ballot_registration(attempt_id, ballot_id, 31),
             Err(ParliamentReducerErrorV1::InvalidLifecycleTransition(
                 ParliamentReducerEntityV1::BallotAttempt
             ))
@@ -7255,12 +7633,44 @@ pub(crate) mod tests {
         );
 
         assert_eq!(
-            state.precheck_freeze_timed_ovn_corpus(attempt_id, ballot_id, 35),
+            state.precheck_freeze_timed_ovn_corpus(attempt_id, ballot_id, 34),
             Err(ParliamentReducerErrorV1::WrongBallotPhaseHeight)
         );
         state
+            .precheck_freeze_timed_ovn_corpus(attempt_id, ballot_id, 35)
+            .expect("first commitment-window height passes the cheap guard");
+        state
             .precheck_freeze_timed_ovn_corpus(attempt_id, ballot_id, 36)
-            .expect("exact commitment deadline passes the cheap guard");
+            .expect("last commitment-window height passes the cheap guard");
+        assert_eq!(
+            state.precheck_freeze_timed_ovn_corpus(attempt_id, ballot_id, 37),
+            Err(ParliamentReducerErrorV1::WrongBallotPhaseHeight)
+        );
+
+        let mut early_completion = state.clone();
+        early_completion
+            .freeze_timed_ovn_corpus(attempt_id, ballot_id, root(20), root(29), 3, root(25), 35)
+            .expect("a complete corpus may seal at the first window height");
+        assert_eq!(
+            early_completion
+                .ballot(&ballot_id)
+                .expect("early-completed ballot")
+                .commitment_closed_at_height,
+            Some(35)
+        );
+
+        let mut incomplete_at_close = state.clone();
+        incomplete_at_close
+            .fail_ballot_no_result(attempt_id, ballot_id, false, 37)
+            .expect("an incomplete corpus prefix becomes objectively fail-able after close");
+        assert_eq!(
+            incomplete_at_close
+                .ballot(&ballot_id)
+                .expect("failed incomplete ballot")
+                .failure_kind,
+            Some(ParliamentBallotFailureKindV1::CommitmentDeadlineExpired)
+        );
+
         state
             .freeze_timed_ovn_corpus(attempt_id, ballot_id, root(20), root(29), 3, root(25), 36)
             .expect("freeze ballot corpus");
@@ -7298,7 +7708,7 @@ pub(crate) mod tests {
                 first_tle_session_id,
                 first_tle_key_session_id,
                 first_release_beacon_session_id,
-                30,
+                27,
                 timed_ovn_policy(),
                 first_release_height,
             )
@@ -7310,10 +7720,10 @@ pub(crate) mod tests {
             ))
         );
         state
-            .close_ballot_registration(id, ballot, root(19), 3, 32)
+            .close_ballot_registration(id, ballot, root(19), 3, 31)
             .expect("commitment");
         assert_eq!(
-            state.close_ballot_registration(id, ballot, root(19), 3, 32),
+            state.close_ballot_registration(id, ballot, root(19), 3, 31),
             Err(ParliamentReducerErrorV1::InvalidLifecycleTransition(
                 ParliamentReducerEntityV1::BallotAttempt
             ))
@@ -7365,13 +7775,13 @@ pub(crate) mod tests {
                 beacon_session(32),
                 41,
                 timed_ovn_policy(),
-                51,
+                54,
             ),
             Err(ParliamentReducerErrorV1::TleSessionAlreadyConsumed)
         );
         let retry_release_beacon_session_id = beacon_session(33);
         let retry_tle_key_session_id = tle_key_session(32);
-        let retry_release_height = 51;
+        let retry_release_height = 54;
         let retry_tle_session_id = TleSessionId::derive_v1(
             retry,
             retry_tle_key_session_id,
@@ -7435,7 +7845,7 @@ pub(crate) mod tests {
                 first_tle_session,
                 key_session_id,
                 first_beacon,
-                30,
+                27,
                 policy,
                 first_release_height,
             )
@@ -7466,7 +7876,7 @@ pub(crate) mod tests {
                 retry_tle_session,
                 key_session_id,
                 retry_beacon,
-                50,
+                47,
                 policy,
                 retry_release_height,
             )
@@ -7507,7 +7917,7 @@ pub(crate) mod tests {
                 tle_key_session(u8::try_from(110 + sequence).expect("test sequence fits in u8"));
             let release_beacon_session_id =
                 beacon_session(u8::try_from(120 + sequence).expect("test sequence fits in u8"));
-            let release_height = registered_at_height + 10;
+            let release_height = registered_at_height + 13;
             let tle_session_id = TleSessionId::derive_v1(
                 ballot_id,
                 tle_key_session_id,
@@ -7528,7 +7938,7 @@ pub(crate) mod tests {
                     release_height,
                 )
                 .expect("register the exact next private ballot attempt");
-            let failure_height = registered_at_height + 3;
+            let failure_height = registered_at_height + 5;
             state
                 .fail_ballot_no_result(attempt_id, ballot_id, false, failure_height)
                 .expect("registration timeout is objectively derived");
@@ -7588,19 +7998,19 @@ pub(crate) mod tests {
                 tle_session_id,
                 tle_key_session_id,
                 release_beacon_session_id,
-                30,
+                27,
                 timed_ovn_policy(),
                 release_height,
             )
             .expect("register private ballot");
 
         assert_eq!(
-            state.fail_ballot_no_result(attempt_id, ballot_id, false, 32),
+            state.fail_ballot_no_result(attempt_id, ballot_id, false, 31),
             Err(ParliamentReducerErrorV1::BallotFailureKindMismatch)
         );
         let mut registration_expired = state.clone();
         registration_expired
-            .fail_ballot_no_result(attempt_id, ballot_id, false, 33)
+            .fail_ballot_no_result(attempt_id, ballot_id, false, 32)
             .expect("registration expiry is derived after its boundary");
         assert_eq!(
             registration_expired
@@ -7613,7 +8023,7 @@ pub(crate) mod tests {
             attempt_id,
             ballot_id,
             ParliamentBallotFailureKindV1::RegistrationDeadlineExpired,
-            33,
+            32,
         );
         assert_eq!(
             registration_expired
@@ -7636,7 +8046,7 @@ pub(crate) mod tests {
         );
 
         state
-            .close_ballot_registration(attempt_id, ballot_id, root(71), 3, 32)
+            .close_ballot_registration(attempt_id, ballot_id, root(71), 3, 31)
             .expect("freeze registration");
         let mut survivor_expired = state.clone();
         survivor_expired
@@ -7803,8 +8213,8 @@ pub(crate) mod tests {
             ),
             u32::try_from(overlapping_candidates.len()).expect("fixture candidate count"),
             3,
-            50,
-            60,
+            250,
+            260,
             beacon_session(104),
             None,
         )
@@ -7822,16 +8232,30 @@ pub(crate) mod tests {
             id,
             0,
             ParliamentBody::ConfirmationJury,
-            103,
+            150,
             3,
             3,
-            50,
-            60,
+            250,
+            260,
             beacon_session(104),
             None,
         );
         let confirmation_request_id = request.id;
         let confirmation_election_id = request.body_election_attempt_id;
+        let all_policy_members = narrow
+            .state
+            .sealed_body_for_role(ParliamentBody::PolicyJury)
+            .expect("completed policy body")
+            .assignments
+            .iter()
+            .map(|assignment| assignment.member.clone())
+            .collect::<BTreeSet<_>>();
+        assert!(
+            candidate_snapshot
+                .iter()
+                .all(|candidate| !all_policy_members.contains(candidate)),
+            "fresh confirmation fixture candidates must exclude every Policy Jury member"
+        );
         narrow
             .state
             .register_sortition_request(id, 0, request, candidate_snapshot)
@@ -7841,13 +8265,13 @@ pub(crate) mod tests {
             id,
             vec![confirmation_request_id],
             beacon_session(104),
-            60,
+            260,
             pulse_id(105),
         )
         .expect("consume confirmation pulse");
         narrow
             .state
-            .begin_invitation_acceptance(id, confirmation_election_id, 60, 1)
+            .begin_invitation_acceptance(id, confirmation_election_id, 260, 1)
             .expect("confirmation invitations");
         let confirmation_members: Vec<_> = narrow
             .state
@@ -7860,12 +8284,12 @@ pub(crate) mod tests {
         for member in confirmation_members {
             narrow
                 .state
-                .record_invitation_response(id, confirmation_election_id, &member, true, 60)
+                .record_invitation_response(id, confirmation_election_id, &member, true, 260)
                 .expect("accept confirmation invitation");
         }
         narrow
             .state
-            .seal_body_roster(id, confirmation_election_id, 61)
+            .seal_body_roster(id, confirmation_election_id, 261)
             .expect("disjoint confirmation roster");
 
         let mut exact_five = opened_policy_ballot(40, 40);
@@ -8049,12 +8473,12 @@ pub(crate) mod tests {
             ParliamentAggregateOutcomeV1::Approved
         );
         assert_eq!(
-            fixture.state.validate_restored_height_v1(40),
+            fixture.state.validate_restored_height_v1(39),
             Err(ParliamentReducerErrorV1::FuturePersistedHeight),
-            "the body result was not realized until height 41"
+            "the body result was not realized until height 40"
         );
         assert_eq!(
-            fixture.state.validate_restored_height_v1(41),
+            fixture.state.validate_restored_height_v1(40),
             Err(ParliamentReducerErrorV1::IncompleteCertificate),
             "Certification is an in-transaction transient until Core constructs the certificate"
         );
@@ -8072,6 +8496,28 @@ pub(crate) mod tests {
             missing.validate(),
             Err(ParliamentReducerErrorV1::IncompleteCertificate),
             "Certification requires the exact completed required-body prefix"
+        );
+    }
+
+    #[test]
+    fn parliament_pulse_slot_uses_one_canonical_json_map_key() {
+        let slot = ParliamentPulseSlotV1::new(beacon_session(13), 20);
+        let map = BTreeMap::from([(slot, pulse_id(14))]);
+        let json = norito::json::to_json(&map).expect("encode pulse-slot map");
+        assert!(json.contains(&format!("\"{}:20\"", "0d".repeat(32))));
+        let decoded: BTreeMap<ParliamentPulseSlotV1, BeaconPulseId> =
+            norito::json::from_json(&json).expect("decode pulse-slot map");
+        assert_eq!(decoded, map);
+
+        assert!(
+            ParliamentPulseSlotV1::from_canonical_json_key(&format!("{}:20", "0D".repeat(32)))
+                .is_err(),
+            "uppercase session hex must not alias the canonical map key"
+        );
+        assert!(
+            ParliamentPulseSlotV1::from_canonical_json_key(&format!("{}:020", "0d".repeat(32)))
+                .is_err(),
+            "zero-padded heights must not alias the canonical map key"
         );
     }
 

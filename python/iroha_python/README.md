@@ -2407,13 +2407,12 @@ no environment variables need to be exported.
   34.10-2012 parameter sets, BLS normal/small, and SM2. The helpers cover
   random and seeded key generation, private-key import, signing, verification,
   and bare or algorithm-prefixed multihash import/export.
-- Keep compatibility-specific Ed25519 account-id helpers and raw SM2 helpers
+- Provide algorithm-specific Ed25519 account-id helpers and raw SM2 helpers
   (`generate_sm2_keypair`, `derive_sm2_keypair_from_seed`, `load_sm2_keypair`,
   `sign_sm2`, `verify_sm2`, `sm2_public_key_multihash`) alongside the generic
-  payload-based API. `sm2_fixture_from_seed` still surfaces the canonical
-  deterministic fixture so SDK parity tests can assert the shared
-  seed/distid/ZA/signature bytes even when the native module is unavailable
-  (falls back to the bundled vector).
+  payload-based API. `sm2_fixture_from_seed` exercises the required native
+  implementation so SDK parity tests assert the shared
+  seed/distid/ZA/signature bytes without a bundled-vector fallback.
 - Provide confidential key-derivation helpers (`derive_confidential_keyset`,
   hex variants, and a `ConfidentialKeyset` wrapper) so wallets can obtain
   `nk`/`ivk`/`ovk`/`fvk` alongside the spend key locally.

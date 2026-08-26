@@ -19,6 +19,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 _add_path(_ROOT)
 _add_path(_ROOT / "norito_py" / "src")
 _add_path(_ROOT / "iroha_torii_client")
+_add_path(_ROOT / "iroha_python" / "tests")
 
 _INSTALLED_PACKAGE_MODE = os.environ.get("IROHA_PYTHON_TEST_INSTALLED_PACKAGE")
 if _INSTALLED_PACKAGE_MODE not in {None, "1"}:

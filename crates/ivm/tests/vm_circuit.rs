@@ -1,15 +1,16 @@
 #![cfg(feature = "ivm_zk_tests")]
-use ivm::{IVM, encoding, halo2::VMExecutionCircuit, instruction, kotodama::wide as kwide};
+use ivm::{IVM, encoding, halo2::VMExecutionCircuit, instruction};
 mod common;
 use common::assemble_zk;
 #[test]
 fn vm_execution_circuit_pass() {
-    let addi_r1 = kwide::encode_addi(1, 0, 5).to_le_bytes();
-    let beq = kwide::encode_branch_checked(instruction::wide::control::BEQ, 1, 1, 2)
-        .expect("branch")
-        .to_le_bytes();
-    let addi_r2 = kwide::encode_addi(2, 0, 2).to_le_bytes(); // skipped
-    let add_r3 = kwide::encode_addi(3, 1, 5).to_le_bytes(); // r3 = 10
+    let addi_r1 =
+        encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 1, 0, 5).to_le_bytes();
+    let beq = encoding::wide::encode_branch(instruction::wide::control::BEQ, 1, 1, 2).to_le_bytes();
+    let addi_r2 =
+        encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 2, 0, 2).to_le_bytes(); // skipped
+    let add_r3 =
+        encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 3, 1, 5).to_le_bytes(); // r3 = 10
     let halt = encoding::wide::encode_halt().to_le_bytes();
     let mut code = Vec::new();
     code.extend_from_slice(&addi_r1);
@@ -28,12 +29,13 @@ fn vm_execution_circuit_pass() {
 }
 #[test]
 fn vm_execution_circuit_fail() {
-    let addi_r1 = kwide::encode_addi(1, 0, 5).to_le_bytes();
-    let beq = kwide::encode_branch_checked(instruction::wide::control::BEQ, 1, 1, 2)
-        .expect("branch")
-        .to_le_bytes();
-    let addi_r2 = kwide::encode_addi(2, 0, 2).to_le_bytes();
-    let add_r3 = kwide::encode_addi(3, 1, 5).to_le_bytes();
+    let addi_r1 =
+        encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 1, 0, 5).to_le_bytes();
+    let beq = encoding::wide::encode_branch(instruction::wide::control::BEQ, 1, 1, 2).to_le_bytes();
+    let addi_r2 =
+        encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 2, 0, 2).to_le_bytes();
+    let add_r3 =
+        encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 3, 1, 5).to_le_bytes();
     let halt = encoding::wide::encode_halt().to_le_bytes();
     let mut code = Vec::new();
     code.extend_from_slice(&addi_r1);

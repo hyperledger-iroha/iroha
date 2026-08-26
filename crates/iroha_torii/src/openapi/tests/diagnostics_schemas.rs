@@ -122,7 +122,7 @@ fn pipeline_status_openapi_exposes_only_the_exact_first_release_scope() {
 }
 
 #[test]
-fn npos_and_vrf_penalty_schemas_exclude_retired_process_local_counters() {
+fn npos_schema_excludes_retired_process_local_counters() {
     let document = canonical_document();
     let schemas = component_schemas(&document);
     let retired = [
@@ -149,55 +149,14 @@ fn npos_and_vrf_penalty_schemas_exclude_retired_process_local_counters() {
             "epoch_seed",
             "prf_height",
             "prf_view",
-            "vrf_commit_deadline_offset",
-            "vrf_reveal_deadline_offset",
-        ])
-    );
-    let report = schemas
-        .get("SumeragiVrfPenaltiesReport")
-        .and_then(Value::as_object)
-        .expect("authoritative VRF penalties report schema");
-    assert_eq!(
-        report.get("additionalProperties"),
-        Some(&Value::from(false))
-    );
-    let report_properties = report
-        .get("properties")
-        .and_then(Value::as_object)
-        .expect("VRF penalties report properties");
-    assert_eq!(
-        report_properties
-            .keys()
-            .map(String::as_str)
-            .collect::<BTreeSet<_>>(),
-        BTreeSet::from([
-            "committed_no_reveal",
-            "epoch",
-            "no_participation",
-            "roster_len",
         ])
     );
     for field in retired {
         assert!(
-            !npos_properties.contains_key(field) && !report_properties.contains_key(field),
+            !npos_properties.contains_key(field),
             "retired process-local VRF counter remains in OpenAPI: {field}"
         );
     }
-    let responses = document
-        .get("paths")
-        .and_then(Value::as_object)
-        .and_then(|paths| paths.get("/v1/sumeragi/vrf/penalties/{epoch}"))
-        .and_then(Value::as_object)
-        .and_then(|path| path.get("get"))
-        .and_then(Value::as_object)
-        .and_then(|operation| operation.get("responses"))
-        .and_then(Value::as_object)
-        .expect("VRF penalties route responses");
-    assert_eq!(
-        responses["200"]["content"]["application/json"]["schema"]["$ref"],
-        Value::from("#/components/schemas/SumeragiVrfPenaltiesReport")
-    );
-    assert!(responses.contains_key("404"));
 }
 
 #[test]

@@ -14813,20 +14813,6 @@ fn build_state_with_vk_order(order: &[(&str, &str)]) -> State {
     let query_handle = LiveQueryStore::start_test();
     State::new_for_testing(world, kura, query_handle)
 }
-state_test! { sync vrf_epochs_mut_for_testing_inserts_record
-    let world = World::default();
-    let_row! { record = iroha_data_model::consensus::VrfEpochRecord { epoch: 0, seed: [0_u8; 32], epoch_length: 1, commit_deadline_offset: 0, reveal_deadline_offset: 0, roster_len: 0, finalized: false, updated_at_height: 0, participants: Vec::new(), late_reveals: Vec::new(), committed_no_reveal: Vec::new(), no_participation: Vec::new(), penalties_applied: false, penalties_applied_at_height: None, validator_election: None, } };
-    {
-        let mut block = world.block();
-        block
-            .vrf_epochs_mut_for_testing()
-            .insert(record.epoch, record);
-        block.commit();
-    }
-    let view = world.view();
-    let stored = view.vrf_epochs().get(&0).expect("vrf epoch record");
-    assert_eq!(stored.epoch, 0);
-}
 fn assert_world_snapshot(snapshot: &impl WorldStateSnapshot) {
     assert_eq!(snapshot.block_hashes().len(), 0);
     assert_eq!(snapshot.commit_topology().len(), 0);
@@ -32877,7 +32863,6 @@ state_test! { sync first_release_governance_state_fields_are_required
         "council",
         "parliament_bodies",
         "parliament_attempts",
-        "vrf_epochs",
     ] {
         let mut snapshot = norito::json::to_value(&state).expect("serialize state snapshot");
         let_row! { norito::json::Value::Object(root) = &mut snapshot else { panic!("state snapshot must be an object"); } };
@@ -38604,6 +38589,103 @@ state_test! { sync block_rejects_failing_execute_trigger_and_rolls_back
         "asset definition created by a failing trigger must not persist after block application",
     );
 }
+
+#[test]
+fn parliament_timed_ovn_resource_reservations_cover_both_heavy_windows() {
+    let incumbent = [(10, 30), (50, 60)];
+
+    assert!(parliament_timed_ovn_resource_windows_overlap_v1(
+        [(30, 40), (70, 80)],
+        incumbent,
+    ));
+    assert!(parliament_timed_ovn_resource_windows_overlap_v1(
+        [(31, 49), (60, 70)],
+        incumbent,
+    ));
+    assert!(parliament_timed_ovn_resource_windows_overlap_v1(
+        [(31, 49), (40, 50)],
+        incumbent,
+    ));
+    assert!(!parliament_timed_ovn_resource_windows_overlap_v1(
+        [(31, 49), (61, 70)],
+        incumbent,
+    ));
+}
+
+#[test]
+fn parliament_timed_ovn_resource_index_tracks_only_the_active_retry() {
+    let key_session_id = TleKeySessionId::new([0x56; 32]);
+    let attempt =
+        crate::governance::parliament::tests::tle_key_session_retention_attempt_fixture_v1(
+            key_session_id,
+        );
+    let governance_attempt_id = attempt.attempt().id;
+    let active_ballot_id = attempt
+        .ballot_attempts()
+        .find_map(|(ballot_attempt_id, ballot)| {
+            (ballot.attempt().status == BallotAttemptStatusV1::Registration)
+                .then_some(*ballot_attempt_id)
+        })
+        .expect("fixture carries one active retry");
+    assert!(attempt.ballot_attempts().any(|(_, ballot)| matches!(
+        ballot.attempt().status,
+        BallotAttemptStatusV1::NoResult | BallotAttemptStatusV1::Superseded
+    )));
+
+    let world = World::new();
+    let mut block = world.block();
+    let mut transaction = block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
+    transaction
+        .put_parliament_attempt(attempt)
+        .expect("persist validated retry fixture");
+
+    let reservations = transaction
+        .parliament_timed_ovn_resource_reservations
+        .iter()
+        .collect::<Vec<_>>();
+    assert_eq!(reservations.len(), 1);
+    assert_eq!(*reservations[0].0, active_ballot_id);
+    assert_eq!(
+        reservations[0].1.governance_attempt_id,
+        governance_attempt_id
+    );
+    assert!(reservations[0].1.cast_capable);
+
+    transaction.remove_parliament_attempt_for_testing(&governance_attempt_id);
+    assert!(
+        transaction
+            .parliament_timed_ovn_resource_reservations
+            .iter()
+            .next()
+            .is_none()
+    );
+}
+
+#[test]
+fn parliament_timed_ovn_resource_index_is_snapshot_skipped_and_rebuilt() {
+    let mut world = World::new();
+    world.parliament_timed_ovn_resource_reservations.insert(
+        BallotAttemptId::new([0xA1; 32]),
+        ParliamentTimedOvnResourceReservationV1 {
+            governance_attempt_id: GovernanceAttemptId::new([0xA2; 32]),
+            resource_windows: [(10, 20), (30, 40)],
+            cast_capable: true,
+        },
+    );
+    let encoded = norito::json::to_json(&world).expect("serialize world snapshot");
+    assert!(!encoded.contains("parliament_timed_ovn_resource_reservations"));
+
+    world.rebuild_governance_read_indexes();
+    assert!(
+        world
+            .parliament_timed_ovn_resource_reservations
+            .view()
+            .iter()
+            .next()
+            .is_none()
+    );
+}
+
 include!("tests/kagemusha_runtime_effective_config_tests.rs");
 include!("tests/confidential_digest_and_queue_plan_helpers.rs");
 include!("autonomous_merge_and_queue_plan_tests.rs"); // Queue-plan and merge-ledger cases.

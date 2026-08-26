@@ -592,7 +592,7 @@ fn advance_queue_plan_fixture_to_beacon_parent(
         parent = successor;
     }
 
-    let (beacon_key, beacon_pulse) = crate::beacon::tests::signed_persisted_pulse_fixture_for_world(
+    let (beacon_key, beacon_pulse) = crate::beacon::signed_persisted_pulse_fixture_for_world(
         *state.network_id_ref(),
         parent.header().height().get(),
     );

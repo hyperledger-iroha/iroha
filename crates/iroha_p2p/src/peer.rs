@@ -23,6 +23,8 @@ use iroha_crypto::soranet::{
     },
     puzzle::{self, ChallengeBinding as PuzzleBinding, Parameters as PuzzleParameters},
 };
+#[cfg(test)]
+use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::peer::PeerId;
 use message::*;
 use norito::{
@@ -63,17 +65,19 @@ fn test_ticket_revocation_store() -> Arc<Mutex<TicketRevocationStore>> {
         .expect("test in-memory replay store must be available");
     Arc::new(Mutex::new(store))
 }
-/// Max length of a handshake message in bytes excluding the length prefix.
-///
-/// Previously this value was limited to `u8::MAX` which proved insufficient once
-/// additional metadata (such as the peer's public address) was included in the
-/// payload, causing handshake messages to exceed 255 bytes and therefore
-/// failing to decrypt on the receiving side.  The length prefix is now encoded
-/// as a `u16`, allowing messages up to `u16::MAX` bytes.
-pub const MAX_HANDSHAKE_LENGTH: u16 = u16::MAX;
+#[cfg(test)]
+fn random_node_key_pair() -> KeyPair {
+    KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+}
+#[cfg(test)]
+fn random_node_peer_id() -> PeerId {
+    PeerId::from(random_node_key_pair().public_key().clone())
+}
+/// Largest encrypted identity-handshake payload representable by its length prefix.
+const MAX_HANDSHAKE_LENGTH: u16 = u16::MAX;
 /// Default associated data for AEAD
 /// [`Authenticated encryption`](https://en.wikipedia.org/wiki/Authenticated_encryption)
-pub const DEFAULT_AAD: &[u8; 10] = b"Iroha2 AAD";
+const DEFAULT_AAD: &[u8; 10] = b"Iroha3 AAD";
 /// Default capacity for peer I/O buffers.
 ///
 /// A small benchmarking utility compared buffer sizes from 256 bytes to
@@ -81,7 +85,7 @@ pub const DEFAULT_AAD: &[u8; 10] = b"Iroha2 AAD";
 /// second. A 1 KiB buffer reached ≈25 million messages per second while
 /// larger capacities didn't improve throughput but doubled memory usage.
 /// Therefore 1 KiB is chosen as a balanced default.
-pub const DEFAULT_BUFFER_CAPACITY: usize = 1024;
+const DEFAULT_BUFFER_CAPACITY: usize = 1024;
 /// Maximum source-budget reservation made ahead of received encrypted bytes.
 ///
 /// This keeps length-prefix slowloris retention small. Incremental reservations
@@ -131,7 +135,6 @@ static HSE_DECRYPT: AtomicU64 = AtomicU64::new(0);
 static HSE_CODEC: AtomicU64 = AtomicU64::new(0);
 static HSE_IO: AtomicU64 = AtomicU64::new(0);
 static HSE_OTHER: AtomicU64 = AtomicU64::new(0);
-static MALFORMED_PAYLOAD_FRAMES: AtomicU64 = AtomicU64::new(0);
 // Handshake latency histogram buckets (ms)
 const HN: usize = 12;
 static HANDSHAKE_BUCKETS_MS: [u64; HN] = [1, 2, 5, 10, 25, 50, 100, 250, 500, 1000, 2000, 5000];
@@ -219,6 +222,7 @@ impl std::fmt::Debug for PendingTicketReplayReservation {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("PendingTicketReplayReservation")
+            .field("pending", &"[REDACTED]")
             .field("fingerprint", &"[REDACTED]")
             .field("active", &self.active)
             .finish()
@@ -262,7 +266,6 @@ impl SoranetHandshakeConfig {
         pow_params: PowParameters,
         puzzle_params: Option<PuzzleParameters>,
         pow_ticket_ttl: Duration,
-        signed_ticket_public_key: Option<Vec<u8>>,
         revocation_store: Arc<Mutex<TicketRevocationStore>>,
     ) -> Result<Self, Error> {
         if MlKemSuite::from_kem_id(kem_id).is_none() {
@@ -322,12 +325,6 @@ impl SoranetHandshakeConfig {
                 "invalid SoraNet runtime handshake configuration: {detail}"
             ))
         })?;
-        if signed_ticket_public_key.is_some() {
-            return Err(Error::HandshakeSoranet(
-                "delegated signed-ticket credentials are not supported by the direct P2P handshake; use the transcript-bound self-minted Argon2 policy"
-                    .to_owned(),
-            ));
-        }
         Ok(Self {
             descriptor_commit: Arc::new(descriptor_commit),
             client_capabilities: Arc::new(client_capabilities),
@@ -391,7 +388,7 @@ impl SoranetHandshakeConfig {
             ChallengeVerifyError::RevocationStore("lock_poisoned".to_string())
         })
     }
-    fn map_pow_verification_error(&self, error: pow::Error) -> ChallengeVerifyError {
+    fn map_pow_verification_error(error: pow::Error) -> ChallengeVerifyError {
         match error {
             pow::Error::Replay => ChallengeVerifyError::Replay,
             pow::Error::RevocationStore(message) => {
@@ -414,7 +411,7 @@ impl SoranetHandshakeConfig {
         if store_guard
             .is_ticket_payload_revoked(ticket, now)
             .map_err(|error| {
-                self.map_pow_verification_error(pow::Error::RevocationStore(error.to_string()))
+                Self::map_pow_verification_error(pow::Error::RevocationStore(error.to_string()))
             })?
         {
             return Err(ChallengeVerifyError::Replay);
@@ -424,7 +421,7 @@ impl SoranetHandshakeConfig {
             .fingerprints
             .lock()
             .map_err(|_| {
-                self.map_pow_verification_error(pow::Error::RevocationStore(
+                Self::map_pow_verification_error(pow::Error::RevocationStore(
                     "pending_lock_poisoned".to_owned(),
                 ))
             })?;
@@ -432,12 +429,12 @@ impl SoranetHandshakeConfig {
             return Err(ChallengeVerifyError::Replay);
         }
         if pending.len() >= MAX_PENDING_TICKET_REPLAYS {
-            return Err(self.map_pow_verification_error(pow::Error::RevocationStore(
-                "pending_capacity".to_owned(),
-            )));
+            return Err(Self::map_pow_verification_error(
+                pow::Error::RevocationStore("pending_capacity".to_owned()),
+            ));
         }
         pending.try_reserve(1).map_err(|_| {
-            self.map_pow_verification_error(pow::Error::RevocationStore(
+            Self::map_pow_verification_error(pow::Error::RevocationStore(
                 "pending_allocation".to_owned(),
             ))
         })?;
@@ -457,10 +454,10 @@ impl SoranetHandshakeConfig {
         {
             let mut store_guard = self.lock_revocation_store()?;
             pow::record_revocation(ticket, Some(&mut *store_guard), now)
-                .map_err(|error| self.map_pow_verification_error(error))?;
+                .map_err(Self::map_pow_verification_error)?;
         }
         reservation.release().map_err(|reason| {
-            self.map_pow_verification_error(pow::Error::RevocationStore(reason.to_owned()))
+            Self::map_pow_verification_error(pow::Error::RevocationStore(reason.to_owned()))
         })
     }
     fn admission_for_difficulty(&self, difficulty: u8) -> ChallengeAdmission {
@@ -493,7 +490,6 @@ impl SoranetHandshakeConfig {
             PowParameters::new(0, Duration::from_secs(300), Duration::from_secs(30)),
             None,
             Duration::from_secs(60),
-            None,
             test_ticket_revocation_store(),
         )
         .expect("built-in SoraNet handshake defaults must be valid")
@@ -601,9 +597,9 @@ impl SoranetHandshakeConfig {
         if !self.inbound_pow_required() {
             return Ok(None);
         }
-        self.verify_unsigned_ticket_bytes(bytes, transcript_hash)
+        self.verify_ticket_bytes(bytes, transcript_hash)
     }
-    fn verify_unsigned_ticket_bytes(
+    fn verify_ticket_bytes(
         &self,
         bytes: &[u8],
         transcript_hash: &[u8; 32],
@@ -858,13 +854,6 @@ pub fn handshake_ms_sum() -> u64 {
 pub fn handshake_ms_count() -> u64 {
     HANDSHAKE_MS_COUNT.load(Ordering::Relaxed)
 }
-/// Returns the number of decrypted peer frames dropped due to malformed inner payloads.
-pub fn malformed_payload_frame_count() -> u64 {
-    MALFORMED_PAYLOAD_FRAMES.load(Ordering::Relaxed)
-}
-fn record_malformed_payload_frame() {
-    MALFORMED_PAYLOAD_FRAMES.fetch_add(1, Ordering::Relaxed);
-}
 fn observe_handshake_ms(ms: u64) {
     HANDSHAKE_MS_SUM.fetch_add(ms, Ordering::Relaxed);
     HANDSHAKE_MS_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -883,7 +872,7 @@ const PRE_VERSION: u8 = 5;
 const SORANET_TRANSPORT_DELEGATION_CHALLENGE_BYTES: usize = 32;
 const ML_DSA_65_PUBLIC_KEY_BYTES: usize = 1_952;
 /// Exact first-release allocation ceiling for one complete V5 certificate and proof frame.
-const MAX_SORANET_TRANSPORT_DELEGATION_FRAME_BYTES: usize = 4_493;
+const MAX_SORANET_TRANSPORT_DELEGATION_FRAME_BYTES: usize = 4_525;
 const SORANET_TRANSPORT_CERTIFICATE_SIGNATURE_DOMAIN: &[u8] =
     b"iroha:p2p:soranet-transport-certificate:v5|";
 const SORANET_TRANSPORT_CERTIFICATE_DIGEST_DOMAIN: &[u8] =
@@ -1126,6 +1115,10 @@ fn sign_soranet_transport_delegation_v5(
         binding,
     })
 }
+#[expect(
+    clippy::too_many_lines,
+    reason = "keep the ordered fail-closed V5 certificate/proof checks in one auditable validation path"
+)]
 fn verify_soranet_transport_delegation_v5(
     canonical_signed_frame: &[u8],
     expected_network_id: &iroha_data_model::NetworkId,
@@ -2474,7 +2467,6 @@ impl<T> RetainedPost<T> {
 #[cfg(test)]
 mod shared_byte_budget_tests {
     use super::*;
-    use iroha_crypto::KeyPair;
     #[test]
     fn ordinary_cannot_consume_the_safety_reserve() {
         let budget = SharedByteBudget::new(10, 3).expect("valid budget geometry");
@@ -2715,7 +2707,7 @@ mod shared_byte_budget_tests {
     fn duplicate_sessions_share_one_authenticated_peer_reserve() {
         let budgets = InboundFrameByteBudgets::new(1, 1, 2, 2).expect("valid source geometry");
         assert!(budgets.install_protected_sources(HashSet::new()));
-        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let peer_id = random_node_peer_id();
         let first = budgets.high(&peer_id).expect("first peer reserve");
         let second = budgets.high(&peer_id).expect("duplicate peer reserve");
         let first_reserve = first.peer_reserve.as_ref().expect("peer reserve");
@@ -2732,7 +2724,7 @@ mod shared_byte_budget_tests {
             second.try_reserve(1).is_none(),
             "a replacement session must not multiply one peer's reserve"
         );
-        let other_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let other_peer = random_node_peer_id();
         assert!(
             budgets
                 .high(&other_peer)
@@ -2746,8 +2738,8 @@ mod shared_byte_budget_tests {
     fn authenticated_peer_reserve_registry_fails_closed_at_its_bound() {
         let budgets = InboundFrameByteBudgets::new(1, 1, 2, 1).expect("valid source geometry");
         assert!(budgets.install_protected_sources(HashSet::new()));
-        let first_peer = PeerId::from(KeyPair::random().public_key().clone());
-        let second_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let first_peer = random_node_peer_id();
+        let second_peer = random_node_peer_id();
         let first = budgets.high(&first_peer).expect("first reserve");
         assert!(
             budgets.high(&first_peer).is_some(),
@@ -2767,8 +2759,8 @@ mod shared_byte_budget_tests {
     fn authenticated_source_count_registry_bounds_identity_churn_and_capacity_drift() {
         let budgets = InboundFrameByteBudgets::new(1, 1, 1, 1).expect("valid source geometry");
         assert!(budgets.install_protected_sources(HashSet::new()));
-        let first_peer = PeerId::from(KeyPair::random().public_key().clone());
-        let second_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let first_peer = random_node_peer_id();
+        let second_peer = random_node_peer_id();
         let first = budgets
             .source_credits(&first_peer, 1)
             .expect("first count owner");
@@ -2811,9 +2803,9 @@ mod shared_byte_budget_tests {
     #[test]
     fn pending_protected_sources_reserve_released_owner_slots_from_identity_churn() {
         let budgets = InboundFrameByteBudgets::new(1, 1, 1, 1).expect("valid source geometry");
-        let old_source = PeerId::from(KeyPair::random().public_key().clone());
-        let desired_source = PeerId::from(KeyPair::random().public_key().clone());
-        let observer = PeerId::from(KeyPair::random().public_key().clone());
+        let old_source = random_node_peer_id();
+        let desired_source = random_node_peer_id();
+        let observer = random_node_peer_id();
         assert!(budgets.install_protected_sources(HashSet::new()));
         let old_owner = budgets
             .source_credits(&old_source, 1)
@@ -2839,9 +2831,9 @@ mod shared_byte_budget_tests {
     #[test]
     fn impossible_protected_projection_preserves_last_valid_authority() {
         let budgets = InboundFrameByteBudgets::new(1, 1, 1, 1).expect("valid source geometry");
-        let protected = PeerId::from(KeyPair::random().public_key().clone());
-        let overflow = PeerId::from(KeyPair::random().public_key().clone());
-        let observer = PeerId::from(KeyPair::random().public_key().clone());
+        let protected = random_node_peer_id();
+        let overflow = random_node_peer_id();
+        let observer = random_node_peer_id();
         assert!(budgets.install_protected_sources(HashSet::from([protected.clone()])));
         assert!(!budgets.install_protected_sources(HashSet::from([protected.clone(), overflow,])));
         assert!(
@@ -2857,7 +2849,7 @@ mod shared_byte_budget_tests {
             .expect("valid inbound source geometry");
         let outbound = OutboundPostByteBudgets::new_with_source_geometry(1, 1, 1, geometry.clone())
             .expect("valid outbound source geometry");
-        let observer = PeerId::from(KeyPair::random().public_key().clone());
+        let observer = random_node_peer_id();
         assert!(inbound.high(&observer).is_none());
         assert!(outbound.high(&observer).is_none());
         assert!(inbound.source_credits(&observer, 1).is_none());
@@ -2871,8 +2863,8 @@ mod shared_byte_budget_tests {
         let geometry = AuthenticatedSourceGeometry::new(1);
         let inbound = InboundFrameByteBudgets::new_with_source_geometry(1, 1, 2, geometry.clone())
             .expect("valid inbound source geometry");
-        let old_source = PeerId::from(KeyPair::random().public_key().clone());
-        let desired_source = PeerId::from(KeyPair::random().public_key().clone());
+        let old_source = random_node_peer_id();
+        let desired_source = random_node_peer_id();
         assert!(geometry.install_protected_sources(HashSet::new()));
         let old_budget = inbound.high(&old_source).expect("old inbound owner");
         let old_lease = old_budget
@@ -2892,8 +2884,8 @@ mod shared_byte_budget_tests {
         let geometry = AuthenticatedSourceGeometry::new(1);
         let outbound = OutboundPostByteBudgets::new_with_source_geometry(1, 1, 2, geometry.clone())
             .expect("valid outbound source geometry");
-        let old_source = PeerId::from(KeyPair::random().public_key().clone());
-        let desired_source = PeerId::from(KeyPair::random().public_key().clone());
+        let old_source = random_node_peer_id();
+        let desired_source = random_node_peer_id();
         assert!(geometry.install_protected_sources(HashSet::new()));
         let old_budget = outbound.high(&old_source).expect("old outbound owner");
         let old_lease = old_budget
@@ -2914,8 +2906,8 @@ mod shared_byte_budget_tests {
             .expect("valid inbound source geometry");
         let outbound = OutboundPostByteBudgets::new_with_source_geometry(1, 1, 1, geometry.clone())
             .expect("valid outbound source geometry");
-        let first = PeerId::from(KeyPair::random().public_key().clone());
-        let second = PeerId::from(KeyPair::random().public_key().clone());
+        let first = random_node_peer_id();
+        let second = random_node_peer_id();
         assert!(geometry.install_protected_sources(HashSet::new()));
         let inbound_first = inbound.high(&first).expect("first inbound owner");
         let outbound_first = outbound
@@ -2944,8 +2936,8 @@ mod shared_byte_budget_tests {
                 .source_geometry
                 .install_protected_sources(HashSet::new())
         );
-        let first_peer = PeerId::from(KeyPair::random().public_key().clone());
-        let other_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let first_peer = random_node_peer_id();
+        let other_peer = random_node_peer_id();
         let first = budgets.high(&first_peer).expect("first peer reserve");
         let replacement = budgets.high(&first_peer).expect("replacement peer reserve");
         let other = budgets.high(&other_peer).expect("other peer reserve");
@@ -2986,8 +2978,8 @@ mod shared_byte_budget_tests {
                 .source_geometry
                 .install_protected_sources(HashSet::new())
         );
-        let first_peer = PeerId::from(KeyPair::random().public_key().clone());
-        let second_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let first_peer = random_node_peer_id();
+        let second_peer = random_node_peer_id();
         let first = budgets.high(&first_peer).expect("first reserve");
         assert!(budgets.high(&first_peer).is_some());
         assert!(budgets.high(&second_peer).is_none());
@@ -3047,8 +3039,8 @@ mod shared_byte_budget_tests {
                 .source_geometry
                 .install_protected_sources(HashSet::new())
         );
-        let first_peer = PeerId::from(KeyPair::random().public_key().clone());
-        let second_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let first_peer = random_node_peer_id();
+        let second_peer = random_node_peer_id();
         let first = budgets.high(&first_peer).expect("first high source");
         let second = budgets.high(&second_peer).expect("second high source");
         let held = first
@@ -4291,11 +4283,6 @@ mod run {
     // best-effort datagram posts, which do not consume `MessageSender` capacity.
     const DIRECT_POST_BURST_MAX: u8 = 8;
     const PEER_TERMINATION_NOTIFY_TIMEOUT: Duration = Duration::from_secs(1);
-    // Decrypt/auth failures remain fatal. A malformed inner payload frame, however,
-    // is discarded after the encrypted frame has been consumed, so the next frame can
-    // still decode cleanly. Keep validator links alive through bounded transient
-    // framing damage under load instead of tearing down quorum after a tiny burst.
-    const MALFORMED_PAYLOAD_FRAME_THRESHOLD: u32 = 64;
     // The sender emits at most 16 high-priority or 32 low-priority inner messages per
     // encrypted frame. Enforce the protocol-wide larger bound before decoding the next
     // inner object so a hostile peer cannot amplify one bounded byte frame into an
@@ -4571,9 +4558,8 @@ mod run {
             }
         }
     }
-    struct MalformedParsedMessages<M> {
+    struct MalformedParsedMessages {
         context: MalformedPayloadFrameContext,
-        messages: VecDeque<(M, usize)>,
         topic_cap_violation: Option<InboundTopicCapViolation>,
     }
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -4594,11 +4580,6 @@ mod run {
         Consensus,
         ConsensusPayload,
         ConsensusChunk,
-    }
-    fn note_malformed_payload_frame(streak: &mut u32) -> bool {
-        record_malformed_payload_frame();
-        *streak = streak.saturating_add(1);
-        *streak >= MALFORMED_PAYLOAD_FRAME_THRESHOLD
     }
     fn low_topic_label(topic: LowTopic) -> &'static str {
         match topic {
@@ -5088,6 +5069,7 @@ mod run {
                         Error::HandshakeBadPreface => { HSE_PREFACE.fetch_add(1, Ordering::Relaxed); },
                         Error::Keys(_)
                         | Error::HandshakePeerMismatch { .. }
+                        | Error::HandshakeNodeAlgorithmMismatch { .. }
                         | Error::HandshakeSoranetDelegation(_) => {
                             HSE_VERIFY.fetch_add(1, Ordering::Relaxed);
                         },
@@ -5258,7 +5240,6 @@ mod run {
             });
             // Sampler for repeated read/parse errors to avoid log floods from malformed peers
             let mut read_err_sampler = LogSampler::new();
-            let mut malformed_payload_sampler = LogSampler::new();
             let mut message_sender_hi = MessageSender::with_limits(
                 write,
                 cryptographer.clone(),
@@ -5323,8 +5304,6 @@ mod run {
             let mut prefer_low_read = false;
             let mut prefer_inbound_io = true;
             let mut direct_post_budget = DIRECT_POST_BURST_MAX;
-            let mut malformed_payload_streak_hi: u32 = 0;
-            let mut malformed_payload_streak_low: u32 = 0;
             let mut termination_open = true;
             loop {
                 if *termination_receiver.borrow_and_update() {
@@ -5861,7 +5840,6 @@ mod run {
                                     InboundFrameRetention,
                                 ) = match msg {
                             Ok(Some((msg, encoded_len, frame_retention))) => {
-                                malformed_payload_streak_hi = 0;
                                 (msg, encoded_len, frame_retention)
                             }
                             Ok(None) => {
@@ -5889,8 +5867,6 @@ mod run {
                                 break;
                             }
                             Err(Error::MalformedPayloadFrame) => {
-                                let disconnect =
-                                    note_malformed_payload_frame(&mut malformed_payload_streak_hi);
                                 let context = message_reader.take_malformed_payload_context();
                                 let malformed_reason =
                                     context.map_or("unknown", |ctx| ctx.reason.as_str());
@@ -5901,38 +5877,19 @@ mod run {
                                 let decode_offset = context.map(|ctx| ctx.decode_offset);
                                 let remaining_bytes = context.map(|ctx| ctx.remaining_bytes);
                                 let decoded_messages = context.map(|ctx| ctx.decoded_messages);
-                                if let Some(suppressed) = malformed_payload_sampler
-                                    .should_log(tokio::time::Duration::from_millis(500))
-                                {
-                                    iroha_logger::warn!(
-                                        peer = %peer_id,
-                                        conn_id,
-                                        stream = "high",
-                                        malformed_payload_streak = malformed_payload_streak_hi,
-                                        threshold = MALFORMED_PAYLOAD_FRAME_THRESHOLD,
-                                        malformed_reason,
-                                        ?encrypted_frame_bytes,
-                                        ?decrypted_payload_bytes,
-                                        ?decode_offset,
-                                        ?remaining_bytes,
-                                        ?decoded_messages,
-                                        suppressed,
-                                        "Dropped malformed decrypted peer payload frame"
-                                    );
-                                }
-                                if disconnect {
-                                    iroha_logger::error!(
-                                        peer = %peer_id,
-                                        conn_id,
-                                        stream = "high",
-                                        malformed_payload_streak = malformed_payload_streak_hi,
-                                        "Disconnecting peer after consecutive malformed decrypted payload frames"
-                                    );
-                                    break;
-                                }
-                                idle_interval.reset();
-                                ping_interval.reset();
-                                continue;
+                                iroha_logger::warn!(
+                                    peer = %peer_id,
+                                    conn_id,
+                                    stream = "high",
+                                    malformed_reason,
+                                    ?encrypted_frame_bytes,
+                                    ?decrypted_payload_bytes,
+                                    ?decode_offset,
+                                    ?remaining_bytes,
+                                    ?decoded_messages,
+                                    "Disconnecting peer after authenticated malformed payload frame"
+                                );
+                                break;
                             }
                             Err(error) => {
                                 if let Some(supp) = read_err_sampler.should_log(tokio::time::Duration::from_millis(500)) {
@@ -6023,7 +5980,6 @@ mod run {
                                     InboundFrameRetention,
                                 ) = match msg {
                             Ok(Some((msg, encoded_len, frame_retention))) => {
-                                malformed_payload_streak_low = 0;
                                 (msg, encoded_len, frame_retention)
                             }
                             Ok(None) => {
@@ -6055,8 +6011,6 @@ mod run {
                                 break;
                             }
                             Err(Error::MalformedPayloadFrame) => {
-                                let disconnect =
-                                    note_malformed_payload_frame(&mut malformed_payload_streak_low);
                                 let context = message_reader_low
                                     .as_mut()
                                     .and_then(MessageReader::take_malformed_payload_context);
@@ -6069,38 +6023,19 @@ mod run {
                                 let decode_offset = context.map(|ctx| ctx.decode_offset);
                                 let remaining_bytes = context.map(|ctx| ctx.remaining_bytes);
                                 let decoded_messages = context.map(|ctx| ctx.decoded_messages);
-                                if let Some(suppressed) = malformed_payload_sampler
-                                    .should_log(tokio::time::Duration::from_millis(500))
-                                {
-                                    iroha_logger::warn!(
-                                        peer = %peer_id,
-                                        conn_id,
-                                        stream = "low",
-                                        malformed_payload_streak = malformed_payload_streak_low,
-                                        threshold = MALFORMED_PAYLOAD_FRAME_THRESHOLD,
-                                        malformed_reason,
-                                        ?encrypted_frame_bytes,
-                                        ?decrypted_payload_bytes,
-                                        ?decode_offset,
-                                        ?remaining_bytes,
-                                        ?decoded_messages,
-                                        suppressed,
-                                        "Dropped malformed decrypted peer payload frame"
-                                    );
-                                }
-                                if disconnect {
-                                    iroha_logger::error!(
-                                        peer = %peer_id,
-                                        conn_id,
-                                        stream = "low",
-                                        malformed_payload_streak = malformed_payload_streak_low,
-                                        "Disconnecting peer after consecutive malformed decrypted payload frames"
-                                    );
-                                    break;
-                                }
-                                idle_interval.reset();
-                                ping_interval.reset();
-                                continue;
+                                iroha_logger::warn!(
+                                    peer = %peer_id,
+                                    conn_id,
+                                    stream = "low",
+                                    malformed_reason,
+                                    ?encrypted_frame_bytes,
+                                    ?decrypted_payload_bytes,
+                                    ?decode_offset,
+                                    ?remaining_bytes,
+                                    ?decoded_messages,
+                                    "Disconnecting peer after authenticated malformed payload frame"
+                                );
+                                break;
                             }
                             Err(error) => {
                                 if let Some(supp) = read_err_sampler.should_log(tokio::time::Duration::from_millis(500)) {
@@ -6475,7 +6410,6 @@ mod run {
         source_byte_budget: InboundSourceByteBudget,
         frame_queue_overhead_bytes: usize,
         current_frame_retention: Option<InboundFrameRetention>,
-        pending_malformed_payload: Option<MalformedPayloadFrameContext>,
         last_malformed_payload: Option<MalformedPayloadFrameContext>,
         last_topic_cap_violation: Option<InboundTopicCapViolation>,
     }
@@ -6540,7 +6474,6 @@ mod run {
                 frame_queue_overhead_bytes: crate::frame_queue_charge_for::<E>(0)
                     .expect("AEAD frame overhead must fit usize"),
                 current_frame_retention: None,
-                pending_malformed_payload: None,
                 last_malformed_payload: None,
                 last_topic_cap_violation: None,
             }
@@ -6599,7 +6532,7 @@ mod run {
             framed_padding: usize,
             topic_frame_caps: crate::network::TopicFrameCaps,
             decode_scratch: &mut Vec<u8>,
-        ) -> Result<VecDeque<(M, usize)>, MalformedParsedMessages<M>> {
+        ) -> Result<VecDeque<(M, usize)>, MalformedParsedMessages> {
             let decrypted_len = decrypted.len();
             if decrypted_len == 0 {
                 return Err(MalformedParsedMessages {
@@ -6611,7 +6544,6 @@ mod run {
                         0,
                         0,
                     ),
-                    messages: VecDeque::new(),
                     topic_cap_violation: None,
                 });
             }
@@ -6630,7 +6562,6 @@ mod run {
                             0,
                             decoded_messages,
                         ),
-                        messages: frame_messages,
                         topic_cap_violation: None,
                     });
                 };
@@ -6644,7 +6575,6 @@ mod run {
                             remaining.len(),
                             decoded_messages,
                         ),
-                        messages: frame_messages,
                         topic_cap_violation: None,
                     });
                 }
@@ -6661,7 +6591,6 @@ mod run {
                                     remaining.len(),
                                     decoded_messages,
                                 ),
-                                messages: frame_messages,
                                 topic_cap_violation: None,
                             });
                         }
@@ -6676,7 +6605,6 @@ mod run {
                             remaining.len(),
                             decoded_messages,
                         ),
-                        messages: frame_messages,
                         topic_cap_violation: None,
                     });
                 };
@@ -6703,7 +6631,6 @@ mod run {
                                     remaining.len(),
                                     decoded_messages,
                                 ),
-                                messages: frame_messages,
                                 topic_cap_violation: None,
                             });
                         }
@@ -6717,9 +6644,6 @@ mod run {
                                     remaining.len(),
                                     decoded_messages,
                                 ),
-                                // A cap violation is connection-fatal. Do not deliver an
-                                // honest prefix from the same attacker-controlled batch.
-                                messages: VecDeque::new(),
                                 topic_cap_violation: Some(violation),
                             });
                         }
@@ -6750,7 +6674,6 @@ mod run {
                                 remaining.len(),
                                 decoded_messages,
                             ),
-                            messages: frame_messages,
                             topic_cap_violation: None,
                         });
                     }
@@ -6847,10 +6770,6 @@ mod run {
             if let Some(msg) = self.pending.pop_front() {
                 return Ok(Some(msg));
             }
-            if let Some(context) = self.pending_malformed_payload.take() {
-                self.last_malformed_payload = Some(context);
-                return Err(Error::MalformedPayloadFrame);
-            }
             loop {
                 // Once a declared length prefix is buffered, reserve only the
                 // next bounded assembly chunk. A peer that sends a maximum-size
@@ -6885,10 +6804,7 @@ mod run {
         async fn parse_next_encrypted_frame(&mut self) -> Result<bool, Error> {
             enum ParsedFrame<M> {
                 Messages(VecDeque<(M, usize)>),
-                Malformed {
-                    context: MalformedPayloadFrameContext,
-                    messages: VecDeque<(M, usize)>,
-                },
+                Malformed(MalformedPayloadFrameContext),
                 TopicCap(InboundTopicCapViolation),
             }
             self.last_malformed_payload = None;
@@ -6942,12 +6858,9 @@ mod run {
                     Ok(messages) => Ok(ParsedFrame::Messages(messages)),
                     Err(MalformedParsedMessages {
                         context,
-                        messages,
                         topic_cap_violation,
-                    }) => Ok(topic_cap_violation.map_or_else(
-                        || ParsedFrame::Malformed { context, messages },
-                        ParsedFrame::TopicCap,
-                    )),
+                    }) => Ok(topic_cap_violation
+                        .map_or_else(|| ParsedFrame::Malformed(context), ParsedFrame::TopicCap)),
                 }
             })();
             self.buffer.advance(size + Self::U32_SIZE);
@@ -6960,17 +6873,9 @@ mod run {
                             .map(|(message, bytes)| (message, bytes, frame_retention.clone())),
                     );
                 }
-                ParsedFrame::Malformed { context, messages } => {
-                    if messages.is_empty() {
-                        self.last_malformed_payload = Some(context);
-                        return Err(Error::MalformedPayloadFrame);
-                    }
-                    self.pending_malformed_payload = Some(context);
-                    self.pending.extend(
-                        messages
-                            .into_iter()
-                            .map(|(message, bytes)| (message, bytes, frame_retention.clone())),
-                    );
+                ParsedFrame::Malformed(context) => {
+                    self.last_malformed_payload = Some(context);
+                    return Err(Error::MalformedPayloadFrame);
                 }
                 ParsedFrame::TopicCap(violation) => {
                     self.last_topic_cap_violation = Some(violation);
@@ -8537,7 +8442,7 @@ mod run {
         use super::*;
         use crate::Priority;
         use bytes::Bytes;
-        use iroha_crypto::{KeyPair, encryption::ChaCha20Poly1305};
+        use iroha_crypto::encryption::ChaCha20Poly1305;
         use iroha_data_model::peer::Peer;
         use norito::codec::{Decode, Encode};
         use std::{
@@ -8559,11 +8464,11 @@ mod run {
         fn authenticated_via_survives_clone_mapping_and_into_parts() {
             let transport = Peer::new(
                 "127.0.0.1:17447".parse().expect("transport address"),
-                KeyPair::random().public_key().clone(),
+                random_node_key_pair().public_key().clone(),
             );
             let semantic_origin = Peer::new(
                 "127.0.0.1:17448".parse().expect("semantic origin address"),
-                KeyPair::random().public_key().clone(),
+                random_node_key_pair().public_key().clone(),
             );
             let authenticated_via = transport.id().clone();
             let message = PeerMessage::new(transport, Dummy, 1);
@@ -8585,11 +8490,11 @@ mod run {
             let source_lease = source_budget.try_reserve(1, false).expect("source lease");
             let transport = Peer::new(
                 "127.0.0.1:17451".parse().expect("transport address"),
-                KeyPair::random().public_key().clone(),
+                random_node_key_pair().public_key().clone(),
             );
             let semantic_origin = Peer::new(
                 "127.0.0.1:17452".parse().expect("semantic origin address"),
-                KeyPair::random().public_key().clone(),
+                random_node_key_pair().public_key().clone(),
             );
             let authenticated_via = transport.id().clone();
             let mut message = PeerMessage::from_inbound_frame(
@@ -8655,7 +8560,7 @@ mod run {
             };
             let peer = Peer::new(
                 "127.0.0.1:17455".parse().expect("peer address"),
-                KeyPair::random().public_key().clone(),
+                random_node_key_pair().public_key().clone(),
             );
             let mut v2 = PeerMessage::new(peer.clone(), Dummy, 1);
             assert!(matches!(
@@ -8697,7 +8602,7 @@ mod run {
             let source_lease = source_budget.try_reserve(1, false).expect("source lease");
             let peer = Peer::new(
                 "127.0.0.1:17449".parse().expect("peer address"),
-                KeyPair::random().public_key().clone(),
+                random_node_key_pair().public_key().clone(),
             );
             let pending = PendingInbound {
                 message: PeerMessage::from_inbound_frame(
@@ -8805,7 +8710,7 @@ mod run {
             let source_lease = source_budget.try_reserve(1, false).expect("source lease");
             let peer = Peer::new(
                 "127.0.0.1:17461".parse().expect("peer address"),
-                KeyPair::random().public_key().clone(),
+                random_node_key_pair().public_key().clone(),
             );
             let conn_id = 61;
             let pending = PendingInbound {
@@ -8934,7 +8839,7 @@ mod run {
         async fn peer_task_panic_closes_delivery_producer_and_notifies_exact_connection_once() {
             let peer = Peer::new(
                 "127.0.0.1:17462".parse().expect("peer address"),
-                KeyPair::random().public_key().clone(),
+                random_node_key_pair().public_key().clone(),
             );
             let conn_id = 62;
             let delivery_drain = Arc::new(InboundDeliveryDrain::new());
@@ -8992,7 +8897,7 @@ mod run {
             let source_lease = source_budget.try_reserve(1, false).expect("source lease");
             let peer = Peer::new(
                 "127.0.0.1:17450".parse().expect("peer address"),
-                KeyPair::random().public_key().clone(),
+                random_node_key_pair().public_key().clone(),
             );
             let pending = PendingInbound {
                 message: PeerMessage::from_inbound_frame(
@@ -9053,7 +8958,7 @@ mod run {
                 .expect("second source lease");
             let peer = Peer::new(
                 "127.0.0.1:17453".parse().expect("peer address"),
-                KeyPair::random().public_key().clone(),
+                random_node_key_pair().public_key().clone(),
             );
             let pending = |connection_id, source| PendingInbound {
                 message: PeerMessage::from_inbound_frame(
@@ -9346,7 +9251,7 @@ mod run {
             capacity: usize,
             budgets: &OutboundPostByteBudgets,
         ) -> (handles::PeerHandle<T>, TestOutboundReceivers<T>) {
-            let key_pair = iroha_crypto::KeyPair::random();
+            let key_pair = random_node_key_pair();
             let peer_id = PeerId::from(key_pair.public_key().clone());
             test_outbound_mailbox_for_peer(capacity, budgets, &peer_id)
         }
@@ -9770,7 +9675,7 @@ mod run {
             let charge = routed_post_charge(&message);
             let budgets = OutboundPostByteBudgets::new(charge, charge, 0, 1)
                 .expect("test aggregate geometry must fit");
-            let key_pair = iroha_crypto::KeyPair::random();
+            let key_pair = random_node_key_pair();
             let peer_id = PeerId::from(key_pair.public_key().clone());
             let (original, mut original_receivers) =
                 test_outbound_mailbox_for_peer::<RoutedMsg>(1, &budgets, &peer_id);
@@ -9997,7 +9902,9 @@ mod run {
             let mut receivers = Vec::new();
             let peer_ids = (0..=ORDINARY_PEERS)
                 .map(|_| {
-                    let key_pair = iroha_crypto::KeyPair::random();
+                    let key_pair = iroha_crypto::KeyPair::random_with_algorithm(
+                        iroha_crypto::Algorithm::BlsNormal,
+                    );
                     PeerId::from(key_pair.public_key().clone())
                 })
                 .collect::<Vec<_>>();
@@ -10060,7 +9967,7 @@ mod run {
                 .post(high_other)
                 .expect("replacement may proceed after explicit predecessor teardown releases R");
             assert_eq!(budgets.retained_high_ordinary(), ordinary_max);
-            let extra_key_pair = iroha_crypto::KeyPair::random();
+            let extra_key_pair = random_node_key_pair();
             let extra_peer = PeerId::from(extra_key_pair.public_key().clone());
             assert!(
                 budgets.high(&extra_peer).is_none(),
@@ -12537,24 +12444,12 @@ mod run {
                     .expect("valid key length");
             let mut reader: MessageReader<ChaCha20Poly1305, Message<Blob>> =
                 MessageReader::new(read, cryptographer, 64 * 1024);
-            for expected in 0..super::MAX_INNER_MESSAGES_PER_ENCRYPTED_FRAME {
-                let (message, _, _frame_retention) = reader
-                    .read_message()
-                    .await
-                    .expect("messages before the cap are salvaged")
-                    .expect("one decoded inner message");
-                match message {
-                    Message::Data(blob) => {
-                        assert_eq!(blob.0, vec![u8::try_from(expected).expect("fixture byte")])
-                    }
-                    other => panic!("expected data frame, got {other:?}"),
-                }
-            }
             let error = reader
                 .read_message()
                 .await
-                .expect_err("the first above-cap message makes the remainder malformed");
+                .expect_err("an above-cap batch must fail atomically");
             assert!(matches!(error, Error::MalformedPayloadFrame));
+            assert!(reader.pending.is_empty(), "no batch prefix may escape");
             let context = reader
                 .take_malformed_payload_context()
                 .expect("above-cap context");
@@ -12578,7 +12473,7 @@ mod run {
             );
         }
         #[tokio::test(flavor = "current_thread")]
-        async fn malformed_payload_frame_salvages_decoded_messages_before_error() {
+        async fn malformed_payload_frame_discards_decoded_prefix_atomically() {
             let key_byte = 5u8;
             let mut malformed_plain = blob_message_frame(&[1u8]);
             let mut truncated_inner = blob_message_frame(&[2u8]);
@@ -12599,21 +12494,12 @@ mod run {
                     .expect("valid key length");
             let mut reader: MessageReader<ChaCha20Poly1305, Message<Blob>> =
                 MessageReader::new(read, cryptographer, 1024);
-            let (message, encoded_len, _frame_retention) = reader
-                .read_message()
-                .await
-                .expect("decoded messages before malformed inner frame should be delivered")
-                .expect("valid message should be salvaged");
-            assert_eq!(encoded_len, blob_message_frame(&[1u8]).len());
-            match message {
-                Message::Data(blob) => assert_eq!(blob.0, vec![1u8]),
-                other => panic!("expected salvaged data frame, got {other:?}"),
-            }
             let err = reader
                 .read_message()
                 .await
-                .expect_err("malformed remainder should be reported after salvaged messages");
+                .expect_err("malformed batch must be rejected before prefix delivery");
             assert!(matches!(err, Error::MalformedPayloadFrame));
+            assert!(reader.pending.is_empty(), "no batch prefix may escape");
             let context = reader
                 .take_malformed_payload_context()
                 .expect("malformed frame context");
@@ -12636,113 +12522,6 @@ mod run {
             }
             let none = reader.read_message().await.expect("stream exhausted");
             assert!(none.is_none());
-        }
-        #[tokio::test(flavor = "current_thread")]
-        async fn malformed_payload_frame_counter_tracks_recovery_without_disconnect() {
-            let key_byte = 6u8;
-            let mut first_bad = blob_message_frame(&[1u8, 2u8]);
-            first_bad.pop().expect("truncate first malformed frame");
-            let valid_plain = blob_message_frame(&[7u8, 8u8]);
-            let mut second_bad = blob_message_frame(&[3u8, 4u8]);
-            second_bad.pop().expect("truncate second malformed frame");
-            let mut raw = encrypted_frame(&first_bad, key_byte);
-            raw.extend_from_slice(&encrypted_frame(&valid_plain, key_byte));
-            raw.extend_from_slice(&encrypted_frame(&second_bad, key_byte));
-            raw.extend_from_slice(&encrypted_frame(&valid_plain, key_byte));
-            let read: Box<dyn AsyncRead + Send + Unpin> = Box::new(FakeRead {
-                data: Bytes::from(raw),
-                pos: 0,
-            });
-            let cryptographer =
-                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[key_byte; 32])
-                    .expect("valid key length");
-            let mut reader: MessageReader<ChaCha20Poly1305, Message<Blob>> =
-                MessageReader::new(read, cryptographer, 1024);
-            let counter_before = super::super::malformed_payload_frame_count();
-            let mut streak = 0u32;
-            let err = reader
-                .read_message()
-                .await
-                .expect_err("first malformed frame should not decode");
-            assert!(matches!(err, Error::MalformedPayloadFrame));
-            assert!(
-                !super::note_malformed_payload_frame(&mut streak),
-                "one malformed decrypted frame must not disconnect the session"
-            );
-            assert!(
-                super::super::malformed_payload_frame_count() >= counter_before.saturating_add(1)
-            );
-            let (message, _, _frame_retention) = reader
-                .read_message()
-                .await
-                .expect("valid frame after malformed one")
-                .expect("message after malformed one");
-            streak = 0;
-            match message {
-                Message::Data(blob) => assert_eq!(blob.0, vec![7u8, 8u8]),
-                other => panic!("expected valid data frame, got {other:?}"),
-            }
-            let err = reader
-                .read_message()
-                .await
-                .expect_err("second malformed frame should not decode");
-            assert!(matches!(err, Error::MalformedPayloadFrame));
-            assert!(
-                !super::note_malformed_payload_frame(&mut streak),
-                "streak should restart after a successfully decoded frame"
-            );
-            assert_eq!(streak, 1);
-            assert!(
-                super::super::malformed_payload_frame_count() >= counter_before.saturating_add(2)
-            );
-            let (message, _, _frame_retention) = reader
-                .read_message()
-                .await
-                .expect("reader should continue after second malformed frame")
-                .expect("final valid message");
-            match message {
-                Message::Data(blob) => assert_eq!(blob.0, vec![7u8, 8u8]),
-                other => panic!("expected valid data frame, got {other:?}"),
-            }
-        }
-        #[tokio::test(flavor = "current_thread")]
-        async fn malformed_payload_frame_disconnects_after_threshold_consecutive_frames() {
-            let key_byte = 7u8;
-            let mut malformed_plain = blob_message_frame(&[0xAAu8]);
-            malformed_plain.pop().expect("truncate malformed frame");
-            let mut raw = Vec::new();
-            for _ in 0..super::MALFORMED_PAYLOAD_FRAME_THRESHOLD {
-                raw.extend_from_slice(&encrypted_frame(&malformed_plain, key_byte));
-            }
-            let read: Box<dyn AsyncRead + Send + Unpin> = Box::new(FakeRead {
-                data: Bytes::from(raw),
-                pos: 0,
-            });
-            let cryptographer =
-                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[key_byte; 32])
-                    .expect("valid key length");
-            let mut reader: MessageReader<ChaCha20Poly1305, Message<Blob>> =
-                MessageReader::new(read, cryptographer, 1024);
-            let counter_before = super::super::malformed_payload_frame_count();
-            let mut streak = 0u32;
-            for attempt in 1..=super::MALFORMED_PAYLOAD_FRAME_THRESHOLD {
-                let err = reader
-                    .read_message()
-                    .await
-                    .expect_err("malformed decrypted frame should be reported");
-                assert!(matches!(err, Error::MalformedPayloadFrame));
-                let disconnect = super::note_malformed_payload_frame(&mut streak);
-                assert_eq!(
-                    disconnect,
-                    attempt == super::MALFORMED_PAYLOAD_FRAME_THRESHOLD
-                );
-            }
-            assert_eq!(streak, super::MALFORMED_PAYLOAD_FRAME_THRESHOLD);
-            assert!(
-                super::super::malformed_payload_frame_count()
-                    >= counter_before
-                        .saturating_add(u64::from(super::MALFORMED_PAYLOAD_FRAME_THRESHOLD))
-            );
         }
         #[tokio::test(flavor = "current_thread")]
         async fn decrypt_failure_remains_fatal_and_log_sampling_limits_flood() {
@@ -13037,7 +12816,7 @@ mod run {
                 .high
                 .try_reserve(wire.len(), false)
                 .expect("saturate shared ordinary source owner");
-            let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+            let peer_id = random_node_peer_id();
             let cryptographer =
                 Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[key_byte; 32])
                     .expect("valid key length");
@@ -13197,7 +12976,6 @@ mod run {
         fn message_sender_rejects_oversized_frame_tcp() {
             assert_large_payload_rejected(256);
         }
-        #[cfg(feature = "p2p_tls")]
         #[test]
         fn message_sender_rejects_oversized_frame_tls() {
             assert_large_payload_rejected(256);
@@ -13314,9 +13092,8 @@ mod state {
         pub(super) scion_supported: bool,
     }
     #[derive(Clone, Debug, Encode, Decode)]
-    pub(super) struct HandshakeHelloV1 {
+    pub(super) struct HandshakeHello {
         pub(super) network_id: iroha_data_model::NetworkId,
-        pub(super) algorithm: iroha_crypto::Algorithm,
         pub(super) public_key: Vec<u8>,
         pub(super) signature: Vec<u8>,
         pub(super) addr: iroha_primitives::addr::SocketAddr,
@@ -13325,10 +13102,6 @@ mod state {
         pub(super) confidential: HandshakeConfidentialMeta,
         pub(super) crypto: HandshakeCryptoMeta,
         pub(super) trust: HandshakeTrustMeta,
-    }
-    #[derive(Clone, Debug)]
-    pub(super) enum HandshakeHello {
-        V1(HandshakeHelloV1),
     }
     fn build_consensus_meta(caps: Option<&ConsensusHandshakeCaps>) -> HandshakeConsensusMeta {
         caps.map_or(
@@ -13590,7 +13363,6 @@ mod state {
         network_id: iroha_data_model::NetworkId,
         soranet_transport_binding: [u8; iroha_crypto::Hash::LENGTH],
         transport_binding: Option<[u8; iroha_crypto::Hash::LENGTH]>,
-        algorithm: iroha_crypto::Algorithm,
         public_key: Vec<u8>,
         advertised_addr: iroha_primitives::addr::SocketAddr,
         relay: RelayRole,
@@ -13601,7 +13373,7 @@ mod state {
     }
     pub(super) fn handshake_signature_payload<E: Enc>(
         cryptographer: &Cryptographer<E>,
-        hello: &HandshakeHelloV1,
+        hello: &HandshakeHello,
         soranet_transport_binding: &[u8; iroha_crypto::Hash::LENGTH],
         transport_binding: Option<&[u8; iroha_crypto::Hash::LENGTH]>,
     ) -> Vec<u8> {
@@ -13611,7 +13383,6 @@ mod state {
             network_id: hello.network_id.clone(),
             soranet_transport_binding: *soranet_transport_binding,
             transport_binding: transport_binding.copied(),
-            algorithm: hello.algorithm,
             public_key: hello.public_key.clone(),
             advertised_addr: hello.addr.clone(),
             relay: hello.relay,
@@ -13628,7 +13399,7 @@ mod state {
     }
     pub(super) fn encode_handshake_message<E: Enc>(
         cryptographer: &Cryptographer<E>,
-        message: &HandshakeHelloV1,
+        message: &HandshakeHello,
     ) -> Result<Vec<u8>, crate::Error> {
         let payload = message.encode();
         let mut encoded = Vec::with_capacity(payload.len().saturating_add(2));
@@ -13650,14 +13421,12 @@ mod state {
         if version != HANDSHAKE_HELLO_VERSION {
             return Err(crate::Error::Format);
         }
-        let hello =
-            decode_handshake_body_with_limits(body, norito::canonical_decode_limits(body.len()))?;
-        Ok(HandshakeHello::V1(hello))
+        decode_handshake_body_with_limits(body, norito::canonical_decode_limits(body.len()))
     }
     pub(super) fn decode_handshake_body_with_limits(
         body: &[u8],
         limits: norito::DecodeLimits,
-    ) -> Result<HandshakeHelloV1, crate::Error> {
+    ) -> Result<HandshakeHello, crate::Error> {
         let mut slice = body;
         Ok(norito::with_decode_limits(limits, || {
             DecodeAll::decode_all(&mut slice)
@@ -13738,61 +13507,49 @@ mod state {
                 dial_timeout: Duration,
                 connection_id: ConnectionId,
             ) -> Result<Connection, crate::Error> {
-                #[cfg(not(feature = "p2p_tls"))]
-                {
-                    let _ = (peer_addr, opts, dial_timeout, connection_id);
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        "first-release P2P requires a build with iroha_p2p/p2p_tls",
-                    )
-                    .into());
-                }
-                #[cfg(feature = "p2p_tls")]
-                {
-                    let sni_host = match peer_addr {
-                        iroha_primitives::addr::SocketAddr::Host(host) => host.host.as_ref(),
-                        _ => "iroha-p2p",
-                    };
-                    let tls = tokio::time::timeout(dial_timeout, async {
-                        let stream = crate::transport::connect(peer_addr, opts).await?;
-                        match stream {
-                            crate::transport::TcpConnectStream::Plain(tcp) => {
-                                let tls = crate::transport::tls::connect_tls(sni_host, tcp).await?;
-                                let transport_binding =
-                                    crate::transport::tls_peer_certificate_fingerprint(&tls)?;
-                                let (read_half, write_half) = tokio::io::split(tls);
-                                Ok::<_, std::io::Error>(Connection::from_split_with_binding(
-                                    connection_id,
-                                    read_half,
-                                    write_half,
-                                    transport_binding,
-                                ))
-                            }
-                            crate::transport::TcpConnectStream::Tls(proxy_tls) => {
-                                let tls =
-                                    crate::transport::tls::connect_tls(sni_host, proxy_tls).await?;
-                                let transport_binding =
-                                    crate::transport::tls_peer_certificate_fingerprint(&tls)?;
-                                let (read_half, write_half) = tokio::io::split(tls);
-                                Ok::<_, std::io::Error>(Connection::from_split_with_binding(
-                                    connection_id,
-                                    read_half,
-                                    write_half,
-                                    transport_binding,
-                                ))
-                            }
+                let sni_host = match peer_addr {
+                    iroha_primitives::addr::SocketAddr::Host(host) => host.host.as_ref(),
+                    _ => "iroha-p2p",
+                };
+                let tls = tokio::time::timeout(dial_timeout, async {
+                    let stream = crate::transport::connect(peer_addr, opts).await?;
+                    match stream {
+                        crate::transport::TcpConnectStream::Plain(tcp) => {
+                            let tls = crate::transport::tls::connect_tls(sni_host, tcp).await?;
+                            let transport_binding =
+                                crate::transport::tls_peer_certificate_fingerprint(&tls)?;
+                            let (read_half, write_half) = tokio::io::split(tls);
+                            Ok::<_, std::io::Error>(Connection::from_split_with_binding(
+                                connection_id,
+                                read_half,
+                                write_half,
+                                transport_binding,
+                            ))
                         }
-                    })
-                    .await;
-                    match tls {
-                        Ok(Ok(conn)) => Ok(conn),
-                        Ok(Err(error)) => Err(error.into()),
-                        Err(_) => Err(std::io::Error::new(
-                            std::io::ErrorKind::TimedOut,
-                            "tls dial timeout",
-                        )
-                        .into()),
+                        crate::transport::TcpConnectStream::Tls(proxy_tls) => {
+                            let tls =
+                                crate::transport::tls::connect_tls(sni_host, proxy_tls).await?;
+                            let transport_binding =
+                                crate::transport::tls_peer_certificate_fingerprint(&tls)?;
+                            let (read_half, write_half) = tokio::io::split(tls);
+                            Ok::<_, std::io::Error>(Connection::from_split_with_binding(
+                                connection_id,
+                                read_half,
+                                write_half,
+                                transport_binding,
+                            ))
+                        }
                     }
+                })
+                .await;
+                match tls {
+                    Ok(Ok(conn)) => Ok(conn),
+                    Ok(Err(error)) => Err(error.into()),
+                    Err(_) => Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "tls dial timeout",
+                    )
+                    .into()),
                 }
             }
             #[cfg(feature = "quic")]
@@ -14027,11 +13784,11 @@ mod state {
             let our_public_address: std::net::SocketAddr = "127.0.0.1:0".parse().expect("addr");
             Connecting {
                 peer_addr: peer_addr.into(),
-                peer_id: iroha_data_model::prelude::PeerId::from(
-                    KeyPair::random().public_key().clone(),
-                ),
+                peer_id: random_node_peer_id(),
                 our_public_address: our_public_address.into(),
-                key_pair: Arc::new(KeyPair::random()),
+                key_pair: Arc::new(KeyPair::random_with_algorithm(
+                    iroha_crypto::Algorithm::BlsNormal,
+                )),
                 connection_id: 0,
                 network_id: test_network_id("test-chain"),
                 consensus_caps: None,
@@ -14095,18 +13852,6 @@ mod state {
                         && e.kind() != std::io::ErrorKind::NotFound
             ));
         }
-        #[cfg(not(feature = "p2p_tls"))]
-        #[tokio::test(flavor = "current_thread")]
-        async fn mandatory_tls_dial_requires_p2p_tls_feature() {
-            let addr: std::net::SocketAddr = "127.0.0.1:1".parse().expect("addr");
-            let connecting = connecting_to(addr);
-            let res = Connecting::connect_to(connecting).await;
-            assert!(matches!(
-                res,
-                Err(crate::Error::Io(e)) if e.kind() == std::io::ErrorKind::InvalidInput
-            ));
-        }
-        #[cfg(feature = "p2p_tls")]
         #[tokio::test(flavor = "current_thread")]
         async fn tls_failure_never_falls_back_to_plain_tcp() {
             use tokio::net::TcpListener;
@@ -14570,9 +14315,11 @@ mod state {
             let write_half = &mut connection.write;
             let our_addr = our_public_address;
             let (alg, pk_bytes) = key_pair.public_key().to_bytes();
-            let mut hello = HandshakeHelloV1 {
+            if alg != iroha_crypto::Algorithm::BlsNormal {
+                return Err(crate::Error::HandshakeNodeAlgorithmMismatch { found: alg });
+            }
+            let mut hello = HandshakeHello {
                 network_id: network_id.clone(),
-                algorithm: alg,
                 public_key: pk_bytes.to_vec(),
                 signature: Vec::new(),
                 addr: our_addr,
@@ -14657,7 +14404,6 @@ mod state {
             let mut data = vec![0_u8; size];
             let _ = read_half.read_exact(&mut data).await?;
             let hello = decode_handshake_message(&cryptographer, data.as_slice())?;
-            let HandshakeHello::V1(hello) = hello;
             if hello.network_id != network_id {
                 return Err(crate::Error::HandshakeNetworkMismatch {
                     expected: network_id,
@@ -14671,7 +14417,6 @@ mod state {
                 connection.transport_binding.as_ref(),
             );
             let (
-                algorithm,
                 public_key,
                 signature,
                 remote_public_address,
@@ -14682,9 +14427,8 @@ mod state {
                 trust_gossip_remote,
                 scion_supported_remote,
             ) = {
-                let HandshakeHelloV1 {
+                let HandshakeHello {
                     network_id: _,
-                    algorithm,
                     public_key,
                     signature,
                     addr,
@@ -14695,7 +14439,6 @@ mod state {
                     trust,
                 } = hello;
                 (
-                    algorithm,
                     public_key,
                     signature,
                     addr,
@@ -14707,20 +14450,14 @@ mod state {
                     trust.scion_supported,
                 )
             };
-            let remote_pub_key = match PublicKey::from_bytes(algorithm, &public_key) {
-                Ok(pk) => pk,
-                Err(e) => return Err(crate::Error::from(iroha_crypto::error::Error::from(e))),
-            };
-            let signature = match algorithm {
-                iroha_crypto::Algorithm::Ed25519 => {
-                    iroha_crypto::ed25519_parse_signature(&signature)
-                }
-                iroha_crypto::Algorithm::MlDsa => iroha_crypto::mldsa65_parse_signature(&signature),
-                _ => {
-                    Signature::try_from_bytes(&signature).map_err(iroha_crypto::error::Error::from)
-                }
-            }
-            .map_err(crate::Error::Keys)?;
+            let remote_pub_key =
+                match PublicKey::from_bytes(iroha_crypto::Algorithm::BlsNormal, &public_key) {
+                    Ok(pk) => pk,
+                    Err(e) => return Err(crate::Error::from(iroha_crypto::error::Error::from(e))),
+                };
+            let signature = Signature::try_from_bytes(&signature)
+                .map_err(iroha_crypto::error::Error::from)
+                .map_err(crate::Error::Keys)?;
             signature.verify(&remote_pub_key, &payload)?;
             if let Some(expected_peer_id) = expected_peer_id {
                 let found_peer_id = iroha_data_model::prelude::PeerId::from(remote_pub_key.clone());

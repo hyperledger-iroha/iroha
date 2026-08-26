@@ -17,10 +17,6 @@ impl fmt::Debug for HexWithOrigin<'_> {
 
 impl fmt::Debug for SoranetHandshake {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let signed_ticket_key = self.pow.signed_ticket_public_key.as_ref().map_or_else(
-            || "None".to_string(),
-            |key| format!("Some(len={})", key.len()),
-        );
         f.debug_struct("SoranetHandshake")
             .field("descriptor_commit", &HexWithOrigin(&self.descriptor_commit))
             .field(
@@ -38,7 +34,7 @@ impl fmt::Debug for SoranetHandshake {
             .field(
                 "pow",
                 &format_args!(
-                    "SoranetPow {{ required: {}, difficulty: {}, max_future_skew_secs: {}, min_ticket_ttl_secs: {}, ticket_ttl_secs: {}, outbound_mint_capacity: {}, inbound_verify_capacity: {}, revocation_store_capacity: {}, revocation_max_ttl_secs: {}, revocation_store_path: {}, puzzle: {}, signed_ticket_public_key: {} }}",
+                    "SoranetPow {{ required: {}, difficulty: {}, max_future_skew_secs: {}, min_ticket_ttl_secs: {}, ticket_ttl_secs: {}, outbound_mint_capacity: {}, inbound_verify_capacity: {}, revocation_store_capacity: {}, revocation_max_ttl_secs: {}, revocation_store_path: {}, puzzle: {} }}",
                     self.pow.required,
                     self.pow.difficulty,
                     self.pow.max_future_skew.as_secs(),
@@ -58,7 +54,6 @@ impl fmt::Debug for SoranetHandshake {
                             puzzle.lanes.get()
                         ),
                     ),
-                    signed_ticket_key,
                 ),
             )
             .finish()

@@ -2,10 +2,7 @@
 //! asset-definition, and `QuantityValueV1` TLVs.
 use iroha_data_model::{account::AccountId, asset::AssetDefinitionId, domain::DomainId};
 use iroha_primitives::{numeric::Quantity, numeric_abi::QuantityValueV1};
-use ivm::{
-    IVM, PointerType, VMError, encoding, host::IVMHost, instruction, kotodama::wide as kwide,
-    syscalls,
-};
+use ivm::{IVM, PointerType, VMError, encoding, host::IVMHost, instruction, syscalls};
 use std::{
     any::Any,
     collections::HashMap,
@@ -105,8 +102,7 @@ impl IVMHost for AssetHost {
 fn build_program() -> Vec<u8> {
     let mut prog = ivm::ProgramMetadata::default().encode();
     // if current_supply >= cap -> burn instead of mint (skip next two instructions)
-    let branch = kwide::encode_branch_checked(instruction::wide::control::BGEU, 13, 14, 2)
-        .expect("branch offset");
+    let branch = encoding::wide::encode_branch(instruction::wide::control::BGEU, 13, 14, 2);
     prog.extend_from_slice(&branch.to_le_bytes());
     prog.extend_from_slice(
         &encoding::wide::encode_sys(

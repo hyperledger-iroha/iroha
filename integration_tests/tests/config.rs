@@ -149,7 +149,6 @@ fn retrieve_update_config_scenario(client: &iroha::client::Client) -> eyre::Resu
                 ticket_ttl_secs: Some(300),
                 outbound_mint_capacity: None,
                 inbound_verify_capacity: None,
-                signed_ticket_public_key_hex: None,
                 puzzle: Some(SoranetHandshakePuzzleUpdate {
                     enabled: Some(true),
                     memory_kib: Some(UPDATED_POW_MEMORY_KIB),
@@ -296,7 +295,6 @@ fn soranet_pow_puzzle_update_propagates_across_peers_scenario(
                 ticket_ttl_secs: Some(target_ticket_ttl),
                 outbound_mint_capacity: None,
                 inbound_verify_capacity: None,
-                signed_ticket_public_key_hex: None,
                 puzzle: Some(SoranetHandshakePuzzleUpdate {
                     enabled: Some(true),
                     memory_kib: Some(target_puzzle_memory),

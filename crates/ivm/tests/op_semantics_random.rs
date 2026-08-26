@@ -48,10 +48,7 @@ fn loads_stores_alignment_semantics() {
     vm_store.set_register(2, ivm::Memory::HEAP_START);
     vm_store.set_register(3, 0x99);
     let res = vm_store.run();
-    assert!(matches!(
-        res,
-        Err(VMError::MisalignedAccess { .. }) | Err(VMError::UnalignedAccess)
-    ));
+    assert!(matches!(res, Err(VMError::MisalignedAccess { .. })));
     let load_misal = encoding::wide::encode_load(instruction::wide::memory::LOAD64, 4, 2, 1);
     let mut load_bytes = ProgramMetadata::default().encode();
     for w in [addi_base, store64, load_misal, halt] {
@@ -62,10 +59,7 @@ fn loads_stores_alignment_semantics() {
     vm_load.set_register(2, ivm::Memory::HEAP_START);
     vm_load.set_register(3, 0x55AA);
     let res2 = vm_load.run();
-    assert!(matches!(
-        res2,
-        Err(VMError::MisalignedAccess { .. }) | Err(VMError::UnalignedAccess)
-    ));
+    assert!(matches!(res2, Err(VMError::MisalignedAccess { .. })));
 }
 #[test]
 fn classic_word_ops_rejected() {

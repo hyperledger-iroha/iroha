@@ -16,7 +16,7 @@ iroha_data_model = { workspace = true, default-features = false, features = ["ap
 iroha_primitives = { workspace = true }
 iroha_test_network = { workspace = true }
 iroha_test_samples = { workspace = true }
-ivm = { workspace = true, default-features = false, features = ["runtime"] }
+ivm = { workspace = true }
 iroha_executor_data_model = { workspace = true }
 iroha_genesis = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }

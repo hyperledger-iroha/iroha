@@ -26,6 +26,9 @@ export const PARLIAMENT_TRANSITION_SUBMIT_WIRE_ID_V1 =
 export const PARLIAMENT_ATTEMPT_STATE_MAX_BYTES_V1 = 16 * 1024 * 1024;
 export const PARLIAMENT_TIMED_OVN_REGISTRATION_RECORD_BYTES_V1 = 3_624;
 export const PARLIAMENT_TIMED_OVN_BALLOT_RECORD_BYTES_V1 = 2_858;
+// One transition appends a bounded contiguous chunk; the complete corpus may
+// still contain PARLIAMENT_TIMED_OVN_CORPUS_ENTRIES_V1 records.
+export const PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1 = 32;
 export const PARLIAMENT_TIMED_OVN_CORPUS_ENTRIES_V1 = 1_000;
 export const PARLIAMENT_TLE_MAX_COMMITTEE_SIZE_V1 = 31;
 const PARLIAMENT_BODY_TARGET_SEATS_MAX_V1 = 1_000;
@@ -96,6 +99,13 @@ export const PARLIAMENT_BODY_STATE_FIELDS_V1 = Object.freeze([
   "public_finding_deadline_height",
   "no_result_kind",
   "no_result_height",
+  "timed_ovn_progress",
+]);
+const PARLIAMENT_TIMED_OVN_PROGRESS_FIELDS_V1 = Object.freeze([
+  "ballot_attempt_id",
+  "status",
+  "frozen_survivor_count",
+  "accepted_ballot_prefix_count",
 ]);
 
 export const PARLIAMENT_CERTIFICATE_BODY_BINDING_FIELDS_V1 = Object.freeze([
@@ -366,7 +376,6 @@ export function normalizeParliamentAttemptReadResponseV1(value, expectedGovernan
   const root = exactObject(value, READ_RESPONSE_FIELDS, "Parliament attempt read response");
   version(root.version);
   unsigned(root.current_height, "current_height");
-  unsigned(root.policy_version, "policy_version");
   optionalUnsigned(root.terminal_height, "terminal_height");
   optionalBytes32(root.execution_failure_root, "execution_failure_root");
   const attempt = exactObject(root.attempt, ATTEMPT_FIELDS, "attempt");
@@ -374,9 +383,12 @@ export function normalizeParliamentAttemptReadResponseV1(value, expectedGovernan
   if (attemptId !== canonicalId(expectedGovernanceAttemptId, "expectedGovernanceAttemptId")) {
     throw new Error("attempt.id differs from the requested canonical identifier");
   }
-  canonicalId(attempt.proposal_content_id, "attempt.proposal_content_id");
-  uint(attempt.sequence, 0xffff_ffff, "attempt.sequence");
-  validateTaggedUnit(attempt.risk_tier, "tier", ["Routine", "Standard", "Constitutional", "Emergency"], "attempt.risk_tier");
+  const proposalContentId = canonicalId(
+    attempt.proposal_content_id,
+    "attempt.proposal_content_id",
+  );
+  const attemptSequence = uint(attempt.sequence, 0xffff_ffff, "attempt.sequence");
+  const riskTier = validateTaggedUnit(attempt.risk_tier, "tier", ["Routine", "Standard", "Constitutional", "Emergency"], "attempt.risk_tier");
   validateTaggedUnit(attempt.stage, "stage", [
     "Qualification", "Rules", "Agenda", "Interest", "Review", "Coordination",
     "Mpc", "Fma", "Oversight", "PolicyJury", "ConfirmationJury",
@@ -385,15 +397,22 @@ export function normalizeParliamentAttemptReadResponseV1(value, expectedGovernan
   validateTaggedUnit(attempt.status, "status", [
     "Active", "Certified", "Rejected", "Enacted", "Superseded", "ExecutionFailed",
   ], "attempt.status");
-  if (!Array.isArray(root.required_bodies) || root.required_bodies.length < 1 || root.required_bodies.length > 10) {
-    throw new TypeError("required_bodies must contain one through ten exact body projections");
+  const policyVersion = unsigned(root.policy_version, "policy_version");
+  if (BigInt(policyVersion) === 0n) {
+    throw new TypeError("policy_version must be positive");
   }
-  for (const [index, body] of root.required_bodies.entries()) {
-    exactObject(body, ["body", "decision_mode"], `required_bodies[${index}]`);
-  }
-  validateBodyStates(root.body_states, root.required_bodies);
+  const requiredBodies = validateRequiredBodies(root.required_bodies);
+  const bodyStates = validateBodyStates(root.body_states, requiredBodies);
   if (root.certificate !== null) {
-    validateCertificate(root.certificate, attemptId);
+    validateCertificate(root.certificate, {
+      attemptId,
+      proposalContentId,
+      attemptSequence,
+      riskTier,
+      policyVersion,
+      requiredBodies,
+      bodyStates,
+    });
   }
   if (root.superseding_head !== null) {
     validateExpectedHead(root.superseding_head, "superseding_head");
@@ -765,6 +784,35 @@ function validateTleIdentityPayload(
   }
 }
 
+function validateRequiredBodies(value) {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 10) {
+    throw new TypeError("required_bodies must contain one through ten exact body projections");
+  }
+  let previousBodyIndex = -1;
+  return value.map((raw, index) => {
+    const context = `required_bodies[${index}]`;
+    const entry = exactObject(raw, ["body", "decision_mode"], context);
+    const bodyIndex = PARLIAMENT_BODY_ORDER_V1.indexOf(entry.body);
+    if (bodyIndex < 0 || bodyIndex <= previousBodyIndex) {
+      throw new TypeError("required_bodies must use strict canonical body order");
+    }
+    previousBodyIndex = bodyIndex;
+    const decisionMode = validateTaggedUnit(
+      entry.decision_mode,
+      "mode",
+      ["PublicFinding", "HiddenBindingBallot"],
+      `${context}.decision_mode`,
+    );
+    const expectedMode = entry.body === "policy-jury" || entry.body === "confirmation-jury"
+      ? "HiddenBindingBallot"
+      : "PublicFinding";
+    if (decisionMode !== expectedMode) {
+      throw new TypeError(`${context}.decision_mode differs from the body protocol`);
+    }
+    return { body: entry.body, decisionMode };
+  });
+}
+
 function validateBodyStates(value, requiredBodies) {
   if (!Array.isArray(value) || value.length !== requiredBodies.length || value.length < 1 || value.length > 10) {
     throw new TypeError("body_states must exactly match the required body pipeline");
@@ -777,7 +825,7 @@ function validateBodyStates(value, requiredBodies) {
     "Orientation", "Evidence", "Questions", "Responses", "Deliberation", "Reflection", "Vote",
   ];
   const noResultKinds = new Set(PARLIAMENT_NO_RESULT_KINDS_V1.map(({ jsonTag }) => jsonTag));
-  for (const [index, raw] of value.entries()) {
+  return value.map((raw, index) => {
     const context = `body_states[${index}]`;
     const body = exactObject(raw, PARLIAMENT_BODY_STATE_FIELDS_V1, context);
     if (body.body !== requiredBodies[index].body) {
@@ -829,7 +877,57 @@ function validateBodyStates(value, requiredBodies) {
         throw new Error(`${context} no-result kind does not match the body's decision protocol`);
       }
     }
+    const privateBody = body.body === "policy-jury" || body.body === "confirmation-jury";
+    const progress = body.timed_ovn_progress === null
+      ? null
+      : validateTimedOvnProgress(body.timed_ovn_progress, `${context}.timed_ovn_progress`);
+    if (progress !== null && (!privateBody || body.body_instance_id === null)) {
+      throw new TypeError(`${context}.timed_ovn_progress requires an active private body`);
+    }
+    return {
+      body: body.body,
+      bodyInstanceId: body.body_instance_id,
+      progress,
+      status,
+    };
+  });
+}
+
+function validateTimedOvnProgress(value, context) {
+  const progress = exactObject(value, PARLIAMENT_TIMED_OVN_PROGRESS_FIELDS_V1, context);
+  const ballotAttemptId = canonicalId(progress.ballot_attempt_id, `${context}.ballot_attempt_id`);
+  const status = validateTaggedUnit(
+    progress.status,
+    "status",
+    [
+      "Registration", "SurvivorFreeze", "TimedCommitment", "AwaitingRelease",
+      "Opening", "Finalized", "NoResult", "Superseded",
+    ],
+    `${context}.status`,
+  );
+  const survivors = progress.frozen_survivor_count;
+  const prefix = progress.accepted_ballot_prefix_count;
+  if ((survivors === null) !== (prefix === null)) {
+    throw new TypeError(`${context} survivor and prefix counts must appear together`);
   }
+  if (survivors === null) {
+    if (!["Registration", "SurvivorFreeze", "NoResult", "Superseded"].includes(status)) {
+      throw new TypeError(`${context} must expose counts after survivor freeze`);
+    }
+  } else {
+    uint(survivors, PARLIAMENT_TIMED_OVN_CORPUS_ENTRIES_V1, `${context}.frozen_survivor_count`, 1);
+    uint(prefix, survivors, `${context}.accepted_ballot_prefix_count`);
+    if (status === "TimedCommitment" && prefix >= survivors) {
+      throw new TypeError(`${context} TimedCommitment prefix must remain incomplete`);
+    }
+    if (["AwaitingRelease", "Opening", "Finalized"].includes(status) && prefix !== survivors) {
+      throw new TypeError(`${context} sealed/released prefix must equal frozen survivors`);
+    }
+    if (["Registration", "SurvivorFreeze"].includes(status)) {
+      throw new TypeError(`${context} exposes counts before survivor freeze`);
+    }
+  }
+  return { ballotAttemptId, prefix, status, survivors };
 }
 
 function normalizePublicTransition(value) {
@@ -868,8 +966,12 @@ function validateTransitionPayload(tag, payload) {
     bytes(payload.registration_record, PARLIAMENT_TIMED_OVN_REGISTRATION_RECORD_BYTES_V1, `${tag}.registration_record`);
   }
   if (tag === "FreezeTimedOvnCorpus") {
-    if (!Array.isArray(payload.ballot_records) || payload.ballot_records.length < 1 || payload.ballot_records.length > PARLIAMENT_TIMED_OVN_CORPUS_ENTRIES_V1) {
-      throw new RangeError(`${tag}.ballot_records must contain one through 1000 records`);
+    if (!Array.isArray(payload.ballot_records)
+      || payload.ballot_records.length < 1
+      || payload.ballot_records.length > PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1) {
+      throw new RangeError(
+        `${tag}.ballot_records must contain one through ${PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1} records`,
+      );
     }
     payload.ballot_records.forEach((record, index) =>
       bytes(record, PARLIAMENT_TIMED_OVN_BALLOT_RECORD_BYTES_V1, `${tag}.ballot_records[${index}]`));
@@ -894,26 +996,44 @@ function validateTransitionPayload(tag, payload) {
  * fingerprinting.
  */
 export function normalizeParliamentGovernanceCertificateV1(value) {
-  return validateCertificate(value, undefined, { requirePolicyJury: true });
+  return validateCertificate(value, {}, { requirePolicyJury: true });
 }
 
-function validateCertificate(value, expectedAttemptId, options = {}) {
+function validateCertificate(value, expectations = {}, options = {}) {
   const certificate = exactObject(value, CERTIFICATE_FIELDS, "certificate");
-  canonicalId(certificate.proposal_content_id, "certificate.proposal_content_id");
+  const proposalContentId = canonicalId(
+    certificate.proposal_content_id,
+    "certificate.proposal_content_id",
+  );
   const attemptId = canonicalId(
     certificate.governance_attempt_id,
     "certificate.governance_attempt_id",
   );
-  if (expectedAttemptId !== undefined && attemptId !== expectedAttemptId) {
+  if (expectations.attemptId !== undefined && attemptId !== expectations.attemptId) {
     throw new Error("certificate.governance_attempt_id differs from attempt.id");
   }
-  uint(certificate.governance_attempt_sequence, 0xffff_ffff, "certificate.governance_attempt_sequence");
-  validateTaggedUnit(
+  if (expectations.proposalContentId !== undefined
+    && proposalContentId !== expectations.proposalContentId) {
+    throw new Error("certificate.proposal_content_id differs from attempt.proposal_content_id");
+  }
+  const attemptSequence = uint(
+    certificate.governance_attempt_sequence,
+    0xffff_ffff,
+    "certificate.governance_attempt_sequence",
+  );
+  if (expectations.attemptSequence !== undefined
+    && attemptSequence !== expectations.attemptSequence) {
+    throw new Error("certificate.governance_attempt_sequence differs from attempt.sequence");
+  }
+  const riskTier = validateTaggedUnit(
     certificate.risk_tier,
     "tier",
     ["Routine", "Standard", "Constitutional", "Emergency"],
     "certificate.risk_tier",
   );
+  if (expectations.riskTier !== undefined && riskTier !== expectations.riskTier) {
+    throw new Error("certificate.risk_tier differs from attempt.risk_tier");
+  }
   if (!Array.isArray(certificate.body_bindings) || certificate.body_bindings.length < 1 || certificate.body_bindings.length > 10) {
     throw new TypeError("certificate.body_bindings must contain one through ten bindings");
   }
@@ -956,6 +1076,48 @@ function validateCertificate(value, expectedAttemptId, options = {}) {
       "certificate must keep sortition and release pulse identifiers disjoint",
     );
   }
+  if (expectations.requiredBodies !== undefined) {
+    if (bindings.length !== expectations.requiredBodies.length) {
+      throw new TypeError("certificate.body_bindings must exactly match required_bodies");
+    }
+    for (const [index, binding] of bindings.entries()) {
+      const required = expectations.requiredBodies[index];
+      if (binding.body !== required.body
+        || binding.decisionMode !== required.decisionMode) {
+        throw new TypeError(
+          `certificate.body_bindings[${index}] differs from required_bodies`,
+        );
+      }
+    }
+  }
+  if (expectations.bodyStates !== undefined) {
+    for (const [index, binding] of bindings.entries()) {
+      const bodyState = expectations.bodyStates[index];
+      if (binding.bodyInstanceId !== bodyState.bodyInstanceId) {
+        throw new TypeError(
+          `certificate.body_bindings[${index}].body_instance_id differs from body_states`,
+        );
+      }
+      if (binding.ballot !== null) {
+        const progress = bodyState.progress;
+        if (
+          progress === null ||
+          progress.status !== "Finalized" ||
+          progress.ballotAttemptId !== binding.ballotAttemptId ||
+          progress.survivors !== binding.ballot.tally.accepted_ballots ||
+          progress.prefix !== binding.ballot.tally.accepted_ballots
+        ) {
+          throw new TypeError(
+            `certificate.body_bindings[${index}].ballot differs from timed_ovn_progress`,
+          );
+        }
+      } else if (bodyState.progress !== null) {
+        throw new TypeError(
+          `certificate.body_bindings[${index}] public body exposes timed_ovn_progress`,
+        );
+      }
+    }
+  }
   if (options.requirePolicyJury === true) {
     const policyJuries = bindings.filter((binding) => binding.body === "policy-jury");
     const confirmationJuries = bindings.filter(
@@ -992,8 +1154,13 @@ function validateCertificate(value, expectedAttemptId, options = {}) {
   }
   bytes(certificate.effect_preimage_hash, 32, "certificate.effect_preimage_hash", true);
   validateExpectedHead(certificate.expected_head, "certificate.expected_head");
-  if (BigInt(unsigned(certificate.policy_version, "certificate.policy_version")) === 0n) {
+  const policyVersion = unsigned(certificate.policy_version, "certificate.policy_version");
+  if (BigInt(policyVersion) === 0n) {
     throw new TypeError("certificate.policy_version must be positive");
+  }
+  if (expectations.policyVersion !== undefined
+    && BigInt(policyVersion) !== BigInt(expectations.policyVersion)) {
+    throw new Error("certificate.policy_version differs from the attempt projection");
   }
   return certificate;
 }
@@ -1003,7 +1170,7 @@ function validateBodyCertificateBinding(value, index, governanceAttemptId, certi
   const binding = exactObject(value, PARLIAMENT_CERTIFICATE_BODY_BINDING_FIELDS_V1, context);
   const seats = uint(
     binding.original_seats,
-    0xffff_ffff,
+    PARLIAMENT_TIMED_OVN_CORPUS_ENTRIES_V1,
     `${context}.original_seats`,
     1,
   );
@@ -1049,6 +1216,7 @@ function validateBodyCertificateBinding(value, index, governanceAttemptId, certi
     beaconSessionId: binding.beacon_session_id,
     body: binding.body,
     bodyIndex,
+    decisionMode: isPrivateJury ? "HiddenBindingBallot" : "PublicFinding",
     bodyInstanceId: binding.body_instance_id,
     electionAttemptId: binding.election_attempt_id,
     releasePulseId: ballot?.releasePulseId ?? null,
@@ -1077,7 +1245,12 @@ function validateSortitionRequest(value, binding, governanceAttemptId, context) 
     `${context}.beacon_session_id`,
   );
   bytes(request.candidate_root, 32, `${context}.candidate_root`, true);
-  uint(request.candidate_count, 0xffff_ffff, `${context}.candidate_count`, 1);
+  uint(
+    request.candidate_count,
+    PARLIAMENT_TIMED_OVN_CORPUS_ENTRIES_V1,
+    `${context}.candidate_count`,
+    1,
+  );
   uint(
     request.target_seats,
     PARLIAMENT_BODY_TARGET_SEATS_MAX_V1,
@@ -1086,8 +1259,8 @@ function validateSortitionRequest(value, binding, governanceAttemptId, context) 
   );
   const requestHeight = BigInt(unsigned(request.request_height, `${context}.request_height`));
   const pulseHeight = BigInt(unsigned(request.pulse_height, `${context}.pulse_height`));
-  if (pulseHeight === 0n || pulseHeight <= requestHeight) {
-    throw new TypeError(`${context}.pulse_height must be strictly after request_height`);
+  if (requestHeight === 0n || pulseHeight <= requestHeight) {
+    throw new TypeError(`${context} sortition heights must be positive and strictly ordered`);
   }
   if (
     id !== binding.sortition_request_id ||
@@ -1141,16 +1314,25 @@ function validateBallotCertificate(value, binding, context) {
     "survivors_frozen_at_height", "commitment_closed_at_height", "release_height",
     "opening_deadline_height", "opening_height",
   ]) heights[field] = BigInt(unsigned(ballot[field], `${context}.${field}`));
+  const maxCorpus = BigInt(maxCorpusEntries);
+  const requiredCommitmentBlocks = (maxCorpus + BigInt(
+    PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1 - 1,
+  )) / BigInt(PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1);
   if (
+    maxCorpusEntries < binding.original_seats ||
     heights.registered_at_height === 0n ||
     heights.registration_close_height <= heights.registered_at_height ||
+    heights.registration_close_height - heights.registered_at_height < maxCorpus + 1n ||
     heights.survivor_freeze_height <= heights.registration_close_height ||
+    heights.survivor_freeze_height - heights.registration_close_height < maxCorpus ||
     heights.commitment_close_height <= heights.survivor_freeze_height ||
+    heights.commitment_close_height - heights.survivor_freeze_height < requiredCommitmentBlocks ||
     heights.release_height <= heights.commitment_close_height ||
     heights.opening_deadline_height <= heights.release_height ||
     heights.registration_closed_at_height !== heights.registration_close_height ||
     heights.survivors_frozen_at_height !== heights.survivor_freeze_height ||
-    heights.commitment_closed_at_height !== heights.commitment_close_height ||
+    heights.commitment_closed_at_height <= heights.survivor_freeze_height ||
+    heights.commitment_closed_at_height > heights.commitment_close_height ||
     heights.opening_height < heights.release_height ||
     heights.opening_height > heights.opening_deadline_height ||
     BigInt(binding.result_height) < heights.opening_height ||
@@ -1199,8 +1381,18 @@ function validatePublicFinding(value, originalSeats, context) {
   const finding = exactObject(value, PARLIAMENT_PUBLIC_FINDING_CERTIFICATE_FIELDS_V1, context);
   bytes(finding.endorsement_root, 32, `${context}.endorsement_root`, true);
   validateStrictIdList(finding.endorsing_assignments, `${context}.endorsing_assignments`);
-  const endorsements = uint(finding.endorsements, 1_000, `${context}.endorsements`, 1);
-  const quorum = uint(finding.quorum, 1_000, `${context}.quorum`, 1);
+  const endorsements = uint(
+    finding.endorsements,
+    PARLIAMENT_TIMED_OVN_CORPUS_ENTRIES_V1,
+    `${context}.endorsements`,
+    1,
+  );
+  const quorum = uint(
+    finding.quorum,
+    PARLIAMENT_TIMED_OVN_CORPUS_ENTRIES_V1,
+    `${context}.quorum`,
+    1,
+  );
   const expectedQuorum = Math.floor((2 * originalSeats + 2) / 3);
   if (endorsements !== finding.endorsing_assignments.length || endorsements !== quorum || quorum !== expectedQuorum) {
     throw new Error(`${context} must contain the exact canonical 2/3 supporter list`);

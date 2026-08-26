@@ -688,13 +688,6 @@ fn production_empty_genesis_complete_tip_adopts_control_repair_and_launches() {
         super::super::v2_block_sync::V2BlockSyncDiscovery::new(context.clone(), local_peer, 64)
             .expect("open CompleteTip block-sync discovery");
     let mut block_sync_request = None;
-    let mut npos_vrf = super::super::v2_npos::V2NposVrfLifecycle::open(
-        &context,
-        state.as_ref(),
-        Some(local_validator),
-        &local_signer,
-    )
-    .expect("open CompleteTip NPoS lifecycle");
     let mut npos_beacon = super::super::v2_beacon::V2GlobalBeaconLifecycle::open(
         &context,
         state.as_ref(),
@@ -712,7 +705,6 @@ fn production_empty_genesis_complete_tip_adopts_control_repair_and_launches() {
         &mut block_sync_server,
         &mut block_sync,
         &mut block_sync_request,
-        &mut npos_vrf,
         &mut npos_beacon,
         1,
         super::super::v2_runner::LifecycleProducerClaimDispositionV1::initial(),
@@ -742,7 +734,6 @@ fn production_empty_genesis_complete_tip_adopts_control_repair_and_launches() {
             &mut block_sync_server,
             &mut block_sync,
             &mut block_sync_request,
-            &mut npos_vrf,
             &mut npos_beacon,
             1,
             producer_claim,
@@ -2115,13 +2106,6 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             )
             .expect("open ordinary-tail block-sync discovery");
             let mut block_sync_request = None;
-            let mut npos_vrf = super::super::v2_npos::V2NposVrfLifecycle::open(
-                &recovered_context,
-                state.as_ref(),
-                Some(local_validator),
-                &local_signer,
-            )
-            .expect("open ordinary-tail NPoS lifecycle");
             let mut npos_beacon = super::super::v2_beacon::V2GlobalBeaconLifecycle::open(
                 &recovered_context,
                 state.as_ref(),
@@ -2140,7 +2124,6 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                         &mut block_sync_server,
                         &mut block_sync,
                         &mut block_sync_request,
-                        &mut npos_vrf,
                         &mut npos_beacon,
                     )
                     .expect("consume the exact ordinary runner handoff"),
@@ -2179,7 +2162,6 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                         &mut block_sync_server,
                         &mut block_sync,
                         &mut block_sync_request,
-                        &mut npos_vrf,
                         &mut npos_beacon,
                     )
                     .expect("consume the exact malformed-response ordinary handoff"),
@@ -2211,7 +2193,6 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 &mut block_sync_server,
                 &mut block_sync,
                 &mut block_sync_request,
-                &mut npos_vrf,
                 &mut npos_beacon,
                 1,
                 super::super::v2_runner::LifecycleProducerClaimDispositionV1::initial(),

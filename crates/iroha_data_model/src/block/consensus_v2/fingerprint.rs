@@ -21,8 +21,6 @@ struct ConsensusParametersFingerprintInput {
 struct NposGenesisFingerprintInput {
     epoch_length_blocks: core::num::NonZeroU64,
     epoch_seed: [u8; 32],
-    vrf_commit_window_blocks: u64,
-    vrf_reveal_window_blocks: u64,
     max_validators: u32,
     min_self_bond: Quantity,
     min_nomination_bond: Quantity,
@@ -57,8 +55,6 @@ pub fn compute(params: &ConsensusGenesisParams) -> Result<[u8; 32], String> {
             Some(NposGenesisFingerprintInput {
                 epoch_length_blocks: npos.epoch_length_blocks,
                 epoch_seed: npos.epoch_seed,
-                vrf_commit_window_blocks: npos.vrf_commit_window_blocks,
-                vrf_reveal_window_blocks: npos.vrf_reveal_window_blocks,
                 max_validators: npos.max_validators,
                 min_self_bond: npos.min_self_bond.clone(),
                 min_nomination_bond: npos.min_nomination_bond.clone(),
@@ -107,8 +103,6 @@ mod tests {
             ConsensusGenesisModeParams::Npos(crate::block::consensus::NposGenesisParams {
                 epoch_length_blocks: core::num::NonZeroU64::new(3_600).unwrap(),
                 epoch_seed: [7; 32],
-                vrf_commit_window_blocks: 100,
-                vrf_reveal_window_blocks: 40,
                 max_validators: 31,
                 min_self_bond: 1_000_u64.into(),
                 min_nomination_bond: 1_u64.into(),
@@ -182,18 +176,6 @@ mod tests {
         params.v2_context.execution_policy_hash = [0; 32];
         let error = compute(&params).expect_err("zero execution-policy hash must fail closed");
         assert!(error.contains("invalid Sumeragi v2 genesis context"));
-    }
-    #[test]
-    fn npos_windows_outside_epoch_are_rejected_before_hashing() {
-        let mut params = npos_params();
-        let ConsensusGenesisModeParams::Npos(npos) = &mut params.mode else {
-            unreachable!()
-        };
-        npos.vrf_commit_window_blocks = 3_599;
-        npos.vrf_reveal_window_blocks = 2;
-        let error =
-            compute(&params).expect_err("VRF windows outside the signed epoch must fail closed");
-        assert!(error.contains("close before the epoch boundary"));
     }
     #[test]
     fn npos_percentage_above_one_hundred_is_rejected_before_hashing() {

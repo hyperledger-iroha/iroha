@@ -15,6 +15,7 @@ class CanonicalRequestHeaderPlan(dict[str, str]):
     def __init__(self, headers: Mapping[str, str], canonical_auth: Any) -> None:
         super().__init__(headers)
         self.canonical_auth = canonical_auth
+        self.reject_ambient_auth = False
 
 
 class OperatorRequestHeaderPlan(dict[str, str]):
@@ -23,6 +24,16 @@ class OperatorRequestHeaderPlan(dict[str, str]):
     def __init__(self, headers: Mapping[str, str], context: Any) -> None:
         super().__init__(headers)
         self.context = context
+
+
+class _NoAmbientAuth(requests.auth.AuthBase):
+    """Truthful no-op auth that prevents Requests from consulting netrc."""
+
+    def __call__(self, request: requests.PreparedRequest) -> requests.PreparedRequest:
+        return request
+
+
+_NO_AMBIENT_AUTH = _NoAmbientAuth()
 
 
 def send_request(
@@ -62,12 +73,17 @@ def send_request(
         )
     if allow_retry or allow_redirects:
         raise ValueError("canonical requests must disable redirects and retries")
+    reject_ambient_auth = bool(
+        isinstance(headers, CanonicalRequestHeaderPlan)
+        and headers.reject_ambient_auth
+    )
     request = requests.Request(
         method,
         url,
         params=params,
         headers=dict(headers),
         data=data,
+        auth=_NO_AMBIENT_AUTH if reject_ambient_auth else None,
     )
     try:
         prepared = session.prepare_request(request)
@@ -75,6 +91,12 @@ def send_request(
         raise ValueError(
             "canonical requests require a verifiable prepared-request transport"
         ) from exc
+    if reject_ambient_auth:
+        for name in ("Authorization", "Cookie", "Proxy-Authorization"):
+            if name in prepared.headers:
+                raise ValueError(
+                    f"canonical request preparation introduced ambient {name}"
+                )
     prepared_body = prepared.body
     if prepared_body is None:
         body = b""
@@ -102,15 +124,21 @@ def send_request(
             body,
         )
     prepared.headers.update(signed_headers)
-    require_zero_retry_adapter(session=session, url=prepared.url)
+    prepared_url = prepared.url
+    if not isinstance(prepared_url, str):
+        raise ValueError("canonical request preparation returned no exact URL")
+    require_zero_retry_adapter(session=session, url=prepared_url)
     try:
-        settings = session.merge_environment_settings(
-            prepared.url,
-            {},
-            stream,
-            None,
-            None,
-        )
+        # Canonical authentication signs the prepared target and headers.  Do not
+        # consult trust_env after that audit: environment proxies can inject
+        # Proxy-Authorization and environment CA variables can silently replace
+        # the caller's TLS policy.  Snapshot only the explicit Session settings.
+        settings: dict[str, Any] = {
+            "stream": stream,
+            "verify": session.verify,
+            "cert": session.cert,
+            "proxies": dict(session.proxies),
+        }
         return session.send(
             prepared,
             allow_redirects=False,

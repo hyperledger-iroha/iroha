@@ -204,17 +204,12 @@ fn block_element_syntax_kind(element: &ParsedBlockElement) -> SyntaxKind {
 }
 #[derive(Default)]
 struct FunctionAttributes {
-    reads: Vec<String>,
-    writes: Vec<String>,
     is_test: bool,
     test_fixture: Option<String>,
 }
 impl FunctionAttributes {
     fn is_empty(&self) -> bool {
-        self.reads.is_empty()
-            && self.writes.is_empty()
-            && !self.is_test
-            && self.test_fixture.is_none()
+        !self.is_test && self.test_fixture.is_none()
     }
 }
 /// Parse a KOTODAMA source string into a [`Program`].
@@ -915,8 +910,6 @@ impl<'a> CstAstLowerer<'a> {
                         FunctionModifiers {
                             kind: FunctionKind::Private,
                             permission: None,
-                            access_reads: attrs.reads,
-                            access_writes: attrs.writes,
                             is_test: attrs.is_test,
                             test_fixture: attrs.test_fixture,
                         },
@@ -936,8 +929,6 @@ impl<'a> CstAstLowerer<'a> {
                         FunctionModifiers {
                             kind: FunctionKind::Kotoage,
                             permission: None,
-                            access_reads: attrs.reads,
-                            access_writes: attrs.writes,
                             is_test: attrs.is_test,
                             test_fixture: attrs.test_fixture,
                         },
@@ -957,8 +948,6 @@ impl<'a> CstAstLowerer<'a> {
                         FunctionModifiers {
                             kind: FunctionKind::View,
                             permission: None,
-                            access_reads: attrs.reads,
-                            access_writes: attrs.writes,
                             is_test: attrs.is_test,
                             test_fixture: attrs.test_fixture,
                         },
@@ -977,8 +966,6 @@ impl<'a> CstAstLowerer<'a> {
                         FunctionModifiers {
                             kind: FunctionKind::Hajimari,
                             permission: None,
-                            access_reads: attrs.reads,
-                            access_writes: attrs.writes,
                             is_test: attrs.is_test,
                             test_fixture: attrs.test_fixture,
                         },
@@ -997,8 +984,6 @@ impl<'a> CstAstLowerer<'a> {
                         FunctionModifiers {
                             kind: FunctionKind::Kaizen,
                             permission: None,
-                            access_reads: attrs.reads,
-                            access_writes: attrs.writes,
                             is_test: attrs.is_test,
                             test_fixture: attrs.test_fixture,
                         },
@@ -1441,77 +1426,6 @@ impl<'a> CstAstLowerer<'a> {
             result?;
         }
         Ok(attrs)
-    }
-    fn parse_access_value_list(&mut self) -> ParseResult<Vec<String>> {
-        if self.peek(TokenKind::LBracket) {
-            self.bump();
-            let mut values = Vec::new();
-            while !self.peek(TokenKind::RBracket) && !self.peek(TokenKind::EOF) {
-                let tok = self.bump();
-                match tok.kind {
-                    TokenKind::String(s) => values.push(s),
-                    _ => return Err(self.error(tok, "string literal")),
-                }
-                if self.peek(TokenKind::Comma) {
-                    self.bump();
-                } else {
-                    break;
-                }
-            }
-            self.expect(TokenKind::RBracket)?;
-            return Ok(values);
-        }
-        let tok = self.bump();
-        match tok.kind {
-            TokenKind::String(s) => Ok(vec![s]),
-            _ => Err(self.error(tok, "string literal")),
-        }
-    }
-    #[allow(dead_code)]
-    fn parse_access_attribute_body(&mut self, attrs: &mut FunctionAttributes) -> ParseResult<()> {
-        self.expect(TokenKind::LParen)?;
-        let mut parsed_any = false;
-        while !self.peek(TokenKind::RParen) && !self.peek(TokenKind::EOF) {
-            let key = self.expect_ident()?;
-            self.expect(TokenKind::Equal)?;
-            let mut values = self.parse_access_value_list()?;
-            match key.as_str() {
-                "read" => attrs.reads.append(&mut values),
-                "write" => attrs.writes.append(&mut values),
-                _ => {
-                    return Err(Box::new(ParseError {
-                        code: "K1001",
-                        message: format!("unknown access list `{key}`"),
-                        line: self.tokens[self.pos.saturating_sub(1)].line,
-                        column: self.tokens[self.pos.saturating_sub(1)].column,
-                        snippet: String::new(),
-                        range: self.tokens[self.pos.saturating_sub(1)].range,
-                        fix: None,
-                        expected: None,
-                        expected_owner: None,
-                    }));
-                }
-            }
-            parsed_any = true;
-            if self.peek(TokenKind::Comma) {
-                self.bump();
-            }
-        }
-        if !parsed_any {
-            return Err(Box::new(ParseError {
-                code: "K1001",
-                message: "access attribute must include read/write entries".into(),
-                line: self.tokens[self.pos.saturating_sub(1)].line,
-                column: self.tokens[self.pos.saturating_sub(1)].column,
-                snippet: String::new(),
-                range: self.tokens[self.pos.saturating_sub(1)].range,
-                fix: None,
-                expected: None,
-                expected_owner: None,
-            }));
-        }
-        self.expect(TokenKind::RParen)?;
-        Ok(())
     }
     fn parse_test_attribute_body(&mut self, attrs: &mut FunctionAttributes) -> ParseResult<()> {
         attrs.is_test = true;

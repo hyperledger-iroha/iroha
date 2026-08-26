@@ -70,10 +70,6 @@ pub enum ConsensusMessageControlKind {
     CommitCertificateRequest,
     /// Commit-certificate response.
     CommitCertificateResponse,
-    /// Verifiable-random-function commitment.
-    VrfCommit,
-    /// Verifiable-random-function reveal.
-    VrfReveal,
 }
 impl ConsensusMessageControlKind {
     const fn as_str(self) -> &'static str {
@@ -91,8 +87,6 @@ impl ConsensusMessageControlKind {
             Self::CertifiedBodyResponse => "certified_body_response",
             Self::CommitCertificateRequest => "commit_certificate_request",
             Self::CommitCertificateResponse => "commit_certificate_response",
-            Self::VrfCommit => "vrf_commit",
-            Self::VrfReveal => "vrf_reveal",
         }
     }
     fn parse(value: &str) -> Result<Self> {
@@ -110,16 +104,11 @@ impl ConsensusMessageControlKind {
             "certified_body_response" => Ok(Self::CertifiedBodyResponse),
             "commit_certificate_request" => Ok(Self::CommitCertificateRequest),
             "commit_certificate_response" => Ok(Self::CommitCertificateResponse),
-            "vrf_commit" => Ok(Self::VrfCommit),
-            "vrf_reveal" => Ok(Self::VrfReveal),
             _ => Err(eyre!("unknown consensus message-control kind `{value}`")),
         }
     }
     const fn has_exact_round(self) -> bool {
-        !matches!(
-            self,
-            Self::PayloadChunk | Self::CommitCertificateRequest | Self::VrfCommit | Self::VrfReveal
-        )
+        !matches!(self, Self::PayloadChunk | Self::CommitCertificateRequest)
     }
 }
 /// Action taken when a rule matches.
@@ -1328,9 +1317,7 @@ fn parse_held(value: &Value) -> Result<ConsensusMessageControlHeld> {
         .transpose()
         .map_err(|_| eyre!("held descriptor chunk index exceeds u32"))?;
     match kind {
-        ConsensusMessageControlKind::PayloadChunk
-        | ConsensusMessageControlKind::VrfCommit
-        | ConsensusMessageControlKind::VrfReveal => {
+        ConsensusMessageControlKind::PayloadChunk => {
             if height.is_some() || view.is_some() {
                 return Err(eyre!("roundless held descriptor invented a round"));
             }
@@ -1393,8 +1380,6 @@ fn parse_held(value: &Value) -> Result<ConsensusMessageControlHeld> {
             | ConsensusMessageControlKind::CommitVote
             | ConsensusMessageControlKind::TimeoutVote
             | ConsensusMessageControlKind::PayloadChunk
-            | ConsensusMessageControlKind::VrfCommit
-            | ConsensusMessageControlKind::VrfReveal
     );
     if requires_single_signer != signer.is_some() {
         return Err(eyre!(
@@ -1481,13 +1466,6 @@ fn parse_held(value: &Value) -> Result<ConsensusMessageControlHeld> {
         }
         ConsensusMessageControlKind::CommitCertificateRequest => {
             has_no_subject_or_execution && !has_single_signer && !has_certificate_signers
-        }
-        ConsensusMessageControlKind::VrfCommit | ConsensusMessageControlKind::VrfReveal => {
-            has_no_subject_or_execution
-                && has_single_signer
-                && !has_certificate_signers
-                && !has_manifest_hash
-                && !has_chunk_index
         }
     };
     if !matches!(
@@ -2039,14 +2017,6 @@ mod tests {
                 Value::Null,
                 Vec::new(),
             ),
-            ConsensusMessageControlKind::VrfCommit | ConsensusMessageControlKind::VrfReveal => (
-                Value::Null,
-                Value::Null,
-                Value::Null,
-                Value::Null,
-                Value::from(0_u64),
-                Vec::new(),
-            ),
         };
         object_value([
             ("authenticated_via", Value::from(peer.clone())),
@@ -2187,24 +2157,6 @@ mod tests {
                 .is_err(),
             "a chunk selector cannot invent height/view coordinates"
         );
-        for (revision, kind) in [
-            (6, ConsensusMessageControlKind::VrfCommit),
-            (7, ConsensusMessageControlKind::VrfReveal),
-        ] {
-            let vrf_rule = ConsensusMessageControlRule::exact(
-                chunk.sender.clone(),
-                kind,
-                9,
-                2,
-                ConsensusMessageControlAction::Hold,
-            );
-            assert!(
-                control
-                    .write_command(revision, &[vrf_rule], &[], 2, false)
-                    .is_err(),
-                "roundless {kind:?} traffic cannot be selected by an exact-round rule"
-            );
-        }
         assert!(
             control.write_command(8, &[deferred], &[], 2, false).is_ok(),
             "a Proposal-bound Hold selector is admissible before its exact hash resolves"
@@ -3096,8 +3048,6 @@ mod tests {
             ConsensusMessageControlKind::CertifiedBodyResponse,
             ConsensusMessageControlKind::CommitCertificateRequest,
             ConsensusMessageControlKind::CommitCertificateResponse,
-            ConsensusMessageControlKind::VrfCommit,
-            ConsensusMessageControlKind::VrfReveal,
         ] {
             let parsed = parse_held(&held_descriptor(kind))
                 .unwrap_or_else(|error| panic!("daemon {kind:?} descriptor failed: {error:#}"));

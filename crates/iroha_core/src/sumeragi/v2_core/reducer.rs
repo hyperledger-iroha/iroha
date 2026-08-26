@@ -639,6 +639,16 @@ impl Reducer {
             None => false,
         }
     }
+    /// Return whether this validator may create a Prepare/Commit intent for
+    /// the current candidate body.
+    ///
+    /// The serialized runtime uses this read-only projection when deciding
+    /// whether exact, already-arrived locked-reproposal Prepare votes can
+    /// productively precede a frozen timeout owner. Reducer admission and WAL
+    /// persistence remain the authority for the eventual vote.
+    pub(crate) fn local_candidate_body_is_eligible(&self) -> bool {
+        self.local_candidate_body_eligible()
+    }
     fn local_certified_candidate_body_eligible(&self) -> bool {
         self.local_validator.is_none() || self.local_candidate_body_eligible()
     }

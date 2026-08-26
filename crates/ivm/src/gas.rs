@@ -8,8 +8,8 @@
 //!
 //! Scope
 //! - Includes extended vector/parallel and cryptographic instructions.
-//! - Vector length scaling and HTM retry penalties are supported; vector costs
-//!   scale from the two-lane baseline by the active logical vector length.
+//! - Vector costs scale from the two-lane baseline by the deterministic logical
+//!   vector length.
 use crate::instruction::wide;
 use iroha_crypto::Hash;
 /// Gas accounting treats two lanes as the baseline for vector operations.
@@ -555,7 +555,6 @@ pub(crate) fn cost_from_parts(
     base_cost: Option<u64>,
     wide_op: u8,
     vector_len: usize,
-    htm_retries: u32,
 ) -> Option<u64> {
     let mut cost = base_cost?;
     if matches!(
@@ -569,13 +568,12 @@ pub(crate) fn cost_from_parts(
     ) {
         cost = scaled_vector_cost(cost, vector_len);
     }
-    Some(cost.saturating_mul(htm_retries as u64 + 1))
+    Some(cost)
 }
-/// Compute gas cost considering vector length and HTM retries.
-#[allow(dead_code)]
-pub fn cost_of_with_params(instr: u32, vector_len: usize, htm_retries: u32) -> Option<u64> {
+/// Compute gas cost using the supplied deterministic logical vector length.
+pub fn cost_of_with_vector_len(instr: u32, vector_len: usize) -> Option<u64> {
     let wide_op = wide::opcode(instr);
-    cost_from_parts(cost_of(instr), wide_op, vector_len, htm_retries)
+    cost_from_parts(cost_of(instr), wide_op, vector_len)
 }
 const GAS_SCHEDULE_DOMAIN: &str = "iroha.ivm.gas-schedule.v3";
 const GAS_SCHEDULE_DESCRIPTOR_VERSION: u16 = 3;
@@ -1433,13 +1431,11 @@ mod tests {
         for &op in SCHEDULE_OPCODES {
             let instr = u32::from(op) << 24;
             for vector_len in [0, 1, 2, 4, 16] {
-                for htm_retries in [0, 1, 3] {
-                    assert_eq!(
-                        cost_from_parts(cost_of(instr), op, vector_len, htm_retries),
-                        cost_of_with_params(instr, vector_len, htm_retries),
-                        "op=0x{op:02x} vector_len={vector_len} htm_retries={htm_retries}",
-                    );
-                }
+                assert_eq!(
+                    cost_from_parts(cost_of(instr), op, vector_len),
+                    cost_of_with_vector_len(instr, vector_len),
+                    "op=0x{op:02x} vector_len={vector_len}",
+                );
             }
         }
     }

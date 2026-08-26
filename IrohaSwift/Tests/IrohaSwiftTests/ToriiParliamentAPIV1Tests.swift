@@ -25,6 +25,15 @@ final class ToriiParliamentAPIV1Tests: XCTestCase {
         let fixture = try fixtureObject()
         XCTAssertEqual(fixture["api_version"] as? Int, Int(ToriiParliamentAPIV1.version))
         let routes = try XCTUnwrap(fixture["routes"] as? [String: String])
+        let limits = try XCTUnwrap(fixture["limits"] as? [String: Int])
+        XCTAssertEqual(
+            limits["timed_ovn_ballot_chunk_max_records"],
+            ToriiParliamentAPIV1.maximumTimedOvnBallotChunkRecords
+        )
+        XCTAssertEqual(
+            limits["timed_ovn_corpus_entries"],
+            ToriiParliamentAPIV1.maximumCorpusEntries
+        )
         XCTAssertEqual(routes["attempt_draft"], ToriiParliamentAPIV1.attemptDraftPath)
         XCTAssertEqual(routes["attempt_read"], ToriiParliamentAPIV1.attemptReadPathTemplate)
         XCTAssertEqual(
@@ -170,6 +179,35 @@ final class ToriiParliamentAPIV1Tests: XCTestCase {
         )
     }
 
+    func testTimedOvnCorpusTransitionPreflightsOneThrough32RecordsPerChunk() {
+        let record = [UInt8](
+            repeating: 1,
+            count: ToriiParliamentAPIV1.timedOvnBallotRecordBytes
+        )
+        for count in [1, ToriiParliamentAPIV1.maximumTimedOvnBallotChunkRecords] {
+            XCTAssertNoThrow(
+                try ToriiParliamentAPIV1.transitionDraftRequestData(
+                    governanceAttemptId: attemptID,
+                    transition: .freezeTimedOvnCorpus(
+                        ballotAttemptId: identifier(1),
+                        ballotRecords: Array(repeating: record, count: count)
+                    )
+                )
+            )
+        }
+        for count in [0, ToriiParliamentAPIV1.maximumTimedOvnBallotChunkRecords + 1] {
+            XCTAssertThrowsError(
+                try ToriiParliamentAPIV1.transitionDraftRequestData(
+                    governanceAttemptId: attemptID,
+                    transition: .freezeTimedOvnCorpus(
+                        ballotAttemptId: identifier(1),
+                        ballotRecords: Array(repeating: record, count: count)
+                    )
+                )
+            )
+        }
+    }
+
     func testReadProjectionValidatesScheduleNoResultAndExactSupporters() throws {
         let valid = try jsonData(makeReadResponse())
         let parsed = try ToriiParliamentAPIV1.decodeAttemptReadResponse(
@@ -219,6 +257,143 @@ final class ToriiParliamentAPIV1Tests: XCTestCase {
         XCTAssertThrowsError(
             try ToriiParliamentAPIV1.decodeAttemptReadResponse(
                 jsonData(unsorted),
+                expectedGovernanceAttemptId: attemptID
+            )
+        )
+    }
+
+    func testReadProjectionRejectsForgedCertificateBindingsAndBallots() throws {
+        let forgedResponses = [
+            mutateCertificate(makeReadResponse()) { certificate, _, _ in
+                certificate["proposal_content_id"] = identifier(0xee)
+            },
+            mutateCertificate(makeReadResponse()) { certificate, _, _ in
+                certificate["governance_attempt_sequence"] = 1
+            },
+            mutateCertificate(makeReadResponse()) { certificate, _, _ in
+                certificate["risk_tier"] = ["tier": "Emergency"]
+            },
+            mutateCertificate(makeReadResponse()) { certificate, _, _ in
+                certificate["policy_version"] = 2
+            },
+            mutateCertificate(makeReadResponse()) { certificate, _, _ in
+                certificate["enact_at_height"] = 8
+            },
+            mutateCertificate(makeReadResponse()) { _, _, request in
+                request["beacon_session_id"] = identifier(0xee)
+            },
+            mutateCertificate(makeReadResponse()) { _, _, request in
+                request["request_height"] = 0
+            },
+            mutateCertificate(makeReadResponse()) { _, _, request in
+                request["candidate_count"] = 1_001
+            },
+        ]
+        for forged in forgedResponses {
+            XCTAssertThrowsError(
+                try ToriiParliamentAPIV1.decodeAttemptReadResponse(
+                    jsonData(forged),
+                    expectedGovernanceAttemptId: attemptID
+                )
+            )
+        }
+
+        var wrongMode = makeReadResponse()
+        wrongMode["required_bodies"] = [[
+            "body": "rules-committee",
+            "decision_mode": ["mode": "HiddenBindingBallot"],
+        ]]
+        XCTAssertThrowsError(
+            try ToriiParliamentAPIV1.decodeAttemptReadResponse(
+                jsonData(wrongMode),
+                expectedGovernanceAttemptId: attemptID
+            )
+        )
+
+        XCTAssertNoThrow(
+            try ToriiParliamentAPIV1.decodeAttemptReadResponse(
+                jsonData(makeHiddenBallotReadResponse()),
+                expectedGovernanceAttemptId: attemptID
+            )
+        )
+        let ballotMutations: [(inout [String: Any]) -> Void] = [
+            { $0["ballot_attempt_sequence"] = 17 },
+            { $0["max_corpus_entries"] = 2 },
+            {
+                var tally = $0["tally"] as! [String: Any]
+                tally["abstain"] = 1
+                $0["tally"] = tally
+            },
+            { $0["outcome"] = ["outcome": "Rejected"] },
+        ]
+        for mutation in ballotMutations {
+            var forged = makeHiddenBallotReadResponse()
+            var certificate = try XCTUnwrap(forged["certificate"] as? [String: Any])
+            var bindings = try XCTUnwrap(certificate["body_bindings"] as? [[String: Any]])
+            var ballot = try XCTUnwrap(bindings[0]["ballot"] as? [String: Any])
+            mutation(&ballot)
+            bindings[0]["ballot"] = ballot
+            certificate["body_bindings"] = bindings
+            forged["certificate"] = certificate
+            XCTAssertThrowsError(
+                try ToriiParliamentAPIV1.decodeAttemptReadResponse(
+                    jsonData(forged),
+                    expectedGovernanceAttemptId: attemptID
+                )
+            )
+        }
+    }
+
+    func testTimedOvnProgressIsAggregateOnlyAndCertificateBound() throws {
+        let response = makeHiddenBallotReadResponse()
+        let parsed = try ToriiParliamentAPIV1.decodeAttemptReadResponse(
+            jsonData(response),
+            expectedGovernanceAttemptId: attemptID
+        )
+        let progress = try XCTUnwrap(parsed.bodyStates[0].timedOvnProgress)
+        XCTAssertEqual(progress.ballotAttemptId, identifier(0x21))
+        XCTAssertEqual(progress.status, "Finalized")
+        XCTAssertEqual(progress.frozenSurvivorCount, 3)
+        XCTAssertEqual(progress.acceptedBallotPrefixCount, 3)
+
+        var mismatched = response
+        var states = try XCTUnwrap(mismatched["body_states"] as? [[String: Any]])
+        var progressObject = try XCTUnwrap(
+            states[0]["timed_ovn_progress"] as? [String: Any]
+        )
+        progressObject["accepted_ballot_prefix_count"] = 2
+        states[0]["timed_ovn_progress"] = progressObject
+        mismatched["body_states"] = states
+        XCTAssertThrowsError(
+            try ToriiParliamentAPIV1.decodeAttemptReadResponse(
+                jsonData(mismatched),
+                expectedGovernanceAttemptId: attemptID
+            )
+        )
+
+        var leaked = response
+        states = try XCTUnwrap(leaked["body_states"] as? [[String: Any]])
+        progressObject = try XCTUnwrap(states[0]["timed_ovn_progress"] as? [String: Any])
+        progressObject["ballot_records"] = []
+        states[0]["timed_ovn_progress"] = progressObject
+        leaked["body_states"] = states
+        XCTAssertThrowsError(
+            try ToriiParliamentAPIV1.decodeAttemptReadResponse(
+                jsonData(leaked),
+                expectedGovernanceAttemptId: attemptID
+            )
+        )
+
+        var premature = response
+        states = try XCTUnwrap(premature["body_states"] as? [[String: Any]])
+        progressObject = try XCTUnwrap(states[0]["timed_ovn_progress"] as? [String: Any])
+        progressObject["status"] = ["status": "TimedCommitment"]
+        progressObject["accepted_ballot_prefix_count"] = 3
+        states[0]["timed_ovn_progress"] = progressObject
+        premature["body_states"] = states
+        XCTAssertThrowsError(
+            try ToriiParliamentAPIV1.decodeAttemptReadResponse(
+                jsonData(premature),
                 expectedGovernanceAttemptId: attemptID
             )
         )
@@ -352,6 +527,27 @@ final class ToriiParliamentAPIV1Tests: XCTestCase {
         )
     }
 
+    private func mutateCertificate(
+        _ response: [String: Any],
+        mutation: (
+            _ certificate: inout [String: Any],
+            _ binding: inout [String: Any],
+            _ sortitionRequest: inout [String: Any]
+        ) -> Void
+    ) -> [String: Any] {
+        var result = response
+        var certificate = result["certificate"] as! [String: Any]
+        var bindings = certificate["body_bindings"] as! [[String: Any]]
+        var binding = bindings[0]
+        var request = binding["sortition_request"] as! [String: Any]
+        mutation(&certificate, &binding, &request)
+        binding["sortition_request"] = request
+        bindings[0] = binding
+        certificate["body_bindings"] = bindings
+        result["certificate"] = certificate
+        return result
+    }
+
     private func makeReadResponse(
         supporters: [String]? = nil
     ) -> [String: Any] {
@@ -381,6 +577,7 @@ final class ToriiParliamentAPIV1Tests: XCTestCase {
                 "public_finding_deadline_height": 8,
                 "no_result_kind": NSNull(),
                 "no_result_height": NSNull(),
+                "timed_ovn_progress": NSNull(),
             ]],
             "certificate": [
                 "proposal_content_id": proposalID,
@@ -431,6 +628,66 @@ final class ToriiParliamentAPIV1Tests: XCTestCase {
             "superseding_head": NSNull(),
             "state_payload_hex": framedHex(),
         ]
+    }
+
+    private func makeHiddenBallotReadResponse() -> [String: Any] {
+        var response = mutateCertificate(makeReadResponse()) { _, binding, request in
+            binding["body"] = "policy-jury"
+            request["body"] = "policy-jury"
+            binding["public_finding"] = NSNull()
+            binding["ballot"] = [
+                "ballot_attempt_id": identifier(0x21),
+                "ballot_attempt_sequence": 0,
+                "tle_session_id": identifier(0x22),
+                "tle_key_session_id": identifier(0x23),
+                "registration_root": root,
+                "dropout_root": root,
+                "survivor_root": root,
+                "corpus_root": root,
+                "no_recovery_root": root,
+                "timed_commitment_root": root,
+                "release_beacon_session_id": identifier(0x24),
+                "registered_at_height": 1,
+                "registration_close_height": 3,
+                "survivor_freeze_height": 4,
+                "commitment_close_height": 5,
+                "registration_closed_at_height": 3,
+                "survivors_frozen_at_height": 4,
+                "commitment_closed_at_height": 5,
+                "max_ballot_retries": 16,
+                "max_corpus_entries": 3,
+                "release_height": 6,
+                "opening_deadline_height": 9,
+                "release_pulse_id": identifier(0x25),
+                "opening_height": 7,
+                "opening_root": root,
+                "tally": [
+                    "original_seats": 3,
+                    "accepted_ballots": 3,
+                    "aye": 2,
+                    "nay": 1,
+                    "abstain": 0,
+                ],
+                "outcome": ["outcome": "Approved"],
+            ]
+        }
+        response["required_bodies"] = [[
+            "body": "policy-jury",
+            "decision_mode": ["mode": "HiddenBindingBallot"],
+        ]]
+        var states = response["body_states"] as! [[String: Any]]
+        states[0]["body"] = "policy-jury"
+        states[0]["public_finding_opened_at_height"] = NSNull()
+        states[0]["public_finding_phase_blocks"] = NSNull()
+        states[0]["public_finding_deadline_height"] = NSNull()
+        states[0]["timed_ovn_progress"] = [
+            "ballot_attempt_id": identifier(0x21),
+            "status": ["status": "Finalized"],
+            "frozen_survivor_count": 3,
+            "accepted_ballot_prefix_count": 3,
+        ]
+        response["body_states"] = states
+        return response
     }
 
     private func makeTleReleaseContextResponse() -> [String: Any] {

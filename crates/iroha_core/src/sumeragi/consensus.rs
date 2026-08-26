@@ -19,8 +19,8 @@ pub use iroha_data_model::block::consensus::{
     CertPhase, ConsensusBlockHeader, ConsensusGenesisModeParams, ConsensusGenesisParams, Evidence,
     ExecKv, ExecWitness, ExecWitnessMsg, Height, LaneBlockCertificateV1, LaneBlockDescriptorV1,
     LaneBlockProposalPayloadHintV1, LaneBlockProposalV1, LaneBlockQcV1, LaneBlockVoteBodyV1,
-    NposGenesisParams, Proposal, Qc, QcAggregate, QcRef, QcVote, ValidatorIndex, View, VrfCommit,
-    VrfReveal, default_chain_order_hash,
+    NposGenesisParams, Proposal, Qc, QcAggregate, QcRef, QcVote, ValidatorIndex, View,
+    default_chain_order_hash,
 };
 /// Live consensus protocol revision.
 pub const PROTO_VERSION: u32 = iroha_data_model::block::consensus_v2::PROTOCOL_VERSION as u32;
@@ -72,75 +72,6 @@ pub fn vote_preimage(network_id: &NetworkId, mode_tag: &str, v: &Vote) -> Vec<u8
     }
     out
 }
-/// Build the canonical preimage for a VRF commit signature under the given chain and mode tag.
-pub fn vrf_commit_preimage(network_id: &NetworkId, mode_tag: &str, c: &VrfCommit) -> Vec<u8> {
-    vrf_commit_preimage_fields(network_id, mode_tag, c.epoch, c.signer, &c.commitment)
-}
-/// Build the canonical preimage for a versioned-v2 VRF commitment.
-pub fn v2_vrf_commit_preimage(
-    network_id: &NetworkId,
-    mode_tag: &str,
-    commit: &iroha_data_model::block::consensus_v2::VrfCommit,
-) -> Vec<u8> {
-    let mut out = Vec::with_capacity(32 + 8 + 4 + 32);
-    let domain = consensus_domain(network_id, "VrfCommit", b"v2", mode_tag);
-    out.extend_from_slice(&domain);
-    out.extend_from_slice(&commit.epoch.to_be_bytes());
-    out.extend_from_slice(&commit.signer.to_be_bytes());
-    out.extend_from_slice(&commit.commitment);
-    out
-}
-fn vrf_commit_preimage_fields(
-    network_id: &NetworkId,
-    mode_tag: &str,
-    epoch: u64,
-    signer: u32,
-    commitment: &[u8; 32],
-) -> Vec<u8> {
-    let mut out = Vec::with_capacity(32 + 8 + 4 + 32);
-    let domain = consensus_domain(network_id, "VrfCommit", b"v1", mode_tag);
-    out.extend_from_slice(&domain);
-    out.extend_from_slice(&epoch.to_be_bytes());
-    out.extend_from_slice(&signer.to_be_bytes());
-    out.extend_from_slice(commitment);
-    out
-}
-/// Build the canonical preimage for a VRF reveal signature under the given chain and mode tag.
-pub fn vrf_reveal_preimage(network_id: &NetworkId, mode_tag: &str, r: &VrfReveal) -> Vec<u8> {
-    vrf_reveal_preimage_fields(network_id, mode_tag, r.epoch, r.signer, &r.reveal)
-}
-/// Build the canonical preimage for a versioned-v2 VRF reveal.
-pub fn v2_vrf_reveal_preimage(
-    network_id: &NetworkId,
-    mode_tag: &str,
-    reveal: &iroha_data_model::block::consensus_v2::VrfReveal,
-) -> Vec<u8> {
-    let proof_len = u64::try_from(reveal.vrf_proof.len()).unwrap_or(u64::MAX);
-    let mut out = Vec::with_capacity(32 + 8 + 4 + 32 + 8 + reveal.vrf_proof.len());
-    let domain = consensus_domain(network_id, "VrfReveal", b"v2", mode_tag);
-    out.extend_from_slice(&domain);
-    out.extend_from_slice(&reveal.epoch.to_be_bytes());
-    out.extend_from_slice(&reveal.signer.to_be_bytes());
-    out.extend_from_slice(&reveal.reveal);
-    out.extend_from_slice(&proof_len.to_be_bytes());
-    out.extend_from_slice(&reveal.vrf_proof);
-    out
-}
-fn vrf_reveal_preimage_fields(
-    network_id: &NetworkId,
-    mode_tag: &str,
-    epoch: u64,
-    signer: u32,
-    reveal: &[u8; 32],
-) -> Vec<u8> {
-    let mut out = Vec::with_capacity(32 + 8 + 4 + 32);
-    let domain = consensus_domain(network_id, "VrfReveal", b"v1", mode_tag);
-    out.extend_from_slice(&domain);
-    out.extend_from_slice(&epoch.to_be_bytes());
-    out.extend_from_slice(&signer.to_be_bytes());
-    out.extend_from_slice(reveal);
-    out
-}
 /// Canonical preimage helpers for BLS signing (same-message across signers).
 #[cfg(feature = "bls")]
 pub mod bls_preimage {
@@ -148,14 +79,6 @@ pub mod bls_preimage {
     /// Build the canonical preimage for a Vote signature under the given chain and mode tag.
     pub fn vote(network_id: &NetworkId, mode_tag: &str, v: &Vote) -> Vec<u8> {
         super::vote_preimage(network_id, mode_tag, v)
-    }
-    /// Build the canonical preimage for a VRF commit signature.
-    pub fn vrf_commit(network_id: &NetworkId, mode_tag: &str, c: &VrfCommit) -> Vec<u8> {
-        super::vrf_commit_preimage(network_id, mode_tag, c)
-    }
-    /// Build the canonical preimage for a VRF reveal signature.
-    pub fn vrf_reveal(network_id: &NetworkId, mode_tag: &str, r: &VrfReveal) -> Vec<u8> {
-        super::vrf_reveal_preimage(network_id, mode_tag, r)
     }
 }
 /// Domain separation helper for signable payloads.
@@ -216,8 +139,6 @@ pub fn consensus_genesis_params_from_parameters(
             ConsensusGenesisModeParams::Npos(NposGenesisParams {
                 epoch_length_blocks: npos.epoch_length_blocks(),
                 epoch_seed: npos.epoch_seed(),
-                vrf_commit_window_blocks: npos.vrf_commit_window_blocks(),
-                vrf_reveal_window_blocks: npos.vrf_reveal_window_blocks(),
                 max_validators: npos.max_validators(),
                 min_self_bond: npos.min_self_bond().clone(),
                 min_nomination_bond: npos.min_nomination_bond().clone(),
@@ -544,7 +465,7 @@ mod tests {
         assert_ne!(d1, d2);
     }
     #[test]
-    fn preimages_use_current_domain_tags() {
+    fn vote_preimage_uses_current_domain_tag() {
         let chain = test_network_id("iroha:test:preimage-tags");
         let block_hash = HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([7u8; 32]));
         let vote = Vote {
@@ -565,28 +486,6 @@ mod tests {
         assert_eq!(
             &vote_preimage[..32],
             &consensus_domain(&chain, "Vote", b"v1", PERMISSIONED_TAG)
-        );
-        let vrf_commit = VrfCommit {
-            epoch: 0,
-            commitment: [0xA1; 32],
-            signer: 3,
-            bls_sig: Vec::new(),
-        };
-        let vrf_commit_preimage = vrf_commit_preimage(&chain, PERMISSIONED_TAG, &vrf_commit);
-        assert_eq!(
-            &vrf_commit_preimage[..32],
-            &consensus_domain(&chain, "VrfCommit", b"v1", PERMISSIONED_TAG)
-        );
-        let vrf_reveal = VrfReveal {
-            epoch: 0,
-            reveal: [0xB2; 32],
-            signer: 3,
-            bls_sig: Vec::new(),
-        };
-        let vrf_reveal_preimage = vrf_reveal_preimage(&chain, PERMISSIONED_TAG, &vrf_reveal);
-        assert_eq!(
-            &vrf_reveal_preimage[..32],
-            &consensus_domain(&chain, "VrfReveal", b"v1", PERMISSIONED_TAG)
         );
     }
     #[test]
@@ -677,127 +576,6 @@ mod tests {
         );
     }
     #[test]
-    fn vrf_preimages_match_formal_layout_and_exclude_signatures() {
-        let chain = test_network_id("iroha:test:classic-vrf-preimage-layout");
-        let mut commit = VrfCommit {
-            epoch: 0x0102_0304_0506_0708,
-            commitment: [0x21; 32],
-            signer: 0x3132_3334,
-            bls_sig: vec![0xAA, 0xBB],
-        };
-        let mut reveal = VrfReveal {
-            epoch: 0x1112_1314_1516_1718,
-            reveal: [0x41; 32],
-            signer: 0x5152_5354,
-            bls_sig: vec![0xCC, 0xDD],
-        };
-        let mut expected_commit = Vec::new();
-        expected_commit.extend_from_slice(&consensus_domain(
-            &chain,
-            "VrfCommit",
-            b"v1",
-            PERMISSIONED_TAG,
-        ));
-        expected_commit.extend_from_slice(&commit.epoch.to_be_bytes());
-        expected_commit.extend_from_slice(&commit.signer.to_be_bytes());
-        expected_commit.extend_from_slice(&commit.commitment);
-        assert_eq!(
-            vrf_commit_preimage(&chain, PERMISSIONED_TAG, &commit),
-            expected_commit
-        );
-        let mut v2_commit = iroha_data_model::block::consensus_v2::VrfCommit {
-            epoch: commit.epoch,
-            commitment: commit.commitment,
-            signer: commit.signer,
-            bls_sig: vec![0xFE],
-        };
-        let mut expected_v2_commit = Vec::new();
-        expected_v2_commit.extend_from_slice(&consensus_domain(
-            &chain,
-            "VrfCommit",
-            b"v2",
-            PERMISSIONED_TAG,
-        ));
-        expected_v2_commit.extend_from_slice(&v2_commit.epoch.to_be_bytes());
-        expected_v2_commit.extend_from_slice(&v2_commit.signer.to_be_bytes());
-        expected_v2_commit.extend_from_slice(&v2_commit.commitment);
-        assert_eq!(
-            v2_vrf_commit_preimage(&chain, PERMISSIONED_TAG, &v2_commit),
-            expected_v2_commit,
-            "the versioned carrier must bind its own domain and canonical fields",
-        );
-        commit.bls_sig = vec![0x10, 0x11, 0x12];
-        v2_commit.bls_sig = vec![0x13, 0x14];
-        assert_eq!(
-            vrf_commit_preimage(&chain, PERMISSIONED_TAG, &commit),
-            expected_commit,
-            "VRF commit signatures must stay outside the commit preimage"
-        );
-        assert_eq!(
-            v2_vrf_commit_preimage(&chain, PERMISSIONED_TAG, &v2_commit),
-            expected_v2_commit,
-            "versioned VRF commit signatures must stay outside the commit preimage",
-        );
-        let mut expected_reveal = Vec::new();
-        expected_reveal.extend_from_slice(&consensus_domain(
-            &chain,
-            "VrfReveal",
-            b"v1",
-            PERMISSIONED_TAG,
-        ));
-        expected_reveal.extend_from_slice(&reveal.epoch.to_be_bytes());
-        expected_reveal.extend_from_slice(&reveal.signer.to_be_bytes());
-        expected_reveal.extend_from_slice(&reveal.reveal);
-        assert_eq!(
-            vrf_reveal_preimage(&chain, PERMISSIONED_TAG, &reveal),
-            expected_reveal
-        );
-        let mut v2_reveal = iroha_data_model::block::consensus_v2::VrfReveal {
-            epoch: reveal.epoch,
-            reveal: reveal.reveal,
-            signer: reveal.signer,
-            vrf_proof: vec![0x31, 0x32],
-            bls_sig: vec![0xFD],
-        };
-        let mut expected_v2_reveal = Vec::new();
-        expected_v2_reveal.extend_from_slice(&consensus_domain(
-            &chain,
-            "VrfReveal",
-            b"v2",
-            PERMISSIONED_TAG,
-        ));
-        expected_v2_reveal.extend_from_slice(&v2_reveal.epoch.to_be_bytes());
-        expected_v2_reveal.extend_from_slice(&v2_reveal.signer.to_be_bytes());
-        expected_v2_reveal.extend_from_slice(&v2_reveal.reveal);
-        expected_v2_reveal.extend_from_slice(
-            &u64::try_from(v2_reveal.vrf_proof.len())
-                .unwrap()
-                .to_be_bytes(),
-        );
-        expected_v2_reveal.extend_from_slice(&v2_reveal.vrf_proof);
-        assert_eq!(
-            v2_vrf_reveal_preimage(&chain, PERMISSIONED_TAG, &v2_reveal),
-            expected_v2_reveal,
-            "the versioned carrier must bind its proof and canonical fields",
-        );
-        assert_ne!(
-            expected_commit, expected_reveal,
-            "VRF commit and reveal preimages must remain type-separated"
-        );
-        reveal.bls_sig = vec![0x20, 0x21, 0x22];
-        v2_reveal.bls_sig = vec![0x23, 0x24];
-        assert_eq!(
-            vrf_reveal_preimage(&chain, PERMISSIONED_TAG, &reveal),
-            expected_reveal,
-            "VRF reveal signatures must stay outside the reveal preimage"
-        );
-        assert_eq!(
-            v2_vrf_reveal_preimage(&chain, PERMISSIONED_TAG, &v2_reveal),
-            expected_v2_reveal,
-            "versioned VRF reveal signatures must stay outside the reveal preimage",
-        );
-    }
-    #[test]
     fn vote_preimage_binds_chain_order() {
         let chain = test_network_id("iroha:test:chain-order-binding");
         let block_hash = HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([7u8; 32]));
@@ -856,8 +634,6 @@ mod tests {
                 epoch_length_blocks: core::num::NonZeroU64::new(3_600)
                     .expect("test epoch length must be non-zero"),
                 epoch_seed: [7; 32],
-                vrf_commit_window_blocks: 100,
-                vrf_reveal_window_blocks: 40,
                 max_validators: 31,
                 min_self_bond: 1_u64.into(),
                 min_nomination_bond: 1_u64.into(),
@@ -930,8 +706,6 @@ mod tests {
                 epoch_length_blocks: core::num::NonZeroU64::new(3_600)
                     .expect("test epoch length must be non-zero"),
                 epoch_seed: [0u8; 32],
-                vrf_commit_window_blocks: 100,
-                vrf_reveal_window_blocks: 40,
                 max_validators: 31,
                 min_self_bond: 1_000_u64.into(),
                 min_nomination_bond: 1_u64.into(),

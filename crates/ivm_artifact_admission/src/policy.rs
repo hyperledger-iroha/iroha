@@ -528,7 +528,7 @@ fn validate_bytecode_security(
                 | wide::control::JALS
         ) || (opcode == wide::control::JAL && wide::rd(op.inst) != 0);
         if requires_fallthrough {
-            let fallthrough = op.pc.checked_add(u64::from(op.len)).ok_or_else(|| {
+            let fallthrough = op.pc.checked_add(4).ok_or_else(|| {
                 ContractArtifactError::invalid(format!(
                     "control-flow fallthrough overflows at pc {}",
                     op.pc
@@ -604,7 +604,7 @@ fn validate_nonrecursive_direct_calls(
         })?;
         let opcode = wide::opcode(op.inst);
         let fallthrough = || {
-            op.pc.checked_add(u64::from(op.len)).ok_or_else(|| {
+            op.pc.checked_add(4).ok_or_else(|| {
                 ContractArtifactError::invalid(format!(
                     "control-flow fallthrough overflows at pc {}",
                     op.pc
@@ -758,7 +758,7 @@ fn reachable_syscalls(
             syscalls.insert(number);
         }
         let opcode = wide::opcode(op.inst);
-        let fallthrough = op.pc.checked_add(u64::from(op.len));
+        let fallthrough = op.pc.checked_add(4);
         match opcode {
             wide::control::HALT => {}
             wide::control::BEQ

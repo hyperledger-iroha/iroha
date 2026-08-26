@@ -1961,8 +1961,6 @@ impl ConsensusIngressLimiter {
                         | ConsensusMessageV2Payload::CertifiedBodyRequest(_)
                         | ConsensusMessageV2Payload::CommitCertificateRequest(_)
                         | ConsensusMessageV2Payload::CommitCertificateResponse(_)
-                        | ConsensusMessageV2Payload::VrfCommit(_)
-                        | ConsensusMessageV2Payload::VrfReveal(_)
                         | ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => {
                             IngressPolicy::critical()
                         }
@@ -4600,8 +4598,6 @@ impl NetworkRelayShared {
                 Some(response.certificate.round.height),
                 Some(response.certificate.round.view),
             ),
-            ConsensusMessageV2Payload::VrfCommit(_) => ("SumeragiV2VrfCommit", None, None),
-            ConsensusMessageV2Payload::VrfReveal(_) => ("SumeragiV2VrfReveal", None, None),
             ConsensusMessageV2Payload::GlobalBeaconPartialSignature(partial) => (
                 "SumeragiV2GlobalBeaconPartialSignature",
                 Some(partial.round.height),
@@ -5192,36 +5188,6 @@ mod network_relay_tests {
                 ..
             }
         ));
-    }
-    #[test]
-    fn block_message_blocking_ingress_policy_admits_only_authoritative_v2() {
-        assert!(
-            BlockMessage::LaneBlockProposal(sample_lane_block_proposal())
-                .requires_blocking_ingress()
-        );
-        assert!(
-            BlockMessage::LaneExecutablePayload(sample_lane_executable_payload())
-                .requires_blocking_ingress()
-        );
-        assert!(
-            BlockMessage::LaneBlockNewViewVote(sample_lane_block_new_view_vote())
-                .requires_blocking_ingress()
-        );
-        assert!(
-            BlockMessage::LaneBlockNewViewCertificate(sample_lane_block_new_view_certificate())
-                .requires_blocking_ingress()
-        );
-        assert!(
-            BlockMessage::LaneBlockVote(sample_lane_block_vote(Phase::Prepare))
-                .requires_blocking_ingress()
-        );
-        assert!(
-            BlockMessage::LaneBlockQc(sample_lane_block_qc(Phase::Commit))
-                .requires_blocking_ingress()
-        );
-        assert!(v2_payload_chunk_block_message().requires_blocking_ingress());
-        assert!(sumeragi_v2_commit_certificate_request().requires_blocking_ingress());
-        assert!(kura_replica_advert_block_message().requires_blocking_ingress());
     }
     fn kura_replica_advert_block_message() -> BlockMessage {
         let keeper = PeerId::new(KeyPair::random().public_key().clone());

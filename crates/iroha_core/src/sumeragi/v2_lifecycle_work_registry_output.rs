@@ -129,6 +129,66 @@ impl PreparedApplyTerminalDirectBroadcastV1 {
     }
 }
 
+/// Proof that the sole executor-pending output is the already-installed exact
+/// CommitQC Broadcast immediately after one exact Ready live Decision Apply.
+///
+/// This proof does not authorize output service. It only closes the scheduling
+/// cycle in which the globally earlier Apply must terminalize before the
+/// ordinary post-Apply Broadcast corridor can service this exact row.
+#[must_use = "the attested post-Apply output census must stay bound to its Apply"]
+pub(in crate::sumeragi) struct AttestedLifecycleDecisionApplySuccessorOutputsV1 {
+    live_apply: LiveLifecycleDecisionApplyReconciliationAuthorityV1,
+    output_address: ConcreteWorkAddress,
+    output_digest: LifecycleDigest,
+    pending_key: LifecycleOutputAdmissionKeyV1,
+    _seal: LifecycleDecisionApplySuccessorOutputsSealV1,
+}
+
+#[derive(Debug)]
+struct LifecycleDecisionApplySuccessorOutputsSealV1;
+
+impl AttestedLifecycleDecisionApplySuccessorOutputsV1 {
+    /// Return the immutable Apply dispatch key governing this suffix.
+    pub(in crate::sumeragi) const fn dispatch_key(
+        &self,
+    ) -> LifecycleDecisionApplyDispatchKeyV1 {
+        self.live_apply.dispatch_key()
+    }
+
+    /// Recheck the sole retained reducer suffix against the exact live Apply.
+    pub(in crate::sumeragi) fn exactly_matches_retransmit_apply(
+        &self,
+        effect: &AdapterEffect,
+    ) -> bool {
+        self.live_apply.exactly_matches_retransmit_apply(effect)
+    }
+
+    /// Return the exact number of pending direct outputs in the frozen census.
+    pub(in crate::sumeragi) const fn pending_count(&self) -> usize {
+        1
+    }
+
+    /// Recheck the whole current pending-map key census without exposing output bytes.
+    #[allow(single_use_lifetimes)]
+    pub(in crate::sumeragi) fn exactly_matches_pending_keys<'a>(
+        &self,
+        keys: impl Iterator<Item = &'a LifecycleOutputAdmissionKeyV1>,
+    ) -> bool {
+        keys.copied().eq(std::iter::once(self.pending_key))
+    }
+
+    /// Rejoin the terminal output preparation to the exact row and pending key
+    /// authenticated before Apply dispatch.
+    pub(in crate::sumeragi) fn exactly_matches_terminal_preparation(
+        &self,
+        prepared: &PreparedApplyTerminalDirectBroadcastV1,
+    ) -> bool {
+        self.output_address == prepared.address
+            && self.output_digest == prepared.digest
+            && self.pending_key == prepared.pending_key
+    }
+}
+
 fn terminal_direct_output_matches_record(
     coordinator: &LifecycleCoordinator,
     ordinal: u128,
@@ -276,6 +336,101 @@ fn lifecycle_output_row_matches(
 }
 
 impl ConcreteLifecycleWorkRegistry {
+    /// Authenticate the sole exact CommitQC output immediately behind one
+    /// exact Ready live Apply.
+    ///
+    /// Every pending owner must rejoin one unique installed `PendingAdapter`
+    /// Broadcast row which is Ready, indexed, and strictly later than Apply.
+    /// Missing/direct-terminal/recovered/diagnostic aliases are rejected.
+    #[allow(single_use_lifetimes)]
+    pub(super) fn attest_lifecycle_decision_apply_successor_outputs<'a>(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        authority: LiveLifecycleDecisionApplyReconciliationAuthorityV1,
+        mut pending_outputs: impl ExactSizeIterator<Item = &'a PendingLifecycleOutputAdmissionV1>,
+    ) -> Option<AttestedLifecycleDecisionApplySuccessorOutputsV1> {
+        if coordinator.fault.is_some() || coordinator.active_lease.is_some() {
+            return None;
+        }
+        let dispatch_key = authority.dispatch_key();
+        if dispatch_key.lineage() != LifecycleDecisionApplyLineageV1::Live {
+            return None;
+        }
+        let apply_ordinal = dispatch_key.lifecycle_ordinal();
+        let apply_record = coordinator.records.get(&apply_ordinal)?;
+        let apply_attestation = self
+            .attest_ready_lifecycle_decision_apply(coordinator, apply_ordinal)
+            .ok()?;
+        if apply_attestation.dispatch_key() != dispatch_key
+            || apply_record.state != super::LifecycleState::Ready
+            || coordinator.ready_index.first().copied() != Some(apply_ordinal)
+        {
+            return None;
+        }
+
+        if pending_outputs.len() != 1 {
+            return None;
+        }
+        let pending_output = pending_outputs.next()?;
+        if pending_outputs.next().is_some() {
+            return None;
+        }
+        let effect = &pending_output.effect;
+        let pending = &pending_output.pending;
+        let AdapterEffect::Broadcast(message) = effect else {
+            return None;
+        };
+        let wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) = &message.payload
+        else {
+            return None;
+        };
+        if certificate != authority.certificate()
+            || certificate.phase != wire::GlobalPhase::Commit
+        {
+            return None;
+        }
+        let mut installed = self.entries.iter().filter(|(address, work)| {
+            pending_output_matches_work(effect, pending, work)
+                && address.owner.causal_root()
+                    == super::CausalRoot::new(digest_from_hash(pending.causal_lifecycle_key()))
+        });
+        let (&address, work) = installed.next()?;
+        if installed.next().is_some()
+            || self.entries.iter().any(|(candidate, candidate_work)| {
+                recovered_broadcast_output_matches_work(
+                    coordinator,
+                    *candidate,
+                    candidate_work,
+                    effect,
+                    pending,
+                )
+            })
+            || coordinator.records.keys().copied().any(|ordinal| {
+                terminal_direct_output_matches_record(coordinator, ordinal, effect, pending)
+            })
+        {
+            return None;
+        }
+        let record = coordinator.records.get(&address.ordinal)?;
+        if address.ordinal <= apply_ordinal
+            || coordinator.ready_index.iter().copied().nth(1) != Some(address.ordinal)
+            || record.state != super::LifecycleState::Ready
+            || record.work_class != LifecycleWorkClass::Broadcast
+            || record.key.phase() != LifecyclePhase::BroadcastCommitQc
+            || record.stage.kind() != LifecycleStageKind::BroadcastCommitQc
+            || !lifecycle_output_row_matches(coordinator, address, work, effect, pending)
+        {
+            return None;
+        }
+        Some(AttestedLifecycleDecisionApplySuccessorOutputsV1 {
+            live_apply: authority,
+            output_address: address,
+            output_digest: work.digest,
+            pending_key: pending_output.key(),
+            _seal: LifecycleDecisionApplySuccessorOutputsSealV1,
+        })
+    }
+
     fn owner_held_output_ordinals(
         coordinator: &LifecycleCoordinator,
         extra: RecoveredWalRegistrySlotV1,

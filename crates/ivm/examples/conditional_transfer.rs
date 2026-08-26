@@ -4,10 +4,7 @@ use iroha_data_model::{
     account::AccountId, asset::AssetDefinitionId, domain::DomainId, nexus::DataSpaceId,
 };
 use iroha_primitives::{numeric::Quantity, numeric_abi::QuantityValueV1};
-use ivm::{
-    IVM, PointerType, VMError, encoding, host::IVMHost, instruction, kotodama::wide as kwide,
-    syscalls,
-};
+use ivm::{IVM, PointerType, VMError, encoding, host::IVMHost, instruction, syscalls};
 use std::{
     any::Any,
     collections::HashMap,
@@ -108,8 +105,7 @@ impl IVMHost for AssetHost {
 fn build_program() -> Vec<u8> {
     let mut prog = ivm::ProgramMetadata::default().encode();
     // If the scalar balance in x15 is below the scalar amount in x16, abort.
-    let branch = kwide::encode_branch_checked(instruction::wide::control::BLTU, 15, 16, 2)
-        .expect("branch offset");
+    let branch = encoding::wide::encode_branch(instruction::wide::control::BLTU, 15, 16, 2);
     prog.extend_from_slice(&branch.to_le_bytes());
     // perform transfer
     prog.extend_from_slice(

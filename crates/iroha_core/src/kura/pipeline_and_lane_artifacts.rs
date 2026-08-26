@@ -2415,7 +2415,6 @@ impl AutonomousLifecycleCursorRead {
 }
 /// Authenticated origin of local executable-payload custody before Kura activation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
-#[allow(dead_code)] // Reserved for source-specific validators at the audited persistence sinks.
 pub(crate) enum AutonomousLifecyclePayloadCustodySourceV1 {
     /// Producer-side custody remains fenced by the exact live Queue reservation group.
     #[codec(index = 0)]

@@ -110,7 +110,7 @@ print(
 ```
 
 The closed response contains exactly
-`cash_handoff_capability="cash_handoff_v1"`, bridge ABI `22`, maximum hop count
+`cash_handoff_capability="cash_handoff_v1"`, bridge ABI `23`, maximum hop count
 `8`, and `ready=True`. Wallet/device peer handoff must not depend on network
 discovery. Missing proof material for a particular online top-up or redemption
 rejects that command only; it cannot make a node, asset, or dataspace “not

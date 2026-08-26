@@ -18202,7 +18202,8 @@ mod tests {
         while displacement != 0 {
             let chunk = displacement.min(127);
             program.extend_from_slice(
-                &ivm::kotodama::wide::encode_addi(
+                &ivm::encoding::wide::encode_ri(
+                    ivm::instruction::wide::arithmetic::ADDI,
                     10,
                     10,
                     i8::try_from(chunk).expect("bounded ADDI chunk"),
@@ -18211,9 +18212,18 @@ mod tests {
             );
             displacement -= chunk;
         }
-        program.extend_from_slice(&ivm::kotodama::wide::encode_move(11, 0).to_le_bytes());
-        program.extend_from_slice(&ivm::kotodama::wide::encode_addi(11, 11, 16).to_le_bytes());
-        program.extend_from_slice(&ivm::kotodama::wide::encode_store64(10, 11, 0).to_le_bytes());
+        program.extend_from_slice(
+            &ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 11, 0, 0)
+                .to_le_bytes(),
+        );
+        program.extend_from_slice(
+            &ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 11, 11, 16)
+                .to_le_bytes(),
+        );
+        program.extend_from_slice(
+            &ivm::encoding::wide::encode_store(ivm::instruction::wide::memory::STORE64, 10, 11, 0)
+                .to_le_bytes(),
+        );
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(program));
         LoadedExecutor::load(raw).expect("load past-heap executor test program")

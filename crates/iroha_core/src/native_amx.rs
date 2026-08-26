@@ -17,14 +17,14 @@ use norito::codec::{Decode, Encode};
 use parking_lot::Mutex;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs::{self, File, OpenOptions},
-    io::{Read, Write},
+    fs::{self, File},
     num::NonZeroUsize,
     path::{Path, PathBuf},
 };
 #[cfg(unix)]
 use std::{
-    fs::DirBuilder,
+    fs::{DirBuilder, OpenOptions},
+    io::{Read, Write},
     os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
 };
 use thiserror::Error;
@@ -2193,6 +2193,7 @@ fn native_amx_verify_owned_directory(
 ) -> Result<(), NativeAmxSigningGuardError> {
     Err(NativeAmxSigningGuardError::UnsupportedPlatform)
 }
+#[cfg(unix)]
 fn native_amx_reconcile_guard_temps(
     directory: &Path,
     directory_handle: &File,

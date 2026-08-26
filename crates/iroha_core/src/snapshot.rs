@@ -2121,7 +2121,7 @@ fn canonical_wsv_member_is_redacted(path: CanonicalWsvPath, key: &str) -> bool {
             key,
             "sumeragi_v2_bootstrap" | "commit_topology" | "prev_commit_topology"
         ),
-        CanonicalWsvPath::World => matches!(key, "consensus_evidence" | "vrf_epochs"),
+        CanonicalWsvPath::World => matches!(key, "consensus_evidence"),
         CanonicalWsvPath::Parameters | CanonicalWsvPath::Sumeragi | CanonicalWsvPath::Other => {
             false
         }
@@ -3792,7 +3792,10 @@ fn publish_immutable_snapshot_generation(
     match std::fs::symlink_metadata(&generations_dir) {
         Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            #[cfg(unix)]
             let mut builder = std::fs::DirBuilder::new();
+            #[cfg(not(unix))]
+            let builder = std::fs::DirBuilder::new();
             #[cfg(unix)]
             {
                 use std::os::unix::fs::DirBuilderExt;
@@ -4821,9 +4824,6 @@ fn redact_consensus_sidecars_from_world_value(world: &mut json::Value) {
     // Consensus evidence is asynchronously enriched recovery data, not WSV data committed by
     // the block itself. Including it makes historical checkpoints depend on later peer input.
     world.remove("consensus_evidence");
-    // VRF epoch snapshots are maintained by consensus message handling outside
-    // block application. Kura replay verifies block-applied WSV data only.
-    world.remove("vrf_epochs");
 }
 /// Canonical bytes for the committed WSV surface used by replay parity tests.
 #[cfg(any(test, feature = "iroha-core-tests"))]

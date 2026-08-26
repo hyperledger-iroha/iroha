@@ -51,9 +51,6 @@ request.
   current pool size it doubles the number of threads up to a configurable
   maximum. When the workload drops below half the pool size it scales back down
   but never below the configured minimum.
-- **Profile HTM paths** – the instruction-level scheduler has optional hardware
-  transactional memory support. Gathering benchmarks on real hardware will help
-  decide whether maintaining this code is worthwhile.
 
 ## Benchmarking
 

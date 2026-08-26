@@ -40,7 +40,6 @@ pub const MAX_CONTRACT_IMAGE_BYTES: u64 = 0x0010_0000;
 pub(crate) struct DecodedOp {
     pub(crate) pc: u64,
     pub(crate) inst: u32,
-    pub(crate) len: u32,
 }
 /// Admission outputs derived from the artifact itself.
 #[derive(Clone, Debug)]
@@ -332,7 +331,6 @@ fn decode_instruction_stream(code: &[u8]) -> Result<Vec<DecodedOp>, ContractArti
         decoded.push(DecodedOp {
             pc,
             inst: u32::from_le_bytes(bytes.try_into().expect("four-byte instruction")),
-            len: 4,
         });
     }
     Ok(decoded)

@@ -1,5 +1,9 @@
 % NPoS Sumeragi Phase A Tracker Stub (Dec 2025)
 
+> Historical pre-release planning record. Commit/reveal VRF work listed below
+> was superseded before V1 by the canonical global threshold beacon and is not
+> an implemented or supported first-release path. See `specs/sumeragi_v2.md`.
+
 Dispatched 2025-12-03 — Sequencing table circulated to `@sumeragi-core`, `@telemetry-ops`, `@torii-sdk`, `@governance`, `@qa-consensus`, `@performance-lab`, and `@operator-docs` for confirmation. Owners should reply on the shared tracker thread (#npos-phase-a-sync) with acceptance updates or dependency risks.
 
 | Ticket ID | Milestone | Summary | Owners | Dependencies | Target exit | Notes |

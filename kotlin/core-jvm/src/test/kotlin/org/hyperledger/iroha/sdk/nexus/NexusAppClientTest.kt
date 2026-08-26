@@ -148,7 +148,7 @@ class NexusAppClientTest {
         )
         for (account in listOf(authority, destination, sourceAssetId.substringAfter('#').substringBefore('#'))) {
             val parsed = AccountAddress.parseEncodedIgnoringCurveSupport(account, chainDiscriminant)
-            assertEquals(account, parsed.address.toI105(chainDiscriminant))
+            assertEquals(account, parsed.toI105(chainDiscriminant))
         }
         val client = NexusAppClient(
             config = NexusAppConfig(
@@ -189,7 +189,6 @@ class NexusAppClientTest {
         val signingPublicKey = hexToBytes(string(approval, "signing_public_key_hex"))
         val wrongChainDestination = AccountAddress
             .parseEncodedIgnoringCurveSupport(destination, fixtureChain)
-            .address
             .toI105(fixtureChain + 1)
         val client = NexusAppClient(
             config = NexusAppConfig(
@@ -227,7 +226,6 @@ class NexusAppClientTest {
 
         val wrongChainAuthority = AccountAddress
             .parseEncodedIgnoringCurveSupport(authority, fixtureChain)
-            .address
             .toI105(fixtureChain + 1)
         val approvalClient = NexusAppClient(
             config = NexusAppConfig(

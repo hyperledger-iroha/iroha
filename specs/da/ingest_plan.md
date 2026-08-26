@@ -480,7 +480,8 @@ one-shot nonce and existing pin indexes reject reuse.
   The fixture emits:
 
   - `manifest.{norito.hex,json}` — canonical `DaManifestV1` encodings.
-  - `chunk_matrix.json` — ordered index/offset/length/digest/parity rows for doc/testing references.
+  - `chunk_matrix.json` — producer-ordered index/offset/length/digest/parity rows: each source
+    stripe's data commitments precede its global parity commitments, with stripe parity last.
   - `chunks/` — `chunk_{index:05}.bin` payload slices for both data and parity shards.
   - `payload.bin` — deterministic payload used by the parity-aware harness test.
   - `commitment_bundle.{json,norito.hex}` — sample Merkle-only
@@ -574,7 +575,10 @@ All previously blocked ingest TODOs have been implemented and verified:
 - Torii also exposes `GET /v1/da/manifests/{storage_ticket}` so SDKs and operators can fetch manifests
   and chunk plans without touching the node’s spool directory. The response returns the Norito bytes
   (base64), rendered manifest JSON, a strict
-  `sorafs.chunk_fetch_plan.v1` `chunk_plan` object ready for `sorafs fetch`,
+  `sorafs.chunk_fetch_plan.v1` `chunk_plan` object ready for `sorafs fetch`. Manifest-to-plan
+  conversion validates the full producer-ordered RS16 inventory, then includes only data
+  commitments in this application-payload fetch plan; parity commitments remain in the manifest
+  and reconstruction inventory,
   plus the relevant
   hex digests (`storage_ticket`, `client_blob_id`, `blob_hash`, `chunk_root`) so downstream tooling can
   feed the orchestrator without recomputing digests, and emits the same `Sora-PDP-Commitment` header to

@@ -24,29 +24,25 @@ pub struct Registers {
     usage: Mutex<RegisterUsage>,
     /// Merkle tree commitment to the register contents and tags (canonical type).
     tree: Mutex<MerkleTree<[u8; 32]>>,
-    /// Cached leaf digests for efficient rebuilds of the canonical Merkle tree.
-    leaves: Vec<[u8; 32]>,
     /// Dirty flag to defer rebuilds until root/path are requested.
     dirty: AtomicBool,
-    /// Pending register indices awaiting incremental rebuild.
-    pending: Mutex<Vec<usize>>,
 }
 impl Clone for Registers {
     fn clone(&self) -> Self {
         let gpr = self.gpr;
         let tags = self.tags;
         let usage = *self.usage.lock();
-        let leaves = self.leaves.clone();
-        let tree = MerkleTree::from_hashed_leaves_sha256(leaves.clone());
-        let pending = self.pending.lock().clone();
+        let tree = if self.dirty.load(Ordering::Acquire) {
+            MerkleTree::from_hashed_leaves_sha256(register_leaf_digests(&gpr, &tags))
+        } else {
+            self.tree.lock().clone()
+        };
         Registers {
             gpr,
             tags,
             usage: Mutex::new(usage),
             tree: Mutex::new(tree),
-            leaves,
-            dirty: AtomicBool::new(self.dirty.load(Ordering::Acquire)),
-            pending: Mutex::new(pending),
+            dirty: AtomicBool::new(false),
         }
     }
 }
@@ -64,15 +60,6 @@ impl Registers {
             let _ = idx;
         }
     }
-    #[cfg(not(feature = "merkle_incremental"))]
-    #[inline]
-    fn mark_pending(&self, idx: usize) {
-        let mut pending = self.pending.lock();
-        if !pending.contains(&idx) {
-            pending.push(idx);
-        }
-        self.dirty.store(true, Ordering::Release);
-    }
     #[inline]
     pub fn new() -> Self {
         let gpr = [0u64; 256];
@@ -82,16 +69,13 @@ impl Registers {
             let b = [0u8; 9];
             Sha256::digest(b).into()
         };
-        let leaves = vec![zero_leaf; 256];
-        let tree = MerkleTree::from_hashed_leaves_sha256(leaves.clone());
+        let tree = MerkleTree::from_hashed_leaves_sha256(vec![zero_leaf; 256]);
         Registers {
             gpr,
             tags,
             usage,
             tree: Mutex::new(tree),
-            leaves,
             dirty: AtomicBool::new(false),
-            pending: Mutex::new(Vec::new()),
         }
     }
     /// Snapshot of unique register usage since the last reset.
@@ -136,19 +120,15 @@ impl Registers {
         if idx != 0 {
             self.record_usage(idx);
             self.gpr[idx] = value;
-            self.leaves[idx] = register_leaf_digest(self.gpr[idx], self.tags[idx]);
-            #[cfg(feature = "merkle_incremental")]
-            {
-                self.tree
-                    .lock()
-                    .update_hashed_leaf_sha256(idx, self.leaves[idx]);
-                self.dirty.store(false, Ordering::Release);
-            }
-            #[cfg(not(feature = "merkle_incremental"))]
-            {
-                self.mark_pending(idx);
-            }
+            let was_dirty = self.dirty.swap(true, Ordering::AcqRel);
             with_reg_logger(|log| {
+                if !was_dirty {
+                    self.tree.get_mut().update_hashed_leaf_sha256(
+                        idx,
+                        register_leaf_digest(value, self.tags[idx]),
+                    );
+                    self.dirty.store(false, Ordering::Release);
+                }
                 let (root, path) = self.merkle_root_and_path(idx);
                 log.record(RegEvent::Write {
                     index: idx,
@@ -174,19 +154,14 @@ impl Registers {
         if idx != 0 {
             self.record_usage(idx);
             self.tags[idx] = value;
-            self.leaves[idx] = register_leaf_digest(self.gpr[idx], self.tags[idx]);
-            #[cfg(feature = "merkle_incremental")]
-            {
-                self.tree
-                    .lock()
-                    .update_hashed_leaf_sha256(idx, self.leaves[idx]);
-                self.dirty.store(false, Ordering::Release);
-            }
-            #[cfg(not(feature = "merkle_incremental"))]
-            {
-                self.mark_pending(idx);
-            }
+            let was_dirty = self.dirty.swap(true, Ordering::AcqRel);
             with_reg_logger(|log| {
+                if !was_dirty {
+                    self.tree
+                        .get_mut()
+                        .update_hashed_leaf_sha256(idx, register_leaf_digest(self.gpr[idx], value));
+                    self.dirty.store(false, Ordering::Release);
+                }
                 let (root, path) = self.merkle_root_and_path(idx);
                 log.record(RegEvent::Write {
                     index: idx,
@@ -216,8 +191,9 @@ impl Registers {
     /// Return the Merkle root of the register file.
     #[inline]
     pub fn merkle_root(&self) -> HashOf<MerkleTree<[u8; 32]>> {
-        self.ensure_built();
-        self.tree.lock().root().expect("tree has at least one leaf")
+        self.ensure_built_and_lock()
+            .root()
+            .expect("tree has at least one leaf")
     }
     /// Merkle authentication path for register `idx`.
     #[inline]
@@ -279,44 +255,14 @@ impl Registers {
         (proof, adj_root)
     }
     #[inline]
-    /// Ensure the Merkle tree is rebuilt when marked dirty. This uses a deterministic full rebuild
-    /// today; once `iroha_crypto` exposes a canonical incremental builder, the `merkle_incremental`
-    /// feature gate will switch this to an incremental update path.
-    fn ensure_built(&self) {
+    fn ensure_built_and_lock(&self) -> parking_lot::MutexGuard<'_, MerkleTree<[u8; 32]>> {
+        let mut tree = self.tree.lock();
         if self.dirty.load(Ordering::Acquire) {
-            self.rebuild_tree();
+            *tree =
+                MerkleTree::from_hashed_leaves_sha256(register_leaf_digests(&self.gpr, &self.tags));
             self.dirty.store(false, Ordering::Release);
         }
-    }
-    #[inline]
-    fn ensure_built_and_lock(&self) -> parking_lot::MutexGuard<'_, MerkleTree<[u8; 32]>> {
-        self.ensure_built();
-        self.tree.lock()
-    }
-    #[inline]
-    /// Rebuild the Merkle tree from cached leaf digests.
-    fn rebuild_tree(&self) {
-        #[cfg(feature = "merkle_incremental")]
-        {
-            let mut pending = self.pending.lock();
-            if pending.is_empty() {
-                return;
-            }
-            pending.sort_unstable();
-            pending.dedup();
-            let indices: Vec<usize> = pending.drain(..).collect();
-            drop(pending);
-            let mut tree = self.tree.lock();
-            for idx in indices {
-                tree.update_hashed_leaf_sha256(idx, self.leaves[idx]);
-            }
-        }
-        #[cfg(not(feature = "merkle_incremental"))]
-        {
-            let tree = MerkleTree::from_hashed_leaves_sha256(self.leaves.clone());
-            *self.tree.lock() = tree;
-            self.pending.lock().clear();
-        }
+        tree
     }
     /// Get a vector stored starting at register `idx` (uses two consecutive
     /// registers as a 128-bit value containing four 32-bit lanes).
@@ -406,10 +352,30 @@ pub struct RegisterUsageSummary {
 }
 #[inline]
 fn register_leaf_digest(value: u64, tag: bool) -> [u8; 32] {
+    #[cfg(test)]
+    REGISTER_LEAF_DIGEST_COUNT.with(|count| count.set(count.get() + 1));
     let mut bytes = [0u8; 9];
     bytes[0] = if tag { 1 } else { 0 };
     bytes[1..].copy_from_slice(&value.to_le_bytes());
     Sha256::digest(bytes).into()
+}
+fn register_leaf_digests(gpr: &[u64; 256], tags: &[bool; 256]) -> Vec<[u8; 32]> {
+    gpr.iter()
+        .zip(tags)
+        .map(|(&value, &tag)| register_leaf_digest(value, tag))
+        .collect()
+}
+#[cfg(test)]
+thread_local! {
+    static REGISTER_LEAF_DIGEST_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+#[cfg(test)]
+fn reset_register_leaf_digest_count() {
+    REGISTER_LEAF_DIGEST_COUNT.with(|count| count.set(0));
+}
+#[cfg(test)]
+fn register_leaf_digest_count() -> usize {
+    REGISTER_LEAF_DIGEST_COUNT.with(std::cell::Cell::get)
 }
 #[cfg(test)]
 mod tests {
@@ -427,5 +393,88 @@ mod tests {
         let cleared = regs.usage_summary();
         assert_eq!(cleared.unique_registers, 0);
         assert_eq!(cleared.max_index, 0);
+    }
+    #[test]
+    fn register_writes_defer_merkle_hashing_until_the_root_is_read() {
+        let mut regs = Registers::new();
+        reset_register_leaf_digest_count();
+        for value in 1..=1_000_u64 {
+            let index = (value as usize % 255) + 1;
+            regs.set(index, value);
+            regs.set_tag(index, value.is_multiple_of(2));
+        }
+        assert_eq!(register_leaf_digest_count(), 0);
+
+        let first_root = regs.merkle_root();
+        assert_eq!(register_leaf_digest_count(), 256);
+        assert_eq!(regs.merkle_root(), first_root);
+        assert_eq!(register_leaf_digest_count(), 256);
+    }
+    #[test]
+    fn cloning_reuses_a_clean_tree_and_rebuilds_a_dirty_tree_once() {
+        let mut regs = Registers::new();
+        reset_register_leaf_digest_count();
+        let clean = regs.clone();
+        assert_eq!(register_leaf_digest_count(), 0);
+        assert_eq!(clean.merkle_root(), regs.merkle_root());
+
+        regs.set(7, 42);
+        let dirty = regs.clone();
+        assert_eq!(register_leaf_digest_count(), 256);
+        assert_eq!(dirty.merkle_root(), regs.merkle_root());
+        assert_eq!(register_leaf_digest_count(), 512);
+    }
+    #[test]
+    fn logged_writes_update_only_the_changed_merkle_leaf() {
+        let mut regs = Registers::new();
+        let mut log = crate::zk::RegLog::default();
+        reset_register_leaf_digest_count();
+        // SAFETY: `log` remains in this stack frame and is not moved until the guard is dropped.
+        let guard =
+            unsafe { crate::zk::RegLoggerGuard::install(std::ptr::NonNull::from(&mut log)) };
+
+        regs.set(7, 42);
+        assert_eq!(register_leaf_digest_count(), 1);
+        let after_set = canonical_root_and_path(&regs, 7);
+
+        reset_register_leaf_digest_count();
+        regs.set_tag(7, true);
+        assert_eq!(register_leaf_digest_count(), 1);
+        let after_tag = canonical_root_and_path(&regs, 7);
+        drop(guard);
+
+        assert_eq!(log.events.len(), 2);
+        assert_logged_event_matches(&log.events[0], &after_set);
+        assert_logged_event_matches(&log.events[1], &after_tag);
+        assert_eq!(regs.merkle_root(), after_tag.0);
+    }
+
+    fn canonical_root_and_path(
+        regs: &Registers,
+        idx: usize,
+    ) -> (HashOf<MerkleTree<[u8; 32]>>, Vec<[u8; 32]>) {
+        let canonical =
+            MerkleTree::from_hashed_leaves_sha256(register_leaf_digests(&regs.gpr, &regs.tags));
+        let root = canonical.root().expect("non-empty register tree");
+        let path = canonical
+            .get_proof(idx as u32)
+            .expect("valid register index")
+            .into_audit_path()
+            .into_iter()
+            .map(|entry| entry.map(|hash| *hash.as_ref()).unwrap_or([0; 32]))
+            .collect::<Vec<_>>();
+        (root, path)
+    }
+
+    fn assert_logged_event_matches(
+        event: &RegEvent,
+        expected: &(HashOf<MerkleTree<[u8; 32]>>, Vec<[u8; 32]>),
+    ) {
+        let (logged_root, logged_path) = match event {
+            RegEvent::Read { root, path, .. } | RegEvent::Write { root, path, .. } => (root, path),
+        };
+
+        assert_eq!(logged_root, &expected.0);
+        assert_eq!(logged_path, &expected.1);
     }
 }

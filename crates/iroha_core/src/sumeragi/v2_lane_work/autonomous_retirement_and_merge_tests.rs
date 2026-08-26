@@ -1133,7 +1133,7 @@ fn record_production_merge_candidate_for_persistence_retry(
         .install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(
             BTreeMap::from([(lane_id, status)]),
         )));
-    let (beacon_key, beacon_pulse) = crate::beacon::tests::signed_persisted_pulse_fixture_for_world(
+    let (beacon_key, beacon_pulse) = crate::beacon::signed_persisted_pulse_fixture_for_world(
         adapter.context.network_id,
         global_height - 1,
     );

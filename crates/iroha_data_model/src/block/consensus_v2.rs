@@ -2465,36 +2465,6 @@ pub struct CommitCertificateResponseSignaturePayload {
     /// Current authenticated network identity serving the artifact.
     pub responder: PeerId,
 }
-/// Authenticated `NPoS` randomness commitment for one frozen epoch roster.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(deny_unknown_fields)]
-pub struct VrfCommit {
-    /// Epoch index to which the commitment applies.
-    pub epoch: u64,
-    /// Hiding commitment to the validator's reveal.
-    pub commitment: [u8; 32],
-    /// Signer index in the immutable height-context roster.
-    pub signer: ValidatorIndex,
-    /// Signature over the canonical `NPoS` `VRF`-commit preimage.
-    pub bls_sig: Vec<u8>,
-}
-/// Authenticated `NPoS` randomness reveal for one frozen epoch roster.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(deny_unknown_fields)]
-pub struct VrfReveal {
-    /// Epoch index to which the reveal applies.
-    pub epoch: u64,
-    /// Revealed preimage whose hash must equal the prior commitment.
-    pub reveal: [u8; 32],
-    /// Signer index in the immutable height-context roster.
-    pub signer: ValidatorIndex,
-    /// Canonical Norito-encoded VRF proof whose verified output equals `reveal`.
-    pub vrf_proof: Vec<u8>,
-    /// Signature over the canonical `NPoS` `VRF`-reveal preimage.
-    pub bls_sig: Vec<u8>,
-}
 /// One adaptive threshold-beacon signature share for an exact consensus round.
 ///
 /// The outer authenticated transport sender must be the validator occupying
@@ -2572,10 +2542,6 @@ pub enum ConsensusMessageV2Payload {
     CommitCertificateRequest(CommitCertificateRequest),
     /// Response carrying the active height context's durable `CommitQC`.
     CommitCertificateResponse(CommitCertificateResponse),
-    /// `NPoS` epoch-randomness commitment.
-    VrfCommit(VrfCommit),
-    /// `NPoS` epoch-randomness reveal.
-    VrfReveal(VrfReveal),
     /// Adaptive global threshold-beacon share for one exact height and view.
     GlobalBeaconPartialSignature(GlobalBeaconPartialSignature),
 }

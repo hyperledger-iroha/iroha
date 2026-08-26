@@ -6,12 +6,6 @@ from copy import deepcopy
 from typing import Any, Callable
 
 import pytest
-
-from iroha_python import (
-    SumeragiLaneRelayEnvelope,
-    SumeragiLaneSettlementCommitment,
-    SumeragiNativeAmxPhase,
-)
 from iroha_torii_client.native_amx import (
     compute_native_amx_descriptor_hash,
     compute_native_amx_participant_settlement_hash,
@@ -19,6 +13,11 @@ from iroha_torii_client.native_amx import (
     compute_native_amx_validator_set_hash,
 )
 
+from iroha_python import (
+    SumeragiLaneRelayEnvelope,
+    SumeragiLaneSettlementCommitment,
+    SumeragiNativeAmxPhase,
+)
 
 _NATIVE_AMX_VALIDATOR_SET = [
     "ea013094D37A1FCA72E8734CAAD4163678D82C36FE2CA70B80F5626E6591709E0D44831BE86CBA9BD0471C6D0D73FF9C4B54E0",

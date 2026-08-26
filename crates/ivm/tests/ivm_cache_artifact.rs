@@ -26,7 +26,7 @@ fn artifact_predecode_uses_header_version() {
     assert!(std::sync::Arc::ptr_eq(&d1, &d2));
 }
 #[test]
-fn artifact_predecode_rejects_legacy_minor_zero() {
+fn artifact_predecode_rejects_generic_test_profile() {
     let mut cache = IvmCache::new(2);
     let mut artifact = ProgramMetadata {
         version_major: 1,
@@ -40,6 +40,6 @@ fn artifact_predecode_rejects_legacy_minor_zero() {
     artifact.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let err = cache
         .get_or_predecode_artifact(&artifact)
-        .expect_err("legacy artifact minor must reject");
+        .expect_err("generic test profile must reject");
     assert_eq!(err, ivm::VMError::InvalidMetadata);
 }

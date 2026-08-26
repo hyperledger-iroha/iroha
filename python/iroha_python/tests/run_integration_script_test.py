@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "run_integration.py"
 SPEC = importlib.util.spec_from_file_location("iroha_python_run_integration", SCRIPT_PATH)
 assert SPEC is not None and SPEC.loader is not None

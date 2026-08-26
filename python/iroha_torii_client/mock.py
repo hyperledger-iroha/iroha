@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import binascii
 import hashlib
 import json
 import re
@@ -970,11 +971,13 @@ class _MockState:
             raise ValueError("zk-v1 ballot payload.envelope_b64 must be non-empty base64")
         try:
             envelope = base64.b64decode(envelope_b64, validate=True)
-        except (ValueError, base64.binascii.Error) as err:
+        except (ValueError, binascii.Error) as err:
             raise ValueError("zk-v1 ballot payload.envelope_b64 must be valid base64") from err
         if not envelope or base64.b64encode(envelope).decode("ascii") != envelope_b64:
             raise ValueError("zk-v1 ballot payload.envelope_b64 must be canonical base64")
         election_id = payload.get("election_id")
+        if not isinstance(election_id, str):
+            raise ValueError("zk-v1 ballot payload.election_id must be an exact token")
         has_owner = payload.get("owner") is not None
         has_amount = payload.get("amount") is not None
         has_duration = payload.get("duration_blocks") is not None

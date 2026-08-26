@@ -2,11 +2,23 @@
 
 from __future__ import annotations
 
-from typing import Any, Iterable, Mapping, Optional, Sequence
+from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 
 
 class RuntimeGovernanceAuthMixin:
     """Authenticate protected runtime/governance requests before dispatch."""
+
+    _canonical_request_headers: Callable[..., Any]
+    _encode_json_body: Callable[..., bytes]
+    _ensure_mapping: Callable[..., Mapping[str, Any]]
+    _expect_status: Callable[..., None]
+    _maybe_json: Callable[..., Any]
+    _parse_node_capabilities: Callable[..., Any]
+    _parse_runtime_abi_active: Callable[..., Any]
+    _parse_runtime_metrics: Callable[..., Any]
+    _request: Callable[..., Any]
+    _require_canonical_auth: Callable[..., Any]
+    _require_exact_i105_account_id: Callable[..., str]
 
     def _account_request(
         self,

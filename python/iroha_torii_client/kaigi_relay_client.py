@@ -2,23 +2,28 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Callable, Optional
 from urllib.parse import quote
 
+from .client_status_models import (
+    KaigiRelayDetail,
+    KaigiRelayHealthSnapshot,
+    KaigiRelaySummaryList,
+)
 
-def create_kaigi_relay_client_mixin(
-    *,
-    relay_summary_list_type: type,
-    relay_detail_type: type,
-    relay_health_type: type,
-) -> type:
+
+def create_kaigi_relay_client_mixin() -> type:
     """Bind the public Kaigi relay result models to their client methods."""
 
-    globals()["KaigiRelaySummaryList"] = relay_summary_list_type
-    globals()["KaigiRelayDetail"] = relay_detail_type
-    globals()["KaigiRelayHealthSnapshot"] = relay_health_type
-
     class KaigiRelayClientMixin:
+        _ensure_mapping: Callable[..., Any]
+        _expect_status: Callable[..., None]
+        _normalize_canonical_account_id: Callable[..., str]
+        _operator_get: Callable[..., Any]
+        _parse_kaigi_relay_detail: Callable[..., KaigiRelayDetail]
+        _parse_kaigi_relay_health_snapshot: Callable[..., KaigiRelayHealthSnapshot]
+        _parse_kaigi_relay_summary_list: Callable[..., KaigiRelaySummaryList]
+
         def list_kaigi_relays(self) -> KaigiRelaySummaryList:
             """Return relays using one exact-network operator-signed GET."""
 

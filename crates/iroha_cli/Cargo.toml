@@ -31,7 +31,6 @@ cli = [
     "iroha_core/node",
     "iroha_crypto/consensus",
     "iroha_data_model/json",
-    "ivm/runtime",
     "norito/node-codec",
 ]
 dev-tools = ["cli"]
@@ -76,7 +75,7 @@ required-features = ["dev-tools"]
 iroha = { workspace = true }
 iroha_sccp = { workspace = true }
 iroha_primitives = { workspace = true }
-ivm = { workspace = true, default-features = false }
+ivm = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false, features = ["sm"] }
 iroha_core = { workspace = true, default-features = false }
 fastpq_prover = { path = "../fastpq_prover" }

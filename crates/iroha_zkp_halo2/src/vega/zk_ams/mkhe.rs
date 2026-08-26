@@ -4103,7 +4103,7 @@ mod tests {
             48_452_611_616
         );
         assert_eq!(resource.proof_envelope_header_wire_bytes, 151);
-        assert_eq!(resource.streamed_hybrid_workspace_bytes, 166_723_776);
+        assert_eq!(resource.streamed_hybrid_workspace_bytes, 87_042_112);
         assert_eq!(resource.max_composed_rotation_work_units, 83_915_440_128);
         assert!(resource.composed_rotation_work_ceiling_met);
         assert!(!resource.evaluated_key_artifact_transport_certified);

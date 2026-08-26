@@ -6,10 +6,13 @@
 //! the production readiness gate enters Python.
 
 use super::{ControllerError, Result, Sha256};
+#[cfg(any(target_os = "macos", test))]
+use std::ffi::OsStr;
+#[cfg(target_os = "macos")]
+use std::fs;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    ffi::{OsStr, OsString},
-    fs,
+    ffi::OsString,
     path::{Component, Path, PathBuf},
 };
 
@@ -1266,6 +1269,7 @@ mod macos {
         Ok(())
     }
 
+    #[cfg(feature = "dev-tools")]
     pub(crate) fn validate_open_file_custody(file: &File, path: &Path) -> Result<()> {
         require_no_xattrs(file, path)
     }
@@ -1888,15 +1892,16 @@ mod macos {
     }
 }
 
-#[cfg(target_os = "macos")]
-pub(super) use macos::{
-    PinnedFile, pin_regular, require_macos_tcb, require_root_custody, validate_open_file_custody,
-    validate_pinned, validate_root_launch_identity,
-};
+#[cfg(all(target_os = "macos", feature = "dev-tools"))]
+pub(super) use macos::{PinnedFile, validate_open_file_custody, validate_pinned};
 #[cfg(target_os = "macos")]
 use macos::{
     authenticate_runtime, high_descriptor, publish_report, receipt_descriptor, run_captured,
     validate_runtime,
+};
+#[cfg(target_os = "macos")]
+pub(super) use macos::{
+    pin_regular, require_macos_tcb, require_root_custody, validate_root_launch_identity,
 };
 
 #[cfg(target_os = "macos")]

@@ -15,6 +15,7 @@ CONSTANTS
     RegistrationBlocks,
     SurvivorBlocks,
     CommitmentBlocks,
+    MaxCorpusEntries,
     ReleaseDelay,
     OpeningBlocks,
     FindingBlocks,
@@ -35,6 +36,7 @@ ASSUME /\ MaxHeight \in Nat \ {0}
        /\ RegistrationBlocks \in Nat \ {0}
        /\ SurvivorBlocks \in Nat \ {0}
        /\ CommitmentBlocks \in Nat \ {0}
+       /\ MaxCorpusEntries \in Nat \ {0}
        /\ ReleaseDelay \in Nat \ {0}
        /\ OpeningBlocks \in Nat \ {0}
        /\ FindingBlocks \in Nat \ {0}
@@ -607,11 +609,18 @@ FreezeSurvivorsAtBoundary ==
         >>
     /\ FindingFrame
 
-FreezeCommitmentAtBoundary ==
+\* Refinement note: concrete contiguous 1..32-record CorpusOpen appends occur
+\* across (survivorFreezeHeight, commitmentCloseHeight]. Intermediate prefixes
+\* stutter at this abstraction because their raw count is not modeled. This
+\* action represents only the append reaching the exact frozen survivor count;
+\* scripts/formal/check_sora_parliament_source_contract.py separately pins the
+\* concrete prefix, chunk, capacity, and terminalization guards.
+FreezeCommitmentInWindow ==
     /\ attemptStatus = "Active"
     /\ ballotState = "TimedCommitment"
     /\ survivorsFrozenAt = survivorFreezeHeight
-    /\ height = commitmentCloseHeight
+    /\ height > survivorFreezeHeight
+    /\ height <= commitmentCloseHeight
     /\ ballotState' = "AwaitingRelease"
     /\ commitmentClosedAt' = height
     /\ UNCHANGED <<
@@ -849,7 +858,7 @@ Next ==
     \/ RegisterPrivateBallot
     \/ CloseRegistrationAtBoundary
     \/ FreezeSurvivorsAtBoundary
-    \/ FreezeCommitmentAtBoundary
+    \/ FreezeCommitmentInWindow
     \/ ObserveCommittedReleasePulse
     \/ BeginAggregateOpening
     \/ FailPrivateBallotNoResult
@@ -1022,13 +1031,20 @@ ExactBallotSchedule ==
         /\ releaseHeight = commitmentCloseHeight + ReleaseDelay
         /\ releaseHeight + OpeningBlocks <= MaxHeight
 
+PhaseCapacity ==
+    /\ RegistrationBlocks >= MaxCorpusEntries + 1
+    /\ SurvivorBlocks >= MaxCorpusEntries
+    /\ CommitmentBlocks * 32 >= MaxCorpusEntries
+    /\ MaxCorpusEntries >= Cardinality(SeatedAssignments)
+
 ExactPhaseBoundaries ==
     /\ registrationClosedAt = None
        \/ registrationClosedAt = registrationCloseHeight
     /\ survivorsFrozenAt = None
        \/ survivorsFrozenAt = survivorFreezeHeight
     /\ commitmentClosedAt = None
-       \/ commitmentClosedAt = commitmentCloseHeight
+       \/ /\ commitmentClosedAt > survivorFreezeHeight
+          /\ commitmentClosedAt <= commitmentCloseHeight
 
 ExactPublicFindingDeadline ==
     /\ findingOpenedAtHeight = None

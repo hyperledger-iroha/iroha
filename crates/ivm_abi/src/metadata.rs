@@ -4,9 +4,8 @@
 //! enabled features and optional cycle limit.  This module defines a
 //! [`ProgramMetadata`] structure and helpers for encoding and decoding this header.
 //!
-//! The metadata header encodes the VM version, execution mode flags, optional
-//! vector length and cycle limit.  It also reserves bits for hardware
-//! transactional memory (HTM) support.
+//! The metadata header encodes the VM version, the ABI-v1 `ZK` and `VECTOR`
+//! mode flags, an optional logical vector length, and a cycle limit.
 use crate::error::VMError;
 use iroha_data_model::smart_contract::manifest::{
     AccessSetHints, ContractErrorCodeDescriptor, EntryPointKind, EntrypointDescriptor,
@@ -1302,9 +1301,6 @@ pub mod mode {
     pub const ZK: u8 = 0x01;
     /// Vector extension (SIMD/crypto ops) enabled.
     pub const VECTOR: u8 = 0x02;
-    /// Hardware transactional memory enabled.
-    #[allow(dead_code)]
-    pub const HTM: u8 = 0x04;
 }
 #[derive(Clone, Debug)]
 pub struct ProgramMetadata {
@@ -1384,10 +1380,10 @@ impl ProgramMetadata {
         // - Accept generic version 1.0 and 1.1 headers.
         // - Self-describing contract artifacts remain a 1.1-only concept and are
         //   validated by higher-level artifact verification.
-        // - Mode must not contain unknown bits (only ZK, VECTOR, HTM).
+        // - Mode must not contain unknown bits (only ZK and VECTOR).
         // - `vector_length` is either 0 (use runtime default) or 1..=64.
         // - ABI V1 is the only first-release ABI.
-        const KNOWN_MODE_BITS: u8 = mode::ZK | mode::VECTOR | mode::HTM;
+        const KNOWN_MODE_BITS: u8 = mode::ZK | mode::VECTOR;
         if version_major != 1 || !matches!(version_minor, 0 | 1) {
             return Err(VMError::UnsupportedProgramVersion {
                 major: version_major,

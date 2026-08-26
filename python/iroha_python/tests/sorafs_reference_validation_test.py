@@ -3,9 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import iroha_python.sorafs as sorafs_module
 import pytest
 
+import iroha_python.sorafs as sorafs_module
 from iroha_python import (
     ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1,
     SORAFS_FIXTURE_BUNDLE_MAX_PAYLOADS_V1,
@@ -25,12 +25,12 @@ from iroha_python import (
     validate_fixture_bundle,
     validate_governance_dag_block,
     validate_governance_dag_head_chain,
+    validate_governance_log_node,
     validate_orderbook_payload,
     validate_pdp_bundle,
     validate_pdp_challenge_proof,
     validate_pdp_commitment_challenge,
     validate_pdp_payload,
-    validate_governance_log_node,
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]

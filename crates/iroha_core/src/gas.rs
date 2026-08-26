@@ -17,7 +17,7 @@ use iroha_config::parameters::actual::ConfidentialGas as ActualConfidentialGas;
 use iroha_data_model::{
     isi as dm_isi, isi::InstructionBox, proof::ProofAttachment, zk::OpenVerifyEnvelope,
 };
-use norito::decode_canonical;
+use norito::{codec::Encode as _, decode_canonical};
 #[cfg(test)]
 use parking_lot::ReentrantMutex;
 use std::{
@@ -54,6 +54,22 @@ const BASE_KAIGI_JOIN_ZK: u64 = 1_520;
 const BASE_KAIGI_LEAVE_ZK: u64 = 1_520;
 const BASE_KAIGI_USAGE_ZK: u64 = 1_180;
 const BASE_SEALED_COMMITMENT: u64 = 96;
+/// Base cost for hashing, dispatching, and recording a Parliament instruction.
+const BASE_PARLIAMENT: u64 = 1_000;
+/// Cost per canonical encoded Parliament instruction byte.
+const PER_BYTE_PARLIAMENT: u64 = 5;
+/// Fixed charge for one bounded cryptographic proof suite.
+const PARLIAMENT_PROOF_UNIT: u64 = 250_000;
+/// Fixed charge for one bounded timed-OVN registration proof verification.
+const PARLIAMENT_REGISTRATION_VERIFY: u64 = 750_000;
+/// Fixed charge for a bounded timed-OVN ballot OR-proof chunk verification.
+const PARLIAMENT_BALLOT_OR_VERIFY: u64 = 750_000;
+/// Fixed charge for validating a final threshold release.
+const PARLIAMENT_RELEASE_VERIFY: u64 = 250_000;
+/// Fixed charge for opening and bounded-decoding the timed-OVN aggregate.
+const PARLIAMENT_AGGREGATE_OPEN: u64 = 250_000;
+/// Cost per canonical public record inspected from committed lifecycle state.
+const PER_PARLIAMENT_CACHED_RECORD: u64 = 500;
 /// Default gas charged for a single confidential proof verification before any other factors.
 pub const DEFAULT_ZK_GAS_BASE_VERIFY: u64 = 250_000;
 /// Default gas multiplier per public input exposed by a confidential proof.
@@ -237,6 +253,68 @@ fn gas_for_register_pin_manifest(manifest_bytes: usize) -> u64 {
     BASE_REGISTER_PIN_MANIFEST.saturating_add(
         PER_BYTE_PIN_MANIFEST.saturating_mul(u64::try_from(manifest_bytes).unwrap_or(u64::MAX)),
     )
+}
+fn parliament_encoded_input_gas(encoded_len: usize) -> u64 {
+    BASE_PARLIAMENT.saturating_add(
+        PER_BYTE_PARLIAMENT.saturating_mul(u64::try_from(encoded_len).unwrap_or(u64::MAX)),
+    )
+}
+
+fn parliament_max_cached_record_gas() -> u64 {
+    PER_PARLIAMENT_CACHED_RECORD.saturating_mul(
+        u64::try_from(iroha_crypto::timed_ovn::TIMED_OVN_MAX_PARTICIPANTS_V1).unwrap_or(u64::MAX),
+    )
+}
+
+fn parliament_transition_confidential_work_gas(
+    transition: &dm_isi::governance::ParliamentLifecycleTransitionV1,
+) -> u64 {
+    use dm_isi::governance::ParliamentLifecycleTransitionV1 as Transition;
+
+    match transition {
+        Transition::RegisterBallotParticipant(_) => {
+            PARLIAMENT_PROOF_UNIT.saturating_add(PARLIAMENT_REGISTRATION_VERIFY)
+        }
+        Transition::FreezeTimedOvnCorpus(_) => {
+            PARLIAMENT_PROOF_UNIT.saturating_add(PARLIAMENT_BALLOT_OR_VERIFY)
+        }
+        Transition::FinalizeOpenedBallot(_) => {
+            PARLIAMENT_RELEASE_VERIFY.saturating_add(PARLIAMENT_AGGREGATE_OPEN)
+        }
+        Transition::ConsumeSortitionPulseBatch(_) | Transition::BeginBallotOpeningBatch(_) => {
+            PARLIAMENT_PROOF_UNIT
+        }
+        _ => 0,
+    }
+}
+
+fn parliament_transition_cached_work_gas(
+    transition: &dm_isi::governance::ParliamentLifecycleTransitionV1,
+) -> u64 {
+    use dm_isi::governance::ParliamentLifecycleTransitionV1 as Transition;
+
+    match transition {
+        Transition::RegisterBallotParticipant(_)
+        | Transition::CloseBallotRegistration(_)
+        | Transition::RecordBallotDropout(_)
+        | Transition::FreezeBallotSurvivors(_)
+        | Transition::FinalizeOpenedBallot(_) => parliament_max_cached_record_gas(),
+        Transition::FreezeTimedOvnCorpus(payload) => PER_PARLIAMENT_CACHED_RECORD
+            .saturating_mul(u64::try_from(payload.ballot_records.len()).unwrap_or(u64::MAX)),
+        _ => 0,
+    }
+}
+
+fn gas_for_parliament_transition(
+    instruction: &dm_isi::governance::SubmitParliamentLifecycleTransitionV1,
+) -> u64 {
+    parliament_encoded_input_gas(instruction.encode().len())
+        .saturating_add(parliament_transition_confidential_work_gas(
+            &instruction.transition,
+        ))
+        .saturating_add(parliament_transition_cached_work_gas(
+            &instruction.transition,
+        ))
 }
 /// Compute gas for a single instruction using a simple schedule.
 #[allow(clippy::too_many_lines)]
@@ -424,6 +502,16 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
     if let Some(register) = any.downcast_ref::<dm_isi::sorafs::RegisterPinManifest>() {
         return gas_for_register_pin_manifest(register.manifest_payload.len());
     }
+    if let Some(create) =
+        any.downcast_ref::<dm_isi::governance::CreateParliamentGovernanceAttemptV1>()
+    {
+        return parliament_encoded_input_gas(create.encode().len());
+    }
+    if let Some(transition) =
+        any.downcast_ref::<dm_isi::governance::SubmitParliamentLifecycleTransitionV1>()
+    {
+        return gas_for_parliament_transition(transition);
+    }
     // Unclassified instructions have a fixed first-release cost. Avoid encoding
     // the full instruction here: the retired per-byte factor was zero, so that
     // allocation and traversal could not affect the charged gas.
@@ -472,6 +560,11 @@ pub fn confidential_gas_cost(instr: &InstructionBox) -> u64 {
     if let Some(finalize) = any.downcast_ref::<dm_isi::zk::FinalizeElection>() {
         return gas_for_proof_attachment(&finalize.tally_proof, 0, 0);
     }
+    if let Some(transition) =
+        any.downcast_ref::<dm_isi::governance::SubmitParliamentLifecycleTransitionV1>()
+    {
+        return parliament_transition_confidential_work_gas(&transition.transition);
+    }
     0
 }
 /// Return the saturating confidential-gas total for an instruction sequence.
@@ -492,6 +585,7 @@ mod tests {
         zk::test_utils::halo2_fixture_envelope,
     };
     use iroha_config::parameters::actual as cfg;
+    use iroha_data_model::governance::types::{BallotAttemptId, GovernanceAttemptId};
     use iroha_data_model::prelude::*;
     use iroha_primitives::json::Json;
     use iroha_test_samples::gen_account_in;
@@ -649,6 +743,128 @@ mod tests {
             ),
         ));
         assert_eq!(meter_instruction(&instruction), BASE_CUSTOM);
+    }
+    fn parliament_corpus_instruction(
+        record_count: usize,
+    ) -> dm_isi::governance::SubmitParliamentLifecycleTransitionV1 {
+        dm_isi::governance::SubmitParliamentLifecycleTransitionV1 {
+            governance_attempt_id: GovernanceAttemptId::new([0x31; 32]),
+            transition: dm_isi::governance::ParliamentLifecycleTransitionV1::FreezeTimedOvnCorpus(
+                dm_isi::governance::ParliamentFreezeTimedOvnCorpusV1 {
+                    ballot_attempt_id: BallotAttemptId::new([0x32; 32]),
+                    ballot_records: vec![
+                        vec![0x33; crate::governance::timed_ovn::TIMED_OVN_BALLOT_RECORD_BYTES_V1];
+                        record_count
+                    ],
+                },
+            ),
+        }
+    }
+    #[test]
+    fn parliament_attempt_creation_uses_encoded_input_schedule() {
+        let create = dm_isi::governance::CreateParliamentGovernanceAttemptV1 {
+            proposal: iroha_data_model::governance::types::ProposalKind::DeployContract(
+                iroha_data_model::governance::types::DeployContractProposal {
+                    contract_address:
+                        "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+                            .parse()
+                            .expect("parse gas fixture contract address"),
+                    code_hash: iroha_data_model::governance::types::ContractCodeHash::new(
+                        [0x35; 32],
+                    ),
+                    abi_hash: iroha_data_model::governance::types::ContractAbiHash::new([0x36; 32]),
+                    abi_version: 1_u16.into(),
+                    manifest_provenance: None,
+                },
+            ),
+            attempt_sequence: 0,
+        };
+        let expected = parliament_encoded_input_gas(create.encode().len());
+        let instruction = InstructionBox::from(create);
+        assert_eq!(meter_instruction(&instruction), expected);
+        assert_eq!(confidential_gas_cost(&instruction), 0);
+    }
+    #[test]
+    fn parliament_transition_gas_is_explicit_and_saturating() {
+        let transition = dm_isi::governance::SubmitParliamentLifecycleTransitionV1 {
+            governance_attempt_id: GovernanceAttemptId::new([0x34; 32]),
+            transition: dm_isi::governance::ParliamentLifecycleTransitionV1::CompleteQualification,
+        };
+        let expected = parliament_encoded_input_gas(transition.encode().len());
+        let instruction = InstructionBox::from(transition);
+        assert_eq!(meter_instruction(&instruction), expected);
+        assert!(expected > BASE_CUSTOM);
+        let maximum_host_length = parliament_encoded_input_gas(usize::MAX);
+        let expected_maximum_host_length = BASE_PARLIAMENT.saturating_add(
+            PER_BYTE_PARLIAMENT.saturating_mul(u64::try_from(usize::MAX).unwrap_or(u64::MAX)),
+        );
+        assert_eq!(maximum_host_length, expected_maximum_host_length);
+        if usize::BITS == u64::BITS {
+            assert_eq!(maximum_host_length, u64::MAX);
+        }
+    }
+    #[test]
+    fn timed_ovn_registration_gas_covers_proof_and_max_committed_roster_scan() {
+        let transition = dm_isi::governance::SubmitParliamentLifecycleTransitionV1 {
+            governance_attempt_id: GovernanceAttemptId::new([0x37; 32]),
+            transition:
+                dm_isi::governance::ParliamentLifecycleTransitionV1::RegisterBallotParticipant(
+                    dm_isi::governance::ParliamentRegisterBallotParticipantV1 {
+                        ballot_attempt_id: BallotAttemptId::new([0x38; 32]),
+                        registration_record: vec![
+                            0x39;
+                            crate::governance::timed_ovn::TIMED_OVN_REGISTRATION_RECORD_BYTES_V1
+                        ],
+                    },
+                ),
+        };
+        let expected = parliament_encoded_input_gas(transition.encode().len())
+            .saturating_add(PARLIAMENT_PROOF_UNIT)
+            .saturating_add(PARLIAMENT_REGISTRATION_VERIFY)
+            .saturating_add(parliament_max_cached_record_gas());
+        let instruction = InstructionBox::from(transition);
+        assert_eq!(meter_instruction(&instruction), expected);
+        assert_eq!(
+            confidential_gas_cost(&instruction),
+            PARLIAMENT_PROOF_UNIT + PARLIAMENT_REGISTRATION_VERIFY
+        );
+        assert!(expected <= 1_680_000);
+    }
+    #[test]
+    fn maximum_timed_ovn_chunk_fits_standard_default_genesis_block_gas_limit() {
+        let transition = parliament_corpus_instruction(
+            dm_isi::governance::PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1,
+        );
+        let encoded = transition.encode().len();
+        let expected = parliament_encoded_input_gas(encoded)
+            .saturating_add(PARLIAMENT_PROOF_UNIT)
+            .saturating_add(PARLIAMENT_BALLOT_OR_VERIFY)
+            .saturating_add(
+                PER_PARLIAMENT_CACHED_RECORD.saturating_mul(
+                    u64::try_from(
+                        dm_isi::governance::PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1,
+                    )
+                    .expect("chunk bound fits u64"),
+                ),
+            );
+        let instruction = InstructionBox::from(transition);
+        assert_eq!(meter_instruction(&instruction), expected);
+        assert_eq!(
+            confidential_gas_cost(&instruction),
+            PARLIAMENT_PROOF_UNIT + PARLIAMENT_BALLOT_OR_VERIFY
+        );
+        assert!(
+            expected <= 1_680_000,
+            "a maximum valid timed-OVN chunk must fit the standard default-genesis block gas limit"
+        );
+    }
+    #[test]
+    fn timed_ovn_chunk_gas_is_monotonic_in_record_count() {
+        let one = InstructionBox::from(parliament_corpus_instruction(1));
+        let maximum = InstructionBox::from(parliament_corpus_instruction(
+            dm_isi::governance::PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1,
+        ));
+        assert!(meter_instruction(&maximum) > meter_instruction(&one));
     }
     #[test]
     fn transfer_batch_gas_matches_entry_sum() {

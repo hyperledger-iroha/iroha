@@ -1,11 +1,10 @@
 //! Parallel execution components implementing the deterministic block execution engine described in
 //! the "Iroha VM Parallel Block Execution – Rust Implementation Specification".
 //!
-//! This module implements the hybrid STM/HTM approach described in the architecture spec. On x86_64
-//! hosts that advertise Intel RTM support we attempt hardware transactions; other targets (or CPUs
-//! without RTM) fall back to the deterministic mutex path.
+//! Transactions execute against isolated contexts and publish ordered write sets
+//! through a software-owned state lock. The execution and commit order is
+//! independent of host CPU features.
 use crate::vector::{SimdChoice, set_thread_forced_simd};
-use dashmap::DashMap;
 use parking_lot::{Mutex, RwLock};
 use rayon::ThreadPool;
 use std::{
@@ -21,108 +20,6 @@ impl Drop for ThreadSimdOverrideGuard {
         set_thread_forced_simd(self.0);
     }
 }
-#[cfg(all(
-    feature = "htm",
-    target_arch = "x86_64",
-    not(any(target_os = "ios", target_os = "tvos", target_os = "watchos"))
-))]
-mod htm_util {
-    use core::arch::x86_64::{_XBEGIN_STARTED, _xbegin, _xend};
-    use parking_lot::Mutex;
-    use std::{collections::HashSet, sync::LazyLock};
-    static STM_MUTEX: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
-    static ACTIVE_TAGS: LazyLock<Mutex<HashSet<usize>>> =
-        LazyLock::new(|| Mutex::new(HashSet::new()));
-    pub fn with_transaction<F, T>(tags: &HashSet<usize>, f: F) -> Result<T, ()>
-    where
-        F: FnOnce() -> T,
-    {
-        {
-            let mut active = ACTIVE_TAGS.lock();
-            if !active.is_disjoint(tags) {
-                return Err(());
-            }
-            for &t in tags {
-                active.insert(t);
-            }
-        }
-        let status = unsafe { _xbegin() };
-        if status == _XBEGIN_STARTED {
-            let r = f();
-            unsafe { _xend() };
-            let mut active = ACTIVE_TAGS.lock();
-            for t in tags {
-                active.remove(t);
-            }
-            Ok(r)
-        } else {
-            let mut active = ACTIVE_TAGS.lock();
-            for t in tags {
-                active.remove(t);
-            }
-            Err(())
-        }
-    }
-    pub fn with_mutex<F, T>(tags: &HashSet<usize>, f: F) -> T
-    where
-        F: FnOnce() -> T,
-    {
-        let _lock = STM_MUTEX.lock();
-        {
-            let mut active = ACTIVE_TAGS.lock();
-            for &t in tags {
-                active.insert(t);
-            }
-        }
-        let r = f();
-        {
-            let mut active = ACTIVE_TAGS.lock();
-            for t in tags {
-                active.remove(t);
-            }
-        }
-        r
-    }
-}
-#[cfg(not(all(
-    feature = "htm",
-    target_arch = "x86_64",
-    not(any(target_os = "ios", target_os = "tvos", target_os = "watchos"))
-)))]
-mod htm_util {
-    use parking_lot::Mutex;
-    use std::{collections::HashSet, sync::LazyLock};
-    static STM_MUTEX: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
-    static ACTIVE_TAGS: LazyLock<Mutex<HashSet<usize>>> =
-        LazyLock::new(|| Mutex::new(HashSet::new()));
-    #[allow(dead_code)]
-    pub fn with_transaction<F, T>(_tags: &HashSet<usize>, _f: F) -> Result<T, ()>
-    where
-        F: FnOnce() -> T,
-    {
-        Err(())
-    }
-    pub fn with_mutex<F, T>(tags: &HashSet<usize>, f: F) -> T
-    where
-        F: FnOnce() -> T,
-    {
-        let _lock = STM_MUTEX.lock();
-        {
-            let mut active = ACTIVE_TAGS.lock();
-            for &t in tags {
-                active.insert(t);
-            }
-        }
-        let r = f();
-        {
-            let mut active = ACTIVE_TAGS.lock();
-            for t in tags {
-                active.remove(t);
-            }
-        }
-        r
-    }
-}
 /// Number of general purpose registers used by the execution contexts.
 ///
 /// Matches the main VM register file size.
@@ -134,56 +31,23 @@ pub type StateKey = String;
 pub type Value = u64;
 /// Shared key-value state accessed by transactions.
 #[derive(Clone, Default)]
-pub struct State(Arc<DashMap<StateKey, Value>>);
+pub struct State(Arc<RwLock<HashMap<StateKey, Value>>>);
 impl State {
     /// Create an empty state.
     pub fn new() -> Self {
-        Self(Arc::new(DashMap::new()))
+        Self::default()
     }
     /// Read a value from the state.
-    pub fn get(&self, key: &StateKey) -> Option<Value> {
-        self.0.get(key).map(|v| *v)
+    pub fn get(&self, key: &str) -> Option<Value> {
+        self.0.read().get(key).copied()
     }
     /// Apply a batch of updates atomically.
-    pub fn apply(&self, updates: &[StateUpdate]) {
-        let mut sorted: Vec<_> = updates.iter().collect();
-        sorted.sort_by(|a, b| a.key.cmp(&b.key));
-        for upd in sorted {
-            self.0.insert(upd.key.clone(), upd.value);
+    pub fn apply(&self, mut updates: Vec<StateUpdate>) {
+        updates.sort_by(|a, b| a.key.cmp(&b.key));
+        let mut state = self.0.write();
+        for update in updates {
+            state.insert(update.key, update.value);
         }
-    }
-    /// Apply a batch of updates using hardware transactional memory when available. If HTM is
-    /// unsupported or the transaction aborts, a fallback lock is used to ensure atomicity.
-    pub fn apply_atomic(&self, updates: &[StateUpdate], tags: &HashSet<usize>, _use_htm: bool) {
-        #[cfg(all(
-            feature = "htm",
-            target_arch = "x86_64",
-            not(any(target_os = "ios", target_os = "tvos", target_os = "watchos"))
-        ))]
-        if _use_htm && crate::ivm::rtm_available() {
-            use core::arch::x86_64::_xtest;
-            unsafe {
-                if _xtest() != 0 {
-                    for upd in updates {
-                        self.0.insert(upd.key.clone(), upd.value);
-                    }
-                    return;
-                }
-            }
-            let res = htm_util::with_transaction(tags, || {
-                for upd in updates {
-                    self.0.insert(upd.key.clone(), upd.value);
-                }
-            });
-            if res.is_ok() {
-                return;
-            }
-        }
-        htm_util::with_mutex(tags, || {
-            for upd in updates {
-                self.0.insert(upd.key.clone(), upd.value);
-            }
-        });
     }
 }
 /// Update produced by a transaction execution.
@@ -269,7 +133,7 @@ impl ExecutionContext {
         }
     }
     /// Read a value from the prefetched state snapshot.
-    pub fn read(&self, key: &StateKey) -> Option<Value> {
+    pub fn read(&self, key: &str) -> Option<Value> {
         self.read_set.get(key).copied()
     }
     /// Record a state write for later commit.
@@ -286,47 +150,12 @@ impl Default for ExecutionContext {
         Self::new()
     }
 }
-/// Metadata about a single instruction and its scheduling state.
-#[derive(Clone, Debug)]
-pub struct InstructionNode {
-    pub tx_index: usize,
-    pub instr_index: usize,
-    pub opcode: u8,
-    pub read_set: HashSet<StateKey>,
-    pub write_set: HashSet<StateKey>,
-    pub gas_cost: u64,
-    pub dependents: Vec<usize>,
-    pub dep_count: usize,
-}
-impl InstructionNode {
-    pub fn new(tx_index: usize, instr_index: usize, opcode: u8) -> Self {
-        Self {
-            tx_index,
-            instr_index,
-            opcode,
-            read_set: HashSet::new(),
-            write_set: HashSet::new(),
-            gas_cost: 0,
-            dependents: Vec::new(),
-            dep_count: 0,
-        }
-    }
-    pub fn add_dependent(&mut self, idx: usize) {
-        self.dependents.push(idx);
-    }
-    pub fn decrement(&mut self) {
-        if self.dep_count > 0 {
-            self.dep_count -= 1;
-        }
-    }
-}
-/// Directed acyclic graph describing instruction dependencies.
+/// Directed acyclic graph describing transaction dependencies.
 #[derive(Clone, Debug, Default)]
 pub struct DependencyGraph {
     pub tx_count: usize,
     pub adj: Vec<Vec<usize>>,
     pub indegree: Vec<usize>,
-    pub access_list: Vec<StateAccessSet>,
 }
 impl DependencyGraph {
     /// Build a dependency graph from a block according to transaction
@@ -334,24 +163,15 @@ impl DependencyGraph {
     /// block order so that the resulting graph is deterministic.
     pub fn build_from_block(block: &Block) -> Self {
         let tx_count = block.transactions.len();
-        let mut graph = DependencyGraph {
-            tx_count,
-            adj: vec![Vec::new(); tx_count],
-            indegree: vec![0; tx_count],
-            access_list: block
-                .transactions
-                .iter()
-                .map(|t| t.access.clone())
-                .collect(),
-        };
+        let transactions = &block.transactions;
         use rayon::prelude::*;
         let edges: Vec<(usize, usize)> = (0..tx_count)
             .into_par_iter()
             .flat_map(|i| {
-                let a = &graph.access_list[i];
+                let a = &transactions[i].access;
                 (i + 1..tx_count)
                     .filter_map(|j| {
-                        let b = &graph.access_list[j];
+                        let b = &transactions[j].access;
                         if Self::conflicts(a, b) {
                             Some((i, j))
                         } else {
@@ -361,6 +181,11 @@ impl DependencyGraph {
                     .collect::<Vec<_>>()
             })
             .collect();
+        let mut graph = DependencyGraph {
+            tx_count,
+            adj: vec![Vec::new(); tx_count],
+            indegree: vec![0; tx_count],
+        };
         let mut edges = edges;
         edges.sort_unstable();
         for (i, j) in edges {
@@ -370,20 +195,10 @@ impl DependencyGraph {
     }
     /// Detect if two access sets conflict.
     fn conflicts(a: &StateAccessSet, b: &StateAccessSet) -> bool {
-        for key in &a.write_keys {
-            if b.write_keys.contains(key) || b.read_keys.contains(key) {
-                return true;
-            }
-        }
-        for key in &a.read_keys {
-            if b.write_keys.contains(key) {
-                return true;
-            }
-        }
-        if !a.reg_tags.is_disjoint(&b.reg_tags) {
-            return true;
-        }
-        false
+        !a.write_keys.is_disjoint(&b.write_keys)
+            || !a.write_keys.is_disjoint(&b.read_keys)
+            || !a.read_keys.is_disjoint(&b.write_keys)
+            || !a.reg_tags.is_disjoint(&b.reg_tags)
     }
     /// Add a directed edge from `i` to `j` in the graph.
     fn add_edge(&mut self, i: usize, j: usize) {
@@ -391,32 +206,14 @@ impl DependencyGraph {
         self.indegree[j] += 1;
     }
 }
-/// Thread-safe buffer used to collect instruction results.
-pub struct ResultBuffer {
-    sender: crossbeam_channel::Sender<(usize, TxResult)>,
-    receiver: crossbeam_channel::Receiver<(usize, TxResult)>,
-}
-impl ResultBuffer {
-    pub fn new(size: usize) -> Self {
-        let (sender, receiver) = crossbeam_channel::bounded(size);
-        Self { sender, receiver }
-    }
-    pub fn store(&self, idx: usize, result: TxResult) {
-        let _ = self.sender.send((idx, result));
-    }
-    pub fn take_ready(&self) -> Option<(usize, TxResult)> {
-        self.receiver.try_recv().ok()
-    }
-}
-/// Scheduler driving instruction-level parallelism.
+/// Scheduler for deterministic transaction-level block execution.
 ///
 /// This type provides a very small implementation of the scheduling behaviour described in the
 /// "Iroha VM Parallel Block Execution – Rust Implementation Specification". A dependency graph is
 /// built for the transactions in a block and tasks whose dependencies are satisfied are spawned on
-/// a thread pool whose size may grow or shrink dynamically. Results are committed in block order
-/// via a `ResultBuffer`. If any error occurs the scheduler falls back to a sequential execution of
-/// the remaining transactions. The thread count defaults to the number of available CPU cores but
-/// can be limited by the caller.
+/// a thread pool whose size may grow or shrink dynamically. Its deferred-output path lets the
+/// coordinator publish successful writes in block order. The thread count defaults to the number
+/// of available CPU cores but can be limited by the caller.
 const LOAD_WINDOW: usize = 8;
 /// Stack size allocated for Rayon worker threads used by the scheduler.
 ///
@@ -438,7 +235,6 @@ pub struct Scheduler {
     max_threads: usize,
     current_threads: AtomicUsize,
     load_history: Mutex<VecDeque<usize>>,
-    htm: bool,
     #[cfg(feature = "cuda")]
     gpu_manager: Option<crate::gpu_manager::GpuManager>,
     forced_simd: AtomicU8,
@@ -472,15 +268,6 @@ impl Scheduler {
     /// Create a scheduler with dynamic thread limits. When either limit is
     /// zero all physical CPU cores are used for that bound.
     pub fn new_dynamic(min_threads: usize, max_threads: usize) -> Self {
-        let htm = cfg!(feature = "htm") && crate::ivm::rtm_available();
-        Self::new_dynamic_with_htm_flag(min_threads, max_threads, htm)
-    }
-    /// Testing helper to create a scheduler with the HTM flag explicitly set.
-    pub fn new_with_htm_flag(num_threads: usize, htm: bool) -> Self {
-        Self::new_dynamic_with_htm_flag(num_threads, num_threads, htm)
-    }
-    /// Create a scheduler with dynamic limits and explicit HTM flag.
-    pub fn new_dynamic_with_htm_flag(min_threads: usize, max_threads: usize, htm: bool) -> Self {
         let phys = num_cpus::get_physical().max(1);
         let mut min = if min_threads == 0 { phys } else { min_threads };
         let mut max = if max_threads == 0 { phys } else { max_threads };
@@ -538,15 +325,10 @@ impl Scheduler {
             max_threads: max,
             current_threads: AtomicUsize::new(min),
             load_history: Mutex::new(VecDeque::new()),
-            htm,
             #[cfg(feature = "cuda")]
             gpu_manager: crate::gpu_manager::GpuManager::init(),
             forced_simd: AtomicU8::new(0),
         }
-    }
-    /// Returns `true` if hardware transactional memory is available on this host CPU.
-    pub fn htm_available(&self) -> bool {
-        self.htm
     }
     /// Configure a forced SIMD backend applied to worker threads.
     pub fn set_forced_simd(&self, choice: Option<SimdChoice>) {
@@ -575,7 +357,7 @@ impl Scheduler {
     pub fn thread_count(&self) -> usize {
         self.current_threads.load(Ordering::SeqCst)
     }
-    fn execute_tx<F: FnOnce() -> TxResult>(&self, func: F) -> TxResult {
+    fn execute_tx<T, F: FnOnce() -> T>(&self, func: F) -> T {
         self.run_with_simd_override(func)
     }
     /// Execute all transactions in `block` respecting dependencies derived from
@@ -585,130 +367,99 @@ impl Scheduler {
     where
         F: Copy + Fn(Transaction) -> TxResult + Send + Sync,
     {
+        self.schedule_block_with_ordered_commit(block, move |tx| (exec(tx), ()), |_, _, ()| {})
+    }
+    /// Execute transactions in parallel and publish successful deferred outputs
+    /// from the coordinator in original block order.
+    ///
+    /// `exec` must not publish consensus-visible state itself. Instead it returns
+    /// that transaction's buffered output alongside its [`TxResult`]. The
+    /// `commit` callback runs on the coordinating thread only after every lower
+    /// transaction index has completed. Outputs from failed transactions are
+    /// discarded. Dependency edges are released after publication, so a
+    /// conflicting successor observes its predecessor's committed state.
+    pub(crate) fn schedule_block_with_ordered_commit<O, F, C>(
+        &self,
+        block: Block,
+        exec: F,
+        mut commit: C,
+    ) -> BlockResult
+    where
+        O: Send,
+        F: Copy + Fn(Transaction) -> (TxResult, O) + Send + Sync,
+        C: FnMut(usize, &TxResult, O),
+    {
         let graph = DependencyGraph::build_from_block(&block);
         let tx_count = graph.tx_count;
         let mut indegree = graph.indegree.clone();
-        let txs = block.transactions;
-        let result_buf = Arc::new(ResultBuffer::new(tx_count));
-        let mut completed = vec![false; tx_count];
+        let mut txs: Vec<Option<Transaction>> = block.transactions.into_iter().map(Some).collect();
+        let (sender, receiver) = crossbeam_channel::bounded(tx_count);
+        let mut completed: Vec<Option<(TxResult, O)>> = (0..tx_count).map(|_| None).collect();
         let mut results = vec![TxResult::default(); tx_count];
         let mut pending: BTreeSet<usize> = (0..tx_count).collect();
-        while !pending.is_empty() {
-            let ready: Vec<usize> = pending
+        let mut next_commit = 0usize;
+        while next_commit < tx_count {
+            let mut ready: Vec<usize> = pending
                 .iter()
                 .filter(|&&idx| indegree[idx] == 0)
                 .copied()
                 .collect();
             if ready.is_empty() {
-                // Cycle in graph or unexpected state; execute sequentially
-                let idx = *pending.iter().next().unwrap();
-                let tx = txs[idx].clone();
-                let res = self.execute_tx(move || exec(tx));
-                result_buf.store(idx, res);
-                if let Some((i, r)) = result_buf.take_ready() {
-                    results[i] = r;
-                    completed[i] = true;
-                    pending.remove(&i);
-                    for &j in &graph.adj[i] {
-                        indegree[j] = indegree[j].saturating_sub(1);
-                    }
-                }
-            } else {
-                let result_buf_for_scope = Arc::clone(&result_buf);
-                if let Some(pool) = self.pool.read().as_ref() {
-                    pool.scope(|s| {
-                        for &idx in &ready {
-                            let tx = txs[idx].clone();
-                            let buf = Arc::clone(&result_buf_for_scope);
-                            let exec_fn = exec;
-                            let scheduler = self;
-                            s.spawn(move |_| {
-                                let r = scheduler.execute_tx(move || exec_fn(tx));
-                                buf.store(idx, r);
-                            });
-                        }
-                    });
-                } else {
-                    // Deterministic sequential fallback if no worker pool is available.
+                // The dependency graph only contains forward edges, so this is
+                // an internal-consistency fallback rather than an expected path.
+                ready.push(*pending.iter().next().expect("uncommitted transaction"));
+            }
+            for &idx in &ready {
+                pending.remove(&idx);
+            }
+            if let Some(pool) = self.pool.read().as_ref() {
+                pool.scope(|s| {
                     for &idx in &ready {
-                        let tx = txs[idx].clone();
+                        let tx = txs[idx]
+                            .take()
+                            .expect("a transaction is scheduled exactly once");
                         let exec_fn = exec;
-                        let res = self.execute_tx(move || exec_fn(tx));
-                        result_buf_for_scope.store(idx, res);
+                        let result_sender = sender.clone();
+                        let scheduler = self;
+                        s.spawn(move |_| {
+                            let output = scheduler.execute_tx(move || exec_fn(tx));
+                            result_sender
+                                .send((idx, output))
+                                .unwrap_or_else(|_| panic!("block result receiver remains alive"));
+                        });
                     }
-                }
-                let mut step_results = Vec::with_capacity(ready.len());
-                for _ in 0..ready.len() {
-                    if let Some(res) = result_buf.take_ready() {
-                        step_results.push(res);
-                    }
-                }
-                step_results.sort_by_key(|&(i, _)| i);
-                for (idx, res) in step_results {
-                    results[idx] = res;
-                    completed[idx] = true;
-                    pending.remove(&idx);
-                    for &j in &graph.adj[idx] {
-                        indegree[j] = indegree[j].saturating_sub(1);
-                    }
-                }
-            }
-        }
-        // Drain any remaining results
-        while let Some((idx, res)) = result_buf.take_ready() {
-            results[idx] = res;
-        }
-        self.record_load(tx_count);
-        self.adjust_pool();
-        BlockResult {
-            tx_results: results,
-        }
-    }
-    /// Fast path for conflict-free blocks (or pre-grouped blocks).
-    ///
-    /// Spawns all transactions in parallel and collects results in order
-    /// without building a dependency graph. The caller must ensure there are
-    /// no internal conflicts in the provided `block`.
-    pub fn schedule_block_conflict_free<F>(&self, block: Block, exec: F) -> BlockResult
-    where
-        F: Copy + Fn(Transaction) -> TxResult + Send + Sync,
-    {
-        let txs = block.transactions;
-        let tx_count = txs.len();
-        if tx_count == 0 {
-            return BlockResult {
-                tx_results: Vec::new(),
-            };
-        }
-        let result_buf = Arc::new(ResultBuffer::new(tx_count));
-        let result_buf_for_scope = Arc::clone(&result_buf);
-        if let Some(pool) = self.pool.read().as_ref() {
-            pool.scope(|s| {
-                for (idx, tx) in txs.into_iter().enumerate() {
+                });
+            } else {
+                // Deterministic sequential fallback if no worker pool is available.
+                for &idx in &ready {
+                    let tx = txs[idx]
+                        .take()
+                        .expect("a transaction is scheduled exactly once");
                     let exec_fn = exec;
-                    let buf = Arc::clone(&result_buf_for_scope);
-                    let scheduler = self;
-                    s.spawn(move |_| {
-                        let r = scheduler.execute_tx(move || exec_fn(tx));
-                        buf.store(idx, r);
-                    });
+                    let output = self.execute_tx(move || exec_fn(tx));
+                    sender
+                        .send((idx, output))
+                        .unwrap_or_else(|_| panic!("block result receiver remains alive"));
                 }
-            });
-        } else {
-            // Deterministic sequential fallback if no worker pool is available.
-            for (idx, tx) in txs.into_iter().enumerate() {
-                let exec_fn = exec;
-                let r = self.execute_tx(move || exec_fn(tx));
-                result_buf_for_scope.store(idx, r);
             }
-        }
-        // All tasks posted to the scope have completed here; drain results.
-        let mut results = vec![TxResult::default(); tx_count];
-        let mut received = 0usize;
-        while received < tx_count {
-            if let Some((i, r)) = result_buf.take_ready() {
-                results[i] = r;
-                received += 1;
+            for _ in 0..ready.len() {
+                let (idx, output) = receiver
+                    .recv()
+                    .expect("every scheduled transaction sends one result");
+                completed[idx] = Some(output);
+            }
+            while let Some((result, output)) = completed[next_commit].take() {
+                if result.success {
+                    commit(next_commit, &result, output);
+                }
+                results[next_commit] = result;
+                for &dependent in &graph.adj[next_commit] {
+                    indegree[dependent] = indegree[dependent].saturating_sub(1);
+                }
+                next_commit += 1;
+                if next_commit == tx_count {
+                    break;
+                }
             }
         }
         self.record_load(tx_count);
@@ -802,188 +553,10 @@ impl StateAccessSet {
             reg_tags: HashSet::new(),
         }
     }
-    /// Determine if this access set conflicts with another based on read/write overlaps.
-    pub fn conflicts(&self, other: &StateAccessSet) -> bool {
-        for key in &self.write_keys {
-            if other.write_keys.contains(key) || other.read_keys.contains(key) {
-                return true;
-            }
-        }
-        for key in &self.read_keys {
-            if other.write_keys.contains(key) {
-                return true;
-            }
-        }
-        if !self.reg_tags.is_disjoint(&other.reg_tags) {
-            return true;
-        }
-        false
-    }
 }
 impl Default for StateAccessSet {
     fn default() -> Self {
         Self::new()
-    }
-}
-pub trait StateAccess {
-    fn access_set(&self) -> &StateAccessSet;
-}
-impl StateAccess for Transaction {
-    fn access_set(&self) -> &StateAccessSet {
-        &self.access
-    }
-}
-/// Group of non-conflicting transactions executed together.
-///
-/// A simple deterministic grouping algorithm partitions transactions so that no group contains two
-/// transactions which conflict on their read/write sets. Groups are formed in block order: if
-/// adding a transaction to the current group would introduce a conflict, the group is closed and a
-/// new one is started. Each group can then be executed in parallel using an [`Scheduler`] and the
-/// results committed sequentially.
-pub struct TransactionGroup {
-    pub transactions: Vec<Transaction>,
-}
-impl TransactionGroup {
-    pub fn new() -> Self {
-        Self {
-            transactions: Vec::new(),
-        }
-    }
-    /// Partition a block of transactions into deterministic conflict-free
-    /// groups based on their access sets.
-    pub fn group_block(block: Block) -> Vec<TransactionGroup> {
-        let mut groups = Vec::new();
-        let mut current = TransactionGroup::new();
-        let mut reads = HashSet::new();
-        let mut writes = HashSet::new();
-        for tx in block.transactions.into_iter() {
-            let conflict = tx
-                .access
-                .write_keys
-                .iter()
-                .any(|k| writes.contains(k) || reads.contains(k))
-                || tx.access.read_keys.iter().any(|k| writes.contains(k));
-            if conflict && !current.transactions.is_empty() {
-                groups.push(current);
-                current = TransactionGroup::new();
-                reads.clear();
-                writes.clear();
-            }
-            reads.extend(tx.access.read_keys.iter().cloned());
-            writes.extend(tx.access.write_keys.iter().cloned());
-            current.transactions.push(tx);
-        }
-        if !current.transactions.is_empty() {
-            groups.push(current);
-        }
-        groups
-    }
-    /// Greedy conflict prediction grouping that tracks aggregate group access
-    /// sets to avoid O(n^2) per-group membership checks.
-    pub fn group_block_predicted(block: Block) -> Vec<TransactionGroup> {
-        let mut groups: Vec<TransactionGroup> = Vec::new();
-        // Aggregate access sets per group for fast conflict checks.
-        let mut agg_reads: Vec<HashSet<StateKey>> = Vec::new();
-        let mut agg_writes: Vec<HashSet<StateKey>> = Vec::new();
-        let mut agg_tags: Vec<HashSet<usize>> = Vec::new();
-        for tx in block.transactions.into_iter() {
-            // Find the first group with which this tx does not conflict.
-            let mut target: Option<usize> = None;
-            for i in 0..groups.len() {
-                let conflict = tx
-                    .access
-                    .write_keys
-                    .iter()
-                    .any(|k| agg_writes[i].contains(k) || agg_reads[i].contains(k))
-                    || tx
-                        .access
-                        .read_keys
-                        .iter()
-                        .any(|k| agg_writes[i].contains(k))
-                    || !tx.access.reg_tags.is_disjoint(&agg_tags[i]);
-                if !conflict {
-                    target = Some(i);
-                    break;
-                }
-            }
-            if let Some(i) = target {
-                // Safe to move tx (we only evaluated predicates on references).
-                // Update aggregate sets for the group.
-                for k in tx.access.read_keys.iter() {
-                    agg_reads[i].insert(k.clone());
-                }
-                for k in tx.access.write_keys.iter() {
-                    agg_writes[i].insert(k.clone());
-                }
-                for t in tx.access.reg_tags.iter() {
-                    agg_tags[i].insert(*t);
-                }
-                groups[i].transactions.push(tx);
-            } else {
-                // Create a new group seeded with this transaction and its access sets.
-                let mut r = HashSet::new();
-                let mut w = HashSet::new();
-                let mut tags = HashSet::new();
-                r.extend(tx.access.read_keys.iter().cloned());
-                w.extend(tx.access.write_keys.iter().cloned());
-                tags.extend(tx.access.reg_tags.iter().copied());
-                groups.push(TransactionGroup {
-                    transactions: vec![tx],
-                });
-                agg_reads.push(r);
-                agg_writes.push(w);
-                agg_tags.push(tags);
-            }
-        }
-        groups
-    }
-}
-impl Default for TransactionGroup {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-/// Execute a block in groups using the provided scheduler.  Groups are derived
-/// deterministically with [`TransactionGroup::group_block`].
-pub fn execute_block_grouped<F>(scheduler: &Scheduler, block: Block, exec: F) -> BlockResult
-where
-    F: Copy + Fn(Transaction) -> TxResult + Send + Sync,
-{
-    let groups = TransactionGroup::group_block(block);
-    let mut results = Vec::new();
-    for group in groups {
-        // Groups are constructed to be conflict-free; take the fast path.
-        let r = scheduler.schedule_block_conflict_free(
-            Block {
-                transactions: group.transactions,
-            },
-            exec,
-        );
-        results.extend(r.tx_results);
-    }
-    BlockResult {
-        tx_results: results,
-    }
-}
-/// Execute a block using greedy conflict prediction to reduce serialization.
-pub fn execute_block_predicted<F>(scheduler: &Scheduler, block: Block, exec: F) -> BlockResult
-where
-    F: Copy + Fn(Transaction) -> TxResult + Send + Sync,
-{
-    let groups = TransactionGroup::group_block_predicted(block);
-    let mut results = Vec::new();
-    for group in groups {
-        // Groups are constructed to be conflict-free; take the fast path.
-        let r = scheduler.schedule_block_conflict_free(
-            Block {
-                transactions: group.transactions,
-            },
-            exec,
-        );
-        results.extend(r.tx_results);
-    }
-    BlockResult {
-        tx_results: results,
     }
 }
 #[cfg(test)]
@@ -998,7 +571,7 @@ mod tests {
     }
     #[test]
     fn scheduler_threads_have_sufficient_stack() {
-        let scheduler = Scheduler::new_with_htm_flag(1, false);
+        let scheduler = Scheduler::new(1);
         let pool_guard = scheduler.pool.read();
         let pool = pool_guard
             .as_ref()
@@ -1006,24 +579,7 @@ mod tests {
         pool.install(|| deep_recurse(4096));
     }
     #[test]
-    fn group_block_predicted_single_group_when_no_conflicts() {
-        // Build a block with unique write keys so there are no conflicts.
-        let mut txs = Vec::new();
-        for i in 0..100usize {
-            let mut access = StateAccessSet::new();
-            access.write_keys.insert(format!("k{i}"));
-            txs.push(Transaction {
-                code: vec![],
-                gas_limit: 0,
-                access,
-            });
-        }
-        let groups = TransactionGroup::group_block_predicted(Block { transactions: txs });
-        assert_eq!(groups.len(), 1);
-        assert_eq!(groups[0].transactions.len(), 100);
-    }
-    #[test]
-    fn schedule_block_conflict_free_preserves_order() {
+    fn schedule_block_preserves_order_for_conflict_free_transactions() {
         // Gas limit carries the original index for verification.
         let mut txs = Vec::new();
         for i in 0..64u64 {
@@ -1035,23 +591,124 @@ mod tests {
                 access,
             });
         }
-        let scheduler = Scheduler::new_with_htm_flag(2, false);
-        let r =
-            scheduler.schedule_block_conflict_free(Block { transactions: txs }, |tx| TxResult {
-                success: true,
-                gas_used: tx.gas_limit,
-            });
+        let scheduler = Scheduler::new(2);
+        let r = scheduler.schedule_block(Block { transactions: txs }, |tx| TxResult {
+            success: true,
+            gas_used: tx.gas_limit,
+        });
         // Results must align with block order
         for (i, tr) in r.tx_results.iter().enumerate() {
             assert_eq!(tr.gas_used as usize, i);
         }
     }
     #[test]
+    fn ordered_commit_buffers_later_ready_transactions() {
+        let transaction = |id: u8, read_keys: &[&str], write_keys: &[&str]| {
+            let mut access = StateAccessSet::new();
+            access
+                .read_keys
+                .extend(read_keys.iter().map(|key| (*key).to_owned()));
+            access
+                .write_keys
+                .extend(write_keys.iter().map(|key| (*key).to_owned()));
+            Transaction {
+                code: vec![id],
+                gas_limit: 0,
+                access,
+            }
+        };
+        let block = Block {
+            transactions: vec![
+                transaction(0, &[], &["a"]),
+                transaction(1, &["a"], &["b"]),
+                transaction(2, &[], &["c"]),
+            ],
+        };
+        let state = State::new();
+        let scheduler = Scheduler::new(2);
+        let mut commit_order = Vec::new();
+        let result = scheduler.schedule_block_with_ordered_commit(
+            block,
+            |tx| {
+                let id = tx.code[0];
+                if id == 1 {
+                    assert_eq!(state.get("a"), Some(10));
+                }
+                let key = match id {
+                    0 => "a",
+                    1 => "b",
+                    2 => "c",
+                    _ => unreachable!("fixture transaction id"),
+                };
+                (
+                    TxResult {
+                        success: true,
+                        gas_used: u64::from(id),
+                    },
+                    vec![StateUpdate {
+                        key: key.to_owned(),
+                        value: u64::from(id) + 10,
+                    }],
+                )
+            },
+            |index, _, updates| {
+                state.apply(updates);
+                commit_order.push(index);
+                if index < 2 {
+                    assert_eq!(state.get("c"), None);
+                }
+            },
+        );
+
+        assert_eq!(commit_order, vec![0, 1, 2]);
+        assert_eq!(state.get("a"), Some(10));
+        assert_eq!(state.get("b"), Some(11));
+        assert_eq!(state.get("c"), Some(12));
+        assert_eq!(
+            result
+                .tx_results
+                .iter()
+                .map(|tx| tx.gas_used)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2]
+        );
+    }
+    #[test]
+    fn ordered_commit_discards_failed_transaction_output() {
+        let transactions = (0_u8..3)
+            .map(|id| Transaction {
+                code: vec![id],
+                gas_limit: 0,
+                access: StateAccessSet::new(),
+            })
+            .collect();
+        let scheduler = Scheduler::new(2);
+        let mut committed = Vec::new();
+
+        let result = scheduler.schedule_block_with_ordered_commit(
+            Block { transactions },
+            |tx| {
+                let id = tx.code[0];
+                (
+                    TxResult {
+                        success: id != 1,
+                        gas_used: u64::from(id),
+                    },
+                    id,
+                )
+            },
+            |index, _, output| committed.push((index, output)),
+        );
+
+        assert_eq!(committed, vec![(0, 0), (2, 2)]);
+        assert!(!result.tx_results[1].success);
+    }
+    #[test]
     fn scheduler_applies_forced_simd_on_worker_threads() {
         let _simd_guard = crate::vector::forced_simd_test_lock();
-        let scheduler = Scheduler::new_with_htm_flag(2, false);
+        let scheduler = Scheduler::new(2);
         scheduler.set_forced_simd(Some(SimdChoice::Scalar));
-        let r = scheduler.schedule_block_conflict_free(
+        let r = scheduler.schedule_block(
             Block {
                 transactions: vec![Transaction {
                     code: vec![],
@@ -1073,7 +730,7 @@ mod tests {
     #[test]
     fn scheduler_propagates_panics_and_restores_thread_simd_override() {
         let _simd_guard = crate::vector::forced_simd_test_lock();
-        let scheduler = Scheduler::new_with_htm_flag(1, false);
+        let scheduler = Scheduler::new(1);
         scheduler.set_forced_simd(Some(SimdChoice::Scalar));
         let previous_override = set_thread_forced_simd(Some(SimdChoice::Sse2));
         let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

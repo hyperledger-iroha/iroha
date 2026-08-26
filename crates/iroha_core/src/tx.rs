@@ -1885,16 +1885,12 @@ impl<'tx> AcceptedTransaction<'tx> {
                         })
                     })?;
                 let code = &proved.bytecode.as_ref()[parsed.code_offset..];
-                let decoded = ivm::ivm_cache::global_get_with_meta(code, &parsed.metadata)
-                    .map_err(|err| {
-                        AcceptTransactionFail::TransactionLimit(TransactionLimitError {
-                            reason: format!("Failed to decode IVM instructions: {err}"),
-                        })
-                    })?;
-                let decoded_bytes = decoded
-                    .iter()
-                    .try_fold(0u64, |acc, op| acc.checked_add(u64::from(op.len)))
-                    .unwrap_or(u64::MAX);
+                let decoded = ivm::ivm_cache::global_get(code).map_err(|err| {
+                    AcceptTransactionFail::TransactionLimit(TransactionLimitError {
+                        reason: format!("Failed to decode IVM instructions: {err}"),
+                    })
+                })?;
+                let decoded_bytes = u64::try_from(code.len()).unwrap_or(u64::MAX);
                 if decoded_bytes > ivm_bytecode_size_limit {
                     return Err(AcceptTransactionFail::TransactionLimit(
                         TransactionLimitError {
@@ -1951,16 +1947,12 @@ impl<'tx> AcceptedTransaction<'tx> {
                         })
                     })?;
                 let code = &smart_contract.as_ref()[parsed.code_offset..];
-                let decoded = ivm::ivm_cache::global_get_with_meta(code, &parsed.metadata)
-                    .map_err(|err| {
-                        AcceptTransactionFail::TransactionLimit(TransactionLimitError {
-                            reason: format!("Failed to decode IVM instructions: {err}"),
-                        })
-                    })?;
-                let decoded_bytes = decoded
-                    .iter()
-                    .try_fold(0u64, |acc, op| acc.checked_add(u64::from(op.len)))
-                    .unwrap_or(u64::MAX);
+                let decoded = ivm::ivm_cache::global_get(code).map_err(|err| {
+                    AcceptTransactionFail::TransactionLimit(TransactionLimitError {
+                        reason: format!("Failed to decode IVM instructions: {err}"),
+                    })
+                })?;
+                let decoded_bytes = u64::try_from(code.len()).unwrap_or(u64::MAX);
                 if decoded_bytes > ivm_bytecode_size_limit {
                     return Err(AcceptTransactionFail::TransactionLimit(
                         TransactionLimitError {
@@ -3218,15 +3210,13 @@ impl StateBlock<'_> {
         let decoded = if code.is_empty() {
             None
         } else {
-            Some(
-                ivm::ivm_cache::global_get_with_meta(code, &meta).map_err(|err| {
-                    TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
-                        iroha_data_model::executor::IvmAdmissionError::BytecodeDecodingFailed(
-                            err.to_string(),
-                        ),
-                    ))
-                })?,
-            )
+            Some(ivm::ivm_cache::global_get(code).map_err(|err| {
+                TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
+                    iroha_data_model::executor::IvmAdmissionError::BytecodeDecodingFailed(
+                        err.to_string(),
+                    ),
+                ))
+            })?)
         };
         let inst_cap = state_transaction.pipeline.ivm_max_decoded_instructions;
         let bytes_cap = state_transaction.pipeline.ivm_max_decoded_bytes;
@@ -3247,10 +3237,7 @@ impl StateBlock<'_> {
                 }
             }
             if bytes_cap != 0 {
-                let decoded_bytes = decoded
-                    .iter()
-                    .try_fold(0u64, |acc, op| acc.checked_add(u64::from(op.len)))
-                    .unwrap_or(u64::MAX);
+                let decoded_bytes = u64::try_from(code.len()).unwrap_or(u64::MAX);
                 if decoded_bytes > bytes_cap {
                     return Err(TransactionRejectionReason::Validation(
                         ValidationFail::IvmAdmission(

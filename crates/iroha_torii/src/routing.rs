@@ -43767,23 +43767,8 @@ fn sumeragi_npos_diagnostics(
     params: &iroha_data_model::parameter::system::SumeragiNposParameters,
     reducer: &iroha_data_model::block::consensus_v2::SumeragiV2Status,
 ) -> Result<SumeragiNposDiagnostics> {
-    let commit = params.vrf_commit_window_blocks();
-    let reveal = commit
-        .checked_add(params.vrf_reveal_window_blocks())
-        .and_then(NonZeroU64::new)
-        .ok_or_else(|| {
-            Error::Query(iroha_data_model::ValidationFail::InternalError(
-                "validated NPoS reveal deadline overflowed".to_owned(),
-            ))
-        })?;
     let diagnostics = SumeragiNposDiagnostics {
         epoch_length_blocks: params.epoch_length_blocks(),
-        vrf_commit_deadline_offset: NonZeroU64::new(commit).ok_or_else(|| {
-            Error::Query(iroha_data_model::ValidationFail::InternalError(
-                "validated NPoS commit window is zero".to_owned(),
-            ))
-        })?,
-        vrf_reveal_deadline_offset: reveal,
         epoch_seed: params.epoch_seed(),
         prf_height: reducer.height,
         prf_view: reducer.view,
@@ -45627,7 +45612,7 @@ mod validation_fee_torii_ingress_tests {
                 let ballot_attempt_id = BallotAttemptId::derive_v1(body_instance_id, 0);
                 let release_beacon_session_id = BeaconSessionId::new(parliament_test_root(0xD0));
                 let tle_key_session_id = TleKeySessionId::new(parliament_test_root(0xD1));
-                let release_height = 40;
+                let release_height = 165;
                 let tle_session_id = TleSessionId::derive_v1(
                     ballot_attempt_id,
                     tle_key_session_id,
@@ -45645,13 +45630,13 @@ mod validation_fee_torii_ingress_tests {
                         release_beacon_session_id,
                         30,
                         ParliamentTimedOvn {
-                            registration_phase_blocks: 2,
-                            survivor_freeze_phase_blocks: 2,
+                            registration_phase_blocks: 65,
+                            survivor_freeze_phase_blocks: 64,
                             commitment_phase_blocks: 2,
                             release_delay_blocks: 4,
                             opening_phase_blocks: 2,
                             max_ballot_retries: 2,
-                            max_corpus_entries: 1_000,
+                            max_corpus_entries: 64,
                         },
                         release_height,
                     )
@@ -45668,7 +45653,7 @@ mod validation_fee_torii_ingress_tests {
                         ballot_attempt_id,
                         registration_root,
                         3,
-                        32,
+                        95,
                     )
                     .expect("close deterministic ballot registration");
                 attempt
@@ -45679,7 +45664,7 @@ mod validation_fee_torii_ingress_tests {
                         survivor_root,
                         3,
                         no_recovery_root,
-                        34,
+                        159,
                     )
                     .expect("freeze deterministic ballot survivors");
                 attempt
@@ -45690,7 +45675,7 @@ mod validation_fee_torii_ingress_tests {
                         survivor_root,
                         3,
                         timed_commitment_root,
-                        36,
+                        161,
                     )
                     .expect("freeze deterministic timed-OVN corpus");
                 attempt
@@ -45719,7 +45704,7 @@ mod validation_fee_torii_ingress_tests {
                             nay: 1,
                             abstain: 0,
                         },
-                        41,
+                        166,
                     )
                     .expect("finalize deterministic aggregate ballot");
                 assert_eq!(outcome, ParliamentAggregateOutcomeV1::Approved);
@@ -54857,8 +54842,8 @@ fn faucet_invalid_request(reason: &str) -> Error {
         "faucet_pow_nonce_invalid"
     } else if normalized.contains("invalid faucet pow solution") {
         "faucet_pow_solution_invalid"
-    } else if normalized.contains("pow vrf seed unavailable") {
-        "faucet_pow_vrf_seed_unavailable"
+    } else if normalized.contains("pow beacon seed unavailable") {
+        "faucet_pow_beacon_seed_unavailable"
     } else if normalized.contains("pow scrypt configuration") {
         "faucet_pow_config_invalid"
     } else if normalized.contains("out of funds") {
@@ -55073,19 +55058,17 @@ fn faucet_pow_challenge_salt(
     faucet: &iroha_config::parameters::actual::ToriiFaucet,
     anchor_height: u64,
 ) -> Result<Option<[u8; 32]>> {
-    if !faucet.pow_vrf_seed_enabled {
+    if !faucet.pow_beacon_seed_enabled {
         return Ok(None);
     }
     let world = app.state.world_view();
-    world
-        .vrf_epochs()
-        .iter()
-        .filter_map(|(_, record)| {
-            (record.finalized && record.updated_at_height <= anchor_height).then_some(record.seed)
-        })
-        .last()
-        .map(Some)
-        .ok_or_else(|| faucet_invalid_request("faucet pow vrf seed unavailable"))
+    iroha_core::beacon::verified_global_threshold_beacon_pulse_at_or_before_v1(
+        &world,
+        app.state.network_id_ref(),
+        anchor_height,
+    )
+    .map(|pulse| Some(pulse.seed))
+    .map_err(|_| faucet_invalid_request("faucet pow beacon seed unavailable"))
 }
 fn faucet_pow_challenge(
     network_id: &iroha_data_model::NetworkId,

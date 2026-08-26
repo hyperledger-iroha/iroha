@@ -20,7 +20,7 @@ iroha_schema = { path = "../../../crates/iroha_schema" }
 iroha_version = { path = "../../../crates/iroha_version" }
 iroha_torii_shared = { path = "../../../crates/iroha_torii_shared" }
 norito = { path = "../../../crates/norito", default-features = false, features = ["node-codec"] }
-ivm = { path = "../../../crates/ivm", default-features = false, features = ["runtime"] }
+ivm = { path = "../../../crates/ivm" }
 sorafs_manifest = { path = "../../../crates/sorafs_manifest" }
 iroha_config = { path = "../../../crates/iroha_config" }
 iroha_core = { path = "../../../crates/iroha_core", features = ["node"], default-features = false }

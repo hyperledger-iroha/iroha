@@ -20,14 +20,12 @@ fn predecode_memory_budget_eviction() {
         code4.extend_from_slice(&halt.to_le_bytes());
     }
     // Insert first entry
-    let _ = cache.get_or_predecode(&code1, 1, 0).expect("decode 1");
+    let _ = cache.get_or_predecode(&code1).expect("decode 1");
     // Insert second entry — combined size should exceed 64 bytes and evict the oldest
-    let _ = cache.get_or_predecode(&code4, 1, 0).expect("decode 4");
+    let _ = cache.get_or_predecode(&code4).expect("decode 4");
     // The first key should have been evicted; re-requesting should miss (and reinsert)
     let before = cache.counters();
-    let _ = cache
-        .get_or_predecode(&code1, 1, 0)
-        .expect("decode 1 again");
+    let _ = cache.get_or_predecode(&code1).expect("decode 1 again");
     let after = cache.counters();
     assert!(after.1 > before.1, "expected a miss for evicted entry");
 }

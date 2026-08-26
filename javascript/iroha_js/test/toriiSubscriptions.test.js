@@ -33,38 +33,8 @@ class ToriiClient extends BaseToriiClient {
 
 function createResponse({ status, jsonData = {}, arrayData, textBody, headers }) {
   const resolvedHeaders = headers ?? { "content-type": "application/json" };
-  return {
-    status,
-    json: async () => jsonData,
-    arrayBuffer: async () => {
-      if (arrayData instanceof ArrayBuffer) {
-        return arrayData;
-      }
-      if (ArrayBuffer.isView(arrayData)) {
-        return arrayData.buffer.slice(
-          arrayData.byteOffset,
-          arrayData.byteOffset + arrayData.byteLength,
-        );
-      }
-      return new TextEncoder().encode(textBody ?? JSON.stringify(jsonData ?? {})).buffer;
-    },
-    text: async () =>
-      typeof textBody === "string" ? textBody : JSON.stringify(jsonData ?? {}),
-    headers: {
-      get(name) {
-        if (!resolvedHeaders) {
-          return null;
-        }
-        const normalized = name.toLowerCase();
-        for (const [key, value] of Object.entries(resolvedHeaders)) {
-          if (key.toLowerCase() === normalized) {
-            return value;
-          }
-        }
-        return null;
-      },
-    },
-  };
+  const body = arrayData ?? textBody ?? JSON.stringify(jsonData ?? {});
+  return new Response(body, { status, headers: resolvedHeaders });
 }
 
 function asUrl(input) {

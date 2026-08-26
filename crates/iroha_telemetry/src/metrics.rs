@@ -6649,22 +6649,6 @@ fields {
     pub sumeragi_membership_view: gauge();
     /// Sumeragi: epoch associated with the membership view hash snapshot.
     pub sumeragi_membership_epoch: gauge();
-    /// VRF: commits broadcast by this validator (cumulative)
-    pub sumeragi_vrf_commits_emitted_total: int_counter();
-    /// VRF: reveals broadcast by this validator (cumulative)
-    pub sumeragi_vrf_reveals_emitted_total: int_counter();
-    /// VRF: reveals accepted after the reveal window (cumulative)
-    pub sumeragi_vrf_reveals_late_total: int_counter();
-    /// VRF: total non-reveal penalties applied in last rollover (cumulative)
-    pub sumeragi_vrf_non_reveal_penalties_total: int_counter();
-    /// VRF: non-reveal penalties by signer index (labeled by `idx`)
-    pub sumeragi_vrf_non_reveal_by_signer: int_counter_vec(&["idx"]);
-    /// VRF: total no-participation penalties applied in last rollover (cumulative)
-    pub sumeragi_vrf_no_participation_total: int_counter();
-    /// VRF: no-participation penalties by signer (labeled by `idx`)
-    pub sumeragi_vrf_no_participation_by_signer: int_counter_vec(&["idx"]);
-    /// VRF: commit/reveal rejects by reason (epoch_mismatch | out_of_window | invalid_reveal)
-    pub sumeragi_vrf_rejects_total_by_reason: int_counter_vec(&["reason"]);
     /// Sumeragi: current runtime mode tag.
     pub sumeragi_mode_tag: raw(Arc<RwLock<String>>);
     /// Sumeragi: current leader index (gauge)
@@ -8443,11 +8427,7 @@ construct {
         kaigi_relay_manifest_updates_total kaigi_relay_manifest_hop_count
         kaigi_relay_failover_total kaigi_relay_failover_hop_count kaigi_relay_health_reports_total
         kaigi_relay_health_state dropped_messages sumeragi_dropped_block_messages_total
-        sumeragi_dropped_control_messages_total sumeragi_vrf_commits_emitted_total
-        sumeragi_vrf_reveals_emitted_total sumeragi_vrf_reveals_late_total
-        sumeragi_vrf_non_reveal_penalties_total sumeragi_vrf_non_reveal_by_signer
-        sumeragi_vrf_no_participation_total sumeragi_vrf_no_participation_by_signer
-        sumeragi_vrf_rejects_total_by_reason p2p_dropped_posts p2p_dropped_broadcasts
+        sumeragi_dropped_control_messages_total p2p_dropped_posts p2p_dropped_broadcasts
         p2p_subscriber_queue_full_total p2p_subscriber_queue_full_by_topic_total
         p2p_subscriber_unrouted_total p2p_subscriber_unrouted_by_topic_total p2p_handshake_failures
         p2p_low_post_throttled_total p2p_low_broadcast_throttled_total p2p_post_overflow_total
@@ -9268,10 +9248,7 @@ initialize (metrics) {
         nts_offset_ok nts_confidence_ok nts_rtt_ms_bucket nts_rtt_ms_sum nts_rtt_ms_count]
     sorafs_orderbook_projection_exposition_lock = Mutex::new(());
     sorafs_gateway_compliance_exposition_lock = Mutex::new(());
-    [musubi registry sumeragi_vrf_commits_emitted_total sumeragi_vrf_reveals_emitted_total
-        sumeragi_vrf_reveals_late_total sumeragi_vrf_non_reveal_penalties_total
-        sumeragi_vrf_non_reveal_by_signer sumeragi_vrf_no_participation_total
-        sumeragi_vrf_no_participation_by_signer sumeragi_vrf_rejects_total_by_reason]
+    [musubi registry]
 }
 epilogue {
     metrics.apply_stack_snapshot(&stack_settings_snapshot());

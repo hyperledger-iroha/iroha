@@ -172,6 +172,7 @@ use std::{
 use thiserror::Error;
 use url::Url;
 const APPLICATION_JSON: &str = "application/json";
+const APPLICATION_JSON_UTF8: &str = "application/json; charset=utf-8";
 const PIPELINE_TRANSACTION_STATUS_RESPONSE_MAX_BYTES: usize = 64 * 1024;
 const NODE_STATUS_RESPONSE_MAX_BYTES: usize = 8 * 1024 * 1024;
 const NODE_CAPABILITIES_RESPONSE_MAX_BYTES: usize = 256 * 1024;
@@ -19544,8 +19545,9 @@ impl Client {
             "Failed to get node capabilities",
             " ",
         )?;
-        if !exact_single_response_header(&resp, "content-type")?
-            .eq_ignore_ascii_case(APPLICATION_JSON)
+        let content_type = exact_single_response_header(&resp, "content-type")?;
+        if !content_type.eq_ignore_ascii_case(APPLICATION_JSON)
+            && !content_type.eq_ignore_ascii_case(APPLICATION_JSON_UTF8)
         {
             return Err(eyre!(
                 "node capabilities response must contain canonical JSON"
@@ -27020,6 +27022,20 @@ mod tests {
         assert_single_accept_header(&store_guard[0], APPLICATION_JSON);
     }
     #[test]
+    fn get_node_capabilities_json_accepts_torii_utf8_json_content_type() {
+        let response = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_JSON_UTF8)
+            .body(compatible_capabilities_body().into_bytes())
+            .expect("build node capabilities response");
+        let (result, snapshots) = capture_requests(response, || {
+            client_with_base_url(base_url()).get_node_capabilities_json()
+        });
+        result.expect("Torii's canonical UTF-8 JSON response should decode");
+        assert_eq!(snapshots.len(), 1);
+        assert_single_accept_header(&snapshots[0], APPLICATION_JSON);
+    }
+    #[test]
     fn get_node_capabilities_json_rejects_ambiguous_representation() {
         let body = compatible_capabilities_body().into_bytes();
         let missing = HttpResponse::builder()
@@ -27037,6 +27053,27 @@ mod tests {
                 client_with_base_url(base_url()).get_node_capabilities_json()
             });
             assert!(result.is_err());
+            assert_eq!(snapshots.len(), 1);
+        }
+        for content_type in [
+            "application/problem+json",
+            "application/json; charset=latin1",
+            "application/json; charset=utf-8; profile=x",
+            "application/json; charset=utf-8; charset=utf-8",
+            APPLICATION_NORITO,
+        ] {
+            let response = HttpResponse::builder()
+                .status(StatusCode::OK)
+                .header("content-type", content_type)
+                .body(compatible_capabilities_body().into_bytes())
+                .expect("build hostile node capabilities response");
+            let (result, snapshots) = capture_requests(response, || {
+                client_with_base_url(base_url()).get_node_capabilities_json()
+            });
+            assert!(
+                result.is_err(),
+                "noncanonical node capabilities content type must fail: {content_type}"
+            );
             assert_eq!(snapshots.len(), 1);
         }
     }
@@ -28552,8 +28589,6 @@ mod tests {
         status.npos = Some(
             iroha_data_model::block::consensus::SumeragiNposDiagnostics {
                 epoch_length_blocks: NonZeroU64::new(100).unwrap(),
-                vrf_commit_deadline_offset: NonZeroU64::new(20).unwrap(),
-                vrf_reveal_deadline_offset: NonZeroU64::new(40).unwrap(),
                 epoch_seed: [0; 32],
                 prf_height: 12,
                 prf_view: 5,
@@ -29938,7 +29973,10 @@ mod tests {
         store
             .ingest_bytes(payload)
             .expect("sample payload must be accepted by the chunk store");
-        let profile = ErasureProfile::default();
+        let profile = ErasureProfile {
+            parity_shards: 0,
+            ..ErasureProfile::default()
+        };
         let data_shards = usize::from(profile.data_shards);
         let chunk_commitments = store
             .chunks()

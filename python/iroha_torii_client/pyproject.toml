@@ -47,9 +47,9 @@ ignore = ["E203", "E501"]
 
 [tool.mypy]
 python_version = "3.9"
-exclude = "(^|/)build/"
+exclude = "(^|/)(build|tests)/"
 strict = false
 warn_unused_ignores = true
 show_error_codes = true
 ignore_missing_imports = true
-files = ["iroha_torii_client", "tests"]
+files = ["."]

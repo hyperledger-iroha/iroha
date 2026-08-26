@@ -4,8 +4,7 @@
 //! one host-independent implementation. In particular, serialized length
 //! prefixes are fixed-width `u64` values and never depend on `usize`.
 use crate::{
-    ProgramMetadata, encoding,
-    kotodama::wide,
+    ProgramMetadata, encoding, instruction,
     metadata::{LITERAL_SECTION_MAGIC, LiteralKindV1, encode_literal_descriptor},
 };
 use iroha_data_model::ValidationFail;
@@ -20,12 +19,22 @@ fn chunk_immediate(value: i32) -> i8 {
 fn emit_addi_inplace(code: &mut Vec<u32>, register: u8, mut value: i32) {
     while value != 0 {
         let chunk = chunk_immediate(value);
-        code.push(wide::encode_addi(register, register, chunk));
+        code.push(encoding::wide::encode_ri(
+            instruction::wide::arithmetic::ADDI,
+            register,
+            register,
+            chunk,
+        ));
         value -= i32::from(chunk);
     }
 }
 fn set_register(code: &mut Vec<u32>, register: u8, value: i32) {
-    code.push(wide::encode_move(register, 0));
+    code.push(encoding::wide::encode_ri(
+        instruction::wide::arithmetic::ADDI,
+        register,
+        0,
+        0,
+    ));
     emit_addi_inplace(code, register, value);
 }
 fn build_copy_program(data_offset: i32, chunks: usize) -> Vec<u32> {
@@ -34,10 +43,25 @@ fn build_copy_program(data_offset: i32, chunks: usize) -> Vec<u32> {
     const TEMPORARY: u8 = 14;
     let mut code = Vec::new();
     set_register(&mut code, SOURCE_POINTER, data_offset);
-    code.push(wide::encode_move(DESTINATION_POINTER, 10));
+    code.push(encoding::wide::encode_ri(
+        instruction::wide::arithmetic::ADDI,
+        DESTINATION_POINTER,
+        10,
+        0,
+    ));
     for _ in 0..chunks {
-        code.push(wide::encode_load64(SOURCE_POINTER, TEMPORARY, 0));
-        code.push(wide::encode_store64(DESTINATION_POINTER, TEMPORARY, 0));
+        code.push(encoding::wide::encode_load(
+            instruction::wide::memory::LOAD64,
+            TEMPORARY,
+            SOURCE_POINTER,
+            0,
+        ));
+        code.push(encoding::wide::encode_store(
+            instruction::wide::memory::STORE64,
+            DESTINATION_POINTER,
+            TEMPORARY,
+            0,
+        ));
         emit_addi_inplace(&mut code, SOURCE_POINTER, 8);
         emit_addi_inplace(&mut code, DESTINATION_POINTER, 8);
     }

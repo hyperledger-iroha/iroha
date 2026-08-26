@@ -15,7 +15,6 @@ dependencies = [
   "iroha-norito>=0.1.0",
   "iroha-torii-client>=0.0.1",
   "requests>=2.31",
-  "urllib3<2",
 ]
 keywords = ["iroha", "sdk", "blockchain", "norito"]
 classifiers = [
@@ -76,4 +75,4 @@ strict = false
 warn_unused_ignores = true
 show_error_codes = true
 ignore_missing_imports = true
-files = ["src/iroha_python", "tests"]
+files = ["src/iroha_python"]

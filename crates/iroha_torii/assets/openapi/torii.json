@@ -9853,6 +9853,114 @@
           }
         ]
       },
+      "GovernanceParliamentBallotAttemptStatusV1": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "const": "Registration",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "const": "SurvivorFreeze",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "const": "TimedCommitment",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "const": "AwaitingRelease",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "const": "Opening",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "const": "Finalized",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "const": "NoResult",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "const": "Superseded",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "GovernanceParliamentBallotAttemptPayloadV1": {
         "additionalProperties": false,
         "properties": {
@@ -10295,7 +10403,7 @@
       },
       "GovernanceParliamentBodyStateProjectionV1": {
         "additionalProperties": false,
-        "description": "Ordered bounded lifecycle/deadline facts. Hidden ballot registrations, records, roots, shares, and openings are intentionally excluded.",
+        "description": "Ordered bounded lifecycle/deadline facts and aggregate-only timed-OVN progress. Hidden ballot registrations, participant identifiers, records, roots, shares, individual openings, and secrets are intentionally excluded.",
         "properties": {
           "body": {
             "$ref": "#/components/schemas/GovernanceParliamentBodyV1"
@@ -10377,6 +10485,16 @@
                 "type": "null"
               }
             ]
+          },
+          "timed_ovn_progress": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GovernanceParliamentTimedOvnProgressV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -10387,7 +10505,8 @@
           "public_finding_phase_blocks",
           "public_finding_deadline_height",
           "no_result_kind",
-          "no_result_height"
+          "no_result_height",
+          "timed_ovn_progress"
         ],
         "type": "object"
       },
@@ -10802,10 +10921,11 @@
             "$ref": "#/components/schemas/GovernanceParliamentDigest32V1"
           },
           "ballot_records": {
+            "description": "Next contiguous nonempty timed-OVN ballot chunk; at most 32 records per transition while the complete corpus remains bounded to 1,000.",
             "items": {
               "$ref": "#/components/schemas/GovernanceParliamentBallotRecordV1"
             },
-            "maxItems": 1000,
+            "maxItems": 32,
             "minItems": 1,
             "type": "array"
           }
@@ -12148,6 +12268,51 @@
         ],
         "type": "object",
         "x-iroha-norito-schema": "iroha.torii.v1.parliament.timed_ovn_casting_proof.response"
+      },
+      "GovernanceParliamentTimedOvnProgressV1": {
+        "additionalProperties": false,
+        "description": "Aggregate-only active-ballot progress. Both counts are null before survivor freeze; once frozen, the prefix is the next contiguous corpus offset and never exceeds the survivor count. It is strictly smaller during TimedCommitment and equal after sealing or release. No participant identifiers, records, roots, shares, individual openings, or secrets are exposed.",
+        "properties": {
+          "accepted_ballot_prefix_count": {
+            "oneOf": [
+              {
+                "format": "uint32",
+                "maximum": 1000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ballot_attempt_id": {
+            "$ref": "#/components/schemas/GovernanceParliamentIdentifier32V1"
+          },
+          "frozen_survivor_count": {
+            "oneOf": [
+              {
+                "format": "uint32",
+                "maximum": 1000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/GovernanceParliamentBallotAttemptStatusV1"
+          }
+        },
+        "required": [
+          "ballot_attempt_id",
+          "status",
+          "frozen_survivor_count",
+          "accepted_ballot_prefix_count"
+        ],
+        "type": "object"
       },
       "GovernanceParliamentTimedOvnRegistrationRecordHexV1": {
         "description": "Exact canonical 3,624-byte authenticated timed-OVN registration record encoded as lowercase hexadecimal.",
@@ -42728,7 +42893,7 @@
             "type": "integer"
           },
           "epoch_seed": {
-            "description": "Non-zero deterministic epoch seed. Commit offset is strictly less than reveal offset, which does not exceed epoch length.",
+            "description": "Non-zero deterministic epoch seed.",
             "items": {
               "maximum": 255,
               "minimum": 0,
@@ -42747,22 +42912,10 @@
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
-          },
-          "vrf_commit_deadline_offset": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "vrf_reveal_deadline_offset": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
           }
         },
         "required": [
           "epoch_length_blocks",
-          "vrf_commit_deadline_offset",
-          "vrf_reveal_deadline_offset",
           "epoch_seed",
           "prf_height",
           "prf_view"
@@ -44489,47 +44642,6 @@
           "validation",
           "application",
           "successor_height"
-        ],
-        "type": "object"
-      },
-      "SumeragiVrfPenaltiesReport": {
-        "additionalProperties": false,
-        "properties": {
-          "committed_no_reveal": {
-            "items": {
-              "format": "uint32",
-              "maximum": 4294967295,
-              "minimum": 0,
-              "type": "integer"
-            },
-            "type": "array"
-          },
-          "epoch": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "no_participation": {
-            "items": {
-              "format": "uint32",
-              "maximum": 4294967295,
-              "minimum": 0,
-              "type": "integer"
-            },
-            "type": "array"
-          },
-          "roster_len": {
-            "format": "uint32",
-            "maximum": 4294967295,
-            "minimum": 0,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "epoch",
-          "roster_len",
-          "committed_no_reveal",
-          "no_participation"
         ],
         "type": "object"
       },
@@ -92041,77 +92153,6 @@
           "Sumeragi"
         ],
         "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/sumeragi/vrf/epoch/{epoch}": {
-      "get": {
-        "description": "Fetch VRF epoch data.",
-        "parameters": [
-          {
-            "description": "Epoch identifier.",
-            "in": "path",
-            "name": "epoch",
-            "required": true,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Fetch VRF epoch data.",
-        "tags": [
-          "Sumeragi"
-        ],
-        "x-iroha-tool-effect": "operator"
-      }
-    },
-    "/v1/sumeragi/vrf/penalties/{epoch}": {
-      "get": {
-        "description": "Fetch the authoritative finalized VRF penalty report for an epoch from persisted consensus state.",
-        "parameters": [
-          {
-            "description": "Epoch identifier.",
-            "in": "path",
-            "name": "epoch",
-            "required": true,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SumeragiVrfPenaltiesReport"
-                }
-              }
-            },
-            "description": "Successful response"
-          },
-          "404": {
-            "description": "No finalized authoritative epoch report exists for the requested epoch."
-          }
-        },
-        "summary": "Fetch an authoritative VRF penalty report.",
-        "tags": [
-          "Sumeragi"
-        ],
-        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/telemetry/live": {

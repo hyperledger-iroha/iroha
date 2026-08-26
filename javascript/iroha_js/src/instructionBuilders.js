@@ -60,6 +60,7 @@ import {
   assertString,
   assertWellFormedUtf16,
   canonicalHashLiteral,
+  normalizeAssetDefinitionName,
   normalizeGovernanceSelectorV1,
   parseHashLiteral,
   parseHashLiteralToBuffer,
@@ -1237,7 +1238,13 @@ function normalizeProofAttachment(value, name) {
       name,
     );
   }
-  const payload = { backend, proof: proofBox };
+  const payload = {
+    backend,
+    proof: proofBox,
+    vk_commitment: null,
+    envelope_hash: null,
+    lane_privacy: null,
+  };
   payload.vk_ref = normalizePortableProofVerifyingKeyId(
     source.verifyingKeyRef,
     `${name}.verifyingKeyRef`,
@@ -4233,7 +4240,7 @@ export function buildRegisterAssetDefinitionInstruction(options = {}) {
           source.assetDefinitionId ?? source.asset_definition_id ?? source.id,
           "registerAssetDefinition.assetDefinitionId",
         ),
-        name: assertString(source.name ?? "", "registerAssetDefinition.name"),
+        name: normalizeAssetDefinitionName(source.name, "registerAssetDefinition.name"),
         description,
         alias,
         spec: { scale },

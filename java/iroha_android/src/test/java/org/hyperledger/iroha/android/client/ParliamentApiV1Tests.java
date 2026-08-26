@@ -17,6 +17,7 @@ import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 import java.util.Set;
 import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.address.AssetDefinitionIdEncoder;
@@ -63,6 +64,12 @@ public final class ParliamentApiV1Tests {
     assertEquals(
         ParliamentApiV1.MAX_STATE_BYTES,
         ((Number) limits.get("attempt_state_bytes")).intValue());
+    assertEquals(
+        ParliamentApiV1.TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS,
+        ((Number) limits.get("timed_ovn_ballot_chunk_max_records")).intValue());
+    assertEquals(
+        ParliamentApiV1.MAX_TIMED_OVN_CORPUS_ENTRIES,
+        ((Number) limits.get("timed_ovn_corpus_entries")).intValue());
 
     final List<?> transitions = (List<?>) fixture.get("public_transitions");
     assertEquals(ParliamentApiV1.PUBLIC_TRANSITIONS.size(), transitions.size());
@@ -82,7 +89,11 @@ public final class ParliamentApiV1Tests {
           layout.jsonPayloadRequired
               ? "{\"transition\":\"" + layout.jsonTag + "\",\"payload\":{}}"
               : "{\"transition\":\"" + layout.jsonTag + "\"}";
-      ParliamentApiV1.transitionDraftRequestJson(ATTEMPT_ID, bytes(transitionJson));
+      ParliamentApiV1.transitionDraftRequestJson(
+          ATTEMPT_ID,
+          layout.jsonTag.equals("FreezeTimedOvnCorpus")
+              ? freezeTimedOvnTransition(1, ParliamentApiV1.TIMED_OVN_BALLOT_RECORD_BYTES)
+              : bytes(transitionJson));
     }
 
     final List<?> outcomes = (List<?>) fixture.get("automatic_execution_outcomes");
@@ -272,6 +283,33 @@ public final class ParliamentApiV1Tests {
   }
 
   @Test
+  public void timedOvnCorpusTransitionPreflightsOneThrough32RecordsPerChunk() {
+    for (final int count :
+        List.of(1, ParliamentApiV1.TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS)) {
+      ParliamentApiV1.transitionDraftRequestJson(
+          ATTEMPT_ID,
+          freezeTimedOvnTransition(count, ParliamentApiV1.TIMED_OVN_BALLOT_RECORD_BYTES));
+    }
+    for (final int count :
+        List.of(0, ParliamentApiV1.TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS + 1)) {
+      assertThrows(
+          IllegalArgumentException.class,
+          () ->
+              ParliamentApiV1.transitionDraftRequestJson(
+                  ATTEMPT_ID,
+                  freezeTimedOvnTransition(
+                      count, ParliamentApiV1.TIMED_OVN_BALLOT_RECORD_BYTES)));
+    }
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            ParliamentApiV1.transitionDraftRequestJson(
+                ATTEMPT_ID,
+                freezeTimedOvnTransition(
+                    1, ParliamentApiV1.TIMED_OVN_BALLOT_RECORD_BYTES - 1)));
+  }
+
+  @Test
   public void requestBuildersExposeOnlyCanonicalFieldsAndRoutes() {
     final Map<String, Object> attempt =
         objectValue(
@@ -419,6 +457,112 @@ public final class ParliamentApiV1Tests {
     assertThrows(
         IllegalArgumentException.class,
         () -> ParliamentApiV1.parseAttemptReadResponse(encode(unsorted), ATTEMPT_ID));
+
+    assertCertificateMutationRejected(
+        certificateValue -> certificateValue.put("proposal_content_id", "ee".repeat(32)));
+    assertCertificateMutationRejected(
+        certificateValue -> certificateValue.put("governance_attempt_sequence", 1));
+    assertCertificateMutationRejected(
+        certificateValue -> certificateValue.put("risk_tier", Map.of("tier", "Emergency")));
+    assertCertificateMutationRejected(
+        certificateValue -> certificateValue.put("policy_version", 2));
+    assertCertificateMutationRejected(
+        certificateValue -> certificateValue.put("enact_at_height", 8));
+    assertCertificateMutationRejected(
+        certificateValue -> {
+          final Map<String, Object> bindingValue =
+              maps(certificateValue.get("body_bindings")).get(0);
+          final Map<String, Object> request =
+              new LinkedHashMap<>(objectValue(bindingValue.get("sortition_request")));
+          request.put("beacon_session_id", "ee".repeat(32));
+          bindingValue.put("sortition_request", request);
+          certificateValue.put("body_bindings", List.of(bindingValue));
+        });
+    assertCertificateMutationRejected(
+        certificateValue -> {
+          final Map<String, Object> bindingValue =
+              maps(certificateValue.get("body_bindings")).get(0);
+          final Map<String, Object> request =
+              new LinkedHashMap<>(objectValue(bindingValue.get("sortition_request")));
+          request.put("request_height", 0);
+          bindingValue.put("sortition_request", request);
+          certificateValue.put("body_bindings", List.of(bindingValue));
+        });
+    assertCertificateMutationRejected(
+        certificateValue -> {
+          final Map<String, Object> bindingValue =
+              maps(certificateValue.get("body_bindings")).get(0);
+          final Map<String, Object> request =
+              new LinkedHashMap<>(objectValue(bindingValue.get("sortition_request")));
+          request.put("candidate_count", 1_001);
+          bindingValue.put("sortition_request", request);
+          certificateValue.put("body_bindings", List.of(bindingValue));
+        });
+
+    final Map<String, Object> wrongMode = readResponse();
+    wrongMode.put(
+        "required_bodies",
+        List.of(
+            Map.of(
+                "body", "rules-committee",
+                "decision_mode", Map.of("mode", "HiddenBindingBallot"))));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> ParliamentApiV1.parseAttemptReadResponse(encode(wrongMode), ATTEMPT_ID));
+
+    ParliamentApiV1.parseAttemptReadResponse(encode(hiddenBallotResponse()), ATTEMPT_ID);
+    assertHiddenBallotMutationRejected(ballot -> ballot.put("ballot_attempt_sequence", 17));
+    assertHiddenBallotMutationRejected(ballot -> ballot.put("max_corpus_entries", 2));
+    assertHiddenBallotMutationRejected(ballot -> ballot.put("registration_close_height", 4));
+    assertHiddenBallotMutationRejected(ballot -> ballot.put("survivor_freeze_height", 7));
+    assertHiddenBallotMutationRejected(
+        ballot -> {
+          final Map<String, Object> tally =
+              new LinkedHashMap<>(objectValue(ballot.get("tally")));
+          tally.put("abstain", 1);
+          ballot.put("tally", tally);
+        });
+    assertHiddenBallotMutationRejected(
+        ballot -> ballot.put("outcome", Map.of("outcome", "Rejected")));
+
+    final Map<String, Object> partial = hiddenBallotResponse();
+    partial.put("certificate", null);
+    final Map<String, Object> partialState = maps(partial.get("body_states")).get(0);
+    partialState.put(
+        "timed_ovn_progress",
+        map(
+            "ballot_attempt_id", "21".repeat(32),
+            "status", Map.of("status", "TimedCommitment"),
+            "frozen_survivor_count", 3,
+            "accepted_ballot_prefix_count", 1));
+    partial.put("body_states", List.of(partialState));
+    final ParliamentApiV1.AttemptReadResponse partialParsed =
+        ParliamentApiV1.parseAttemptReadResponse(encode(partial), ATTEMPT_ID);
+    assertEquals(
+        1,
+        partialParsed.bodyStates.get(0).timedOvnProgress.acceptedBallotPrefixCount.intValue());
+
+    final Map<String, Object> fullDuringCommitment = new LinkedHashMap<>(partial);
+    final Map<String, Object> fullState = maps(fullDuringCommitment.get("body_states")).get(0);
+    final Map<String, Object> fullProgress =
+        new LinkedHashMap<>(objectValue(fullState.get("timed_ovn_progress")));
+    fullProgress.put("accepted_ballot_prefix_count", 3);
+    fullState.put("timed_ovn_progress", fullProgress);
+    fullDuringCommitment.put("body_states", List.of(fullState));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> ParliamentApiV1.parseAttemptReadResponse(encode(fullDuringCommitment), ATTEMPT_ID));
+
+    final Map<String, Object> leaked = hiddenBallotResponse();
+    final Map<String, Object> leakedState = maps(leaked.get("body_states")).get(0);
+    final Map<String, Object> leakedProgress =
+        new LinkedHashMap<>(objectValue(leakedState.get("timed_ovn_progress")));
+    leakedProgress.put("ballot_records", List.of());
+    leakedState.put("timed_ovn_progress", leakedProgress);
+    leaked.put("body_states", List.of(leakedState));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> ParliamentApiV1.parseAttemptReadResponse(encode(leaked), ATTEMPT_ID));
   }
 
   @Test
@@ -676,6 +820,7 @@ public final class ParliamentApiV1Tests {
     bodyState.put("public_finding_deadline_height", 8);
     bodyState.put("no_result_kind", null);
     bodyState.put("no_result_height", null);
+    bodyState.put("timed_ovn_progress", null);
 
     final Map<String, Object> publicFinding = new LinkedHashMap<>();
     publicFinding.put("endorsement_root", root);
@@ -688,7 +833,19 @@ public final class ParliamentApiV1Tests {
     binding.put("election_attempt_id", id2);
     binding.put("election_attempt_sequence", 0);
     binding.put("sortition_request_id", "03".repeat(32));
-    binding.put("sortition_request", Map.of());
+    binding.put(
+        "sortition_request",
+        Map.of(
+            "id", "03".repeat(32),
+            "governance_attempt_id", ATTEMPT_ID,
+            "body_election_attempt_id", id2,
+            "body", "rules-committee",
+            "candidate_root", root,
+            "candidate_count", 3,
+            "target_seats", 3,
+            "request_height", 1,
+            "pulse_height", 2,
+            "beacon_session_id", "04".repeat(32)));
     binding.put("body", "rules-committee");
     binding.put("original_seats", 3);
     binding.put("beacon_session_id", "04".repeat(32));
@@ -738,6 +895,108 @@ public final class ParliamentApiV1Tests {
     response.put("superseding_head", null);
     response.put("execution_failure_root", null);
     response.put("state_payload_hex", stateFrameHex());
+    return response;
+  }
+
+  private static void assertCertificateMutationRejected(
+      final Consumer<Map<String, Object>> mutation) {
+    final Map<String, Object> response = readResponse();
+    final Map<String, Object> certificate = objectValue(response.get("certificate"));
+    mutation.accept(certificate);
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> ParliamentApiV1.parseAttemptReadResponse(encode(response), ATTEMPT_ID));
+  }
+
+  private static void assertHiddenBallotMutationRejected(
+      final Consumer<Map<String, Object>> mutation) {
+    final Map<String, Object> response = hiddenBallotResponse();
+    final Map<String, Object> certificate = objectValue(response.get("certificate"));
+    final Map<String, Object> binding = maps(certificate.get("body_bindings")).get(0);
+    final Map<String, Object> ballot =
+        new LinkedHashMap<>(objectValue(binding.get("ballot")));
+    mutation.accept(ballot);
+    binding.put("ballot", ballot);
+    certificate.put("body_bindings", List.of(binding));
+    response.put("certificate", certificate);
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> ParliamentApiV1.parseAttemptReadResponse(encode(response), ATTEMPT_ID));
+  }
+
+  private static Map<String, Object> hiddenBallotResponse() {
+    final Map<String, Object> response = readResponse();
+    response.put(
+        "required_bodies",
+        List.of(
+            Map.of(
+                "body", "policy-jury",
+                "decision_mode", Map.of("mode", "HiddenBindingBallot"))));
+    final Map<String, Object> bodyState = maps(response.get("body_states")).get(0);
+    bodyState.put("body", "policy-jury");
+    bodyState.put("public_finding_opened_at_height", null);
+    bodyState.put("public_finding_phase_blocks", null);
+    bodyState.put("public_finding_deadline_height", null);
+    bodyState.put(
+        "timed_ovn_progress",
+        map(
+            "ballot_attempt_id", "21".repeat(32),
+            "status", Map.of("status", "Finalized"),
+            "frozen_survivor_count", 3,
+            "accepted_ballot_prefix_count", 3));
+    response.put("body_states", List.of(bodyState));
+
+    final Map<String, Object> certificate = objectValue(response.get("certificate"));
+    final Map<String, Object> binding = maps(certificate.get("body_bindings")).get(0);
+    binding.put("body", "policy-jury");
+    final Map<String, Object> request =
+        new LinkedHashMap<>(objectValue(binding.get("sortition_request")));
+    request.put("body", "policy-jury");
+    binding.put("sortition_request", request);
+    binding.put("public_finding", null);
+    @SuppressWarnings("unchecked")
+    final List<Integer> root = (List<Integer>) binding.get("roster_root");
+    final Map<String, Object> tally = new LinkedHashMap<>();
+    tally.put("original_seats", 3);
+    tally.put("accepted_ballots", 3);
+    tally.put("aye", 2);
+    tally.put("nay", 1);
+    tally.put("abstain", 0);
+    final Map<String, Object> ballot = new LinkedHashMap<>();
+    ballot.put("ballot_attempt_id", "21".repeat(32));
+    ballot.put("ballot_attempt_sequence", 0);
+    ballot.put("tle_session_id", "22".repeat(32));
+    ballot.put("tle_key_session_id", "23".repeat(32));
+    ballot.put("registration_root", root);
+    ballot.put("dropout_root", root);
+    ballot.put("survivor_root", root);
+    ballot.put("corpus_root", root);
+    ballot.put("no_recovery_root", root);
+    ballot.put("timed_commitment_root", root);
+    ballot.put("release_beacon_session_id", "24".repeat(32));
+    ballot.put("registered_at_height", 1);
+    ballot.put("registration_close_height", 5);
+    ballot.put("survivor_freeze_height", 8);
+    ballot.put("commitment_close_height", 9);
+    ballot.put("registration_closed_at_height", 5);
+    ballot.put("survivors_frozen_at_height", 8);
+    ballot.put("commitment_closed_at_height", 9);
+    ballot.put("max_ballot_retries", 16);
+    ballot.put("max_corpus_entries", 3);
+    ballot.put("release_height", 10);
+    ballot.put("opening_deadline_height", 13);
+    ballot.put("release_pulse_id", "25".repeat(32));
+    ballot.put("opening_height", 11);
+    ballot.put("opening_root", root);
+    ballot.put("tally", tally);
+    ballot.put("outcome", Map.of("outcome", "Approved"));
+    binding.put("ballot", ballot);
+    binding.put("result_height", 12);
+    certificate.put("body_bindings", List.of(binding));
+    certificate.put("certified_at_height", 12);
+    certificate.put("enact_at_height", 14);
+    response.put("certificate", certificate);
+    response.put("current_height", 13);
     return response;
   }
 
@@ -986,6 +1245,24 @@ public final class ParliamentApiV1Tests {
     final List<Object> result = new ArrayList<>();
     for (int index = 0; index < size; index++) result.add(value);
     return result;
+  }
+
+  private static byte[] freezeTimedOvnTransition(
+      final int recordCount, final int recordBytes) {
+    final List<Object> records = new ArrayList<>();
+    for (int index = 0; index < recordCount; index++) {
+      records.add(repeatedNumbers(recordBytes, 1));
+    }
+    return encode(
+        map(
+            "transition",
+            "FreezeTimedOvnCorpus",
+            "payload",
+            map(
+                "ballot_attempt_id",
+                "44".repeat(32),
+                "ballot_records",
+                records)));
   }
 
   private static Map<String, Object> map(final Object... entries) {

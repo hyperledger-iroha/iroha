@@ -575,6 +575,73 @@ fn broker_server_readiness_failure_stops_before_accept_and_cleans_endpoint() {
     );
 }
 #[test]
+fn unauthorized_peer_rejection_is_connection_local() {
+    let directory = tempfile::tempdir().expect("create peer-authorization server directory");
+    fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
+        .expect("harden peer-authorization server directory");
+    let path = directory.path().join("runtime-provider-broker-v1.sock");
+    let policy = EndpointPolicy::for_test(path.clone());
+    let bindings = server_test_catalog();
+    let server_bindings = bindings.clone();
+    let server_policy = policy.clone();
+    let lifecycle = Arc::new(RuntimeProviderBrokerLifecycleV1::new());
+    let server_lifecycle = Arc::clone(&lifecycle);
+    let authorization_attempts = Arc::new(AtomicUsize::new(0));
+    let server_authorization_attempts = Arc::clone(&authorization_attempts);
+    let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
+    let (rejected_sender, rejected_receiver) = mpsc::sync_channel(1);
+    let server = thread::spawn(move || {
+        serve_with_policy_and_fallible_readiness_and_peer_authorizer(
+            &server_bindings,
+            server_test_backends(),
+            &server_policy,
+            server_lifecycle,
+            move || {
+                ready_sender
+                    .send(())
+                    .expect("publish peer-authorization readiness");
+                Ok(())
+            },
+            move |observed_uid, expected_uid| {
+                if server_authorization_attempts.fetch_add(1, Ordering::AcqRel) == 0 {
+                    rejected_sender
+                        .send(())
+                        .expect("publish injected peer rejection");
+                    Err(BrokerError::Unavailable)
+                } else {
+                    verify_peer_uid(observed_uid, expected_uid)
+                }
+            },
+        )
+    });
+    ready_receiver
+        .recv_timeout(Duration::from_secs(2))
+        .expect("peer-authorization broker becomes ready");
+
+    let rejected = UnixStream::connect(&path).expect("connect injected unauthorized peer");
+    rejected_receiver
+        .recv_timeout(Duration::from_secs(2))
+        .expect("broker rejects the first peer before the authorized connection");
+    drop(rejected);
+    let (authorized, observations) = BrokerSession::connect(
+        &policy,
+        bindings.chain_id(),
+        *bindings.network_id(),
+        vec![signer_binding_for_server()],
+    )
+    .expect("authorized peer connects after rejected peer");
+    assert_eq!(observations.len(), 1);
+    assert_eq!(authorization_attempts.load(Ordering::Acquire), 2);
+
+    drop(authorized);
+    lifecycle.request_shutdown();
+    server
+        .join()
+        .expect("join peer-authorization broker")
+        .expect("peer-authorization broker exits cleanly");
+    assert!(!path.exists());
+}
+#[test]
 fn broker_server_graceful_cleanup_allows_exact_endpoint_rebind() {
     let directory = tempfile::tempdir().expect("create broker server directory");
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))

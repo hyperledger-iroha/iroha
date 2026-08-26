@@ -5,42 +5,59 @@
 //! registry representation. Release policy comes from canonical configured
 //! Norito; consensus state can select material, but cannot select its signers.
 use super::{Error, StateTransaction, kagemusha_v2_marker, labeled_invariant};
+#[cfg(all(
+    unix,
+    not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+))]
 use crate::zk::{
     kagemusha_artifact_source_v4::{
         KagemushaArtifactReadSeekV4, KagemushaAuthenticatedArtifactSourceV4,
-        KagemushaQualifiedArtifactSourceV4, KagemushaQualifiedParityMetadataV4,
         qualify_kagemusha_authenticated_artifact_source_v4,
     },
     kagemusha_artifact_v4::{
         KagemushaAuthenticatedArtifactInspectionV4, inspect_kagemusha_pasta_cycle_artifact_v4,
-        kagemusha_artifact_descriptor_v4, read_kagemusha_pasta_cycle_artifact_v4,
+        read_kagemusha_pasta_cycle_artifact_v4,
     },
     kagemusha_recursion_adapter::{
-        KAGEMUSHA_PK_STREAM_AUTHENTICATION_BUFFER_BYTES_V5, KagemushaQualificationMemoryContractV4,
-        kagemusha_artifact_encoding_sizes_v4, verify_candidate_recursive_step_two_receipt_v4,
+        KagemushaQualificationMemoryContractV4, verify_candidate_recursive_step_two_receipt_v4,
+    },
+};
+use crate::zk::{
+    kagemusha_artifact_source_v4::{
+        KagemushaQualifiedArtifactSourceV4, KagemushaQualifiedParityMetadataV4,
+    },
+    kagemusha_artifact_v4::kagemusha_artifact_descriptor_v4,
+    kagemusha_recursion_adapter::{
+        KAGEMUSHA_PK_STREAM_AUTHENTICATION_BUFFER_BYTES_V5, kagemusha_artifact_encoding_sizes_v4,
     },
     kagemusha_v2::KagemushaPastaCycleOpaqueVerifierV4,
 };
 use iroha_crypto::Hash;
+#[cfg(all(
+    unix,
+    not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+))]
+use iroha_data_model::offline::{
+    KAGEMUSHA_RECURSIVE_SPEND_BENCHMARK_EVIDENCE_FILE_NAME_V1,
+    KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_FILE_NAME_V1,
+    KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1,
+    KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_FILE_NAME_V4, KagemushaRecursiveSpendCandidateV4,
+    KagemushaRecursiveSpendQualificationReceiptV4,
+};
 use iroha_data_model::{
     confidential::ConfidentialStatus,
     offline::{
         KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4,
         KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4,
-        KAGEMUSHA_RECURSIVE_SPEND_BENCHMARK_EVIDENCE_FILE_NAME_V1,
-        KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_FILE_NAME_V1,
-        KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1,
         KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_MAX_BYTES_V1,
         KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4,
         KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4,
         KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_MAX_BYTES_V4,
-        KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_FILE_NAME_V4,
         KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_EVIDENCE_BYTES_V1,
         KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROMOTION_BYTES_V4, KAGEMUSHA_VERIFIER_NAMESPACE,
         KagemushaAuthenticatedReleaseV4, KagemushaPastaCycleArtifactKindV4,
         KagemushaPastaCycleArtifactV4, KagemushaPastaCycleParityV1,
         KagemushaRecursiveSpendArtifactBindingV4, KagemushaRecursiveSpendArtifactManifestV4,
-        KagemushaRecursiveSpendCandidateV4, KagemushaRecursiveSpendQualificationReceiptV4,
         KagemushaRecursiveSpendReleaseActivationV4, KagemushaRecursiveSpendReleaseAttestationV4,
         KagemushaRecursiveSpendReleasePolicyV1, KagemushaStepCircuitParamsV4,
         kagemusha_recursive_spend_verifier_owner_manifest_id_v4,
@@ -62,7 +79,6 @@ use rustix::fs::{
 use sha2::{Digest as _, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    io::Read,
     path::{Component, Path, PathBuf},
     sync::Arc,
 };
@@ -73,7 +89,7 @@ use std::{
 use std::{
     ffi::OsStr,
     fs::{self, File},
-    io::{Seek as _, SeekFrom},
+    io::{Read, Seek as _, SeekFrom},
     os::unix::fs::MetadataExt as _,
     sync::Mutex,
 };

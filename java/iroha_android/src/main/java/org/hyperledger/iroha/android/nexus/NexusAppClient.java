@@ -341,8 +341,7 @@ public final class NexusAppClient {
     try {
       address =
           AccountAddress.parseEncodedIgnoringCurveSupport(
-                  value, config.chainDiscriminant())
-              .address;
+              value, config.chainDiscriminant());
     } catch (final AccountAddress.AccountAddressException error) {
       throw new NexusAppError(
           "invalid_account_id",
@@ -375,8 +374,7 @@ public final class NexusAppClient {
     try {
       address =
           AccountAddress.parseEncodedIgnoringCurveSupport(
-                  requireCanonicalAccountId(accountId, context), config.chainDiscriminant())
-              .address;
+              requireCanonicalAccountId(accountId, context), config.chainDiscriminant());
     } catch (final NexusAppError error) {
       throw error;
     } catch (final AccountAddress.AccountAddressException error) {

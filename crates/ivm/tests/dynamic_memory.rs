@@ -21,7 +21,9 @@ fn test_heap_growth_allocation() {
         .to_le_bytes(),
     );
     // move alloc size into r10 (`ADD r10 = r11 + r0`)
-    prog.extend_from_slice(&ivm::kotodama::wide::encode_add(10, 11, 0).to_le_bytes());
+    prog.extend_from_slice(
+        &encoding::wide::encode_rr(instruction::wide::arithmetic::ADD, 10, 11, 0).to_le_bytes(),
+    );
     // alloc
     prog.extend_from_slice(
         &encoding::wide::encode_sys(
@@ -31,11 +33,17 @@ fn test_heap_growth_allocation() {
         .to_le_bytes(),
     );
     // copy returned addr to r1 (`ADD r1 = r10 + r0`)
-    prog.extend_from_slice(&ivm::kotodama::wide::encode_add(1, 10, 0).to_le_bytes());
+    prog.extend_from_slice(
+        &encoding::wide::encode_rr(instruction::wide::arithmetic::ADD, 1, 10, 0).to_le_bytes(),
+    );
     // store r2 at [r1]
-    prog.extend_from_slice(&ivm::kotodama::wide::encode_store64(1, 2, 0).to_le_bytes());
+    prog.extend_from_slice(
+        &encoding::wide::encode_store(instruction::wide::memory::STORE64, 1, 2, 0).to_le_bytes(),
+    );
     // load into r3 from [r1]
-    prog.extend_from_slice(&ivm::kotodama::wide::encode_load64(1, 3, 0).to_le_bytes());
+    prog.extend_from_slice(
+        &encoding::wide::encode_load(instruction::wide::memory::LOAD64, 3, 1, 0).to_le_bytes(),
+    );
     prog.extend_from_slice(&HALT);
     let prog = assemble(&prog);
     vm.load_program(&prog).unwrap();
@@ -78,7 +86,9 @@ fn test_heap_alloc_exact_limit() {
         .to_le_bytes(),
     );
     // move allocation size into r10 (`ADD r10 = r11 + r0`)
-    prog.extend_from_slice(&ivm::kotodama::wide::encode_add(10, 11, 0).to_le_bytes());
+    prog.extend_from_slice(
+        &encoding::wide::encode_rr(instruction::wide::arithmetic::ADD, 10, 11, 0).to_le_bytes(),
+    );
     prog.extend_from_slice(
         &encoding::wide::encode_sys(
             instruction::wide::system::SCALL,

@@ -413,8 +413,9 @@ pub(in crate::sumeragi) enum ProductionPreTimeoutLockedPrepareQcIngressTurnV1 {
     Empty,
     /// One WAL-obsolete pre-cut predecessor crossed the ordinary dequeue tail.
     ObsoletePredecessor(ProductionPreparedOrdinaryIngressTurnV1),
-    /// The exact deeply-previewed PrepareQC crossed the ordinary dequeue tail.
-    ExactPrepareQc(ProductionPreparedOrdinaryIngressTurnV1),
+    /// One exact deeply-previewed Prepare vote/QC carrier crossed the ordinary
+    /// dequeue tail.
+    ExactPrepareProgress(ProductionPreparedOrdinaryIngressTurnV1),
     /// Queue ownership or exact dequeue authority failed closed.
     RestartRequired,
 }
@@ -1699,8 +1700,8 @@ impl LaunchedProductionLifecycleV1 {
 
     /// Move at most one fair-ingress row under an already-frozen timeout cut.
     ///
-    /// The exact PrepareQC predicate is a read-only runtime preview. Ordinary
-    /// obsolete retirement remains enabled only to release a durable
+    /// The exact Prepare-progress predicate is a read-only runtime preview.
+    /// Ordinary obsolete retirement remains enabled only to release a durable
     /// leader-wire predecessor; every non-obsolete row must match the exact
     /// preview, and the queue's Blocked verdict is never bypassed.
     pub(in crate::sumeragi) fn prepare_pre_timeout_locked_prepare_qc_ingress_turn(
@@ -1729,13 +1730,7 @@ impl LaunchedProductionLifecycleV1 {
                     else {
                         return false;
                     };
-                    matches!(
-                        &message.payload,
-                        iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload::QuorumCertificate(_)
-                    ) && executor.wire_previews_pre_timeout_locked_prepare_qc(
-                        cut,
-                        &message.payload,
-                    )
+                    executor.wire_previews_pre_timeout_locked_prepare_qc(cut, &message.payload)
                 },
             )
         };
@@ -1765,7 +1760,7 @@ impl LaunchedProductionLifecycleV1 {
                 ProductionPreTimeoutLockedPrepareQcIngressTurnV1::ObsoletePredecessor(turn)
             }
             PreparedOrdinaryIngressDequeueV1::Prepared(turn) => {
-                ProductionPreTimeoutLockedPrepareQcIngressTurnV1::ExactPrepareQc(turn)
+                ProductionPreTimeoutLockedPrepareQcIngressTurnV1::ExactPrepareProgress(turn)
             }
             PreparedOrdinaryIngressDequeueV1::RestartRequired => {
                 ProductionPreTimeoutLockedPrepareQcIngressTurnV1::RestartRequired
@@ -2758,7 +2753,6 @@ impl ActivatedProductionLifecycleV1 {
         block_sync_request: &mut Option<
             iroha_crypto::HashOf<iroha_data_model::block::consensus_v2::CommitCertificateRequest>,
         >,
-        npos_vrf: &mut crate::sumeragi::v2_npos::V2NposVrfLifecycle,
         npos_beacon: &mut crate::sumeragi::v2_beacon::V2GlobalBeaconLifecycle,
     ) -> Result<
         ProductionPreparedOrdinaryIngressConsumptionV1,
@@ -2787,7 +2781,6 @@ impl ActivatedProductionLifecycleV1 {
             block_sync_server,
             block_sync,
             block_sync_request,
-            npos_vrf,
             npos_beacon,
         )
     }

@@ -2549,7 +2549,7 @@ mod tests {
         );
     }
     #[test]
-    fn source_metadata_changes_sidecars_but_not_optimized_ir_or_artifact_bytes() {
+    fn source_metadata_changes_sidecars_but_not_lowered_ir_or_artifact_bytes() {
         let source_text = "seiyaku MetadataFree { view fn answer(int value) -> int { value + 1 } }";
         let source = crate::source::SourceFile::new(
             crate::source::SourceId(73),
@@ -2573,13 +2573,11 @@ mod tests {
         for state in &mut stripped.states {
             state.source = None;
         }
-        let mut sourced_ir = ir::lower(&sourced).expect("lower source-backed HIR");
-        let mut stripped_ir = ir::lower(&stripped).expect("lower metadata-free HIR");
-        crate::regalloc::optimize_program(&mut sourced_ir);
-        crate::regalloc::optimize_program(&mut stripped_ir);
+        let sourced_ir = ir::lower(&sourced).expect("lower source-backed HIR");
+        let stripped_ir = ir::lower(&stripped).expect("lower metadata-free HIR");
         assert_eq!(
             sourced_ir, stripped_ir,
-            "source metadata must not enter optimized semantic IR"
+            "source metadata must not enter lowered semantic IR"
         );
         let compiler = Compiler::new();
         let sourced_output = compiler
@@ -9769,8 +9767,14 @@ mod test_mode_tests {
                 (function.name == "reuse").then(|| super::entrypoint_ir_symbol_name(function))
             })
             .expect("reuse typed function");
-        let mut lowered = crate::ir::lower(&typed).expect("lower split-spill fixture");
-        crate::regalloc::optimize_program(&mut lowered);
+        let lowered = crate::ir::lower(&typed).expect("lower split-spill fixture");
+        let mut optimized = crate::ssa::Program::from_ir(lowered).expect("construct SSA fixture");
+        optimized
+            .optimize_and_retain(&std::collections::BTreeSet::from([
+                implementation_name.clone()
+            ]))
+            .expect("optimize SSA fixture");
+        let lowered = optimized.into_ir().expect("destroy SSA fixture");
         let function = lowered
             .functions
             .iter()

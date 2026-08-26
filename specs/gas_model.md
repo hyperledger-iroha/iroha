@@ -160,18 +160,16 @@ bounds, and every Norito decode limit. A change to any of those values or to
 the charge-point ordering therefore changes `ivm::gas::schedule_hash()` and is
 rejected by the signed peer handshake when validators disagree.
 
-## Vector scaling and HTM retries
+## Vector scaling
 
 - Vector ops (`VADD*`, `VAND`, `VXOR`, `VOR`, `VROT32`) scale with the logical
   vector length set by `SETVL`. The base costs in the table are scaled by
   `min(vector_len, VECTOR_BASE_LANES) / VECTOR_BASE_LANES` (baseline = 2 lanes).
-- HTM retries multiply the cost by `(retries + 1)`; most consensus paths do not
-  incur retries.
 
 ## Canonical opcode gas table
 
 The table below lists the base costs used by `ivm::gas::cost_of`. Vector scaling
-and HTM retries are applied on top of these base values as noted above.
+is applied on top of these base values as noted above.
 
 | Category | Opcode | Mnemonic | Base gas |
 |---|---:|---|---:|

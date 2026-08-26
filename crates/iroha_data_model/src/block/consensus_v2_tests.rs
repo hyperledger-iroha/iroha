@@ -1580,19 +1580,6 @@ mod tests {
                 responder: context.roster[0].validator.clone(),
                 signature: vec![4],
             }),
-            ConsensusMessageV2Payload::VrfCommit(VrfCommit {
-                epoch: context.epoch,
-                commitment: [0x77; 32],
-                signer: 1,
-                bls_sig: vec![5],
-            }),
-            ConsensusMessageV2Payload::VrfReveal(VrfReveal {
-                epoch: context.epoch,
-                reveal: [0x88; 32],
-                signer: 1,
-                vrf_proof: vec![0x99],
-                bls_sig: vec![6],
-            }),
             ConsensusMessageV2Payload::GlobalBeaconPartialSignature(beacon_partial),
         ];
         for payload in variants {

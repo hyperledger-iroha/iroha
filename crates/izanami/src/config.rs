@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 //! Runtime configuration and CLI parsing for the Izanami chaos tool.
-use crate::faults::DEFAULT_NETWORK_PACKET_LOSS_PERCENT;
 use clap::{Args, Parser, ValueEnum};
 use color_eyre::{Result, eyre::eyre};
 use humantime::parse_duration;
@@ -121,13 +120,6 @@ pub struct IzanamiArgs {
     /// Fault toggle switches parsed from CLI flags.
     #[command(flatten)]
     pub faults: FaultArgs,
-    /// P2P application-frame packet-loss percentage used when packet-loss faults are enabled.
-    #[arg(
-        long = "fault-network-packet-loss-percent",
-        default_value_t = DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
-        value_parser = clap::value_parser!(u8).range(0..=100),
-    )]
-    pub packet_loss_percent: u8,
     /// Load the Sora multi-lane profile from `defaults/nexus/config.toml`.
     #[arg(long)]
     pub nexus: bool,
@@ -205,16 +197,6 @@ pub struct FaultArgs {
         default_missing_value = "true",
     )]
     pub network_partition: bool,
-    /// Enable P2P packet-loss faults.
-    #[arg(
-        long = "fault-enable-network-packet-loss",
-        default_value_t = true,
-        action = clap::ArgAction::Set,
-        num_args = 0..=1,
-        require_equals = true,
-        default_missing_value = "true",
-    )]
-    pub network_packet_loss: bool,
     /// Enable CPU stress faults.
     #[arg(
         long = "fault-enable-cpu-stress",
@@ -244,7 +226,6 @@ impl FaultArgs {
             self.spam_invalid_transactions,
             self.network_latency,
             self.network_partition,
-            self.network_packet_loss,
             self.cpu_stress,
             self.disk_saturation,
         ])
@@ -258,7 +239,6 @@ impl Default for FaultArgs {
             spam_invalid_transactions: true,
             network_latency: true,
             network_partition: true,
-            network_packet_loss: true,
             cpu_stress: true,
             disk_saturation: true,
         }
@@ -272,7 +252,6 @@ impl From<FaultToggles> for FaultArgs {
             spam_invalid_transactions: toggles.spam_invalid_transactions(),
             network_latency: toggles.network_latency(),
             network_partition: toggles.network_partition(),
-            network_packet_loss: toggles.network_packet_loss(),
             cpu_stress: toggles.cpu_stress(),
             disk_saturation: toggles.disk_saturation(),
         }
@@ -289,19 +268,17 @@ impl FaultToggles {
     const SPAM_INVALID_TRANSACTIONS: u8 = 1 << 2;
     const NETWORK_LATENCY: u8 = 1 << 3;
     const NETWORK_PARTITION: u8 = 1 << 4;
-    const NETWORK_PACKET_LOSS: u8 = 1 << 5;
-    const CPU_STRESS: u8 = 1 << 6;
-    const DISK_SATURATION: u8 = 1 << 7;
+    const CPU_STRESS: u8 = 1 << 5;
+    const DISK_SATURATION: u8 = 1 << 6;
     const ALL_BITS: u8 = Self::CRASH_RESTART
         | Self::WIPE_STORAGE
         | Self::SPAM_INVALID_TRANSACTIONS
         | Self::NETWORK_LATENCY
         | Self::NETWORK_PARTITION
-        | Self::NETWORK_PACKET_LOSS
         | Self::CPU_STRESS
         | Self::DISK_SATURATION;
     /// Build the exact V1 fault set in declaration order.
-    pub const fn from_enabled_flags(flags: [bool; 8]) -> Self {
+    pub const fn from_enabled_flags(flags: [bool; 7]) -> Self {
         let mut bits = 0u8;
         if flags[0] {
             bits |= Self::CRASH_RESTART;
@@ -319,19 +296,19 @@ impl FaultToggles {
             bits |= Self::NETWORK_PARTITION;
         }
         if flags[5] {
-            bits |= Self::NETWORK_PACKET_LOSS;
-        }
-        if flags[6] {
             bits |= Self::CPU_STRESS;
         }
-        if flags[7] {
+        if flags[6] {
             bits |= Self::DISK_SATURATION;
         }
         Self { bits }
     }
-    pub const fn from_bits(bits: u8) -> Self {
-        Self {
-            bits: bits & Self::ALL_BITS,
+    /// Admit only the exact first-release fault bitset.
+    pub const fn try_from_bits(bits: u8) -> Option<Self> {
+        if bits & !Self::ALL_BITS == 0 {
+            Some(Self { bits })
+        } else {
+            None
         }
     }
     pub const fn bits(self) -> u8 {
@@ -354,9 +331,6 @@ impl FaultToggles {
     }
     pub const fn network_partition(self) -> bool {
         self.bits & Self::NETWORK_PARTITION != 0
-    }
-    pub const fn network_packet_loss(self) -> bool {
-        self.bits & Self::NETWORK_PACKET_LOSS != 0
     }
     pub const fn cpu_stress(self) -> bool {
         self.bits & Self::CPU_STRESS != 0
@@ -392,7 +366,6 @@ pub struct ChaosConfig {
     pub workload_profile: WorkloadProfile,
     pub allow_contract_deploy_in_stable: bool,
     pub fault_interval: RangeInclusive<Duration>,
-    pub packet_loss_percent: u8,
     pub log_filter: String,
     pub faults: FaultToggles,
     pub nexus: Option<NexusProfile>,
@@ -524,12 +497,6 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
                 args.fault_interval_max,
             ));
         }
-        if args.packet_loss_percent > 100 {
-            return Err(eyre!(
-                "fault-network-packet-loss-percent ({}) must be between 0 and 100",
-                args.packet_loss_percent
-            ));
-        }
         let toggles = args.faults.to_toggles();
         if args.faulty > 0 && !toggles.any_enabled() {
             return Err(eyre!(
@@ -563,7 +530,6 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
             fault_interval_min,
             fault_interval_max,
             faults: _faults,
-            packet_loss_percent,
             nexus,
             diagnostic_dir,
             allow_net,
@@ -597,7 +563,6 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
             workload_profile,
             allow_contract_deploy_in_stable,
             fault_interval: fault_interval_min..=fault_interval_max,
-            packet_loss_percent,
             log_filter,
             faults: toggles,
             nexus,
@@ -646,7 +611,6 @@ impl IzanamiArgs {
             fault_interval_min: min,
             fault_interval_max: max,
             faults: FaultArgs::from(cfg.faults),
-            packet_loss_percent: cfg.packet_loss_percent,
             nexus: cfg.nexus.is_some(),
             allow_net: cfg.allow_net,
             diagnostic_dir: cfg.diagnostic_dir.clone(),
@@ -1276,16 +1240,17 @@ mod tests {
     #[test]
     fn fault_toggles_use_the_exact_v1_flag_order() {
         let toggles =
-            FaultToggles::from_enabled_flags([true, false, true, false, true, false, true, false]);
+            FaultToggles::from_enabled_flags([true, false, true, false, true, false, true]);
 
         assert!(toggles.crash_restart());
         assert!(!toggles.wipe_storage());
         assert!(toggles.spam_invalid_transactions());
         assert!(!toggles.network_latency());
         assert!(toggles.network_partition());
-        assert!(!toggles.network_packet_loss());
-        assert!(toggles.cpu_stress());
-        assert!(!toggles.disk_saturation());
+        assert!(!toggles.cpu_stress());
+        assert!(toggles.disk_saturation());
+        assert_eq!(FaultToggles::try_from_bits(toggles.bits()), Some(toggles));
+        assert_eq!(FaultToggles::try_from_bits(toggles.bits() | (1 << 7)), None);
     }
 
     #[test]
@@ -1324,11 +1289,9 @@ mod tests {
                 spam_invalid_transactions: true,
                 network_latency: true,
                 network_partition: true,
-                network_packet_loss: true,
                 cpu_stress: true,
                 disk_saturation: true,
             },
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
             diagnostic_dir: None,
         };
@@ -1397,7 +1360,6 @@ mod tests {
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
             faults: FaultArgs::default(),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
             diagnostic_dir: None,
         };
@@ -1435,7 +1397,6 @@ mod tests {
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
             faults: FaultArgs::default(),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
             diagnostic_dir: None,
         };
@@ -1478,7 +1439,6 @@ mod tests {
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
             faults: FaultArgs::default(),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
             diagnostic_dir: None,
         };
@@ -1519,7 +1479,6 @@ mod tests {
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
             faults: FaultArgs::default(),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
             diagnostic_dir: None,
         };
@@ -1668,7 +1627,6 @@ mod tests {
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
             faults: FaultArgs::default(),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
             diagnostic_dir: None,
         };
@@ -1711,7 +1669,6 @@ mod tests {
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
             faults: FaultArgs::default(),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
             diagnostic_dir: None,
         };
@@ -1754,7 +1711,6 @@ mod tests {
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
             faults: FaultArgs::default(),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
             diagnostic_dir: None,
         };
@@ -1797,7 +1753,6 @@ mod tests {
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
             faults: FaultArgs::default(),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
             diagnostic_dir: None,
         };
@@ -1840,7 +1795,6 @@ mod tests {
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
             faults: FaultArgs::default(),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
             diagnostic_dir: None,
         };
@@ -1882,7 +1836,6 @@ mod tests {
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
             faults: FaultArgs::default(),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
             diagnostic_dir: None,
         };
@@ -1972,7 +1925,6 @@ mod tests {
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
             faults: FaultArgs::default(),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
             diagnostic_dir: None,
         };
@@ -2020,11 +1972,9 @@ mod tests {
                 spam_invalid_transactions: false,
                 network_latency: false,
                 network_partition: false,
-                network_packet_loss: false,
                 cpu_stress: false,
                 disk_saturation: false,
             },
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
             diagnostic_dir: None,
         };

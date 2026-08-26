@@ -14,7 +14,6 @@ import re
 import struct
 from typing import Any, Iterable, Mapping, Sequence, Tuple
 
-
 _HASH_LITERAL_RE = re.compile(r"hash:([0-9A-F]{64})#[0-9A-F]{4}")
 _BLS_NORMAL_PEER_ID_RE = re.compile(r"(?:bls_normal:)?(ea0130[0-9A-F]{96})")
 _BLS12_381_BASE_FIELD = int(

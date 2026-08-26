@@ -565,8 +565,7 @@ fn network_ingress_requires_reducer_order(
         | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
         | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
         | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
-        | wire::ConsensusMessageV2Payload::VrfCommit(_)
-        | wire::ConsensusMessageV2Payload::VrfReveal(_) => false,
+        | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => false,
     }
 }
 """,
@@ -610,8 +609,7 @@ pub(crate) const fn network_ingress_is_certified_fence_escape(
         | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
         | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
         | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
-        | wire::ConsensusMessageV2Payload::VrfCommit(_)
-        | wire::ConsensusMessageV2Payload::VrfReveal(_) => false,
+        | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => false,
     }
 }
 """,

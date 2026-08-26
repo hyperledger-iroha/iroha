@@ -286,6 +286,7 @@ IROHA_CONFIG_DEFAULTS_RS = (
 IROHA_CONFIG_USER_RS = (
     REPO_ROOT / "crates" / "iroha_config" / "src" / "parameters" / "user.rs"
 )
+IROHA_CONFIG_CLIENT_API_RS = REPO_ROOT / "crates" / "iroha_config" / "src" / "client_api.rs"
 SORAFS_CLI_RS = REPO_ROOT / "crates" / "sorafs_orchestrator" / "src" / "bin" / "sorafs_cli.rs"
 HEDGING_FIXTURE_ROOT = REPO_ROOT / "fixtures" / "sorafs_manifest" / "hedging"
 HEDGING_FIXTURE_README = HEDGING_FIXTURE_ROOT / "README.md"
@@ -2043,6 +2044,7 @@ def test_sorafs_soranet_handshake_admission_has_no_relaxation_path() -> None:
     kiso = read(IROHA_CORE_KISO_RS)
     actual_config = read(IROHA_CONFIG_ACTUAL_RS)
     user_config = read(IROHA_CONFIG_USER_RS)
+    client_api = read(IROHA_CONFIG_CLIENT_API_RS)
 
     handshake_args = cli.split("pub struct HandshakeUpdateArgs", 1)[1].split(
         "impl HandshakeUpdateArgs", 1
@@ -2061,10 +2063,10 @@ def test_sorafs_soranet_handshake_admission_has_no_relaxation_path() -> None:
     )[0]
     verify_challenge_ticket = peer.split("pub(crate) fn verify_challenge_ticket", 1)[
         1
-    ].split("/// Verify a signed ticket", 1)[0]
+    ].split("fn verify_ticket_bytes", 1)[0]
     actual_default_pow = actual_config.split("pub const fn default_const() -> Self", 1)[
         1
-    ].split("pub fn with_signed_ticket_public_key", 1)[0]
+    ].split("impl_default!(SoranetPow", 1)[0]
     user_pow = user_config.split("pub struct SoranetHandshakePow", 1)[1].split(
         "impl SoranetHandshakePow", 1
     )[0]
@@ -2091,6 +2093,9 @@ def test_sorafs_soranet_handshake_admission_has_no_relaxation_path() -> None:
     assert "require_sm_openssl_preview_match = Some(false)" not in into_payload
 
     assert "required: true" in actual_default_pow
+    assert "signed_ticket_public_key" not in actual_config
+    assert "signed_ticket_public_key_hex" not in user_config
+    assert "signed_ticket_public_key_hex" not in client_api
     assert "required: bool" not in user_pow
     assert "enabled: bool" not in user_puzzle
     assert "required: true" in user_config.split("fn parse(self) -> actual::SoranetPow", 1)[1].split(
@@ -2114,14 +2119,9 @@ def test_sorafs_soranet_handshake_admission_has_no_relaxation_path() -> None:
     assert "pow.puzzle = None" not in apply_pow_update
 
     assert "Fallback to unsigned tickets" not in peer
-    assert "raw_ticket_accepted_with_signed_key_present" not in peer
-    assert "raw_ticket_rejected_with_signed_key_present" in peer
-    assert "SignedTicket::decode(bytes).map_err(ChallengeVerifyError::Pow)?" in verify_challenge_ticket
+    assert "signed_ticket" not in peer
     assert "bytes.len() == pow::TICKET_LEN" not in verify_challenge_ticket
-    assert (
-        "self.verify_unsigned_ticket_bytes(bytes, transcript_hash)"
-        in verify_challenge_ticket
-    )
+    assert "self.verify_ticket_bytes(bytes, transcript_hash)" in verify_challenge_ticket
 
     assert "handshake_update_accepts_pow_overrides" in cli
     assert "soranet_handshake_update_applies" in kiso

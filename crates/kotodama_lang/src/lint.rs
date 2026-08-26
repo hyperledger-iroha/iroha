@@ -568,9 +568,6 @@ fn lint_state_path_expr(expr: &Expr, warnings: &mut Vec<LintWarning>) {
 fn lint_opaque_access_hints(program: &Program, warnings: &mut Vec<LintWarning>) {
     for item in &program.items {
         if let Item::Function(func) = item {
-            if !func.modifiers.access_reads.is_empty() || !func.modifiers.access_writes.is_empty() {
-                continue;
-            }
             lint_opaque_access_block(&func.body, warnings);
         }
     }

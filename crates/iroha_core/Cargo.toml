@@ -74,11 +74,9 @@ json = [
 ]
 # Enable Chinese SM algorithm family plumbing in dependent crates.
 sm = [
-    "ivm/sm",
     "iroha_config/sm",
     "iroha_crypto/sm",
     "iroha_data_model/sm",
-    "iroha_p2p/sm",
 ]
 # Enable app-facing convenience helpers (testing utilities shared with Torii).
 app_api = []
@@ -181,7 +179,7 @@ iroha_primitives = { workspace = true }
 iroha_genesis = { workspace = true }
 iroha_torii_shared = { workspace = true }
 iroha_executor_data_model = { workspace = true }
-ivm = { workspace = true, default-features = false, features = ["runtime", "halo2-params"] }
+ivm = { workspace = true }
 fastpq_prover = { path = "../fastpq_prover" }
 mv = { workspace = true }
 iroha_schema = { workspace = true }

@@ -40477,7 +40477,7 @@
             "type": "integer"
           },
           "epoch_seed": {
-            "description": "Non-zero deterministic epoch seed. Commit offset is strictly less than reveal offset, which does not exceed epoch length.",
+            "description": "Non-zero deterministic epoch seed.",
             "items": {
               "maximum": 255,
               "minimum": 0,
@@ -40496,49 +40496,13 @@
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
-          },
-          "vrf_commit_deadline_offset": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "vrf_committed_no_reveal_total": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "vrf_late_reveals_total": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "vrf_no_participation_total": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "vrf_penalty_epoch": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "vrf_reveal_deadline_offset": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
           }
         },
         "required": [
           "epoch_length_blocks",
-          "vrf_commit_deadline_offset",
-          "vrf_reveal_deadline_offset",
           "epoch_seed",
           "prf_height",
-          "prf_view",
-          "vrf_penalty_epoch",
-          "vrf_committed_no_reveal_total",
-          "vrf_no_participation_total",
-          "vrf_late_reveals_total"
+          "prf_view"
         ],
         "type": "object"
       },

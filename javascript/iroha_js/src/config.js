@@ -1,4 +1,4 @@
-import { normalizeAccountId } from "./instructionBuilders.js";
+import { normalizeAccountId } from "./normalizers.js";
 
 const DEFAULT_TORII_CLIENT_CONFIG = Object.freeze({
   timeoutMs: 30_000,

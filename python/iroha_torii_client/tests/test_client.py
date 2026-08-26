@@ -4970,12 +4970,10 @@ def test_get_sumeragi_diagnostics_enforces_finalized_identity_pair_and_order() -
         _get_sumeragi_diagnostics(payload)
 
 
-def test_get_sumeragi_diagnostics_parses_npos_windows_and_byte_seed() -> None:
+def test_get_sumeragi_diagnostics_parses_npos_epoch_and_byte_seed() -> None:
     payload = _sumeragi_diagnostics_payload()
     payload["npos"] = {
         "epoch_length_blocks": 100,
-        "vrf_commit_deadline_offset": 20,
-        "vrf_reveal_deadline_offset": 40,
         "epoch_seed": [1] * 32,
         "prf_height": 10,
         "prf_view": 2,
@@ -4986,9 +4984,15 @@ def test_get_sumeragi_diagnostics_parses_npos_windows_and_byte_seed() -> None:
     assert npos is not None
     assert npos.epoch_seed == (1,) * 32
 
-    payload["npos"]["vrf_penalty_epoch"] = 1
-    with pytest.raises(RuntimeError, match="contains unknown field vrf_penalty_epoch"):
-        _get_sumeragi_diagnostics(payload)
+    for retired in (
+        "vrf_commit_deadline_offset",
+        "vrf_reveal_deadline_offset",
+        "vrf_penalty_epoch",
+    ):
+        hostile = copy.deepcopy(payload)
+        hostile["npos"][retired] = 1
+        with pytest.raises(RuntimeError, match=f"contains unknown field {retired}"):
+            _get_sumeragi_diagnostics(hostile)
 
 
 def test_get_sumeragi_diagnostics_rejects_native_amx_participant_finality_tampering() -> None:

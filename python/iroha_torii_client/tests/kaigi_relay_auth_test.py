@@ -9,7 +9,6 @@ from typing import List, Optional
 from urllib.parse import quote
 
 import pytest
-
 from client_test_support import CANONICAL_OWNER, canonical_hash
 from sumeragi_exact_json_test_support import RecordingSession, StubResponse
 

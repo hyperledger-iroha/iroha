@@ -7,9 +7,8 @@ preparing the Kotodama language stack for extraction into a standalone crate.
 
 ## Goals
 
-1. **Layered runtime façade** – introduce an explicit runtime interface so the VM
-   core can be embedded behind a narrow trait and alternative front-ends can evolve
-   without touching internal modules.
+1. **Focused runtime API** – group construction and host-policy entry points while
+   keeping `IVM` as the single concrete first-release engine.
 2. **Host/syscall boundary  hardening** – route syscall dispatch through a
    dedicated adapter that enforces ABI policy and pointer validation before any host
    code executes.
@@ -21,18 +20,16 @@ preparing the Kotodama language stack for extraction into a standalone crate.
 
 ## Phase Breakdown
 
-### Phase 1 – Runtime façade (in progress)
-- Add a `runtime` module that defines a `VmEngine` trait describing lifecycle
-  operations (`load_program`, `execute`, host plumbing).
-- Teach `IVM` to implement the trait.  This keeps the existing struct but allows
-  consumers (and future tests) to depend on the interface instead of concrete
-  types.
-- Start shedding direct module re-exports from `lib.rs` so callers import via the
-  façade when possible.
+### Phase 1 – Runtime API (complete)
+- Group `IvmBuilder`, `IvmConfig`, acceleration policy, and stack policy in the
+  `runtime` module.
+- Keep lifecycle methods on the concrete `IVM`. The first release has no second
+  engine, so an abstraction trait would add an unowned API without isolating any
+  implementation.
+- Keep syscall policy enforcement in the dispatcher boundary described below.
 
-**Security / performance impact**: The façade restricts direct access to internal
-state; only safe entry points are exposed.  This makes it easier to audit host
-interactions and reason about gas or TLV handling.
+**Security / performance impact**: The concrete API avoids a bypass-prone or
+speculative engine abstraction while the dispatcher centralizes host policy.
 
 ### Phase 2 – Syscall dispatcher
 - Introduce a `SyscallDispatcher` component that wraps `IVMHost` and enforces ABI

@@ -2468,8 +2468,8 @@ pub mod torii {
         pub const POW_ADAPTIVE_CLAIMS_PER_EXTRA_BIT: u64 = 0;
         /// Maximum number of adaptive difficulty bits added on top of the base difficulty.
         pub const POW_ADAPTIVE_MAX_EXTRA_BITS: u8 = 0;
-        /// Whether finalized Sumeragi VRF epoch seeds are mixed into faucet challenges when available.
-        pub const POW_VRF_SEED_ENABLED: bool = false;
+        /// Whether verified finalized global-beacon seeds are mixed into faucet challenges.
+        pub const POW_BEACON_SEED_ENABLED: bool = false;
     }
     /// Kagemusha command-submission defaults.
     pub mod kagemusha_commands {
@@ -3986,10 +3986,6 @@ pub mod sumeragi {
     pub mod npos {
         /// Epoch length in blocks.
         pub const EPOCH_LENGTH_BLOCKS: u64 = 3_600;
-        /// VRF commitment window size from epoch start.
-        pub const VRF_COMMIT_WINDOW_BLOCKS: u64 = 100;
-        /// VRF reveal window size after the commitment window.
-        pub const VRF_REVEAL_WINDOW_BLOCKS: u64 = 40;
         /// Exact bounded `3f + 1` ceiling for an epoch committee.
         pub const MAX_VALIDATORS: u32 = 31;
         /// Minimum validator self-bond.
@@ -4152,7 +4148,11 @@ pub mod governance {
         /// Consensus block-height span allotted to proof-validated registration submissions.
         pub const REGISTRATION_PHASE_BLOCKS: u64 = 3_600;
         /// Consensus block-height span allotted to freezing pre-ballot dropouts and survivors.
-        pub const SURVIVOR_FREEZE_PHASE_BLOCKS: u64 = 300;
+        ///
+        /// The default reserves at least one block for every entry in the maximum corpus. This
+        /// remains safe under the standard genesis gas limit, where a worst-case dropout
+        /// transition may consume most of one block after replaying the bounded cache.
+        pub const SURVIVOR_FREEZE_PHASE_BLOCKS: u64 = 1_000;
         /// Consensus block-height span allotted to the exact masked-ballot commitment corpus.
         pub const COMMITMENT_PHASE_BLOCKS: u64 = 3_600;
         /// Consensus block-height span between commitment close and the earliest timed release.

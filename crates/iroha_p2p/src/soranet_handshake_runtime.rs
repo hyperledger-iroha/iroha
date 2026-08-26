@@ -7,6 +7,7 @@ use std::{
     time::SystemTime,
 };
 
+use crate::{Error, peer::SoranetHandshakeConfig, puzzle_work_admission::process_wide_admission};
 use iroha_config::parameters::actual::{
     SoranetHandshake as ActualSoranetHandshake, SoranetPow as ActualSoranetPow,
 };
@@ -14,9 +15,6 @@ use iroha_crypto::soranet::{
     pow::{Parameters as PowParameters, TicketRevocationStore, TicketRevocationStoreLimits},
     puzzle,
 };
-use soranet_pq::MlDsaSuite;
-
-use crate::{Error, peer::SoranetHandshakeConfig, puzzle_work_admission::process_wide_admission};
 
 fn absolute_replay_state_path(path: &Path) -> std::io::Result<PathBuf> {
     if path.is_absolute() {
@@ -50,7 +48,6 @@ pub fn runtime_from_handshake(
         revocation_max_ttl,
         revocation_store_path,
         puzzle,
-        signed_ticket_public_key,
     } = pow;
     validate_revocation_window(max_future_skew, revocation_max_ttl)?;
     validate_puzzle_work_capacities(outbound_mint_capacity, inbound_verify_capacity)?;
@@ -81,7 +78,6 @@ pub fn runtime_from_handshake(
             "invalid soranet puzzle ticket timing: ticket_ttl {ticket_ttl:?} must exceed min_ticket_ttl {min_ticket_ttl:?}"
         )));
     }
-    let signed_ticket_public_key = validate_signed_ticket_public_key(signed_ticket_public_key)?;
     let revocation_limits =
         TicketRevocationStoreLimits::new(revocation_store_capacity, revocation_max_ttl).map_err(
             |err| {
@@ -122,7 +118,6 @@ pub fn runtime_from_handshake(
         pow_params,
         puzzle_params,
         ticket_ttl,
-        signed_ticket_public_key,
         Arc::new(Mutex::new(revocation_store)),
     )?
     .with_puzzle_work_admission(puzzle_work_admission);
@@ -159,24 +154,8 @@ fn validate_puzzle_work_capacities(
     Ok(())
 }
 
-fn validate_signed_ticket_public_key(key: Option<Vec<u8>>) -> Result<Option<Vec<u8>>, Error> {
-    key.map(|key| {
-        MlDsaSuite::MlDsa44
-            .validate_public_key(&key)
-            .map_err(|error| {
-                Error::HandshakeSoranet(format!(
-                    "invalid soranet signed_ticket_public_key_hex (ML-DSA-44): {error}"
-                ))
-            })?;
-        Ok(key)
-    })
-    .transpose()
-}
-
 #[cfg(test)]
 mod tests {
-    use soranet_pq::generate_mldsa_keypair_from_os;
-
     use super::*;
 
     #[test]
@@ -194,21 +173,5 @@ mod tests {
         ));
         validate_revocation_window(max_future_skew, max_future_skew)
             .expect("an equal revocation and acceptance window is sufficient");
-    }
-
-    #[test]
-    fn signed_ticket_public_key_rejects_inert_material() {
-        let inert = vec![0_u8; MlDsaSuite::MlDsa44.public_key_len()];
-        assert!(validate_signed_ticket_public_key(Some(inert)).is_err());
-    }
-
-    #[test]
-    fn signed_ticket_public_key_accepts_generated_material() {
-        let keypair =
-            generate_mldsa_keypair_from_os(MlDsaSuite::MlDsa44).expect("generate ML-DSA keypair");
-        let expected = keypair.public_key().to_vec();
-        let validated = validate_signed_ticket_public_key(Some(expected.clone()))
-            .expect("validate generated public key");
-        assert_eq!(validated.as_deref(), Some(expected.as_slice()));
     }
 }

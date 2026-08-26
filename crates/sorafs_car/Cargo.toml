@@ -49,7 +49,7 @@ iroha_crypto = { workspace = true, optional = true, default-features = false, fe
 iroha_data_model = { workspace = true, optional = true, default-features = false, features = ["application-model"] }
 iroha_config = { workspace = true, optional = true }
 iroha_primitives = { workspace = true, optional = true, features = ["simd-accel"] }
-ivm = { workspace = true, optional = true, default-features = false, features = ["runtime"] }
+ivm = { workspace = true, optional = true }
 eyre = { workspace = true, optional = true }
 clap = { workspace = true, features = ["derive"], optional = true }
 hex = "0.4.3"

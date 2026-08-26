@@ -2059,9 +2059,7 @@ fn target_lifecycle_context(
                 response.certificate.round.context_id,
                 response.certificate.round.height,
             )),
-            wire::ConsensusMessageV2Payload::VrfCommit(_)
-            | wire::ConsensusMessageV2Payload::VrfReveal(_)
-            | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => return None,
+            wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => return None,
         },
         BlockMessage::V2(_) => return None,
         BlockMessage::KuraReplicaAdvert(_)

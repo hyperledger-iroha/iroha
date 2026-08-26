@@ -104,8 +104,8 @@ const VALIDATOR_COUNT: usize = 4;
 const CITIZEN_COUNT: usize = 24;
 const BODY_SEATS: u32 = 3;
 const INVITATION_PHASE_BLOCKS: u64 = 30;
-const REGISTRATION_PHASE_BLOCKS: u64 = 8;
-const SURVIVOR_PHASE_BLOCKS: u64 = 4;
+const REGISTRATION_PHASE_BLOCKS: u64 = 9;
+const SURVIVOR_PHASE_BLOCKS: u64 = 8;
 const COMMITMENT_PHASE_BLOCKS: u64 = 4;
 const RELEASE_DELAY_BLOCKS: u64 = 3;
 const OPENING_PHASE_BLOCKS: u64 = 8;
@@ -1689,8 +1689,6 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
     let mut npos = SumeragiNposParameters::default();
     npos.epoch_length_blocks = NonZeroU64::new(MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS)
         .expect("mandatory NPoS epoch length is non-zero");
-    npos.vrf_commit_window_blocks = 2;
-    npos.vrf_reveal_window_blocks = 2;
     npos.validate()
         .map_err(|error| eyre!("invalid mandatory NPoS fixture: {error}"))?;
 
@@ -1834,8 +1832,6 @@ async fn four_validator_mandatory_npos_beacon_fails_closed_below_threshold() -> 
     let mut npos = SumeragiNposParameters::default();
     npos.epoch_length_blocks = NonZeroU64::new(MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS)
         .expect("mandatory NPoS epoch length is non-zero");
-    npos.vrf_commit_window_blocks = 2;
-    npos.vrf_reveal_window_blocks = 2;
     npos.validate()
         .map_err(|error| eyre!("invalid fail-closed NPoS fixture: {error}"))?;
 

@@ -19,6 +19,10 @@ use iroha_crypto::{
         ThresholdBlsSession, ThresholdBlsSignature, ValidatedDealerCommitment,
     },
 };
+#[cfg(any(test, feature = "iroha-core-tests"))]
+use iroha_crypto::{HashOf, threshold_bls::DasRenDealerSecret};
+#[cfg(any(test, feature = "iroha-core-tests"))]
+use iroha_data_model::block::BlockHeader;
 use iroha_data_model::{
     NetworkId,
     consensus::{
@@ -37,6 +41,8 @@ use norito::{
     codec::Encode as _,
     derive::{JsonDeserialize, JsonSerialize},
 };
+#[cfg(any(test, feature = "iroha-core-tests"))]
+use rand::{SeedableRng as _, rngs::StdRng};
 use std::{collections::BTreeMap, sync::RwLock};
 use thiserror::Error;
 use zeroize::Zeroizing;
@@ -2335,6 +2341,40 @@ pub(crate) fn verified_persisted_global_threshold_beacon_pulse_v1(
     Ok(pulse)
 }
 
+/// Re-verify the newest persisted global pulse at or before a block height.
+///
+/// Selection is deterministic and fails closed if restored state contains two
+/// pulses at the selected height. The returned pulse is then checked against
+/// its complete public DKG session and final threshold signature.
+///
+/// # Errors
+///
+/// Returns a threshold-beacon error when no eligible pulse exists, the selected
+/// height is ambiguous, or the selected pulse fails persisted-state, session,
+/// signature, seed, or identifier verification.
+pub fn verified_global_threshold_beacon_pulse_at_or_before_v1(
+    world: &impl crate::state::WorldReadOnly,
+    network_id: &NetworkId,
+    maximum_height: u64,
+) -> Result<FinalizedGlobalThresholdBeaconPulseV1, GlobalThresholdBeaconError> {
+    let mut selected = None;
+    for (_, candidate) in world.global_beacon_pulses().iter() {
+        if candidate.height > maximum_height {
+            continue;
+        }
+        match selected {
+            None => selected = Some(*candidate),
+            Some(current) if candidate.height > current.height => selected = Some(*candidate),
+            Some(current) if candidate.height == current.height => {
+                return Err(GlobalThresholdBeaconError::InvalidPulseHistory);
+            }
+            Some(_) => {}
+        }
+    }
+    let pulse = selected.ok_or(GlobalThresholdBeaconError::InvalidPulseHistory)?;
+    verified_persisted_global_threshold_beacon_pulse_v1(world, network_id, pulse)
+}
+
 /// Re-verify the latest persisted global pulse and its complete public session.
 ///
 /// This is the shared read boundary for deterministic consumers outside the
@@ -2398,6 +2438,169 @@ fn is_zero(bytes: &[u8]) -> bool {
     bytes.iter().all(|byte| *byte == 0)
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
+fn beacon_fixture_network_id(marker: u8) -> NetworkId {
+    NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+        Hash::prehashed([marker; Hash::LENGTH]),
+    ))
+}
+
+#[cfg(any(test, feature = "iroha-core-tests"))]
+fn adaptive_dkg_session_fixture() -> GlobalThresholdBeaconDkgSessionV1 {
+    GlobalThresholdBeaconDkgSessionV1 {
+        version: GLOBAL_THRESHOLD_BEACON_VERSION_V1,
+        network_id: beacon_fixture_network_id(0x81),
+        session_id: [0x22; 32],
+        roster_hash: [0x33; 32],
+        committee_size: 4,
+        threshold: 2,
+        start_height: 1,
+        sharing_end_height: 10,
+        complaints_end_height: 20,
+        responses_end_height: 30,
+    }
+}
+
+#[cfg(any(test, feature = "iroha-core-tests"))]
+struct AdaptiveBeaconFixture {
+    session: ValidatedGlobalThresholdBeaconSessionV1,
+    #[cfg(test)]
+    binding: GlobalThresholdBeaconSessionBindingV1,
+    parameters: AdaptiveThresholdBlsParameters<BeaconPurpose>,
+    dealer_secrets: Vec<DasRenDealerSecret<BeaconPurpose>>,
+    dealer_commitments: Vec<ValidatedDealerCommitment<BeaconPurpose>>,
+}
+
+#[cfg(any(test, feature = "iroha-core-tests"))]
+fn dealer_commitment_dto(
+    dealer: &ValidatedDealerCommitment<BeaconPurpose>,
+) -> GlobalThresholdBeaconDkgDealerCommitmentV1 {
+    GlobalThresholdBeaconDkgDealerCommitmentV1 {
+        dealer_index: dealer.dealer_index(),
+        coefficient_commitments: dealer
+            .coefficients()
+            .iter()
+            .map(|coefficient| *coefficient.as_bytes())
+            .collect(),
+        constant_term_proof: GlobalThresholdBeaconDkgConstantProofV1 {
+            commitment: *dealer.constant_proof().commitment_bytes(),
+            response: *dealer.constant_proof().response_bytes(),
+        },
+    }
+}
+
+#[cfg(test)]
+fn adaptive_beacon_fixture() -> AdaptiveBeaconFixture {
+    adaptive_beacon_fixture_for_session(adaptive_dkg_session_fixture())
+}
+
+#[cfg(any(test, feature = "iroha-core-tests"))]
+fn adaptive_beacon_fixture_for_session(
+    dkg_session: GlobalThresholdBeaconDkgSessionV1,
+) -> AdaptiveBeaconFixture {
+    let crypto = AdaptiveGlobalThresholdBeaconDkgCryptoV1;
+    let parameters = adaptive_beacon_parameters(&dkg_session).expect("adaptive parameters");
+    let mut state = GlobalThresholdBeaconDkgStateV1::new(dkg_session, &crypto)
+        .expect("valid adaptive DKG state");
+    let mut rng = StdRng::from_seed([0x5A; 32]);
+    let mut dealer_secrets = Vec::new();
+    let mut dealer_commitments = Vec::new();
+    for dealer_index in 1_u16..=dkg_session.committee_size {
+        let (secret, commitment) =
+            DasRenDealerSecret::generate_with_rng(&parameters, dealer_index, &mut rng)
+                .expect("generate adaptive dealer");
+        state
+            .record_dealer_commitment(1, dealer_commitment_dto(&commitment), &crypto)
+            .expect("verify adaptive dealer broadcast");
+        dealer_secrets.push(secret);
+        dealer_commitments.push(commitment);
+    }
+    let record = state
+        .finalize(dkg_session.responses_end_height, &crypto)
+        .expect("finalize adaptive DKG")
+        .clone();
+    let binding = GlobalThresholdBeaconSessionBindingV1 {
+        network_id: record.network_id,
+        session_id: record.session_id,
+        roster_hash: record.roster_hash,
+        transcript_hash: record.transcript_hash,
+    };
+    let session = validate_global_threshold_beacon_session_v1(record, &binding)
+        .expect("validate adaptive beacon transcript DTO");
+    AdaptiveBeaconFixture {
+        session,
+        #[cfg(test)]
+        binding,
+        parameters,
+        dealer_secrets,
+        dealer_commitments,
+    }
+}
+
+/// Build one fully signed, proof-valid persisted beacon fixture.
+#[cfg(any(test, feature = "iroha-core-tests"))]
+#[doc(hidden)]
+pub fn signed_persisted_pulse_fixture_for_world(
+    network_id: NetworkId,
+    height: u64,
+) -> (
+    FinalizedGlobalThresholdBeaconKeySessionRecordV1,
+    FinalizedGlobalThresholdBeaconPulseV1,
+) {
+    assert!(height > 4, "fixture pulse follows DKG finalization");
+    let mut dkg_session = adaptive_dkg_session_fixture();
+    dkg_session.network_id = network_id;
+    dkg_session.sharing_end_height = 2;
+    dkg_session.complaints_end_height = 3;
+    dkg_session.responses_end_height = 4;
+    dkg_session.session_id = Hash::new_from_chunks(&[
+        b"iroha.beacon.world-test-session.v1\0",
+        network_id.as_bytes(),
+    ])
+    .into();
+    let fixture = adaptive_beacon_fixture_for_session(dkg_session);
+    let anchor = GlobalThresholdBeaconChainAnchorV1 {
+        height: height - 1,
+        block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x88; 32])),
+    };
+    let mut aggregator =
+        GlobalThresholdBeaconPulseAggregatorV1::new(fixture.session.clone(), height, anchor)
+            .expect("open exact world-test pulse reducer");
+    let payload = aggregator.payload().to_vec();
+    for recipient_index in 1_u16..=fixture.session.transcript.session().threshold() {
+        let private_contributions = fixture
+            .dealer_secrets
+            .iter()
+            .zip(&fixture.dealer_commitments)
+            .map(|(secret, dealer)| {
+                secret
+                    .private_share(&fixture.parameters, dealer, recipient_index)
+                    .expect("verified private DKG contribution")
+            })
+            .collect::<Vec<_>>();
+        let signing_share = AdaptiveThresholdBlsSecretShare::from_dealer_shares(
+            &fixture.session.transcript,
+            &private_contributions,
+        )
+        .expect("aggregate exact qualified private contributions");
+        aggregator
+            .accept_partial(global_threshold_beacon_partial_signature_dto_v1(
+                &signing_share
+                    .sign_payload(&fixture.session.transcript, &payload)
+                    .expect("sign exact world-test pulse payload"),
+            ))
+            .expect("accept proof-verified world-test partial");
+    }
+    let pulse = aggregator.finalize().expect("finalize world-test pulse");
+    let mut key_record =
+        FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(fixture.session.record().clone())
+            .expect("construct world-test key lifecycle");
+    key_record
+        .activate(fixture.session.record().adaptive_dkg.finalized_at_height)
+        .expect("activate world-test key at DKG finalization");
+    (key_record, pulse)
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -2421,7 +2624,7 @@ pub(crate) mod tests {
     use iroha_config::parameters::actual::{Governance, LaneConfig as RuntimeLaneConfig};
     use iroha_crypto::{
         Algorithm, HashOf, KeyPair,
-        threshold_bls::{AdaptiveThresholdBlsSecretShare, DasRenDealerSecret, TleReleasePurpose},
+        threshold_bls::{AdaptiveThresholdBlsSecretShare, TleReleasePurpose},
     };
     use iroha_data_model::{
         ChainId,
@@ -2542,27 +2745,6 @@ pub(crate) mod tests {
                     .collect(),
                 transcript_hash: event_hash,
             })
-        }
-    }
-
-    fn network_id(marker: u8) -> NetworkId {
-        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
-            Hash::prehashed([marker; Hash::LENGTH]),
-        ))
-    }
-
-    fn adaptive_dkg_session_fixture() -> GlobalThresholdBeaconDkgSessionV1 {
-        GlobalThresholdBeaconDkgSessionV1 {
-            version: GLOBAL_THRESHOLD_BEACON_VERSION_V1,
-            network_id: network_id(0x81),
-            session_id: [0x22; 32],
-            roster_hash: [0x33; 32],
-            committee_size: 4,
-            threshold: 2,
-            start_height: 1,
-            sharing_end_height: 10,
-            complaints_end_height: 20,
-            responses_end_height: 30,
         }
     }
 
@@ -2785,76 +2967,6 @@ pub(crate) mod tests {
         )
     }
 
-    struct AdaptiveBeaconFixture {
-        session: ValidatedGlobalThresholdBeaconSessionV1,
-        binding: GlobalThresholdBeaconSessionBindingV1,
-        parameters: AdaptiveThresholdBlsParameters<BeaconPurpose>,
-        dealer_secrets: Vec<DasRenDealerSecret<BeaconPurpose>>,
-        dealer_commitments: Vec<ValidatedDealerCommitment<BeaconPurpose>>,
-    }
-
-    fn dealer_commitment_dto(
-        dealer: &ValidatedDealerCommitment<BeaconPurpose>,
-    ) -> GlobalThresholdBeaconDkgDealerCommitmentV1 {
-        GlobalThresholdBeaconDkgDealerCommitmentV1 {
-            dealer_index: dealer.dealer_index(),
-            coefficient_commitments: dealer
-                .coefficients()
-                .iter()
-                .map(|coefficient| *coefficient.as_bytes())
-                .collect(),
-            constant_term_proof: GlobalThresholdBeaconDkgConstantProofV1 {
-                commitment: *dealer.constant_proof().commitment_bytes(),
-                response: *dealer.constant_proof().response_bytes(),
-            },
-        }
-    }
-
-    fn adaptive_beacon_fixture() -> AdaptiveBeaconFixture {
-        adaptive_beacon_fixture_for_session(adaptive_dkg_session_fixture())
-    }
-
-    fn adaptive_beacon_fixture_for_session(
-        dkg_session: GlobalThresholdBeaconDkgSessionV1,
-    ) -> AdaptiveBeaconFixture {
-        let crypto = AdaptiveGlobalThresholdBeaconDkgCryptoV1;
-        let parameters = adaptive_beacon_parameters(&dkg_session).expect("adaptive parameters");
-        let mut state = GlobalThresholdBeaconDkgStateV1::new(dkg_session, &crypto)
-            .expect("valid adaptive DKG state");
-        let mut rng = StdRng::from_seed([0x5A; 32]);
-        let mut dealer_secrets = Vec::new();
-        let mut dealer_commitments = Vec::new();
-        for dealer_index in 1_u16..=dkg_session.committee_size {
-            let (secret, commitment) =
-                DasRenDealerSecret::generate_with_rng(&parameters, dealer_index, &mut rng)
-                    .expect("generate adaptive dealer");
-            state
-                .record_dealer_commitment(1, dealer_commitment_dto(&commitment), &crypto)
-                .expect("verify adaptive dealer broadcast");
-            dealer_secrets.push(secret);
-            dealer_commitments.push(commitment);
-        }
-        let record = state
-            .finalize(dkg_session.responses_end_height, &crypto)
-            .expect("finalize adaptive DKG")
-            .clone();
-        let binding = GlobalThresholdBeaconSessionBindingV1 {
-            network_id: record.network_id,
-            session_id: record.session_id,
-            roster_hash: record.roster_hash,
-            transcript_hash: record.transcript_hash,
-        };
-        let session = validate_global_threshold_beacon_session_v1(record, &binding)
-            .expect("validate adaptive beacon transcript DTO");
-        AdaptiveBeaconFixture {
-            session,
-            binding,
-            parameters,
-            dealer_secrets,
-            dealer_commitments,
-        }
-    }
-
     pub(crate) fn finalized_key_session_fixture_for_context_v1(
         network_id: NetworkId,
         session_id: [u8; 32],
@@ -2940,69 +3052,6 @@ pub(crate) mod tests {
         }
         let pulse = aggregator.finalize().expect("finalize unique pulse");
         (fixture, pulse, cursor, anchor)
-    }
-
-    pub(crate) fn signed_persisted_pulse_fixture_for_world(
-        network_id: NetworkId,
-        height: u64,
-    ) -> (
-        FinalizedGlobalThresholdBeaconKeySessionRecordV1,
-        FinalizedGlobalThresholdBeaconPulseV1,
-    ) {
-        assert!(height > 4, "fixture pulse follows DKG finalization");
-        let mut dkg_session = adaptive_dkg_session_fixture();
-        dkg_session.network_id = network_id;
-        // Keep the cryptographic fixture compact while retaining the exact
-        // production DKG phase ordering and activation boundary.
-        dkg_session.sharing_end_height = 2;
-        dkg_session.complaints_end_height = 3;
-        dkg_session.responses_end_height = 4;
-        dkg_session.session_id = Hash::new_from_chunks(&[
-            b"iroha.beacon.world-test-session.v1\0",
-            network_id.as_bytes(),
-        ])
-        .into();
-        let fixture = adaptive_beacon_fixture_for_session(dkg_session);
-        let anchor = GlobalThresholdBeaconChainAnchorV1 {
-            height: height - 1,
-            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x88; 32])),
-        };
-        let mut aggregator =
-            GlobalThresholdBeaconPulseAggregatorV1::new(fixture.session.clone(), height, anchor)
-                .expect("open exact world-test pulse reducer");
-        let payload = aggregator.payload().to_vec();
-        for recipient_index in 1_u16..=fixture.session.transcript.session().threshold() {
-            let private_contributions = fixture
-                .dealer_secrets
-                .iter()
-                .zip(&fixture.dealer_commitments)
-                .map(|(secret, dealer)| {
-                    secret
-                        .private_share(&fixture.parameters, dealer, recipient_index)
-                        .expect("verified private DKG contribution")
-                })
-                .collect::<Vec<_>>();
-            let signing_share = AdaptiveThresholdBlsSecretShare::from_dealer_shares(
-                &fixture.session.transcript,
-                &private_contributions,
-            )
-            .expect("aggregate exact qualified private contributions");
-            aggregator
-                .accept_partial(global_threshold_beacon_partial_signature_dto_v1(
-                    &signing_share
-                        .sign_payload(&fixture.session.transcript, &payload)
-                        .expect("sign exact world-test pulse payload"),
-                ))
-                .expect("accept proof-verified world-test partial");
-        }
-        let pulse = aggregator.finalize().expect("finalize world-test pulse");
-        let mut key_record =
-            FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(fixture.session.record().clone())
-                .expect("construct world-test key lifecycle");
-        key_record
-            .activate(fixture.session.record().adaptive_dkg.finalized_at_height)
-            .expect("activate world-test key at DKG finalization");
-        (key_record, pulse)
     }
 
     fn pulse_partial_signatures(
@@ -3406,7 +3455,7 @@ pub(crate) mod tests {
     #[test]
     fn parliament_optional_slot_survives_key_rotation_and_produces_authoritative_pulse() {
         let keys = live_producer_keys();
-        let network_id = network_id(0xB1);
+        let network_id = beacon_fixture_network_id(0xB1);
         let parent_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xD3; 32]));
         let mut context = live_producer_context(&keys, network_id, parent_hash);
         context.epoch_end_height = 50;
@@ -3599,7 +3648,8 @@ pub(crate) mod tests {
 
     fn assert_same_block_key_rotation_persists_requested_pulse(optional_parliament_slot: bool) {
         let keys = live_producer_keys();
-        let network_id = network_id(if optional_parliament_slot { 0xC1 } else { 0xC2 });
+        let network_id =
+            beacon_fixture_network_id(if optional_parliament_slot { 0xC1 } else { 0xC2 });
         let parent_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xD4; 32]));
         let mut context = live_producer_context(&keys, network_id, parent_hash);
         if optional_parliament_slot {
@@ -3826,7 +3876,7 @@ pub(crate) mod tests {
     #[test]
     fn invalid_test_outbound_is_not_locally_counted_and_is_rejected_on_ingress() {
         let keys = live_producer_keys();
-        let network_id = network_id(0xA7);
+        let network_id = beacon_fixture_network_id(0xA7);
         let parent_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xD7; 32]));
         let context = live_producer_context(&keys, network_id, parent_hash);
         let roster = context
@@ -3901,7 +3951,7 @@ pub(crate) mod tests {
     #[test]
     fn threshold_beacon_live_v2_producer_is_bound_restartable_and_persists_effect() {
         let keys = live_producer_keys();
-        let network_id = network_id(0xA1);
+        let network_id = beacon_fixture_network_id(0xA1);
         let parent_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xD1; 32]));
         let context = live_producer_context(&keys, network_id, parent_hash);
         let roster = context
@@ -4163,7 +4213,7 @@ pub(crate) mod tests {
         let record = session.record().clone();
 
         let mut wrong_network = record.clone();
-        wrong_network.network_id = network_id(0x82);
+        wrong_network.network_id = beacon_fixture_network_id(0x82);
         assert_eq!(
             validate_global_threshold_beacon_session_v1(wrong_network, &expected),
             Err(GlobalThresholdBeaconError::NetworkMismatch)
@@ -4241,7 +4291,7 @@ pub(crate) mod tests {
 
         let mut mutations = Vec::new();
         let mut changed = pulse.clone();
-        changed.network_id = network_id(0x82);
+        changed.network_id = beacon_fixture_network_id(0x82);
         mutations.push(changed);
         let mut changed = pulse.clone();
         changed.session_id[0] ^= 1;
@@ -4332,6 +4382,22 @@ pub(crate) mod tests {
             ),
             Ok(pulse),
             "the first certified pulse must create the authoritative cursor without a test-seeded origin"
+        );
+        assert_eq!(
+            verified_global_threshold_beacon_pulse_at_or_before_v1(
+                &world.view(),
+                &pulse.network_id,
+                pulse.height,
+            ),
+            Ok(pulse)
+        );
+        assert_eq!(
+            verified_global_threshold_beacon_pulse_at_or_before_v1(
+                &world.view(),
+                &pulse.network_id,
+                pulse.height - 1,
+            ),
+            Err(GlobalThresholdBeaconError::InvalidPulseHistory)
         );
     }
 
@@ -4639,7 +4705,7 @@ pub(crate) mod tests {
             finalized_global_beacon_npos_successor_seed_from_sources(
                 &world_view,
                 &block_hashes,
-                &network_id(0x82),
+                &beacon_fixture_network_id(0x82),
                 BOUNDARY_HEIGHT,
                 SUCCESSOR_EPOCH,
             ),

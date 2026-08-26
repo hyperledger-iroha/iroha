@@ -105,29 +105,10 @@ import { NetworkId, networkIdBytes } from "./networkId.js";
 import { generateConnectSid, validateConnectSessionResponseIdentity } from "./connectSession.js";
 import { isCanonicalGovernanceSelectorV1 } from "./governanceSelector.js";
 import { parseCanonicalContractAddress } from "./contractAddress.js";
-import { normalizeGovernanceProposalWireV1 } from "./governanceProposalV1.js";
 import {
   createToriiGovernanceNormalizers,
   VERIFYING_KEY_PRIVATE_KEY_FIELDS,
 } from "./toriiGovernanceNormalizers.js";
-import {
-  PARLIAMENT_ATTEMPT_DRAFT_PATH_V1,
-  PARLIAMENT_ATTEMPT_STATE_MAX_BYTES_V1,
-  PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_ARCHIVE_MAX_BYTES_V1,
-  PARLIAMENT_TRANSITION_DRAFT_PATH_V1,
-  buildParliamentAttemptDraftRequestV1,
-  buildParliamentTransitionDraftRequestV1,
-  normalizeParliamentAttemptDraftResponseV1,
-  normalizeParliamentAttemptReadResponseV1,
-  normalizeParliamentTimedOvnCastingContextResponseV1,
-  normalizeParliamentTlePartialReleaseShareV1,
-  normalizeParliamentTleReleaseContextResponseV1,
-  normalizeParliamentTransitionDraftResponseV1,
-  parliamentAttemptReadPathV1,
-  parliamentTimedOvnCastingContextReadPathV1,
-  parliamentTlePartialReleasePathV1,
-  parliamentTleReleaseContextReadPathV1,
-} from "./parliamentApiV1.js";
 import { createSubscriptionResponseNormalizers } from "./subscriptionResponses.js";
 import {
   decodeExactSoracloudJsonResponse,
@@ -164,19 +145,6 @@ import {
   noritoEncodeTransactionPayloadBatch,
   validateNoritoFrame,
 } from "./norito.js";
-import {
-  normalizeBridgeMessageSubmitPayload,
-  normalizeBridgeProofSubmitPayload,
-  normalizeSccpCapabilities,
-  normalizeSccpMessageBundle,
-  normalizeSccpProofRequest,
-  normalizeSccpRecentMessages,
-  normalizeSccpRegistry,
-  normalizeSccpSoraOutboundMaterial,
-  normalizeSccpRouteGovernanceAction,
-  parseSccpJsonObject,
-  parseSccpBridgeSubmitResponseJson,
-} from "./sccp.js";
 import { IVM_ARTIFACT_MAX_BYTES } from "./ivmArtifact.js";
 import {
   normalizeKagemushaOperationId,
@@ -187,14 +155,6 @@ import {
   normalizeKagemushaTopUpRequestV4,
   requireKagemushaJsonContentType,
 } from "./kagemushaOffline.js";
-import {
-  VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH,
-  VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES,
-  encodeValidationFeeCurrentPolicyProofRequestV1,
-  normalizeValidationFeeCheckpointV1,
-  normalizeValidationFeeLedgerBindingV1,
-  verifyValidationFeeCurrentPolicyProofV1,
-} from "./validationFeeConsensus.js";
 import { assertValidEd25519PublicKey } from "./ed25519Strict.js";
 import { AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1 } from "./authenticatedBlockProofs.js";
 import { createVpnSchema } from "./vpnSchema.js";
@@ -397,6 +357,12 @@ const MIN_ISO_POLL_INTERVAL_MS = 10;
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(MAX_SAFE_INTEGER);
 const MAX_UINT64_BIGINT = (1n << 64n) - 1n;
+
+// These optional async surfaces share a sizeable governance-validation graph.
+// Keep one literal boundary so ordinary Torii clients avoid its startup cost.
+function loadToriiOptionalModule() {
+  return import("./toriiOptional.js");
+}
 const MAX_SIGNED_INT32 = 0x7fffffff;
 const MAX_SIGNED_INT32_BIGINT = BigInt(MAX_SIGNED_INT32);
 const UINT64_MASK = 0xffff_ffff_ffff_ffffn;
@@ -3072,6 +3038,14 @@ export class ToriiClient {
     checkpoint = null,
     options,
   ) {
+    const {
+      VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH,
+      VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES,
+      encodeValidationFeeCurrentPolicyProofRequestV1,
+      normalizeValidationFeeCheckpointV1,
+      normalizeValidationFeeLedgerBindingV1,
+      verifyValidationFeeCurrentPolicyProofV1,
+    } = await loadToriiOptionalModule();
     const normalizedBinding = normalizeValidationFeeLedgerBindingV1(binding);
     const normalizedCheckpoint =
       checkpoint === null || checkpoint === undefined
@@ -3135,6 +3109,10 @@ export class ToriiClient {
    * promotion is required; this convenience method promotes only in memory.
    */
   async catchUpValidationFeeCurrentPolicyProof(binding, options) {
+    const {
+      normalizeValidationFeeCheckpointV1,
+      normalizeValidationFeeLedgerBindingV1,
+    } = await loadToriiOptionalModule();
     const normalizedBinding = normalizeValidationFeeLedgerBindingV1(binding);
     const normalizedOptions = ensureRecord(
       options,
@@ -6409,6 +6387,7 @@ export class ToriiClient {
       responseLabel: "SCCP capabilities",
       signal,
     });
+    const { normalizeSccpCapabilities } = await loadToriiOptionalModule();
     return readSccpJsonResponse(
       response,
       normalizeSccpCapabilities,
@@ -6433,6 +6412,7 @@ export class ToriiClient {
       responseLabel: "SCCP registry",
       signal,
     });
+    const { normalizeSccpRegistry } = await loadToriiOptionalModule();
     return readSccpJsonResponse(
       response,
       normalizeSccpRegistry,
@@ -6465,6 +6445,7 @@ export class ToriiClient {
       responseLabel: "SCCP SORA outbound material",
       signal,
     });
+    const { normalizeSccpSoraOutboundMaterial } = await loadToriiOptionalModule();
     return readSccpJsonResponse(
       response,
       (payload) => normalizeSccpSoraOutboundMaterial(payload, exactRoute),
@@ -6501,19 +6482,21 @@ export class ToriiClient {
       responseLabel: "SCCP message bundle",
       signal,
     });
-    return format === "norito"
-      ? readSccpNoritoResponse(
-          response,
-          "SCCP message bundle",
-          SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES,
-          SCCP_MESSAGE_BUNDLE_NORITO_TYPE_NAME,
-        )
-      : readSccpJsonResponse(
-          response,
-          normalizeSccpMessageBundle,
-          "SCCP message bundle",
-          SCCP_JSON_RESPONSE_MAX_BYTES,
-        );
+    if (format === "norito") {
+      return readSccpNoritoResponse(
+        response,
+        "SCCP message bundle",
+        SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES,
+        SCCP_MESSAGE_BUNDLE_NORITO_TYPE_NAME,
+      );
+    }
+    const { normalizeSccpMessageBundle } = await loadToriiOptionalModule();
+    return readSccpJsonResponse(
+      response,
+      normalizeSccpMessageBundle,
+      "SCCP message bundle",
+      SCCP_JSON_RESPONSE_MAX_BYTES,
+    );
   }
 
   /**
@@ -6544,19 +6527,21 @@ export class ToriiClient {
       responseLabel: "SCCP proof request",
       signal,
     });
-    return format === "norito"
-      ? readSccpNoritoResponse(
-          response,
-          "SCCP proof request",
-          SCCP_DESTINATION_NORITO_RESPONSE_MAX_BYTES,
-          SCCP_PROOF_REQUEST_NORITO_TYPE_NAME,
-        )
-      : readSccpJsonResponse(
-          response,
-          normalizeSccpProofRequest,
-          "SCCP proof request",
-          SCCP_JSON_RESPONSE_MAX_BYTES,
-        );
+    if (format === "norito") {
+      return readSccpNoritoResponse(
+        response,
+        "SCCP proof request",
+        SCCP_DESTINATION_NORITO_RESPONSE_MAX_BYTES,
+        SCCP_PROOF_REQUEST_NORITO_TYPE_NAME,
+      );
+    }
+    const { normalizeSccpProofRequest } = await loadToriiOptionalModule();
+    return readSccpJsonResponse(
+      response,
+      normalizeSccpProofRequest,
+      "SCCP proof request",
+      SCCP_JSON_RESPONSE_MAX_BYTES,
+    );
   }
 
   /**
@@ -6615,6 +6600,7 @@ export class ToriiClient {
       responseLabel: "SCCP recent messages",
       signal: record.signal,
     });
+    const { normalizeSccpRecentMessages } = await loadToriiOptionalModule();
     return readSccpJsonResponse(
       response,
       normalizeSccpRecentMessages,
@@ -6632,6 +6618,7 @@ export class ToriiClient {
    */
   async submitBridgeProof(payload, options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "submitBridgeProof");
+    const { normalizeBridgeProofSubmitPayload } = await loadToriiOptionalModule();
     const body = normalizeBridgeProofSubmitPayload(payload, "submitBridgeProof.payload");
     const response = await this._request("POST", "/v1/bridge/proofs/submit", {
       headers: JSON_REQUEST_HEADERS,
@@ -6655,6 +6642,7 @@ export class ToriiClient {
    */
   async submitBridgeMessage(payload, options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "submitBridgeMessage");
+    const { normalizeBridgeMessageSubmitPayload } = await loadToriiOptionalModule();
     const body = normalizeBridgeMessageSubmitPayload(payload, "submitBridgeMessage.payload");
     const response = await this._request("POST", "/v1/bridge/messages", {
       headers: JSON_REQUEST_HEADERS,
@@ -7378,6 +7366,11 @@ export class ToriiClient {
       },
       context,
     );
+    const {
+      PARLIAMENT_ATTEMPT_DRAFT_PATH_V1,
+      buildParliamentAttemptDraftRequestV1,
+      normalizeParliamentAttemptDraftResponseV1,
+    } = await loadToriiOptionalModule();
     const request = buildParliamentAttemptDraftRequestV1(proposal, attemptSequence);
     const response = await this._request("POST", PARLIAMENT_ATTEMPT_DRAFT_PATH_V1, {
       headers: JSON_REQUEST_HEADERS,
@@ -7402,6 +7395,11 @@ export class ToriiClient {
   async getParliamentAttemptV1(governanceAttemptId, options) {
     const context = "getParliamentAttemptV1";
     const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, context);
+    const {
+      PARLIAMENT_ATTEMPT_STATE_MAX_BYTES_V1,
+      normalizeParliamentAttemptReadResponseV1,
+      parliamentAttemptReadPathV1,
+    } = await loadToriiOptionalModule();
     const path = parliamentAttemptReadPathV1(governanceAttemptId);
     const response = await this._request("GET", path, {
       headers: JSON_ACCEPT_HEADERS,
@@ -7422,6 +7420,11 @@ export class ToriiClient {
   async getParliamentTimedOvnCastingContextV1(ballotAttemptId, options) {
     const context = "getParliamentTimedOvnCastingContextV1";
     const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, context);
+    const {
+      PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_ARCHIVE_MAX_BYTES_V1,
+      normalizeParliamentTimedOvnCastingContextResponseV1,
+      parliamentTimedOvnCastingContextReadPathV1,
+    } = await loadToriiOptionalModule();
     const path = parliamentTimedOvnCastingContextReadPathV1(ballotAttemptId);
     const response = await this._request("GET", path, {
       headers: JSON_ACCEPT_HEADERS,
@@ -7442,6 +7445,10 @@ export class ToriiClient {
   async getParliamentTleReleaseContextV1(ballotAttemptId, options) {
     const context = "getParliamentTleReleaseContextV1";
     const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, context);
+    const {
+      normalizeParliamentTleReleaseContextResponseV1,
+      parliamentTleReleaseContextReadPathV1,
+    } = await loadToriiOptionalModule();
     const path = parliamentTleReleaseContextReadPathV1(ballotAttemptId);
     const response = await this._request("GET", path, {
       headers: JSON_ACCEPT_HEADERS,
@@ -7477,6 +7484,10 @@ export class ToriiClient {
       },
       context,
     );
+    const {
+      normalizeParliamentTlePartialReleaseShareV1,
+      parliamentTlePartialReleasePathV1,
+    } = await loadToriiOptionalModule();
     const path = parliamentTlePartialReleasePathV1(ballotAttemptId);
     const response = await this._request("POST", path, {
       headers: JSON_ACCEPT_HEADERS,
@@ -7516,6 +7527,11 @@ export class ToriiClient {
       },
       context,
     );
+    const {
+      PARLIAMENT_TRANSITION_DRAFT_PATH_V1,
+      buildParliamentTransitionDraftRequestV1,
+      normalizeParliamentTransitionDraftResponseV1,
+    } = await loadToriiOptionalModule();
     const request = buildParliamentTransitionDraftRequestV1(
       governanceAttemptId,
       transition,
@@ -14745,7 +14761,7 @@ const GOVERNANCE_PROPOSAL_STATUSES = new Set([
   "ExecutionFailed",
 ]);
 
-function parseGovernanceProposalResult(payload) {
+async function parseGovernanceProposalResult(payload) {
   const record = ensureRecord(payload, "governance proposal payload");
   if (typeof record.found !== "boolean") {
     throw new TypeError("governance proposal payload missing bool `found` field");
@@ -14756,11 +14772,11 @@ function parseGovernanceProposalResult(payload) {
   const proposalRecord = ensureRecord(record.proposal, "governance proposal payload.proposal");
   return {
     found: record.found,
-    proposal: parseGovernanceProposalRecord(proposalRecord),
+    proposal: await parseGovernanceProposalRecord(proposalRecord),
   };
 }
 
-function parseGovernanceProposalRecord(payload) {
+async function parseGovernanceProposalRecord(payload) {
   const record = requireExactGovernanceProposalRecord(
     payload,
     ["proposer", "kind", "created_height", "status"],
@@ -14781,7 +14797,10 @@ function parseGovernanceProposalRecord(payload) {
     );
   }
   const kindPayload = ensureRecord(record.kind, "governance.proposal.kind");
-  const kind = parseGovernanceProposalKind(kindPayload, "governance.proposal.kind");
+  const kind = await parseGovernanceProposalKind(
+    kindPayload,
+    "governance.proposal.kind",
+  );
   let proposalOperator = null;
   if (kind.variant === "ValidationFeePolicy") {
     proposalOperator = kind.validation_fee_policy.proposal_operator;
@@ -14799,8 +14818,12 @@ function parseGovernanceProposalRecord(payload) {
   };
 }
 
-function parseGovernanceProposalKind(payload, context) {
-  const record = normalizeGovernanceProposalWireV1(payload, context);
+async function parseGovernanceProposalKind(payload, context) {
+  const record = requireExactGovernanceProposalRecord(
+    payload,
+    ["kind", "payload"],
+    context,
+  );
   const variant = requireExactNonEmptyString(record.kind, `${context}.kind`);
   const details = ensureRecord(record.payload, `${context}.payload`);
   switch (variant) {
@@ -14820,7 +14843,7 @@ function parseGovernanceProposalKind(payload, context) {
     case "SccpRouteGovernance":
       return {
         variant,
-        sccp_route_governance: parseGovernanceSccpRouteGovernance(
+        sccp_route_governance: await parseGovernanceSccpRouteGovernance(
           details,
           `${context}.payload`,
         ),
@@ -15002,7 +15025,7 @@ function parseGovernanceSbomDigests(payload, context) {
   });
 }
 
-function parseGovernanceSccpRouteGovernance(payload, context) {
+async function parseGovernanceSccpRouteGovernance(payload, context) {
   const record = requireExactGovernanceProposalRecord(payload, ["anchor"], context);
   const anchorContext = `${context}.anchor`;
   const anchor = requireExactGovernanceProposalRecord(
@@ -15015,6 +15038,7 @@ function parseGovernanceSccpRouteGovernance(payload, context) {
     `${anchorContext}.network_id`,
   );
   NetworkId.parse(networkId);
+  const { normalizeSccpRouteGovernanceAction } = await loadToriiOptionalModule();
   return {
     anchor: {
       network_id: networkId,
@@ -30428,6 +30452,7 @@ async function readSccpBridgeSubmitResponse(response, request) {
   if (request.creation_time_ms !== undefined) {
     expectations.creation_time_ms = request.creation_time_ms;
   }
+  const { parseSccpBridgeSubmitResponseJson } = await loadToriiOptionalModule();
   return parseSccpBridgeSubmitResponseJson(text, expectations);
 }
 
@@ -30514,6 +30539,7 @@ async function readSccpJsonResponse(response, normalize, label, maximumBodyBytes
     throw error;
   }
   const bytes = await readBoundedSccpResponseBytes(response, maximumBodyBytes, label);
+  const { parseSccpJsonObject } = await loadToriiOptionalModule();
   const payload = parseSccpJsonObject(decodeSccpUtf8(bytes, label), label);
   return normalize(payload);
 }

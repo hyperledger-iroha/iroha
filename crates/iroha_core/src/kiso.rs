@@ -660,7 +660,6 @@ mod tests {
                     time_cost,
                     lanes,
                 }),
-                signed_ticket_public_key_hex: None,
             }
         }
         let invalid = [
@@ -797,8 +796,6 @@ mod tests {
                 trust_penalty_bad_gossip: defaults::network::TRUST_PENALTY_BAD_GOSSIP,
                 trust_penalty_unknown_peer: defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
                 trust_min_score: defaults::network::TRUST_MIN_SCORE,
-                debug_packet_loss_inbound_percent: 0,
-                debug_packet_loss_outbound_percent: 0,
                 trust_gossip: defaults::network::TRUST_GOSSIP,
                 dns_refresh_interval: None,
                 dns_refresh_ttl: None,
@@ -2035,7 +2032,6 @@ mod tests {
                     ticket_ttl_secs: Some(240),
                     outbound_mint_capacity: None,
                     inbound_verify_capacity: None,
-                    signed_ticket_public_key_hex: None,
                     puzzle: Some(SoranetHandshakePuzzleUpdate {
                         enabled: Some(true),
                         memory_kib: Some(131_072),
@@ -2145,7 +2141,6 @@ mod tests {
                         ticket_ttl_secs: None,
                         outbound_mint_capacity: None,
                         inbound_verify_capacity: None,
-                        signed_ticket_public_key_hex: None,
                         puzzle: None,
                     }),
                 }),
@@ -2181,7 +2176,6 @@ mod tests {
                         ticket_ttl_secs: None,
                         outbound_mint_capacity: None,
                         inbound_verify_capacity: None,
-                        signed_ticket_public_key_hex: None,
                         puzzle: Some(SoranetHandshakePuzzleUpdate {
                             enabled: Some(false),
                             memory_kib: None,
@@ -2217,7 +2211,6 @@ mod tests {
             ticket_ttl_secs: Some(45),
             outbound_mint_capacity: None,
             inbound_verify_capacity: None,
-            signed_ticket_public_key_hex: None,
             puzzle: Some(SoranetHandshakePuzzleUpdate {
                 enabled: Some(true),
                 memory_kib: Some(32 * 1024),

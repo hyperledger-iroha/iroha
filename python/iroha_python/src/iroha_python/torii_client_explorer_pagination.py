@@ -7,7 +7,6 @@ import binascii
 import re
 from typing import Any, Optional
 
-
 _EXPLORER_CURSOR_MAX_LENGTH = 1_424
 _EXPLORER_CURSOR_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 

@@ -8,8 +8,9 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::isi::governance::{
-    PARLIAMENT_TIMED_OVN_BALLOT_RECORD_BYTES_V1, PARLIAMENT_TIMED_OVN_REGISTRATION_RECORD_BYTES_V1,
-    ParliamentLifecycleTransitionKindV1, ParliamentLifecycleTransitionV1,
+    PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1, PARLIAMENT_TIMED_OVN_BALLOT_RECORD_BYTES_V1,
+    PARLIAMENT_TIMED_OVN_REGISTRATION_RECORD_BYTES_V1, ParliamentLifecycleTransitionKindV1,
+    ParliamentLifecycleTransitionV1,
 };
 use iroha_data_model::{
     NetworkId,
@@ -143,14 +144,13 @@ impl ParliamentTransitionDraftRequestV1 {
             Transition::FreezeTimedOvnCorpus(payload) => {
                 if payload.ballot_records.is_empty()
                     || payload.ballot_records.len()
-                        > usize::try_from(MAX_PARLIAMENT_BALLOT_CORPUS_ENTRIES_V1)
-                            .expect("Parliament corpus bound fits usize")
+                        > PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1
                     || payload
                         .ballot_records
                         .iter()
                         .any(|record| record.len() != PARLIAMENT_TIMED_OVN_BALLOT_RECORD_BYTES_V1)
                 {
-                    return Err("timed-OVN ballot corpus violates its count or record-width bound");
+                    return Err("timed-OVN ballot chunk violates its count or record-width bound");
                 }
             }
             Transition::BeginBallotOpeningBatch(payload) => {
@@ -270,6 +270,88 @@ pub struct ParliamentBodyStateProjectionV1 {
     pub no_result_kind: Option<ParliamentNoResultKindV1>,
     /// Containing finalized height that made the no-result state terminal.
     pub no_result_height: Option<u64>,
+    /// Safe progress for the active private timed-OVN ballot, when one exists.
+    pub timed_ovn_progress: Option<ParliamentTimedOvnProgressProjectionV1>,
+}
+
+/// Public offset and lifecycle binding for one active private timed-OVN ballot.
+///
+/// This projection deliberately exposes only aggregate counts. It never
+/// includes participant identifiers, registration or ballot records, roots,
+/// shares, individual openings, or secret material.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    JsonDeserialize,
+    JsonSerialize,
+    NoritoDeserialize,
+    NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+pub struct ParliamentTimedOvnProgressProjectionV1 {
+    /// Exact active ballot-attempt identifier.
+    pub ballot_attempt_id: BallotAttemptId,
+    /// Reducer-owned lifecycle status for the active ballot.
+    pub status: BallotAttemptStatusV1,
+    /// Exact frozen survivor count after survivor freeze, otherwise absent.
+    pub frozen_survivor_count: Option<u32>,
+    /// Proof-verified contiguous ballot prefix, or absent before survivor freeze.
+    pub accepted_ballot_prefix_count: Option<u32>,
+}
+
+impl ParliamentTimedOvnProgressProjectionV1 {
+    /// Validate the public count/status shape without inspecting private evidence.
+    ///
+    /// # Errors
+    /// Returns a stable error when the active identifier is zero, count options
+    /// disagree, a count exceeds the first-release corpus bound, or the prefix
+    /// is not phase-consistent.
+    pub fn validate_static(&self) -> Result<(), &'static str> {
+        if self
+            .ballot_attempt_id
+            .as_bytes()
+            .iter()
+            .all(|byte| *byte == 0)
+        {
+            return Err("timed-OVN progress ballot attempt id must be non-zero");
+        }
+        match (
+            self.frozen_survivor_count,
+            self.accepted_ballot_prefix_count,
+        ) {
+            (None, None) => match self.status {
+                BallotAttemptStatusV1::Registration
+                | BallotAttemptStatusV1::SurvivorFreeze
+                | BallotAttemptStatusV1::NoResult
+                | BallotAttemptStatusV1::Superseded => Ok(()),
+                _ => Err("timed-OVN progress must expose counts after survivor freeze"),
+            },
+            (Some(survivors), Some(prefix)) => {
+                if survivors == 0
+                    || survivors > MAX_PARLIAMENT_BALLOT_CORPUS_ENTRIES_V1
+                    || prefix > survivors
+                {
+                    return Err("timed-OVN progress counts violate the frozen corpus bound");
+                }
+                match self.status {
+                    BallotAttemptStatusV1::TimedCommitment if prefix < survivors => Ok(()),
+                    BallotAttemptStatusV1::AwaitingRelease
+                    | BallotAttemptStatusV1::Opening
+                    | BallotAttemptStatusV1::Finalized
+                        if prefix == survivors =>
+                    {
+                        Ok(())
+                    }
+                    BallotAttemptStatusV1::NoResult | BallotAttemptStatusV1::Superseded => Ok(()),
+                    _ => Err("timed-OVN progress prefix is inconsistent with ballot status"),
+                }
+            }
+            _ => Err("timed-OVN progress survivor and prefix counts must appear together"),
+        }
+    }
 }
 
 /// Exact authenticated read projection for one Parliament attempt.
@@ -322,9 +404,19 @@ pub const PARLIAMENT_TIMED_OVN_CASTING_PROOF_VERSION_V1: u16 = 1;
 pub const PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA_NAME_V1: &str =
     "iroha.torii.v1.parliament.timed_ovn_casting_proof.request";
 
+/// Lowercase hash of [`PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA_NAME_V1`]
+/// under the Norito V1 type-name schema domain.
+pub const PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA_HASH_HEX_V1: &str =
+    "adccf322a5fcf43040e20bea238f55f3";
+
 /// Stable public Norito schema name for one casting-proof response.
 pub const PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_NAME_V1: &str =
     "iroha.torii.v1.parliament.timed_ovn_casting_proof.response";
+
+/// Lowercase hash of [`PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_NAME_V1`]
+/// under the Norito V1 type-name schema domain.
+pub const PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_HASH_HEX_V1: &str =
+    "46d29299272433b1299646bee722bd11";
 
 /// Maximum consecutive finality proofs, including the caller-pinned checkpoint.
 pub const PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_FINALITY_PROOFS_V1: usize = 64;
@@ -361,7 +453,10 @@ pub fn parliament_timed_ovn_casting_proof_page_tip(
     NoritoDeserialize,
     NoritoSerialize,
 )]
-#[norito(deny_unknown_fields)]
+#[norito(
+    schema_name = "iroha.torii.v1.parliament.timed_ovn_casting_proof.request",
+    deny_unknown_fields
+)]
 pub struct ParliamentTimedOvnCastingProofRequestV1 {
     /// Request layout version.
     pub version: u16,
@@ -380,7 +475,10 @@ pub struct ParliamentTimedOvnCastingProofRequestV1 {
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
-#[norito(deny_unknown_fields)]
+#[norito(
+    schema_name = "iroha.torii.v1.parliament.timed_ovn_casting_proof.response",
+    deny_unknown_fields
+)]
 pub struct ParliamentTimedOvnCastingProofResponseV1 {
     /// Response layout version.
     pub version: u16,
@@ -1279,6 +1377,70 @@ mod tests {
     }
 
     #[test]
+    fn casting_proof_schema_hashes_and_framed_headers_are_golden() {
+        let request_hash = norito::core::schema_hash_for_name(
+            PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA_NAME_V1,
+        );
+        assert_eq!(
+            hex::encode(request_hash),
+            PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA_HASH_HEX_V1
+        );
+        assert_eq!(
+            <ParliamentTimedOvnCastingProofRequestV1 as norito::NoritoSerialize>::schema_hash(),
+            request_hash
+        );
+        assert_eq!(
+            <ParliamentTimedOvnCastingProofRequestV1 as norito::NoritoDeserialize<'static>>::schema_hash(),
+            request_hash
+        );
+        let request = ParliamentTimedOvnCastingProofRequestV1 {
+            version: PARLIAMENT_TIMED_OVN_CASTING_PROOF_VERSION_V1,
+            trusted_checkpoint_height: 17,
+        };
+        let request_bytes = norito::to_bytes(&request).expect("encode casting proof request");
+        assert_eq!(
+            hex::encode(&request_bytes[..22]),
+            "4e5254300000adccf322a5fcf43040e20bea238f55f3"
+        );
+
+        let response_hash = norito::core::schema_hash_for_name(
+            PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_NAME_V1,
+        );
+        assert_eq!(
+            hex::encode(response_hash),
+            PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_HASH_HEX_V1
+        );
+        assert_eq!(
+            <ParliamentTimedOvnCastingProofResponseV1 as norito::NoritoSerialize>::schema_hash(),
+            response_hash
+        );
+        assert_eq!(
+            <ParliamentTimedOvnCastingProofResponseV1 as norito::NoritoDeserialize<'static>>::schema_hash(),
+            response_hash
+        );
+        let response = ParliamentTimedOvnCastingProofResponseV1 {
+            version: PARLIAMENT_TIMED_OVN_CASTING_PROOF_VERSION_V1,
+            casting_context_archive: None,
+            casting_context_binding: None,
+            context_membership_proof: None,
+            casting_witness: None,
+            finality_chain: Vec::new(),
+            evaluated_context_id: HeightContextId(HashOf::from_untyped_unchecked(Hash::prehashed(
+                [3; 32],
+            ))),
+            evaluated_block_height: 17,
+            evaluated_block_hash: hex::encode([5; 32]),
+            observed_ledger_tip_height: 17,
+            more_available: false,
+        };
+        let response_bytes = norito::to_bytes(&response).expect("encode casting proof response");
+        assert_eq!(
+            hex::encode(&response_bytes[..22]),
+            "4e525430000046d29299272433b1299646bee722bd11"
+        );
+    }
+
+    #[test]
     fn casting_proof_request_roundtrips_and_empty_chain_fails_closed() {
         let request = ParliamentTimedOvnCastingProofRequestV1 {
             version: PARLIAMENT_TIMED_OVN_CASTING_PROOF_VERSION_V1,
@@ -1341,6 +1503,54 @@ mod tests {
         let decoded = norito::decode_from_bytes::<ParliamentAttemptDraftRequestV1>(&bytes)
             .expect("decode Parliament request Norito");
         assert_eq!(decoded, request);
+    }
+
+    #[test]
+    fn timed_ovn_progress_enforces_phase_consistent_prefixes() {
+        let ballot_attempt_id = BallotAttemptId::new([0x42; 32]);
+        let mut progress = ParliamentTimedOvnProgressProjectionV1 {
+            ballot_attempt_id,
+            status: BallotAttemptStatusV1::Registration,
+            frozen_survivor_count: None,
+            accepted_ballot_prefix_count: None,
+        };
+        assert_eq!(progress.validate_static(), Ok(()));
+
+        progress.status = BallotAttemptStatusV1::TimedCommitment;
+        progress.frozen_survivor_count = Some(3);
+        progress.accepted_ballot_prefix_count = Some(0);
+        assert_eq!(progress.validate_static(), Ok(()));
+        progress.accepted_ballot_prefix_count = Some(2);
+        assert_eq!(progress.validate_static(), Ok(()));
+        progress.accepted_ballot_prefix_count = Some(3);
+        assert!(progress.validate_static().is_err());
+
+        progress.status = BallotAttemptStatusV1::AwaitingRelease;
+        assert_eq!(progress.validate_static(), Ok(()));
+        progress.accepted_ballot_prefix_count = Some(2);
+        assert!(progress.validate_static().is_err());
+        progress.accepted_ballot_prefix_count = None;
+        assert!(progress.validate_static().is_err());
+
+        progress.status = BallotAttemptStatusV1::NoResult;
+        progress.frozen_survivor_count = None;
+        assert_eq!(progress.validate_static(), Ok(()));
+    }
+
+    #[test]
+    fn timed_ovn_progress_rejects_unknown_json_fields() {
+        let progress = ParliamentTimedOvnProgressProjectionV1 {
+            ballot_attempt_id: BallotAttemptId::new([0x42; 32]),
+            status: BallotAttemptStatusV1::TimedCommitment,
+            frozen_survivor_count: Some(3),
+            accepted_ballot_prefix_count: Some(1),
+        };
+        let mut value = json::to_value(&progress).expect("render timed-OVN progress JSON");
+        value
+            .as_object_mut()
+            .expect("timed-OVN progress object")
+            .insert("ballot_records".to_owned(), json::Value::Array(Vec::new()));
+        assert!(json::from_value::<ParliamentTimedOvnProgressProjectionV1>(value).is_err());
     }
 
     #[test]
@@ -1476,6 +1686,14 @@ mod tests {
             .validate_static()
             .is_ok()
         );
+        assert!(
+            corpus(vec![
+                vec![0x66; PARLIAMENT_TIMED_OVN_BALLOT_RECORD_BYTES_V1];
+                PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1
+            ])
+            .validate_static()
+            .is_ok()
+        );
         assert!(corpus(Vec::new()).validate_static().is_err());
         assert!(
             corpus(vec![vec![
@@ -1488,9 +1706,7 @@ mod tests {
         assert!(
             corpus(vec![
                 vec![0x66; PARLIAMENT_TIMED_OVN_BALLOT_RECORD_BYTES_V1];
-                usize::try_from(MAX_PARLIAMENT_BALLOT_CORPUS_ENTRIES_V1)
-                    .expect("corpus bound fits usize")
-                    + 1
+                PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1 + 1
             ])
             .validate_static()
             .is_err()
@@ -1988,13 +2204,30 @@ mod tests {
                 .get("json_fields")
                 .and_then(json::Value::as_array)
                 .map(Vec::len),
-            Some(8)
+            Some(9)
         );
         assert_eq!(
             body_state
                 .get("deadline_semantics")
                 .and_then(json::Value::as_str),
             Some("inclusive")
+        );
+        let progress = fixture
+            .get("timed_ovn_progress")
+            .and_then(json::Value::as_object)
+            .expect("timed-OVN progress projection fixture");
+        assert_eq!(
+            progress
+                .get("json_fields")
+                .and_then(json::Value::as_array)
+                .map(Vec::len),
+            Some(4)
+        );
+        assert_eq!(
+            progress.get("corpus_open").and_then(json::Value::as_str),
+            Some(
+                "accepted_ballot_prefix_count is the proof-verified next contiguous offset and is strictly less than frozen_survivor_count"
+            )
         );
         let release_context = fixture
             .get("tle_release_context")

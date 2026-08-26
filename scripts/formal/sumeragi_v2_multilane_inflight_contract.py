@@ -2026,7 +2026,7 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
         (
             "let effects = if context.mode == wire::ConsensusMode::Npos",
             "let npos_consensus_effects = (!effects.is_empty()).then_some(effects)",
-            "validate_candidate_records(",
+            "validate_candidate_context(",
             "certified_merge_selection_for_npos(npos_consensus_effects.is_some())",
             "select_pending_certified_merge_entry_for_round",
             "npos_consensus_effects",
@@ -4020,7 +4020,7 @@ INFLIGHT_LAYOUT_ORDERED_SOURCE_CHECKS = (
         (
             "let effects = if context.mode == wire::ConsensusMode::Npos",
             "let npos_consensus_effects = (!effects.is_empty()).then_some(effects)",
-            "validate_candidate_records(",
+            "validate_candidate_context(",
             "let merge_selection = certified_merge_selection_for_npos(",
             "select_pending_certified_merge_entry_for_round(",
             "let certified_merge_entry = selected_merge_entry",

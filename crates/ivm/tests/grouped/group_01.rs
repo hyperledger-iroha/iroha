@@ -42,8 +42,8 @@ mod bit_ops;
 mod bn254_backend;
 #[path = "../bn254_vec.rs"]
 mod bn254_vec;
-#[path = "../branch_prediction.rs"]
-mod branch_prediction;
+#[path = "../branch_cycles.rs"]
+mod branch_cycles;
 #[path = "../burn_circuit.rs"]
 mod burn_circuit;
 #[path = "../byte_merkle_tree.rs"]

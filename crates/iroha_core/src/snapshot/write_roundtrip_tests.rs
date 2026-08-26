@@ -1376,8 +1376,8 @@ async fn snapshot_missing_space_directory_section_rejects_even_with_kura_history
     let block = signed_block_with_transaction(accepted_manifest_transaction());
     store_block_and_mark_state_height(&mut state, &kura, block);
     let key_pair = checked_random_snapshot_keypair();
-    let legacy_bytes = legacy_snapshot_bytes_without_space_directory_section(&state);
-    write_snapshot_bundle_from_bytes(&store_dir, &legacy_bytes, &key_pair);
+    let incomplete_bytes = snapshot_payload_without_space_directory_manifest_section(&state);
+    write_snapshot_bundle_from_bytes(&store_dir, &incomplete_bytes, &key_pair);
     let error = match try_read_snapshot(
         &store_dir,
         &kura,
@@ -1404,11 +1404,11 @@ async fn snapshot_missing_space_directory_section_rejects_without_manifest_histo
     let store_dir = tmp_root.path().join("snapshot");
     let kura = Kura::blank_kura_for_testing();
     let mut state = state_factory_with_kura(Arc::clone(&kura));
-    let block = signed_block_with_transaction(accepted_log_transaction("legacy"));
+    let block = signed_block_with_transaction(accepted_log_transaction("missing-section"));
     store_block_and_mark_state_height(&mut state, &kura, block);
     let key_pair = checked_random_snapshot_keypair();
-    let legacy_bytes = legacy_snapshot_bytes_without_space_directory_section(&state);
-    write_snapshot_bundle_from_bytes(&store_dir, &legacy_bytes, &key_pair);
+    let incomplete_bytes = snapshot_payload_without_space_directory_manifest_section(&state);
+    write_snapshot_bundle_from_bytes(&store_dir, &incomplete_bytes, &key_pair);
     let error = match try_read_snapshot(
         &store_dir,
         &kura,

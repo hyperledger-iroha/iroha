@@ -5,8 +5,18 @@ import json
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+import iroha_torii_client.orderbook_submission as orderbook_submission
 import pytest
 import requests
+from iroha_torii_client.tests.orderbook_submission_test import (
+    IDENTITY,
+    SIGNER,
+    Verifier,
+    stock_session,
+)
+from iroha_torii_client.tests.orderbook_submission_test import (
+    Response as OrderbookResponse,
+)
 from requests.structures import CaseInsensitiveDict
 
 import iroha_python.client as client_module
@@ -19,14 +29,6 @@ from iroha_python import (
     ToriiClient,
 )
 from iroha_python.crypto import NetworkId
-from iroha_torii_client.tests.orderbook_submission_test import (
-    IDENTITY,
-    SIGNER,
-    Response as OrderbookResponse,
-    Verifier,
-    _patch_stock_adapter,
-    stock_session,
-)
 
 from .helpers import StubResponse
 
@@ -360,6 +362,13 @@ def test_high_client_supplies_native_orderbook_adapter_and_local_network(
     native = Verifier(expected_network=network)
     response = OrderbookResponse()
     session, transport = stock_session(response)
+    monkeypatch.setattr(
+        orderbook_submission,
+        "_HTTP_ADAPTER_SEND",
+        lambda _adapter, request, **kwargs: (
+            transport.calls.append({"request": request, **kwargs}) or response
+        ),
+    )
     monkeypatch.setattr(client_module, "_require_crypto", lambda: native)
     client = ToriiClient(
         "https://torii.example",

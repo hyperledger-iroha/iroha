@@ -90,9 +90,16 @@ async function run(profile) {
   }
 
   const state = { unsatisfied: [] };
+  const testArguments = ["--test", "--test-reporter=tap"];
+  if (profile === "unit") {
+    // Several release tests deliberately create and remove publication state.
+    // Keep source-provenance reads isolated from those filesystem mutations.
+    testArguments.push("--test-concurrency=1");
+  }
+  testArguments.push(...files.map((file) => path.join("test", file)));
   const child = spawn(
     process.execPath,
-    ["--test", "--test-reporter=tap", ...files.map((file) => path.join("test", file))],
+    testArguments,
     {
       cwd: SDK_DIRECTORY,
       env: process.env,

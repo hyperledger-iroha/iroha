@@ -5,12 +5,13 @@ from __future__ import annotations
 import json
 import math
 import re
-import requests
-from requests.cookies import RequestsCookieJar
-from requests.structures import CaseInsensitiveDict
 from types import MappingProxyType
 from typing import Any, Dict, Mapping, NoReturn, Optional, Sequence, Tuple, TypedDict, cast
 from urllib.parse import urlsplit
+
+import requests
+from requests.cookies import RequestsCookieJar
+from requests.structures import CaseInsensitiveDict
 
 ORDERBOOK_TRANSACTION_MAX_BYTES_V1 = 2 * 1024 * 1024
 ORDERBOOK_RECEIPT_MAX_BYTES_V1 = 1024 * 1024
@@ -66,7 +67,9 @@ class SorafsOrderbookSubmissionReceipt(TypedDict):
 class SorafsOrderbookSubmissionAmbiguousError(RuntimeError):
     """Dispatch began, so callers must reconcile identity and never resubmit blindly."""
 
-    def __init__(self, route: str, expected_identity: Mapping[str, str]) -> None:
+    def __init__(
+        self, route: str, expected_identity: SorafsOrderbookSubmissionIdentity
+    ) -> None:
         self.route = route
         self.expected_identity = MappingProxyType(dict(expected_identity))
         super().__init__(
@@ -77,6 +80,10 @@ class SorafsOrderbookSubmissionAmbiguousError(RuntimeError):
 
 class SorafsOrderbookSubmissionMixin:
     """Fail-closed signed orderbook submission transport."""
+
+    _base_url: str
+    _default_headers: Mapping[str, str]
+    _session: requests.Session
 
     def _configure_sorafs_orderbook_native_verifier(self, verifier: Any) -> None:
         if verifier is not None:
@@ -162,8 +169,10 @@ class SorafsOrderbookSubmissionMixin:
     ) -> SorafsOrderbookSubmissionReceipt:
         try:
             session, base_url = self._session, self._base_url
-        except AttributeError as error:
-            raise ValueError(f"{context} requires a verifiable one-shot HTTP transport") from error
+        except AttributeError as transport_error:
+            raise ValueError(
+                f"{context} requires a verifiable one-shot HTTP transport"
+            ) from transport_error
         require_orderbook_https_base_url(base_url, context)
         transport_state = snapshot_one_shot_transport(session, context)
         if timeout is None:
@@ -208,12 +217,13 @@ class SorafsOrderbookSubmissionMixin:
                 expected_receipt_signer=expected_receipt_signer, context=context,
             )
         except BaseException:
-            if response is not None: close_response_best_effort(response)
+            if response is not None:
+                close_response_best_effort(response)
         finally:
             close_adapter_best_effort(adapter)
-        error = SorafsOrderbookSubmissionAmbiguousError(route, identity)
-        error.__context__ = None
-        raise error
+        ambiguous_error = SorafsOrderbookSubmissionAmbiguousError(route, identity)
+        ambiguous_error.__context__ = None
+        raise ambiguous_error
 
 
 def _require_native_function(native: Any, name: str) -> Any:
@@ -306,7 +316,7 @@ def prepare_one_shot_request(
             raise ValueError(f"{context} transport changed fixed {name}")
     if any(name.lower() == "prefer" for name in prepared.headers):
         raise ValueError(f"{context} forbids an effective Prefer header")
-    expected_host = requests.utils.urlparse(url).netloc
+    expected_host = urlsplit(url).netloc
     if prepared.headers.get("Host") not in (None, expected_host):
         raise ValueError(f"{context} transport changed the request Host")
     if prepared.headers.get("Content-Length") != str(len(body)):
@@ -465,21 +475,28 @@ def response_header(response: Any, name: str, context: str) -> str | None:
     return value
 
 
-def validate_response_headers(response: Any, identity: Mapping[str, str], context: str) -> None:
+def validate_response_headers(
+    response: Any,
+    identity: SorafsOrderbookSubmissionIdentity,
+    context: str,
+) -> None:
     content_type = response_header(response, "Content-Type", context)
     if content_type != "application/x-norito":
         raise RuntimeError(f"{context} response Content-Type must be exactly application/x-norito")
     content_encoding = response_header(response, "Content-Encoding", context)
     if content_encoding not in (None, "identity"):
         raise RuntimeError(f"{context} response Content-Encoding must be absent or identity")
-    for header, key in (
-        ("x-iroha-entrypoint-hash", "entrypoint_hash"),
-        ("x-iroha-signed-transaction-hash", "signed_transaction_hash"),
+    for header, expected in (
+        ("x-iroha-entrypoint-hash", identity["entrypoint_hash"]),
+        (
+            "x-iroha-signed-transaction-hash",
+            identity["signed_transaction_hash"],
+        ),
     ):
         value = response_header(response, header, context)
         if value is None or _HASH_HEX.fullmatch(value) is None:
             raise RuntimeError(f"{context} response {header} must be one lowercase 32-byte hash")
-        if value != identity[key]:
+        if value != expected:
             raise RuntimeError(f"{context} response {header} does not match the submitted transaction")
 
 
@@ -487,7 +504,7 @@ def verify_receipt(
     *,
     verify_native_receipt: Any,
     receipt_norito: bytes,
-    identity: Mapping[str, str],
+    identity: SorafsOrderbookSubmissionIdentity,
     expected_receipt_signer: str,
     context: str,
 ) -> SorafsOrderbookSubmissionReceipt:

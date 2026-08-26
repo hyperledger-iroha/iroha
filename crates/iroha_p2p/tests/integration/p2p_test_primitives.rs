@@ -37,7 +37,7 @@ fn test_encryption() {
     let encryptor =
         SymmetricEncryptor::<ChaCha20Poly1305>::new_with_key(TEST_KEY).expect("valid key length");
     let message = b"Some ciphertext";
-    let aad = b"Iroha2 AAD";
+    let aad = b"Iroha3 AAD";
     let ciphertext = encryptor
         .encrypt_easy(aad.as_ref(), message.as_ref())
         .unwrap();

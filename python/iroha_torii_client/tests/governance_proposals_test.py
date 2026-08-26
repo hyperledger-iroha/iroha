@@ -5,19 +5,8 @@ from __future__ import annotations
 import copy
 
 import pytest
-
 from client_test_support import CANONICAL_OWNER
 from iroha_torii_client.governance_proposals import (
-    GovernanceSccpAdvanceLaneTrustAnchor,
-    GovernanceSccpEvmDestinationDeployment,
-    GovernanceSccpGovernedRoute,
-    GovernanceSccpInitializeLaneTrustAnchor,
-    GovernanceSccpRegisterRoute,
-    GovernanceSccpRouteAction,
-    GovernanceSccpRouteKey,
-    GovernanceSccpSetRouteActivation,
-    GovernanceSccpSolanaDestinationDeployment,
-    GovernanceSccpSwitchRouteRevision,
     GovernanceProposalDeployContract,
     GovernanceProposalKind,
     GovernanceProposalKindTag,
@@ -28,6 +17,16 @@ from iroha_torii_client.governance_proposals import (
     GovernanceProposalSorafsProviderGovernance,
     GovernanceProposalValidationFeePayoutLifecycle,
     GovernanceProposalValidationFeePolicy,
+    GovernanceSccpAdvanceLaneTrustAnchor,
+    GovernanceSccpEvmDestinationDeployment,
+    GovernanceSccpGovernedRoute,
+    GovernanceSccpInitializeLaneTrustAnchor,
+    GovernanceSccpRegisterRoute,
+    GovernanceSccpRouteAction,
+    GovernanceSccpRouteKey,
+    GovernanceSccpSetRouteActivation,
+    GovernanceSccpSolanaDestinationDeployment,
+    GovernanceSccpSwitchRouteRevision,
 )
 
 CONTRACT_ADDRESS = "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
@@ -404,6 +403,27 @@ def test_proposal_kind_accepts_each_closed_v1_variant(
 def test_proposal_kind_rejects_unknown_and_retired_shapes(payload: object) -> None:
     with pytest.raises(TypeError):
         GovernanceProposalKind.from_payload(payload)
+
+
+def test_attempt_proposal_u64_numbers_obey_the_exact_json_boundary() -> None:
+    maximum = (1 << 53) - 1
+    runtime = copy.deepcopy(_variants()[1][1])
+    runtime["manifest"]["start_height"] = maximum - 1  # type: ignore[index]
+    runtime["manifest"]["end_height"] = maximum  # type: ignore[index]
+    GovernanceProposalKind.from_payload({"kind": "RuntimeUpgrade", "payload": runtime})
+
+    runtime["manifest"]["end_height"] = maximum + 1  # type: ignore[index]
+    with pytest.raises(TypeError, match="9007199254740991"):
+        GovernanceProposalKind.from_payload(
+            {"kind": "RuntimeUpgrade", "payload": runtime}
+        )
+
+    musubi = copy.deepcopy(_variants()[5][1])
+    musubi["value"]["target"]["home_dataspace"] = maximum + 1  # type: ignore[index]
+    with pytest.raises(TypeError, match="9007199254740991"):
+        GovernanceProposalKind.from_payload(
+            {"kind": "MusubiRegistryGovernance", "payload": musubi}
+        )
 
 
 def test_closed_nested_action_tags_reject_unknown_values() -> None:

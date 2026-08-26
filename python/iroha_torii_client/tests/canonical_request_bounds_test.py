@@ -8,15 +8,14 @@ from pathlib import Path
 
 import pytest
 import requests
-from requests.adapters import HTTPAdapter
-
 from client_test_support import CANONICAL_OWNER, CANONICAL_OWNER_HEADER, canonical_hash
+from requests.adapters import HTTPAdapter
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 if str(PACKAGE_ROOT) not in sys.path:
     sys.path.insert(0, str(PACKAGE_ROOT))
 
-from iroha_torii_client import (
+from iroha_torii_client import (  # noqa: E402
     CANONICAL_REQUEST_MAX_ACCOUNT_LITERAL_BYTES_V1,
     CANONICAL_REQUEST_MAX_METHOD_BYTES_V1,
     CANONICAL_REQUEST_MAX_PATH_BYTES_V1,
@@ -29,7 +28,7 @@ from iroha_torii_client import (
     canonical_query_string,
     canonical_request_message,
 )
-from iroha_torii_client.canonical_request_v1 import (
+from iroha_torii_client.canonical_request_v1 import (  # noqa: E402
     CANONICAL_REQUEST_MAX_WITNESS_BYTES_V1,
     require_witness_header,
     validate_target,

@@ -172,7 +172,7 @@ def test_signed_pipeline_details_never_replays_redirects(
         local_signing_context=TRANSACTION_LOCAL_SIGNING_CONTEXT,
     )
 
-    with pytest.raises(requests.HTTPError):
+    with pytest.raises(RuntimeError, match=f"unexpected status {redirect_status}"):
         client.get_pipeline_transaction_details(
             "cd" * 32,
             authority="alice@wonderland",
@@ -187,8 +187,9 @@ def test_confidential_gas_schedule_has_no_runtime_setter() -> None:
     assert not hasattr(ToriiClient, "set_confidential_gas_schedule")
 
 
-class FakeSession:
+class FakeSession(requests.Session):
     def __init__(self, responses: list[requests.Response]):
+        super().__init__()
         self.responses = responses
         self.calls: list[dict[str, object]] = []
 
@@ -209,9 +210,30 @@ class FakeSession:
         response.url = url
         return response
 
+    def send(
+        self, request: requests.PreparedRequest, **kwargs: object
+    ) -> requests.Response:
+        url = request.url or ""
+        self.calls.append(
+            {
+                "method": request.method,
+                "path": urlsplit(url).path,
+                "params": None,
+                "data": request.body,
+                "headers": dict(request.headers),
+                "allow_redirects": kwargs.get("allow_redirects"),
+            }
+        )
+        if not self.responses:
+            raise AssertionError(f"unexpected prepared request {request.method} {url}")
+        response = self.responses.pop(0)
+        response.url = url
+        return response
 
-class OnboardingSession:
+
+class OnboardingSession(requests.Session):
     def __init__(self, responses: list[requests.Response]):
+        super().__init__()
         self.responses = responses
         self.calls: list[dict[str, object]] = []
         self.adapter = requests.adapters.HTTPAdapter(max_retries=0)
@@ -1751,6 +1773,8 @@ def test_asset_balance_rejects_wrong_network_prefix_without_retry() -> None:
             "path": f"/v1/accounts/{quote(taira_account, safe='')}/assets",
             "params": None,
             "data": None,
+            "headers": {"Accept": "application/json"},
+            "allow_redirects": True,
         }
     ]
 
@@ -1767,7 +1791,7 @@ def test_asset_balance_returns_zero_when_account_has_no_matching_asset() -> None
             )
         ]
     )
-    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+    client = authenticated_query_client(session)
 
     assert client.asset_balance("adult@is", "ds#wonderland.is") == Decimal("0")
 
@@ -1941,19 +1965,16 @@ def test_data_model_validation_uses_typed_node_capabilities() -> None:
     session = FakeSession(
         [response(200, {"abi_version": 1, "data_model_version": DATA_MODEL_VERSION})]
     )
-    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+    client = authenticated_query_client(session)
 
     client._ensure_data_model_validation()
 
     assert client._data_model_validation == "matched"
-    assert session.calls == [
-        {
-            "method": "GET",
-            "path": "/v1/node/capabilities",
-            "params": None,
-            "data": None,
-        }
-    ]
+    assert len(session.calls) == 1
+    assert session.calls[0]["method"] == "GET"
+    assert session.calls[0]["path"] == "/v1/node/capabilities"
+    assert session.calls[0]["allow_redirects"] is False
+    assert "X-Iroha-Account" in session.calls[0]["headers"]
 
 
 def test_query_accounts_typed_preserves_bounded_page_metadata() -> None:
@@ -3401,6 +3422,8 @@ def test_account_permission_listing_accepts_configured_chain_discriminant() -> N
             "path": f"/v1/accounts/{quote(taira_account, safe='')}/permissions",
             "params": None,
             "data": None,
+            "headers": {"Accept": "application/json"},
+            "allow_redirects": True,
         }
     ]
 

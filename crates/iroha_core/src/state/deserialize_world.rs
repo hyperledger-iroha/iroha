@@ -5569,7 +5569,9 @@ fn persisted_timed_ovn_phase_v1(lifecycle: &TimedOvnLifecycleStateV1) -> Persist
         TimedOvnLifecycleStateV1::RegistrationClosed(_) => {
             PersistedTimedOvnPhaseV1::RegistrationClosed
         }
-        TimedOvnLifecycleStateV1::SurvivorsFrozen(_) => PersistedTimedOvnPhaseV1::SurvivorsFrozen,
+        TimedOvnLifecycleStateV1::SurvivorsFrozen(_) | TimedOvnLifecycleStateV1::CorpusOpen(_) => {
+            PersistedTimedOvnPhaseV1::SurvivorsFrozen
+        }
         TimedOvnLifecycleStateV1::Sealed(_) => PersistedTimedOvnPhaseV1::Sealed,
         TimedOvnLifecycleStateV1::Released(_) => PersistedTimedOvnPhaseV1::Released,
     }
@@ -5668,12 +5670,14 @@ fn validate_tle_ovn_persistence(world: &World) -> Result<(), json::Error> {
                     "timed-OVN lifecycle references a missing TLE key session",
                 )
             })?;
-        lifecycle.validate(key_session).map_err(|error| {
-            invalid_tle_ovn_persistence(
-                "timed_ovn_evidence",
-                format!("invalid persisted timed-OVN lifecycle {ballot_attempt_id}: {error}"),
-            )
-        })?;
+        let (lifecycle_binding, registered_participant_hashes) = lifecycle
+            .validated_parliament_reducer_binding(key_session)
+            .map_err(|error| {
+                invalid_tle_ovn_persistence(
+                    "timed_ovn_evidence",
+                    format!("invalid persisted timed-OVN lifecycle {ballot_attempt_id}: {error}"),
+                )
+            })?;
 
         let session = lifecycle.session();
         if session.parameter_hash != crate::governance::timed_ovn::timed_ovn_parameter_hash_v1() {
@@ -5694,12 +5698,6 @@ fn validate_tle_ovn_persistence(world: &World) -> Result<(), json::Error> {
                         "timed-OVN lifecycle references a missing Parliament attempt",
                     )
                 })?;
-        if governance_attempt.proposal_content_id().as_bytes() != &session.proposal_content_id {
-            return Err(invalid_tle_ovn_persistence(
-                "timed_ovn_evidence",
-                "timed-OVN proposal binding differs from its Parliament attempt",
-            ));
-        }
         let ballot = governance_attempt
             .ballot(ballot_attempt_id)
             .ok_or_else(|| {
@@ -5708,12 +5706,12 @@ fn validate_tle_ovn_persistence(world: &World) -> Result<(), json::Error> {
                     "timed-OVN lifecycle references a missing Parliament ballot attempt",
                 )
             })?;
-        if ballot.attempt().body_instance_id.as_bytes() != &session.body_instance_id
-            || ballot.release_height() != Some(lifecycle.target_finalized_height())
+        if !governance_attempt
+            .timed_ovn_reducer_binding_matches(ballot_attempt_id, &lifecycle_binding)
         {
             return Err(invalid_tle_ovn_persistence(
                 "timed_ovn_evidence",
-                "timed-OVN body or release-height binding differs from Parliament state",
+                "timed-OVN lifecycle bindings differ from the Parliament reducer",
             ));
         }
         let body = governance_attempt
@@ -5739,32 +5737,76 @@ fn validate_tle_ovn_persistence(world: &World) -> Result<(), json::Error> {
                 )
             })
             .collect::<BTreeSet<_>>();
-        let registered_participant_hashes = lifecycle
-            .validated_registration_participant_hashes(key_session)
-            .map_err(|error| {
-                invalid_tle_ovn_persistence(
-                    "timed_ovn_evidence",
-                    format!(
-                        "could not rebuild authenticated Parliament participant roster: {error}"
-                    ),
-                )
-            })?;
-        let expected_registered_voters = u32::try_from(registered_participant_hashes.len()).ok();
-        let registration_count_matches =
-            if persisted_timed_ovn_phase_v1(lifecycle) == PersistedTimedOvnPhaseV1::Registered {
-                ballot.registered_voters().is_none()
-            } else {
-                ballot.registered_voters() == expected_registered_voters
-            };
         if registered_participant_hashes
             .iter()
             .any(|participant_hash| !eligible_participant_hashes.contains(participant_hash))
-            || !registration_count_matches
         {
             return Err(invalid_tle_ovn_persistence(
                 "timed_ovn_evidence",
                 "timed-OVN registration corpus is not the authenticated nonexcluded body-member subset",
             ));
+        }
+    }
+
+    let mut active_resource_reservations = Vec::new();
+    for (governance_attempt_id, governance_attempt) in parliament_attempts.iter() {
+        if governance_attempt.attempt().status
+            != iroha_data_model::governance::types::GovernanceAttemptStatusV1::Active
+        {
+            continue;
+        }
+        for (ballot_attempt_id, ballot) in governance_attempt.ballot_attempts() {
+            if matches!(
+                ballot.attempt().status,
+                iroha_data_model::governance::types::BallotAttemptStatusV1::Finalized
+                    | iroha_data_model::governance::types::BallotAttemptStatusV1::NoResult
+                    | iroha_data_model::governance::types::BallotAttemptStatusV1::Superseded
+            ) || governance_attempt
+                .active_ballot_for_body(&ballot.attempt().body_instance_id)
+                .is_none_or(|active| active.attempt().id != *ballot_attempt_id)
+                || governance_attempt
+                    .body(&ballot.attempt().body_instance_id)
+                    .is_none_or(|body| {
+                        body.instance().status
+                            != iroha_data_model::governance::types::BodyInstanceStatusV1::Balloting
+                    })
+            {
+                continue;
+            }
+            let release_height = ballot.release_height().ok_or_else(|| {
+                invalid_tle_ovn_persistence(
+                    "parliament_attempts",
+                    "active timed-OVN ballot is missing its release height",
+                )
+            })?;
+            active_resource_reservations.push((
+                *governance_attempt_id,
+                *ballot_attempt_id,
+                [
+                    (
+                        ballot.registered_at_height(),
+                        ballot.commitment_close_height(),
+                    ),
+                    (release_height, ballot.opening_deadline_height()),
+                ],
+            ));
+        }
+    }
+    for left_index in 0..active_resource_reservations.len() {
+        for right_index in left_index + 1..active_resource_reservations.len() {
+            let (left_attempt, left_ballot, left_windows) =
+                active_resource_reservations[left_index];
+            let (right_attempt, right_ballot, right_windows) =
+                active_resource_reservations[right_index];
+            if super::parliament_timed_ovn_resource_windows_overlap_v1(left_windows, right_windows)
+            {
+                return Err(invalid_tle_ovn_persistence(
+                    "parliament_attempts",
+                    format!(
+                        "active timed-OVN resource reservations overlap between {left_attempt:?}/{left_ballot:?} and {right_attempt:?}/{right_ballot:?}"
+                    ),
+                ));
+            }
         }
     }
 
@@ -5874,9 +5916,37 @@ fn validate_tle_ovn_persistence(world: &World) -> Result<(), json::Error> {
     Ok(())
 }
 
+fn validate_tle_ovn_snapshot_network_v1(
+    world: &World,
+    expected_network_id: &iroha_data_model::NetworkId,
+) -> Result<(), String> {
+    let expected_network_binding = *expected_network_id.as_bytes();
+    for (key_session_id, key_session) in world.tle_key_sessions.view().iter() {
+        if key_session.network_id != expected_network_binding {
+            return Err(format!(
+                "restored TLE key session {key_session_id:?} belongs to a different exact NetworkId"
+            ));
+        }
+    }
+    for (ballot_attempt_id, lifecycle) in world.timed_ovn_evidence.view().iter() {
+        if lifecycle.session().network_id != expected_network_binding {
+            return Err(format!(
+                "restored timed-OVN lifecycle {ballot_attempt_id:?} belongs to a different exact NetworkId"
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod timed_ovn_persistence_phase_tests {
     use super::*;
+    use crate::{
+        governance::timed_ovn::{
+            TimedOvnLifecycleStateV1, TimedOvnSessionPublicV1, timed_ovn_parameter_hash_v1,
+        },
+        tle_release::tests::public_key_session_fixture_for_context_v1,
+    };
     use iroha_data_model::governance::types::{
         BallotAttemptStatusV1 as BallotStatus, ParliamentBallotFailureKindV1 as FailureKind,
     };
@@ -5958,6 +6028,60 @@ mod timed_ovn_persistence_phase_tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn restored_tle_ovn_state_must_match_the_authoritative_network() {
+        let authoritative_network = iroha_data_model::NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA1; 32])),
+        );
+        let foreign_network = iroha_data_model::NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB1; 32])),
+        );
+        let foreign_key_state = public_key_session_fixture_for_context_v1(
+            *foreign_network.as_bytes(),
+            0xB2,
+            [0xB3; 32],
+        );
+        let foreign_key_session_id = foreign_key_state.key_session_id;
+        let foreign_key = foreign_key_state
+            .clone()
+            .validate()
+            .expect("foreign-network TLE fixture is internally valid");
+        let ballot_attempt_id = BallotAttemptId::new([0xB4; 32]);
+        let lifecycle = TimedOvnLifecycleStateV1::open_registration(
+            TimedOvnSessionPublicV1 {
+                network_id: *foreign_network.as_bytes(),
+                proposal_content_id: [0xB5; 32],
+                governance_attempt_id: [0xB6; 32],
+                body_instance_id: [0xB7; 32],
+                ballot_attempt_id: *ballot_attempt_id.as_bytes(),
+                parameter_hash: timed_ovn_parameter_hash_v1(),
+                tle_key_session_id: foreign_key_session_id,
+                tle_key_transcript_hash: foreign_key.public_state().transcript_hash,
+                tle_master_public_key: *foreign_key.master_public_key().as_bytes(),
+            },
+            10,
+            20,
+            &foreign_key,
+        )
+        .expect("foreign-network lifecycle is self-consistent with its TLE session");
+        let mut world = World::default();
+        world
+            .tle_key_sessions
+            .insert(foreign_key_session_id, foreign_key_state);
+        world
+            .timed_ovn_evidence
+            .insert(ballot_attempt_id, lifecycle);
+
+        validate_tle_ovn_snapshot_network_v1(&world, &foreign_network)
+            .expect("same-network restored TLE/OVN state is admitted");
+        let error = validate_tle_ovn_snapshot_network_v1(&world, &authoritative_network)
+            .expect_err("self-consistent foreign-network TLE/OVN state must fail closed");
+        assert!(
+            error.contains("different exact NetworkId"),
+            "rejection identifies the cross-network restore: {error}"
+        );
     }
 }
 
@@ -6480,7 +6604,6 @@ fn parse_world(
     let global_beacon_active_session = take_required(&mut map, "global_beacon_active_session")?;
     let global_beacon_latest_pulse = take_required(&mut map, "global_beacon_latest_pulse")?;
     let global_beacon_pulses = take_required(&mut map, "global_beacon_pulses")?;
-    let vrf_epochs = take_required(&mut map, "vrf_epochs")?;
     let repo_agreements = take_required(&mut map, "repo_agreements")?;
     let settlement_receipts = take_required(&mut map, "settlement_receipts")?;
     let kagemusha_replay_keys = take_required(&mut map, "kagemusha_replay_keys")?;
@@ -6742,6 +6865,7 @@ fn parse_world(
         council,
         parliament_bodies,
         parliament_attempts,
+        parliament_timed_ovn_resource_reservations: Storage::default(),
         tle_key_sessions,
         tle_active_key_session,
         timed_ovn_evidence,
@@ -6750,7 +6874,6 @@ fn parse_world(
         global_beacon_active_session,
         global_beacon_latest_pulse,
         global_beacon_pulses,
-        vrf_epochs,
         merge_hint_roots,
         merge_global_state_root,
         consensus_evidence: Storage::default(),
@@ -7117,6 +7240,8 @@ fn build_state(
         ))
     })?;
     if !emergency_fast {
+        validate_tle_ovn_snapshot_network_v1(&world, &network_id)
+            .map_err(MergeLedgerCommitError::ExecutionStatePublication)?;
         for (proposal_id, proposal) in world.governance_proposals.view().iter() {
             if let Some(reason) = proposal.first_release_exact_json_u64_invariant_error() {
                 return Err(MergeLedgerCommitError::ExecutionStatePublication(format!(

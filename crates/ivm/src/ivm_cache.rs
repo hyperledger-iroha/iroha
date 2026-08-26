@@ -1,47 +1,31 @@
 //! IvmCache: a minimal pre-decode cache for instruction streams.
 //!
 //! Decodes a raw fixed-width 32-bit instruction byte stream into a compact
-//! representation using the canonical decoder and caches the result keyed by
-//! `(sha256(code_bytes), version_major, version_minor)`.
+//! representation using the canonical decoder and caches the result by the
+//! SHA-256 digest of the code bytes. Metadata cannot affect fixed-width decoding.
 //!
-//! This is a development scaffold to exercise the pipeline path. It is not
-//! intended to be a fully optimized LRU; it keeps a simple VecDeque order and
-//! a HashMap for lookups. On capacity overflow, it evicts the least-recently
-//! used item. Accessing an existing entry marks it as most-recently used.
+//! A bounded `HashMap` stores decoded streams while a `VecDeque` tracks LRU
+//! order. Accessing an entry moves its digest to the back; capacity or byte
+//! budget overflow evicts from the front.
 use crate::{decoder, metadata::ProgramMetadata};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, VecDeque},
-    hash::{Hash, Hasher},
     sync::{
         Arc, Mutex, OnceLock, RwLock,
         atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     time::Instant,
 };
-/// A decoded instruction with its byte offset and length.
+/// A decoded fixed-width instruction with its byte offset.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DecodedOp {
     /// Byte offset from the beginning of the code buffer.
     pub pc: u64,
     /// Canonical 32-bit instruction word returned by the decoder.
     pub inst: u32,
-    /// Instruction length in bytes (2 or 4).
-    pub len: u32,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct CacheKey {
-    hash: [u8; 32],
-    vmaj: u8,
-    vmin: u8,
-}
-impl Hash for CacheKey {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        state.write(&self.hash);
-        state.write_u8(self.vmaj);
-        state.write_u8(self.vmin);
-    }
-}
+type CacheKey = [u8; 32];
 /// Snapshot of global cache metrics.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CacheStats {
@@ -74,8 +58,6 @@ pub struct IvmCache {
     cur_bytes: usize,
     /// Cached decoded streams by key.
     map: HashMap<CacheKey, Arc<[DecodedOp]>>,
-    /// Per-key sizes in bytes for quick accounting on eviction.
-    sizes: HashMap<CacheKey, usize>,
     /// LRU order (front = oldest).
     order: VecDeque<CacheKey>,
     hits: u64,
@@ -90,25 +72,20 @@ impl IvmCache {
             max_bytes: configured_max_bytes(),
             cur_bytes: 0,
             map: HashMap::new(),
-            sizes: HashMap::new(),
             order: VecDeque::new(),
             hits: 0,
             misses: 0,
             evictions: 0,
         }
     }
-    /// Compute the cache key for a code buffer and header version.
-    fn key_for(code: &[u8], vmaj: u8, vmin: u8) -> CacheKey {
+    /// Compute the cache key for a code buffer.
+    fn key_for(code: &[u8]) -> CacheKey {
         let mut hasher = Sha256::new();
         hasher.update(code);
         let hash = hasher.finalize();
         let mut out = [0u8; 32];
         out.copy_from_slice(&hash);
-        CacheKey {
-            hash: out,
-            vmaj,
-            vmin,
-        }
+        out
     }
     fn touch(&mut self, key: &CacheKey) {
         if let Some(pos) = self.order.iter().position(|k| k == key) {
@@ -125,11 +102,7 @@ impl IvmCache {
         while self.order.len() > self.cap {
             if let Some(old) = self.order.pop_front() {
                 if let Some(decoded) = self.map.remove(&old) {
-                    let sz = self
-                        .sizes
-                        .remove(&old)
-                        .unwrap_or_else(|| Self::entry_size(&decoded));
-                    self.cur_bytes = self.cur_bytes.saturating_sub(sz);
+                    self.cur_bytes = self.cur_bytes.saturating_sub(Self::entry_size(&decoded));
                 }
                 self.evictions += 1;
             } else {
@@ -140,11 +113,7 @@ impl IvmCache {
         while self.cur_bytes > self.max_bytes {
             if let Some(old) = self.order.pop_front() {
                 if let Some(decoded) = self.map.remove(&old) {
-                    let sz = self
-                        .sizes
-                        .remove(&old)
-                        .unwrap_or_else(|| Self::entry_size(&decoded));
-                    self.cur_bytes = self.cur_bytes.saturating_sub(sz);
+                    self.cur_bytes = self.cur_bytes.saturating_sub(Self::entry_size(&decoded));
                 }
                 self.evictions += 1;
             } else {
@@ -170,9 +139,9 @@ impl IvmCache {
                 if out.len() >= max_ops {
                     return Err(crate::VMError::DecodeError);
                 }
-                let (inst, len) = decoder::decode_slice(code, pc)?;
-                out.push(DecodedOp { pc, inst, len });
-                pc += len as u64;
+                let inst = decoder::decode_slice(code, pc)?;
+                out.push(DecodedOp { pc, inst });
+                pc += 4;
             }
             Ok(out)
         })();
@@ -198,13 +167,8 @@ impl IvmCache {
         }
     }
     /// Get a pre-decoded stream from cache or decode and insert.
-    pub fn get_or_predecode(
-        &mut self,
-        code: &[u8],
-        vmaj: u8,
-        vmin: u8,
-    ) -> Result<Arc<[DecodedOp]>, crate::VMError> {
-        let key = Self::key_for(code, vmaj, vmin);
+    pub fn get_or_predecode(&mut self, code: &[u8]) -> Result<Arc<[DecodedOp]>, crate::VMError> {
+        let key = Self::key_for(code);
         self.get_or_predecode_with_key(key, code)
     }
     /// Decode a full artifact that begins with a supported IVM 1.1 header followed by code bytes.
@@ -213,16 +177,11 @@ impl IvmCache {
     ) -> Result<(ProgramMetadata, Arc<[DecodedOp]>), crate::VMError> {
         let parsed = ProgramMetadata::parse(artifact)?;
         validate_supported_artifact_metadata(&parsed.metadata)?;
-        let header_len = parsed.header_len;
-        if artifact.len() < header_len {
-            return Err(crate::VMError::InvalidMetadata);
-        }
         let code = &artifact[parsed.code_offset..];
         let decoded = Self::decode_stream(code)?;
         Ok((parsed.metadata, decoded))
     }
-    /// Get a pre-decoded stream from a supported IVM 1.1 artifact (header + code), using the
-    /// header version in the cache key.
+    /// Get a pre-decoded stream from a supported IVM 1.1 artifact (header + code).
     pub fn get_or_predecode_artifact(
         &mut self,
         artifact: &[u8],
@@ -230,22 +189,9 @@ impl IvmCache {
         let parsed = ProgramMetadata::parse(artifact)?;
         validate_supported_artifact_metadata(&parsed.metadata)?;
         let code = &artifact[parsed.code_offset..];
-        let key = Self::key_for(
-            code,
-            parsed.metadata.version_major,
-            parsed.metadata.version_minor,
-        );
+        let key = Self::key_for(code);
         let decoded = self.get_or_predecode_with_key(key, code)?;
         Ok((parsed.metadata, decoded))
-    }
-    /// Get or predecode using explicit metadata (avoids reconstructing artifact bytes).
-    pub fn get_or_predecode_with_meta(
-        &mut self,
-        code: &[u8],
-        meta: &ProgramMetadata,
-    ) -> Result<Arc<[DecodedOp]>, crate::VMError> {
-        let key = Self::key_for(code, meta.version_major, meta.version_minor);
-        self.get_or_predecode_with_key(key, code)
     }
     fn get_or_predecode_with_key(
         &mut self,
@@ -266,7 +212,6 @@ impl IvmCache {
         let sz = Self::entry_size(&decoded);
         self.cur_bytes = self.cur_bytes.saturating_add(sz);
         self.map.insert(key, decoded.clone());
-        self.sizes.insert(key, sz);
         self.touch(&key);
         Ok(decoded)
     }
@@ -333,7 +278,7 @@ impl ShardedCache {
             0
         } else {
             let mut prefix = [0u8; 8];
-            prefix.copy_from_slice(&key.hash[..8]);
+            prefix.copy_from_slice(&key[..8]);
             (u64::from_le_bytes(prefix) as usize) % count
         };
         Arc::clone(&shards[idx])
@@ -398,12 +343,9 @@ fn atomic_saturating_add(cell: &AtomicU64, value: u64) {
 pub fn global_cache() -> &'static ShardedCache {
     GLOBAL_CACHE.get_or_init(|| ShardedCache::new(global_capacity()))
 }
-pub fn global_get_with_meta(
-    code: &[u8],
-    meta: &ProgramMetadata,
-) -> Result<Arc<[DecodedOp]>, crate::VMError> {
+pub fn global_get(code: &[u8]) -> Result<Arc<[DecodedOp]>, crate::VMError> {
     let cache = global_cache();
-    let key = IvmCache::key_for(code, meta.version_major, meta.version_minor);
+    let key = IvmCache::key_for(code);
     let shard = cache.shard_for_key(&key);
     let mut guard = shard.lock().unwrap();
     let before = guard.counters();

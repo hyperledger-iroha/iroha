@@ -2289,9 +2289,10 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
       },
     });
     const controller = new AbortController();
-    const applyResponse = await client.setProtectedNamespaces(["apps", "system"], {
-      signal: controller.signal,
-    });
+    const applyResponse = await client.setProtectedNamespaces(
+      ["apps", "system"],
+      { signal: controller.signal },
+    );
     assert.equal(captures[0].url, `${BASE_URL}/v1/gov/protected-namespaces`);
     assert.equal(captures[0].init.method, "POST");
     assert.equal(captures[0].init.signal, controller.signal);

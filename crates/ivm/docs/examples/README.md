@@ -80,7 +80,7 @@ Contents
 - `18_ternary.ko`: Ternary conditional `cond ? then : else` expression.
 
 Notes
-- Kotodama targets the Iroha Virtual Machine (IVM) and produces `.to` bytecode. RISC‑V–like encodings in the implementation are IVM’s mixed-format details and not a hardware target.
+- Kotodama targets the Iroha Virtual Machine (IVM) and produces `.to` bytecode. Its canonical executable encoding uses fixed-width 32-bit IVM words and is not a hardware RISC-V target.
 - Typed constructors are compiled into Norito-encoded TLV blobs and passed to
   the host through the validated pointer ABI. Raw pointers and direct syscall
   variants are not source APIs.

@@ -174,9 +174,9 @@ use std::{
 // Production receives the evidence through decoded instructions instead;
 // direct construction remains deliberately confined to tests.
 #[cfg(test)]
-use iroha_data_model::proof::VerifyingKeyBox;
+use iroha_data_model::isi::settlement::FxCorridorOracleEvidence;
 #[cfg(test)]
-use iroha_data_model::{da::types::DaRentQuote, isi::settlement::FxCorridorOracleEvidence};
+use iroha_data_model::proof::VerifyingKeyBox;
 use iroha_primitives::{
     json::Json,
     numeric::{Numeric, Quantity},
@@ -1735,11 +1735,11 @@ pub fn lane_relay_envelope_sample() -> napi::Result<JsLaneRelaySample> {
         lane_id,
         lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
         dataspace_id,
-        tx_count: 1,
-        total_local_amount: "0.00001".parse().expect("valid settlement quantity"),
-        total_xor_due: "0.000005".parse().expect("valid settlement quantity"),
-        total_xor_after_haircut: "0.000004".parse().expect("valid settlement quantity"),
-        total_xor_variance: "0.000001".parse().expect("valid settlement quantity"),
+        tx_count: 0,
+        total_local_amount: "0".parse().expect("valid settlement quantity"),
+        total_xor_due: "0".parse().expect("valid settlement quantity"),
+        total_xor_after_haircut: "0".parse().expect("valid settlement quantity"),
+        total_xor_variance: "0".parse().expect("valid settlement quantity"),
         swap_metadata: None,
         receipts: Vec::new(),
         nexus_fee_receipts: Vec::new(),
@@ -12838,13 +12838,7 @@ mod tests {
         HasMetadata,
         account::AccountId,
         asset::id::{AssetDefinitionId, AssetId},
-        da::{
-            manifest::{ChunkCommitment, ChunkRole, DaManifestV1},
-            types::{
-                BlobClass, BlobCodec, BlobDigest, ErasureProfile, ExtraMetadata, MetadataEntry,
-                MetadataVisibility, RetentionPolicy, StorageTicketId,
-            },
-        },
+        da::manifest::DaManifestV1,
         domain::DomainId,
         events::EventFilterBox,
         isi::{
@@ -13515,6 +13509,10 @@ seiyaku Privacy {
             lane_relay_envelope_sample().expect("checked validator generation for relay sample");
         assert!(!sample.valid.is_empty());
         assert!(!sample.tampered.is_empty());
+        let mut valid = sample.valid.as_ref();
+        let envelope =
+            LaneRelayEnvelope::decode_all(&mut valid).expect("decode canonical relay sample");
+        envelope.verify().expect("verify canonical relay sample");
     }
     #[test]
     fn crypto_keypair_exports_checked_public_key_payload() {
@@ -15098,108 +15096,32 @@ seiyaku Privacy {
         chunk_root: [u8; 32],
         leaf_count: usize,
     }
-    #[allow(clippy::too_many_lines)]
     fn build_da_manifest_fixture() -> DaManifestFixture {
-        let payload: Vec<u8> = (0..16 * 1024)
-            .map(|idx| u8::try_from(idx % 197).expect("payload byte fits in u8"))
-            .collect();
-        let plan =
-            CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
+        let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let fixture_root = crate_root
+            .ancestors()
+            .nth(2)
+            .expect("workspace root")
+            .join("fixtures/da/reconstruct/rs_parity_v1");
+        let manifest_hex = fs::read_to_string(fixture_root.join("manifest.norito.hex"))
+            .expect("read shared DA manifest fixture");
+        let manifest_bytes = hex::decode(manifest_hex).expect("decode shared DA manifest fixture");
+        let manifest: DaManifestV1 =
+            decode_from_bytes(&manifest_bytes).expect("decode shared DA manifest");
+        let payload =
+            fs::read(fixture_root.join("payload.bin")).expect("read shared DA payload fixture");
+        let plan = sorafs_car::build_plan_from_da_manifest(&manifest)
+            .expect("build shared DA manifest plan");
         let mut store = ChunkStore::with_profile(plan.chunk_profile);
         let mut source = InMemoryPayload::new(&payload);
         store
             .ingest_plan_source(&plan, &mut source)
             .expect("ingest payload");
-        let chunk_root = *store.por_tree().root();
-        let blob_hash = *store.payload_digest().as_bytes();
-        let shard_span = usize::from(
-            ErasureProfile::default()
-                .data_shards
-                .saturating_add(ErasureProfile::default().parity_shards),
-        );
-        let chunk_commitments = plan
-            .chunks
-            .iter()
-            .enumerate()
-            .map(|(index, chunk)| {
-                let chunk_index =
-                    u32::try_from(index).expect("chunk index must fit within u32 range");
-                let stripe_id =
-                    u32::try_from(index / shard_span).expect("stripe index fits in u32");
-                ChunkCommitment::new_with_role(
-                    chunk_index,
-                    chunk.offset,
-                    chunk.length,
-                    BlobDigest::new(chunk.digest),
-                    ChunkRole::Data,
-                    stripe_id,
-                )
-            })
-            .collect();
-        let manifest = DaManifestV1 {
-            version: DaManifestV1::VERSION,
-            client_blob_id: BlobDigest::from_hash(blake3::hash(b"client")),
-            lane_id: LaneId::new(0),
-            epoch: 0,
-            blob_class: BlobClass::TaikaiSegment,
-            codec: BlobCodec("application/octet-stream".into()),
-            blob_hash: BlobDigest::new(blob_hash),
-            chunk_root: BlobDigest::new(chunk_root),
-            storage_ticket: StorageTicketId::from_hash(blake3::hash(b"ticket")),
-            total_size: payload.len() as u64,
-            chunk_size: plan
-                .chunks
-                .first()
-                .map(|chunk| chunk.length)
-                .expect("chunks present"),
-            total_stripes: u32::try_from(
-                plan.chunks
-                    .len()
-                    .div_ceil(usize::from(ErasureProfile::default().data_shards)),
-            )
-            .expect("stripe count fits in u32"),
-            shards_per_stripe: u32::from(
-                ErasureProfile::default()
-                    .data_shards
-                    .saturating_add(ErasureProfile::default().parity_shards),
-            ),
-            erasure_profile: ErasureProfile::default(),
-            retention_policy: RetentionPolicy::default(),
-            rent_quote: DaRentQuote::default(),
-            chunks: chunk_commitments,
-            ipa_commitment: BlobDigest::new(chunk_root),
-            metadata: ExtraMetadata {
-                items: vec![
-                    MetadataEntry::new(
-                        "taikai.event_id",
-                        b"demo-event".to_vec(),
-                        MetadataVisibility::Public,
-                    ),
-                    MetadataEntry::new(
-                        "taikai.stream_id",
-                        b"demo-stream".to_vec(),
-                        MetadataVisibility::Public,
-                    ),
-                    MetadataEntry::new(
-                        "taikai.rendition_id",
-                        b"demo-rendition".to_vec(),
-                        MetadataVisibility::Public,
-                    ),
-                    MetadataEntry::new(
-                        "taikai.segment.sequence",
-                        b"1".to_vec(),
-                        MetadataVisibility::Public,
-                    ),
-                ],
-            },
-            issued_at_unix: 0,
-        };
-        let manifest_bytes = norito::to_bytes(&manifest).expect("encode manifest");
         DaManifestFixture {
             manifest_bytes,
             payload,
-            blob_hash,
-            chunk_root,
+            blob_hash: *manifest.blob_hash.as_ref(),
+            chunk_root: *manifest.chunk_root.as_ref(),
             leaf_count: store.por_tree().leaf_count(),
         }
     }

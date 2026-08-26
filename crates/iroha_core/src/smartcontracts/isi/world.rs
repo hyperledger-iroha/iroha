@@ -7956,13 +7956,16 @@ pub mod isi {
             }
             gov::ParliamentLifecycleTransitionV1::FreezeTimedOvnCorpus(payload) => {
                 parliament_timed_ovn_corpus_count_v1(payload.ballot_records.len())?;
-                if payload
+                if payload.ballot_records.len()
+                    > iroha_data_model::isi::governance::PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1
+                    || payload
                     .ballot_records
                     .iter()
                     .any(|record| record.len() != TIMED_OVN_BALLOT_RECORD_BYTES_V1)
                 {
                     return Err(InstructionExecutionError::InvariantViolation(
-                        "Parliament timed-OVN ballot has a noncanonical wire width".into(),
+                        "Parliament timed-OVN ballot chunk is oversized or has a noncanonical wire width"
+                            .into(),
                     ));
                 }
             }
@@ -8253,7 +8256,7 @@ pub mod isi {
                         unreachable!("close_registration returns RegistrationClosed")
                     };
                     let (_, roster) = closed
-                        .validate(&tle_key_session)
+                        .validate_committed_cache(&tle_key_session)
                         .map_err(parliament_timed_ovn_error_v1)?;
                     attempt
                         .close_ballot_registration(
@@ -8343,13 +8346,15 @@ pub mod isi {
                             current_height,
                         )
                         .map_err(parliament_reducer_error)?;
-                    let ballot_count =
-                        parliament_timed_ovn_corpus_count_v1(payload.ballot_records.len())?;
                     let lifecycle = parliament_timed_ovn_lifecycle_v1(
                         payload.ballot_attempt_id,
                         state_transaction,
                     )?;
-                    if !matches!(&lifecycle, TimedOvnLifecycleStateV1::SurvivorsFrozen(_)) {
+                    if !matches!(
+                        &lifecycle,
+                        TimedOvnLifecycleStateV1::SurvivorsFrozen(_)
+                            | TimedOvnLifecycleStateV1::CorpusOpen(_)
+                    ) {
                         return Err(parliament_timed_ovn_error_v1(
                             "ballot-corpus freeze is out of timed-OVN lifecycle phase",
                         ));
@@ -8361,26 +8366,20 @@ pub mod isi {
                     let lifecycle = lifecycle
                         .seal_ballots(payload.ballot_records, &tle_key_session)
                         .map_err(parliament_timed_ovn_error_v1)?;
-                    let TimedOvnLifecycleStateV1::Sealed(sealed) = &lifecycle else {
-                        unreachable!("seal_ballots returns Sealed")
-                    };
-                    let accepted_ballots = u32::from(sealed.aggregate.accepted_ballots);
-                    if accepted_ballots != ballot_count {
-                        return Err(InstructionExecutionError::InvariantViolation(
-                            "Parliament timed-OVN replay accepted a different ballot count".into(),
-                        ));
+                    if let TimedOvnLifecycleStateV1::Sealed(sealed) = &lifecycle {
+                        let accepted_ballots = u32::from(sealed.aggregate.accepted_ballots);
+                        attempt
+                            .freeze_timed_ovn_corpus(
+                                governance_attempt_id,
+                                payload.ballot_attempt_id,
+                                sealed.aggregate.ballot_corpus_hash,
+                                sealed.aggregate.survivor_corpus_root,
+                                accepted_ballots,
+                                sealed.aggregate.transcript_hash,
+                                current_height,
+                            )
+                            .map_err(parliament_reducer_error)?;
                     }
-                    attempt
-                        .freeze_timed_ovn_corpus(
-                            governance_attempt_id,
-                            payload.ballot_attempt_id,
-                            sealed.aggregate.ballot_corpus_hash,
-                            sealed.aggregate.survivor_corpus_root,
-                            accepted_ballots,
-                            sealed.aggregate.transcript_hash,
-                            current_height,
-                        )
-                        .map_err(parliament_reducer_error)?;
                     timed_ovn_lifecycle = Some(lifecycle);
                 }
                 gov::ParliamentLifecycleTransitionV1::FinalizeOpenedBallot(payload) => {
@@ -19083,6 +19082,29 @@ pub mod isi {
                 format!("{validation_error:?}").contains("unknown Parliament governance attempt"),
                 "an authorized manager must reach deterministic corpus validation: {validation_error:?}"
             );
+
+            let oversized = gov::SubmitParliamentLifecycleTransitionV1 {
+                governance_attempt_id:
+                    iroha_data_model::governance::types::GovernanceAttemptId::new([0x96; 32]),
+                transition: gov::ParliamentLifecycleTransitionV1::FreezeTimedOvnCorpus(
+                    gov::ParliamentFreezeTimedOvnCorpusV1 {
+                        ballot_attempt_id:
+                            iroha_data_model::governance::types::BallotAttemptId::new([0x97; 32]),
+                        ballot_records: vec![
+                            vec![0x98; TIMED_OVN_BALLOT_RECORD_BYTES_V1];
+                            iroha_data_model::isi::governance::PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1
+                                + 1
+                        ],
+                    },
+                ),
+            };
+            let oversized_error = oversized
+                .execute(&ALICE_ID, &mut state_transaction)
+                .expect_err("a 33-record timed-OVN chunk must fail before state lookup");
+            assert!(
+                format!("{oversized_error:?}").contains("chunk is oversized"),
+                "unexpected oversized-chunk rejection: {oversized_error:?}"
+            );
         }
 
         #[test]
@@ -19135,11 +19157,10 @@ pub mod isi {
             let mut block = state.block(header);
             let mut state_transaction = block.transaction();
             let release_height = 41;
-            let (key_record, pulse) =
-                crate::beacon::tests::signed_persisted_pulse_fixture_for_world(
-                    state_transaction.network_id,
-                    release_height,
-                );
+            let (key_record, pulse) = crate::beacon::signed_persisted_pulse_fixture_for_world(
+                state_transaction.network_id,
+                release_height,
+            );
             state_transaction
                 .world
                 .global_beacon_key_sessions
@@ -19529,7 +19550,7 @@ pub mod isi {
                     let release_beacon_session_id =
                         BeaconSessionId::new(parliament_test_root(0xD0));
                     let tle_key_session_id = TleKeySessionId::new(parliament_test_root(0xD1));
-                    let release_height = 40;
+                    let release_height = 42;
                     let tle_session_id = TleSessionId::derive_v1(
                         ballot_attempt_id,
                         tle_key_session_id,
@@ -19547,13 +19568,13 @@ pub mod isi {
                             release_beacon_session_id,
                             30,
                             ParliamentTimedOvn {
-                                registration_phase_blocks: 2,
-                                survivor_freeze_phase_blocks: 2,
-                                commitment_phase_blocks: 2,
+                                registration_phase_blocks: 4,
+                                survivor_freeze_phase_blocks: 3,
+                                commitment_phase_blocks: 1,
                                 release_delay_blocks: 4,
                                 opening_phase_blocks: 2,
                                 max_ballot_retries: 2,
-                                max_corpus_entries: 1_000,
+                                max_corpus_entries: 3,
                             },
                             release_height,
                         )
@@ -19581,7 +19602,7 @@ pub mod isi {
                             survivor_root,
                             3,
                             no_recovery_root,
-                            34,
+                            37,
                         )
                         .expect("freeze deterministic ballot survivors");
                     attempt
@@ -19592,7 +19613,7 @@ pub mod isi {
                             survivor_root,
                             3,
                             timed_commitment_root,
-                            36,
+                            38,
                         )
                         .expect("freeze deterministic timed-OVN corpus");
                     attempt
@@ -19621,7 +19642,7 @@ pub mod isi {
                                 nay: 1,
                                 abstain: 0,
                             },
-                            41,
+                            43,
                         )
                         .expect("finalize deterministic aggregate ballot");
                     assert_eq!(outcome, ParliamentAggregateOutcomeV1::Approved);

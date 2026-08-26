@@ -122,8 +122,6 @@ impl V2EffectServices for ProductionV2Services {
             | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
-            | wire::ConsensusMessageV2Payload::VrfCommit(_)
-            | wire::ConsensusMessageV2Payload::VrfReveal(_)
             | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => {
                 self.remote_voters()
             }
@@ -722,8 +720,8 @@ impl V2EffectServices for ProductionV2Services {
 
 /// Recover the exact global round carried by one view-scoped v2 output.
 ///
-/// Height-only recovery requests and epoch-wide VRF traffic deliberately
-/// return `None`: a certified view does not supersede those owners.
+/// Payload chunks and height-only certificate requests return `None` because
+/// they do not own a certified view. Beacon partials carry their exact round.
 fn global_v2_output_round(message: &NetworkMessage) -> Option<wire::ConsensusRound> {
     let NetworkMessage::SumeragiBlock(envelope) = message else {
         return None;
@@ -746,9 +744,7 @@ fn global_v2_output_round(message: &NetworkMessage) -> Option<wire::ConsensusRou
             Some(response.certificate.round)
         }
         wire::ConsensusMessageV2Payload::PayloadChunk(_)
-        | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
-        | wire::ConsensusMessageV2Payload::VrfCommit(_)
-        | wire::ConsensusMessageV2Payload::VrfReveal(_) => None,
+        | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_) => None,
         wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(partial) => {
             Some(partial.round)
         }

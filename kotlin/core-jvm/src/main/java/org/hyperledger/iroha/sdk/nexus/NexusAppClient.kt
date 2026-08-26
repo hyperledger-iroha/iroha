@@ -433,7 +433,7 @@ class NexusAppClient @JvmOverloads constructor(
             AccountAddress.parseEncodedIgnoringCurveSupport(
                 value,
                 config.chainDiscriminant,
-            ).address
+            )
         } catch (error: Exception) {
             throw NexusAppError(
                 "invalid_account_id",
@@ -468,7 +468,7 @@ class NexusAppClient @JvmOverloads constructor(
             AccountAddress.parseEncodedIgnoringCurveSupport(
                 requireCanonicalAccountId(accountId, context),
                 config.chainDiscriminant,
-            ).address
+            )
         } catch (error: NexusAppError) {
             throw error
         } catch (error: Exception) {

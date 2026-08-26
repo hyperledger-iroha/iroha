@@ -73,6 +73,16 @@ def test_first_release_crypto_module_excludes_camel_case_aliases() -> None:
         assert not hasattr(crypto_module, name)
 
 
+def test_sm2_fixture_generation_requires_the_native_implementation(monkeypatch) -> None:
+    class MissingSm2Fixture:
+        pass
+
+    monkeypatch.setattr(crypto_module, "_crypto", MissingSm2Fixture())
+
+    with pytest.raises(AttributeError, match="sm2_fixture_from_seed"):
+        crypto_module.sm2_fixture_from_seed("1234567812345678", b"seed", b"message")
+
+
 def _signed_byte_array(data: bytes) -> array[int]:
     return array("b", (byte if byte < 128 else byte - 256 for byte in data))
 

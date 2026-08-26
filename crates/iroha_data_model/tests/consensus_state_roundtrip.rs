@@ -7,7 +7,6 @@ use iroha_data_model::{
         consensus::{CertPhase, Qc, QcAggregate},
         consensus_v2::PERMISSIONED_TAG,
     },
-    consensus::{VrfEpochRecord, VrfLateRevealRecord, VrfParticipantRecord},
     peer::PeerId,
 };
 use norito::codec::{Decode, Encode};
@@ -64,109 +63,4 @@ fn qc_roundtrip() {
         },
     };
     assert_roundtrip(&qc);
-}
-#[test]
-fn vrf_participant_record_roundtrip_variants() {
-    let variants = [
-        VrfParticipantRecord {
-            signer: 1,
-            commitment: None,
-            reveal: None,
-            commit_proof: None,
-            reveal_proof: None,
-            last_updated_height: 10,
-        },
-        VrfParticipantRecord {
-            signer: 2,
-            commitment: Some([0x11; 32]),
-            reveal: None,
-            commit_proof: None,
-            reveal_proof: None,
-            last_updated_height: 20,
-        },
-        VrfParticipantRecord {
-            signer: 3,
-            commitment: None,
-            reveal: Some([0x22; 32]),
-            commit_proof: None,
-            reveal_proof: None,
-            last_updated_height: 30,
-        },
-        VrfParticipantRecord {
-            signer: 4,
-            commitment: Some([0x33; 32]),
-            reveal: Some([0x44; 32]),
-            commit_proof: None,
-            reveal_proof: None,
-            last_updated_height: 40,
-        },
-    ];
-    for record in &variants {
-        assert_roundtrip(record);
-    }
-}
-#[test]
-fn vrf_epoch_record_roundtrip() {
-    let participants = vec![
-        VrfParticipantRecord {
-            signer: 5,
-            commitment: Some([0xAA; 32]),
-            reveal: Some([0xBB; 32]),
-            commit_proof: None,
-            reveal_proof: None,
-            last_updated_height: 100,
-        },
-        VrfParticipantRecord {
-            signer: 6,
-            commitment: Some([0xCC; 32]),
-            reveal: None,
-            commit_proof: None,
-            reveal_proof: None,
-            last_updated_height: 110,
-        },
-    ];
-    let record = VrfEpochRecord {
-        epoch: 9,
-        seed: [0x55; 32],
-        epoch_length: 180,
-        commit_deadline_offset: 45,
-        reveal_deadline_offset: 120,
-        roster_len: 12,
-        finalized: true,
-        updated_at_height: 720,
-        participants,
-        late_reveals: vec![VrfLateRevealRecord {
-            signer: 7,
-            reveal: [0xDD; 32],
-            reveal_proof: None,
-            noted_at_height: 730,
-        }],
-        committed_no_reveal: vec![7, 8],
-        no_participation: vec![9, 10],
-        penalties_applied: false,
-        penalties_applied_at_height: None,
-        validator_election: None,
-    };
-    assert_roundtrip(&record);
-}
-#[test]
-fn vrf_epoch_record_empty_sets_roundtrip() {
-    let record = VrfEpochRecord {
-        epoch: 11,
-        seed: [0x66; 32],
-        epoch_length: 200,
-        commit_deadline_offset: 60,
-        reveal_deadline_offset: 140,
-        roster_len: 5,
-        finalized: false,
-        updated_at_height: 880,
-        participants: Vec::new(),
-        late_reveals: Vec::new(),
-        committed_no_reveal: Vec::new(),
-        no_participation: Vec::new(),
-        penalties_applied: false,
-        penalties_applied_at_height: None,
-        validator_election: None,
-    };
-    assert_roundtrip(&record);
 }

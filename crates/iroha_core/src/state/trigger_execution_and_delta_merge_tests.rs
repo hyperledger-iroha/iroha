@@ -727,8 +727,14 @@ fn ivm_trigger_respects_pipeline_cycle_cap() {
     let trigger_id: TriggerId = "ivm_gas_guard".parse().unwrap();
     let mut raw = Vec::new();
     // Two ADD instructions cost two cycles in total, exceeding the configured cap of one.
-    raw.extend_from_slice(&ivm::kotodama::wide::encode_add(3, 1, 2).to_le_bytes());
-    raw.extend_from_slice(&ivm::kotodama::wide::encode_add(3, 1, 2).to_le_bytes());
+    raw.extend_from_slice(
+        &ivm::encoding::wide::encode_rr(ivm::instruction::wide::arithmetic::ADD, 3, 1, 2)
+            .to_le_bytes(),
+    );
+    raw.extend_from_slice(
+        &ivm::encoding::wide::encode_rr(ivm::instruction::wide::arithmetic::ADD, 3, 1, 2)
+            .to_le_bytes(),
+    );
     raw.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let mut bytecode = assemble_ivm_header(&raw);
     bytecode[8..16].copy_from_slice(&1_u64.to_le_bytes());
