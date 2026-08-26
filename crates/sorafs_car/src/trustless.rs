@@ -556,6 +556,7 @@ emit_metrics = true
         ));
         pin.finalized_cursor.height = 7;
         pin.manifest.status = PinStatus::Pending;
+        pin.manifest.approved_epoch = None;
         let err = outcome
             .validate_finalized_pin(&pin)
             .expect_err("pending pin");

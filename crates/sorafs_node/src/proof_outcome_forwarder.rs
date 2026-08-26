@@ -352,9 +352,10 @@ pub struct ProofOutcomeOutbox {
     store: Option<Arc<CheckpointStore>>,
 }
 impl ProofOutcomeOutbox {
-    /// Construct a bounded non-persistent outbox for unit tests.
-    #[cfg(test)]
-    fn in_memory(policy: ProofOutcomeOutboxPolicyV1) -> Result<Self, ProofOutcomeOutboxError> {
+    /// Construct a bounded non-persistent outbox for emergency-disabled startup and tests.
+    pub(crate) fn in_memory(
+        policy: ProofOutcomeOutboxPolicyV1,
+    ) -> Result<Self, ProofOutcomeOutboxError> {
         policy.validate()?;
         Ok(Self {
             policy,

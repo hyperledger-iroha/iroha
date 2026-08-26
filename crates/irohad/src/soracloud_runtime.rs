@@ -18,9 +18,11 @@
 //! unique cgroup-v2 worker subtree with finite CPU, memory, swap, process, and
 //! backing-device IO limits.
 //!
-//! Ordered mailbox execution and public query local reads now run admitted IVM
-//! bundles directly through the Soracloud host surface while asset local reads
-//! still resolve from the committed snapshot plus hydrated artifact cache.
+//! Public query local reads run admitted IVM bundles directly through the
+//! Soracloud host surface, while asset local reads resolve from the committed
+//! snapshot plus hydrated artifact cache. Ordered-mailbox admission and result
+//! persistence remain fail-closed until consensus can re-execute the exact
+//! admitted bundle and verify a self-contained effect certificate.
 //! The Soracloud host has no ledger world-state snapshot, so it rejects the
 //! complete state-backed AXT syscall family instead of delegating it to the
 //! standalone core-host shim.
@@ -34,6 +36,7 @@ use iroha_core::soracloud_runtime::{
     SORACLOUD_APARTMENT_AUTONOMY_EXECUTION_SUMMARY_MAX_BYTES_V1,
     SORACLOUD_APARTMENT_AUTONOMY_EXECUTION_SUMMARY_VERSION_V1,
     SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_FILE_V1, SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_VERSION_V1,
+    SORACLOUD_PRIVATE_UPLOADED_MODEL_EXECUTION_MAX_SUBMISSION_ATTEMPTS_V1,
     SORACLOUD_RUNTIME_SNAPSHOT_VERSION_V1, SoracloudApartmentAutonomyExecutionSummaryV1,
     SoracloudApartmentAutonomyWorkflowStepSummaryV1, SoracloudApartmentExecutionRequest,
     SoracloudApartmentExecutionResult, SoracloudHostedHttpReplicaRuntimeStateV1,
@@ -42,7 +45,8 @@ use iroha_core::soracloud_runtime::{
     SoracloudPrivateOutputDurabilityStatusV1, SoracloudPrivateUploadedModelExecutionJournalPhaseV1,
     SoracloudPrivateUploadedModelExecutionJournalV1,
     SoracloudPrivateUploadedModelExecutionRequestV1,
-    SoracloudPrivateUploadedModelExecutionResultV1, SoracloudQuantizedCpuModelV1,
+    SoracloudPrivateUploadedModelExecutionResultV1,
+    SoracloudPrivateUploadedModelExecutionSubmissionProgressV1, SoracloudQuantizedCpuModelV1,
     SoracloudQuantizedRoundingV1, SoracloudRuntime, SoracloudRuntimeApartmentPlan,
     SoracloudRuntimeArtifactPlan, SoracloudRuntimeExecutionError,
     SoracloudRuntimeExecutionErrorKind, SoracloudRuntimeHfSourcePlan,
@@ -57,6 +61,7 @@ use iroha_core::soracloud_runtime::{
     soracloud_hf_generated_source_binding,
     validate_soracloud_apartment_autonomy_execution_summary_v1,
     validate_soracloud_private_output_durability_v1,
+    validate_soracloud_private_output_pin_for_prepare_v1,
 };
 use iroha_core::state::{State, StateReadOnly, StateView, WorldReadOnly};
 use iroha_core::{
@@ -93,6 +98,7 @@ use iroha_data_model::{
         SORA_PRIVATE_MODEL_ENCRYPTED_ARTIFACT_MAX_BYTES_V1,
         SORA_PRIVATE_MODEL_ENCRYPTED_ARTIFACT_VERSION_V1,
         SORA_PRIVATE_QUANTIZED_CPU_OUTPUT_VERSION_V1, SORA_RUNTIME_RECEIPT_VERSION_V1,
+        SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1,
         SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
         SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1, SORACLOUD_HOST_RESPONSE_VERSION_V1,
         SoraAgentApartmentRecordV1, SoraAgentRuntimeStatusV1, SoraArtifactKindV1,
@@ -135,7 +141,10 @@ use iroha_data_model::{
         encode_soracloud_private_model_payload_aad_v1, is_canonical_hf_commit_oid_v1,
         is_canonical_hf_repo_id_v1,
     },
-    sorafs::pin_registry::{ManifestDigest, ManifestRootCid, PinStatus},
+    sorafs::pin_registry::{
+        ManifestDigest, ManifestRootCid, PinStatus, ReplicationOrderStatus,
+        SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1,
+    },
     transaction::{
         Executable, SignedTransaction, TransactionBuilder, TransactionEntrypoint,
         TransactionPayload,
@@ -177,6 +186,7 @@ use sorafs_car::{
     CarBuildPlan, CarChunk, CarWriter, FilePlan, compute_chunk_plan_digest_sha3, compute_por_root,
 };
 use sorafs_node::store::{StorageBackend, StoredManifest};
+use std::fmt::Write as _;
 #[cfg(any(test, target_os = "linux"))]
 use std::net::{Shutdown, TcpListener};
 #[cfg(target_os = "linux")]
@@ -193,7 +203,7 @@ use std::{
     cmp::{Ordering, Reverse},
     collections::{BTreeMap, BTreeSet},
     fs,
-    io::{self, Read as _, Seek as _, Write as _},
+    io::{self, BufRead as _, Read as _, Seek as _, Write as _},
     net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, ToSocketAddrs as _},
     num::{NonZeroU64, NonZeroUsize},
     ops::{Deref, DerefMut},
@@ -212,8 +222,10 @@ use tokio::{sync::RwLock as AsyncRwLock, task::JoinHandle};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSecret};
 use zeroize::{Zeroize as _, Zeroizing};
 #[cfg(target_os = "linux")]
+#[path = "soracloud_runtime/inrou_cgroup.rs"]
 mod inrou_cgroup;
 #[cfg(target_os = "linux")]
+#[path = "soracloud_runtime/inrou_namespace.rs"]
 mod inrou_namespace;
 #[path = "soracloud_runtime/remote_stream_token_auth.rs"]
 mod remote_stream_token_auth;
@@ -231,6 +243,13 @@ const SORACLOUD_PRIVATE_EXECUTION_RECEIPT_ENDPOINT: &str =
     "/internal/soracloud/runtime/private-model-receipt";
 const SORACLOUD_PRIVATE_EXECUTION_JOURNAL_DECODE_LIMITS: norito::DecodeLimits =
     norito::DecodeLimits::new(2_097_152, 2_097_152, 4_194_304, 32 * 1024 * 1024, 64);
+
+#[cfg(test)]
+fn private_execution_signed_journal_store_failure_target()
+-> &'static parking_lot::Mutex<Option<(String, String)>> {
+    static TARGET: OnceLock<parking_lot::Mutex<Option<(String, String)>>> = OnceLock::new();
+    TARGET.get_or_init(|| parking_lot::Mutex::new(None))
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 struct PrivateExecutionJournalEnvelopeV1 {
@@ -289,8 +308,6 @@ const SORACLOUD_OPERATOR_PRESEED_MAX_MANIFEST_SCAN_V1: usize = 10_000;
 const SORACLOUD_RUNTIME_SNAPSHOT_MAX_BYTES: u64 = 64 * 1024 * 1024;
 #[cfg(any(test, target_os = "linux"))]
 const SORACLOUD_INROU_LOG_MAX_BYTES: u64 = 8 * 1024 * 1024;
-#[cfg(target_os = "linux")]
-const SORACLOUD_INROU_HOST_COMMAND_STDOUT_MAX_BYTES: usize = 64 * 1024;
 #[cfg(target_os = "linux")]
 const SORACLOUD_INROU_QMP_MAX_MESSAGE_BYTES: usize = 64 * 1024;
 #[cfg(target_os = "linux")]
@@ -356,6 +373,31 @@ const SORACLOUD_INROU_QMP_IO_POLL: Duration = Duration::from_millis(100);
 const SORACLOUD_INROU_QMP_SESSION_ATTEST_TIMEOUT: Duration = Duration::from_secs(2);
 const SORACLOUD_INROU_CHILD_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 const SORACLOUD_INROU_LOG_DRAIN_STOP_TIMEOUT: Duration = Duration::from_secs(1);
+// The first-release lease-disk profile is deliberately independent of host
+// mke2fs.conf defaults. One allocation unit is one complete ext4 block group;
+// accepting partial groups would let mke2fs silently leave trailing raw-device
+// bytes outside the filesystem on some e2fsprogs revisions.
+const SORACLOUD_INROU_EXT4_BLOCK_BYTES_V1: u64 = 4 * 1024;
+const SORACLOUD_INROU_EXT4_BLOCKS_PER_GROUP_V1: u64 = 32 * 1024;
+const SORACLOUD_INROU_EXT4_GROUP_BYTES_V1: u64 =
+    SORACLOUD_INROU_EXT4_BLOCK_BYTES_V1 * SORACLOUD_INROU_EXT4_BLOCKS_PER_GROUP_V1;
+const SORACLOUD_INROU_EXT4_INODE_BYTES_V1: u64 = 16 * 1024;
+const SORACLOUD_INROU_EXT4_INODE_SIZE_V1: u16 = 256;
+const SORACLOUD_INROU_EXT4_INODES_PER_GROUP_V1: u32 = 8 * 1024;
+const SORACLOUD_INROU_EXT4_GROUP_DESCRIPTOR_BYTES_V1: u16 = 64;
+const SORACLOUD_INROU_EXT4_FLEX_GROUPS_V1: u8 = 16;
+const SORACLOUD_INROU_EXT4_JOURNAL_MIB_V1: u64 = 16;
+const SORACLOUD_INROU_EXT4_LABEL_V1: &str = "inrou-v1";
+const SORACLOUD_INROU_EXT4_FEATURES_V1: &str = "none,has_journal,ext_attr,dir_index,filetype,64bit,extent,flex_bg,sparse_super,large_file,huge_file,dir_nlink,extra_isize,metadata_csum";
+const SORACLOUD_INROU_EXT4_EXTENDED_OPTIONS_V1: &str = "lazy_itable_init=0,lazy_journal_init=0,nodiscard,root_owner=0:0,assume_storage_prezeroed=0,packed_meta_blocks=0,stride=0,stripe_width=0";
+const SORACLOUD_INROU_EXT4_COMPAT_FEATURES_V1: u32 = 0x0000_002c;
+const SORACLOUD_INROU_EXT4_INCOMPAT_FEATURES_V1: u32 = 0x0000_02c2;
+const SORACLOUD_INROU_EXT4_INCOMPAT_RECOVER: u32 = 0x0000_0004;
+const SORACLOUD_INROU_EXT4_RO_COMPAT_FEATURES_V1: u32 = 0x0000_046b;
+// EXT4_DEFM_XATTR_USER | EXT4_DEFM_ACL. `mke2fs` has no command-line switch
+// for this field, so post-format validation pins the accepted V1 value before
+// publication instead of inheriting an unchecked host default.
+const SORACLOUD_INROU_EXT4_DEFAULT_MOUNT_OPTIONS_V1: u32 = 0x0000_000c;
 const SORACLOUD_INROU_ID_BASE: u32 =
     iroha_config::parameters::defaults::soracloud_runtime::INROU_PORTABLE_VM_ID_BASE;
 const SORACLOUD_INROU_ID_MAX_EXCLUSIVE: u32 =
@@ -384,7 +426,6 @@ const SORACLOUD_HF_RUNNER_RESPONSE_OVERHEAD_BYTES: u64 = 64 * 1024;
 const SORACLOUD_HF_RUNNER_SCRIPT_MAX_BYTES: u64 = 1024 * 1024;
 const SORACLOUD_HF_MODEL_INFO_MAX_TAGS: usize = 1_024;
 const SORACLOUD_HF_MODEL_INFO_MAX_STRING_BYTES: usize = 4 * 1024;
-const SORACLOUD_HF_IMPORT_MAX_RECORDED_SKIPS: usize = 512;
 const SORACLOUD_HF_IMPORT_MANIFEST_MAX_FILES: usize = 128;
 const SORACLOUD_HF_IMPORT_MAX_PATH_COMPONENTS_V1: usize = 64;
 const SORACLOUD_HF_IMPORT_CACHE_MAX_ENTRIES_V1: usize =
@@ -396,7 +437,6 @@ const SORACLOUD_HF_IMPORT_GENERATION_RANDOM_BYTES_V1: usize = 16;
 const SORACLOUD_HF_IMPORT_GENERATION_MAX_DIRECTORY_ENTRIES_V1: usize = 32;
 const SORACLOUD_HF_IMPORT_MANIFEST_MAX_TOTAL_FILE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const SORACLOUD_HF_IMPORT_MANIFEST_MAX_ERROR_BYTES: usize = 64 * 1024;
-const SORACLOUD_HF_IMPORT_MANIFEST_MAX_TEXT_BYTES: usize = 8 * 1024;
 const SORACLOUD_ARTIFACT_CACHE_MAX_DIRECTORY_ENTRIES: usize = 65_536;
 const SORACLOUD_HYDRATION_MAX_REQUIRED_ARTIFACTS: usize = 65_536;
 const SORACLOUD_RUNTIME_ARTIFACT_PATH_MAX_BYTES: usize = 4 * 1024;
@@ -693,13 +733,21 @@ pub trait SoracloudRuntimeMutationSink: Send + Sync {
     fn submission_authority(&self) -> Option<AccountId> {
         None
     }
-    /// Build, quote, and sign an atomic instruction transaction without enqueueing it.
-    fn prepare_instructions_atomic(
+    /// Build and fee-quote an exact unsigned transaction payload without invoking the signer.
+    fn prepare_instruction_payload_atomic(
         &self,
         _instructions: Vec<InstructionBox>,
         _endpoint: &'static str,
+    ) -> eyre::Result<TransactionPayload> {
+        eyre::bail!("mutation sink does not support durable unsigned transaction reservation")
+    }
+    /// Sign one exact payload previously persisted in the durable outbox.
+    fn sign_transaction_payload_atomic(
+        &self,
+        _payload: TransactionPayload,
+        _endpoint: &'static str,
     ) -> eyre::Result<SignedTransaction> {
-        eyre::bail!("mutation sink does not support durable prepared transaction submission")
+        eyre::bail!("mutation sink does not support signing a durable transaction reservation")
     }
     /// Enqueue one exact previously signed transaction, idempotently by signed hash.
     fn submit_prepared_transaction(
@@ -842,11 +890,11 @@ impl QueuedSoracloudRuntimeMutationSink {
         Ok(time_to_live)
     }
 
-    fn prepare_instructions_queued(
+    fn prepare_instruction_payload_queued(
         &self,
         instructions: Vec<InstructionBox>,
         endpoint: &'static str,
-    ) -> eyre::Result<SignedTransaction> {
+    ) -> eyre::Result<TransactionPayload> {
         if instructions.is_empty() {
             eyre::bail!("internal Soracloud runtime mutation requires at least one instruction");
         }
@@ -871,13 +919,11 @@ impl QueuedSoracloudRuntimeMutationSink {
             .wrap_err_with(|| {
                 format!("route internal Soracloud runtime mutation at `{endpoint}`")
             })?;
-        let latest_header = self.state.latest_block_header_fast();
-        let observation_time_ms = latest_header
-            .as_ref()
-            .map_or(0, |header| header.creation_time_ms);
-        let next_block_height = latest_header
-            .as_ref()
-            .map_or(1, |header| header.height().get().saturating_add(1));
+        let observation_time_ms = self.state.latest_block_creation_time_ms_fast().unwrap_or(0);
+        let next_block_height = u64::try_from(self.state.view().height())
+            .map_err(|_| eyre::eyre!("internal Soracloud ledger height does not fit u64"))?
+            .checked_add(1)
+            .ok_or_else(|| eyre::eyre!("internal Soracloud next block height overflowed"))?;
         let nexus = self.state.nexus_snapshot();
         let pipeline = self.state.pipeline_snapshot();
         let quote = {
@@ -896,11 +942,28 @@ impl QueuedSoracloudRuntimeMutationSink {
             eyre::eyre!("quote internal Soracloud runtime mutation at `{endpoint}`: {error:?}")
         })?;
         payload.fee_payment = quote.recommended_intent;
+        Ok(payload)
+    }
+
+    fn sign_transaction_payload_queued(
+        &self,
+        payload: TransactionPayload,
+        endpoint: &'static str,
+    ) -> eyre::Result<SignedTransaction> {
         self.signer.sign_transaction(payload).map_err(|error| {
             eyre::eyre!(
                 "external signer refused internal Soracloud runtime mutation at `{endpoint}`: {error:?}"
             )
         })
+    }
+
+    fn prepare_instructions_queued(
+        &self,
+        instructions: Vec<InstructionBox>,
+        endpoint: &'static str,
+    ) -> eyre::Result<SignedTransaction> {
+        let payload = self.prepare_instruction_payload_queued(instructions, endpoint)?;
+        self.sign_transaction_payload_queued(payload, endpoint)
     }
 
     fn submit_prepared_transaction_queued(
@@ -1000,38 +1063,35 @@ impl QueuedSoracloudRuntimeMutationSink {
         let signed_hash = transaction.hash();
         let entrypoint_hash = transaction.hash_as_entrypoint();
         if let Some(height) = self.state.committed_entrypoint_height(&entrypoint_hash) {
-            let block = self.state.block_by_height(height).ok_or_else(|| {
-                eyre::eyre!(
-                    "committed private execution transaction block at height {height} is unavailable"
-                )
-            })?;
-            let index = block
-                .external_entrypoints_cloned()
-                .enumerate()
-                .find_map(|(index, entrypoint)| match entrypoint {
-                    TransactionEntrypoint::External(candidate)
-                        if candidate.hash() == signed_hash =>
-                    {
-                        Some(index)
-                    }
-                    _ => None,
-                })
-                .ok_or_else(|| {
-                    eyre::eyre!(
-                        "committed private execution transaction is absent from its indexed block"
-                    )
-                })?;
+            let Some(block) = self.state.block_by_height(height) else {
+                // The committed-entrypoint index survives hash-only/pruned block storage. The
+                // caller has already checked the exact phase effect and revalidates authoritative
+                // state before replacement, so missing historical bodies conservatively mean
+                // "committed without a proven successful effect", not an observation outage.
+                return Ok(PrivateExecutionTransactionObservation::CommittedRejected);
+            };
+            let Some(index) =
+                block
+                    .external_entrypoints_cloned()
+                    .enumerate()
+                    .find_map(|(index, entrypoint)| match entrypoint {
+                        TransactionEntrypoint::External(candidate)
+                            if candidate.hash() == signed_hash =>
+                        {
+                            Some(index)
+                        }
+                        _ => None,
+                    })
+            else {
+                return Ok(PrivateExecutionTransactionObservation::CommittedRejected);
+            };
             if !block.has_results() {
-                eyre::bail!(
-                    "committed private execution transaction block has no execution results"
-                );
+                return Ok(PrivateExecutionTransactionObservation::CommittedRejected);
             }
             return match block.results().nth(index).map(|result| result.as_ref()) {
                 Some(Ok(_)) => Ok(PrivateExecutionTransactionObservation::CommittedSuccess),
                 Some(Err(_)) => Ok(PrivateExecutionTransactionObservation::CommittedRejected),
-                None => Err(eyre::eyre!(
-                    "committed private execution transaction has no aligned execution result"
-                )),
+                None => Ok(PrivateExecutionTransactionObservation::CommittedRejected),
             };
         }
         if self
@@ -1067,12 +1127,19 @@ impl SoracloudRuntimeMutationSink for QueuedSoracloudRuntimeMutationSink {
     fn submission_authority(&self) -> Option<AccountId> {
         Some(self.authority.clone())
     }
-    fn prepare_instructions_atomic(
+    fn prepare_instruction_payload_atomic(
         &self,
         instructions: Vec<InstructionBox>,
         endpoint: &'static str,
+    ) -> eyre::Result<TransactionPayload> {
+        self.prepare_instruction_payload_queued(instructions, endpoint)
+    }
+    fn sign_transaction_payload_atomic(
+        &self,
+        payload: TransactionPayload,
+        endpoint: &'static str,
     ) -> eyre::Result<SignedTransaction> {
-        self.prepare_instructions_queued(instructions, endpoint)
+        self.sign_transaction_payload_queued(payload, endpoint)
     }
     fn submit_prepared_transaction(
         &self,
@@ -1318,6 +1385,7 @@ struct PortableVmBackendPreflight {
     child_identity: PortableVmChildIdentity,
     shell: PathBuf,
     qemu_img: PathBuf,
+    ext4_formatter: PathBuf,
     namespace_tools: inrou_namespace::InrouNamespaceTools,
 }
 #[cfg(target_os = "linux")]
@@ -1471,17 +1539,57 @@ fn inrou_startup_probe_resources(
         max_tasks: std::num::NonZeroU16::new(64).expect("fixed nonzero probe task budget"),
     }
 }
+#[cfg(any(target_os = "linux", test))]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct InrouWorkerTeardownAttestations {
+    direct_child_exited: bool,
+    cgroup_empty: bool,
+}
+#[cfg(any(target_os = "linux", test))]
+impl InrouWorkerTeardownAttestations {
+    fn with_direct_child_exit(mut self, attested: bool) -> Self {
+        self.direct_child_exited = attested;
+        self
+    }
+
+    fn with_empty_cgroup(mut self, attested: bool) -> Self {
+        self.cgroup_empty = attested;
+        self
+    }
+
+    fn release_authorized(self) -> bool {
+        self.direct_child_exited && self.cgroup_empty
+    }
+}
 #[cfg(target_os = "linux")]
-fn terminate_inrou_startup_probe_bounded(
+fn terminate_inrou_confined_child_bounded(
     child: &mut std::process::Child,
     worker_cgroup: &mut inrou_cgroup::InrouWorkerCgroup,
     firewall: &mut Option<InrouLoopbackOwnerFirewall>,
+    label: &str,
 ) -> eyre::Result<std::process::ExitStatus> {
     let termination = terminate_inrou_child_bounded(child);
-    let cgroup_cleanup = worker_cgroup.cleanup_bounded();
-    match (termination, cgroup_cleanup) {
-        (Ok(status), Ok(())) => Ok(status),
-        (termination, cgroup_cleanup) => {
+    let cgroup_empty = worker_cgroup.kill_and_attest_empty_bounded();
+    let attestations = InrouWorkerTeardownAttestations::default()
+        .with_direct_child_exit(termination.is_ok())
+        .with_empty_cgroup(cgroup_empty.is_ok());
+    match (termination, cgroup_empty) {
+        (Ok(status), Ok(empty)) => {
+            debug_assert!(attestations.release_authorized());
+            if let Err(error) = worker_cgroup.release_attested_empty(empty) {
+                if let Some(firewall) = firewall.take() {
+                    std::mem::forget(firewall);
+                }
+                return Err(error).wrap_err_with(|| {
+                    format!(
+                        "{label} child exited with {status} and its cgroup was proved empty, but the confined cgroup could not be released"
+                    )
+                });
+            }
+            Ok(status)
+        }
+        (termination, cgroup_empty) => {
+            debug_assert!(!attestations.release_authorized());
             if let Some(firewall) = firewall.take() {
                 // Neither a direct-child termination error nor an uncleared
                 // worker cgroup is enough proof that every QEMU descendant is
@@ -1489,24 +1597,34 @@ fn terminate_inrou_startup_probe_bounded(
                 // supervisor exit instead of exposing either loopback port.
                 std::mem::forget(firewall);
             }
-            match (termination, cgroup_cleanup) {
-                (Err(termination), Ok(())) => Err(termination).wrap_err(
-                    "Inrou startup-probe cgroup is empty, but direct-child termination is unproven",
+            match (termination, cgroup_empty) {
+                (Err(termination), Ok(_)) => Err(termination).wrap_err(
+                    format!(
+                        "{label} cgroup is empty, but direct-child termination is unproven; retaining the cgroup"
+                    ),
                 ),
-                (Ok(status), Err(cgroup_cleanup)) => Err(cgroup_cleanup).wrap_err_with(|| {
+                (Ok(status), Err(cgroup_empty)) => Err(cgroup_empty).wrap_err_with(|| {
                     format!(
-                        "Inrou startup-probe child exited with {status}, but its cgroup could not be proved empty"
+                        "{label} child exited with {status}, but its cgroup could not be proved empty"
                     )
                 }),
-                (Err(termination), Err(cgroup_cleanup)) => Err(termination).wrap_err_with(|| {
+                (Err(termination), Err(cgroup_empty)) => Err(termination).wrap_err_with(|| {
                     format!(
-                        "Inrou startup-probe direct-child termination and cgroup cleanup both failed: {cgroup_cleanup}"
+                        "{label} direct-child termination and empty-cgroup attestation both failed: {cgroup_empty}"
                     )
                 }),
-                (Ok(_), Ok(())) => unreachable!("successful teardown returned above"),
+                (Ok(_), Ok(_)) => unreachable!("successful teardown returned above"),
             }
         }
     }
+}
+#[cfg(target_os = "linux")]
+fn terminate_inrou_startup_probe_bounded(
+    child: &mut std::process::Child,
+    worker_cgroup: &mut inrou_cgroup::InrouWorkerCgroup,
+    firewall: &mut Option<InrouLoopbackOwnerFirewall>,
+) -> eyre::Result<std::process::ExitStatus> {
+    terminate_inrou_confined_child_bounded(child, worker_cgroup, firewall, "Inrou startup probe")
 }
 #[cfg(target_os = "linux")]
 fn portable_vm_backend_static_preflight(
@@ -1532,6 +1650,11 @@ fn portable_vm_backend_static_preflight(
     })?;
     let qemu_img = resolve_inrou_qemu_img_executable()
         .ok_or_else(|| eyre::eyre!("configured Inrou PortableVM backend requires qemu-img"))?;
+    let ext4_formatter = resolve_inrou_ext4_formatter_executable().ok_or_else(|| {
+        eyre::eyre!(
+            "configured Inrou PortableVM backend requires a root-owned mke2fs at a standard system path for atomic ext4 lease-disk formatting"
+        )
+    })?;
     let namespace_tools = inrou_namespace::InrouNamespaceTools::resolve_exact()
         .wrap_err("resolve the fixed root-custodied Inrou namespace launcher")?;
     inrou_namespace::InrouNamespacePlan::preflight(namespace_tools.clone())
@@ -1540,6 +1663,7 @@ fn portable_vm_backend_static_preflight(
         child_identity,
         shell,
         qemu_img,
+        ext4_formatter,
         namespace_tools,
     })
 }
@@ -1548,6 +1672,9 @@ fn ensure_portable_vm_backend_available(
     config: &iroha_config::parameters::actual::SoracloudRuntimeInrou,
 ) -> eyre::Result<()> {
     let preflight = portable_vm_backend_static_preflight(config)?;
+    inrou_cgroup::attest_inrou_worker_absence().wrap_err(
+        "require an empty root-custodied Inrou worker subtree before startup qualification",
+    )?;
     run_inrou_portable_vm_startup_probe(config, preflight)
         .wrap_err("exercise the authenticated Inrou QEMU/KVM startup boundary")
 }
@@ -1561,6 +1688,7 @@ fn run_inrou_portable_vm_startup_probe(
         child_identity,
         shell,
         qemu_img: _,
+        ext4_formatter: _,
         namespace_tools,
     } = preflight;
     let guest_isa = current_host_inrou_guest_isa()
@@ -1763,13 +1891,26 @@ fn run_inrou_portable_vm_startup_probe(
                 });
             }
         };
-    if let Err(error) = worker_cgroup.cleanup_bounded() {
+    let empty_cgroup = match worker_cgroup.kill_and_attest_empty_bounded() {
+        Ok(empty_cgroup) => empty_cgroup,
+        Err(error) => {
+            if let Some(firewall) = loopback_firewall.take() {
+                // QMP quit reaped the direct child, but an uncleared cgroup
+                // leaves descendant termination unproven. Keep the barrier
+                // fail-closed.
+                std::mem::forget(firewall);
+            }
+            return Err(error)
+                .wrap_err("prove the QMP-stopped Inrou startup-probe cgroup is empty");
+        }
+    };
+    if let Err(error) = worker_cgroup.release_attested_empty(empty_cgroup) {
         if let Some(firewall) = loopback_firewall.take() {
-            // QMP quit reaped the direct child, but an uncleared cgroup leaves
-            // descendant termination unproven. Keep the barrier fail-closed.
             std::mem::forget(firewall);
         }
-        return Err(error).wrap_err("prove the QMP-stopped Inrou startup-probe cgroup is empty");
+        return Err(error).wrap_err(
+            "release the empty Inrou startup-probe cgroup after direct-child exit attestation",
+        );
     }
     if !status.success() {
         eyre::bail!("Inrou startup probe exited with non-success status {status}");
@@ -3565,8 +3706,34 @@ fn private_model_unavailable(message: impl Into<String>) -> SoracloudRuntimeExec
     SoracloudRuntimeExecutionError::new(SoracloudRuntimeExecutionErrorKind::Unavailable, message)
 }
 
+fn private_model_conflict(message: impl Into<String>) -> SoracloudRuntimeExecutionError {
+    SoracloudRuntimeExecutionError::new(SoracloudRuntimeExecutionErrorKind::Conflict, message)
+}
+
 fn private_model_internal(message: impl Into<String>) -> SoracloudRuntimeExecutionError {
     SoracloudRuntimeExecutionError::new(SoracloudRuntimeExecutionErrorKind::Internal, message)
+}
+
+fn private_execution_submission_attempts_exhausted(
+    phase: SoracloudPrivateUploadedModelExecutionJournalPhaseV1,
+) -> SoracloudRuntimeExecutionError {
+    private_model_conflict(format!(
+        "private execution {phase:?} phase exhausted its {} bounded submission attempts; exact evidence is quarantined",
+        SORACLOUD_PRIVATE_UPLOADED_MODEL_EXECUTION_MAX_SUBMISSION_ATTEMPTS_V1
+    ))
+}
+
+fn next_private_execution_submission_attempt(
+    phase: SoracloudPrivateUploadedModelExecutionJournalPhaseV1,
+    current_attempt: u8,
+) -> Result<u8, SoracloudRuntimeExecutionError> {
+    let maximum_attempts = SORACLOUD_PRIVATE_UPLOADED_MODEL_EXECUTION_MAX_SUBMISSION_ATTEMPTS_V1;
+    if current_attempt >= maximum_attempts {
+        return Err(private_execution_submission_attempts_exhausted(phase));
+    }
+    current_attempt
+        .checked_add(1)
+        .ok_or_else(|| private_model_internal("private execution submission attempt overflowed"))
 }
 
 fn private_execution_journal_dir(state_dir: &Path) -> PathBuf {
@@ -3852,10 +4019,22 @@ fn load_private_execution_journal_entry(
     Ok(Some(entry))
 }
 
+#[derive(Debug)]
+struct PrivateExecutionJournalReadFailure {
+    path: PathBuf,
+    error: io::Error,
+}
+
+#[derive(Debug)]
+struct PrivateExecutionJournalListing {
+    entries: Vec<SoracloudPrivateUploadedModelExecutionJournalV1>,
+    quarantined: Vec<PrivateExecutionJournalReadFailure>,
+}
+
 fn list_private_execution_journal_entries(
     state_dir: &Path,
     binding: PrivateExecutionJournalDeploymentBindingV1,
-) -> io::Result<Vec<SoracloudPrivateUploadedModelExecutionJournalV1>> {
+) -> io::Result<PrivateExecutionJournalListing> {
     let directory =
         prepare_uploaded_model_encryption_key_dir(&private_execution_journal_dir(state_dir))?;
     let (expected_count, _) = reconcile_private_execution_journal_directory(&directory)?;
@@ -3868,19 +4047,16 @@ fn list_private_execution_journal_entries(
     for directory_entry in fs::read_dir(&directory)? {
         let directory_entry = directory_entry?;
         let file_name = directory_entry.file_name();
-        let Some(file_name) = file_name.to_str() else {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "private execution journal filename is not valid UTF-8",
-            ));
-        };
         if file_name == ".lock" {
             continue;
         }
-        if !file_name.ends_with(".nrt") {
+        if !is_private_execution_journal_data_name(&file_name) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("private execution journal contains unexpected entry `{file_name}`"),
+                format!(
+                    "private execution journal contains unexpected entry `{}`",
+                    file_name.to_string_lossy()
+                ),
             ));
         }
         paths.push(directory_entry.path());
@@ -3898,22 +4074,38 @@ fn list_private_execution_journal_entries(
             "reserve bounded private execution journal entry list: {error}"
         ))
     })?;
+    let mut quarantined = Vec::new();
     for path in paths {
-        let entry = read_private_execution_journal_file(&path, binding)?;
-        if private_execution_journal_path(
-            &directory,
-            &entry.service_name,
-            &entry.decryption_request_id,
-        ) != path
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "private execution journal filename does not match its embedded key",
-            ));
+        match read_private_execution_journal_file(&path, binding) {
+            Ok(entry)
+                if private_execution_journal_path(
+                    &directory,
+                    &entry.service_name,
+                    &entry.decryption_request_id,
+                ) == path =>
+            {
+                entries.push(entry);
+            }
+            Ok(_) => quarantined.push(PrivateExecutionJournalReadFailure {
+                path,
+                error: io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "private execution journal filename does not match its embedded key",
+                ),
+            }),
+            Err(error) => {
+                quarantined.push(PrivateExecutionJournalReadFailure { path, error });
+            }
         }
-        entries.push(entry);
     }
-    Ok(entries)
+    Ok(PrivateExecutionJournalListing {
+        entries,
+        quarantined,
+    })
+}
+
+fn is_private_execution_journal_data_name(file_name: &std::ffi::OsStr) -> bool {
+    file_name.as_encoded_bytes().ends_with(b".nrt")
 }
 
 fn is_private_execution_journal_temporary_name(file_name: &str) -> bool {
@@ -3945,15 +4137,30 @@ fn validate_private_execution_journal_data_file(
     path: &Path,
     allow_empty: bool,
 ) -> io::Result<()> {
-    if !metadata.is_file()
-        || metadata.file_type().is_symlink()
-        || (!allow_empty && metadata.len() == 0)
+    validate_private_execution_journal_data_file_custody(metadata, path)?;
+    if (!allow_empty && metadata.len() == 0)
         || metadata.len() > SORACLOUD_PRIVATE_EXECUTION_JOURNAL_MAX_FILE_BYTES
     {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
-                "private execution journal data file {} has unsafe type or length",
+                "private execution journal data file {} has unsafe length",
+                path.display()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_private_execution_journal_data_file_custody(
+    metadata: &fs::Metadata,
+    path: &Path,
+) -> io::Result<()> {
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "private execution journal data file {} is not a regular file",
                 path.display()
             ),
         ));
@@ -3998,36 +4205,32 @@ fn reconcile_private_execution_journal_directory(directory: &Path) -> io::Result
             ));
         }
         let file_name = entry.file_name();
-        let file_name = file_name.to_string_lossy();
         if file_name == ".lock" {
             let metadata = fs::symlink_metadata(entry.path())?;
             validate_private_execution_journal_lock_file(&metadata, &entry.path())?;
             continue;
         }
         let metadata = fs::symlink_metadata(entry.path())?;
-        if is_private_execution_journal_temporary_name(&file_name) {
+        let display_name = file_name.to_string_lossy();
+        if is_private_execution_journal_temporary_name(&display_name) {
             validate_private_execution_journal_data_file(&metadata, &entry.path(), true)?;
             fs::remove_file(entry.path())?;
             removed_temporary = true;
             continue;
         }
-        if !file_name.ends_with(".nrt") {
+        if !is_private_execution_journal_data_name(&file_name) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!(
-                    "private execution journal directory contains unexpected entry `{file_name}`"
+                    "private execution journal directory contains unexpected entry `{display_name}`"
                 ),
             ));
         }
-        let digest = &file_name[..file_name.len().saturating_sub(4)];
-        if digest.len() != Hash::LENGTH * 2 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit())
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("private execution journal has invalid filename `{file_name}`"),
-            ));
-        }
-        validate_private_execution_journal_data_file(&metadata, &entry.path(), false)?;
+        // Custody and filesystem-object violations compromise the whole outbox boundary and fail
+        // closed. Ordinary per-entry shape failures (zero/oversized data, malformed canonical
+        // names, and decode errors) are counted here but deferred to the isolated reader below so
+        // one poison journal cannot starve otherwise valid recovery work.
+        validate_private_execution_journal_data_file_custody(&metadata, &entry.path())?;
         count = count.checked_add(1).ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -4102,36 +4305,98 @@ fn store_private_execution_journal_entry(
             }
             return Ok(());
         }
-        let first_submission = existing.submission_attempt == 0
+        let first_reservation = existing.submission_attempt == 0
+            && existing.transaction_payload.is_none()
             && existing.transaction_hash.is_none()
             && existing.signed_transaction.is_none()
             && existing.phase == entry.phase
             && entry.submission_attempt == 1
-            && entry.transaction_hash.is_some()
-            && entry.signed_transaction.is_some()
+            && entry.transaction_payload.is_some()
+            && entry.transaction_hash.is_none()
+            && entry.signed_transaction.is_none()
             && replaced_transaction.is_none();
-        let next_replacement_submission = existing.submission_attempt > 0
+        let next_replacement_reservation = existing.submission_attempt > 0
+            && existing.submission_attempt
+                < SORACLOUD_PRIVATE_UPLOADED_MODEL_EXECUTION_MAX_SUBMISSION_ATTEMPTS_V1
+            && existing.phase
+                != SoracloudPrivateUploadedModelExecutionJournalPhaseV1::AwaitingDurability
             && existing.phase == entry.phase
             && existing
                 .submission_attempt
                 .checked_add(1)
                 .is_some_and(|next| entry.submission_attempt == next)
+            && existing.signed_transaction.is_some()
+            && entry.transaction_payload.is_some()
+            && entry.transaction_payload != existing.transaction_payload
+            && entry.transaction_hash.is_none()
+            && entry.signed_transaction.is_none()
+            && replaced_transaction == existing.transaction_hash;
+        let attach_reserved_signature = existing.phase == entry.phase
+            && existing.submission_attempt == entry.submission_attempt
+            && existing.transaction_payload == entry.transaction_payload
+            && existing.transaction_payload.is_some()
+            && existing.transaction_hash.is_none()
+            && existing.signed_transaction.is_none()
             && entry.transaction_hash.is_some()
             && entry.signed_transaction.is_some()
-            && entry.transaction_hash != existing.transaction_hash
-            && replaced_transaction == existing.transaction_hash;
-        let advance_to_receipt = existing.phase
-            == SoracloudPrivateUploadedModelExecutionJournalPhaseV1::Prepare
-            && entry.phase == SoracloudPrivateUploadedModelExecutionJournalPhaseV1::Receipt
-            && entry.submission_attempt == 0
+            && replaced_transaction.is_none();
+        let abandon_ambiguous_reservation = existing.phase == entry.phase
+            && existing.submission_attempt > 0
+            && existing.submission_attempt
+                < SORACLOUD_PRIVATE_UPLOADED_MODEL_EXECUTION_MAX_SUBMISSION_ATTEMPTS_V1
+            && existing
+                .submission_attempt
+                .checked_add(1)
+                .is_some_and(|next| entry.submission_attempt == next)
+            && existing.transaction_payload.is_some()
+            && existing.transaction_hash.is_none()
+            && existing.signed_transaction.is_none()
+            && entry.transaction_payload.is_some()
+            && entry.transaction_payload != existing.transaction_payload
             && entry.transaction_hash.is_none()
             && entry.signed_transaction.is_none()
             && replaced_transaction.is_none();
-        if !first_submission && !next_replacement_submission && !advance_to_receipt {
+        let observe_prepare_commit = existing.phase
+            == SoracloudPrivateUploadedModelExecutionJournalPhaseV1::Prepare
+            && entry.phase
+                == SoracloudPrivateUploadedModelExecutionJournalPhaseV1::AwaitingDurability
+            && entry.submission_attempt == existing.submission_attempt
+            && entry.transaction_payload == existing.transaction_payload
+            && entry.transaction_hash == existing.transaction_hash
+            && entry.signed_transaction == existing.signed_transaction
+            && replaced_transaction.is_none();
+        let advance_to_receipt = existing.phase
+            == SoracloudPrivateUploadedModelExecutionJournalPhaseV1::AwaitingDurability
+            && entry.phase == SoracloudPrivateUploadedModelExecutionJournalPhaseV1::Receipt
+            && entry.submission_attempt == 0
+            && entry.transaction_payload.is_none()
+            && entry.transaction_hash.is_none()
+            && entry.signed_transaction.is_none()
+            && replaced_transaction.is_none();
+        if !first_reservation
+            && !next_replacement_reservation
+            && !attach_reserved_signature
+            && !abandon_ambiguous_reservation
+            && !observe_prepare_commit
+            && !advance_to_receipt
+        {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "private execution journal transition must be same-phase Prepared(0)->Signed(1), exact same-phase Signed(n)->Signed(n+1) replacement, or Prepare->Receipt Prepared(0)",
+                "private execution journal transition must be same-phase Prepared(0)->Reserved(1)->Signed(1), exact same-phase Signed(n)->Reserved(n+1)->Signed(n+1) replacement, conservative Reserved(n)->Reserved(n+1) abandonment, Prepare->AwaitingDurability with exact committed evidence, or AwaitingDurability->Receipt Prepared(0)",
             ));
+        }
+        #[cfg(test)]
+        if attach_reserved_signature {
+            let mut target = private_execution_signed_journal_store_failure_target().lock();
+            if target.as_ref().is_some_and(|(service_name, request_id)| {
+                service_name == entry.service_name.as_ref()
+                    && request_id == &entry.decryption_request_id
+            }) {
+                *target = None;
+                return Err(io::Error::other(
+                    "injected crash after signing but before signed journal fsync",
+                ));
+            }
         }
     } else if entry_count >= SORACLOUD_PRIVATE_EXECUTION_JOURNAL_MAX_ENTRIES {
         return Err(io::Error::new(
@@ -4142,6 +4407,7 @@ fn store_private_execution_journal_entry(
             ),
         ));
     } else if entry.submission_attempt != 0
+        || entry.transaction_payload.is_some()
         || entry.transaction_hash.is_some()
         || entry.signed_transaction.is_some()
         || entry.phase != SoracloudPrivateUploadedModelExecutionJournalPhaseV1::Prepare
@@ -4258,61 +4524,53 @@ fn verify_private_execution_output_is_durable(
     Ok(())
 }
 
-fn private_execution_transaction_instruction<'a>(
-    transaction: &'a SignedTransaction,
+fn private_execution_payload_instruction<'a>(
+    payload: &'a TransactionPayload,
     network_id: &iroha_data_model::NetworkId,
     authority: &AccountId,
     configured_fee_payment: Option<&iroha_data_model::transaction::FeePaymentIntent>,
 ) -> Result<&'a InstructionBox, SoracloudRuntimeExecutionError> {
-    transaction.verify_signature().map_err(|error| {
-        private_model_invalid(format!(
-            "private execution journal transaction signature is invalid: {error}"
-        ))
-    })?;
-    if transaction.network_id() != Some(network_id) {
+    if payload.network_id() != Some(network_id) {
         return Err(private_model_invalid(
             "private execution journal transaction belongs to another network",
         ));
     }
-    if transaction.authority() != authority {
+    if &payload.authority != authority {
         return Err(private_model_invalid(
             "private execution journal transaction authority does not match the attester",
         ));
     }
-    let Some(time_to_live) = transaction.time_to_live() else {
+    let Some(time_to_live) = payload.time_to_live() else {
         return Err(private_model_invalid(
             "private execution journal transaction has no canonical lifetime",
         ));
     };
     if time_to_live > iroha_data_model::transaction::DEFAULT_TRANSACTION_TIME_TO_LIVE
-        || transaction.nonce().is_some()
-        || transaction.attachments().is_some()
-        || !transaction.metadata().is_empty()
-        || transaction.admission_intent()
+        || payload.nonce.is_some()
+        || payload.attachments.is_some()
+        || !payload.metadata.is_empty()
+        || payload.admission_intent()
             != iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary
     {
         return Err(private_model_invalid(
             "private execution journal transaction exceeds the protocol lifetime bound or has a non-canonical nonce, metadata, attachment, or admission intent",
         ));
     }
-    transaction
-        .fee_payment_intent()
-        .validate()
-        .map_err(|error| {
-            private_model_invalid(format!(
-                "private execution journal transaction has an invalid fee intent: {error}"
-            ))
-        })?;
+    payload.fee_payment.validate().map_err(|error| {
+        private_model_invalid(format!(
+            "private execution journal transaction has an invalid fee intent: {error}"
+        ))
+    })?;
     if configured_fee_payment.is_some_and(|configured_fee_payment| {
-        !transaction
-            .fee_payment_intent()
+        !payload
+            .fee_payment
             .has_same_payer_and_gas_bound(configured_fee_payment)
     }) {
         return Err(private_model_invalid(
             "private execution journal transaction fee payer does not match runtime configuration",
         ));
     }
-    let Executable::Instructions(instructions) = transaction.instructions() else {
+    let Executable::Instructions(instructions) = &payload.instructions else {
         return Err(private_model_invalid(
             "private execution journal transaction must contain direct instructions",
         ));
@@ -4325,78 +4583,68 @@ fn private_execution_transaction_instruction<'a>(
     Ok(&instructions[0])
 }
 
-fn validate_private_execution_prepare_transaction(
-    transaction: &SignedTransaction,
-    network_id: &iroha_data_model::NetworkId,
-    authority: &AccountId,
-    configured_fee_payment: Option<&iroha_data_model::transaction::FeePaymentIntent>,
-    output_manifest_payload: &[u8],
-    receipt: &SoraPrivateUploadedModelExecutionReceiptV1,
-) -> Result<(), SoracloudRuntimeExecutionError> {
-    let instruction = private_execution_transaction_instruction(
-        transaction,
-        network_id,
-        authority,
-        configured_fee_payment,
-    )?;
-    let Some(prepare) = instruction
-        .as_any()
-        .downcast_ref::<isi::soracloud::PrepareSoracloudPrivateUploadedModelExecution>(
-    ) else {
-        return Err(private_model_invalid(
-            "private execution prepare transaction does not contain the atomic prepare instruction",
-        ));
-    };
-    if prepare.output_manifest_payload.as_slice() != output_manifest_payload
-        || &prepare.receipt != receipt
-    {
-        return Err(private_model_invalid(
-            "private execution prepare transaction does not exactly bind its canonical manifest and receipt",
-        ));
-    }
-    Ok(())
-}
-
-fn validate_private_execution_receipt_transaction(
-    transaction: &SignedTransaction,
-    network_id: &iroha_data_model::NetworkId,
-    authority: &AccountId,
-    configured_fee_payment: Option<&iroha_data_model::transaction::FeePaymentIntent>,
-    receipt: &SoraPrivateUploadedModelExecutionReceiptV1,
-) -> Result<(), SoracloudRuntimeExecutionError> {
-    let instruction = private_execution_transaction_instruction(
-        transaction,
-        network_id,
-        authority,
-        configured_fee_payment,
-    )?;
-    let Some(commit) = instruction
-        .as_any()
-        .downcast_ref::<isi::soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt>(
-    ) else {
-        return Err(private_model_invalid(
-            "private execution receipt transaction does not contain the receipt instruction",
-        ));
-    };
-    if &commit.receipt != receipt {
-        return Err(private_model_invalid(
-            "private execution receipt transaction does not exactly bind its durable receipt evidence",
-        ));
-    }
-    Ok(())
-}
-
 fn private_execution_phase_endpoint(
     phase: SoracloudPrivateUploadedModelExecutionJournalPhaseV1,
 ) -> &'static str {
     match phase {
-        SoracloudPrivateUploadedModelExecutionJournalPhaseV1::Prepare => {
+        SoracloudPrivateUploadedModelExecutionJournalPhaseV1::Prepare
+        | SoracloudPrivateUploadedModelExecutionJournalPhaseV1::AwaitingDurability => {
             SORACLOUD_PRIVATE_EXECUTION_PREPARE_ENDPOINT
         }
         SoracloudPrivateUploadedModelExecutionJournalPhaseV1::Receipt => {
             SORACLOUD_PRIVATE_EXECUTION_RECEIPT_ENDPOINT
         }
     }
+}
+
+fn validate_private_execution_phase_payload(
+    payload: &TransactionPayload,
+    network_id: &iroha_data_model::NetworkId,
+    authority: &AccountId,
+    configured_fee_payment: Option<&iroha_data_model::transaction::FeePaymentIntent>,
+    journal: &SoracloudPrivateUploadedModelExecutionJournalV1,
+) -> Result<(), SoracloudRuntimeExecutionError> {
+    let instruction = private_execution_payload_instruction(
+        payload,
+        network_id,
+        authority,
+        configured_fee_payment,
+    )?;
+    match journal.phase {
+        SoracloudPrivateUploadedModelExecutionJournalPhaseV1::Prepare
+        | SoracloudPrivateUploadedModelExecutionJournalPhaseV1::AwaitingDurability => {
+            let Some(prepare) = instruction
+                .as_any()
+                .downcast_ref::<isi::soracloud::PrepareSoracloudPrivateUploadedModelExecution>(
+            ) else {
+                return Err(private_model_invalid(
+                    "private execution payload does not contain the atomic prepare instruction",
+                ));
+            };
+            if prepare.output_manifest_payload != journal.output_manifest_payload
+                || prepare.receipt != journal.receipt
+            {
+                return Err(private_model_invalid(
+                    "private execution payload does not exactly bind its canonical manifest and receipt",
+                ));
+            }
+        }
+        SoracloudPrivateUploadedModelExecutionJournalPhaseV1::Receipt => {
+            let Some(commit) = instruction.as_any().downcast_ref::<
+                isi::soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt,
+            >() else {
+                return Err(private_model_invalid(
+                    "private execution payload does not contain the receipt instruction",
+                ));
+            };
+            if commit.receipt != journal.receipt {
+                return Err(private_model_invalid(
+                    "private execution payload does not exactly bind its durable receipt evidence",
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_private_execution_phase_transaction(
@@ -4406,39 +4654,40 @@ fn validate_private_execution_phase_transaction(
     configured_fee_payment: Option<&iroha_data_model::transaction::FeePaymentIntent>,
     journal: &SoracloudPrivateUploadedModelExecutionJournalV1,
 ) -> Result<(), SoracloudRuntimeExecutionError> {
-    match journal.phase {
-        SoracloudPrivateUploadedModelExecutionJournalPhaseV1::Prepare => {
-            validate_private_execution_prepare_transaction(
-                transaction,
-                network_id,
-                authority,
-                configured_fee_payment,
-                &journal.output_manifest_payload,
-                &journal.receipt,
-            )
-        }
-        SoracloudPrivateUploadedModelExecutionJournalPhaseV1::Receipt => {
-            validate_private_execution_receipt_transaction(
-                transaction,
-                network_id,
-                authority,
-                configured_fee_payment,
-                &journal.receipt,
-            )
-        }
+    transaction.verify_signature().map_err(|error| {
+        private_model_invalid(format!(
+            "private execution journal transaction signature is invalid: {error}"
+        ))
+    })?;
+    if let Some(reserved) = journal.transaction_payload.as_ref()
+        && transaction.payload() != reserved
+    {
+        return Err(private_model_invalid(
+            "private execution signed transaction differs from its durable unsigned reservation",
+        ));
     }
+    validate_private_execution_phase_payload(
+        transaction.payload(),
+        network_id,
+        authority,
+        configured_fee_payment,
+        journal,
+    )
 }
 
 fn private_execution_phase_instruction(
     journal: &SoracloudPrivateUploadedModelExecutionJournalV1,
 ) -> InstructionBox {
     match journal.phase {
-        SoracloudPrivateUploadedModelExecutionJournalPhaseV1::Prepare => InstructionBox::from(
-            isi::soracloud::PrepareSoracloudPrivateUploadedModelExecution {
-                output_manifest_payload: journal.output_manifest_payload.clone(),
-                receipt: journal.receipt.clone(),
-            },
-        ),
+        SoracloudPrivateUploadedModelExecutionJournalPhaseV1::Prepare
+        | SoracloudPrivateUploadedModelExecutionJournalPhaseV1::AwaitingDurability => {
+            InstructionBox::from(
+                isi::soracloud::PrepareSoracloudPrivateUploadedModelExecution {
+                    output_manifest_payload: journal.output_manifest_payload.clone(),
+                    receipt: journal.receipt.clone(),
+                },
+            )
+        }
         SoracloudPrivateUploadedModelExecutionJournalPhaseV1::Receipt => InstructionBox::from(
             isi::soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt {
                 receipt: journal.receipt.clone(),
@@ -4452,9 +4701,7 @@ fn private_execution_candidate_epoch(state: &State) -> Result<u64, SoracloudRunt
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|_| private_model_unavailable("system clock is before the Unix epoch"))?
         .as_secs();
-    let finalized_epoch = state
-        .latest_block_header_fast()
-        .map_or(0, |header| header.creation_time_ms / 1_000);
+    let finalized_epoch = state.latest_block_creation_time_ms_fast().unwrap_or(0) / 1_000;
     wall_epoch
         .max(finalized_epoch)
         .checked_add(1)
@@ -4483,24 +4730,74 @@ fn private_execution_candidate_deadline_epoch(
         })
 }
 
-fn private_execution_signed_deadline_epoch(
-    transaction: &SignedTransaction,
+fn private_execution_minimum_receipt_retention_epoch(
+    signed_transaction_deadline_epoch: u64,
+) -> Option<u64> {
+    signed_transaction_deadline_epoch
+        .checked_add(iroha_data_model::soracloud::SORACLOUD_PRIVATE_OUTPUT_MIN_RETENTION_SECS_V1)
+}
+
+fn private_execution_bounded_phase_horizon_secs(recovery_interval: Duration) -> Option<u64> {
+    let horizon = iroha_data_model::transaction::DEFAULT_TRANSACTION_TIME_TO_LIVE
+        .checked_mul(u32::from(
+            SORACLOUD_PRIVATE_UPLOADED_MODEL_EXECUTION_MAX_SUBMISSION_ATTEMPTS_V1,
+        ))?
+        .checked_add(recovery_interval.checked_mul(4)?)?
+        .checked_add(Duration::from_secs(60))?;
+    horizon
+        .as_secs()
+        .checked_add(u64::from(horizon.subsec_nanos() != 0))
+}
+
+fn private_execution_minimum_prepare_retention_epoch(
+    signed_transaction_deadline_epoch: u64,
+    recovery_interval: Duration,
+    settlement_window_secs: u64,
+) -> Option<u64> {
+    let receipt_recovery_horizon = private_execution_bounded_phase_horizon_secs(recovery_interval)?
+        .checked_add(iroha_data_model::soracloud::SORACLOUD_PRIVATE_OUTPUT_MIN_RETENTION_SECS_V1)?;
+    signed_transaction_deadline_epoch
+        .checked_add(u64::from(
+            SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1,
+        ))
+        .and_then(|epoch| epoch.checked_add(settlement_window_secs.max(receipt_recovery_horizon)))
+}
+
+fn private_execution_prepare_settlement_window_for_recovery(
+    journal: &SoracloudPrivateUploadedModelExecutionJournalV1,
+    replacement_required: bool,
+    current_settlement_window_secs: u64,
+) -> u64 {
+    if replacement_required || journal.signed_transaction.is_none() {
+        current_settlement_window_secs
+    } else {
+        0
+    }
+}
+
+fn private_execution_payload_deadline_epoch(
+    payload: &TransactionPayload,
 ) -> Result<u64, SoracloudRuntimeExecutionError> {
-    let time_to_live = transaction.time_to_live().ok_or_else(|| {
+    let time_to_live_ms = payload.time_to_live_ms.ok_or_else(|| {
         private_model_invalid("private execution transaction has no signature-bound lifetime")
     })?;
-    let deadline = transaction
-        .creation_time()
-        .checked_add(time_to_live)
+    let deadline_ms = payload
+        .creation_time_ms
+        .checked_add(time_to_live_ms.get())
         .ok_or_else(|| {
             private_model_invalid("private execution signed transaction deadline overflowed")
         })?;
-    deadline
-        .as_secs()
-        .checked_add(u64::from(deadline.subsec_nanos() != 0))
+    (deadline_ms / 1_000)
+        .checked_add(u64::from(deadline_ms % 1_000 != 0))
         .ok_or_else(|| {
             private_model_invalid("private execution signed transaction epoch overflowed")
         })
+}
+
+fn private_execution_signed_deadline_epoch(
+    transaction: &SignedTransaction,
+) -> Result<u64, SoracloudRuntimeExecutionError> {
+    private_execution_payload_deadline_epoch(transaction.payload())
 }
 
 fn require_private_execution_receipt_safe_through_signed_deadline(
@@ -4530,6 +4827,32 @@ fn require_private_execution_receipt_safe_through_signed_deadline(
     Ok(())
 }
 
+fn require_private_execution_ready_through_next_receipt_deadline(
+    state: &State,
+    receipt: &SoraPrivateUploadedModelExecutionReceiptV1,
+    candidate_deadline_epoch: u64,
+) -> Result<(), SoracloudRuntimeExecutionError> {
+    let receipt_safe = {
+        let view = state.view();
+        validate_soracloud_private_output_durability_v1(
+            view.world(),
+            receipt,
+            candidate_deadline_epoch,
+        )
+    }
+    .map_err(|error| {
+        private_model_conflict(format!(
+            "private execution output is not durable through the next signed Receipt deadline: {error}"
+        ))
+    })?;
+    if receipt_safe != SoracloudPrivateOutputDurabilityStatusV1::Ready {
+        return Err(private_model_conflict(format!(
+            "private execution output cannot remain durable through the next signed Receipt deadline: {receipt_safe:?}"
+        )));
+    }
+    Ok(())
+}
+
 fn private_execution_has_exact_authoritative_claim(
     state: &State,
     receipt: &SoraPrivateUploadedModelExecutionReceiptV1,
@@ -4554,11 +4877,76 @@ fn private_execution_has_exact_authoritative_claim(
         ))
     })?;
     if claim.receipt != *receipt {
-        return Err(private_model_invalid(
-            "private execution authorization claim is bound to different receipt evidence",
+        return Err(private_model_conflict(
+            "private execution was superseded by another validator's authoritative claim",
         ));
     }
     Ok(true)
+}
+
+fn require_private_execution_prepare_dependencies_through_deadline(
+    state: &State,
+    journal: &SoracloudPrivateUploadedModelExecutionJournalV1,
+    signed_deadline_epoch: u64,
+) -> Result<(), SoracloudRuntimeExecutionError> {
+    let view = state.view();
+    let world = view.world();
+    let consensus_epoch = state.latest_block_creation_time_ms_fast().unwrap_or(0) / 1_000;
+    let model_pin = world
+        .pin_manifests()
+        .get(&journal.receipt.model_manifest_digest)
+        .ok_or_else(|| {
+            private_model_invalid(
+                "private execution replacement Prepare model pin is no longer retained",
+            )
+        })?;
+    match model_pin.status {
+        PinStatus::Approved(approved_epoch) if approved_epoch <= consensus_epoch => {}
+        PinStatus::Approved(_) | PinStatus::Pending | PinStatus::Retired(_) => {
+            return Err(private_model_invalid(
+                "private execution replacement Prepare model pin is not currently approved",
+            ));
+        }
+    }
+    if model_pin.policy.retention_epoch <= signed_deadline_epoch {
+        return Err(private_model_invalid(format!(
+            "private execution replacement Prepare model pin expires at epoch {}, not after signed deadline {signed_deadline_epoch}",
+            model_pin.policy.retention_epoch
+        )));
+    }
+
+    let input = &journal.receipt.input_artifact;
+    let input_pin = world
+        .pin_manifests()
+        .get(&input.sorafs_manifest_digest)
+        .ok_or_else(|| {
+            private_model_invalid(
+                "private execution replacement Prepare input pin is no longer retained",
+            )
+        })?;
+    if input_pin.digest != input.sorafs_manifest_digest
+        || input_pin.root_cid != input.sorafs_root_cid
+        || input_pin.content_length != input.ciphertext_bytes
+    {
+        return Err(private_model_invalid(
+            "private execution replacement Prepare input pin no longer matches its exact artifact",
+        ));
+    }
+    match input_pin.status {
+        PinStatus::Approved(approved_epoch) if approved_epoch <= consensus_epoch => {}
+        PinStatus::Approved(_) | PinStatus::Pending | PinStatus::Retired(_) => {
+            return Err(private_model_invalid(
+                "private execution replacement Prepare input pin is not currently approved",
+            ));
+        }
+    }
+    if input_pin.policy.retention_epoch <= signed_deadline_epoch {
+        return Err(private_model_invalid(format!(
+            "private execution replacement Prepare input pin expires at epoch {}, not after signed deadline {signed_deadline_epoch}",
+            input_pin.policy.retention_epoch
+        )));
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -5395,7 +5783,7 @@ impl SoracloudRuntimeReadHandle for SoracloudRuntimeManagerHandle {
     {
         let mutation_sink = self.mutation_sink.as_ref().ok_or_else(|| {
             private_model_unavailable(
-                "private execution requires an atomic production-qualified receipt persistence sink",
+                "private execution requires a production-qualified phase transaction sink",
             )
         })?;
         mutation_sink
@@ -5474,6 +5862,7 @@ impl SoracloudRuntimeReadHandle for SoracloudRuntimeManagerHandle {
         entry: SoracloudPrivateUploadedModelExecutionJournalV1,
     ) -> Result<(), SoracloudRuntimeExecutionError> {
         if entry.submission_attempt != 0
+            || entry.transaction_payload.is_some()
             || entry.transaction_hash.is_some()
             || entry.signed_transaction.is_some()
             || entry.phase != SoracloudPrivateUploadedModelExecutionJournalPhaseV1::Prepare
@@ -5543,7 +5932,10 @@ impl SoracloudRuntimeReadHandle for SoracloudRuntimeManagerHandle {
         &self,
         output_manifest_payload: Vec<u8>,
         receipt: SoraPrivateUploadedModelExecutionReceiptV1,
-    ) -> Result<Option<Hash>, SoracloudRuntimeExecutionError> {
+    ) -> Result<
+        SoracloudPrivateUploadedModelExecutionSubmissionProgressV1,
+        SoracloudRuntimeExecutionError,
+    > {
         receipt.validate_submission().map_err(|error| {
             private_model_invalid(format!(
                 "private receipt is not in canonical submission form: {error}"
@@ -5610,7 +6002,7 @@ impl SoracloudRuntimeReadHandle for SoracloudRuntimeManagerHandle {
         )?;
         let mutation_sink = self.mutation_sink.as_ref().ok_or_else(|| {
             private_model_unavailable(
-                "private receipt persistence requires an atomic production-qualified mutation sink",
+                "private receipt persistence requires a production-qualified phase transaction sink",
             )
         })?;
         if mutation_sink.submission_authority().as_ref()
@@ -5676,13 +6068,15 @@ impl SoracloudRuntimeReadHandle for SoracloudRuntimeManagerHandle {
                 }
             }
             SoracloudPrivateUploadedModelExecutionJournalPhaseV1::Receipt
+            | SoracloudPrivateUploadedModelExecutionJournalPhaseV1::AwaitingDurability
                 if !has_authoritative_claim =>
             {
                 return Err(private_model_invalid(
-                    "private execution receipt phase has no exact authoritative prepare claim",
+                    "private execution post-Prepare journal phase has no exact authoritative claim",
                 ));
             }
             SoracloudPrivateUploadedModelExecutionJournalPhaseV1::Prepare
+            | SoracloudPrivateUploadedModelExecutionJournalPhaseV1::AwaitingDurability
             | SoracloudPrivateUploadedModelExecutionJournalPhaseV1::Receipt => {}
         }
 
@@ -5696,25 +6090,46 @@ impl SoracloudRuntimeReadHandle for SoracloudRuntimeManagerHandle {
             )?;
         }
 
-        // Phase one is complete only when the shared consensus predicate observes the exact pin,
-        // approval, canonical deterministic order, provider completions, and retention horizon.
-        // Expected lifecycle waits return without ever preparing a receipt transaction.
         if journal.phase == SoracloudPrivateUploadedModelExecutionJournalPhaseV1::Prepare
             && has_authoritative_claim
         {
-            // Reserve the full signed receipt lifetime in addition to the consensus post-commit
-            // retention floor. A transaction valid until its deadline must remain commit-safe at
-            // every admissible block timestamp, not merely when the runtime signs it.
-            let candidate_epoch = private_execution_candidate_deadline_epoch(
-                self.state.as_ref(),
-                private_execution_transaction_time_to_live,
-            )?;
+            if journal.signed_transaction.is_none() {
+                return Err(private_model_internal(
+                    "authoritative private execution claim has no exact durable Prepare transaction evidence",
+                ));
+            }
+            journal.phase =
+                SoracloudPrivateUploadedModelExecutionJournalPhaseV1::AwaitingDurability;
+            store_private_execution_journal_entry(
+                self.state_dir.as_ref(),
+                binding,
+                &journal,
+                None,
+            )
+            .map_err(|error| {
+                private_model_unavailable(format!(
+                    "failed to durably record committed private execution Prepare evidence: {error}"
+                ))
+            })?;
+        }
+
+        // Phase one is complete only when the shared consensus predicate observes the exact pin,
+        // approval, canonical deterministic order, provider completions, and retention horizon.
+        // Expected lifecycle waits return without ever preparing a receipt transaction.
+        if journal.phase == SoracloudPrivateUploadedModelExecutionJournalPhaseV1::AwaitingDurability
+        {
+            // Observe lifecycle state at the current finalized consensus epoch. A Pending order
+            // remains recoverable through its real deadline even when a hypothetical Receipt
+            // transaction would outlive that deadline. Once quorum is Ready, separately require
+            // the exact predicate through the next signed Receipt deadline before advancing.
+            let consensus_epoch =
+                self.state.latest_block_creation_time_ms_fast().unwrap_or(0) / 1_000;
             let durability = {
                 let view = self.state.view();
                 validate_soracloud_private_output_durability_v1(
                     view.world(),
                     &journal.receipt,
-                    candidate_epoch,
+                    consensus_epoch,
                 )
             }
             .map_err(|error| {
@@ -5724,7 +6139,17 @@ impl SoracloudRuntimeReadHandle for SoracloudRuntimeManagerHandle {
             })?;
             match durability {
                 SoracloudPrivateOutputDurabilityStatusV1::Ready => {
+                    let candidate_deadline_epoch = private_execution_candidate_deadline_epoch(
+                        self.state.as_ref(),
+                        private_execution_transaction_time_to_live,
+                    )?;
+                    require_private_execution_ready_through_next_receipt_deadline(
+                        self.state.as_ref(),
+                        &journal.receipt,
+                        candidate_deadline_epoch,
+                    )?;
                     journal.phase = SoracloudPrivateUploadedModelExecutionJournalPhaseV1::Receipt;
+                    journal.transaction_payload = None;
                     journal.transaction_hash = None;
                     journal.signed_transaction = None;
                     journal.submission_attempt = 0;
@@ -5748,7 +6173,10 @@ impl SoracloudRuntimeReadHandle for SoracloudRuntimeManagerHandle {
                 SoracloudPrivateOutputDurabilityStatusV1::AwaitingPinApproval
                 | SoracloudPrivateOutputDurabilityStatusV1::AwaitingReplicationOrder
                 | SoracloudPrivateOutputDurabilityStatusV1::AwaitingReplicationQuorum { .. } => {
-                    return Ok(journal.transaction_hash);
+                    return Ok(SoracloudPrivateUploadedModelExecutionSubmissionProgressV1 {
+                        phase: journal.phase,
+                        transaction_hash: None,
+                    });
                 }
             }
         }
@@ -5771,50 +6199,20 @@ impl SoracloudRuntimeReadHandle for SoracloudRuntimeManagerHandle {
                     ))
                 })? {
                 PrivateExecutionTransactionObservation::Pending => {
-                    return Ok(Some(existing_hash));
+                    return Ok(SoracloudPrivateUploadedModelExecutionSubmissionProgressV1 {
+                        phase: journal.phase,
+                        transaction_hash: Some(existing_hash),
+                    });
                 }
                 PrivateExecutionTransactionObservation::CommittedRejected => {
-                    match SoracloudRuntimeManager::private_execution_journal_ledger_disposition(
-                        self.state.as_ref(),
-                        &journal,
-                    )
-                    .map_err(|error| {
-                        private_model_invalid(format!(
-                            "cannot revalidate rejected private execution transaction against authoritative state: {error}"
-                        ))
-                    })? {
-                        PrivateExecutionJournalLedgerDisposition::Active => {
-                            iroha_logger::warn!(
-                                service = %journal.service_name,
-                                decryption_request_id = %journal.decryption_request_id,
-                                phase = ?journal.phase,
-                                transaction_hash = %existing_hash,
-                                "replacing a rejected private execution outbox transaction after authoritative-state revalidation"
-                            );
-                            replacement_hash = Some(existing_hash);
-                        }
-                        PrivateExecutionJournalLedgerDisposition::Committed => {
-                            return Ok(Some(existing_hash));
-                        }
-                        PrivateExecutionJournalLedgerDisposition::AuthorizationExpired => {
-                            return Err(private_model_invalid(format!(
-                                "private execution {:?} transaction {existing_hash} was rejected after its unclaimed authorization expired; durable evidence awaits terminal reconciliation",
-                                journal.phase
-                            )));
-                        }
-                        PrivateExecutionJournalLedgerDisposition::UnclaimedOutputRecoveryWindowClosed => {
-                            return Err(private_model_invalid(format!(
-                                "private execution {:?} transaction {existing_hash} was rejected after its unclaimed output recovery window closed; durable evidence awaits safe re-execution cleanup",
-                                journal.phase
-                            )));
-                        }
-                        PrivateExecutionJournalLedgerDisposition::ClaimedOutputRecoveryWindowClosed => {
-                            return Err(private_model_invalid(format!(
-                                "private execution {:?} transaction {existing_hash} was rejected after its claimed output recovery window closed; durable evidence awaits terminal reconciliation",
-                                journal.phase
-                            )));
-                        }
-                    }
+                    iroha_logger::warn!(
+                        service = %journal.service_name,
+                        decryption_request_id = %journal.decryption_request_id,
+                        phase = ?journal.phase,
+                        transaction_hash = %existing_hash,
+                        "replacing a rejected private execution outbox transaction after authoritative-state revalidation"
+                    );
+                    replacement_hash = Some(existing_hash);
                 }
                 PrivateExecutionTransactionObservation::Replaceable => {
                     replacement_hash = Some(existing_hash);
@@ -5823,7 +6221,8 @@ impl SoracloudRuntimeReadHandle for SoracloudRuntimeManagerHandle {
                     reusable_transaction = Some(existing);
                 }
                 PrivateExecutionTransactionObservation::CommittedSuccess => match journal.phase {
-                    SoracloudPrivateUploadedModelExecutionJournalPhaseV1::Prepare => {
+                    SoracloudPrivateUploadedModelExecutionJournalPhaseV1::Prepare
+                    | SoracloudPrivateUploadedModelExecutionJournalPhaseV1::AwaitingDurability => {
                         if !private_execution_has_exact_authoritative_claim(
                             self.state.as_ref(),
                             &journal.receipt,
@@ -5832,7 +6231,10 @@ impl SoracloudRuntimeReadHandle for SoracloudRuntimeManagerHandle {
                                 "successful private execution prepare transaction has no authoritative claim",
                             ));
                         }
-                        return Ok(Some(existing_hash));
+                        return Ok(SoracloudPrivateUploadedModelExecutionSubmissionProgressV1 {
+                            phase: journal.phase,
+                            transaction_hash: Some(existing_hash),
+                        });
                     }
                     SoracloudPrivateUploadedModelExecutionJournalPhaseV1::Receipt => {
                         let committed = {
@@ -5859,7 +6261,10 @@ impl SoracloudRuntimeReadHandle for SoracloudRuntimeManagerHandle {
                                 "committed private receipt differs from durable outbox evidence",
                             ));
                         }
-                        return Ok(Some(existing_hash));
+                        return Ok(SoracloudPrivateUploadedModelExecutionSubmissionProgressV1 {
+                            phase: journal.phase,
+                            transaction_hash: Some(existing_hash),
+                        });
                     }
                 },
             }
@@ -5868,11 +6273,81 @@ impl SoracloudRuntimeReadHandle for SoracloudRuntimeManagerHandle {
         let transaction = if let Some(existing) = reusable_transaction {
             existing
         } else {
+            match SoracloudRuntimeManager::private_execution_journal_ledger_disposition(
+                self.state.as_ref(),
+                &journal,
+                true,
+                self.config.reconcile_interval,
+            )
+            .map_err(|error| {
+                private_model_invalid(format!(
+                    "cannot revalidate private execution replacement against authoritative state: {error}"
+                ))
+            })? {
+                PrivateExecutionJournalLedgerDisposition::Active => {}
+                PrivateExecutionJournalLedgerDisposition::SubmissionAttemptsExhausted => {
+                    return Err(private_execution_submission_attempts_exhausted(journal.phase));
+                }
+                PrivateExecutionJournalLedgerDisposition::Committed => {
+                    return Ok(
+                        SoracloudPrivateUploadedModelExecutionSubmissionProgressV1 {
+                            phase: journal.phase,
+                            transaction_hash: journal.transaction_hash,
+                        },
+                    );
+                }
+                PrivateExecutionJournalLedgerDisposition::SupersededByAuthoritativeClaim => {
+                    return Err(private_model_conflict(
+                        "private execution was superseded by another validator's authoritative claim",
+                    ));
+                }
+                PrivateExecutionJournalLedgerDisposition::AuthorizationExpired => {
+                    return Err(private_model_conflict(
+                        "private execution authorization expired before a replacement Prepare could commit",
+                    ));
+                }
+                PrivateExecutionJournalLedgerDisposition::UnclaimedOutputRecoveryWindowClosed => {
+                    return Err(private_model_conflict(
+                        "private execution output lease cannot cover another Prepare and automatic replication horizon",
+                    ));
+                }
+                PrivateExecutionJournalLedgerDisposition::UnclaimedDependencyUnavailable => {
+                    return Err(private_model_conflict(
+                        "private execution source pins cannot cover another signed Prepare deadline",
+                    ));
+                }
+                PrivateExecutionJournalLedgerDisposition::UnclaimedOutputConflict => {
+                    return Err(private_model_conflict(
+                        "retry-stable private output digest conflicts with an existing SoraFS pin; route execution to another validator",
+                    ));
+                }
+                PrivateExecutionJournalLedgerDisposition::ClaimedOutputRecoveryWindowClosed => {
+                    return Err(private_model_conflict(
+                        "claimed private output cannot cover another signed Receipt deadline",
+                    ));
+                }
+            }
+            // Never sign an unsigned reservation loaded from disk: a crash may have happened
+            // after a randomized signer returned but before the signed evidence fsynced. Burn the
+            // ambiguous attempt, reserve the next exact payload, and invoke the signer at most once
+            // for the reservation created during this locked advance call.
+            mutation_sink
+                .ensure_production_qualified()
+                .map_err(|error| {
+                    private_model_unavailable(format!(
+                        "private execution {:?} signing requires a production-qualified persistence signer: {error}",
+                        journal.phase
+                    ))
+                })?;
+            let next_submission_attempt = next_private_execution_submission_attempt(
+                journal.phase,
+                journal.submission_attempt,
+            )?;
+            let candidate_epoch = private_execution_candidate_deadline_epoch(
+                self.state.as_ref(),
+                private_execution_transaction_time_to_live,
+            )?;
             if journal.phase == SoracloudPrivateUploadedModelExecutionJournalPhaseV1::Receipt {
-                let candidate_epoch = private_execution_candidate_deadline_epoch(
-                    self.state.as_ref(),
-                    private_execution_transaction_time_to_live,
-                )?;
                 let durability = {
                     let view = self.state.view();
                     validate_soracloud_private_output_durability_v1(
@@ -5891,23 +6366,87 @@ impl SoracloudRuntimeReadHandle for SoracloudRuntimeManagerHandle {
                         "private execution output is not yet receipt-safe through the next signed transaction deadline: {durability:?}"
                     )));
                 }
-            }
-            mutation_sink
-                .ensure_production_qualified()
-                .map_err(|error| {
-                    private_model_unavailable(format!(
-                        "private execution {:?} signing requires a production-qualified persistence signer: {error}",
-                        journal.phase
-                    ))
+            } else {
+                require_private_execution_prepare_dependencies_through_deadline(
+                    self.state.as_ref(),
+                    &journal,
+                    candidate_epoch,
+                )?;
+                let minimum_retention_epoch = private_execution_minimum_prepare_retention_epoch(
+                    candidate_epoch,
+                    self.config.reconcile_interval,
+                    self.state
+                        .view()
+                        .world()
+                        .sorafs_pricing()
+                        .credit
+                        .settlement_window_secs,
+                )
+                .ok_or_else(|| {
+                    private_model_invalid(
+                        "private execution replacement Prepare retention horizon overflowed",
+                    )
                 })?;
-            let transaction = mutation_sink
-                .prepare_instructions_atomic(
+                let manifest =
+                    sorafs_manifest::decode_manifest_v1_canonical(&journal.output_manifest_payload)
+                        .map_err(|error| {
+                            private_model_invalid(format!(
+                                "private execution replacement output manifest is invalid: {error}"
+                            ))
+                        })?;
+                if manifest.pin_policy.retention_epoch < minimum_retention_epoch {
+                    return Err(private_model_invalid(format!(
+                        "private execution replacement Prepare requires output retention through epoch {minimum_retention_epoch}"
+                    )));
+                }
+            }
+            let payload = mutation_sink
+                .prepare_instruction_payload_atomic(
                     vec![private_execution_phase_instruction(&journal)],
                     endpoint,
                 )
                 .map_err(|error| {
                     private_model_unavailable(format!(
-                        "failed to prepare signed private execution {:?} transaction: {error}",
+                        "failed to prepare unsigned private execution {:?} transaction payload: {error}",
+                        journal.phase
+                    ))
+                })?;
+            validate_private_execution_phase_payload(
+                &payload,
+                self.state.network_id_ref(),
+                &receipt.attesting_validator.validator_account_id,
+                Some(&self.config.submission.fee_payment_intent()),
+                &journal,
+            )?;
+            journal.submission_attempt = next_submission_attempt;
+            journal.transaction_payload = Some(payload.clone());
+            journal.transaction_hash = None;
+            journal.signed_transaction = None;
+            store_private_execution_journal_entry(
+                self.state_dir.as_ref(),
+                binding,
+                &journal,
+                replacement_hash,
+            )
+            .map_err(|error| {
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::InvalidInput | io::ErrorKind::AlreadyExists
+                ) {
+                    private_model_invalid(format!(
+                        "private execution journal rejected unsigned attempt reservation: {error}"
+                    ))
+                } else {
+                    private_model_unavailable(format!(
+                        "failed to reserve private execution signing attempt durably: {error}"
+                    ))
+                }
+            })?;
+            let transaction = mutation_sink
+                .sign_transaction_payload_atomic(payload, endpoint)
+                .map_err(|error| {
+                    private_model_unavailable(format!(
+                        "failed to sign reserved private execution {:?} transaction payload: {error}",
                         journal.phase
                     ))
                 })?;
@@ -5915,40 +6454,17 @@ impl SoracloudRuntimeReadHandle for SoracloudRuntimeManagerHandle {
                 &transaction,
                 self.state.network_id_ref(),
                 &receipt.attesting_validator.validator_account_id,
-                Some(&self.config.submission.fee_payment_intent()),
+                None,
                 &journal,
             )?;
-            if journal.phase == SoracloudPrivateUploadedModelExecutionJournalPhaseV1::Receipt {
-                require_private_execution_receipt_safe_through_signed_deadline(
-                    self.state.as_ref(),
-                    &journal.receipt,
-                    &transaction,
-                )?;
-            }
-            if mutation_sink
-                .prepared_transaction_requires_replacement(&transaction, endpoint)
-                .map_err(|error| {
-                    private_model_unavailable(format!(
-                        "newly signed private execution phase transaction failed canonical admission before journaling: {error}"
-                    ))
-                })?
-            {
-                return Err(private_model_unavailable(
-                    "newly signed private execution phase transaction expired before it could be durably journaled",
-                ));
-            }
             let transaction_hash: Hash = transaction.hash().into();
-            journal.submission_attempt =
-                journal.submission_attempt.checked_add(1).ok_or_else(|| {
-                    private_model_internal("private execution submission attempt overflowed")
-                })?;
             journal.transaction_hash = Some(transaction_hash);
             journal.signed_transaction = Some(transaction.clone());
             store_private_execution_journal_entry(
                 self.state_dir.as_ref(),
                 binding,
                 &journal,
-                replacement_hash,
+                None,
             )
             .map_err(|error| {
                 if matches!(
@@ -5964,6 +6480,28 @@ impl SoracloudRuntimeReadHandle for SoracloudRuntimeManagerHandle {
                     ))
                 }
             })?;
+            // The exact fee-quoted payload and increment were fsynced before invoking the signer.
+            // A loaded unsigned reservation is never signed again, so a randomized signer or a
+            // crash before the signed evidence fsyncs cannot exceed the durable attempt bound.
+            if journal.phase == SoracloudPrivateUploadedModelExecutionJournalPhaseV1::Receipt {
+                require_private_execution_receipt_safe_through_signed_deadline(
+                    self.state.as_ref(),
+                    &journal.receipt,
+                    &transaction,
+                )?;
+            }
+            if mutation_sink
+                .prepared_transaction_requires_replacement(&transaction, endpoint)
+                .map_err(|error| {
+                    private_model_unavailable(format!(
+                        "newly signed private execution phase transaction failed canonical admission after durable attempt reservation: {error}"
+                    ))
+                })?
+            {
+                return Err(private_model_unavailable(
+                    "newly signed private execution phase transaction requires replacement after its bounded attempt was durably reserved",
+                ));
+            }
             transaction
         };
         validate_private_execution_phase_transaction(
@@ -5997,7 +6535,10 @@ impl SoracloudRuntimeReadHandle for SoracloudRuntimeManagerHandle {
                 "private execution mutation sink returned a hash different from durable signed evidence",
             ));
         }
-        Ok(Some(expected_hash))
+        Ok(SoracloudPrivateUploadedModelExecutionSubmissionProgressV1 {
+            phase: journal.phase,
+            transaction_hash: Some(expected_hash),
+        })
     }
     fn local_peer_id(&self) -> Option<String> {
         self.config.local_peer_id.clone()
@@ -6248,6 +6789,16 @@ impl SoracloudRuntime for SoracloudRuntimeManagerHandle {
                 format!("unknown Soracloud apartment `{}`", request.apartment_name),
             ));
         };
+        let runtime_status = record.runtime_status_at_current_height(committed_height(&view));
+        if runtime_status == SoraAgentRuntimeStatusV1::LeaseExpired {
+            return Err(SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::Unavailable,
+                format!(
+                    "apartment `{}` lease expired at consensus height {}; renew before execution",
+                    request.apartment_name, record.lease_expires_height
+                ),
+            ));
+        }
         if record.process_generation != request.process_generation {
             return Err(SoracloudRuntimeExecutionError::new(
                 SoracloudRuntimeExecutionErrorKind::Unavailable,
@@ -6259,10 +6810,17 @@ impl SoracloudRuntime for SoracloudRuntimeManagerHandle {
         }
         if let Some(run_id) = parse_apartment_autonomy_run_id(&request.operation).map(str::to_owned)
         {
-            return execute_apartment_autonomy_run(self, &view, record, &request, &run_id);
+            return execute_apartment_autonomy_run(
+                self,
+                &view,
+                record,
+                &request,
+                &run_id,
+                runtime_status,
+            );
         }
         Ok(SoracloudApartmentExecutionResult {
-            status: record.status,
+            status: runtime_status,
             checkpoint_artifact_hash: None,
             journal_artifact_hash: None,
             result_commitment: apartment_result_commitment(
@@ -6270,7 +6828,7 @@ impl SoracloudRuntime for SoracloudRuntimeManagerHandle {
                 request.process_generation,
                 &request.operation,
                 request.request_commitment,
-                record.status,
+                runtime_status,
             ),
         })
     }
@@ -7548,6 +8106,12 @@ struct HfRequiredWeightFileV1 {
     content_length: u64,
     lfs_sha256: String,
 }
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct HfSelectedImportFileV1 {
+    path: String,
+    lfs_content_length: Option<u64>,
+    lfs_sha256: Option<String>,
+}
 #[derive(Clone, Debug, norito::derive::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct ApartmentAutonomyWorkflowV1 {
@@ -7611,15 +8175,13 @@ struct HfLocalImportManifestV1 {
     required_weight_files: Vec<HfRequiredWeightFileV1>,
     #[norito(required)]
     weight_selection_commitment: Option<String>,
+    import_file_allowlist: Vec<String>,
     imported_files: Vec<HfImportedFileV1>,
-    skipped_files: Vec<String>,
     #[norito(required)]
     import_error: Option<String>,
 }
 #[derive(Clone)]
 struct PinnedHfImportGeneration {
-    #[cfg(test)]
-    name: String,
     root: PathBuf,
     files_root: PathBuf,
     manifest: HfLocalImportManifestV1,
@@ -7656,6 +8218,11 @@ fn stop_hf_local_runner_worker_for_source(workers: &SharedHfLocalRunnerWorkers, 
         worker.lock().stop();
     }
 }
+/// Runtime-local reporter identity.
+///
+/// The economic lease start height prevents counters from crossing lease
+/// incarnations, while the reporting epoch prevents a reporter admitted after
+/// an epoch rollover from inheriting the retired epoch's durable counter.
 type HostedHttpReporterKey = (String, String, u64, u64, u16);
 type HostedHttpRevisionKey = (String, String, u64, u64);
 type SharedHostedHttpWorkers =
@@ -7810,12 +8377,53 @@ struct HostedHttpWorker {
     loopback_firewall: Option<InrouLoopbackOwnerFirewall>,
     #[cfg(target_os = "linux")]
     cgroup: Option<inrou_cgroup::InrouWorkerCgroup>,
+    shutdown_state: HostedHttpWorkerShutdownState,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum HostedHttpWorkerShutdownState {
+    #[default]
+    Running,
+    AttestedStopped,
+}
+impl HostedHttpWorkerShutdownState {
+    fn requires_shutdown(self) -> bool {
+        self == Self::Running
+    }
+
+    fn attest_stopped(&mut self) {
+        *self = Self::AttestedStopped;
+    }
+}
+#[cfg(target_os = "linux")]
+struct HostedHttpWorkerLaunch {
+    cache_key: HostedHttpWorkerCacheKey,
+    child: std::process::Child,
+    log_drains: Vec<thread::JoinHandle<()>>,
+    listen_base_url: String,
+    egress_accounting: PortableVmReplicaEgressAccounting,
+    stderr_log_path: PathBuf,
+    stop_grace: Duration,
+    port_forward: PortableVmLoopbackBridge,
+    qmp_control: Arc<Mutex<PortableVmQmpControl>>,
+    loopback_firewall: InrouLoopbackOwnerFirewall,
+    worker_cgroup: inrou_cgroup::InrouWorkerCgroup,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct HostedHttpLeaseUsageSubmissionAttempt {
     accounted_egress_bytes: u64,
     finalize_reporter: bool,
     attempted_at_ms: u64,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct HostedHttpLeaseIdentity {
+    lease_started_height: u64,
+    reporting_epoch: u64,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HostedHttpReporterLeaseSelection {
+    Ready(HostedHttpLeaseIdentity),
+    AwaitingRollover,
+    NotAssigned,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct HostedHttpReporterCheckpointState {
@@ -7843,10 +8451,31 @@ enum HostedHttpTerminalReporterAction {
     Retire,
     Submit,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HostedHttpAttestedQuarantineDisposition {
+    RetainOpenReporter,
+    FinalizeReporter,
+}
+fn hosted_http_attested_quarantine_disposition(
+    desired: bool,
+) -> HostedHttpAttestedQuarantineDisposition {
+    if desired {
+        HostedHttpAttestedQuarantineDisposition::RetainOpenReporter
+    } else {
+        HostedHttpAttestedQuarantineDisposition::FinalizeReporter
+    }
+}
 fn hosted_http_terminal_reporter_action(
+    shutdown_attested: bool,
     authoritative: Option<HostedHttpReporterCheckpointState>,
     local_accounted_egress_bytes: u64,
 ) -> io::Result<HostedHttpTerminalReporterAction> {
+    if !shutdown_attested {
+        return Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "terminal reporter accounting requires an attested worker shutdown",
+        ));
+    }
     match authoritative {
         Some(checkpoint)
             if checkpoint.finalize_reporter
@@ -7875,6 +8504,18 @@ fn hosted_http_terminal_reporter_action(
         )),
     }
 }
+fn require_inrou_former_reporter_recovery_attestation(
+    recovery_required: bool,
+    startup_worker_absence_attested: bool,
+) -> io::Result<()> {
+    if recovery_required && !startup_worker_absence_attested {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "former Inrou reporter recovery requires startup worker-absence attestation",
+        ));
+    }
+    Ok(())
+}
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
 )]
@@ -7899,7 +8540,6 @@ struct HfGeneratedMetadataResponse {
     imported_file_count: u32,
     imported_total_bytes: u64,
     imported_files: Vec<HfImportedFileV1>,
-    skipped_files: Vec<String>,
     #[norito(required)]
     import_error: Option<String>,
     inference_local_enabled: bool,
@@ -7943,6 +8583,12 @@ pub struct SoracloudRuntimeManager {
     snapshot: Arc<RwLock<SoracloudRuntimeSnapshot>>,
     hf_local_workers: SharedHfLocalRunnerWorkers,
     hosted_http_workers: SharedHostedHttpWorkers,
+    /// Workers whose shutdown has started but has not yet been fully attested.
+    ///
+    /// Keeping the worker object alive retains custody of its cgroup and owner
+    /// firewall. A reporter cannot be finalized or relaunched until cleanup
+    /// succeeds on a later reconcile pass.
+    quarantined_hosted_http_workers: SharedHostedHttpWorkers,
     ivm_runtime_cache: Arc<SoracloudPreparedRuntimeCache>,
     private_execution_journal_lock: Arc<Mutex<Option<fs::File>>>,
     host_violation_reporter: Arc<SoracloudModelHostViolationReporter>,
@@ -7954,6 +8600,8 @@ pub struct SoracloudRuntimeManager {
     last_inrou_host_advert_attempt_ms: Mutex<Option<u64>>,
     pending_inrou_host_capability_advert: Mutex<Option<SoraInrouHostCapabilityRecordV1>>,
     inrou_startup_capability: Option<InrouStartupCapabilitySnapshot>,
+    /// Set only by the successful real startup probe, except in direct unit tests.
+    inrou_startup_worker_absence_attested: bool,
     last_inrou_host_withdraw_attempt_ms: Mutex<Option<u64>>,
     last_inrou_placement_reconcile_attempt_ms: Mutex<Option<u64>>,
     last_ordered_mailbox_submission: Mutex<Option<(Hash, Option<Hash>, u64)>>,
@@ -8155,9 +8803,13 @@ fn write_verified_sorafs_manifest_payload_to_cache(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PrivateExecutionJournalLedgerDisposition {
     Active,
+    SubmissionAttemptsExhausted,
     Committed,
+    SupersededByAuthoritativeClaim,
     AuthorizationExpired,
     UnclaimedOutputRecoveryWindowClosed,
+    UnclaimedDependencyUnavailable,
+    UnclaimedOutputConflict,
     ClaimedOutputRecoveryWindowClosed,
 }
 
@@ -8193,6 +8845,7 @@ impl SoracloudRuntimeManager {
             snapshot: Arc::new(RwLock::new(SoracloudRuntimeSnapshot::default())),
             hf_local_workers: Arc::new(Mutex::new(BTreeMap::new())),
             hosted_http_workers: Arc::new(Mutex::new(BTreeMap::new())),
+            quarantined_hosted_http_workers: Arc::new(Mutex::new(BTreeMap::new())),
             ivm_runtime_cache,
             private_execution_journal_lock: Arc::new(Mutex::new(None)),
             host_violation_reporter: SoracloudModelHostViolationReporter::disabled(),
@@ -8203,6 +8856,7 @@ impl SoracloudRuntimeManager {
             last_inrou_host_advert_attempt_ms: Mutex::new(None),
             pending_inrou_host_capability_advert: Mutex::new(None),
             inrou_startup_capability: None,
+            inrou_startup_worker_absence_attested: false,
             last_inrou_host_withdraw_attempt_ms: Mutex::new(None),
             last_inrou_placement_reconcile_attempt_ms: Mutex::new(None),
             last_ordered_mailbox_submission: Mutex::new(None),
@@ -8217,8 +8871,16 @@ impl SoracloudRuntimeManager {
         }
     }
     fn qualify_inrou_startup_capability(&mut self) -> eyre::Result<()> {
-        self.inrou_startup_capability = InrouStartupCapabilitySnapshot::qualify(&self.config)?;
+        self.inrou_startup_capability = None;
+        self.inrou_startup_worker_absence_attested = false;
+        let capability = InrouStartupCapabilitySnapshot::qualify(&self.config)?;
+        self.inrou_startup_worker_absence_attested = capability.is_some();
+        self.inrou_startup_capability = capability;
         Ok(())
+    }
+    #[cfg(test)]
+    fn attest_inrou_startup_worker_absence_for_test(&mut self) {
+        self.inrou_startup_worker_absence_attested = true;
     }
     /// Attach the authoritative mutation sink used for runtime-originated Soracloud health reports.
     #[must_use]
@@ -8313,13 +8975,20 @@ impl SoracloudRuntimeManager {
                 &self.config,
             )
             .map_err(|error| eyre::eyre!(error.message))?;
-            list_private_execution_journal_entries(
+            let listing = list_private_execution_journal_entries(
                 self.config.state_dir.as_path(),
                 journal_binding,
             )
             .wrap_err(
-                "validate every private-execution journal entry before publishing the runtime handle",
+                "enumerate private-execution journal entries before publishing the runtime handle",
             )?;
+            for failure in listing.quarantined {
+                iroha_logger::error!(
+                    path = %failure.path.display(),
+                    error = %failure.error,
+                    "quarantined malformed private execution journal while retaining its bytes for operator recovery"
+                );
+            }
         }
         match (
             self.config.hf.inference_credential_provider.as_ref(),
@@ -8547,17 +9216,51 @@ impl SoracloudRuntimeManager {
     fn private_execution_journal_ledger_disposition(
         state: &State,
         entry: &SoracloudPrivateUploadedModelExecutionJournalV1,
+        replacement_required: bool,
+        recovery_interval: Duration,
     ) -> eyre::Result<PrivateExecutionJournalLedgerDisposition> {
         let view = state.view();
         let world = view.world();
-        let consensus_epoch = view
-            .latest_block()
-            .map_or(0, |block| block.header().creation_time_ms / 1_000);
-        let next_minimum_receipt_epoch = consensus_epoch.checked_add(1).and_then(|epoch| {
-            epoch.checked_add(
-                iroha_data_model::soracloud::SORACLOUD_PRIVATE_OUTPUT_MIN_RETENTION_SECS_V1,
-            )
-        });
+        let consensus_epoch = state.latest_block_creation_time_ms_fast().unwrap_or(0) / 1_000;
+        let next_signed_transaction_deadline_epoch = if !replacement_required {
+            entry
+                .transaction_payload
+                .as_ref()
+                .map(private_execution_payload_deadline_epoch)
+                .transpose()
+                .map_err(|error| eyre::eyre!(error.message))?
+        } else {
+            None
+        }
+        .map_or_else(
+            || {
+                private_execution_candidate_deadline_epoch(
+                    state,
+                    iroha_data_model::transaction::DEFAULT_TRANSACTION_TIME_TO_LIVE,
+                )
+                .map_err(|error| eyre::eyre!(error.message))
+            },
+            Ok,
+        )?;
+        let next_minimum_receipt_epoch = private_execution_minimum_receipt_retention_epoch(
+            next_signed_transaction_deadline_epoch,
+        );
+        // A still-observable signed Prepare retains the settlement assumptions under which its
+        // immutable payload was created; a later governance increase must not invalidate exact
+        // enqueueable evidence before observation. Prepared/ambiguous unsigned evidence and a
+        // proven replacement use the current authoritative settlement window because they will
+        // create a fresh payload.
+        let next_prepare_settlement_window_secs =
+            private_execution_prepare_settlement_window_for_recovery(
+                entry,
+                replacement_required,
+                world.sorafs_pricing().credit.settlement_window_secs,
+            );
+        let next_minimum_prepare_epoch = private_execution_minimum_prepare_retention_epoch(
+            next_signed_transaction_deadline_epoch,
+            recovery_interval,
+            next_prepare_settlement_window_secs,
+        );
         if let Some(committed) = world
             .soracloud_private_uploaded_model_execution_receipts()
             .get(&entry.receipt.receipt_id)
@@ -8593,8 +9296,8 @@ impl SoracloudRuntimeManager {
                 )
             })?;
             if claim.receipt != entry.receipt {
-                eyre::bail!(
-                    "private execution outbox differs from its authoritative prepare claim"
+                return Ok(
+                    PrivateExecutionJournalLedgerDisposition::SupersededByAuthoritativeClaim,
                 );
             }
             let output_pin = world
@@ -8622,12 +9325,49 @@ impl SoracloudRuntimeManager {
                     PrivateExecutionJournalLedgerDisposition::ClaimedOutputRecoveryWindowClosed,
                 );
             }
+            let replication_order = world
+                .replication_orders()
+                .get(&entry.receipt.output_replication_order_id);
+            if matches!(output_pin.status, PinStatus::Approved(_)) && replication_order.is_none() {
+                return Ok(
+                    PrivateExecutionJournalLedgerDisposition::ClaimedOutputRecoveryWindowClosed,
+                );
+            }
+            if let Some(order) = replication_order {
+                if order.order_id != entry.receipt.output_replication_order_id
+                    || order.manifest_digest != entry.receipt.output_artifact.sorafs_manifest_digest
+                    || order.manifest_root_cid != entry.receipt.output_artifact.sorafs_root_cid
+                {
+                    eyre::bail!(
+                        "claimed private execution outbox does not exactly match its deterministic automatic replication order"
+                    );
+                }
+                if matches!(
+                    order.status,
+                    ReplicationOrderStatus::Expired(_) | ReplicationOrderStatus::Cancelled(_)
+                ) || matches!(order.status, ReplicationOrderStatus::Pending)
+                    && consensus_epoch > order.deadline_epoch
+                {
+                    return Ok(
+                        PrivateExecutionJournalLedgerDisposition::ClaimedOutputRecoveryWindowClosed,
+                    );
+                }
+            }
             // The claim froze the active decryption authorization and validator placement in
             // consensus before asynchronous pin approval and replication began. Its original TTL
             // expiring later must never retire an otherwise recoverable receipt outbox. The exact
             // prepaid output-retention boundary remains terminal so an abandoned claim cannot
             // retain a poisoned local outbox forever.
-            return Ok(PrivateExecutionJournalLedgerDisposition::Active);
+            return Ok(
+                if entry.submission_attempt
+                    >= SORACLOUD_PRIVATE_UPLOADED_MODEL_EXECUTION_MAX_SUBMISSION_ATTEMPTS_V1
+                    && (replacement_required || entry.signed_transaction.is_none())
+                {
+                    PrivateExecutionJournalLedgerDisposition::SubmissionAttemptsExhausted
+                } else {
+                    PrivateExecutionJournalLedgerDisposition::Active
+                },
+            );
         }
         let output_manifest = sorafs_manifest::decode_manifest_v1_canonical(
             &entry.output_manifest_payload,
@@ -8635,7 +9375,45 @@ impl SoracloudRuntimeManager {
         .map_err(|error| {
             eyre::eyre!("private execution outbox has an invalid output manifest: {error}")
         })?;
-        if next_minimum_receipt_epoch
+        if let Some(output_pin) = world
+            .pin_manifests()
+            .get(&entry.receipt.output_artifact.sorafs_manifest_digest)
+        {
+            let pin_is_compatible = validate_soracloud_private_output_pin_for_prepare_v1(
+                output_pin,
+                &output_manifest,
+                &entry.receipt.attesting_validator.validator_account_id,
+                consensus_epoch,
+            )
+            .is_ok();
+            let order_is_compatible = world
+                .replication_orders()
+                .get(&entry.receipt.output_replication_order_id)
+                .is_some_and(|order| {
+                    order.order_id == entry.receipt.output_replication_order_id
+                        && order.manifest_digest
+                            == entry.receipt.output_artifact.sorafs_manifest_digest
+                        && order.manifest_root_cid == entry.receipt.output_artifact.sorafs_root_cid
+                        && match order.status {
+                            ReplicationOrderStatus::Pending => {
+                                consensus_epoch <= order.deadline_epoch
+                            }
+                            ReplicationOrderStatus::Completed(completed_epoch) => {
+                                completed_epoch <= consensus_epoch
+                            }
+                            ReplicationOrderStatus::Expired(_)
+                            | ReplicationOrderStatus::Cancelled(_) => false,
+                        }
+                });
+            if !pin_is_compatible || !order_is_compatible {
+                // Output encryption is retry-stable for one attester. Retain the evidence as a
+                // terminal conflict so the same node cannot loop through inference and reproduce
+                // the colliding digest; another validator may execute with distinct custody
+                // material.
+                return Ok(PrivateExecutionJournalLedgerDisposition::UnclaimedOutputConflict);
+            }
+        }
+        if next_minimum_prepare_epoch
             .is_none_or(|epoch| output_manifest.pin_policy.retention_epoch < epoch)
         {
             // No claim exists, so consensus has not consumed the decryption request. Discarding
@@ -8644,6 +9422,44 @@ impl SoracloudRuntimeManager {
             return Ok(
                 PrivateExecutionJournalLedgerDisposition::UnclaimedOutputRecoveryWindowClosed,
             );
+        }
+        let source_required_epoch = if replacement_required {
+            next_signed_transaction_deadline_epoch
+        } else {
+            consensus_epoch
+        };
+        for (label, digest) in [
+            ("uploaded model", entry.receipt.model_manifest_digest),
+            (
+                "private input",
+                entry.receipt.input_artifact.sorafs_manifest_digest,
+            ),
+        ] {
+            let Some(pin) = world.pin_manifests().get(&digest) else {
+                return Ok(
+                    PrivateExecutionJournalLedgerDisposition::UnclaimedDependencyUnavailable,
+                );
+            };
+            let approved = matches!(
+                pin.status,
+                PinStatus::Approved(approved_epoch) if approved_epoch <= consensus_epoch
+            );
+            let exact_input = label != "private input"
+                || pin.root_cid == entry.receipt.input_artifact.sorafs_root_cid
+                    && pin.content_length == entry.receipt.input_artifact.ciphertext_bytes;
+            if !approved || !exact_input || pin.policy.retention_epoch <= source_required_epoch {
+                iroha_logger::warn!(
+                    service = %entry.service_name,
+                    decryption_request_id = %entry.decryption_request_id,
+                    dependency = label,
+                    retention_epoch = pin.policy.retention_epoch,
+                    required_epoch = source_required_epoch,
+                    "private execution Prepare dependency is unavailable through the required claim horizon"
+                );
+                return Ok(
+                    PrivateExecutionJournalLedgerDisposition::UnclaimedDependencyUnavailable,
+                );
+            }
         }
         let release_key = (
             entry.service_name.as_ref().to_owned(),
@@ -8693,13 +9509,22 @@ impl SoracloudRuntimeManager {
         if next_height >= expires_at_height {
             return Ok(PrivateExecutionJournalLedgerDisposition::AuthorizationExpired);
         }
-        Ok(PrivateExecutionJournalLedgerDisposition::Active)
+        Ok(
+            if entry.submission_attempt
+                >= SORACLOUD_PRIVATE_UPLOADED_MODEL_EXECUTION_MAX_SUBMISSION_ATTEMPTS_V1
+                && (replacement_required || entry.signed_transaction.is_none())
+            {
+                PrivateExecutionJournalLedgerDisposition::SubmissionAttemptsExhausted
+            } else {
+                PrivateExecutionJournalLedgerDisposition::Active
+            },
+        )
     }
     fn reconcile_private_execution_outbox(&self) -> eyre::Result<()> {
         if self.mutation_sink.is_none() {
             return Ok(());
         }
-        let entries = {
+        let listing = {
             let binding = resolve_private_execution_journal_deployment_binding(
                 self.state.as_ref(),
                 &self.config,
@@ -8711,17 +9536,35 @@ impl SoracloudRuntimeManager {
             list_private_execution_journal_entries(self.config.state_dir.as_path(), binding)
                 .wrap_err("enumerate private execution durable outbox")?
         };
-        if entries.is_empty() {
-            return Ok(());
+        let mut first_quarantined = None;
+        for failure in listing.quarantined {
+            iroha_logger::error!(
+                path = %failure.path.display(),
+                error = %failure.error,
+                "quarantined malformed private execution outbox entry while continuing with valid entries"
+            );
+            if first_quarantined.is_none() {
+                first_quarantined = Some(eyre::eyre!(
+                    "malformed private execution journal {}: {}",
+                    failure.path.display(),
+                    failure.error
+                ));
+            }
         }
-        let runtime = Self::build_runtime_handle(self);
-        reconcile_private_execution_entries_isolated(
-            &entries,
-            |entry| {
-                match Self::private_execution_journal_ledger_disposition(
-                    self.state.as_ref(),
-                    entry,
-                )? {
+        let reconciliation = if listing.entries.is_empty() {
+            Ok(())
+        } else {
+            let runtime = Self::build_runtime_handle(self);
+            reconcile_private_execution_entries_isolated(
+                &listing.entries,
+                |entry| {
+                    let disposition = Self::private_execution_journal_ledger_disposition(
+                        self.state.as_ref(),
+                        entry,
+                        false,
+                        self.config.reconcile_interval,
+                    )?;
+                    match disposition {
                     PrivateExecutionJournalLedgerDisposition::Committed => {
                         runtime
                             .remove_private_uploaded_model_execution_journal(
@@ -8755,7 +9598,8 @@ impl SoracloudRuntimeManager {
                         );
                         return Ok(());
                     }
-                    PrivateExecutionJournalLedgerDisposition::UnclaimedOutputRecoveryWindowClosed => {
+                    PrivateExecutionJournalLedgerDisposition::UnclaimedOutputRecoveryWindowClosed
+                    | PrivateExecutionJournalLedgerDisposition::UnclaimedDependencyUnavailable => {
                         runtime
                             .remove_private_uploaded_model_execution_journal(
                                 &entry.service_name,
@@ -8794,45 +9638,133 @@ impl SoracloudRuntimeManager {
                         );
                         return Ok(());
                     }
+                    PrivateExecutionJournalLedgerDisposition::SupersededByAuthoritativeClaim => {
+                        iroha_logger::warn!(
+                            service = %entry.service_name,
+                            decryption_request_id = %entry.decryption_request_id,
+                            receipt_id = %entry.receipt.receipt_id,
+                            "quarantined private execution outbox superseded by another validator's authoritative claim"
+                        );
+                        return Ok(());
+                    }
+                    PrivateExecutionJournalLedgerDisposition::UnclaimedOutputConflict => {
+                        iroha_logger::warn!(
+                            service = %entry.service_name,
+                            decryption_request_id = %entry.decryption_request_id,
+                            receipt_id = %entry.receipt.receipt_id,
+                            "quarantined retry-stable private output digest collision; route a retry to another validator"
+                        );
+                        return Ok(());
+                    }
+                    PrivateExecutionJournalLedgerDisposition::SubmissionAttemptsExhausted => {
+                        iroha_logger::error!(
+                            service = %entry.service_name,
+                            decryption_request_id = %entry.decryption_request_id,
+                            phase = ?entry.phase,
+                            submission_attempt = entry.submission_attempt,
+                            "quarantined exhausted private execution outbox entry while retaining its exact durable evidence"
+                        );
+                        return Ok(());
+                    }
                     PrivateExecutionJournalLedgerDisposition::Active => {}
                 }
-                let sorafs_node = self.sorafs_node.as_ref().ok_or_else(|| {
-                    eyre::eyre!("private execution durable outbox requires embedded SoraFS storage")
-                })?;
-                verify_private_execution_output_is_durable(
-                    sorafs_node,
-                    &entry.receipt.output_artifact,
-                )?;
-                runtime
-                    .advance_private_uploaded_model_execution(
-                        entry.output_manifest_payload.clone(),
-                        entry.receipt.clone(),
-                    )
-                    .map_err(|error| {
+                    let sorafs_node = self.sorafs_node.as_ref().ok_or_else(|| {
                         eyre::eyre!(
-                            "recover private execution durable outbox submission: {}",
-                            error.message
+                            "private execution durable outbox requires embedded SoraFS storage"
                         )
                     })?;
-                Ok(())
-            },
-            |entry, error| {
-                iroha_logger::error!(
-                    service = %entry.service_name,
-                    decryption_request_id = %entry.decryption_request_id,
-                    error = %error,
-                    "private execution outbox entry reconciliation failed; continuing with remaining entries"
-                );
-            },
-        )
+                    verify_private_execution_output_is_durable(
+                        sorafs_node,
+                        &entry.receipt.output_artifact,
+                    )?;
+                    if let Err(error) = runtime.advance_private_uploaded_model_execution(
+                        entry.output_manifest_payload.clone(),
+                        entry.receipt.clone(),
+                    ) {
+                        if error.kind == SoracloudRuntimeExecutionErrorKind::Conflict {
+                            let terminal = Self::private_execution_journal_ledger_disposition(
+                                self.state.as_ref(),
+                                entry,
+                                true,
+                                self.config.reconcile_interval,
+                            )?;
+                            match terminal {
+                            PrivateExecutionJournalLedgerDisposition::Committed
+                            | PrivateExecutionJournalLedgerDisposition::AuthorizationExpired
+                            | PrivateExecutionJournalLedgerDisposition::UnclaimedOutputRecoveryWindowClosed
+                            | PrivateExecutionJournalLedgerDisposition::UnclaimedDependencyUnavailable
+                            | PrivateExecutionJournalLedgerDisposition::ClaimedOutputRecoveryWindowClosed => {
+                                runtime
+                                    .remove_private_uploaded_model_execution_journal(
+                                        &entry.service_name,
+                                        &entry.decryption_request_id,
+                                    )
+                                    .map_err(|remove_error| {
+                                        eyre::eyre!(
+                                            "remove terminal private execution outbox entry: {}",
+                                            remove_error.message
+                                        )
+                                    })?;
+                                iroha_logger::warn!(
+                                    service = %entry.service_name,
+                                    decryption_request_id = %entry.decryption_request_id,
+                                    disposition = ?terminal,
+                                    "retired terminal private execution outbox after replacement became impossible"
+                                );
+                                return Ok(());
+                            }
+                            PrivateExecutionJournalLedgerDisposition::SubmissionAttemptsExhausted
+                            | PrivateExecutionJournalLedgerDisposition::SupersededByAuthoritativeClaim
+                            | PrivateExecutionJournalLedgerDisposition::UnclaimedOutputConflict => {
+                                iroha_logger::warn!(
+                                    service = %entry.service_name,
+                                    decryption_request_id = %entry.decryption_request_id,
+                                    disposition = ?terminal,
+                                    "quarantined terminal private execution outbox evidence"
+                                );
+                                return Ok(());
+                            }
+                            PrivateExecutionJournalLedgerDisposition::Active => {}
+                        }
+                        }
+                        return Err(eyre::eyre!(
+                            "recover private execution durable outbox submission: {}",
+                            error.message
+                        ));
+                    }
+                    Ok(())
+                },
+                |entry, error| {
+                    iroha_logger::error!(
+                        service = %entry.service_name,
+                        decryption_request_id = %entry.decryption_request_id,
+                        error = %error,
+                        "private execution outbox entry reconciliation failed; continuing with remaining entries"
+                    );
+                },
+            )
+        };
+        if let Some(error) = first_quarantined {
+            return Err(error).wrap_err(
+                "one or more private execution outbox entries were quarantined during reconciliation",
+            );
+        }
+        reconciliation
     }
     /// Reconcile the node-local materialization plan against authoritative state once.
     pub(super) fn reconcile_once(&self) -> eyre::Result<()> {
         validate_soracloud_runtime_manager_posture(&self.config)
             .wrap_err("validate Soracloud runtime-manager first-release posture")?;
         self.ensure_runtime_state_directories()?;
-        self.reconcile_private_execution_outbox()
-            .wrap_err("reconcile private execution durable outbox")?;
+        let private_execution_outbox_result = self
+            .reconcile_private_execution_outbox()
+            .wrap_err("reconcile private execution durable outbox");
+        if let Err(error) = &private_execution_outbox_result {
+            iroha_logger::error!(
+                error = %error,
+                "private execution outbox is degraded; continuing ordinary runtime reconciliation"
+            );
+        }
         let inrou_hosting_available = self.inrou_hosting_available_for_reconcile();
         let SoracloudReconcileBaseline {
             bundle_registry,
@@ -8890,7 +9822,7 @@ impl SoracloudRuntimeManager {
             "Soracloud runtime snapshot",
         )?;
         *self.snapshot.write() = snapshot;
-        Ok(())
+        private_execution_outbox_result
     }
     /// Reserved worker for globally ordered mailbox execution.
     ///
@@ -9287,11 +10219,15 @@ impl SoracloudRuntimeManager {
                         continue;
                     }
                 };
-                let Some((lease_started_height, reporting_epoch)) =
+                let Some(lease_identity) =
                     self.authoritative_service_lease_identity(view, service_name)
                 else {
                     continue;
                 };
+                let HostedHttpLeaseIdentity {
+                    lease_started_height,
+                    reporting_epoch,
+                } = lease_identity;
                 for replica in &plan.local_replicas {
                     let assignment = match resolve_active_inrou_replica_assignment(
                         view.world(),
@@ -9423,45 +10359,200 @@ impl SoracloudRuntimeManager {
         let service_name_id = Name::from_str(service_name).wrap_err_with(|| {
             format!("parse authoritative Soracloud service name `{service_name}`")
         })?;
-        let accounted_egress_bytes = view
+        let lease = view
             .world()
             .soracloud_service_deployments()
             .get(&service_name_id)
-            .filter(|deployment| {
-                deployment.current_service_version == service_version
-                    || deployment.active_rollout.as_ref().is_some_and(|rollout| {
-                        rollout.candidate_version == service_version
-                            || rollout.baseline_version == service_version
-                    })
-            })
             .and_then(|deployment| deployment.service_lease.as_ref())
-            .filter(|lease| {
-                lease.lease_started_height == lease_started_height
-                    && lease.reporting_epoch == reporting_epoch
-            })
-            .map(|lease| lease.accounted_egress_bytes)
+            .filter(|lease| lease.lease_started_height == lease_started_height)
             .ok_or_else(|| {
                 eyre::eyre!(
                     "service `{service_name}` revision `{service_version}` has no authoritative lease egress for incarnation `{lease_started_height}`"
                 )
             })?;
-        u64::try_from(accounted_egress_bytes).map_err(|_| {
-            eyre::eyre!(
-                "service `{service_name}` revision `{service_version}` authoritative lease egress exceeds the local u64 accounting corridor"
-            )
-        })
+        if reporting_epoch == lease.reporting_epoch {
+            return lease
+                .egress_reporter_checkpoints
+                .iter()
+                .filter(|checkpoint| {
+                    checkpoint.reporting_epoch == reporting_epoch
+                        && checkpoint.assignment.service_version == service_version
+                })
+                .try_fold(0_u64, |total, checkpoint| {
+                    total
+                        .checked_add(checkpoint.accounted_egress_bytes)
+                        .ok_or_else(|| {
+                            eyre::eyre!(
+                                "service `{service_name}` revision `{service_version}` current reporting-epoch egress exceeds the u64 runtime counter domain"
+                            )
+                        })
+                });
+        }
+        if lease.reporting_epoch.checked_add(1) == Some(reporting_epoch) {
+            return Ok(0);
+        }
+        eyre::bail!(
+            "service `{service_name}` revision `{service_version}` reporting epoch `{reporting_epoch}` is neither current epoch `{}` nor its exact successor",
+            lease.reporting_epoch
+        )
     }
     fn authoritative_service_lease_identity(
         &self,
         view: &StateView<'_>,
         service_name: &str,
-    ) -> Option<(u64, u64)> {
+    ) -> Option<HostedHttpLeaseIdentity> {
         let service_name = Name::from_str(service_name).ok()?;
         view.world()
             .soracloud_service_deployments()
             .get(&service_name)
             .and_then(|deployment| deployment.service_lease.as_ref())
-            .map(|lease| (lease.lease_started_height, lease.reporting_epoch))
+            .map(|lease| HostedHttpLeaseIdentity {
+                lease_started_height: lease.lease_started_height,
+                reporting_epoch: lease.reporting_epoch,
+            })
+    }
+    fn authoritative_reporter_lease_selection(
+        &self,
+        view: &StateView<'_>,
+        service_name: &str,
+        service_version: &str,
+        replica_slot: u16,
+    ) -> eyre::Result<HostedHttpReporterLeaseSelection> {
+        let validator_account_id = self
+            .config
+            .local_validator_account_id
+            .as_ref()
+            .ok_or_else(|| eyre::eyre!("local Inrou reporter identity is not configured"))?;
+        let local_peer_id =
+            self.config.local_peer_id.as_deref().ok_or_else(|| {
+                eyre::eyre!("local Inrou reporter peer identity is not configured")
+            })?;
+        let service_name_id = Name::from_str(service_name).wrap_err_with(|| {
+            format!("parse authoritative Soracloud service name `{service_name}`")
+        })?;
+        let world = view.world();
+        let Some(deployment) = world.soracloud_service_deployments().get(&service_name_id) else {
+            return Ok(HostedHttpReporterLeaseSelection::NotAssigned);
+        };
+        let now_ms =
+            soracloud_state_view_observed_at_ms(view).max(soracloud_runtime_observed_at_ms());
+        let assignment = resolve_active_inrou_replica_assignment(
+            world,
+            service_name,
+            service_version,
+            replica_slot,
+            now_ms,
+            committed_height(view),
+            |lane_id| view.is_lane_active_for_authority(lane_id),
+        )
+        .map_err(|error| eyre::eyre!(error))?;
+        if !assignment.is_some_and(|placement| {
+            placement.validator_account_id == *validator_account_id
+                && placement.peer_id == local_peer_id
+        }) {
+            return Ok(HostedHttpReporterLeaseSelection::NotAssigned);
+        }
+        let Some(lease) = deployment.service_lease.as_ref() else {
+            return Ok(HostedHttpReporterLeaseSelection::NotAssigned);
+        };
+        let current = HostedHttpLeaseIdentity {
+            lease_started_height: lease.lease_started_height,
+            reporting_epoch: lease.reporting_epoch,
+        };
+        if lease
+            .egress_reporter_checkpoints
+            .iter()
+            .any(|checkpoint| checkpoint.reporting_epoch != lease.reporting_epoch)
+        {
+            eyre::bail!(
+                "service `{service_name}` contains an Inrou reporter checkpoint from another reporting epoch"
+            );
+        }
+        if lease.egress_reporter_checkpoints.iter().any(|checkpoint| {
+            checkpoint.assignment.service_version == service_version
+                && checkpoint.assignment.placement.replica_slot == replica_slot
+                && checkpoint.assignment.placement.validator_account_id == *validator_account_id
+        }) {
+            return Ok(HostedHttpReporterLeaseSelection::Ready(current));
+        }
+        match lease
+            .egress_reporter_checkpoints
+            .len()
+            .cmp(&SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1)
+        {
+            std::cmp::Ordering::Less => {
+                return Ok(HostedHttpReporterLeaseSelection::Ready(current));
+            }
+            std::cmp::Ordering::Greater => {
+                eyre::bail!(
+                    "service `{service_name}` exceeds the first-release reporter-checkpoint limit"
+                );
+            }
+            std::cmp::Ordering::Equal => {}
+        }
+        if lease
+            .egress_reporter_checkpoints
+            .iter()
+            .any(|checkpoint| !checkpoint.finalize_reporter)
+        {
+            return Ok(HostedHttpReporterLeaseSelection::AwaitingRollover);
+        }
+        let mut active_reporter_assignments = BTreeSet::new();
+        for (active_service_version, _, _) in collect_active_versions(deployment)? {
+            let assignments = resolve_active_inrou_replica_assignments(
+                world,
+                service_name,
+                &active_service_version,
+                now_ms,
+                committed_height(view),
+                |lane_id| view.is_lane_active_for_authority(lane_id),
+            )
+            .map_err(|error| eyre::eyre!(error))?;
+            active_reporter_assignments.extend(assignments.into_iter().map(|assignment| {
+                (
+                    active_service_version.clone(),
+                    assignment.replica_slot,
+                    assignment.validator_account_id,
+                )
+            }));
+        }
+        if lease.egress_reporter_checkpoints.iter().any(|checkpoint| {
+            active_reporter_assignments.contains(&(
+                checkpoint.assignment.service_version.clone(),
+                checkpoint.assignment.placement.replica_slot,
+                checkpoint.assignment.placement.validator_account_id.clone(),
+            ))
+        }) {
+            return Ok(HostedHttpReporterLeaseSelection::AwaitingRollover);
+        }
+        let prior_epoch_delta = lease
+            .egress_reporter_checkpoints
+            .iter()
+            .try_fold(0_u128, |total, checkpoint| {
+                total.checked_add(u128::from(checkpoint.accounted_egress_bytes))
+            })
+            .ok_or_else(|| {
+                eyre::eyre!(
+                    "service `{service_name}` prior reporting-epoch settlement overflows u128"
+                )
+            })?;
+        lease
+            .settled_egress_bytes
+            .checked_add(prior_epoch_delta)
+            .ok_or_else(|| {
+                eyre::eyre!(
+                    "service `{service_name}` cumulative reporting-epoch settlement overflows u128"
+                )
+            })?;
+        let reporting_epoch = lease.reporting_epoch.checked_add(1).ok_or_else(|| {
+            eyre::eyre!("service `{service_name}` reporting epoch space is exhausted")
+        })?;
+        Ok(HostedHttpReporterLeaseSelection::Ready(
+            HostedHttpLeaseIdentity {
+                lease_started_height: lease.lease_started_height,
+                reporting_epoch,
+            },
+        ))
     }
     fn authoritative_service_lease_reporter_checkpoint(
         &self,
@@ -9500,6 +10591,194 @@ impl SoracloudRuntimeManager {
                         finalize_reporter: checkpoint.finalize_reporter,
                     })
             })
+    }
+    fn recover_or_reuse_inrou_reporter_egress_accounting(
+        &self,
+        key: &HostedHttpReporterKey,
+        revision_accounting: &PortableVmEgressAccounting,
+        authoritative_checkpoint: Option<HostedHttpReporterCheckpointState>,
+    ) -> io::Result<PortableVmEgressAccounting> {
+        let mut reporter_accounting = self.inrou_replica_egress_accounting.lock();
+        if let Some(accounting) = reporter_accounting.get(key) {
+            return Ok(accounting.clone());
+        }
+        let (service_name, service_version, lease_started_height, reporting_epoch, replica_slot) =
+            key;
+        let validator_account_id = self
+            .config
+            .local_validator_account_id
+            .as_ref()
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "local Inrou replica `{service_name}` revision `{service_version}` replica {replica_slot} has no validator reporter identity"
+                    ),
+                )
+            })?;
+        let durable_checkpoint = InrouDurableEgressCheckpoint::load_or_create(
+            &self.config.state_dir,
+            service_name,
+            *lease_started_height,
+            *reporting_epoch,
+            service_version,
+            *replica_slot,
+            validator_account_id,
+            authoritative_checkpoint,
+        )?;
+        let recovered_accounted_egress_bytes = durable_checkpoint.accounted_egress_bytes();
+        let accounting = PortableVmEgressAccounting::new_durable_with_gate(
+            recovered_accounted_egress_bytes,
+            Arc::clone(&revision_accounting.update_gate),
+            durable_checkpoint,
+        )?;
+        reporter_accounting.insert(key.clone(), accounting.clone());
+        Ok(accounting)
+    }
+    fn advance_inrou_revision_recovery_floor(
+        &self,
+        view: &StateView<'_>,
+        revision_key: &HostedHttpRevisionKey,
+        revision_accounting: &PortableVmEgressAccounting,
+        authoritative_revision_accounted_egress_bytes: u64,
+    ) -> io::Result<()> {
+        let local_reporters = self
+            .inrou_replica_egress_accounting
+            .lock()
+            .iter()
+            .filter(|(key, _accounting)| {
+                key.0 == revision_key.0
+                    && key.1 == revision_key.1
+                    && key.2 == revision_key.2
+                    && key.3 == revision_key.3
+            })
+            .map(|(key, accounting)| (key.clone(), accounting.clone()))
+            .collect::<Vec<_>>();
+        let reporter_floors = local_reporters
+            .into_iter()
+            .map(|(key, accounting)| {
+                let authoritative_accounted_egress_bytes = self
+                    .authoritative_service_lease_reporter_checkpoint(
+                        view, &key.0, key.2, key.3, &key.1, key.4,
+                    )
+                    .map_or(0, |checkpoint| checkpoint.accounted_egress_bytes);
+                (authoritative_accounted_egress_bytes, accounting)
+            })
+            .collect::<Vec<_>>();
+        revision_accounting.advance_recovered_revision_floor(
+            authoritative_revision_accounted_egress_bytes,
+            &reporter_floors,
+        )
+    }
+    fn recover_authoritative_inrou_reporter_egress_accounting(
+        &self,
+        view: &StateView<'_>,
+        desired_keys: &BTreeSet<HostedHttpReporterKey>,
+    ) -> eyre::Result<()> {
+        let Some(validator_account_id) = self.config.local_validator_account_id.as_ref() else {
+            return Ok(());
+        };
+        let mut authoritative_reporters = BTreeMap::<HostedHttpRevisionKey, Vec<_>>::new();
+        let mut unique_keys = BTreeSet::new();
+        for (service_name, deployment) in view.world().soracloud_service_deployments().iter() {
+            let Some(lease) = deployment.service_lease.as_ref() else {
+                continue;
+            };
+            for checkpoint in &lease.egress_reporter_checkpoints {
+                if checkpoint.reporting_epoch != lease.reporting_epoch {
+                    eyre::bail!(
+                        "service `{service_name}` contains an Inrou reporter checkpoint from another reporting epoch"
+                    );
+                }
+                if checkpoint.assignment.placement.validator_account_id != *validator_account_id {
+                    continue;
+                }
+                let key = (
+                    service_name.as_ref().to_owned(),
+                    checkpoint.assignment.service_version.clone(),
+                    lease.lease_started_height,
+                    lease.reporting_epoch,
+                    checkpoint.assignment.placement.replica_slot,
+                );
+                if !unique_keys.insert(key.clone()) {
+                    eyre::bail!(
+                        "service `{service_name}` contains duplicate Inrou reporter checkpoint identity {key:?}"
+                    );
+                }
+                authoritative_reporters
+                    .entry((key.0.clone(), key.1.clone(), key.2, key.3))
+                    .or_default()
+                    .push((
+                        key,
+                        HostedHttpReporterCheckpointState {
+                            lease_started_height: lease.lease_started_height,
+                            reporting_epoch: lease.reporting_epoch,
+                            accounted_egress_bytes: checkpoint.accounted_egress_bytes,
+                            finalize_reporter: checkpoint.finalize_reporter,
+                        },
+                    ));
+            }
+        }
+        for (revision_key, reporters) in authoritative_reporters {
+            let (service_name, service_version, lease_started_height, reporting_epoch) =
+                &revision_key;
+            let authoritative_revision_egress_bytes =
+                Self::authoritative_service_lease_egress_bytes(
+                    view,
+                    service_name,
+                    service_version,
+                    *lease_started_height,
+                    *reporting_epoch,
+                )?;
+            let revision_accounting = {
+                let mut accounting = self.inrou_revision_egress_accounting.lock();
+                accounting
+                    .entry(revision_key.clone())
+                    .or_insert_with(|| {
+                        PortableVmEgressAccounting::new(authoritative_revision_egress_bytes)
+                    })
+                    .clone()
+            };
+            for (key, authoritative_checkpoint) in reporters {
+                let former_reporter_recovery_required = !desired_keys.contains(&key)
+                    && !self
+                        .inrou_replica_egress_accounting
+                        .lock()
+                        .contains_key(&key);
+                require_inrou_former_reporter_recovery_attestation(
+                    former_reporter_recovery_required,
+                    self.inrou_startup_worker_absence_attested,
+                )
+                .wrap_err_with(|| {
+                    format!(
+                        "authorize former Inrou reporter recovery for service `{}` revision `{}` replica {}",
+                        key.0, key.1, key.4
+                    )
+                })?;
+                self.recover_or_reuse_inrou_reporter_egress_accounting(
+                    &key,
+                    &revision_accounting,
+                    Some(authoritative_checkpoint),
+                )
+                .wrap_err_with(|| {
+                    format!(
+                        "recover authoritative Inrou reporter egress checkpoint for service `{service_name}` revision `{service_version}` reporting epoch {reporting_epoch}"
+                    )
+                })?;
+            }
+            self.advance_inrou_revision_recovery_floor(
+                view,
+                &revision_key,
+                &revision_accounting,
+                authoritative_revision_egress_bytes,
+            )
+            .wrap_err_with(|| {
+                format!(
+                    "recompute recovered Inrou revision egress floor for service `{service_name}` revision `{service_version}` reporting epoch {reporting_epoch}"
+                )
+            })?;
+        }
+        Ok(())
     }
     fn reconcile_inrou_egress_checkpoint_files(&self, view: &StateView<'_>) -> io::Result<()> {
         let mut retained_digests = BTreeSet::new();
@@ -9575,6 +10854,7 @@ impl SoracloudRuntimeManager {
             .cloned()
             .collect::<BTreeSet<_>>();
         retained_local_keys.extend(self.hosted_http_workers.lock().keys().cloned());
+        retained_local_keys.extend(self.quarantined_hosted_http_workers.lock().keys().cloned());
         if !retained_local_keys.is_empty() {
             let validator_account_id =
                 self.config
@@ -9679,26 +10959,31 @@ impl SoracloudRuntimeManager {
                 return;
             }
         };
-        let current_lease_matches = view
+        let lease_epoch_matches = view
             .world()
             .soracloud_service_deployments()
             .get(&service_name_id)
             .and_then(|deployment| deployment.service_lease.as_ref())
             .is_some_and(|lease| {
                 lease.lease_started_height == lease_started_height
-                    && lease.reporting_epoch == reporting_epoch
+                    && (lease.reporting_epoch == reporting_epoch
+                        || (lease.reporting_epoch.checked_add(1) == Some(reporting_epoch)
+                            && replica_accounted_egress_bytes == 0
+                            && !finalize_reporter))
             });
-        if !current_lease_matches {
+        if !lease_epoch_matches {
             iroha_logger::warn!(
                 service_name,
                 service_version,
                 lease_started_height,
-                "refusing to submit Soracloud lease usage for a stale or missing lease incarnation"
+                reporting_epoch,
+                "refusing to submit Soracloud lease usage for a stale lease or invalid reporting-epoch transition"
             );
             return;
         }
         let instruction = InstructionBox::from(isi::soracloud::ReportSoracloudServiceLeaseUsage {
             service_name: service_name_id,
+            lease_started_height,
             reporting_epoch,
             active_service_version: service_version.to_owned(),
             replica_slot,
@@ -9714,6 +10999,7 @@ impl SoracloudRuntimeManager {
                 service_name = %service_name,
                 service_version = %service_version,
                 lease_started_height,
+                reporting_epoch,
                 replica_slot,
                 replica_accounted_egress_bytes,
                 finalize_reporter,
@@ -10139,51 +11425,74 @@ impl SoracloudRuntimeManager {
         &self,
         view: &StateView<'_>,
         snapshot: &SoracloudRuntimeSnapshot,
-        _bundle_registry: &BTreeMap<(String, String), SoraDeploymentBundleV1>,
-    ) -> BTreeSet<HostedHttpReporterKey> {
-        snapshot
-            .services
-            .iter()
-            .flat_map(|(service_name, versions)| {
-                versions.iter().filter_map(|(service_version, plan)| {
-                    let (lease_started_height, reporting_epoch) =
-                        self.authoritative_service_lease_identity(view, service_name)?;
-                    (plan.runtime == SoraContainerRuntimeV1::Inrou
-                        && plan.process_generation.is_some())
-                    .then_some((
+    ) -> eyre::Result<BTreeSet<HostedHttpReporterKey>> {
+        let mut desired = BTreeSet::new();
+        for (service_name, versions) in &snapshot.services {
+            for (service_version, plan) in versions {
+                if plan.runtime != SoraContainerRuntimeV1::Inrou
+                    || plan.process_generation.is_none()
+                {
+                    continue;
+                }
+                for replica_slot in plan.local_replica_slots.iter().copied() {
+                    let HostedHttpReporterLeaseSelection::Ready(lease_identity) = self
+                        .authoritative_reporter_lease_selection(
+                            view,
+                            service_name,
+                            service_version,
+                            replica_slot,
+                        )?
+                    else {
+                        continue;
+                    };
+                    desired.insert((
                         service_name.clone(),
                         service_version.clone(),
-                        lease_started_height,
-                        reporting_epoch,
-                    ))
-                })
-            })
-            .flat_map(
-                |(service_name, service_version, lease_started_height, reporting_epoch)| {
-                    snapshot
-                        .services
-                        .get(&service_name)
-                        .and_then(|versions| versions.get(&service_version))
-                        .into_iter()
-                        .flat_map(move |plan| {
-                            let service_name = service_name.clone();
-                            let service_version = service_version.clone();
-                            plan.local_replica_slots
-                                .iter()
-                                .copied()
-                                .map(move |replica_slot| {
-                                    (
-                                        service_name.clone(),
-                                        service_version.clone(),
-                                        lease_started_height,
-                                        reporting_epoch,
-                                        replica_slot,
-                                    )
-                                })
-                        })
-                },
-            )
-            .collect()
+                        lease_identity.lease_started_height,
+                        lease_identity.reporting_epoch,
+                        replica_slot,
+                    ));
+                }
+            }
+        }
+        Ok(desired)
+    }
+    fn stop_hosted_http_worker_attested(
+        &self,
+        key: &HostedHttpReporterKey,
+        worker: Arc<Mutex<HostedHttpWorker>>,
+    ) -> eyre::Result<u64> {
+        {
+            let mut quarantined = self.quarantined_hosted_http_workers.lock();
+            match quarantined.get(key) {
+                Some(existing) if !Arc::ptr_eq(existing, &worker) => {
+                    eyre::bail!(
+                        "Inrou reporter {key:?} already has a different quarantined worker"
+                    );
+                }
+                Some(_) => {}
+                None => {
+                    quarantined.insert(key.clone(), Arc::clone(&worker));
+                }
+            }
+        }
+        let accounted_egress_bytes = {
+            let mut worker = worker.lock();
+            worker
+                .stop()
+                .wrap_err_with(|| format!("attest shutdown of Inrou reporter {key:?}"))?;
+            worker.accounted_egress_bytes().ok_or_else(|| {
+                eyre::eyre!("stopped Inrou reporter {key:?} has no durable egress accounting")
+            })?
+        };
+        let mut quarantined = self.quarantined_hosted_http_workers.lock();
+        if quarantined
+            .get(key)
+            .is_some_and(|current| Arc::ptr_eq(current, &worker))
+        {
+            quarantined.remove(key);
+        }
+        Ok(accounted_egress_bytes)
     }
     fn reconcile_hosted_http_workers(
         &self,
@@ -10191,7 +11500,7 @@ impl SoracloudRuntimeManager {
         snapshot: &SoracloudRuntimeSnapshot,
         bundle_registry: &BTreeMap<(String, String), SoraDeploymentBundleV1>,
     ) -> eyre::Result<()> {
-        let desired_keys = self.desired_hosted_http_worker_keys(view, snapshot, bundle_registry);
+        let desired_keys = self.desired_hosted_http_worker_keys(view, snapshot)?;
         let desired_revision_keys = desired_keys
             .iter()
             .map(
@@ -10211,6 +11520,13 @@ impl SoracloudRuntimeManager {
                 },
             )
             .collect::<BTreeSet<_>>();
+        self.recover_authoritative_inrou_reporter_egress_accounting(view, &desired_keys)?;
+        let mut stop_candidates = self
+            .quarantined_hosted_http_workers
+            .lock()
+            .iter()
+            .map(|(key, worker)| (key.clone(), Arc::clone(worker)))
+            .collect::<BTreeMap<_, _>>();
         let stale_workers = {
             let mut workers = self.hosted_http_workers.lock();
             let stale_keys = workers
@@ -10223,31 +11539,63 @@ impl SoracloudRuntimeManager {
                 .filter_map(|key| workers.remove(&key).map(|worker| (key, worker)))
                 .collect::<Vec<_>>()
         };
-        for (
-            (service_name, service_version, lease_started_height, reporting_epoch, replica_slot),
-            worker,
-        ) in stale_workers
         {
-            let final_accounted_egress_bytes = {
-                let mut worker = worker.lock();
-                worker.stop();
-                worker.accounted_egress_bytes().ok_or_else(|| {
-                    eyre::eyre!(
-                        "stale hosted worker `{service_name}` revision `{service_version}` replica {replica_slot} has no reporter accounting"
-                    )
-                })?
-            };
-            self.submit_http_service_lease_usage_update(
-                view,
-                &service_name,
+            let mut quarantined = self.quarantined_hosted_http_workers.lock();
+            for (key, worker) in stale_workers {
+                if quarantined.contains_key(&key) {
+                    eyre::bail!("Inrou reporter {key:?} exists in both active and quarantine maps");
+                }
+                quarantined.insert(key.clone(), Arc::clone(&worker));
+                stop_candidates.insert(key, worker);
+            }
+        }
+        for (key, worker) in stop_candidates {
+            let (
+                service_name,
+                service_version,
                 lease_started_height,
                 reporting_epoch,
-                &service_version,
                 replica_slot,
-                final_accounted_egress_bytes,
-                true,
-            );
+            ) = &key;
+            let final_accounted_egress_bytes =
+                self.stop_hosted_http_worker_attested(&key, worker)?;
+            match hosted_http_attested_quarantine_disposition(desired_keys.contains(&key)) {
+                HostedHttpAttestedQuarantineDisposition::RetainOpenReporter => {
+                    // Shutdown is now fully attested, so the worker has left
+                    // quarantine. The assignment became desired again while
+                    // it was quarantined: retain its open durable reporter and
+                    // let the normal launch pass create a clean worker. An
+                    // active assignment must never receive a terminal
+                    // checkpoint.
+                    continue;
+                }
+                HostedHttpAttestedQuarantineDisposition::FinalizeReporter => {}
+            }
+            if self.authoritative_service_lease_identity(view, service_name)
+                == Some(HostedHttpLeaseIdentity {
+                    lease_started_height: *lease_started_height,
+                    reporting_epoch: *reporting_epoch,
+                })
+            {
+                self.submit_http_service_lease_usage_update(
+                    view,
+                    service_name,
+                    *lease_started_height,
+                    *reporting_epoch,
+                    service_version,
+                    *replica_slot,
+                    final_accounted_egress_bytes,
+                    true,
+                );
+            }
         }
+        let mut unattested_reporters = self
+            .hosted_http_workers
+            .lock()
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        unattested_reporters.extend(self.quarantined_hosted_http_workers.lock().keys().cloned());
         let pending_terminal_reporters = self
             .inrou_replica_egress_accounting
             .lock()
@@ -10262,6 +11610,28 @@ impl SoracloudRuntimeManager {
         ) in pending_terminal_reporters
         {
             let local_accounted_egress_bytes = accounting.accounted_egress_bytes();
+            let reporter_key = (
+                service_name.clone(),
+                service_version.clone(),
+                lease_started_height,
+                reporting_epoch,
+                replica_slot,
+            );
+            if self.authoritative_service_lease_identity(view, &service_name)
+                != Some(HostedHttpLeaseIdentity {
+                    lease_started_height,
+                    reporting_epoch,
+                })
+            {
+                finalized_reporters.push((
+                    service_name,
+                    service_version,
+                    lease_started_height,
+                    reporting_epoch,
+                    replica_slot,
+                ));
+                continue;
+            }
             let authoritative = self.authoritative_service_lease_reporter_checkpoint(
                 view,
                 &service_name,
@@ -10271,6 +11641,7 @@ impl SoracloudRuntimeManager {
                 replica_slot,
             );
             match hosted_http_terminal_reporter_action(
+                !unattested_reporters.contains(&reporter_key),
                 authoritative,
                 local_accounted_egress_bytes,
             )
@@ -10310,15 +11681,32 @@ impl SoracloudRuntimeManager {
                 .lock()
                 .retain(|key, _attempt| !finalized_reporters.contains(key));
         }
-        self.inrou_revision_egress_accounting
-            .lock()
-            .retain(|key, _accounting| desired_revision_keys.contains(key));
         let retained_reporter_keys = self
             .inrou_replica_egress_accounting
             .lock()
             .keys()
             .cloned()
             .collect::<BTreeSet<_>>();
+        let mut retained_revision_keys = desired_revision_keys;
+        retained_revision_keys.extend(retained_reporter_keys.iter().map(
+            |(
+                service_name,
+                service_version,
+                lease_started_height,
+                reporting_epoch,
+                _replica_slot,
+            )| {
+                (
+                    service_name.clone(),
+                    service_version.clone(),
+                    *lease_started_height,
+                    *reporting_epoch,
+                )
+            },
+        ));
+        self.inrou_revision_egress_accounting
+            .lock()
+            .retain(|key, _accounting| retained_revision_keys.contains(key));
         self.last_service_lease_usage_submission_bytes
             .lock()
             .retain(|key, _attempt| {
@@ -10348,13 +11736,6 @@ impl SoracloudRuntimeManager {
                     continue;
                 };
                 let runtime_label = "inrou";
-                let (lease_started_height, reporting_epoch) = self
-                    .authoritative_service_lease_identity(view, service_name)
-                    .ok_or_else(|| {
-                        eyre::eyre!(
-                            "local Inrou service `{service_name}` revision `{service_version}` has no authoritative lease incarnation"
-                        )
-                    })?;
                 let process_generation = plan.process_generation.ok_or_else(|| {
                     eyre::eyre!(
                         "local Inrou service `{service_name}` revision `{service_version}` has no canonical process generation"
@@ -10362,39 +11743,61 @@ impl SoracloudRuntimeManager {
                 })?;
                 let service_data_dir =
                     build_native_service_data_dir(&self.config.state_dir, service_name);
-                let authoritative_lease_egress_bytes =
-                    Self::authoritative_service_lease_egress_bytes(
+                let mut replica_runtime_states = Vec::with_capacity(plan.local_replica_slots.len());
+                let mut revision_accounting_for_summary = None;
+                for replica_slot in plan.local_replica_slots.iter().copied() {
+                    let replica_plan = project_hosted_http_replica_plan(plan, replica_slot);
+                    let lease_selection = self.authoritative_reporter_lease_selection(
                         view,
                         service_name,
                         service_version,
+                        replica_slot,
+                    )?;
+                    let lease_identity = match lease_selection {
+                        HostedHttpReporterLeaseSelection::Ready(lease_identity) => lease_identity,
+                        HostedHttpReporterLeaseSelection::AwaitingRollover => {
+                            replica_runtime_states.push(persist_hosted_http_replica_runtime_state(
+                                &PathBuf::from(&replica_plan.materialization_dir),
+                                service_name,
+                                service_version,
+                                process_generation,
+                                replica_slot,
+                                SoraServiceHealthStatusV1::Degraded,
+                                None,
+                                None,
+                                0,
+                                Some(
+                                    "awaiting exact Inrou reporting-epoch rollover preconditions"
+                                        .to_owned(),
+                                ),
+                            )?);
+                            continue;
+                        }
+                        HostedHttpReporterLeaseSelection::NotAssigned => {
+                            replica_runtime_states.push(
+                                persist_hosted_http_replica_runtime_state(
+                                    &PathBuf::from(&replica_plan.materialization_dir),
+                                    service_name,
+                                    service_version,
+                                    process_generation,
+                                    replica_slot,
+                                    SoraServiceHealthStatusV1::Degraded,
+                                    None,
+                                    None,
+                                    0,
+                                    Some(
+                                        "authoritative Inrou assignment changed during reconciliation; worker withheld"
+                                            .to_owned(),
+                                    ),
+                                )?,
+                            );
+                            continue;
+                        }
+                    };
+                    let HostedHttpLeaseIdentity {
                         lease_started_height,
                         reporting_epoch,
-                    )?;
-                let revision_lease_accounting_offset_bytes = authoritative_lease_egress_bytes;
-                let revision_egress_accounting = {
-                    let mut accounting = self.inrou_revision_egress_accounting.lock();
-                    accounting
-                        .entry((
-                            service_name.clone(),
-                            service_version.clone(),
-                            lease_started_height,
-                            reporting_epoch,
-                        ))
-                        .or_insert_with(|| {
-                            PortableVmEgressAccounting::new(revision_lease_accounting_offset_bytes)
-                        })
-                        .clone()
-                };
-                revision_egress_accounting
-                    .advance_floor(revision_lease_accounting_offset_bytes)
-                    .wrap_err_with(|| {
-                        format!(
-                            "advance shared Inrou egress accounting floor for service `{service_name}` revision `{service_version}`"
-                        )
-                    })?;
-                let mut replica_runtime_states = Vec::with_capacity(plan.local_replica_slots.len());
-                for replica_slot in plan.local_replica_slots.iter().copied() {
-                    let replica_plan = project_hosted_http_replica_plan(plan, replica_slot);
+                    } = lease_identity;
                     let key = (
                         service_name.clone(),
                         service_version.clone(),
@@ -10402,6 +11805,39 @@ impl SoracloudRuntimeManager {
                         reporting_epoch,
                         replica_slot,
                     );
+                    let revision_lease_accounting_offset_bytes =
+                        Self::authoritative_service_lease_egress_bytes(
+                            view,
+                            service_name,
+                            service_version,
+                            lease_started_height,
+                            reporting_epoch,
+                        )?;
+                    let revision_key = (
+                        service_name.clone(),
+                        service_version.clone(),
+                        lease_started_height,
+                        reporting_epoch,
+                    );
+                    let revision_egress_accounting = {
+                        let mut accounting = self.inrou_revision_egress_accounting.lock();
+                        accounting
+                            .entry(revision_key.clone())
+                            .or_insert_with(|| {
+                                PortableVmEgressAccounting::new(
+                                    revision_lease_accounting_offset_bytes,
+                                )
+                            })
+                            .clone()
+                    };
+                    revision_egress_accounting
+                        .advance_floor(revision_lease_accounting_offset_bytes)
+                        .wrap_err_with(|| {
+                            format!(
+                                "advance shared Inrou egress accounting floor for service `{service_name}` revision `{service_version}` reporting epoch {reporting_epoch}"
+                            )
+                        })?;
+                    revision_accounting_for_summary = Some(revision_egress_accounting.clone());
                     let authoritative_reporter_checkpoint = self
                         .authoritative_service_lease_reporter_checkpoint(
                             view,
@@ -10414,31 +11850,10 @@ impl SoracloudRuntimeManager {
                     let authoritative_reporter_accounted_egress_bytes =
                         authoritative_reporter_checkpoint
                             .map_or(0, |checkpoint| checkpoint.accounted_egress_bytes);
-                    let reporter_egress_accounting = if let Some(accounting) = self
-                        .inrou_replica_egress_accounting
-                        .lock()
-                        .get(&key)
-                        .cloned()
-                    {
-                        accounting
-                    } else {
-                        let validator_account_id = self
-                            .config
-                            .local_validator_account_id
-                            .as_ref()
-                            .ok_or_else(|| {
-                                eyre::eyre!(
-                                    "local Inrou replica `{service_name}` revision `{service_version}` replica {replica_slot} has no validator reporter identity"
-                                )
-                            })?;
-                        let durable_checkpoint = InrouDurableEgressCheckpoint::load_or_create(
-                            &self.config.state_dir,
-                            service_name,
-                            lease_started_height,
-                            reporting_epoch,
-                            service_version,
-                            replica_slot,
-                            validator_account_id,
+                    let reporter_egress_accounting = self
+                        .recover_or_reuse_inrou_reporter_egress_accounting(
+                            &key,
+                            &revision_egress_accounting,
                             authoritative_reporter_checkpoint,
                         )
                         .wrap_err_with(|| {
@@ -10446,18 +11861,6 @@ impl SoracloudRuntimeManager {
                                 "recover durable Inrou egress checkpoint for service `{service_name}` revision `{service_version}` replica {replica_slot}"
                             )
                         })?;
-                        let recovered_accounted_egress_bytes =
-                            durable_checkpoint.accounted_egress_bytes();
-                        let accounting = PortableVmEgressAccounting::new_durable_with_gate(
-                            recovered_accounted_egress_bytes,
-                            Arc::clone(&revision_egress_accounting.update_gate),
-                            durable_checkpoint,
-                        )?;
-                        self.inrou_replica_egress_accounting
-                            .lock()
-                            .insert(key.clone(), accounting.clone());
-                        accounting
-                    };
                     reporter_egress_accounting
                         .advance_floor(authoritative_reporter_accounted_egress_bytes)
                         .wrap_err_with(|| {
@@ -10465,6 +11868,17 @@ impl SoracloudRuntimeManager {
                                 "advance Inrou reporter egress accounting floor for service `{service_name}` revision `{service_version}` replica {replica_slot}"
                             )
                         })?;
+                    self.advance_inrou_revision_recovery_floor(
+                        view,
+                        &revision_key,
+                        &revision_egress_accounting,
+                        revision_lease_accounting_offset_bytes,
+                    )
+                    .wrap_err_with(|| {
+                        format!(
+                            "recompute complete Inrou revision egress floor for service `{service_name}` revision `{service_version}` reporting epoch {reporting_epoch}"
+                        )
+                    })?;
                     let replica_egress_accounting = PortableVmReplicaEgressAccounting::from_shared(
                         revision_egress_accounting.clone(),
                         reporter_egress_accounting.clone(),
@@ -10513,7 +11927,7 @@ impl SoracloudRuntimeManager {
                         || (!reporter_checkpoint_is_current && !existing_worker_is_running)
                     {
                         if let Some(worker) = self.hosted_http_workers.lock().remove(&key) {
-                            worker.lock().stop();
+                            self.stop_hosted_http_worker_attested(&key, worker)?;
                             running_processes = running_processes.saturating_sub(1);
                         }
                         let accounted_egress_bytes =
@@ -10598,12 +12012,10 @@ impl SoracloudRuntimeManager {
                             submit_replica_usage();
                             continue;
                         }
-                        guard.stop();
-                        let accounted_egress_bytes = guard
-                            .accounted_egress_bytes()
-                            .unwrap_or_else(|| reporter_egress_accounting.accounted_egress_bytes());
                         drop(guard);
                         let removed = self.hosted_http_workers.lock().remove(&key);
+                        let accounted_egress_bytes =
+                            self.stop_hosted_http_worker_attested(&key, worker)?;
                         if removed.is_some() && running_processes > 0 {
                             running_processes = running_processes.saturating_sub(1);
                         }
@@ -10737,7 +12149,9 @@ impl SoracloudRuntimeManager {
                     running_processes = running_processes.saturating_add(1);
                     submit_replica_usage();
                 }
-                let accounted_egress_bytes = revision_egress_accounting.accounted_egress_bytes();
+                let accounted_egress_bytes = revision_accounting_for_summary
+                    .as_ref()
+                    .map_or(0, PortableVmEgressAccounting::accounted_egress_bytes);
                 let revision_listen_base_url =
                     aggregate_hosted_http_revision_listener(&replica_runtime_states)
                         .map(ToOwned::to_owned);
@@ -10831,6 +12245,7 @@ impl SoracloudRuntimeManager {
             child_identity,
             shell,
             qemu_img,
+            ext4_formatter,
             namespace_tools,
         } = preflight;
         ensure_no_process_with_inrou_identity(&child_identity)
@@ -10876,7 +12291,12 @@ impl SoracloudRuntimeManager {
             resolve_inrou_bundle_member_path(&bundle_root, &inrou.kernel_image_path)?;
         let base_rootfs_image_path =
             resolve_inrou_bundle_member_path(&bundle_root, &inrou.rootfs_image_path)?;
-        let rootfs_base_binding = inrou_rootfs_base_binding(bundle, inrou)?;
+        let root_volume = plan
+            .lease_volumes
+            .iter()
+            .find(|volume| volume.kind == SoraLeaseVolumeKindV1::PersistentRootLeaseVolume)
+            .ok_or_else(|| eyre::eyre!("Inrou runtime requires one PersistentRootLeaseVolume"))?;
+        let rootfs_base_binding = inrou_rootfs_base_binding(bundle, inrou, root_volume)?;
         let initrd_image_path = inrou
             .initrd_image_path
             .as_ref()
@@ -10903,23 +12323,16 @@ impl SoracloudRuntimeManager {
         let stderr_log_path = materialization_dir.join("inrou.stderr.log");
         let stderr_log = open_inrou_runtime_log(&stderr_log_path, "Inrou stderr log")
             .wrap_err_with(|| format!("open {}", stderr_log_path.display()))?;
-        let (root_disk_path, root_disk_format) = match plan
-            .lease_volumes
-            .iter()
-            .find(|volume| volume.kind == SoraLeaseVolumeKindV1::PersistentRootLeaseVolume)
-        {
-            Some(root_volume) => (
-                ensure_inrou_portable_root_disk(
-                    &base_rootfs_image_path,
-                    root_volume,
-                    rootfs_base_binding,
-                )
-                .wrap_err("prepare Inrou mutable PortableVm root disk")?,
-                "raw",
-            ),
-            None => eyre::bail!("Inrou runtime requires one PersistentRootLeaseVolume"),
-        };
-        let lease_disks = ensure_inrou_portable_lease_disks(&qemu_img, plan)
+        let (root_disk_path, root_disk_format) = (
+            ensure_inrou_portable_root_disk(
+                &base_rootfs_image_path,
+                root_volume,
+                rootfs_base_binding,
+            )
+            .wrap_err("prepare Inrou mutable PortableVm root disk")?,
+            "raw",
+        );
+        let lease_disks = ensure_inrou_portable_lease_disks(&qemu_img, &ext4_formatter, plan)
             .wrap_err("prepare PortableVm lease disks")?;
         let shared_filesystem_mounts = build_inrou_portable_shared_filesystem_mounts(&lease_disks);
         let PortableVmNetworkPlan {
@@ -11064,7 +12477,7 @@ impl SoracloudRuntimeManager {
             .iter()
             .map(PathBuf::as_path)
             .collect::<Vec<_>>();
-        let worker_cgroup = inrou_cgroup::InrouWorkerCgroup::prepare(
+        let mut worker_cgroup = inrou_cgroup::InrouWorkerCgroup::prepare(
             inrou_cgroup::InrouCgroupWorkerKey {
                 service_name: &cache_key.service_name,
                 service_version: &cache_key.service_version,
@@ -11124,11 +12537,14 @@ impl SoracloudRuntimeManager {
         append_portable_vm_drive(
             &mut command,
             profile,
-            "rootfs",
-            Path::new(inrou_namespace::INROU_NAMESPACE_ROOT_DISK_PATH),
-            root_disk_format,
-            false,
-            true,
+            &PortableVmDriveSpec {
+                drive_id: "rootfs",
+                file_path: Path::new(inrou_namespace::INROU_NAMESPACE_ROOT_DISK_PATH),
+                format: root_disk_format,
+                read_only: false,
+                discard_on_unmap: true,
+                serial: None,
+            },
         )
         .wrap_err("attach PortableVm mutable root disk")?;
         append_portable_vm_vvfat_drive(
@@ -11137,28 +12553,33 @@ impl SoracloudRuntimeManager {
             Path::new(inrou_namespace::INROU_NAMESPACE_CLOUD_INIT_ROOT),
         )
         .wrap_err("attach read-only PortableVm cloud-init seed")?;
-        append_portable_vm_drive_with_serial(
+        append_portable_vm_drive(
             &mut command,
             profile,
-            "bundle",
-            Path::new(inrou_namespace::INROU_NAMESPACE_BUNDLE_PATH),
-            "raw",
-            true,
-            false,
-            Some(INROU_PORTABLE_BUNDLE_DEVICE_SERIAL),
+            &PortableVmDriveSpec {
+                drive_id: "bundle",
+                file_path: Path::new(inrou_namespace::INROU_NAMESPACE_BUNDLE_PATH),
+                format: "raw",
+                read_only: true,
+                discard_on_unmap: false,
+                serial: Some(INROU_PORTABLE_BUNDLE_DEVICE_SERIAL),
+            },
         )
         .wrap_err("attach read-only PortableVm app-bundle block device")?;
         for (index, disk) in lease_disks.iter().enumerate() {
             let drive_id = format!("lease{index}");
+            let namespace_drive_path = format!("/inrou/disk/lease{index}");
             append_portable_vm_drive(
                 &mut command,
                 profile,
-                &format!("lease{index}"),
-                Path::new(&format!("/inrou/disk/lease{index}")),
-                disk.image_format,
-                false,
-                true,
-                Some(&disk.device_serial),
+                &PortableVmDriveSpec {
+                    drive_id: &drive_id,
+                    file_path: Path::new(&namespace_drive_path),
+                    format: disk.image_format,
+                    read_only: false,
+                    discard_on_unmap: true,
+                    serial: Some(&disk.device_serial),
+                },
             )
             .wrap_err_with(|| format!("attach PortableVm lease disk {index}"))?;
         }
@@ -11182,8 +12603,12 @@ impl SoracloudRuntimeManager {
             }
         };
         if let Err(error) = worker_cgroup.place_launcher(child.id()) {
-            let termination = terminate_inrou_child_bounded(&mut child);
-            preserve_inrou_firewall_after_failed_termination(&termination, &mut loopback_firewall);
+            let termination = terminate_inrou_confined_child_bounded(
+                &mut child,
+                &mut worker_cgroup,
+                &mut loopback_firewall,
+                "Inrou PortableVM",
+            );
             return Err(error).wrap_err_with(|| {
                 format!(
                     "place and attest Inrou launcher before QEMU exec{}",
@@ -11192,8 +12617,12 @@ impl SoracloudRuntimeManager {
             });
         }
         if let Err(error) = launch_barrier.release() {
-            let termination = terminate_inrou_child_bounded(&mut child);
-            preserve_inrou_firewall_after_failed_termination(&termination, &mut loopback_firewall);
+            let termination = terminate_inrou_confined_child_bounded(
+                &mut child,
+                &mut worker_cgroup,
+                &mut loopback_firewall,
+                "Inrou PortableVM",
+            );
             return Err(error).wrap_err_with(|| {
                 format!(
                     "release Inrou QEMU only after cgroup placement{}",
@@ -11204,10 +12633,11 @@ impl SoracloudRuntimeManager {
         let mut log_drains = match attach_inrou_runtime_log_drains(&mut child, stderr_log) {
             Ok(log_drains) => log_drains,
             Err(error) => {
-                let termination = terminate_inrou_child_bounded(&mut child);
-                preserve_inrou_firewall_after_failed_termination(
-                    &termination,
+                let termination = terminate_inrou_confined_child_bounded(
+                    &mut child,
+                    &mut worker_cgroup,
                     &mut loopback_firewall,
+                    "Inrou PortableVM",
                 );
                 return Err(error).wrap_err_with(|| {
                     format!(
@@ -11227,10 +12657,11 @@ impl SoracloudRuntimeManager {
         ) {
             Ok(qemu_forward) => qemu_forward,
             Err(error) => {
-                let termination = terminate_inrou_child_bounded(&mut child);
-                preserve_inrou_firewall_after_failed_termination(
-                    &termination,
+                let termination = terminate_inrou_confined_child_bounded(
+                    &mut child,
+                    &mut worker_cgroup,
                     &mut loopback_firewall,
+                    "Inrou PortableVM",
                 );
                 join_inrou_log_drains_bounded(&mut log_drains);
                 return Err(error).wrap_err_with(|| {
@@ -11242,8 +12673,12 @@ impl SoracloudRuntimeManager {
             }
         };
         if qemu_forward != expected_backend {
-            let termination = terminate_inrou_child_bounded(&mut child);
-            preserve_inrou_firewall_after_failed_termination(&termination, &mut loopback_firewall);
+            let termination = terminate_inrou_confined_child_bounded(
+                &mut child,
+                &mut worker_cgroup,
+                &mut loopback_firewall,
+                "Inrou PortableVM",
+            );
             join_inrou_log_drains_bounded(&mut log_drains);
             eyre::bail!(
                 "QEMU published Inrou host forward {qemu_forward} instead of the reserved private-network endpoint {expected_backend}{}",
@@ -11262,10 +12697,11 @@ impl SoracloudRuntimeManager {
         ) {
             Ok(port_forward) => port_forward,
             Err(error) => {
-                let termination = terminate_inrou_child_bounded(&mut child);
-                preserve_inrou_firewall_after_failed_termination(
-                    &termination,
+                let termination = terminate_inrou_confined_child_bounded(
+                    &mut child,
+                    &mut worker_cgroup,
                     &mut loopback_firewall,
+                    "Inrou PortableVM",
                 );
                 join_inrou_log_drains_bounded(&mut log_drains);
                 return Err(error).wrap_err_with(|| {
@@ -11282,10 +12718,11 @@ impl SoracloudRuntimeManager {
                 Ok(status) => status,
                 Err(error) => {
                     port_forward.stop();
-                    let termination = terminate_inrou_child_bounded(&mut child);
-                    preserve_inrou_firewall_after_failed_termination(
-                        &termination,
+                    let termination = terminate_inrou_confined_child_bounded(
+                        &mut child,
+                        &mut worker_cgroup,
                         &mut loopback_firewall,
+                        "Inrou PortableVM",
                     );
                     join_inrou_log_drains_bounded(&mut log_drains);
                     return Err(error).wrap_err_with(|| {
@@ -11298,15 +12735,22 @@ impl SoracloudRuntimeManager {
             };
             if let Some(status) = child_status {
                 port_forward.stop();
+                let termination = terminate_inrou_confined_child_bounded(
+                    &mut child,
+                    &mut worker_cgroup,
+                    &mut loopback_firewall,
+                    "Inrou PortableVM",
+                );
                 join_inrou_log_drains_bounded(&mut log_drains);
                 let stderr = stderr_log_excerpt(&stderr_log_path);
                 eyre::bail!(
-                    "Inrou PortableVm process exited during startup with status {status}{}",
+                    "Inrou PortableVm process exited during startup with status {status}{}{}",
                     if stderr.is_empty() {
                         String::new()
                     } else {
                         format!(": {stderr}")
                     },
+                    inrou_termination_error_suffix(&termination),
                 );
             }
             match probe_hosted_http_health(
@@ -11336,10 +12780,11 @@ impl SoracloudRuntimeManager {
                 }
                 Err(error) => {
                     port_forward.stop();
-                    let termination = terminate_inrou_child_bounded(&mut child);
-                    preserve_inrou_firewall_after_failed_termination(
-                        &termination,
+                    let termination = terminate_inrou_confined_child_bounded(
+                        &mut child,
+                        &mut worker_cgroup,
                         &mut loopback_firewall,
+                        "Inrou PortableVM",
                     );
                     join_inrou_log_drains_bounded(&mut log_drains);
                     let stderr = stderr_log_excerpt(&stderr_log_path);
@@ -11745,6 +13190,8 @@ impl SoracloudRuntimeManager {
         source_id: &str,
         source: &iroha_data_model::soracloud::SoraHfSourceRecordV1,
     ) -> eyre::Result<()> {
+        let import_file_allowlist =
+            canonical_hf_import_file_allowlist(&self.config.hf.import_file_allowlist)?;
         let profile = source.resource_profile.as_ref().ok_or_else(|| {
             eyre::eyre!("Hugging Face source `{source_id}` has no authoritative resource profile")
         })?;
@@ -11769,6 +13216,7 @@ impl SoracloudRuntimeManager {
                 self.config.hf.import_max_files,
                 self.config.hf.import_max_file_bytes,
                 self.config.hf.import_max_total_bytes,
+                &import_file_allowlist,
             ) {
                 Ok(()) => return Ok(()),
                 Err(error) => {
@@ -11836,6 +13284,14 @@ impl SoracloudRuntimeManager {
         let library_name = bounded_hf_model_info_string(&model_info, "library_name")?;
         let tags =
             bounded_hf_model_info_strings(&model_info, "tags", SORACLOUD_HF_MODEL_INFO_MAX_TAGS)?;
+        let import_selection = derive_hf_import_file_selection_v1(
+            &model_info,
+            &selection,
+            &import_file_allowlist,
+            self.config.hf.import_max_files,
+            self.config.hf.import_max_file_bytes,
+            self.config.hf.import_max_total_bytes,
+        )?;
         let mut imported_files = Vec::new();
         let mut imported_total_bytes = 0_u64;
         drop(model_info);
@@ -11849,8 +13305,8 @@ impl SoracloudRuntimeManager {
         .wrap_err("write staged Hugging Face model-info")?;
         drop(model_info_bytes);
         let files_root = staging.files_root.clone();
-        for weight in &selection.required_weight_files {
-            let path = weight.path.clone();
+        for selected_file in &import_selection {
+            let path = selected_file.path.clone();
             let file_url = hf_repo_file_url(
                 &self.config.hf.hub_base_url,
                 &source.repo_id,
@@ -11865,7 +13321,7 @@ impl SoracloudRuntimeManager {
             .wrap_err_with(|| format!("query HF file headers from {file_url}"))?;
             if !head.status().is_success() {
                 eyre::bail!(
-                    "required Hugging Face model file `{path}` HEAD returned {}",
+                    "required Hugging Face import file `{path}` HEAD returned {}",
                     head.status()
                 );
             }
@@ -11876,18 +13332,23 @@ impl SoracloudRuntimeManager {
                 .and_then(|value| value.parse::<u64>().ok())
             else {
                 eyre::bail!(
-                    "required Hugging Face model file `{path}` HEAD omitted a canonical Content-Length"
+                    "required Hugging Face import file `{path}` HEAD omitted a canonical Content-Length"
                 );
             };
-            if content_length != weight.content_length {
+            if selected_file
+                .lfs_content_length
+                .is_some_and(|expected| content_length != expected)
+            {
                 eyre::bail!(
                     "Hugging Face file `{path}` HEAD length {content_length} does not match authenticated LFS size {}",
-                    weight.content_length
+                    selected_file
+                        .lfs_content_length
+                        .expect("checked authenticated LFS size")
                 );
             }
             if content_length > self.config.hf.import_max_file_bytes {
                 eyre::bail!(
-                    "required Hugging Face model file `{path}` has {content_length} bytes, exceeding the configured per-file cap {}",
+                    "required Hugging Face import file `{path}` has {content_length} bytes, exceeding the configured per-file cap {}",
                     self.config.hf.import_max_file_bytes
                 );
             }
@@ -11908,7 +13369,7 @@ impl SoracloudRuntimeManager {
             .wrap_err_with(|| format!("download HF file from {file_url}"))?;
             if !response.status().is_success() {
                 eyre::bail!(
-                    "required Hugging Face model file `{path}` GET returned {}",
+                    "required Hugging Face import file `{path}` GET returned {}",
                     response.status()
                 );
             }
@@ -11931,11 +13392,17 @@ impl SoracloudRuntimeManager {
                 response,
                 content_length,
                 self.config.hf.import_max_file_bytes,
-                Some(
-                    parse_canonical_hf_lfs_sha256(&weight.lfs_sha256).ok_or_else(|| {
-                        eyre::eyre!("canonical Hugging Face selection contains an invalid SHA-256")
-                    })?,
-                ),
+                selected_file
+                    .lfs_sha256
+                    .as_deref()
+                    .map(|digest| {
+                        parse_canonical_hf_lfs_sha256(digest).ok_or_else(|| {
+                            eyre::eyre!(
+                                "canonical Hugging Face selection contains an invalid SHA-256"
+                            )
+                        })
+                    })
+                    .transpose()?,
             )
             .wrap_err_with(|| format!("stream HF file response from {file_url}"))?;
             imported_total_bytes = next_total;
@@ -11943,16 +13410,18 @@ impl SoracloudRuntimeManager {
                 path,
                 content_length,
                 payload_hash: payload_hash.to_string(),
-                lfs_sha256: Some(weight.lfs_sha256.clone()),
+                lfs_sha256: selected_file.lfs_sha256.clone(),
             });
         }
-        if imported_files.len() != selection.required_weight_files.len()
-            || imported_total_bytes != selection.required_model_bytes
+        if imported_files.len() != import_selection.len()
+            || imported_files
+                .iter()
+                .zip(&import_selection)
+                .any(|(imported, selected)| imported.path != selected.path)
         {
             eyre::bail!(
-                "Hugging Face import did not produce the complete authenticated weight set of {} files and {} bytes",
-                selection.required_weight_files.len(),
-                selection.required_model_bytes
+                "Hugging Face import did not produce the complete canonical set of {} required files",
+                import_selection.len()
             );
         }
         let manifest = HfLocalImportManifestV1 {
@@ -11972,8 +13441,8 @@ impl SoracloudRuntimeManager {
             selected_weight_format: Some(selection.model_format),
             required_weight_files,
             weight_selection_commitment: Some(selection.weight_selection_commitment.to_string()),
+            import_file_allowlist,
             imported_files,
-            skipped_files: Vec::new(),
             import_error: None,
         };
         validate_hf_import_manifest_bounds(&manifest)
@@ -11986,6 +13455,7 @@ impl SoracloudRuntimeManager {
             self.config.hf.import_max_files,
             self.config.hf.import_max_file_bytes,
             self.config.hf.import_max_total_bytes,
+            &self.config.hf.import_file_allowlist,
         )
         .wrap_err("verify staged Hugging Face import cache")?;
         publish_hf_import_generation(&mut staging, &manifest)
@@ -12018,8 +13488,10 @@ impl SoracloudRuntimeManager {
             selected_weight_format: None,
             required_weight_files: Vec::new(),
             weight_selection_commitment: None,
+            import_file_allowlist: canonical_hf_import_file_allowlist(
+                &self.config.hf.import_file_allowlist,
+            )?,
             imported_files: Vec::new(),
-            skipped_files: Vec::new(),
             import_error: Some(error.to_owned()),
         };
         validate_hf_import_manifest_bounds(&manifest)
@@ -13951,9 +15423,6 @@ fn execute_generated_hf_metadata_local_read(
         imported_files: import_manifest
             .as_ref()
             .map_or_else(Vec::new, |manifest| manifest.imported_files.clone()),
-        skipped_files: import_manifest
-            .as_ref()
-            .map_or_else(Vec::new, |manifest| manifest.skipped_files.clone()),
         import_error: import_manifest
             .as_ref()
             .and_then(|manifest| manifest.import_error.clone()),
@@ -14173,14 +15642,16 @@ fn prepare_hf_local_runner_source(
         import_manifest
             .pipeline_tag
             .clone()
-            .map_or(norito::json::Value::Null, norito::json::Value::from),
+            .map(norito::json::Value::from)
+            .unwrap_or(norito::json::Value::Null),
     );
     runner_request.insert(
         "library_name".to_owned(),
         import_manifest
             .library_name
             .clone()
-            .map_or(norito::json::Value::Null, norito::json::Value::from),
+            .map(norito::json::Value::from)
+            .unwrap_or(norito::json::Value::Null),
     );
     runner_request.insert(
         "source_files_dir".to_owned(),
@@ -14350,7 +15821,8 @@ fn execute_generated_hf_local_runner(
         request
             .request_query
             .clone()
-            .map_or(norito::json::Value::Null, norito::json::Value::from),
+            .map(norito::json::Value::from)
+            .unwrap_or(norito::json::Value::Null),
     );
     let request_headers = request
         .request_headers
@@ -14455,6 +15927,7 @@ fn probe_hf_local_runner_for_source(
         hf_config.import_max_files,
         hf_config.import_max_file_bytes,
         hf_config.import_max_total_bytes,
+        &hf_config.import_file_allowlist,
     ) {
         stop_hf_local_runner_worker_for_source(hf_local_workers, source_id);
         return Err(SoracloudRuntimeExecutionError::new(
@@ -14614,12 +16087,21 @@ fn validate_apartment_snapshot(
             ),
         ));
     }
-    if !snapshot.apartments.contains_key(&request.apartment_name) {
+    let Some(plan) = snapshot.apartments.get(&request.apartment_name) else {
         return Err(SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Unavailable,
             format!(
                 "apartment `{}` is not materialized in the node-local runtime snapshot",
                 request.apartment_name
+            ),
+        ));
+    };
+    if plan.status == SoraAgentRuntimeStatusV1::LeaseExpired {
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            format!(
+                "apartment `{}` lease expired at consensus height {}; renew before execution",
+                request.apartment_name, plan.lease_expires_height
             ),
         ));
     }
@@ -14642,10 +16124,11 @@ fn execute_apartment_autonomy_run(
     record: &SoraAgentApartmentRecordV1,
     request: &SoracloudApartmentExecutionRequest,
     run_id: &str,
+    runtime_status: SoraAgentRuntimeStatusV1,
 ) -> Result<SoracloudApartmentExecutionResult, SoracloudRuntimeExecutionError> {
     if !apartment_declares_hf_infer(record) {
         return Ok(SoracloudApartmentExecutionResult {
-            status: record.status,
+            status: runtime_status,
             checkpoint_artifact_hash: None,
             journal_artifact_hash: None,
             result_commitment: apartment_result_commitment(
@@ -14653,7 +16136,7 @@ fn execute_apartment_autonomy_run(
                 request.process_generation,
                 &request.operation,
                 request.request_commitment,
-                record.status,
+                runtime_status,
             ),
         });
     }
@@ -14697,7 +16180,7 @@ fn execute_apartment_autonomy_run(
     )? && summary.succeeded
     {
         return Ok(apartment_execution_result_from_summary(
-            record.status,
+            runtime_status,
             &summary,
             journal_hash,
         ));
@@ -14746,7 +16229,7 @@ fn execute_apartment_autonomy_run(
     let (summary, journal_hash) =
         persist_apartment_autonomy_execution_summary(&handle.state_dir, &summary)?;
     Ok(apartment_execution_result_from_summary(
-        record.status,
+        runtime_status,
         &summary,
         journal_hash,
     ))
@@ -16416,18 +17899,12 @@ fn runtime_service_hosting_state(
         == SoraContainerRuntimeV1::Inrou
         && !local_inrou_assignments.is_empty()
     {
-        match read_hosted_http_runtime_state(&paths.service_dir) {
-            Ok(state) => state,
-            Err(error) => {
-                iroha_logger::warn!(
-                    ?error,
-                    service_name = %context.service_name,
-                    service_version = %context.service_version,
-                    "failed to read hosted-HTTP runtime state while building Soracloud snapshot"
-                );
-                None
-            }
-        }
+        read_hosted_http_runtime_state(&paths.service_dir).wrap_err_with(|| {
+            format!(
+                "read hosted-HTTP runtime state for service `{}` revision `{}`",
+                context.service_name, context.service_version
+            )
+        })?
     } else {
         None
     };
@@ -16487,7 +17964,7 @@ fn runtime_service_effective_environment(
     );
     if let Some(lease) = context.deployment.service_lease.as_ref() {
         effective_env.insert(
-            "SORACLOUD_SERVICE_LEASE_EXPIRES_SEQUENCE".to_owned(),
+            "SORACLOUD_SERVICE_LEASE_EXPIRES_HEIGHT".to_owned(),
             lease.lease_expires_height.to_string(),
         );
         effective_env.insert(
@@ -16718,7 +18195,7 @@ fn build_runtime_snapshot(
         .map(|(apartment_name, record)| {
             (
                 apartment_name.clone(),
-                build_apartment_plan(apartment_name, record, context.state_dir),
+                build_apartment_plan(apartment_name, record, current_height, context.state_dir),
             )
         })
         .collect();
@@ -16870,6 +18347,7 @@ fn build_hf_source_plan(
                             hf_config.import_max_files,
                             hf_config.import_max_file_bytes,
                             hf_config.import_max_total_bytes,
+                            &hf_config.import_file_allowlist,
                         )
                         .err()
                         .map(|error| {
@@ -17026,6 +18504,7 @@ fn derive_hf_runtime_status(
 fn build_apartment_plan(
     apartment_name: &str,
     record: &SoraAgentApartmentRecordV1,
+    current_height: u64,
     state_dir: &Path,
 ) -> SoracloudRuntimeApartmentPlan {
     let apartment_root = state_dir
@@ -17034,7 +18513,7 @@ fn build_apartment_plan(
     SoracloudRuntimeApartmentPlan {
         apartment_name: apartment_name.to_string(),
         manifest_hash: record.manifest_hash.to_string(),
-        status: record.status,
+        status: record.runtime_status_at_current_height(current_height),
         process_generation: record.process_generation,
         lease_expires_height: record.lease_expires_height,
         last_active_sequence: record.last_active_sequence,
@@ -18108,6 +19587,231 @@ fn bounded_hf_model_info_strings(
     }
     Ok(strings)
 }
+fn canonical_hf_import_file_allowlist(allowlist: &[String]) -> eyre::Result<Vec<String>> {
+    let mut canonical = Vec::new();
+    canonical
+        .try_reserve_exact(allowlist.len())
+        .wrap_err("reserve canonical Hugging Face import allowlist")?;
+    for raw_pattern in allowlist {
+        let pattern = raw_pattern.trim().to_ascii_lowercase();
+        if pattern.is_empty() {
+            continue;
+        }
+        let suffix_pattern = pattern.strip_prefix("*.");
+        if pattern.len() > SORACLOUD_HF_MODEL_INFO_MAX_STRING_BYTES
+            || pattern.contains('\\')
+            || pattern.chars().any(char::is_control)
+            || suffix_pattern.is_some_and(|suffix| {
+                suffix.is_empty()
+                    || suffix.chars().any(|character| {
+                        matches!(character, '*' | '/' | ':' | '?' | '"' | '<' | '>' | '|')
+                    })
+            })
+            || (suffix_pattern.is_none()
+                && (pattern.contains('*') || hf_import_relative_path(&pattern).is_err()))
+        {
+            eyre::bail!(
+                "Hugging Face import allowlist pattern `{raw_pattern}` is not an exact path or `*.suffix` pattern"
+            );
+        }
+        canonical.push(pattern);
+    }
+    canonical.sort();
+    canonical.dedup();
+    if canonical.len() > SORACLOUD_HF_IMPORT_MANIFEST_MAX_FILES {
+        eyre::bail!(
+            "Hugging Face import allowlist has {} canonical patterns, exceeding the {}-pattern limit",
+            canonical.len(),
+            SORACLOUD_HF_IMPORT_MANIFEST_MAX_FILES
+        );
+    }
+    Ok(canonical)
+}
+fn hf_import_file_selected(path: &str, canonical_allowlist: &[String]) -> bool {
+    let normalized_path = path.to_ascii_lowercase();
+    canonical_allowlist.iter().any(|pattern| {
+        pattern.strip_prefix("*.").map_or_else(
+            || normalized_path == *pattern,
+            |suffix| {
+                normalized_path
+                    .strip_suffix(suffix)
+                    .is_some_and(|prefix| prefix.ends_with('.'))
+            },
+        )
+    })
+}
+fn register_hf_import_portable_path(
+    portable_paths: &mut BTreeMap<String, String>,
+    path: &str,
+) -> eyre::Result<()> {
+    let folded = path.to_ascii_lowercase();
+    if let Some(previous) = portable_paths.get(&folded) {
+        if previous != path {
+            eyre::bail!(
+                "Hugging Face import paths `{previous}` and `{path}` collide on case-insensitive filesystems"
+            );
+        }
+        return Ok(());
+    }
+    portable_paths.insert(folded, path.to_owned());
+    Ok(())
+}
+fn derive_hf_import_file_selection_v1(
+    model_info: &norito::json::Value,
+    weight_selection: &SoraHfWeightSelectionV1,
+    canonical_allowlist: &[String],
+    maximum_files: u32,
+    maximum_file_bytes: u64,
+    maximum_total_bytes: u64,
+) -> eyre::Result<Vec<HfSelectedImportFileV1>> {
+    let maximum_files = usize::try_from(maximum_files)
+        .wrap_err("configured Hugging Face import file limit does not fit this host")?;
+    let mut selected = Vec::new();
+    selected
+        .try_reserve_exact(maximum_files)
+        .wrap_err("reserve bounded Hugging Face import selection")?;
+    let mut selected_weight_paths = BTreeSet::new();
+    let mut portable_paths = BTreeMap::new();
+    for weight in &weight_selection.required_weight_files {
+        if weight.content_length > maximum_file_bytes {
+            eyre::bail!(
+                "selected Hugging Face weight `{}` has {} bytes, exceeding the configured per-file cap {maximum_file_bytes}",
+                weight.path,
+                weight.content_length
+            );
+        }
+        hf_import_relative_path(&weight.path).wrap_err_with(|| {
+            format!(
+                "selected Hugging Face weight path `{}` is not portable",
+                weight.path
+            )
+        })?;
+        if !selected_weight_paths.insert(weight.path.clone()) {
+            eyre::bail!(
+                "canonical Hugging Face weight selection repeats path `{}`",
+                weight.path
+            );
+        }
+        register_hf_import_portable_path(&mut portable_paths, &weight.path)?;
+        selected.push(HfSelectedImportFileV1 {
+            path: weight.path.clone(),
+            lfs_content_length: Some(weight.content_length),
+            lfs_sha256: Some(weight.lfs_sha256.clone()),
+        });
+    }
+    let mut known_total_bytes = weight_selection.required_model_bytes;
+    if known_total_bytes > maximum_total_bytes {
+        eyre::bail!(
+            "Hugging Face authenticated import total {known_total_bytes} exceeds the configured aggregate import cap {maximum_total_bytes}"
+        );
+    }
+    let mut ancillary = BTreeMap::<String, (Option<u64>, Option<String>)>::new();
+    let siblings = model_info
+        .get("siblings")
+        .and_then(norito::json::Value::as_array)
+        .ok_or_else(|| eyre::eyre!("Hugging Face model-info response omitted `siblings`"))?;
+    if siblings.len() > iroha_data_model::soracloud::SORA_HF_MODEL_INFO_MAX_SIBLINGS_V1 {
+        eyre::bail!(
+            "Hugging Face model-info contains {} sibling entries, exceeding the {}-entry limit",
+            siblings.len(),
+            iroha_data_model::soracloud::SORA_HF_MODEL_INFO_MAX_SIBLINGS_V1
+        );
+    }
+    for entry in siblings {
+        let entry = entry
+            .as_object()
+            .ok_or_else(|| eyre::eyre!("every Hugging Face sibling entry must be an object"))?;
+        let path = entry
+            .get("rfilename")
+            .and_then(norito::json::Value::as_str)
+            .ok_or_else(|| {
+                eyre::eyre!("every Hugging Face sibling entry must contain `rfilename`")
+            })?;
+        if selected_weight_paths.contains(path)
+            || hf_import_file_requires_lfs_integrity(path)
+            || !hf_import_file_selected(path, canonical_allowlist)
+        {
+            continue;
+        }
+        if path.len() > SORACLOUD_HF_MODEL_INFO_MAX_STRING_BYTES
+            || path.trim() != path
+            || path.contains('\\')
+            || path.chars().any(char::is_control)
+        {
+            eyre::bail!("selected Hugging Face ancillary path `{path}` is not canonical");
+        }
+        hf_import_relative_path(path)?;
+        register_hf_import_portable_path(&mut portable_paths, path)?;
+        let lfs = match entry.get("lfs") {
+            None | Some(norito::json::Value::Null) => (None, None),
+            Some(value) => {
+                let value = value.as_object().ok_or_else(|| {
+                    eyre::eyre!(
+                        "selected Hugging Face ancillary file `{path}` has non-object LFS metadata"
+                    )
+                })?;
+                let digest = value
+                    .get("sha256")
+                    .and_then(norito::json::Value::as_str)
+                    .filter(|digest| {
+                        parse_canonical_hf_lfs_sha256(digest).is_some()
+                            && !digest.bytes().all(|byte| byte == b'0')
+                    })
+                    .ok_or_else(|| {
+                        eyre::eyre!(
+                            "selected Hugging Face ancillary file `{path}` lacks a canonical lowercase LFS SHA-256"
+                        )
+                    })?;
+                let size = value
+                    .get("size")
+                    .and_then(norito::json::Value::as_u64)
+                    .filter(|size| *size > 0)
+                    .ok_or_else(|| {
+                        eyre::eyre!(
+                            "selected Hugging Face ancillary file `{path}` lacks a positive integer LFS size"
+                        )
+                    })?;
+                if size > maximum_file_bytes {
+                    eyre::bail!(
+                        "selected Hugging Face ancillary file `{path}` has {size} bytes, exceeding the configured per-file cap {maximum_file_bytes}"
+                    );
+                }
+                (Some(size), Some(digest.to_owned()))
+            }
+        };
+        if let Some(previous) = ancillary.insert(path.to_owned(), lfs.clone())
+            && previous != lfs
+        {
+            eyre::bail!(
+                "Hugging Face model-info contains conflicting integrity metadata for selected ancillary file `{path}`"
+            );
+        }
+    }
+    if selected.len().saturating_add(ancillary.len()) > maximum_files {
+        eyre::bail!(
+            "Hugging Face import selection has {} required files, exceeding the configured {maximum_files}-file limit",
+            selected.len().saturating_add(ancillary.len())
+        );
+    }
+    for (path, (lfs_content_length, lfs_sha256)) in ancillary {
+        if let Some(content_length) = lfs_content_length {
+            known_total_bytes = known_total_bytes
+                .checked_add(content_length)
+                .ok_or_else(|| eyre::eyre!("Hugging Face import byte total overflow"))?;
+            if known_total_bytes > maximum_total_bytes {
+                eyre::bail!(
+                    "Hugging Face authenticated import total {known_total_bytes} exceeds the configured aggregate import cap {maximum_total_bytes}"
+                );
+            }
+        }
+        selected.push(HfSelectedImportFileV1 {
+            path,
+            lfs_content_length,
+            lfs_sha256,
+        });
+    }
+    Ok(selected)
+}
 fn parse_canonical_hf_lfs_sha256(value: &str) -> Option<[u8; 32]> {
     if value.len() != 64
         || !value
@@ -18164,7 +19868,21 @@ fn hf_import_file_requires_lfs_integrity(path: &str) -> bool {
     hf_path_has_extension(path, SORA_HF_WEIGHT_FILE_EXTENSIONS_V1)
 }
 fn hf_import_relative_path(path: &str) -> io::Result<PathBuf> {
-    if path.split('/').count() > SORACLOUD_HF_IMPORT_MAX_PATH_COMPONENTS_V1 {
+    if path.is_empty()
+        || path.len() > SORACLOUD_HF_MODEL_INFO_MAX_STRING_BYTES
+        || path.trim() != path
+        || path.chars().any(|character| {
+            character.is_control()
+                || matches!(character, '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|')
+        })
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Hugging Face import path `{path}` is not a portable relative path"),
+        ));
+    }
+    let components = path.split('/').collect::<Vec<_>>();
+    if components.len() > SORACLOUD_HF_IMPORT_MAX_PATH_COMPONENTS_V1 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
@@ -18173,12 +19891,20 @@ fn hf_import_relative_path(path: &str) -> io::Result<PathBuf> {
             ),
         ));
     }
-    sanitized_relative_material_path(path).map_err(|error| {
-        io::Error::new(
+    if components
+        .iter()
+        .any(|component| component.is_empty() || matches!(*component, "." | ".."))
+    {
+        return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("invalid Hugging Face import path `{path}`: {error}"),
-        )
-    })
+            format!("Hugging Face import path `{path}` contains an invalid component"),
+        ));
+    }
+    let mut relative = PathBuf::new();
+    for component in components {
+        relative.push(component);
+    }
+    Ok(relative)
 }
 fn hf_local_source_root(state_dir: &Path, source_id: &str) -> PathBuf {
     state_dir
@@ -18294,8 +20020,6 @@ fn read_hf_import_generation(
             continue;
         }
         return Ok(Some(PinnedHfImportGeneration {
-            #[cfg(test)]
-            name,
             files_root: root.join("files"),
             root,
             manifest,
@@ -18316,8 +20040,8 @@ fn read_hf_import_manifest(
 fn validate_hf_import_manifest_bounds(manifest: &HfLocalImportManifestV1) -> io::Result<()> {
     if manifest.tags.len() > SORACLOUD_HF_MODEL_INFO_MAX_TAGS
         || manifest.required_weight_files.len() > SORACLOUD_HF_IMPORT_MANIFEST_MAX_FILES
+        || manifest.import_file_allowlist.len() > SORACLOUD_HF_IMPORT_MANIFEST_MAX_FILES
         || manifest.imported_files.len() > SORACLOUD_HF_IMPORT_MANIFEST_MAX_FILES
-        || manifest.skipped_files.len() > SORACLOUD_HF_IMPORT_MAX_RECORDED_SKIPS
     {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -18339,6 +20063,7 @@ fn validate_hf_import_manifest_bounds(manifest: &HfLocalImportManifestV1) -> io:
         .chain(manifest.model_info_payload_hash.as_deref())
         .chain(manifest.weight_selection_commitment.as_deref())
         .chain(manifest.tags.iter().map(String::as_str))
+        .chain(manifest.import_file_allowlist.iter().map(String::as_str))
         .any(|value| value.len() > SORACLOUD_HF_MODEL_INFO_MAX_STRING_BYTES)
     {
         return Err(io::Error::new(
@@ -18346,14 +20071,17 @@ fn validate_hf_import_manifest_bounds(manifest: &HfLocalImportManifestV1) -> io:
             "Hugging Face import manifest contains an oversized string",
         ));
     }
-    if manifest
-        .skipped_files
-        .iter()
-        .any(|value| value.len() > SORACLOUD_HF_IMPORT_MANIFEST_MAX_TEXT_BYTES)
-    {
+    let canonical_allowlist = canonical_hf_import_file_allowlist(&manifest.import_file_allowlist)
+        .map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("invalid Hugging Face import manifest allowlist: {error}"),
+        )
+    })?;
+    if canonical_allowlist != manifest.import_file_allowlist {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "Hugging Face import manifest skip record contains an oversized string",
+            "Hugging Face import manifest allowlist is not in canonical sorted order",
         ));
     }
     if manifest
@@ -18437,6 +20165,7 @@ fn validate_hf_import_manifest_bounds(manifest: &HfLocalImportManifestV1) -> io:
             || weight.lfs_sha256.len() != 64
             || weight.content_length == 0
             || parse_canonical_hf_lfs_sha256(&weight.lfs_sha256).is_none()
+            || weight.lfs_sha256.bytes().all(|byte| byte == b'0')
         {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -18500,7 +20229,8 @@ fn validate_hf_import_manifest_bounds(manifest: &HfLocalImportManifestV1) -> io:
             )
         })?;
         if let Some(lfs_sha256) = file.lfs_sha256.as_deref()
-            && parse_canonical_hf_lfs_sha256(lfs_sha256).is_none()
+            && (parse_canonical_hf_lfs_sha256(lfs_sha256).is_none()
+                || lfs_sha256.bytes().all(|byte| byte == b'0'))
         {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -18695,6 +20425,7 @@ fn validate_hf_cached_model_info(
     maximum_files: u32,
     maximum_file_bytes: u64,
     maximum_total_bytes: u64,
+    import_file_allowlist: &[String],
 ) -> io::Result<()> {
     let expected_length = manifest.model_info_content_length.ok_or_else(|| {
         io::Error::new(
@@ -18773,6 +20504,28 @@ fn validate_hf_cached_model_info(
             format!("validate cached Hugging Face resource profile: {error}"),
         )
     })?;
+    let canonical_allowlist = canonical_hf_import_file_allowlist(import_file_allowlist)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))?;
+    if manifest.import_file_allowlist != canonical_allowlist {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Hugging Face cache manifest was produced by a different import allowlist",
+        ));
+    }
+    let expected_import_files = derive_hf_import_file_selection_v1(
+        &model_info,
+        &selection,
+        &canonical_allowlist,
+        maximum_files,
+        maximum_file_bytes,
+        maximum_total_bytes,
+    )
+    .map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("derive cached Hugging Face import selection: {error}"),
+        )
+    })?;
     let required_weights = local_hf_required_weight_records(&selection);
     let expected_selection_commitment = selection.weight_selection_commitment.to_string();
     if manifest.selected_weight_format != Some(selection.model_format)
@@ -18785,6 +20538,24 @@ fn validate_hf_cached_model_info(
             "Hugging Face cache manifest does not equal the complete model-info weight selection",
         ));
     }
+    if manifest.imported_files.len() != expected_import_files.len()
+        || manifest
+            .imported_files
+            .iter()
+            .zip(&expected_import_files)
+            .any(|(record, expected)| {
+                record.path != expected.path
+                    || record.lfs_sha256 != expected.lfs_sha256
+                    || expected
+                        .lfs_content_length
+                        .is_some_and(|length| record.content_length != length)
+            })
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Hugging Face cache manifest does not equal the complete allowlist-selected import set",
+        ));
+    }
     Ok(())
 }
 
@@ -18794,6 +20565,7 @@ fn validate_hf_import_cache(
     maximum_files: u32,
     maximum_file_bytes: u64,
     maximum_total_bytes: u64,
+    import_file_allowlist: &[String],
 ) -> io::Result<()> {
     validate_hf_import_cache_at_generation(
         &generation.root,
@@ -18803,6 +20575,7 @@ fn validate_hf_import_cache(
         maximum_files,
         maximum_file_bytes,
         maximum_total_bytes,
+        import_file_allowlist,
     )
 }
 fn validate_hf_import_cache_at_generation(
@@ -18813,6 +20586,7 @@ fn validate_hf_import_cache_at_generation(
     maximum_files: u32,
     maximum_file_bytes: u64,
     maximum_total_bytes: u64,
+    import_file_allowlist: &[String],
 ) -> io::Result<()> {
     validate_hf_import_manifest_bounds(manifest)?;
     if manifest.import_error.is_some() {
@@ -18828,7 +20602,46 @@ fn validate_hf_import_cache_at_generation(
         maximum_files,
         maximum_file_bytes,
         maximum_total_bytes,
+        import_file_allowlist,
     )?;
+    let maximum_files = usize::try_from(maximum_files).map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("Hugging Face file-count limit does not fit this host: {error}"),
+        )
+    })?;
+    if manifest.imported_files.len() > maximum_files {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Hugging Face cache contains more files than the configured import limit",
+        ));
+    }
+    let mut imported_total_bytes = 0_u64;
+    for record in &manifest.imported_files {
+        if record.content_length > maximum_file_bytes {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "cached Hugging Face file `{}` exceeds its configured byte limit",
+                    record.path
+                ),
+            ));
+        }
+        imported_total_bytes = imported_total_bytes
+            .checked_add(record.content_length)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Hugging Face cache byte total overflow",
+                )
+            })?;
+        if imported_total_bytes > maximum_total_bytes {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Hugging Face cache exceeds the configured aggregate import limit",
+            ));
+        }
+    }
     let root_metadata = fs::symlink_metadata(files_root)?;
     validate_hf_cache_entry_custody(files_root, &root_metadata, false)?;
     let mut expected = BTreeMap::<PathBuf, &HfImportedFileV1>::new();
@@ -19519,20 +21332,6 @@ fn inrou_termination_error_suffix(termination: &eyre::Result<std::process::ExitS
             format!("; bounded child termination also failed: {error}")
         })
 }
-#[cfg(target_os = "linux")]
-fn preserve_inrou_firewall_after_failed_termination(
-    termination: &eyre::Result<std::process::ExitStatus>,
-    firewall: &mut Option<InrouLoopbackOwnerFirewall>,
-) {
-    if termination.is_err()
-        && let Some(firewall) = firewall.take()
-    {
-        // A child that survived SIGKILL must never outlive the loopback owner
-        // barrier. Leaking the lock/rules makes the supervisor fail closed
-        // until process exit, when the kernel releases the lock descriptor.
-        std::mem::forget(firewall);
-    }
-}
 fn join_inrou_log_drains_bounded(log_drains: &mut Vec<thread::JoinHandle<()>>) {
     let deadline = std::time::Instant::now() + SORACLOUD_INROU_LOG_DRAIN_STOP_TIMEOUT;
     while log_drains.iter().any(|drain| !drain.is_finished())
@@ -19876,8 +21675,8 @@ impl HfLocalRunnerWorker {
     fn stop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
-        if let Some(stdout_reader) = self.stdout.reader_thread.take() {
-            let _ = stdout_reader.join();
+        if let Some(reader_thread) = self.stdout.reader_thread.take() {
+            let _ = reader_thread.join();
         }
     }
 }
@@ -19896,33 +21695,20 @@ fn effective_inrou_lifecycle_grace(
 }
 impl HostedHttpWorker {
     #[cfg(target_os = "linux")]
-    fn new(
-        cache_key: HostedHttpWorkerCacheKey,
-        child: std::process::Child,
-        log_drains: Vec<thread::JoinHandle<()>>,
-        listen_base_url: String,
-        egress_accounting: PortableVmReplicaEgressAccounting,
-        stderr_log_path: PathBuf,
-        stop_grace: Duration,
-        port_forward: PortableVmLoopbackBridge,
-        qmp_control: Arc<Mutex<PortableVmQmpControl>>,
-        #[cfg(target_os = "linux")] loopback_firewall: InrouLoopbackOwnerFirewall,
-        #[cfg(target_os = "linux")] cgroup: inrou_cgroup::InrouWorkerCgroup,
-    ) -> Self {
+    fn new(launch: HostedHttpWorkerLaunch) -> Self {
         Self {
-            cache_key,
-            child,
-            log_drains,
-            listen_base_url,
-            egress_accounting,
-            stderr_log_path,
-            stop_grace,
-            port_forward: Some(port_forward),
-            qmp_control: Some(qmp_control),
-            #[cfg(target_os = "linux")]
-            loopback_firewall: Some(loopback_firewall),
-            #[cfg(target_os = "linux")]
-            cgroup: Some(cgroup),
+            cache_key: launch.cache_key,
+            child: launch.child,
+            log_drains: launch.log_drains,
+            listen_base_url: launch.listen_base_url,
+            egress_accounting: launch.egress_accounting,
+            stderr_log_path: launch.stderr_log_path,
+            stop_grace: launch.stop_grace,
+            port_forward: Some(launch.port_forward),
+            qmp_control: Some(launch.qmp_control),
+            loopback_firewall: Some(launch.loopback_firewall),
+            cgroup: Some(launch.worker_cgroup),
+            shutdown_state: HostedHttpWorkerShutdownState::Running,
         }
     }
     fn pid(&self) -> Option<u32> {
@@ -19937,7 +21723,10 @@ impl HostedHttpWorker {
         }
         Some(self.egress_accounting.reporter_accounted_egress_bytes())
     }
-    fn stop(&mut self) {
+    fn stop(&mut self) -> eyre::Result<()> {
+        if !self.shutdown_state.requires_shutdown() {
+            return Ok(());
+        }
         let _ = &self.stderr_log_path;
         if let Some(mut port_forward) = self.port_forward.take() {
             port_forward.stop();
@@ -20002,53 +21791,95 @@ impl HostedHttpWorker {
                 terminate_inrou_child_bounded(&mut self.child)
             }
         };
-        #[cfg(target_os = "linux")]
-        let cgroup_cleanup = self.cgroup.take().map(|mut cgroup| {
-            let result = cgroup.cleanup_bounded();
-            if result.is_err() {
-                // Retain the live object and its deterministic path. A
-                // subsequent launch with this worker identity must fail
-                // rather than silently escape its stale confined group.
-                std::mem::forget(cgroup);
-            }
-            result
-        });
-        #[cfg(target_os = "linux")]
-        if termination.is_err()
-            || cgroup_cleanup
-                .as_ref()
-                .is_some_and(|cleanup| cleanup.is_err())
-        {
-            if let Some(firewall) = self.loopback_firewall.take() {
-                // A worker or descendant whose bounded cleanup failed must
-                // not outlive the owner firewall.
-                std::mem::forget(firewall);
-            }
-        }
-        if let Err(error) = termination {
+        let mut shutdown_failures = Vec::new();
+        if let Err(error) = &termination {
             iroha_logger::warn!(
                 ?error,
                 pid = self.child.id(),
                 "Inrou PortableVM child did not stop before its deadline; retaining the owner firewall"
             );
+            shutdown_failures.push(format!("child exit was not attested: {error}"));
         }
         #[cfg(target_os = "linux")]
-        if let Some(Err(error)) = cgroup_cleanup {
-            iroha_logger::error!(
-                ?error,
-                pid = self.child.id(),
-                "Inrou cgroup did not become empty before its deadline; retaining the cgroup and owner firewall"
+        {
+            let cgroup_empty = self.cgroup.as_ref().map_or_else(
+                || Err(eyre::eyre!("Inrou worker lost its confined cgroup")),
+                inrou_cgroup::InrouWorkerCgroup::kill_and_attest_empty_bounded,
             );
+            let attestations = InrouWorkerTeardownAttestations::default()
+                .with_direct_child_exit(termination.is_ok())
+                .with_empty_cgroup(cgroup_empty.is_ok());
+            match cgroup_empty {
+                Ok(empty) if attestations.release_authorized() => {
+                    let release = self
+                        .cgroup
+                        .as_mut()
+                        .expect("empty-cgroup proof requires the cgroup owner")
+                        .release_attested_empty(empty);
+                    match release {
+                        Ok(()) => {
+                            let _ = self.cgroup.take();
+                        }
+                        Err(error) => {
+                            iroha_logger::error!(
+                                ?error,
+                                pid = self.child.id(),
+                                "Inrou cgroup was empty but could not be released; retaining the cgroup and owner firewall"
+                            );
+                            shutdown_failures.push(format!(
+                                "confined empty cgroup could not be released: {error}"
+                            ));
+                        }
+                    }
+                }
+                Ok(_) => {
+                    debug_assert!(!attestations.release_authorized());
+                    iroha_logger::error!(
+                        pid = self.child.id(),
+                        "Inrou cgroup is empty but direct-child exit is unproven; retaining the cgroup and owner firewall"
+                    );
+                }
+                Err(error) => {
+                    debug_assert!(!attestations.release_authorized());
+                    iroha_logger::error!(
+                        ?error,
+                        pid = self.child.id(),
+                        "Inrou cgroup did not become empty before its deadline; retaining the cgroup and owner firewall"
+                    );
+                    shutdown_failures.push(format!(
+                        "confined cgroup emptiness was not attested: {error}"
+                    ));
+                }
+            }
+        }
+        if !shutdown_failures.is_empty() {
+            eyre::bail!(shutdown_failures.join("; "));
         }
         join_inrou_log_drains_bounded(&mut self.log_drains);
         let _ = self.qmp_control.take();
         #[cfg(target_os = "linux")]
         let _ = self.loopback_firewall.take();
+        self.shutdown_state.attest_stopped();
+        Ok(())
     }
 }
 impl Drop for HostedHttpWorker {
     fn drop(&mut self) {
-        self.stop();
+        if let Err(error) = self.stop() {
+            iroha_logger::error!(
+                ?error,
+                pid = self.child.id(),
+                "dropping an Inrou worker whose shutdown was not attested; retaining confinement controls"
+            );
+            #[cfg(target_os = "linux")]
+            if let Some(cgroup) = self.cgroup.take() {
+                std::mem::forget(cgroup);
+            }
+            #[cfg(target_os = "linux")]
+            if let Some(firewall) = self.loopback_firewall.take() {
+                std::mem::forget(firewall);
+            }
+        }
     }
 }
 fn hosted_http_runtime_state_path(materialization_dir: &Path) -> PathBuf {
@@ -20410,9 +22241,9 @@ enum InrouSharedFilesystemMountKind {
         device_serial: String,
         filesystem_type: String,
         mount_options: String,
-        initialize_filesystem: bool,
     },
 }
+#[derive(Debug)]
 #[cfg(any(test, target_os = "linux"))]
 #[cfg_attr(all(test, not(target_os = "linux")), allow(dead_code))]
 struct PortableVmLeaseDisk {
@@ -20422,7 +22253,13 @@ struct PortableVmLeaseDisk {
     device_serial: String,
     filesystem_type: String,
     mount_options: String,
-    initialize_filesystem: bool,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct InrouExt4VolumeProfileV1 {
+    total_bytes: u64,
+    total_blocks: u32,
+    total_inodes: u32,
+    uuid: [u8; 16],
 }
 #[cfg(any(test, target_os = "linux"))]
 struct PortableVmNetworkPlan {
@@ -20476,7 +22313,7 @@ impl InrouDurableEgressCheckpoint {
         }) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "authoritative Inrou reporter checkpoint belongs to another lease incarnation",
+                "authoritative Inrou reporter checkpoint belongs to another lease incarnation or reporting epoch",
             ));
         }
         let directory = prepare_inrou_egress_checkpoint_dir(
@@ -20565,7 +22402,14 @@ fn inrou_egress_reporter_key_digest(
     replica_slot: u16,
     validator_account_id: &AccountId,
 ) -> io::Result<[u8; 32]> {
+    if lease_started_height == 0 || reporting_epoch == 0 || replica_slot == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Inrou reporter identity requires nonzero lease height, reporting epoch, and replica slot",
+        ));
+    }
     let encoded = norito::to_bytes(&(
+        "iroha:soracloud:inrou-egress-reporter:v1",
         service_name.to_owned(),
         lease_started_height,
         reporting_epoch,
@@ -20943,6 +22787,93 @@ impl PortableVmEgressAccounting {
         self.accounted_egress_bytes.load(AtomicOrdering::Acquire)
     }
 
+    fn advance_recovered_revision_floor(
+        &self,
+        authoritative_revision_accounted_egress_bytes: u64,
+        local_reporters: &[(u64, PortableVmEgressAccounting)],
+    ) -> io::Result<()> {
+        if local_reporters
+            .iter()
+            .any(|(_, reporter)| !Arc::ptr_eq(&self.update_gate, &reporter.update_gate))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "recovered Inrou reporter does not share its revision update gate",
+            ));
+        }
+        let _guard = self.update_gate.write();
+        let outstanding_local_delta = local_reporters
+            .iter()
+            .try_fold(
+                0_u64,
+                |total, (authoritative_accounted_egress_bytes, reporter)| {
+                    let local_delta = reporter
+                        .accounted_egress_bytes()
+                        .checked_sub(*authoritative_accounted_egress_bytes)
+                        .ok_or_else(|| {
+                            io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                "durable Inrou reporter checkpoint is behind its authoritative counter",
+                            )
+                        })?;
+                    total.checked_add(local_delta).ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "recovered Inrou reporter deltas overflow the revision counter domain",
+                        )
+                    })
+                },
+            )
+            .map_err(|error| {
+                self.exhausted.store(true, AtomicOrdering::Release);
+                error
+            })?;
+        let recovered_floor = authoritative_revision_accounted_egress_bytes
+            .checked_add(outstanding_local_delta)
+            .ok_or_else(|| {
+                self.exhausted.store(true, AtomicOrdering::Release);
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "authoritative Inrou revision egress plus recovered local deltas overflows the counter domain",
+                )
+            })?;
+        let current = self.accounted_egress_bytes();
+        let remaining = self.remaining_egress_bytes.load(AtomicOrdering::Acquire);
+        if remaining != u64::MAX.saturating_sub(current) {
+            self.exhausted.store(true, AtomicOrdering::Release);
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Inrou revision egress accounting counter and remaining budget diverged during durable recovery",
+            ));
+        }
+        if recovered_floor < current {
+            self.exhausted.store(true, AtomicOrdering::Release);
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "recomputed Inrou revision recovery floor regressed behind its live counter",
+            ));
+        }
+        if recovered_floor == current {
+            return Ok(());
+        }
+        let delta = recovered_floor - current;
+        if delta > remaining {
+            self.exhausted.store(true, AtomicOrdering::Release);
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "recovered Inrou revision floor exceeds the remaining counter budget",
+            ));
+        }
+        self.remaining_egress_bytes
+            .store(remaining - delta, AtomicOrdering::Release);
+        self.accounted_egress_bytes
+            .store(recovered_floor, AtomicOrdering::Release);
+        if recovered_floor == u64::MAX {
+            self.exhausted.store(true, AtomicOrdering::Release);
+        }
+        Ok(())
+    }
+
     fn advance_floor(&self, accounted_egress_bytes: u64) -> io::Result<()> {
         let _guard = self.update_gate.write();
         let current = self.accounted_egress_bytes();
@@ -21087,7 +23018,7 @@ impl PortableVmReplicaEgressAccounting {
         Ok(reserved)
     }
 
-    #[cfg(any(test, target_os = "linux"))]
+    #[cfg(test)]
     fn revision_accounted_egress_bytes(&self) -> u64 {
         self.revision.accounted_egress_bytes()
     }
@@ -21204,6 +23135,27 @@ fn resolve_inrou_qemu_img_executable() -> Option<PathBuf> {
             })
         })
         .then(|| candidate.to_path_buf())
+}
+#[cfg(target_os = "linux")]
+fn resolve_inrou_ext4_formatter_executable() -> Option<PathBuf> {
+    [Path::new("/usr/sbin/mke2fs"), Path::new("/sbin/mke2fs")]
+        .into_iter()
+        .find_map(|candidate| {
+            let canonical = fs::canonicalize(candidate).ok()?;
+            let command_metadata = fs::symlink_metadata(candidate).ok()?;
+            let command_entry_is_trusted = (command_metadata.is_file()
+                || command_metadata.file_type().is_symlink())
+                && command_metadata.uid() == 0
+                && candidate.ancestors().skip(1).all(|ancestor| {
+                    fs::metadata(ancestor).ok().is_some_and(|metadata| {
+                        metadata.is_dir() && metadata.uid() == 0 && metadata.mode() & 0o022 == 0
+                    })
+                });
+            (command_entry_is_trusted
+                && is_resolved_executable(&canonical)
+                && is_root_owned_executable_path(&canonical))
+            .then_some(canonical)
+        })
 }
 #[cfg(target_os = "linux")]
 fn resolve_inrou_shell_executable() -> Option<PathBuf> {
@@ -21985,6 +23937,323 @@ fn validate_reusable_inrou_disk(path: &Path, exact_bytes: Option<u64>) -> eyre::
     }
     Ok(())
 }
+fn inrou_ext4_volume_profile_v1(
+    plan: &SoracloudRuntimeServicePlan,
+    volume: &SoracloudRuntimeLeaseVolumePlan,
+) -> eyre::Result<InrouExt4VolumeProfileV1> {
+    if volume.kind == SoraLeaseVolumeKindV1::PersistentRootLeaseVolume {
+        eyre::bail!("the canonical Inrou ext4 lease profile does not apply to a root disk");
+    }
+    if volume.max_total_bytes < SORACLOUD_INROU_EXT4_GROUP_BYTES_V1
+        || !volume
+            .max_total_bytes
+            .is_multiple_of(SORACLOUD_INROU_EXT4_GROUP_BYTES_V1)
+    {
+        eyre::bail!(
+            "Inrou V1 lease volume `{}` must reserve a positive multiple of the exact {}-byte ext4 allocation unit",
+            volume.volume_name,
+            SORACLOUD_INROU_EXT4_GROUP_BYTES_V1,
+        );
+    }
+    let total_blocks = volume.max_total_bytes / SORACLOUD_INROU_EXT4_BLOCK_BYTES_V1;
+    let total_blocks = u32::try_from(total_blocks).wrap_err_with(|| {
+        format!(
+            "Inrou V1 lease volume `{}` exceeds the 32-bit canonical ext4 block-count profile",
+            volume.volume_name
+        )
+    })?;
+    let total_inodes = volume.max_total_bytes / SORACLOUD_INROU_EXT4_INODE_BYTES_V1;
+    let total_inodes = u32::try_from(total_inodes).wrap_err_with(|| {
+        format!(
+            "Inrou V1 lease volume `{}` exceeds the canonical ext4 inode-count profile",
+            volume.volume_name
+        )
+    })?;
+    let digest = Hash::new(Encode::encode(&(
+        "iroha:soracloud:inrou-ext4-volume-uuid:v1".to_owned(),
+        plan.service_name.clone(),
+        plan.service_version.clone(),
+        volume.volume_name.clone(),
+        volume.kind,
+        volume.storage_class,
+        volume.authoritative_generation,
+    )));
+    let mut uuid = [0_u8; 16];
+    uuid.copy_from_slice(&digest.as_ref()[..16]);
+    // RFC 9562 UUIDv8 reserves this version for application-defined payloads.
+    // The payload remains a domain-separated digest, with the RFC variant bits
+    // fixed so tools parse the stable value as a UUID rather than arbitrary hex.
+    uuid[6] = (uuid[6] & 0x0f) | 0x80;
+    uuid[8] = (uuid[8] & 0x3f) | 0x80;
+    Ok(InrouExt4VolumeProfileV1 {
+        total_bytes: volume.max_total_bytes,
+        total_blocks,
+        total_inodes,
+        uuid,
+    })
+}
+
+fn format_inrou_ext4_uuid_v1(uuid: &[u8; 16]) -> String {
+    format!(
+        "{}-{}-{}-{}-{}",
+        hex::encode(&uuid[..4]),
+        hex::encode(&uuid[4..6]),
+        hex::encode(&uuid[6..8]),
+        hex::encode(&uuid[8..10]),
+        hex::encode(&uuid[10..]),
+    )
+}
+
+fn inrou_ext4_superblock_u16(superblock: &[u8; 1_024], offset: usize) -> u16 {
+    u16::from_le_bytes([superblock[offset], superblock[offset + 1]])
+}
+
+fn inrou_ext4_superblock_u32(superblock: &[u8; 1_024], offset: usize) -> u32 {
+    u32::from_le_bytes([
+        superblock[offset],
+        superblock[offset + 1],
+        superblock[offset + 2],
+        superblock[offset + 3],
+    ])
+}
+
+fn validate_inrou_ext4_filesystem(
+    path: &Path,
+    profile: InrouExt4VolumeProfileV1,
+) -> eyre::Result<()> {
+    const EXT4_SUPERBLOCK_OFFSET: u64 = 1_024;
+    const EXT4_SUPERBLOCK_MAGIC: u16 = 0xef53;
+    const EXT4_VALID_FS: u16 = 0x0001;
+    const EXT4_ERROR_FS: u16 = 0x0002;
+
+    let (mut file, before) = open_soracloud_regular_file_no_follow(path, "Inrou ext4 lease disk")?;
+    if before.len() != profile.total_bytes {
+        eyre::bail!(
+            "Inrou ext4 lease disk {} has {} bytes instead of the canonical {} bytes",
+            path.display(),
+            before.len(),
+            profile.total_bytes,
+        );
+    }
+    file.seek(io::SeekFrom::Start(EXT4_SUPERBLOCK_OFFSET))
+        .wrap_err_with(|| format!("seek Inrou ext4 lease disk {}", path.display()))?;
+    let mut superblock = [0_u8; 1_024];
+    file.read_exact(&mut superblock)
+        .wrap_err_with(|| format!("read Inrou ext4 superblock from {}", path.display()))?;
+    if inrou_ext4_superblock_u16(&superblock, 0x38) != EXT4_SUPERBLOCK_MAGIC {
+        eyre::bail!(
+            "Inrou lease disk {} does not contain a canonical ext4 superblock",
+            path.display()
+        );
+    }
+    let require_u32 = |offset, expected, field| -> eyre::Result<()> {
+        let actual = inrou_ext4_superblock_u32(&superblock, offset);
+        if actual != expected {
+            eyre::bail!(
+                "Inrou ext4 lease disk {} retained {field} {actual:#x} instead of {expected:#x}",
+                path.display()
+            );
+        }
+        Ok(())
+    };
+    let require_u16 = |offset, expected, field| -> eyre::Result<()> {
+        let actual = inrou_ext4_superblock_u16(&superblock, offset);
+        if actual != expected {
+            eyre::bail!(
+                "Inrou ext4 lease disk {} retained {field} {actual:#x} instead of {expected:#x}",
+                path.display()
+            );
+        }
+        Ok(())
+    };
+    require_u32(0x00, profile.total_inodes, "inode count")?;
+    require_u32(0x04, profile.total_blocks, "low block count")?;
+    require_u32(0x08, 0, "low reserved-block count")?;
+    require_u32(0x14, 0, "first data block")?;
+    require_u32(0x18, 2, "log2 block geometry")?;
+    require_u32(0x1c, 2, "log2 cluster geometry")?;
+    require_u32(
+        0x20,
+        u32::try_from(SORACLOUD_INROU_EXT4_BLOCKS_PER_GROUP_V1)
+            .expect("fixed ext4 blocks-per-group fits u32"),
+        "blocks per group",
+    )?;
+    require_u32(
+        0x24,
+        u32::try_from(SORACLOUD_INROU_EXT4_BLOCKS_PER_GROUP_V1)
+            .expect("fixed ext4 clusters-per-group fits u32"),
+        "clusters per group",
+    )?;
+    require_u32(
+        0x28,
+        SORACLOUD_INROU_EXT4_INODES_PER_GROUP_V1,
+        "inodes per group",
+    )?;
+    require_u16(0x3c, 2, "error policy")?;
+    require_u32(0x48, 0, "creator OS")?;
+    require_u32(0x4c, 1, "dynamic revision")?;
+    require_u16(0x50, 0, "reserved uid")?;
+    require_u16(0x52, 0, "reserved gid")?;
+    require_u32(0x54, 11, "first non-reserved inode")?;
+    require_u16(0x58, SORACLOUD_INROU_EXT4_INODE_SIZE_V1, "inode size")?;
+    require_u32(
+        0x5c,
+        SORACLOUD_INROU_EXT4_COMPAT_FEATURES_V1,
+        "compatible feature mask",
+    )?;
+    let incompat = inrou_ext4_superblock_u32(&superblock, 0x60);
+    if incompat & !SORACLOUD_INROU_EXT4_INCOMPAT_RECOVER
+        != SORACLOUD_INROU_EXT4_INCOMPAT_FEATURES_V1
+    {
+        eyre::bail!(
+            "Inrou ext4 lease disk {} retained incompatible feature mask {incompat:#x} outside the canonical base {:#x} plus the dynamic needs-recovery bit",
+            path.display(),
+            SORACLOUD_INROU_EXT4_INCOMPAT_FEATURES_V1,
+        );
+    }
+    require_u32(
+        0x64,
+        SORACLOUD_INROU_EXT4_RO_COMPAT_FEATURES_V1,
+        "read-only-compatible feature mask",
+    )?;
+    if superblock[0x68..0x78] != profile.uuid {
+        eyre::bail!(
+            "Inrou ext4 lease disk {} has a UUID outside its canonical logical-volume binding",
+            path.display()
+        );
+    }
+    let mut expected_label = [0_u8; 16];
+    expected_label[..SORACLOUD_INROU_EXT4_LABEL_V1.len()]
+        .copy_from_slice(SORACLOUD_INROU_EXT4_LABEL_V1.as_bytes());
+    if superblock[0x78..0x88] != expected_label {
+        eyre::bail!(
+            "Inrou ext4 lease disk {} has a non-canonical volume label",
+            path.display()
+        );
+    }
+    require_u32(0xe0, 8, "internal journal inode")?;
+    require_u32(0xe4, 0, "external journal device")?;
+    require_u16(
+        0xfe,
+        SORACLOUD_INROU_EXT4_GROUP_DESCRIPTOR_BYTES_V1,
+        "group descriptor size",
+    )?;
+    require_u32(
+        0x100,
+        SORACLOUD_INROU_EXT4_DEFAULT_MOUNT_OPTIONS_V1,
+        "default mount options",
+    )?;
+    require_u32(0x150, 0, "high block count")?;
+    require_u32(0x154, 0, "high reserved-block count")?;
+    require_u16(0x164, 0, "RAID stride")?;
+    require_u32(0x170, 0, "RAID stripe width")?;
+    if superblock[0x174] != SORACLOUD_INROU_EXT4_FLEX_GROUPS_V1.ilog2() as u8 {
+        eyre::bail!(
+            "Inrou ext4 lease disk {} retained log-groups-per-flex {} instead of the canonical {}",
+            path.display(),
+            superblock[0x174],
+            SORACLOUD_INROU_EXT4_FLEX_GROUPS_V1.ilog2(),
+        );
+    }
+    if superblock[0x175] != 1 {
+        eyre::bail!(
+            "Inrou ext4 lease disk {} does not use canonical CRC32C metadata checksums",
+            path.display()
+        );
+    }
+    let filesystem_state = inrou_ext4_superblock_u16(&superblock, 0x3a);
+    if filesystem_state & EXT4_ERROR_FS != 0
+        || filesystem_state & !(EXT4_VALID_FS | EXT4_ERROR_FS) != 0
+    {
+        eyre::bail!(
+            "Inrou ext4 lease disk {} carries an errored or unknown filesystem state {filesystem_state:#x}",
+            path.display()
+        );
+    }
+    let opened_after = file.metadata()?;
+    let named_after = fs::symlink_metadata(path)?;
+    if !same_soracloud_regular_file(&before, &opened_after)
+        || !same_soracloud_regular_file(&opened_after, &named_after)
+    {
+        eyre::bail!(
+            "Inrou ext4 lease disk {} changed while it was verified",
+            path.display()
+        );
+    }
+    Ok(())
+}
+#[cfg(test)]
+fn exact_inrou_ext4_superblock_fixture_v1(profile: InrouExt4VolumeProfileV1) -> [u8; 1_024] {
+    fn put_u16(superblock: &mut [u8; 1_024], offset: usize, value: u16) {
+        superblock[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+    }
+    fn put_u32(superblock: &mut [u8; 1_024], offset: usize, value: u32) {
+        superblock[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    }
+
+    let mut superblock = [0_u8; 1_024];
+    put_u32(&mut superblock, 0x00, profile.total_inodes);
+    put_u32(&mut superblock, 0x04, profile.total_blocks);
+    put_u32(&mut superblock, 0x14, 0);
+    put_u32(&mut superblock, 0x18, 2);
+    put_u32(&mut superblock, 0x1c, 2);
+    put_u32(
+        &mut superblock,
+        0x20,
+        u32::try_from(SORACLOUD_INROU_EXT4_BLOCKS_PER_GROUP_V1)
+            .expect("fixed ext4 blocks-per-group fits u32"),
+    );
+    put_u32(
+        &mut superblock,
+        0x24,
+        u32::try_from(SORACLOUD_INROU_EXT4_BLOCKS_PER_GROUP_V1)
+            .expect("fixed ext4 clusters-per-group fits u32"),
+    );
+    put_u32(
+        &mut superblock,
+        0x28,
+        SORACLOUD_INROU_EXT4_INODES_PER_GROUP_V1,
+    );
+    put_u16(&mut superblock, 0x38, 0xef53);
+    put_u16(&mut superblock, 0x3a, 1);
+    put_u16(&mut superblock, 0x3c, 2);
+    put_u32(&mut superblock, 0x48, 0);
+    put_u32(&mut superblock, 0x4c, 1);
+    put_u32(&mut superblock, 0x54, 11);
+    put_u16(&mut superblock, 0x58, SORACLOUD_INROU_EXT4_INODE_SIZE_V1);
+    put_u32(
+        &mut superblock,
+        0x5c,
+        SORACLOUD_INROU_EXT4_COMPAT_FEATURES_V1,
+    );
+    put_u32(
+        &mut superblock,
+        0x60,
+        SORACLOUD_INROU_EXT4_INCOMPAT_FEATURES_V1,
+    );
+    put_u32(
+        &mut superblock,
+        0x64,
+        SORACLOUD_INROU_EXT4_RO_COMPAT_FEATURES_V1,
+    );
+    superblock[0x68..0x78].copy_from_slice(&profile.uuid);
+    superblock[0x78..0x78 + SORACLOUD_INROU_EXT4_LABEL_V1.len()]
+        .copy_from_slice(SORACLOUD_INROU_EXT4_LABEL_V1.as_bytes());
+    put_u32(&mut superblock, 0xe0, 8);
+    put_u16(
+        &mut superblock,
+        0xfe,
+        SORACLOUD_INROU_EXT4_GROUP_DESCRIPTOR_BYTES_V1,
+    );
+    put_u32(
+        &mut superblock,
+        0x100,
+        SORACLOUD_INROU_EXT4_DEFAULT_MOUNT_OPTIONS_V1,
+    );
+    superblock[0x174] = SORACLOUD_INROU_EXT4_FLEX_GROUPS_V1.ilog2() as u8;
+    superblock[0x175] = 1;
+    superblock
+}
 #[cfg(target_os = "linux")]
 struct InrouWriteLease<'a> {
     file: &'a fs::File,
@@ -22587,6 +24856,7 @@ fn install_staged_inrou_disk(
 fn inrou_rootfs_base_binding(
     bundle: &SoraDeploymentBundleV1,
     plan: &SoracloudRuntimeInrouPlan,
+    root_volume: &SoracloudRuntimeLeaseVolumePlan,
 ) -> eyre::Result<Hash> {
     let image = bundle
         .container
@@ -22599,11 +24869,22 @@ fn inrou_rootfs_base_binding(
     if image.rootfs_image_path != plan.rootfs_image_path {
         eyre::bail!("selected Inrou rootfs does not match the signed bundle");
     }
+    if root_volume.kind != SoraLeaseVolumeKindV1::PersistentRootLeaseVolume
+        || root_volume.volume_name != plan.root_volume_name
+    {
+        eyre::bail!("selected Inrou persistent root volume does not match the signed guest plan");
+    }
     Ok(Hash::new(Encode::encode(&(
-        "soracloud.inrou.rootfs-base-binding.v1".to_owned(),
+        "soracloud.inrou.rootfs-base-and-volume-binding.v1".to_owned(),
         bundle.container.bundle_hash,
         plan.selected_guest_isa,
         image.clone(),
+        root_volume.volume_name.clone(),
+        root_volume.kind,
+        root_volume.storage_class,
+        root_volume.mount_path.clone(),
+        root_volume.max_total_bytes,
+        root_volume.authoritative_generation,
     ))))
 }
 #[cfg(any(test, target_os = "linux"))]
@@ -22628,7 +24909,7 @@ fn validate_inrou_root_disk_binding(
     .wrap_err_with(|| format!("read {}", binding_path.display()))?;
     if actual != expected_binding.to_string() {
         eyre::bail!(
-            "Inrou persistent root disk {} is bound to a different authenticated base image",
+            "Inrou persistent root disk {} is bound to a different authenticated base image or logical volume identity",
             root_disk_path.display()
         );
     }
@@ -22639,6 +24920,59 @@ fn write_inrou_root_disk_binding(root_disk_path: &Path, binding: Hash) -> eyre::
     let binding_path = inrou_root_disk_binding_path(root_disk_path)?;
     write_bytes_atomic(&binding_path, binding.to_string().as_bytes())
         .wrap_err_with(|| format!("write {}", binding_path.display()))
+}
+#[cfg(any(test, target_os = "linux"))]
+fn inrou_root_disk_byte_equals_authenticated_base(
+    base_rootfs_image_path: &Path,
+    base_file: &mut fs::File,
+    base_metadata: &fs::Metadata,
+    root_disk_path: &Path,
+) -> eyre::Result<bool> {
+    let (mut root_disk_file, root_disk_metadata) = open_soracloud_regular_file_no_follow(
+        root_disk_path,
+        "Inrou published persistent root disk",
+    )
+    .wrap_err_with(|| format!("open {}", root_disk_path.display()))?;
+    if root_disk_metadata.len() != base_metadata.len() {
+        return Ok(false);
+    }
+    base_file.rewind().wrap_err_with(|| {
+        format!(
+            "rewind authenticated Inrou base rootfs {}",
+            base_rootfs_image_path.display()
+        )
+    })?;
+    let mut base_buffer = [0_u8; 64 * 1024];
+    let mut root_disk_buffer = [0_u8; 64 * 1024];
+    let mut remaining = base_metadata.len();
+    while remaining != 0 {
+        let chunk_bytes = usize::try_from(remaining.min(base_buffer.len() as u64))
+            .expect("bounded root-disk comparison chunk fits usize");
+        base_file
+            .read_exact(&mut base_buffer[..chunk_bytes])
+            .wrap_err("read authenticated Inrou base rootfs during binding recovery")?;
+        root_disk_file
+            .read_exact(&mut root_disk_buffer[..chunk_bytes])
+            .wrap_err("read published Inrou root disk during binding recovery")?;
+        if base_buffer[..chunk_bytes] != root_disk_buffer[..chunk_bytes] {
+            return Ok(false);
+        }
+        remaining -= chunk_bytes as u64;
+    }
+    let base_opened_after = base_file.metadata()?;
+    let base_named_after = fs::symlink_metadata(base_rootfs_image_path)?;
+    let root_disk_opened_after = root_disk_file.metadata()?;
+    let root_disk_named_after = fs::symlink_metadata(root_disk_path)?;
+    if !same_soracloud_regular_file(base_metadata, &base_opened_after)
+        || !same_soracloud_regular_file(&base_opened_after, &base_named_after)
+        || !same_soracloud_regular_file(&root_disk_metadata, &root_disk_opened_after)
+        || !same_soracloud_regular_file(&root_disk_opened_after, &root_disk_named_after)
+    {
+        eyre::bail!(
+            "authenticated Inrou base rootfs or published root disk changed during binding recovery"
+        );
+    }
+    Ok(true)
 }
 #[cfg(any(test, target_os = "linux"))]
 fn ensure_inrou_portable_root_disk(
@@ -22666,7 +25000,30 @@ fn ensure_inrou_portable_root_disk(
     match fs::symlink_metadata(&root_disk_path) {
         Ok(_) => {
             validate_reusable_inrou_disk(&root_disk_path, Some(base_size))?;
-            validate_inrou_root_disk_binding(&root_disk_path, base_binding)?;
+            let binding_path = inrou_root_disk_binding_path(&root_disk_path)?;
+            match fs::symlink_metadata(&binding_path) {
+                Ok(_) => validate_inrou_root_disk_binding(&root_disk_path, base_binding)?,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    if !inrou_root_disk_byte_equals_authenticated_base(
+                        base_rootfs_image_path,
+                        &mut base_file,
+                        &base_metadata,
+                        &root_disk_path,
+                    )? {
+                        eyre::bail!(
+                            "Inrou persistent root disk {} has no authenticated binding and no longer byte-equals its securely opened base image",
+                            root_disk_path.display()
+                        );
+                    }
+                    write_inrou_root_disk_binding(&root_disk_path, base_binding)?;
+                    validate_inrou_root_disk_binding(&root_disk_path, base_binding)?;
+                }
+                Err(error) => {
+                    return Err(error).wrap_err_with(|| {
+                        format!("inspect Inrou root-disk binding {}", binding_path.display())
+                    });
+                }
+            }
             return Ok(root_disk_path);
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -22718,6 +25075,7 @@ fn ensure_inrou_portable_root_disk(
 #[cfg(any(test, target_os = "linux"))]
 fn ensure_inrou_portable_lease_disks(
     qemu_img: &Path,
+    ext4_formatter: &Path,
     plan: &SoracloudRuntimeServicePlan,
 ) -> eyre::Result<Vec<PortableVmLeaseDisk>> {
     let mut disks = Vec::new();
@@ -22729,28 +25087,24 @@ fn ensure_inrou_portable_lease_disks(
         let volume_dir =
             ensure_secure_inrou_disk_directory(Path::new(&volume.local_materialization_dir))?;
         let image_path = volume_dir.join("lease.raw");
-        let initialize_filesystem = match fs::symlink_metadata(&image_path) {
+        let profile = inrou_ext4_volume_profile_v1(plan, volume)?;
+        match fs::symlink_metadata(&image_path) {
             Ok(_) => {
                 validate_reusable_inrou_disk(&image_path, Some(volume.max_total_bytes))?;
-                false
+                validate_inrou_ext4_filesystem(&image_path, profile)?;
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 let (staging_path, staging_file) =
                     create_unique_inrou_disk_staging_file(&volume_dir, "lease.raw")?;
                 drop(staging_file);
                 let create_result = (|| -> eyre::Result<()> {
+                    let staging_path_str = staging_path
+                        .to_str()
+                        .ok_or_else(|| eyre::eyre!("non-utf8 path"))?;
+                    let total_bytes = profile.total_bytes.to_string();
                     run_host_command(
                         qemu_img,
-                        &[
-                            "create",
-                            "-q",
-                            "-f",
-                            "raw",
-                            staging_path
-                                .to_str()
-                                .ok_or_else(|| eyre::eyre!("non-utf8 path"))?,
-                            &volume.max_total_bytes.to_string(),
-                        ],
+                        &["create", "-q", "-f", "raw", staging_path_str, &total_bytes],
                     )
                     .wrap_err_with(|| {
                         format!(
@@ -22759,6 +25113,60 @@ fn ensure_inrou_portable_lease_disks(
                             volume.volume_name
                         )
                     })?;
+                    let total_blocks = profile.total_blocks.to_string();
+                    let total_inodes = profile.total_inodes.to_string();
+                    let uuid = format_inrou_ext4_uuid_v1(&profile.uuid);
+                    let block_bytes = SORACLOUD_INROU_EXT4_BLOCK_BYTES_V1.to_string();
+                    let blocks_per_group = SORACLOUD_INROU_EXT4_BLOCKS_PER_GROUP_V1.to_string();
+                    let flex_groups = SORACLOUD_INROU_EXT4_FLEX_GROUPS_V1.to_string();
+                    let inode_size = SORACLOUD_INROU_EXT4_INODE_SIZE_V1.to_string();
+                    let journal_size = format!("size={SORACLOUD_INROU_EXT4_JOURNAL_MIB_V1}");
+                    run_inrou_ext4_formatter(
+                        ext4_formatter,
+                        &[
+                            "-q",
+                            "-F",
+                            "-t",
+                            "ext4",
+                            "-r",
+                            "1",
+                            "-b",
+                            &block_bytes,
+                            "-I",
+                            &inode_size,
+                            "-N",
+                            &total_inodes,
+                            "-g",
+                            &blocks_per_group,
+                            "-G",
+                            &flex_groups,
+                            "-m",
+                            "0",
+                            "-o",
+                            "linux",
+                            "-e",
+                            "remount-ro",
+                            "-L",
+                            SORACLOUD_INROU_EXT4_LABEL_V1,
+                            "-U",
+                            &uuid,
+                            "-O",
+                            SORACLOUD_INROU_EXT4_FEATURES_V1,
+                            "-E",
+                            SORACLOUD_INROU_EXT4_EXTENDED_OPTIONS_V1,
+                            "-J",
+                            &journal_size,
+                            staging_path_str,
+                            &total_blocks,
+                        ],
+                    )
+                    .wrap_err_with(|| {
+                        format!(
+                            "format PortableVm lease disk {} for volume `{}` with the exact Inrou V1 ext4 profile before publication",
+                            staging_path.display(), volume.volume_name
+                        )
+                    })?;
+                    validate_inrou_ext4_filesystem(&staging_path, profile)?;
                     install_staged_inrou_disk(
                         &staging_path,
                         &image_path,
@@ -22769,10 +25177,9 @@ fn ensure_inrou_portable_lease_disks(
                     remove_inrou_disk_staging_file(&staging_path)?;
                     return Err(error);
                 }
-                true
             }
             Err(error) => return Err(error).wrap_err("inspect PortableVm lease disk"),
-        };
+        }
         disks.push(PortableVmLeaseDisk {
             mount_path: volume.mount_path.clone(),
             image_path,
@@ -22780,7 +25187,6 @@ fn ensure_inrou_portable_lease_disks(
             device_serial: portable_vm_block_device_serial(&volume.volume_name),
             filesystem_type: "ext4".to_owned(),
             mount_options: "rw,nofail".to_owned(),
-            initialize_filesystem,
         });
     }
     Ok(disks)
@@ -22797,7 +25203,6 @@ fn build_inrou_portable_shared_filesystem_mounts(
                 device_serial: disk.device_serial.clone(),
                 filesystem_type: disk.filesystem_type.clone(),
                 mount_options: disk.mount_options.clone(),
-                initialize_filesystem: disk.initialize_filesystem,
             },
         })
         .collect()
@@ -24060,17 +26465,37 @@ fn finish_inrou_stdout_drain_bounded(
 }
 #[cfg(any(test, target_os = "linux"))]
 fn run_host_command(program: &Path, args: &[&str]) -> eyre::Result<()> {
-    run_host_command_with_timeout(program, args, Duration::from_secs(10 * 60))
+    run_host_command_with_timeout_and_environment(program, args, Duration::from_secs(10 * 60), &[])
 }
 #[cfg(any(test, target_os = "linux"))]
+fn run_inrou_ext4_formatter(program: &Path, args: &[&str]) -> eyre::Result<()> {
+    // An empty configuration prevents host `/etc/mke2fs.conf` feature and
+    // usage-type policy from silently changing the first-release disk format.
+    run_host_command_with_timeout_and_environment(
+        program,
+        args,
+        Duration::from_secs(10 * 60),
+        &[("MKE2FS_CONFIG", "/dev/null")],
+    )
+}
+#[cfg(test)]
 fn run_host_command_with_timeout(
     program: &Path,
     args: &[&str],
     timeout: Duration,
 ) -> eyre::Result<()> {
+    run_host_command_with_timeout_and_environment(program, args, timeout, &[])
+}
+fn run_host_command_with_timeout_and_environment(
+    program: &Path,
+    args: &[&str],
+    timeout: Duration,
+    environment: &[(&str, &str)],
+) -> eyre::Result<()> {
     let mut command = Command::new(program);
     sanitize_host_command_environment(&mut command);
     command
+        .envs(environment.iter().copied())
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -24328,7 +26753,6 @@ fn append_inrou_block_device_mount(
     device_serial: &str,
     filesystem_type: &str,
     mount_options: &str,
-    initialize_filesystem: bool,
 ) {
     script.push_str("  mount_path=");
     script.push_str(&shell_single_quote(mount_path));
@@ -24351,19 +26775,6 @@ fn append_inrou_block_device_mount(
         "    exit 1\n",
         "  fi\n",
     ));
-    if initialize_filesystem {
-        script.push_str(concat!(
-            "  if ! command -v mkfs.ext4 >/dev/null 2>&1; then\n",
-            "    echo 'Inrou PortableVm block-volume initialization requires mkfs.ext4 in the guest image' >&2\n",
-            "    exit 1\n",
-            "  fi\n",
-            "  if blkid \"$device_path\" >/dev/null 2>&1; then\n",
-            "    echo \"new Inrou PortableVm volume unexpectedly contains a filesystem signature: $device_path\" >&2\n",
-            "    exit 1\n",
-            "  fi\n",
-            "  mkfs.ext4 -F \"$device_path\"\n",
-        ));
-    }
     script.push_str("  actual_filesystem=$(blkid -s TYPE -o value \"$device_path\" 2>/dev/null || true)\n  if [ \"$actual_filesystem\" != ");
     script.push_str(&shell_single_quote(filesystem_type));
     script.push_str(concat!(
@@ -24378,13 +26789,13 @@ fn append_inrou_block_device_mount(
     script.push_str(&shell_single_quote(mount_options));
     script.push_str(" \"$device_path\" \"$mount_path\"");
     script.push_str(concat!(
-        "; then\n    echo \"Inrou PortableVm volume mount failed; refusing to modify $device_path\" >&2\n    exit 1\n  fi\n",
+        "; then\n    echo \"Inrou PortableVm volume mount failed; refusing destructive initialization of $device_path\" >&2\n    exit 1\n  fi\n",
         "  if ! mountpoint -q \"$mount_path\"; then\n",
-        "    echo \"Inrou PortableVm volume mount was not established; refusing to modify $device_path\" >&2\n",
+        "    echo \"Inrou PortableVm volume mount was not established; refusing destructive initialization of $device_path\" >&2\n",
         "    exit 1\n",
         "  fi\n",
         "  if ! mkdir -p \"$mount_path/.inrou-volume-check\"; then\n",
-        "    echo \"Inrou PortableVm volume filesystem check failed; refusing to modify $device_path\" >&2\n",
+        "    echo \"Inrou PortableVm volume post-mount write probe failed; the device will not be reformatted: $device_path\" >&2\n",
         "    umount \"$mount_path\" >/dev/null 2>&1 || true\n",
         "    exit 1\n",
         "  fi\n",
@@ -24406,20 +26817,19 @@ fn append_inrou_shared_filesystem_mount(script: &mut String, mount: &InrouShared
         "fi\n",
         "if ! mountpoint -q \"$mount_path\"; then\n",
     ));
-    let InrouSharedFilesystemMountKind::BlockDevice {
-        device_serial,
-        filesystem_type,
-        mount_options,
-        initialize_filesystem,
-    } = &mount.kind;
-    append_inrou_block_device_mount(
-        script,
-        &mount.mount_path,
-        device_serial,
-        filesystem_type,
-        mount_options,
-        *initialize_filesystem,
-    );
+    match &mount.kind {
+        InrouSharedFilesystemMountKind::BlockDevice {
+            device_serial,
+            filesystem_type,
+            mount_options,
+        } => append_inrou_block_device_mount(
+            script,
+            &mount.mount_path,
+            device_serial,
+            filesystem_type,
+            mount_options,
+        ),
+    }
     script.push_str("fi\nchown inrou:inrou ");
     script.push_str(&shell_single_quote(&mount.mount_path));
     script.push_str(" 2>/dev/null || true\nchmod 0775 ");
@@ -24576,7 +26986,8 @@ fn build_inrou_launcher_script(
 
 #[cfg(any(test, target_os = "linux"))]
 fn build_inrou_service_unit(stop_grace: Duration) -> String {
-    let mut unit = String::from(concat!(
+    let mut service_unit = String::new();
+    service_unit.push_str(concat!(
         "[Unit]\n",
         "Description=Soracloud Inrou service\n",
         "After=network-online.target\n",
@@ -24588,11 +26999,11 @@ fn build_inrou_service_unit(stop_grace: Duration) -> String {
         "Group=inrou\n",
         "Restart=always\n",
         "RestartSec=2\n",
-        "TimeoutStopSec=",
     ));
-    unit.push_str(&stop_grace.as_millis().to_string());
-    unit.push_str(concat!(
-        "ms\n",
+    service_unit.push_str("TimeoutStopSec=");
+    service_unit.push_str(&stop_grace.as_millis().to_string());
+    service_unit.push_str("ms\n");
+    service_unit.push_str(concat!(
         "StandardOutput=journal+console\n",
         "StandardError=journal+console\n",
         "ExecStartPre=/usr/local/bin/inrou-prepare.sh\n",
@@ -24600,7 +27011,7 @@ fn build_inrou_service_unit(stop_grace: Duration) -> String {
         "[Install]\n",
         "WantedBy=multi-user.target\n",
     ));
-    unit
+    service_unit
 }
 
 #[cfg(any(test, target_os = "linux"))]
@@ -25638,7 +28049,7 @@ fn ensure_inrou_entrypoint_present(bundle_root: &Path, entrypoint: &str) -> eyre
     }
     Ok(())
 }
-#[cfg(target_os = "linux")]
+#[cfg(any(test, target_os = "linux"))]
 fn is_resolved_executable(candidate: &Path) -> bool {
     if !candidate.is_file() {
         return false;
@@ -27463,11 +29874,41 @@ fn validated_remote_hydration_order(
         || order.order_id != *record.order_id.as_bytes()
         || order.manifest_digest != *record.manifest_digest.as_bytes()
         || order.manifest_cid.as_slice() != record.manifest_root_cid.as_bytes()
+        || order.issued_at != record.issued_epoch
+        || order.deadline_at != record.deadline_epoch
     {
         iroha_logger::warn!(
             manifest_digest = %hex::encode(record.manifest_digest.as_bytes()),
             "rejected substituted canonical SoraFS replication order during Soracloud hydration"
         );
+        return None;
+    }
+    let target_replicas = usize::from(order.target_replicas);
+    if record.assignment_revision == 0 || record.provider_completions.len() != target_replicas {
+        return None;
+    }
+    let mut completed_providers = BTreeSet::new();
+    let mut previous_completion_epoch = None;
+    for completion in &record.provider_completions {
+        if !order
+            .assignments
+            .iter()
+            .any(|assignment| assignment.provider_id == *completion.provider_id.as_bytes())
+            || !completed_providers.insert(*completion.provider_id.as_bytes())
+            || completion.completion_epoch < record.issued_epoch
+            || completion.completion_epoch > record.deadline_epoch
+            || previous_completion_epoch
+                .is_some_and(|previous| completion.completion_epoch < previous)
+            || completion.assignment_revision != record.assignment_revision
+            || !completion.completion_authority.is_valid()
+            || completion.completion_authority.provider_owner != completion.completed_by
+            || !completion.finalized_anchor.is_valid()
+        {
+            return None;
+        }
+        previous_completion_epoch = Some(completion.completion_epoch);
+    }
+    if previous_completion_epoch != Some(completed_epoch) {
         return None;
     }
     Some((completed_epoch, order))
@@ -27939,7 +30380,7 @@ fn begin_soracloud_atomic_file_transaction(
             sequence
         ));
         let mut options = fs::OpenOptions::new();
-        options.write(true).create_new(true);
+        options.read(true).write(true).create_new(true);
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt as _;
@@ -28132,7 +30573,8 @@ mod tests {
     const SAMPLE_SERVICE_LEASE_STARTED_HEIGHT: u64 = 1;
     use eyre::Result;
     use iroha_core::{
-        kura::Kura, query::store::LiveQueryStore, smartcontracts::Execute, state::World,
+        block::BlockBuilder, kura::Kura, query::store::LiveQueryStore, smartcontracts::Execute,
+        state::World,
     };
     use iroha_crypto::{
         Algorithm, BlsNormal, KeyGenOption, KeyPair, PrivateKey, PublicKey, Signature,
@@ -28402,8 +30844,8 @@ mod tests {
             selected_weight_format: None,
             required_weight_files: Vec::new(),
             weight_selection_commitment: None,
+            import_file_allowlist: Vec::new(),
             imported_files: Vec::new(),
-            skipped_files: Vec::new(),
             import_error: Some("fixture import failure".to_owned()),
         }
     }
@@ -28437,8 +30879,8 @@ mod tests {
         for collection_field in [
             "tags",
             "required_weight_files",
+            "import_file_allowlist",
             "imported_files",
-            "skipped_files",
         ] {
             let mut missing = canonical.clone();
             missing
@@ -28454,10 +30896,10 @@ mod tests {
         unknown_manifest
             .as_object_mut()
             .expect("HF import manifest JSON object")
-            .insert("legacy_files".to_owned(), norito::json::Value::Null);
+            .insert("skipped_files".to_owned(), norito::json!([]));
         assert!(
             norito::json::from_value::<HfLocalImportManifestV1>(unknown_manifest).is_err(),
-            "HF import manifest must reject unknown fields"
+            "HF import manifest must reject retired best-effort skip state"
         );
 
         let imported = HfImportedFileV1 {
@@ -28515,7 +30957,6 @@ mod tests {
             imported_file_count: 0,
             imported_total_bytes: 0,
             imported_files: Vec::new(),
-            skipped_files: Vec::new(),
             import_error: Some("fixture import failure".to_owned()),
             inference_local_enabled: false,
             inference_bridge_available: false,
@@ -28528,7 +30969,6 @@ mod tests {
             "tags",
             "imported_at_ms",
             "imported_files",
-            "skipped_files",
             "import_error",
         ] {
             let mut missing = metadata_value.clone();
@@ -28545,8 +30985,11 @@ mod tests {
         unknown_metadata
             .as_object_mut()
             .expect("HF generated metadata JSON object")
-            .insert("legacy_status".to_owned(), norito::json::Value::Null);
-        assert!(norito::json::from_value::<HfGeneratedMetadataResponse>(unknown_metadata).is_err());
+            .insert("skipped_files".to_owned(), norito::json!([]));
+        assert!(
+            norito::json::from_value::<HfGeneratedMetadataResponse>(unknown_metadata).is_err(),
+            "HF metadata must reject retired best-effort skip state"
+        );
         Ok(())
     }
     #[test]
@@ -28702,13 +31145,13 @@ mod tests {
             selected_weight_format: Some(selection.model_format),
             weight_selection_commitment: Some(selection.weight_selection_commitment.to_string()),
             required_weight_files: local_hf_required_weight_records(&selection),
+            import_file_allowlist: Vec::new(),
             imported_files: vec![HfImportedFileV1 {
                 path: relative_path.to_owned(),
                 content_length: payload.len() as u64,
                 payload_hash: Hash::new(payload).to_string(),
                 lfs_sha256: Some(hex::encode(iroha_crypto::sha256(payload))),
             }],
-            skipped_files: Vec::new(),
             import_error: None,
         };
         validate_hf_import_cache_at_generation(
@@ -28719,11 +31162,19 @@ mod tests {
             16,
             1_024,
             4_096,
+            &[],
         )?;
         publish_hf_import_generation(&mut staging, &manifest)?;
         let generation = read_hf_import_generation(temp_dir.path(), &source_id)?
             .expect("published test generation");
-        validate_hf_import_cache(&generation, &profile, 16, 1_024, 4_096)?;
+        validate_hf_import_cache(&generation, &profile, 16, 1_024, 4_096, &[])?;
+        let changed_allowlist = vec!["config.json".to_owned()];
+        assert_eyre_error_contains(
+            validate_hf_import_cache(&generation, &profile, 16, 1_024, 4_096, &changed_allowlist)
+                .expect_err("an import allowlist change must invalidate cache reuse")
+                .into(),
+            "different import allowlist",
+        );
 
         let second_payload = b"authenticated second shard";
         let expanded_model_info_payload = norito::json::to_vec(&test_hf_model_info(
@@ -28751,6 +31202,7 @@ mod tests {
             16,
             1_024,
             4_096,
+            &[],
         )
         .expect_err("one-shard manifest must not satisfy a two-shard model-info commitment");
         write_bytes_atomic(
@@ -28758,22 +31210,23 @@ mod tests {
             &model_info_payload,
         )?;
 
-        fs::write(&local_path, b"tampered model weight bytes")?;
-        validate_hf_import_cache(&generation, &profile, 16, 1_024, 4_096)
+        let published_local_path = generation.files_root.join(relative_path);
+        fs::write(&published_local_path, b"tampered model weight bytes")?;
+        validate_hf_import_cache(&generation, &profile, 16, 1_024, 4_096, &[])
             .expect_err("same-path cache payload drift must fail closed");
-        write_bytes_atomic(&local_path, payload)?;
-        let unexpected = files_root.join("unexpected.py");
+        write_bytes_atomic(&published_local_path, payload)?;
+        let unexpected = generation.files_root.join("unexpected.py");
         write_bytes_atomic(&unexpected, b"untrusted")?;
-        validate_hf_import_cache(&generation, &profile, 16, 1_024, 4_096)
+        validate_hf_import_cache(&generation, &profile, 16, 1_024, 4_096, &[])
             .expect_err("unmanifested cache entries must fail closed");
         fs::remove_file(&unexpected)?;
 
         #[cfg(unix)]
         {
             use std::os::unix::fs::symlink;
-            fs::remove_file(&local_path)?;
-            symlink(temp_dir.path().join("outside"), &local_path)?;
-            validate_hf_import_cache(&generation, &profile, 16, 1_024, 4_096)
+            fs::remove_file(&published_local_path)?;
+            symlink(temp_dir.path().join("outside"), &published_local_path)?;
+            validate_hf_import_cache(&generation, &profile, 16, 1_024, 4_096, &[])
                 .expect_err("symlinked cache payloads must fail without following them");
         }
         Ok(())
@@ -28798,12 +31251,12 @@ mod tests {
             "gpt2",
             TEST_HF_WEIGHT_PAYLOAD,
         )?;
-        assert_ne!(first.name, second.name);
+        assert_ne!(first.root, second.root);
         assert_eq!(
             read_hf_import_generation(temp_dir.path(), &source_id)?
                 .expect("current generation")
-                .name,
-            second.name,
+                .root,
+            second.root,
         );
         assert_eq!(fs::read(&first_weight)?, TEST_HF_WEIGHT_PAYLOAD);
         assert!(
@@ -28841,7 +31294,7 @@ mod tests {
 
         let current = read_hf_import_generation(temp_dir.path(), &source_id)?
             .expect("current error generation");
-        assert_ne!(current.name, success.name);
+        assert_ne!(current.root, success.root);
         assert_eq!(current.manifest.import_error, error_manifest.import_error);
         assert_eq!(fs::read_dir(&current.files_root)?.count(), 0);
         assert!(!current.root.join("model_info.json").exists());
@@ -28912,9 +31365,9 @@ mod tests {
             drop(first);
             let (mut second, _) = listener.accept()?;
             let request_bytes = second.read(&mut request)?;
-            let request = String::from_utf8_lossy(&request[..request_bytes]);
-            assert!(request.starts_with("GET /final HTTP/1.1"));
-            assert!(!request.to_ascii_lowercase().contains("authorization:"));
+            let request_text = String::from_utf8_lossy(&request[..request_bytes]);
+            assert!(request_text.starts_with("GET /final HTTP/1.1"));
+            assert!(!request_text.to_ascii_lowercase().contains("authorization:"));
             write!(
                 second,
                 "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
@@ -28959,12 +31412,15 @@ mod tests {
         config.api_base_url = origin.clone();
         config.import_redirect_allowed_origins.clear();
         config.request_timeout = Duration::from_secs(2);
-        let _ = send_hf_import_request_with_vetted_redirects(
-            &config,
-            reqwest::Method::GET,
-            reqwest::Url::parse(&format!("{origin}/source"))?,
-        )
-        .expect_err("an unconfigured cross-origin redirect must fail closed");
+        assert_eyre_error_contains(
+            send_hf_import_request_with_vetted_redirects(
+                &config,
+                reqwest::Method::GET,
+                reqwest::Url::parse(&format!("{origin}/source"))?,
+            )
+            .expect_err("an unconfigured cross-origin redirect must fail closed"),
+            "redirect targeted unapproved origin",
+        );
         worker.join().expect("HF cross-origin fixture")?;
         assert_eq!(
             target
@@ -30146,7 +32602,7 @@ mod tests {
                 iroha_data_model::soracloud::SORACLOUD_PRIVATE_MODEL_RUNTIME_VERSION_V1.to_owned(),
             model_manifest_digest: ManifestDigest::new([seed.wrapping_add(4); 32]),
             model_bundle_root: Hash::new([seed.wrapping_add(5); 32]),
-            policy_id: "policy/v1".to_owned(),
+            policy_id: "policy_v1".to_owned(),
             decryption_request_id: format!("decrypt-{seed}"),
             attesting_validator,
             input_artifact: private_execution_journal_test_artifact(
@@ -30197,6 +32653,7 @@ mod tests {
             phase: SoracloudPrivateUploadedModelExecutionJournalPhaseV1::Prepare,
             transaction_hash: None,
             signed_transaction: None,
+            transaction_payload: None,
             submission_attempt: 0,
         };
         entry
@@ -30226,16 +32683,25 @@ mod tests {
     }
     fn private_execution_journal_test_signed_entry(
         prepared: &SoracloudPrivateUploadedModelExecutionJournalV1,
-        attempt: u64,
+        attempt: u8,
         marker: &str,
     ) -> Result<SoracloudPrivateUploadedModelExecutionJournalV1> {
         let transaction =
             private_execution_journal_test_signed_transaction(prepared.receipt.network_id, marker)?;
         let mut signed = prepared.clone();
         signed.transaction_hash = Some(Hash::from(transaction.hash()));
+        signed.transaction_payload = Some(transaction.payload().clone());
         signed.signed_transaction = Some(transaction);
         signed.submission_attempt = attempt;
         Ok(signed)
+    }
+    fn private_execution_journal_test_reserved_entry(
+        signed: &SoracloudPrivateUploadedModelExecutionJournalV1,
+    ) -> SoracloudPrivateUploadedModelExecutionJournalV1 {
+        let mut reserved = signed.clone();
+        reserved.transaction_hash = None;
+        reserved.signed_transaction = None;
+        reserved
     }
     fn private_execution_journal_test_reseal_receipt(
         receipt: &mut SoraPrivateUploadedModelExecutionReceiptV1,
@@ -30272,6 +32738,7 @@ mod tests {
         assert!(transaction.verify_signature().is_err());
         let mut signed = prepared.clone();
         signed.transaction_hash = Some(Hash::from(transaction.hash()));
+        signed.transaction_payload = Some(transaction.payload().clone());
         signed.signed_transaction = Some(transaction);
         signed.submission_attempt = 1;
         Ok(signed)
@@ -30283,6 +32750,8 @@ mod tests {
         submitted: parking_lot::Mutex<Vec<SignedTransaction>>,
         observations: parking_lot::Mutex<BTreeMap<Hash, PrivateExecutionTransactionObservation>>,
         fail_next_submit: AtomicBool,
+        force_immediate_replacement: AtomicBool,
+        tamper_next_payload: AtomicBool,
         qualification_available: AtomicBool,
     }
     impl PrivateExecutionFaultSink {
@@ -30294,11 +32763,21 @@ mod tests {
                 submitted: parking_lot::Mutex::new(Vec::new()),
                 observations: parking_lot::Mutex::new(BTreeMap::new()),
                 fail_next_submit: AtomicBool::new(false),
+                force_immediate_replacement: AtomicBool::new(false),
+                tamper_next_payload: AtomicBool::new(false),
                 qualification_available: AtomicBool::new(true),
             }
         }
         fn fail_next_submit(&self) {
             self.fail_next_submit.store(true, AtomicOrdering::Release);
+        }
+        fn force_immediate_replacement(&self, enabled: bool) {
+            self.force_immediate_replacement
+                .store(enabled, AtomicOrdering::Release);
+        }
+        fn tamper_next_payload(&self) {
+            self.tamper_next_payload
+                .store(true, AtomicOrdering::Release);
         }
         fn set_qualification_available(&self, available: bool) {
             self.qualification_available
@@ -30330,11 +32809,11 @@ mod tests {
         fn submission_authority(&self) -> Option<AccountId> {
             Some(ALICE_ID.clone())
         }
-        fn prepare_instructions_atomic(
+        fn prepare_instruction_payload_atomic(
             &self,
             instructions: Vec<InstructionBox>,
             endpoint: &'static str,
-        ) -> eyre::Result<SignedTransaction> {
+        ) -> eyre::Result<TransactionPayload> {
             self.ensure_production_qualified()?;
             let mut payload = build_soracloud_runtime_submission_payload_with_instructions(
                 self.network_id,
@@ -30343,11 +32822,28 @@ mod tests {
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 endpoint,
             )?;
+            if self.tamper_next_payload.swap(false, AtomicOrdering::AcqRel) {
+                payload.instructions = Executable::Instructions(
+                    vec![InstructionBox::from(Log::new(
+                        Level::WARN,
+                        "tampered unsigned reservation".to_owned(),
+                    ))]
+                    .into(),
+                );
+            }
             let sequence = self
                 .prepare_sequence
                 .fetch_add(1, AtomicOrdering::AcqRel)
                 .saturating_add(1);
             payload.creation_time_ms = payload.creation_time_ms.saturating_add(sequence);
+            Ok(payload)
+        }
+        fn sign_transaction_payload_atomic(
+            &self,
+            payload: TransactionPayload,
+            endpoint: &'static str,
+        ) -> eyre::Result<SignedTransaction> {
+            self.ensure_production_qualified()?;
             let transaction =
                 sign_soracloud_runtime_submission_payload(payload, &ALICE_KEYPAIR, endpoint)?;
             self.prepared.lock().push(transaction.clone());
@@ -30374,18 +32870,27 @@ mod tests {
             transaction: &SignedTransaction,
             _endpoint: &'static str,
         ) -> eyre::Result<bool> {
-            Ok(matches!(
-                self.observations
-                    .lock()
-                    .get(&Hash::from(transaction.hash())),
-                Some(PrivateExecutionTransactionObservation::Replaceable)
-            ))
+            Ok(self
+                .force_immediate_replacement
+                .load(AtomicOrdering::Acquire)
+                || matches!(
+                    self.observations
+                        .lock()
+                        .get(&Hash::from(transaction.hash())),
+                    Some(PrivateExecutionTransactionObservation::Replaceable)
+                ))
         }
         fn observe_private_execution_transaction(
             &self,
             transaction: &SignedTransaction,
             _endpoint: &'static str,
         ) -> eyre::Result<PrivateExecutionTransactionObservation> {
+            if self
+                .force_immediate_replacement
+                .load(AtomicOrdering::Acquire)
+            {
+                return Ok(PrivateExecutionTransactionObservation::Replaceable);
+            }
             Ok(self
                 .observations
                 .lock()
@@ -30424,6 +32929,224 @@ mod tests {
         );
         state
     }
+    fn private_execution_fault_state_at_epoch_one() -> Result<Arc<State>> {
+        let mut state = test_state_at_height_one_with_creation_time(1_000)?;
+        insert_public_lane_validator_fixture(
+            &mut Arc::get_mut(&mut state)
+                .expect("unique private outbox state")
+                .world,
+            PublicLaneValidatorStatus::Active,
+        );
+        Ok(state)
+    }
+    fn insert_private_execution_dependency_pin_fixtures(
+        state: &mut Arc<State>,
+        entry: &SoracloudPrivateUploadedModelExecutionJournalV1,
+    ) {
+        let chunker = ChunkerProfileHandle {
+            profile_id: 1,
+            namespace: "sorafs".to_owned(),
+            name: "sf1".to_owned(),
+            semver: "1.0.0".to_owned(),
+            multihash_code: BLAKE3_256_MULTIHASH_CODE,
+        };
+        let policy = PinPolicy {
+            min_replicas: 1,
+            storage_class: iroha_data_model::sorafs::pin_registry::StorageClass::Warm,
+            retention_epoch: u64::MAX,
+        };
+        let mut model_pin = PinManifestRecord::new(
+            entry.receipt.model_manifest_digest,
+            entry.receipt.input_artifact.sorafs_root_cid,
+            chunker.clone(),
+            [0xA1; 32],
+            [0xA2; 32],
+            1,
+            policy.clone(),
+            ALICE_ID.clone(),
+            0,
+            None,
+            None,
+            Metadata::default(),
+        );
+        model_pin.approve(0, None);
+        let input = &entry.receipt.input_artifact;
+        let mut input_pin = PinManifestRecord::new(
+            input.sorafs_manifest_digest,
+            input.sorafs_root_cid,
+            chunker,
+            [0xA3; 32],
+            [0xA4; 32],
+            input.ciphertext_bytes,
+            policy,
+            ALICE_ID.clone(),
+            0,
+            None,
+            None,
+            Metadata::default(),
+        );
+        input_pin.approve(0, None);
+        let world = &mut Arc::get_mut(state)
+            .expect("unique private execution dependency fixture state")
+            .world;
+        world
+            .pin_manifests_mut_for_testing()
+            .insert(model_pin.digest, model_pin);
+        world
+            .pin_manifests_mut_for_testing()
+            .insert(input_pin.digest, input_pin);
+    }
+    fn insert_private_execution_active_authorization_fixture(
+        state: &mut Arc<State>,
+        entry: &SoracloudPrivateUploadedModelExecutionJournalV1,
+    ) -> Result<()> {
+        use iroha_data_model::soracloud::{
+            DECRYPTION_AUTHORITY_POLICY_VERSION_V1, DECRYPTION_REQUEST_VERSION_V1,
+            DecryptionAuthorityModeV1, DecryptionAuthorityPolicyV1, DecryptionRequestV1,
+            SORA_DECRYPTION_REQUEST_RECORD_VERSION_V1, SORA_SERVICE_AUDIT_EVENT_VERSION_V1,
+            SoraDecryptionRequestRecordV1, SoraServiceAuditEventV1,
+            derive_soracloud_service_config_snapshot_hash_v1,
+            derive_soracloud_service_secret_snapshot_hash_v1,
+        };
+
+        let policy_name: Name = entry.receipt.policy_id.parse()?;
+        let policy = DecryptionAuthorityPolicyV1 {
+            schema_version: DECRYPTION_AUTHORITY_POLICY_VERSION_V1,
+            policy_name: policy_name.clone(),
+            mode: DecryptionAuthorityModeV1::ClientHeld,
+            approver_quorum: std::num::NonZeroU16::new(1).expect("one is non-zero"),
+            approver_ids: vec!["private_executor".parse()?],
+            allow_break_glass: false,
+            jurisdiction_tag: "private_execution".to_owned(),
+            require_consent_evidence: false,
+            max_ttl_blocks: std::num::NonZeroU32::new(100).expect("100 is non-zero"),
+            audit_tag: "private.execution".to_owned(),
+        };
+        let request = DecryptionRequestV1 {
+            schema_version: DECRYPTION_REQUEST_VERSION_V1,
+            request_id: entry.decryption_request_id.clone(),
+            policy_name,
+            binding_name: "private_input".parse()?,
+            state_key: "/private/input".to_owned(),
+            ciphertext_commitment: entry.receipt.input_artifact.artifact_hash,
+            justification: "exercise durable private execution recovery".to_owned(),
+            jurisdiction_tag: policy.jurisdiction_tag.clone(),
+            consent_evidence_hash: None,
+            requested_ttl_blocks: std::num::NonZeroU32::new(100).expect("100 is non-zero"),
+            break_glass: false,
+            break_glass_reason: None,
+            governance_tx_hash: Hash::new(b"private execution authorization fixture"),
+        };
+        let record = SoraDecryptionRequestRecordV1 {
+            schema_version: SORA_DECRYPTION_REQUEST_RECORD_VERSION_V1,
+            service_name: entry.service_name.clone(),
+            service_version: entry.receipt.service_version.clone(),
+            policy,
+            request,
+            sequence: 1,
+            signer: ALICE_KEYPAIR.public_key().clone(),
+        };
+        record.validate()?;
+        let event = SoraServiceAuditEventV1 {
+            schema_version: SORA_SERVICE_AUDIT_EVENT_VERSION_V1,
+            sequence: record.sequence,
+            block_height: 1,
+            block_timestamp_ms: 1_000,
+            action: SoraServiceLifecycleActionV1::DecryptionRequest,
+            service_name: record.service_name.clone(),
+            from_version: None,
+            to_version: record.service_version.clone(),
+            service_manifest_hash: Hash::new(b"private execution service manifest fixture"),
+            container_manifest_hash: Hash::new(b"private execution container manifest fixture"),
+            process_generation: 1,
+            config_generation: 0,
+            secret_generation: 0,
+            config_snapshot_hash: derive_soracloud_service_config_snapshot_hash_v1(&BTreeMap::new()),
+            secret_snapshot_hash: derive_soracloud_service_secret_snapshot_hash_v1(&BTreeMap::new()),
+            governance_tx_hash: Some(record.request.governance_tx_hash),
+            binding_name: Some(record.request.binding_name.clone()),
+            state_key: Some(record.request.state_key.clone()),
+            config_mutations: Vec::new(),
+            secret_mutations: Vec::new(),
+            rollout_state: None,
+            policy_name: Some(record.policy.policy_name.clone()),
+            policy_snapshot_hash: Some(record.policy_snapshot_hash()),
+            jurisdiction_tag: Some(record.request.jurisdiction_tag.clone()),
+            consent_evidence_hash: record.request.consent_evidence_hash,
+            break_glass: Some(record.request.break_glass),
+            break_glass_reason: record.request.break_glass_reason.clone(),
+            lease_usage: None,
+            service_lease_commitment: None,
+            lease_reporting_epoch_rollover: None,
+            signer: record.signer.clone(),
+        };
+        event.validate()?;
+
+        let record_key = (
+            record.service_name.as_ref().to_owned(),
+            record.request.request_id.clone(),
+        );
+        let world = &mut Arc::get_mut(state)
+            .expect("unique private execution authorization fixture state")
+            .world;
+        world
+            .soracloud_service_audit_events_mut_for_testing()
+            .insert(event.sequence, event);
+        world
+            .soracloud_decryption_request_records_mut_for_testing()
+            .insert(record_key, record);
+        Ok(())
+    }
+    fn insert_private_execution_active_prepare_fixtures(
+        state: &mut Arc<State>,
+        entry: &SoracloudPrivateUploadedModelExecutionJournalV1,
+    ) -> Result<()> {
+        insert_private_execution_dependency_pin_fixtures(state, entry);
+        insert_private_execution_active_authorization_fixture(state, entry)
+    }
+    fn private_execution_output_pin_fixture(
+        entry: &SoracloudPrivateUploadedModelExecutionJournalV1,
+        submitted_by: AccountId,
+    ) -> Result<PinManifestRecord> {
+        let manifest =
+            sorafs_manifest::decode_manifest_v1_canonical(&entry.output_manifest_payload)?;
+        let mut pin = PinManifestRecord::new(
+            ManifestDigest::from_manifest(&manifest)?,
+            ManifestRootCid::try_from_slice(&manifest.root_cid)?,
+            ChunkerProfileHandle {
+                profile_id: manifest.chunking.profile_id.0,
+                namespace: manifest.chunking.namespace,
+                name: manifest.chunking.name,
+                semver: manifest.chunking.semver,
+                multihash_code: manifest.chunking.multihash_code,
+            },
+            manifest.chunk_digest_sha3_256,
+            manifest.por_root,
+            manifest.content_length,
+            PinPolicy {
+                min_replicas: manifest.pin_policy.min_replicas,
+                storage_class: match manifest.pin_policy.storage_class {
+                    sorafs_manifest::StorageClass::Hot => {
+                        iroha_data_model::sorafs::pin_registry::StorageClass::Hot
+                    }
+                    sorafs_manifest::StorageClass::Warm => {
+                        iroha_data_model::sorafs::pin_registry::StorageClass::Warm
+                    }
+                    sorafs_manifest::StorageClass::Cold => {
+                        iroha_data_model::sorafs::pin_registry::StorageClass::Cold
+                    }
+                },
+                retention_epoch: manifest.pin_policy.retention_epoch,
+            },
+            submitted_by,
+            0,
+            None,
+            None,
+            Metadata::default(),
+        );
+        pin.approve(0, None);
+        Ok(pin)
+    }
     fn private_execution_fault_manager(
         state_dir: &Path,
         state: Arc<State>,
@@ -30441,6 +33164,14 @@ mod tests {
         pin: &PinManifestRecord,
     ) -> ReplicationOrderRecord {
         let provider = iroha_data_model::sorafs::capacity::ProviderId::new([0xD1; 32]);
+        let issued_epoch = pin
+            .approved_epoch
+            .expect("private output replication fixture requires approval");
+        let deadline_epoch = issued_epoch
+            .checked_add(u64::from(
+                SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1,
+            ))
+            .expect("private output replication deadline");
         let order = sorafs_manifest::capacity::ReplicationOrderV1 {
             version: sorafs_manifest::capacity::REPLICATION_ORDER_VERSION_V1,
             order_id: *receipt.output_replication_order_id.as_bytes(),
@@ -30453,8 +33184,8 @@ mod tests {
                 slice_gib: 1,
                 lane: None,
             }],
-            issued_at: 3_600,
-            deadline_at: 90_000,
+            issued_at: issued_epoch,
+            deadline_at: deadline_epoch,
             sla: sorafs_manifest::capacity::ReplicationOrderSlaV1 {
                 ingest_deadline_secs: 86_400,
                 min_availability_percent_milli: 99_500,
@@ -30463,15 +33194,15 @@ mod tests {
             metadata: Vec::new(),
         };
         order.validate().expect("valid private outbox order");
-        let completion_epoch = 1;
+        let completion_epoch = issued_epoch;
         ReplicationOrderRecord {
             order_id: receipt.output_replication_order_id,
             manifest_digest: pin.digest,
             manifest_root_cid: pin.root_cid,
             musubi_archive: None,
             issued_by: ALICE_ID.clone(),
-            issued_epoch: 1,
-            deadline_epoch: 2,
+            issued_epoch,
+            deadline_epoch,
             canonical_order: norito::encode_canonical(&order)
                 .expect("canonical private outbox order"),
             assignment_revision: 1,
@@ -30592,8 +33323,288 @@ mod tests {
             SoracloudRuntimeManager::private_execution_journal_ledger_disposition(
                 state.as_ref(),
                 &prepared,
+                false,
+                Duration::ZERO,
             )?,
             PrivateExecutionJournalLedgerDisposition::UnclaimedOutputRecoveryWindowClosed,
+        );
+        Ok(())
+    }
+    #[test]
+    fn private_execution_losing_validator_journal_is_terminally_superseded() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let mut state = private_execution_fault_state();
+        let network_id = *state.network_id_ref();
+        let (_binding, mut prepared) = private_execution_journal_test_fixture(0x74)?;
+        prepared.receipt.network_id = network_id;
+        private_execution_journal_test_reseal_receipt(&mut prepared.receipt);
+        let mut winning_receipt = prepared.receipt.clone();
+        winning_receipt.output_commitment = Hash::new(b"competing validator output");
+        private_execution_journal_test_reseal_receipt(&mut winning_receipt);
+        let claim = iroha_data_model::soracloud::SoraPrivateUploadedModelExecutionClaimV1 {
+            schema_version:
+                iroha_data_model::soracloud::SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_CLAIM_VERSION_V1,
+            receipt: winning_receipt,
+            claimed_block_height: 1,
+            claimed_epoch: 1,
+        };
+        claim.validate()?;
+        Arc::get_mut(&mut state)
+            .expect("unique competing-validator state")
+            .world
+            .soracloud_private_uploaded_model_execution_claims_mut_for_testing()
+            .insert(
+                (
+                    prepared.service_name.as_ref().to_owned(),
+                    prepared.decryption_request_id.clone(),
+                ),
+                claim,
+            );
+        assert_eq!(
+            SoracloudRuntimeManager::private_execution_journal_ledger_disposition(
+                state.as_ref(),
+                &prepared,
+                false,
+                Duration::ZERO,
+            )?,
+            PrivateExecutionJournalLedgerDisposition::SupersededByAuthoritativeClaim,
+        );
+        let sink = Arc::new(PrivateExecutionFaultSink::new(network_id));
+        let manager = private_execution_fault_manager(
+            temp_dir.path(),
+            Arc::clone(&state),
+            test_sorafs_node(&temp_dir),
+            Arc::clone(&sink),
+        );
+        let handle = test_runtime_handle(&manager, Arc::clone(&state));
+        handle
+            .store_private_uploaded_model_execution_journal(prepared.clone())
+            .map_err(|error| eyre::eyre!(error.message))?;
+        manager.reconcile_private_execution_outbox()?;
+        assert!(
+            handle
+                .load_private_uploaded_model_execution_journal(
+                    &prepared.service_name,
+                    &prepared.decryption_request_id,
+                )
+                .map_err(|error| eyre::eyre!(error.message))?
+                .is_some(),
+            "losing exact evidence must remain quarantined without poisoning reconciliation"
+        );
+        assert!(sink.prepared_transactions().is_empty());
+        Ok(())
+    }
+    #[test]
+    fn private_execution_retry_stable_output_collision_is_quarantined() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let mut state = private_execution_fault_state();
+        let network_id = *state.network_id_ref();
+        let (_binding, mut prepared) = private_execution_journal_test_fixture(0x77)?;
+        prepared.receipt.network_id = network_id;
+        private_execution_journal_test_reseal_receipt(&mut prepared.receipt);
+        let colliding_pin = private_execution_output_pin_fixture(&prepared, BOB_ID.clone())?;
+        Arc::get_mut(&mut state)
+            .expect("unique output-collision state")
+            .world
+            .pin_manifests_mut_for_testing()
+            .insert(colliding_pin.digest, colliding_pin);
+        assert_eq!(
+            SoracloudRuntimeManager::private_execution_journal_ledger_disposition(
+                state.as_ref(),
+                &prepared,
+                false,
+                Duration::ZERO,
+            )?,
+            PrivateExecutionJournalLedgerDisposition::UnclaimedOutputConflict,
+        );
+        let mut retired_pin = private_execution_output_pin_fixture(&prepared, ALICE_ID.clone())?;
+        retired_pin.retire(1, Some("terminal collision fixture".to_owned()));
+        Arc::get_mut(&mut state)
+            .expect("unique retired-output state")
+            .world
+            .pin_manifests_mut_for_testing()
+            .insert(retired_pin.digest, retired_pin);
+        assert_eq!(
+            SoracloudRuntimeManager::private_execution_journal_ledger_disposition(
+                state.as_ref(),
+                &prepared,
+                false,
+                Duration::ZERO,
+            )?,
+            PrivateExecutionJournalLedgerDisposition::UnclaimedOutputConflict,
+        );
+        let mut mismatched_pin = private_execution_output_pin_fixture(&prepared, ALICE_ID.clone())?;
+        mismatched_pin.content_length = mismatched_pin.content_length.saturating_add(1);
+        Arc::get_mut(&mut state)
+            .expect("unique mismatched-output state")
+            .world
+            .pin_manifests_mut_for_testing()
+            .insert(mismatched_pin.digest, mismatched_pin);
+        assert_eq!(
+            SoracloudRuntimeManager::private_execution_journal_ledger_disposition(
+                state.as_ref(),
+                &prepared,
+                false,
+                Duration::ZERO,
+            )?,
+            PrivateExecutionJournalLedgerDisposition::UnclaimedOutputConflict,
+        );
+        let colliding_pin = private_execution_output_pin_fixture(&prepared, BOB_ID.clone())?;
+        Arc::get_mut(&mut state)
+            .expect("unique collision-quarantine state")
+            .world
+            .pin_manifests_mut_for_testing()
+            .insert(colliding_pin.digest, colliding_pin);
+
+        let sink = Arc::new(PrivateExecutionFaultSink::new(network_id));
+        let manager = private_execution_fault_manager(
+            temp_dir.path(),
+            Arc::clone(&state),
+            test_sorafs_node(&temp_dir),
+            Arc::clone(&sink),
+        );
+        let handle = test_runtime_handle(&manager, Arc::clone(&state));
+        handle
+            .store_private_uploaded_model_execution_journal(prepared.clone())
+            .map_err(|error| eyre::eyre!(error.message))?;
+        manager.reconcile_private_execution_outbox()?;
+        assert!(
+            handle
+                .load_private_uploaded_model_execution_journal(
+                    &prepared.service_name,
+                    &prepared.decryption_request_id,
+                )
+                .map_err(|error| eyre::eyre!(error.message))?
+                .is_some(),
+            "retry-stable collision evidence must remain quarantined"
+        );
+        assert!(sink.prepared_transactions().is_empty());
+        Ok(())
+    }
+    #[test]
+    fn private_execution_replacement_requires_source_pins_past_signed_deadline() -> Result<()> {
+        let mut state = private_execution_fault_state();
+        let (_binding, prepared) = private_execution_journal_test_fixture(0x78)?;
+        insert_private_execution_dependency_pin_fixtures(&mut state, &prepared);
+        let signed_deadline_epoch = 500;
+        {
+            let world = &mut Arc::get_mut(&mut state)
+                .expect("unique source-retention state")
+                .world;
+            let mut model_pin = {
+                let pins = world.pin_manifests_mut_for_testing().view();
+                pins.get(&prepared.receipt.model_manifest_digest)
+                    .cloned()
+                    .expect("model pin")
+            };
+            model_pin.policy.retention_epoch = signed_deadline_epoch;
+            world
+                .pin_manifests_mut_for_testing()
+                .insert(model_pin.digest, model_pin);
+        }
+        let model_error = require_private_execution_prepare_dependencies_through_deadline(
+            state.as_ref(),
+            &prepared,
+            signed_deadline_epoch,
+        )
+        .expect_err("model pin equality does not outlive the signed deadline");
+        assert!(model_error.message.contains("model pin expires"));
+
+        {
+            let world = &mut Arc::get_mut(&mut state)
+                .expect("unique source-retention state")
+                .world;
+            let mut model_pin = {
+                let pins = world.pin_manifests_mut_for_testing().view();
+                pins.get(&prepared.receipt.model_manifest_digest)
+                    .cloned()
+                    .expect("model pin")
+            };
+            model_pin.policy.retention_epoch = u64::MAX;
+            world
+                .pin_manifests_mut_for_testing()
+                .insert(model_pin.digest, model_pin);
+            let mut input_pin = {
+                let pins = world.pin_manifests_mut_for_testing().view();
+                pins.get(&prepared.receipt.input_artifact.sorafs_manifest_digest)
+                    .cloned()
+                    .expect("input pin")
+            };
+            input_pin.policy.retention_epoch = signed_deadline_epoch;
+            world
+                .pin_manifests_mut_for_testing()
+                .insert(input_pin.digest, input_pin);
+        }
+        let input_error = require_private_execution_prepare_dependencies_through_deadline(
+            state.as_ref(),
+            &prepared,
+            signed_deadline_epoch,
+        )
+        .expect_err("input pin equality does not outlive the signed deadline");
+        assert!(input_error.message.contains("input pin expires"));
+        Ok(())
+    }
+    #[test]
+    fn private_execution_manager_removes_unclaimed_journal_after_source_pin_retires() -> Result<()>
+    {
+        let temp_dir = tempfile::tempdir()?;
+        let sorafs_node = test_sorafs_node(&temp_dir);
+        let mut state = private_execution_fault_state();
+        let network_id = *state.network_id_ref();
+        let sink = Arc::new(PrivateExecutionFaultSink::new(network_id));
+        let (_binding, mut prepared) = private_execution_journal_test_fixture(0x73)?;
+        prepared.receipt.network_id = network_id;
+        private_execution_journal_test_reseal_receipt(&mut prepared.receipt);
+        prepared.validate().map_err(|error| eyre::eyre!(error))?;
+
+        let mut retired_model_pin = PinManifestRecord::new(
+            prepared.receipt.model_manifest_digest,
+            prepared.receipt.input_artifact.sorafs_root_cid,
+            ChunkerProfileHandle {
+                profile_id: 1,
+                namespace: "sorafs".to_owned(),
+                name: "sf1".to_owned(),
+                semver: "1.0.0".to_owned(),
+                multihash_code: BLAKE3_256_MULTIHASH_CODE,
+            },
+            [0x73; 32],
+            [0x74; 32],
+            1,
+            PinPolicy {
+                min_replicas: 1,
+                storage_class: iroha_data_model::sorafs::pin_registry::StorageClass::Warm,
+                retention_epoch: u64::MAX,
+            },
+            ALICE_ID.clone(),
+            1,
+            None,
+            None,
+            Metadata::default(),
+        );
+        retired_model_pin.approve(1, None);
+        retired_model_pin.retire(2, None);
+        Arc::get_mut(&mut state)
+            .expect("unique private execution state")
+            .world
+            .pin_manifests_mut_for_testing()
+            .insert(retired_model_pin.digest, retired_model_pin);
+
+        let manager =
+            private_execution_fault_manager(temp_dir.path(), Arc::clone(&state), sorafs_node, sink);
+        let handle = test_runtime_handle(&manager, Arc::clone(&state));
+        handle
+            .store_private_uploaded_model_execution_journal(prepared.clone())
+            .map_err(|error| eyre::eyre!(error.message))?;
+        manager.reconcile_private_execution_outbox()?;
+        assert!(
+            handle
+                .load_private_uploaded_model_execution_journal(
+                    &prepared.service_name,
+                    &prepared.decryption_request_id,
+                )
+                .map_err(|error| eyre::eyre!(error.message))?
+                .is_none(),
+            "irreversibly retired source dependency must not retain a poison Prepare journal"
         );
         Ok(())
     }
@@ -30621,6 +33632,302 @@ mod tests {
         assert!(error.to_string().contains("failed reconciliation"));
     }
     #[test]
+    fn private_execution_submission_attempt_bound_is_closed() {
+        let maximum = SORACLOUD_PRIVATE_UPLOADED_MODEL_EXECUTION_MAX_SUBMISSION_ATTEMPTS_V1;
+        assert_eq!(
+            next_private_execution_submission_attempt(
+                SoracloudPrivateUploadedModelExecutionJournalPhaseV1::Prepare,
+                maximum - 1,
+            )
+            .expect("the final bounded attempt remains available"),
+            maximum
+        );
+        let error = next_private_execution_submission_attempt(
+            SoracloudPrivateUploadedModelExecutionJournalPhaseV1::Receipt,
+            maximum,
+        )
+        .expect_err("a phase at its bound must not sign another transaction");
+        assert_eq!(error.kind, SoracloudRuntimeExecutionErrorKind::Conflict);
+        assert!(error.message.contains("exhausted"));
+    }
+    #[test]
+    fn private_execution_replacement_retention_horizons_are_phase_complete() {
+        let signed_deadline_epoch = 1_000;
+        let recovery_interval = Duration::from_secs(10);
+        let receipt_floor =
+            iroha_data_model::soracloud::SORACLOUD_PRIVATE_OUTPUT_MIN_RETENTION_SECS_V1;
+        let bounded_receipt_horizon =
+            private_execution_bounded_phase_horizon_secs(recovery_interval)
+                .expect("bounded Receipt horizon");
+        assert_eq!(
+            bounded_receipt_horizon,
+            iroha_data_model::transaction::DEFAULT_TRANSACTION_TIME_TO_LIVE.as_secs()
+                * u64::from(SORACLOUD_PRIVATE_UPLOADED_MODEL_EXECUTION_MAX_SUBMISSION_ATTEMPTS_V1,)
+                + recovery_interval.as_secs() * 4
+                + 60,
+        );
+        assert_eq!(
+            private_execution_minimum_receipt_retention_epoch(signed_deadline_epoch),
+            Some(signed_deadline_epoch + receipt_floor),
+        );
+        assert_eq!(
+            private_execution_minimum_prepare_retention_epoch(
+                signed_deadline_epoch,
+                recovery_interval,
+                1,
+            ),
+            Some(
+                signed_deadline_epoch
+                    + u64::from(SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1)
+                    + bounded_receipt_horizon
+                    + receipt_floor
+            ),
+        );
+        let initial_candidate_epoch = 10_000;
+        let bounded_prepare_horizon = bounded_receipt_horizon;
+        let paid_retention_epoch = initial_candidate_epoch
+            + bounded_prepare_horizon
+            + u64::from(SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1)
+            + bounded_receipt_horizon
+            + receipt_floor;
+        assert_eq!(
+            private_execution_minimum_prepare_retention_epoch(
+                initial_candidate_epoch + bounded_prepare_horizon,
+                recovery_interval,
+                1,
+            ),
+            Some(paid_retention_epoch),
+            "a final Prepare replacement at the paid boundary must retain the full Receipt phase",
+        );
+        assert!(
+            private_execution_minimum_prepare_retention_epoch(
+                initial_candidate_epoch + bounded_prepare_horizon + 1,
+                recovery_interval,
+                1,
+            )
+            .is_some_and(|required| required > paid_retention_epoch),
+            "a replacement after the prepaid Prepare horizon must fail closed",
+        );
+        assert!(private_execution_minimum_receipt_retention_epoch(u64::MAX).is_none());
+        assert!(
+            private_execution_minimum_prepare_retention_epoch(u64::MAX, recovery_interval, 1,)
+                .is_none()
+        );
+        assert!(private_execution_bounded_phase_horizon_secs(Duration::MAX).is_none());
+
+        let settlement_window = bounded_receipt_horizon + receipt_floor + 60;
+        let settlement_paid_retention_epoch = initial_candidate_epoch
+            + bounded_prepare_horizon
+            + u64::from(SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1)
+            + settlement_window;
+        assert_eq!(
+            private_execution_minimum_prepare_retention_epoch(
+                initial_candidate_epoch + bounded_prepare_horizon,
+                recovery_interval,
+                settlement_window,
+            ),
+            Some(settlement_paid_retention_epoch),
+            "a settlement-dominant lease must preserve its complete governed window",
+        );
+        assert!(
+            private_execution_minimum_prepare_retention_epoch(
+                initial_candidate_epoch + bounded_prepare_horizon + 1,
+                recovery_interval,
+                settlement_window,
+            )
+            .is_some_and(|required| required > settlement_paid_retention_epoch),
+            "a late replacement must not consume the governed settlement buffer",
+        );
+    }
+    #[test]
+    fn private_execution_settlement_increase_preserves_exact_signed_prepare() -> Result<()> {
+        let (_binding, prepared) = private_execution_journal_test_fixture(0x75)?;
+        let current_settlement_window_secs = 10_000;
+        assert_eq!(
+            private_execution_prepare_settlement_window_for_recovery(
+                &prepared,
+                false,
+                current_settlement_window_secs,
+            ),
+            current_settlement_window_secs,
+            "Prepared(0) will create a fresh payload under current pricing",
+        );
+        let signed =
+            private_execution_journal_test_signed_entry(&prepared, 1, "settlement-evidence")?;
+        assert_eq!(
+            private_execution_prepare_settlement_window_for_recovery(
+                &signed,
+                false,
+                current_settlement_window_secs,
+            ),
+            0,
+            "a governance increase must not invalidate exact signed evidence before observation",
+        );
+        assert_eq!(
+            private_execution_prepare_settlement_window_for_recovery(
+                &signed,
+                true,
+                current_settlement_window_secs,
+            ),
+            current_settlement_window_secs,
+            "a proven replacement must use current authoritative pricing",
+        );
+        let reserved = private_execution_journal_test_reserved_entry(&signed);
+        assert_eq!(
+            private_execution_prepare_settlement_window_for_recovery(
+                &reserved,
+                false,
+                current_settlement_window_secs,
+            ),
+            current_settlement_window_secs,
+            "an ambiguous unsigned reservation is burned before a fresh priced payload",
+        );
+        Ok(())
+    }
+    #[test]
+    fn ready_private_output_without_next_receipt_floor_is_terminal_conflict() -> Result<()> {
+        let (_binding, prepared) = private_execution_journal_test_fixture(0x76)?;
+        let candidate_deadline_epoch = 100_000;
+        let receipt_floor =
+            iroha_data_model::soracloud::SORACLOUD_PRIVATE_OUTPUT_MIN_RETENTION_SECS_V1;
+        let mut pin = private_execution_output_pin_fixture(&prepared, ALICE_ID.clone())?;
+        pin.policy.retention_epoch = candidate_deadline_epoch + receipt_floor - 1;
+        let order = private_execution_completed_replication_order(&prepared.receipt, &pin);
+        let mut state = private_execution_fault_state();
+        {
+            let world = &mut Arc::get_mut(&mut state)
+                .expect("unique short Receipt-horizon state")
+                .world;
+            world
+                .pin_manifests_mut_for_testing()
+                .insert(pin.digest, pin.clone());
+            world
+                .replication_orders_mut_for_testing()
+                .insert(order.order_id, order);
+        }
+        let error = require_private_execution_ready_through_next_receipt_deadline(
+            state.as_ref(),
+            &prepared.receipt,
+            candidate_deadline_epoch,
+        )
+        .expect_err("a Ready output below the signed Receipt floor is terminal");
+        assert_eq!(error.kind, SoracloudRuntimeExecutionErrorKind::Conflict);
+        assert!(error.message.contains("next signed Receipt deadline"));
+
+        pin.policy.retention_epoch = candidate_deadline_epoch + receipt_floor;
+        Arc::get_mut(&mut state)
+            .expect("unique exact Receipt-horizon state")
+            .world
+            .pin_manifests_mut_for_testing()
+            .insert(pin.digest, pin);
+        require_private_execution_ready_through_next_receipt_deadline(
+            state.as_ref(),
+            &prepared.receipt,
+            candidate_deadline_epoch,
+        )
+        .map_err(|error| eyre::eyre!(error.message))?;
+        Ok(())
+    }
+    #[test]
+    fn private_execution_manager_quarantines_exhausted_journal_with_exact_evidence() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let sorafs_node = test_sorafs_node(&temp_dir);
+        let output_ciphertext = vec![0x62; 257];
+        let stored_output = ingest_sorafs_payload(&sorafs_node, &output_ciphertext)?;
+        let mut state = private_execution_fault_state();
+        let network_id = *state.network_id_ref();
+        let sink = Arc::new(PrivateExecutionFaultSink::new(network_id));
+        let (_binding, mut prepared) = private_execution_journal_test_fixture(0x62)?;
+        prepared.receipt.network_id = network_id;
+        prepared.receipt.output_artifact.artifact_hash = Hash::new(&output_ciphertext);
+        private_execution_journal_test_reseal_receipt(&mut prepared.receipt);
+        insert_private_execution_active_prepare_fixtures(&mut state, &prepared)?;
+        prepared.validate().map_err(|error| eyre::eyre!(error))?;
+        assert_eq!(
+            stored_output.manifest_digest(),
+            prepared
+                .receipt
+                .output_artifact
+                .sorafs_manifest_digest
+                .as_bytes(),
+        );
+
+        let manager = private_execution_fault_manager(
+            temp_dir.path(),
+            Arc::clone(&state),
+            sorafs_node,
+            Arc::clone(&sink),
+        );
+        let handle = test_runtime_handle(&manager, Arc::clone(&state));
+        handle
+            .store_private_uploaded_model_execution_journal(prepared.clone())
+            .map_err(|error| eyre::eyre!(error.message))?;
+
+        let mut latest_hash = None;
+        for expected_attempt in
+            1..=SORACLOUD_PRIVATE_UPLOADED_MODEL_EXECUTION_MAX_SUBMISSION_ATTEMPTS_V1
+        {
+            if let Some(previous_hash) = latest_hash {
+                sink.set_observation(
+                    previous_hash,
+                    PrivateExecutionTransactionObservation::Replaceable,
+                );
+            }
+            let progress = handle
+                .advance_private_uploaded_model_execution(
+                    prepared.output_manifest_payload.clone(),
+                    prepared.receipt.clone(),
+                )
+                .map_err(|error| eyre::eyre!(error.message))?;
+            latest_hash = progress.transaction_hash;
+            let journal = handle
+                .load_private_uploaded_model_execution_journal(
+                    &prepared.service_name,
+                    &prepared.decryption_request_id,
+                )
+                .map_err(|error| eyre::eyre!(error.message))?
+                .expect("signed journal remains durable");
+            assert_eq!(journal.submission_attempt, expected_attempt);
+            assert_eq!(journal.transaction_hash, latest_hash);
+        }
+        let exhausted_hash = latest_hash.expect("bounded final transaction hash");
+        sink.set_observation(
+            exhausted_hash,
+            PrivateExecutionTransactionObservation::Replaceable,
+        );
+        let exhausted = handle
+            .load_private_uploaded_model_execution_journal(
+                &prepared.service_name,
+                &prepared.decryption_request_id,
+            )
+            .map_err(|error| eyre::eyre!(error.message))?
+            .expect("exhausted journal remains durable");
+        assert_eq!(
+            SoracloudRuntimeManager::private_execution_journal_ledger_disposition(
+                state.as_ref(),
+                &exhausted,
+                true,
+                Duration::ZERO,
+            )?,
+            PrivateExecutionJournalLedgerDisposition::SubmissionAttemptsExhausted,
+        );
+
+        manager.reconcile_private_execution_outbox()?;
+        let quarantined = handle
+            .load_private_uploaded_model_execution_journal(
+                &prepared.service_name,
+                &prepared.decryption_request_id,
+            )
+            .map_err(|error| eyre::eyre!(error.message))?
+            .expect("quarantine must retain exhausted evidence");
+        assert_eq!(quarantined, exhausted);
+        assert_eq!(
+            sink.prepared_transactions().len(),
+            usize::from(SORACLOUD_PRIVATE_UPLOADED_MODEL_EXECUTION_MAX_SUBMISSION_ATTEMPTS_V1)
+        );
+        Ok(())
+    }
+    #[test]
     fn private_execution_journal_prepared_round_trip_is_idempotent_and_removable() -> Result<()> {
         let temp_dir = tempfile::tempdir()?;
         let (binding, prepared) = private_execution_journal_test_fixture(0x41)?;
@@ -30636,7 +33943,7 @@ mod tests {
             Some(prepared.clone())
         );
         assert_eq!(
-            list_private_execution_journal_entries(temp_dir.path(), binding)?,
+            list_private_execution_journal_entries(temp_dir.path(), binding)?.entries,
             vec![prepared.clone()]
         );
 
@@ -30669,13 +33976,172 @@ mod tests {
             &prepared.decryption_request_id,
         )?;
         assert!(!path.exists());
-        assert!(list_private_execution_journal_entries(temp_dir.path(), binding)?.is_empty());
+        assert!(
+            list_private_execution_journal_entries(temp_dir.path(), binding)?
+                .entries
+                .is_empty()
+        );
         remove_private_execution_journal_entry(
             temp_dir.path(),
             binding,
             &prepared.service_name,
             &prepared.decryption_request_id,
         )?;
+        Ok(())
+    }
+    #[test]
+    fn private_execution_journal_listing_quarantines_one_bad_key_and_keeps_valid_entries()
+    -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let (binding, prepared) = private_execution_journal_test_fixture(0x71)?;
+        store_private_execution_journal_entry(temp_dir.path(), binding, &prepared, None)?;
+        let directory = private_execution_journal_dir(temp_dir.path());
+        let valid_path = private_execution_journal_path(
+            &directory,
+            &prepared.service_name,
+            &prepared.decryption_request_id,
+        );
+        let poison_service: Name = "private_journal_poison".parse()?;
+        let poison_path =
+            private_execution_journal_path(&directory, &poison_service, "decrypt-poison");
+        fs::copy(&valid_path, &poison_path)?;
+
+        let listing = list_private_execution_journal_entries(temp_dir.path(), binding)?;
+        assert_eq!(listing.entries, vec![prepared]);
+        assert_eq!(listing.quarantined.len(), 1);
+        assert_eq!(listing.quarantined[0].path, poison_path);
+        assert_eq!(
+            listing.quarantined[0].error.kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert!(
+            listing.quarantined[0]
+                .error
+                .to_string()
+                .contains("filename does not match")
+        );
+        assert!(
+            poison_path.exists(),
+            "quarantine must retain malformed bytes for operator recovery"
+        );
+        Ok(())
+    }
+    #[test]
+    fn private_execution_journal_listing_isolates_ordinary_file_corruption() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let (binding, prepared) = private_execution_journal_test_fixture(0x72)?;
+        store_private_execution_journal_entry(temp_dir.path(), binding, &prepared, None)?;
+        let directory = private_execution_journal_dir(temp_dir.path());
+        let valid_path = private_execution_journal_path(
+            &directory,
+            &prepared.service_name,
+            &prepared.decryption_request_id,
+        );
+        let zero_path = private_execution_journal_path(
+            &directory,
+            &"private_journal_zero".parse()?,
+            "decrypt-zero",
+        );
+        fs::copy(&valid_path, &zero_path)?;
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&zero_path)?
+            .set_len(0)?;
+        let oversized_path = private_execution_journal_path(
+            &directory,
+            &"private_journal_oversized".parse()?,
+            "decrypt-oversized",
+        );
+        fs::copy(&valid_path, &oversized_path)?;
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&oversized_path)?
+            .set_len(SORACLOUD_PRIVATE_EXECUTION_JOURNAL_MAX_FILE_BYTES + 1)?;
+        let invalid_name_path = directory.join("not-a-canonical-digest.nrt");
+        fs::copy(&valid_path, &invalid_name_path)?;
+        let dot_name_path = directory.join(".nrt");
+        fs::copy(&valid_path, &dot_name_path)?;
+
+        let listing = list_private_execution_journal_entries(temp_dir.path(), binding)?;
+        assert_eq!(listing.entries, vec![prepared]);
+        assert_eq!(listing.quarantined.len(), 4);
+        let failures = listing
+            .quarantined
+            .into_iter()
+            .map(|failure| (failure.path, failure.error))
+            .collect::<BTreeMap<_, _>>();
+        for path in [
+            &zero_path,
+            &oversized_path,
+            &invalid_name_path,
+            &dot_name_path,
+        ] {
+            assert_eq!(
+                failures.get(path).map(io::Error::kind),
+                Some(io::ErrorKind::InvalidData),
+                "ordinary corruption at {} must be isolated",
+                path.display(),
+            );
+            assert!(path.exists(), "quarantine must retain {}", path.display());
+        }
+        assert!(
+            failures[&zero_path].to_string().contains("invalid length"),
+            "zero-length evidence must fail in the isolated reader"
+        );
+        assert!(
+            failures[&oversized_path]
+                .to_string()
+                .contains("invalid length"),
+            "oversized evidence must fail in the isolated reader"
+        );
+        assert!(
+            failures[&invalid_name_path]
+                .to_string()
+                .contains("filename does not match"),
+            "a non-canonical journal name must be quarantined after bounded decoding"
+        );
+        assert!(
+            failures[&dot_name_path]
+                .to_string()
+                .contains("filename does not match"),
+            "the exact .nrt dotfile must enter per-file quarantine"
+        );
+        Ok(())
+    }
+    #[cfg(unix)]
+    #[test]
+    fn private_execution_journal_listing_isolates_non_utf8_nrt_name() -> Result<()> {
+        use std::os::unix::ffi::OsStringExt;
+
+        let temp_dir = tempfile::tempdir()?;
+        let (binding, prepared) = private_execution_journal_test_fixture(0x73)?;
+        store_private_execution_journal_entry(temp_dir.path(), binding, &prepared, None)?;
+        let directory = private_execution_journal_dir(temp_dir.path());
+        let valid_path = private_execution_journal_path(
+            &directory,
+            &prepared.service_name,
+            &prepared.decryption_request_id,
+        );
+        let poison_path = directory.join(std::ffi::OsString::from_vec(vec![
+            0xFF, b'.', b'n', b'r', b't',
+        ]));
+        fs::copy(&valid_path, &poison_path)?;
+
+        let listing = list_private_execution_journal_entries(temp_dir.path(), binding)?;
+        assert_eq!(listing.entries, vec![prepared]);
+        assert_eq!(listing.quarantined.len(), 1);
+        assert_eq!(listing.quarantined[0].path, poison_path);
+        assert_eq!(
+            listing.quarantined[0].error.kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert!(
+            listing.quarantined[0]
+                .error
+                .to_string()
+                .contains("filename does not match")
+        );
+        assert!(poison_path.exists(), "quarantine must retain exact bytes");
         Ok(())
     }
     #[test]
@@ -30713,6 +34179,8 @@ mod tests {
 
         store_private_execution_journal_entry(temp_dir.path(), binding, &prepared_pin, None)?;
         let signed_pin = private_execution_journal_test_signed_entry(&prepared_pin, 1, "prepare")?;
+        let reserved_pin = private_execution_journal_test_reserved_entry(&signed_pin);
+        store_private_execution_journal_entry(temp_dir.path(), binding, &reserved_pin, None)?;
         store_private_execution_journal_entry(temp_dir.path(), binding, &signed_pin, None)?;
 
         let mut unsafe_transition = signed_pin.clone();
@@ -30729,14 +34197,27 @@ mod tests {
             io::ErrorKind::InvalidInput
         );
 
-        let mut prepared_receipt = signed_pin;
+        let mut awaiting_durability = signed_pin;
+        awaiting_durability.phase =
+            SoracloudPrivateUploadedModelExecutionJournalPhaseV1::AwaitingDurability;
+        store_private_execution_journal_entry(
+            temp_dir.path(),
+            binding,
+            &awaiting_durability,
+            None,
+        )?;
+
+        let mut prepared_receipt = awaiting_durability;
         prepared_receipt.phase = SoracloudPrivateUploadedModelExecutionJournalPhaseV1::Receipt;
         prepared_receipt.transaction_hash = None;
         prepared_receipt.signed_transaction = None;
+        prepared_receipt.transaction_payload = None;
         prepared_receipt.submission_attempt = 0;
         store_private_execution_journal_entry(temp_dir.path(), binding, &prepared_receipt, None)?;
         let signed_receipt =
             private_execution_journal_test_signed_entry(&prepared_receipt, 1, "receipt")?;
+        let reserved_receipt = private_execution_journal_test_reserved_entry(&signed_receipt);
+        store_private_execution_journal_entry(temp_dir.path(), binding, &reserved_receipt, None)?;
         store_private_execution_journal_entry(temp_dir.path(), binding, &signed_receipt, None)?;
         assert_eq!(
             load_private_execution_journal_entry(
@@ -30750,18 +34231,240 @@ mod tests {
         Ok(())
     }
     #[test]
+    fn private_execution_post_sign_replacement_consumes_the_bounded_attempt() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let sorafs_node = test_sorafs_node(&temp_dir);
+        let output_ciphertext = vec![0x72; 257];
+        let stored_output = ingest_sorafs_payload(&sorafs_node, &output_ciphertext)?;
+        let mut state = private_execution_fault_state();
+        let network_id = *state.network_id_ref();
+        let sink = Arc::new(PrivateExecutionFaultSink::new(network_id));
+        sink.force_immediate_replacement(true);
+        let (_unused_binding, mut prepared) = private_execution_journal_test_fixture(0x72)?;
+        prepared.receipt.network_id = network_id;
+        prepared.receipt.output_artifact.artifact_hash = Hash::new(&output_ciphertext);
+        private_execution_journal_test_reseal_receipt(&mut prepared.receipt);
+        insert_private_execution_active_prepare_fixtures(&mut state, &prepared)?;
+        prepared.validate().map_err(|error| eyre::eyre!(error))?;
+        assert_eq!(
+            stored_output.manifest_digest(),
+            prepared
+                .receipt
+                .output_artifact
+                .sorafs_manifest_digest
+                .as_bytes(),
+        );
+        let manager = private_execution_fault_manager(
+            temp_dir.path(),
+            Arc::clone(&state),
+            sorafs_node,
+            Arc::clone(&sink),
+        );
+        let handle = test_runtime_handle(&manager, Arc::clone(&state));
+        handle
+            .store_private_uploaded_model_execution_journal(prepared.clone())
+            .map_err(|error| eyre::eyre!(error.message))?;
+
+        for expected_attempt in
+            1..=SORACLOUD_PRIVATE_UPLOADED_MODEL_EXECUTION_MAX_SUBMISSION_ATTEMPTS_V1
+        {
+            let error = handle
+                .advance_private_uploaded_model_execution(
+                    prepared.output_manifest_payload.clone(),
+                    prepared.receipt.clone(),
+                )
+                .expect_err("post-sign replacement must surface after reserving its attempt");
+            assert!(
+                error.message.contains("durably reserved"),
+                "unexpected post-sign replacement error: {}",
+                error.message
+            );
+            let journal = handle
+                .load_private_uploaded_model_execution_journal(
+                    &prepared.service_name,
+                    &prepared.decryption_request_id,
+                )
+                .map_err(|error| eyre::eyre!(error.message))?
+                .expect("signed replacement evidence remains durable");
+            assert_eq!(journal.submission_attempt, expected_attempt);
+            assert_eq!(
+                sink.prepared_transactions().len(),
+                usize::from(expected_attempt)
+            );
+        }
+
+        let exhausted = handle
+            .advance_private_uploaded_model_execution(
+                prepared.output_manifest_payload.clone(),
+                prepared.receipt.clone(),
+            )
+            .expect_err("a fourth validator signature must be rejected before signing");
+        assert_eq!(
+            exhausted,
+            private_execution_submission_attempts_exhausted(
+                SoracloudPrivateUploadedModelExecutionJournalPhaseV1::Prepare,
+            )
+        );
+        assert_eq!(
+            sink.prepared_transactions().len(),
+            usize::from(SORACLOUD_PRIVATE_UPLOADED_MODEL_EXECUTION_MAX_SUBMISSION_ATTEMPTS_V1),
+        );
+        Ok(())
+    }
+    #[test]
+    fn private_execution_unsigned_payload_is_validated_before_signing() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let sorafs_node = test_sorafs_node(&temp_dir);
+        let output_ciphertext = vec![0x75; 257];
+        let stored_output = ingest_sorafs_payload(&sorafs_node, &output_ciphertext)?;
+        let mut state = private_execution_fault_state();
+        let network_id = *state.network_id_ref();
+        let sink = Arc::new(PrivateExecutionFaultSink::new(network_id));
+        let (_unused_binding, mut prepared) = private_execution_journal_test_fixture(0x75)?;
+        prepared.receipt.network_id = network_id;
+        prepared.receipt.output_artifact.artifact_hash = Hash::new(&output_ciphertext);
+        private_execution_journal_test_reseal_receipt(&mut prepared.receipt);
+        insert_private_execution_active_prepare_fixtures(&mut state, &prepared)?;
+        assert_eq!(
+            stored_output.manifest_digest(),
+            prepared
+                .receipt
+                .output_artifact
+                .sorafs_manifest_digest
+                .as_bytes(),
+        );
+        let manager = private_execution_fault_manager(
+            temp_dir.path(),
+            Arc::clone(&state),
+            sorafs_node,
+            Arc::clone(&sink),
+        );
+        let handle = test_runtime_handle(&manager, Arc::clone(&state));
+        handle
+            .store_private_uploaded_model_execution_journal(prepared.clone())
+            .map_err(|error| eyre::eyre!(error.message))?;
+
+        sink.tamper_next_payload();
+        let error = handle
+            .advance_private_uploaded_model_execution(
+                prepared.output_manifest_payload.clone(),
+                prepared.receipt.clone(),
+            )
+            .expect_err("an unrelated unsigned instruction must never reach the signer");
+        assert_eq!(
+            error.kind,
+            SoracloudRuntimeExecutionErrorKind::InvalidRequest
+        );
+        assert!(
+            error
+                .message
+                .contains("does not contain the atomic prepare instruction"),
+            "unexpected unsigned-payload validation error: {}",
+            error.message,
+        );
+        assert!(sink.prepared_transactions().is_empty());
+        let retained = handle
+            .load_private_uploaded_model_execution_journal(
+                &prepared.service_name,
+                &prepared.decryption_request_id,
+            )
+            .map_err(|error| eyre::eyre!(error.message))?
+            .expect("Prepared(0) evidence remains durable");
+        assert_eq!(retained, prepared);
+        Ok(())
+    }
+    #[test]
+    fn private_execution_signed_journal_store_failures_cannot_exceed_attempt_cap() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let sorafs_node = test_sorafs_node(&temp_dir);
+        let output_ciphertext = vec![0x76; 257];
+        let stored_output = ingest_sorafs_payload(&sorafs_node, &output_ciphertext)?;
+        let mut state = private_execution_fault_state();
+        let network_id = *state.network_id_ref();
+        let sink = Arc::new(PrivateExecutionFaultSink::new(network_id));
+        let (_unused_binding, mut prepared) = private_execution_journal_test_fixture(0x76)?;
+        prepared.receipt.network_id = network_id;
+        prepared.receipt.output_artifact.artifact_hash = Hash::new(&output_ciphertext);
+        private_execution_journal_test_reseal_receipt(&mut prepared.receipt);
+        insert_private_execution_active_prepare_fixtures(&mut state, &prepared)?;
+        assert_eq!(
+            stored_output.manifest_digest(),
+            prepared
+                .receipt
+                .output_artifact
+                .sorafs_manifest_digest
+                .as_bytes(),
+        );
+        let manager = private_execution_fault_manager(
+            temp_dir.path(),
+            Arc::clone(&state),
+            sorafs_node,
+            Arc::clone(&sink),
+        );
+        let handle = test_runtime_handle(&manager, Arc::clone(&state));
+        handle
+            .store_private_uploaded_model_execution_journal(prepared.clone())
+            .map_err(|error| eyre::eyre!(error.message))?;
+
+        for attempt in 1..=SORACLOUD_PRIVATE_UPLOADED_MODEL_EXECUTION_MAX_SUBMISSION_ATTEMPTS_V1 {
+            *private_execution_signed_journal_store_failure_target().lock() = Some((
+                prepared.service_name.as_ref().to_owned(),
+                prepared.decryption_request_id.clone(),
+            ));
+            let error = handle
+                .advance_private_uploaded_model_execution(
+                    prepared.output_manifest_payload.clone(),
+                    prepared.receipt.clone(),
+                )
+                .expect_err("the injected post-sign journal-store failure must surface");
+            assert_eq!(error.kind, SoracloudRuntimeExecutionErrorKind::Unavailable);
+            assert!(
+                error
+                    .message
+                    .contains("failed to durably journal signed private execution transaction"),
+                "unexpected signed-journal failure: {}",
+                error.message,
+            );
+            let reserved = handle
+                .load_private_uploaded_model_execution_journal(
+                    &prepared.service_name,
+                    &prepared.decryption_request_id,
+                )
+                .map_err(|error| eyre::eyre!(error.message))?
+                .expect("unsigned reservation remains durable");
+            assert_eq!(reserved.submission_attempt, attempt);
+            assert!(reserved.transaction_payload.is_some());
+            assert!(reserved.signed_transaction.is_none());
+            assert_eq!(sink.prepared_transactions().len(), usize::from(attempt));
+        }
+
+        let exhausted = handle
+            .advance_private_uploaded_model_execution(
+                prepared.output_manifest_payload.clone(),
+                prepared.receipt.clone(),
+            )
+            .expect_err("a loaded Reserved(3) must never invoke the signer again");
+        assert_eq!(exhausted.kind, SoracloudRuntimeExecutionErrorKind::Conflict);
+        assert_eq!(
+            sink.prepared_transactions().len(),
+            usize::from(SORACLOUD_PRIVATE_UPLOADED_MODEL_EXECUTION_MAX_SUBMISSION_ATTEMPTS_V1),
+        );
+        Ok(())
+    }
+    #[test]
     fn private_execution_outbox_recovers_every_two_phase_crash_boundary() -> Result<()> {
         let temp_dir = tempfile::tempdir()?;
         let sorafs_node = test_sorafs_node(&temp_dir);
         let output_ciphertext = vec![0x5D; 257];
         let stored_output = ingest_sorafs_payload(&sorafs_node, &output_ciphertext)?;
-        let state = private_execution_fault_state();
+        let mut state = private_execution_fault_state();
         let network_id = *state.network_id_ref();
         let sink = Arc::new(PrivateExecutionFaultSink::new(network_id));
         let (_unused_binding, mut prepared) = private_execution_journal_test_fixture(0x5D)?;
         prepared.receipt.network_id = network_id;
         prepared.receipt.output_artifact.artifact_hash = Hash::new(&output_ciphertext);
         private_execution_journal_test_reseal_receipt(&mut prepared.receipt);
+        insert_private_execution_active_prepare_fixtures(&mut state, &prepared)?;
         prepared.validate().map_err(|error| eyre::eyre!(error))?;
         assert_eq!(
             stored_output.manifest_digest(),
@@ -30794,7 +34497,9 @@ mod tests {
             .expect_err("injected pre-enqueue crash must surface");
         assert_eq!(
             failure.kind,
-            SoracloudRuntimeExecutionErrorKind::Unavailable
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            "unexpected pre-enqueue crash classification: {}",
+            failure.message,
         );
         let signed_one = handle
             .load_private_uploaded_model_execution_journal(
@@ -30850,7 +34555,10 @@ mod tests {
                     prepared.receipt.clone(),
                 )
                 .map_err(|error| eyre::eyre!(error.message))?,
-            Some(signed_one_hash),
+            SoracloudPrivateUploadedModelExecutionSubmissionProgressV1 {
+                phase: SoracloudPrivateUploadedModelExecutionJournalPhaseV1::Prepare,
+                transaction_hash: Some(signed_one_hash),
+            },
         );
         assert_eq!(sink.prepared_transactions().len(), 1);
         assert_eq!(sink.submitted_transactions().len(), 1);
@@ -30861,7 +34569,8 @@ mod tests {
         );
 
         // Only an absent transaction whose lifetime, queue residence, or configured fee policy
-        // became obsolete may be replaced. Attempts remain monotonic and recovery is not capped.
+        // became obsolete may be replaced. Attempts remain monotonic and stop at the bounded
+        // first-release cap, after which exact evidence is retained in quarantine.
         sink.set_observation(
             signed_one_hash,
             PrivateExecutionTransactionObservation::Replaceable,
@@ -30886,12 +34595,18 @@ mod tests {
         assert_eq!(still_signed_one.submission_attempt, 1);
         assert_eq!(still_signed_one.transaction_hash, Some(signed_one_hash));
         sink.set_qualification_available(true);
-        let signed_two_hash = handle
+        let signed_two_progress = handle
             .advance_private_uploaded_model_execution(
                 prepared.output_manifest_payload.clone(),
                 prepared.receipt.clone(),
             )
-            .map_err(|error| eyre::eyre!(error.message))?
+            .map_err(|error| eyre::eyre!(error.message))?;
+        assert_eq!(
+            signed_two_progress.phase,
+            SoracloudPrivateUploadedModelExecutionJournalPhaseV1::Prepare
+        );
+        let signed_two_hash = signed_two_progress
+            .transaction_hash
             .expect("replacement prepare transaction hash");
         assert_ne!(signed_two_hash, signed_one_hash);
         let signed_two = handle
@@ -30910,7 +34625,7 @@ mod tests {
         // Simulate the finalized atomic prepare claim plus provider completion observed after
         // restart. The outbox may only now clear prepare evidence and durably enter Receipt
         // Prepared(0).
-        let mut replicated_state = private_execution_fault_state();
+        let mut replicated_state = private_execution_fault_state_at_epoch_one()?;
         assert_eq!(*replicated_state.network_id_ref(), network_id);
         let manifest =
             sorafs_manifest::decode_manifest_v1_canonical(&prepared.output_manifest_payload)?;
@@ -30943,6 +34658,9 @@ mod tests {
         pin.approve(1, None);
         let completed_order =
             private_execution_completed_replication_order(&prepared.receipt, &pin);
+        let mut pending_order = completed_order.clone();
+        pending_order.provider_completions.clear();
+        pending_order.status = ReplicationOrderStatus::Pending;
         {
             let world = &mut Arc::get_mut(&mut replicated_state)
                 .expect("unique replicated state")
@@ -30952,7 +34670,7 @@ mod tests {
                 .insert(pin.digest, pin);
             world
                 .replication_orders_mut_for_testing()
-                .insert(completed_order.order_id, completed_order);
+                .insert(pending_order.order_id, pending_order);
             world
                 .soracloud_private_uploaded_model_execution_claims_mut_for_testing()
                 .insert(
@@ -30982,12 +34700,61 @@ mod tests {
             Arc::clone(&sink),
         );
         let handle = test_runtime_handle(&manager, Arc::clone(&replicated_state));
-        let receipt_hash = handle
+        let awaiting_progress = handle
             .advance_private_uploaded_model_execution(
                 prepared.output_manifest_payload.clone(),
                 prepared.receipt.clone(),
             )
+            .map_err(|error| eyre::eyre!(error.message))?;
+        assert_eq!(
+            awaiting_progress,
+            SoracloudPrivateUploadedModelExecutionSubmissionProgressV1 {
+                phase: SoracloudPrivateUploadedModelExecutionJournalPhaseV1::AwaitingDurability,
+                transaction_hash: None,
+            },
+            "a committed Prepare with pending replication must expose the explicit durability wait"
+        );
+        let awaiting_journal = handle
+            .load_private_uploaded_model_execution_journal(
+                &prepared.service_name,
+                &prepared.decryption_request_id,
+            )
             .map_err(|error| eyre::eyre!(error.message))?
+            .expect("durability-wait journal remains durable");
+        assert_eq!(
+            awaiting_journal.phase,
+            SoracloudPrivateUploadedModelExecutionJournalPhaseV1::AwaitingDurability
+        );
+        assert_eq!(awaiting_journal.submission_attempt, 2);
+        assert_eq!(awaiting_journal.transaction_hash, Some(signed_two_hash));
+        assert!(awaiting_journal.signed_transaction.is_some());
+        drop(handle);
+        drop(manager);
+        Arc::get_mut(&mut replicated_state)
+            .expect("unique replicated state after durability observation")
+            .world
+            .replication_orders_mut_for_testing()
+            .insert(completed_order.order_id, completed_order.clone());
+
+        let manager = private_execution_fault_manager(
+            temp_dir.path(),
+            Arc::clone(&replicated_state),
+            sorafs_node.clone(),
+            Arc::clone(&sink),
+        );
+        let handle = test_runtime_handle(&manager, Arc::clone(&replicated_state));
+        let receipt_progress = handle
+            .advance_private_uploaded_model_execution(
+                prepared.output_manifest_payload.clone(),
+                prepared.receipt.clone(),
+            )
+            .map_err(|error| eyre::eyre!(error.message))?;
+        assert_eq!(
+            receipt_progress.phase,
+            SoracloudPrivateUploadedModelExecutionJournalPhaseV1::Receipt
+        );
+        let receipt_hash = receipt_progress
+            .transaction_hash
             .expect("replicated output advances to signed receipt transaction");
         let signed_receipt = handle
             .load_private_uploaded_model_execution_journal(
@@ -31023,12 +34790,18 @@ mod tests {
             receipt_hash,
             PrivateExecutionTransactionObservation::CommittedRejected,
         );
-        let replacement_receipt_hash = handle
+        let replacement_receipt_progress = handle
             .advance_private_uploaded_model_execution(
                 prepared.output_manifest_payload.clone(),
                 prepared.receipt.clone(),
             )
-            .map_err(|error| eyre::eyre!(error.message))?
+            .map_err(|error| eyre::eyre!(error.message))?;
+        assert_eq!(
+            replacement_receipt_progress.phase,
+            SoracloudPrivateUploadedModelExecutionJournalPhaseV1::Receipt
+        );
+        let replacement_receipt_hash = replacement_receipt_progress
+            .transaction_hash
             .expect("rejected receipt transaction is replaced");
         assert_ne!(replacement_receipt_hash, receipt_hash);
         let replaced_receipt = handle
@@ -31061,11 +34834,45 @@ mod tests {
                     prepared.receipt.clone(),
                 )
                 .map_err(|error| eyre::eyre!(error.message))?,
-            Some(replacement_receipt_hash),
+            SoracloudPrivateUploadedModelExecutionSubmissionProgressV1 {
+                phase: SoracloudPrivateUploadedModelExecutionJournalPhaseV1::Receipt,
+                transaction_hash: Some(replacement_receipt_hash),
+            },
         );
         assert_eq!(sink.prepared_transactions().len(), 4);
         drop(handle);
         drop(manager);
+
+        // A claim whose deterministic replication order has expired is terminal even while the
+        // paid pin itself remains live. Reconciliation must classify it without retrying the
+        // receipt path that consensus will permanently reject.
+        let mut expired_order = completed_order.clone();
+        expired_order.provider_completions.clear();
+        expired_order.status = ReplicationOrderStatus::Expired(
+            expired_order
+                .deadline_epoch
+                .checked_add(1)
+                .expect("expired order epoch"),
+        );
+        Arc::get_mut(&mut replicated_state)
+            .expect("unique expired-order state")
+            .world
+            .replication_orders_mut_for_testing()
+            .insert(expired_order.order_id, expired_order);
+        assert_eq!(
+            SoracloudRuntimeManager::private_execution_journal_ledger_disposition(
+                replicated_state.as_ref(),
+                &replaced_receipt,
+                false,
+                Duration::ZERO,
+            )?,
+            PrivateExecutionJournalLedgerDisposition::ClaimedOutputRecoveryWindowClosed,
+        );
+        Arc::get_mut(&mut replicated_state)
+            .expect("unique restored-order state")
+            .world
+            .replication_orders_mut_for_testing()
+            .insert(completed_order.order_id, completed_order);
 
         // The immutable claim survives release retirement, but its prepaid output-retention
         // boundary is terminal. Once the pin retires the daemon classifies the outbox for
@@ -31094,6 +34901,8 @@ mod tests {
             SoracloudRuntimeManager::private_execution_journal_ledger_disposition(
                 replicated_state.as_ref(),
                 &replaced_receipt,
+                false,
+                Duration::ZERO,
             )?,
             PrivateExecutionJournalLedgerDisposition::ClaimedOutputRecoveryWindowClosed,
         );
@@ -31182,13 +34991,14 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn private_execution_journal_enforces_monotonic_replacement_without_liveness_cap() -> Result<()>
-    {
+    fn private_execution_journal_enforces_monotonic_bounded_replacement() -> Result<()> {
         let temp_dir = tempfile::tempdir()?;
         let (binding, prepared) = private_execution_journal_test_fixture(0x43)?;
         store_private_execution_journal_entry(temp_dir.path(), binding, &prepared, None)?;
 
         let signed_one = private_execution_journal_test_signed_entry(&prepared, 1, "signed-one")?;
+        let reserved_one = private_execution_journal_test_reserved_entry(&signed_one);
+        store_private_execution_journal_entry(temp_dir.path(), binding, &reserved_one, None)?;
         store_private_execution_journal_entry(temp_dir.path(), binding, &signed_one, None)?;
         assert_eq!(
             load_private_execution_journal_entry(
@@ -31248,11 +35058,12 @@ mod tests {
         );
 
         let signed_two = private_execution_journal_test_signed_entry(&prepared, 2, "signed-two")?;
+        let reserved_two = private_execution_journal_test_reserved_entry(&signed_two);
         assert_eq!(
             store_private_execution_journal_entry(
                 temp_dir.path(),
                 binding,
-                &signed_two,
+                &reserved_two,
                 Some(Hash::new(b"not-the-replaced-transaction")),
             )
             .expect_err("replacement must name the exact previous signed hash")
@@ -31262,17 +35073,20 @@ mod tests {
         store_private_execution_journal_entry(
             temp_dir.path(),
             binding,
-            &signed_two,
+            &reserved_two,
             signed_one.transaction_hash,
         )?;
+        store_private_execution_journal_entry(temp_dir.path(), binding, &signed_two, None)?;
         let signed_three =
             private_execution_journal_test_signed_entry(&prepared, 3, "signed-three")?;
+        let reserved_three = private_execution_journal_test_reserved_entry(&signed_three);
         store_private_execution_journal_entry(
             temp_dir.path(),
             binding,
-            &signed_three,
+            &reserved_three,
             signed_two.transaction_hash,
         )?;
+        store_private_execution_journal_entry(temp_dir.path(), binding, &signed_three, None)?;
         assert_eq!(
             load_private_execution_journal_entry(
                 temp_dir.path(),
@@ -31284,19 +35098,21 @@ mod tests {
         );
 
         let signed_four = private_execution_journal_test_signed_entry(&prepared, 4, "signed-four")?;
-        store_private_execution_journal_entry(
-            temp_dir.path(),
-            binding,
-            &signed_four,
-            signed_three.transaction_hash,
-        )?;
-        let signed_five = private_execution_journal_test_signed_entry(&prepared, 5, "signed-five")?;
-        store_private_execution_journal_entry(
-            temp_dir.path(),
-            binding,
-            &signed_five,
-            signed_four.transaction_hash,
-        )?;
+        let validation_error = signed_four
+            .validate()
+            .expect_err("the first attempt above the per-phase bound must be invalid");
+        assert!(validation_error.contains("exceeds the per-phase maximum"));
+        assert_eq!(
+            store_private_execution_journal_entry(
+                temp_dir.path(),
+                binding,
+                &signed_four,
+                signed_three.transaction_hash,
+            )
+            .expect_err("journal storage must reject a fourth signed attempt")
+            .kind(),
+            io::ErrorKind::InvalidInput
+        );
         assert_eq!(
             load_private_execution_journal_entry(
                 temp_dir.path(),
@@ -31304,7 +35120,7 @@ mod tests {
                 &prepared.service_name,
                 &prepared.decryption_request_id,
             )?,
-            Some(signed_five)
+            Some(signed_three)
         );
         Ok(())
     }
@@ -31842,6 +35658,42 @@ mod tests {
         let query = LiveQueryStore::start_test();
         Arc::new(State::new_for_testing(World::new(), kura, query))
     }
+    fn test_state_at_height_one() -> Result<Arc<State>> {
+        test_state_at_height_one_with_creation_time(1)
+    }
+    fn test_state_at_height_one_with_creation_time(creation_time_ms: u64) -> Result<Arc<State>> {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(
+            World::new(),
+            Arc::clone(&kura),
+            query,
+        ));
+        commit_empty_test_block(&state, &kura, creation_time_ms)?;
+        Ok(state)
+    }
+    fn commit_empty_test_block(state: &State, kura: &Kura, creation_time_ms: u64) -> Result<()> {
+        let previous = state.view().latest_block();
+        let expected_height = u64::try_from(state.view().height())?.saturating_add(1);
+        let (_time_handle, time_source) = iroha_primitives::time::TimeSource::new_mock(
+            std::time::Duration::from_millis(creation_time_ms),
+        );
+        let new_block = BlockBuilder::new_with_time_source(Vec::new(), time_source)
+            .chain(0, previous.as_deref())
+            .sign(ALICE_KEYPAIR.private_key())
+            .unpack(|_| {});
+        assert!(new_block.transactions().is_empty());
+        assert_eq!(new_block.header().height().get(), expected_height);
+        let mut state_block = state.block(new_block.header());
+        let valid = new_block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        kura.store_block(Arc::new(committed.as_ref().clone()))?;
+        let _events = state_block.apply_without_execution(&committed, Vec::new());
+        state_block.commit()?;
+        Ok(())
+    }
     struct RuntimeFixture {
         manager: SoracloudRuntimeManager,
         temp_dir: tempfile::TempDir,
@@ -31986,6 +35838,10 @@ mod tests {
         let model_info_payload = norito::json::to_vec(&model_info)?;
         let selection = test_hf_selection(&model_info);
         let profile = test_hf_resource_profile(&selection);
+        let import_file_allowlist = canonical_hf_import_file_allowlist(
+            &iroha_config::parameters::actual::SoracloudRuntimeHuggingFace::default()
+                .import_file_allowlist,
+        )?;
         let mut staging = begin_hf_import_generation(state_dir, source_id)?;
         write_bytes_atomic(
             &staging.staging_root.join("model_info.json"),
@@ -32009,13 +35865,13 @@ mod tests {
             selected_weight_format: Some(selection.model_format),
             required_weight_files: local_hf_required_weight_records(&selection),
             weight_selection_commitment: Some(selection.weight_selection_commitment.to_string()),
+            import_file_allowlist: import_file_allowlist.clone(),
             imported_files: vec![HfImportedFileV1 {
                 path: "model.safetensors".to_owned(),
                 content_length: u64::try_from(payload.len())?,
                 payload_hash: Hash::new(payload).to_string(),
                 lfs_sha256: Some(hex::encode(iroha_crypto::sha256(payload))),
             }],
-            skipped_files: Vec::new(),
             import_error: None,
         };
         validate_hf_import_cache_at_generation(
@@ -32026,6 +35882,7 @@ mod tests {
             16,
             1_024 * 1_024,
             16 * 1_024 * 1_024,
+            &import_file_allowlist,
         )?;
         publish_hf_import_generation(&mut staging, &manifest)?;
         read_hf_import_generation(state_dir, source_id)?
@@ -32062,8 +35919,11 @@ mod tests {
         mismatches.push(commitment);
 
         for mismatch in mismatches {
-            let _ = validate_hf_weight_selection_against_profile(&selection, &mismatch)
-                .expect_err("every authoritative selection field must match exactly");
+            assert_eyre_error_contains(
+                validate_hf_weight_selection_against_profile(&selection, &mismatch)
+                    .expect_err("every authoritative selection field must match exactly"),
+                "does not exactly match the authoritative resource profile",
+            );
         }
     }
     fn sample_agent_record() -> Result<SoraAgentApartmentRecordV1> {
@@ -32071,7 +35931,6 @@ mod tests {
         Ok(SoraAgentApartmentRecordV1 {
             schema_version: SORA_AGENT_APARTMENT_RECORD_VERSION_V1,
             manifest_hash: Hash::prehashed([0xAA; Hash::LENGTH]),
-            status: SoraAgentRuntimeStatusV1::Running,
             deployed_sequence: 1,
             lease_started_height: 1,
             lease_expires_height: 42,
@@ -32146,7 +36005,6 @@ mod tests {
                         lease_started_height: lease.lease_started_height,
                         lease_expires_height: lease.lease_expires_height,
                         authoritative_generation: 1,
-                        last_materialized_sequence: None,
                     },
                 )
                 .collect()
@@ -32174,6 +36032,103 @@ mod tests {
             .validate()
             .expect("sample Soracloud deployment state must be production-valid");
         deployment
+    }
+    fn test_service_lease_reporter_assignment(
+        service_version: &str,
+        replica_slot: u16,
+        validator_account_id: &AccountId,
+        peer_id: &str,
+        selected_guest_isa: SoraInrouGuestIsaV1,
+    ) -> iroha_data_model::soracloud::SoraServiceLeaseReporterAssignmentV1 {
+        iroha_data_model::soracloud::SoraServiceLeaseReporterAssignmentV1 {
+            schema_version:
+                iroha_data_model::soracloud::SORA_SERVICE_LEASE_REPORTER_ASSIGNMENT_VERSION_V1,
+            service_version: service_version.to_owned(),
+            placement: SoraInrouReplicaPlacementV1 {
+                replica_slot,
+                validator_account_id: validator_account_id.clone(),
+                peer_id: peer_id.to_owned(),
+                selected_guest_isa,
+                selected_geography_tag: None,
+                selection_latency_ms: None,
+            },
+            placement_reconciled_at_ms: 1,
+        }
+    }
+    fn sample_service_lease_egress_checkpoint(
+        bundle: &SoraDeploymentBundleV1,
+        reporting_epoch: u64,
+        replica_slot: u16,
+        validator_account_id: &AccountId,
+        accounted_egress_bytes: u64,
+        finalize_reporter: bool,
+    ) -> iroha_data_model::soracloud::SoraServiceLeaseEgressCheckpointV1 {
+        let peer_id =
+            PeerId::from(validator_account_id.expect_single_signatory().clone()).to_string();
+        iroha_data_model::soracloud::SoraServiceLeaseEgressCheckpointV1 {
+            reporting_epoch,
+            assignment: test_service_lease_reporter_assignment(
+                &bundle.service.service_version,
+                replica_slot,
+                validator_account_id,
+                &peer_id,
+                SoraInrouGuestIsaV1::X8664,
+            ),
+            accounted_egress_bytes,
+            last_updated_height: 1,
+            finalize_reporter,
+        }
+    }
+    fn seed_open_inrou_reporter_fixture(
+        deployment: &mut SoraServiceDeploymentStateV1,
+        bundle: &SoraDeploymentBundleV1,
+        state_dir: &Path,
+        replica_slot: u16,
+        validator_account_id: &AccountId,
+        peer_id: &str,
+        selected_guest_isa: SoraInrouGuestIsaV1,
+    ) -> Result<()> {
+        let lease = deployment
+            .service_lease
+            .as_mut()
+            .ok_or_else(|| eyre::eyre!("Inrou reporter fixture requires a service lease"))?;
+        if !lease.egress_reporter_checkpoints.is_empty() {
+            eyre::bail!("Inrou reporter fixture requires an unseeded service lease");
+        }
+        let lease_started_height = lease.lease_started_height;
+        let reporting_epoch = lease.reporting_epoch;
+        let durable = InrouDurableEgressCheckpoint::load_or_create(
+            state_dir,
+            bundle.service.service_name.as_ref(),
+            lease_started_height,
+            reporting_epoch,
+            &bundle.service.service_version,
+            replica_slot,
+            validator_account_id,
+            None,
+        )?;
+        if durable.accounted_egress_bytes() != 0 {
+            eyre::bail!("new Inrou reporter fixture checkpoint must start at zero");
+        }
+        lease.egress_reporter_checkpoints = vec![
+            iroha_data_model::soracloud::SoraServiceLeaseEgressCheckpointV1 {
+                reporting_epoch,
+                assignment: test_service_lease_reporter_assignment(
+                    &bundle.service.service_version,
+                    replica_slot,
+                    validator_account_id,
+                    peer_id,
+                    selected_guest_isa,
+                ),
+                accounted_egress_bytes: 0,
+                last_updated_height: lease_started_height,
+                finalize_reporter: false,
+            },
+        ];
+        lease.refresh_accounted_egress_bytes()?;
+        deployment.validate().map_err(|error| {
+            eyre::eyre!("invalid seeded Inrou reporter deployment fixture: {error}")
+        })
     }
     fn sample_service_audit_event(
         bundle: &SoraDeploymentBundleV1,
@@ -32217,35 +36172,6 @@ mod tests {
             service_lease_commitment: None,
             lease_reporting_epoch_rollover: None,
             signer: ALICE_KEYPAIR.public_key().clone(),
-        }
-    }
-    fn sample_service_lease_egress_checkpoint(
-        bundle: &SoraDeploymentBundleV1,
-        reporting_epoch: u64,
-        accounted_egress_bytes: u64,
-        last_updated_height: u64,
-    ) -> iroha_data_model::soracloud::SoraServiceLeaseEgressCheckpointV1 {
-        iroha_data_model::soracloud::SoraServiceLeaseEgressCheckpointV1 {
-            reporting_epoch,
-            assignment: iroha_data_model::soracloud::SoraServiceLeaseReporterAssignmentV1 {
-                schema_version:
-                    iroha_data_model::soracloud::SORA_SERVICE_LEASE_REPORTER_ASSIGNMENT_VERSION_V1,
-                service_version: bundle.service.service_version.clone(),
-                placement: SoraInrouReplicaPlacementV1 {
-                    replica_slot: 1,
-                    validator_account_id: ALICE_ID.clone(),
-                    peer_id: canonical_inrou_test_peer_id().to_owned(),
-                    selected_guest_isa: current_host_inrou_guest_isa()
-                        .expect("tests require a supported Inrou host ISA"),
-                    selected_geography_tag: None,
-                    selection_latency_ms: None,
-                },
-                placement_reconciled_at_ms: 1,
-            },
-            accounted_egress_bytes,
-            last_updated_height,
-            finalize_reporter: false,
-            forced_finalization: false,
         }
     }
     fn sample_app_infra_audit_event(
@@ -32408,13 +36334,15 @@ mod tests {
         let reporting_epoch = lease.reporting_epoch;
         lease.egress_reporter_checkpoints = vec![sample_service_lease_egress_checkpoint(
             &bundle,
-            lease.reporting_epoch,
+            reporting_epoch,
+            1,
+            &ALICE_ID,
             37,
-            lease_started_height,
+            false,
         )];
         lease
             .refresh_accounted_egress_bytes()
-            .expect("fixture egress aggregate");
+            .expect("test checkpoint aggregate is representable");
         let mut state = test_state();
         let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
         insert_service_deployment_fixture(world, &bundle, deployment);
@@ -32430,17 +36358,36 @@ mod tests {
             )?,
             37
         );
-        for (service_version, incarnation, epoch) in [
-            ("missing-revision", lease_started_height, reporting_epoch),
+        assert_eq!(
+            SoracloudRuntimeManager::authoritative_service_lease_egress_bytes(
+                &view,
+                bundle.service.service_name.as_ref(),
+                &bundle.service.service_version,
+                lease_started_height,
+                reporting_epoch + 1,
+            )?,
+            0,
+            "a successor reporting epoch must not inherit the settled epoch's revision counter"
+        );
+        for rejected_epoch in [reporting_epoch - 1, reporting_epoch + 2] {
+            let error = SoracloudRuntimeManager::authoritative_service_lease_egress_bytes(
+                &view,
+                bundle.service.service_name.as_ref(),
+                &bundle.service.service_version,
+                lease_started_height,
+                rejected_epoch,
+            )
+            .expect_err("stale and beyond-successor reporting epochs must fail closed");
+            assert!(
+                error.to_string().contains("is neither current epoch"),
+                "unexpected error: {error}"
+            );
+        }
+        for (service_version, incarnation) in [
+            ("missing-revision", lease_started_height),
             (
                 bundle.service.service_version.as_str(),
                 lease_started_height + 1,
-                reporting_epoch,
-            ),
-            (
-                bundle.service.service_version.as_str(),
-                lease_started_height,
-                reporting_epoch + 1,
             ),
         ] {
             let error = SoracloudRuntimeManager::authoritative_service_lease_egress_bytes(
@@ -32448,7 +36395,7 @@ mod tests {
                 bundle.service.service_name.as_ref(),
                 service_version,
                 incarnation,
-                epoch,
+                reporting_epoch,
             )
             .expect_err("non-exact authoritative lease egress must fail closed");
             assert!(
@@ -32991,7 +36938,7 @@ mod tests {
             .services
             .get(bundle.service.service_name.as_ref())
             .and_then(|versions| versions.get(&bundle.service.service_version))
-            .expect("hosted Inrou runtime plan");
+            .ok_or_else(|| eyre::eyre!("test fixture did not produce a hosted Inrou plan"))?;
         let replica_plan = project_hosted_http_replica_plan(plan, 1);
         let cache_key = HostedHttpWorkerCacheKey {
             runtime: bundle.container.runtime,
@@ -33068,7 +37015,7 @@ mod tests {
                     )| {
                         let guard = worker.lock();
                         format!(
-                            "{service_name}@{service_version} lease {lease_started_height} epoch {reporting_epoch} replica {replica_slot}: pid={:?}, url={}, stderr={}",
+                            "{service_name}@{service_version} lease {lease_started_height} reporting epoch {reporting_epoch} replica {replica_slot}: pid={:?}, url={}, stderr={}",
                             guard.pid(),
                             guard.listen_base_url,
                             stderr_log_excerpt(&guard.stderr_log_path),
@@ -33900,6 +37847,42 @@ mod tests {
         assert_eq!(
             sources[1].manifest_digest_hex,
             hex::encode(fixtures[2].manifest_digest.as_bytes())
+        );
+        let valid_record = view
+            .world()
+            .replication_orders()
+            .get(&fixtures[3].order_id)
+            .expect("completed remote hydration order");
+        let mut substituted_issued_epoch = valid_record.clone();
+        substituted_issued_epoch.issued_epoch += 1;
+        assert!(
+            validated_remote_hydration_order(&view, &state, &substituted_issued_epoch).is_none(),
+            "payload and ledger issued timestamps must match exactly"
+        );
+        let mut substituted_deadline_epoch = valid_record.clone();
+        substituted_deadline_epoch.deadline_epoch += 1;
+        assert!(
+            validated_remote_hydration_order(&view, &state, &substituted_deadline_epoch).is_none(),
+            "payload and ledger deadline timestamps must match exactly"
+        );
+        let mut missing_completion = valid_record.clone();
+        missing_completion.provider_completions.clear();
+        assert!(
+            validated_remote_hydration_order(&view, &state, &missing_completion).is_none(),
+            "completed orders must retain their exact redundancy target"
+        );
+        let mut owner_substitution = valid_record.clone();
+        owner_substitution.provider_completions[0].completed_by = (*BOB_ID).clone();
+        assert!(
+            validated_remote_hydration_order(&view, &state, &owner_substitution).is_none(),
+            "completion authority must exactly bind the retained completing owner"
+        );
+        let mut completion_epoch_substitution = valid_record.clone();
+        completion_epoch_substitution.provider_completions[0].completion_epoch += 1;
+        assert!(
+            validated_remote_hydration_order(&view, &state, &completion_epoch_substitution)
+                .is_none(),
+            "completed status must equal the last ordered completion epoch"
         );
         Ok(())
     }
@@ -35291,21 +39274,6 @@ mod tests {
                 })
                 .collect()
         }
-        fn submitted_inrou_replica_runtime_states(
-            &self,
-        ) -> Vec<iroha_data_model::isi::soracloud::SetSoracloudInrouReplicaRuntimeState> {
-            self.instructions
-                .lock()
-                .iter()
-                .filter_map(|instruction| {
-                    iroha_data_model::isi::Instruction::as_any(&**instruction)
-                        .downcast_ref::<
-                            iroha_data_model::isi::soracloud::SetSoracloudInrouReplicaRuntimeState,
-                        >()
-                        .cloned()
-                })
-                .collect()
-        }
         #[allow(dead_code)]
         fn submitted_cleared_inrou_replica_runtime_states(
             &self,
@@ -35317,6 +39285,21 @@ mod tests {
                     iroha_data_model::isi::Instruction::as_any(&**instruction)
                         .downcast_ref::<
                             iroha_data_model::isi::soracloud::ClearSoracloudInrouReplicaRuntimeState,
+                        >()
+                        .cloned()
+                })
+                .collect()
+        }
+        fn submitted_inrou_replica_runtime_states(
+            &self,
+        ) -> Vec<iroha_data_model::isi::soracloud::SetSoracloudInrouReplicaRuntimeState> {
+            self.instructions
+                .lock()
+                .iter()
+                .filter_map(|instruction| {
+                    iroha_data_model::isi::Instruction::as_any(instruction)
+                        .downcast_ref::<
+                            iroha_data_model::isi::soracloud::SetSoracloudInrouReplicaRuntimeState,
                         >()
                         .cloned()
                 })
@@ -35592,10 +39575,12 @@ mod tests {
                     .iter()
                     .map(|lease| lease.lease_started_height),
             )
-            .chain(deployment.lease_volume_states.iter().flat_map(|volume| {
-                std::iter::once(volume.lease_started_height)
-                    .chain(volume.last_materialized_sequence)
-            }))
+            .chain(
+                deployment
+                    .lease_volume_states
+                    .iter()
+                    .map(|volume| volume.lease_started_height),
+            )
             .chain(
                 [
                     deployment.active_rollout.as_ref(),
@@ -36582,6 +40567,36 @@ mod tests {
         assert_eq!(resources.max_tasks.get(), 64);
     }
     #[test]
+    fn inrou_cgroup_release_requires_both_teardown_attestations() {
+        let confined = InrouWorkerTeardownAttestations::default();
+        assert!(!confined.release_authorized());
+
+        let child_first = confined.with_direct_child_exit(true);
+        assert!(!child_first.release_authorized());
+        assert!(child_first.with_empty_cgroup(true).release_authorized());
+
+        let cgroup_first = confined.with_empty_cgroup(true);
+        assert!(!cgroup_first.release_authorized());
+        assert!(
+            cgroup_first
+                .with_direct_child_exit(true)
+                .release_authorized()
+        );
+
+        assert!(
+            !confined
+                .with_direct_child_exit(false)
+                .with_empty_cgroup(true)
+                .release_authorized()
+        );
+        assert!(
+            !confined
+                .with_direct_child_exit(true)
+                .with_empty_cgroup(false)
+                .release_authorized()
+        );
+    }
+    #[test]
     fn inrou_qmp_kvm_attestation_requires_one_exact_enabled_record() -> Result<()> {
         validate_inrou_qmp_kvm_info(&norito::json!({
             "enabled": true,
@@ -36594,8 +40609,11 @@ mod tests {
             norito::json!({"enabled": true, "present": true, "fallback": "tcg"}),
             norito::json!([true, true]),
         ] {
-            let _ = validate_inrou_qmp_kvm_info(&rejected)
-                .expect_err("non-exact KVM status must fail qualification");
+            assert_eyre_error_contains(
+                validate_inrou_qmp_kvm_info(&rejected)
+                    .expect_err("non-exact KVM status must fail qualification"),
+                "must attest exactly `enabled=true` and `present=true`",
+            );
         }
         Ok(())
     }
@@ -36618,8 +40636,11 @@ mod tests {
 
         validate_inrou_portable_vm_v1_config(&config)?;
         config.portable_vm_gid = std::num::NonZeroU32::new(70_001);
-        let _ = validate_inrou_portable_vm_v1_config(&config)
-            .expect_err("PortableVM uid/gid must select the same canonical slot");
+        assert_eyre_error_contains(
+            validate_inrou_portable_vm_v1_config(&config)
+                .expect_err("PortableVM uid/gid must select the same canonical slot"),
+            "uid/gid must be one equal canonical slot pair",
+        );
         Ok(())
     }
     #[test]
@@ -36819,6 +40840,39 @@ mod tests {
         );
     }
     #[test]
+    fn inrou_host_capability_refresh_candidate_rejects_stale_peer_binding() {
+        let mut state = test_state();
+        insert_public_lane_validator_fixture(
+            &mut Arc::get_mut(&mut state).expect("unique test state").world,
+            PublicLaneValidatorStatus::Active,
+        );
+        let config = test_runtime_manager_config(PathBuf::from(
+            "/tmp/test-soracloud-runtime-host-refresh-stale-peer",
+        ))
+        .with_local_host_identity(ALICE_ID.clone(), "12D3KooWStaleRuntimeHostPeer");
+        let manager = inrou_capability_unit_test_manager(config, Arc::clone(&state));
+        *manager.pending_inrou_host_capability_advert.lock() = Some(
+            manager
+                .build_local_inrou_host_capability_record(456)
+                .expect("host identity configured"),
+        );
+
+        let view = state.view();
+        assert!(
+            manager
+                .local_inrou_host_capability_refresh_candidate(&view)
+                .is_none(),
+            "a validator account must not advertise from a stale peer binding"
+        );
+        assert!(
+            manager
+                .pending_inrou_host_capability_advert
+                .lock()
+                .is_none(),
+            "a stale peer binding must clear its pending capability advert"
+        );
+    }
+    #[test]
     fn inrou_placement_reconcile_detects_inactive_validator_with_live_capability() -> Result<()> {
         let mut state = test_state();
         let bundle = sample_inrou_test_bundle()?;
@@ -36908,7 +40962,7 @@ mod tests {
             view.world(),
             bundle.service.service_name.as_ref(),
             &bundle.service.service_version,
-            SAMPLE_SERVICE_LEASE_STARTED_HEIGHT,
+            committed_height(&view),
         )
         .expect_err("cross-keyed placement must fail closed");
         assert!(error.contains("storage key"), "unexpected error: {error}");
@@ -36958,7 +41012,7 @@ mod tests {
             view.world(),
             bundle.service.service_name.as_ref(),
             &bundle.service.service_version,
-            SAMPLE_SERVICE_LEASE_STARTED_HEIGHT,
+            committed_height(&view),
         )
         .expect_err("invalid placement must fail closed");
         assert!(error.contains("malformed"), "unexpected error: {error}");
@@ -37027,7 +41081,7 @@ mod tests {
                 view.world(),
                 bundle.service.service_name.as_ref(),
                 &bundle.service.service_version,
-                SAMPLE_SERVICE_LEASE_STARTED_HEIGHT,
+                committed_height(&view),
             )
             .map_err(|error| eyre::eyre!(error))?
             .expect("each placement lifecycle remains independently active");
@@ -37042,7 +41096,7 @@ mod tests {
                 bundle.service.service_name.as_ref(),
                 &bundle.service.service_version,
                 soracloud_state_view_observed_at_ms(&view),
-                SAMPLE_SERVICE_LEASE_STARTED_HEIGHT,
+                committed_height(&view),
                 |lane_id| view.is_lane_active_for_authority(lane_id),
             )
             .map_err(|error| eyre::eyre!(error))?;
@@ -37070,7 +41124,7 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn inrou_placement_reconcile_observes_authoritative_sequence_lease_boundary() -> Result<()> {
+    fn inrou_placement_reconcile_does_not_treat_audit_sequence_as_height() -> Result<()> {
         let mut state = test_state();
         let bundle = sample_inrou_test_bundle()?;
         let local_peer_id = canonical_inrou_test_peer_id();
@@ -37090,6 +41144,7 @@ mod tests {
         let view = state.view();
         let bundle_registry = collect_service_revision_registry(&view);
         assert_eq!(authoritative_soracloud_sequence(view.world()), 100);
+        assert_eq!(committed_height(&view), 0);
         assert!(SoracloudRuntimeManager::inrou_placement_reconcile_needed(
             &view,
             &bundle_registry
@@ -37106,7 +41161,8 @@ mod tests {
         assert_eq!(plan.process_generation, None);
         assert_eq!(
             plan.service_lease_status,
-            Some(SoraServiceLeaseStatusV1::Expired)
+            Some(SoraServiceLeaseStatusV1::Active),
+            "an audit sequence at the numeric expiry boundary must not expire a height-based lease"
         );
         Ok(())
     }
@@ -37309,6 +41365,7 @@ mod tests {
         );
         inputs.import_failed = false;
         inputs.bound_service_count = 0;
+        inputs.materialized_service_count = 0;
         assert_eq!(
             derive_hf_runtime_status(SoraHfSourceStatusV1::Ready, &inputs),
             SoracloudRuntimeHfSourceStatus::Failed
@@ -37453,7 +41510,7 @@ mod tests {
 
     #[test]
     fn reconcile_once_persists_active_service_and_apartment_materializations() -> Result<()> {
-        let mut state = test_state();
+        let mut state = test_state_at_height_one()?;
         let mut bundle = load_deployment_bundle_fixture()?;
         bundle.container.required_config_names = vec!["ui/settings".to_string()];
         bundle.container.config_exports = vec![
@@ -37742,6 +41799,50 @@ mod tests {
         Ok(())
     }
 
+    fn insert_generated_hf_synthesis_fixtures(
+        state: &mut Arc<State>,
+        bundle: &SoraDeploymentBundleV1,
+        apartment_manifest: &AgentApartmentManifestV1,
+        registry: HfRegistryFixture<'_>,
+    ) {
+        let world = &mut Arc::get_mut(state).expect("unique test state").world;
+        insert_service_revision_fixture(world, bundle);
+        insert_service_deployment_fixture(world, bundle, sample_deployment_state(bundle));
+        world.soracloud_agent_apartments_mut_for_testing().insert(
+            apartment_manifest.apartment_name.to_string(),
+            SoraAgentApartmentRecordV1 {
+                schema_version: SORA_AGENT_APARTMENT_RECORD_VERSION_V1,
+                manifest_hash: Hash::new(Encode::encode(apartment_manifest)),
+                manifest: apartment_manifest.clone(),
+                deployed_sequence: 1,
+                lease_started_height: 1,
+                lease_expires_height: 128,
+                last_renewed_height: 1,
+                restart_count: 0,
+                last_restart_sequence: None,
+                last_restart_reason: None,
+                process_generation: 1,
+                process_started_sequence: 1,
+                last_active_sequence: 1,
+                last_checkpoint_sequence: None,
+                checkpoint_count: 0,
+                persistent_state: SoraAgentPersistentStateV1 {
+                    total_bytes: 0,
+                    key_sizes: BTreeMap::new(),
+                },
+                revoked_policy_capabilities: BTreeSet::new(),
+                pending_wallet_requests: BTreeMap::new(),
+                wallet_daily_spend: BTreeMap::new(),
+                mailbox_queue: Vec::new(),
+                autonomy_budget_ceiling_units: 1_000,
+                autonomy_budget_remaining_units: 1_000,
+                artifact_allowlist: BTreeMap::new(),
+                autonomy_run_history: Vec::new(),
+            },
+        );
+        insert_hf_registry_fixture(world, bundle, registry);
+    }
+
     #[test]
     fn reconcile_once_synthesizes_generated_hf_bundle_without_sorafs_importer() -> Result<()> {
         let mut state = test_state();
@@ -37768,60 +41869,21 @@ mod tests {
                     .expect("valid generated apartment name"),
                 &bundle,
             );
-        {
-            let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
-            insert_service_revision_fixture(world, &bundle);
-            insert_service_deployment_fixture(world, &bundle, sample_deployment_state(&bundle));
-            world.soracloud_agent_apartments_mut_for_testing().insert(
-                apartment_manifest.apartment_name.to_string(),
-                SoraAgentApartmentRecordV1 {
-                    schema_version: SORA_AGENT_APARTMENT_RECORD_VERSION_V1,
-                    manifest_hash: Hash::new(Encode::encode(&apartment_manifest)),
-                    manifest: apartment_manifest.clone(),
-                    status: SoraAgentRuntimeStatusV1::Running,
-                    deployed_sequence: 1,
-                    lease_started_height: 1,
-                    lease_expires_height: 128,
-                    last_renewed_height: 1,
-                    restart_count: 0,
-                    last_restart_sequence: None,
-                    last_restart_reason: None,
-                    process_generation: 1,
-                    process_started_sequence: 1,
-                    last_active_sequence: 1,
-                    last_checkpoint_sequence: None,
-                    checkpoint_count: 0,
-                    persistent_state: SoraAgentPersistentStateV1 {
-                        total_bytes: 0,
-                        key_sizes: BTreeMap::new(),
-                    },
-                    revoked_policy_capabilities: BTreeSet::new(),
-                    pending_wallet_requests: BTreeMap::new(),
-                    wallet_daily_spend: BTreeMap::new(),
-                    mailbox_queue: Vec::new(),
-                    autonomy_budget_ceiling_units: 1_000,
-                    autonomy_budget_remaining_units: 1_000,
-                    artifact_allowlist: BTreeMap::new(),
-                    autonomy_run_history: Vec::new(),
-                },
-            );
-            insert_hf_registry_fixture(
-                world,
-                &bundle,
-                HfRegistryFixture {
-                    source_id,
-                    pool_id,
-                    lease_asset_definition_id,
-                    repo_id: "openai/gpt-oss",
-                    resolved_revision: TEST_HF_COMMIT_OID,
-                    model_name: "gpt-oss",
-                    normalized_runtime_hash: Hash::new(b"generated-hf-runtime"),
-                    apartment_bindings: BTreeSet::from([apartment_manifest
-                        .apartment_name
-                        .to_string()]),
-                },
-            );
-        }
+        insert_generated_hf_synthesis_fixtures(
+            &mut state,
+            &bundle,
+            &apartment_manifest,
+            HfRegistryFixture {
+                source_id,
+                pool_id,
+                lease_asset_definition_id,
+                repo_id: "openai/gpt-oss",
+                resolved_revision: TEST_HF_COMMIT_OID,
+                model_name: "gpt-oss",
+                normalized_runtime_hash: Hash::new(b"generated-hf-runtime"),
+                apartment_bindings: BTreeSet::from([apartment_manifest.apartment_name.to_string()]),
+            },
+        );
         let temp_dir = tempfile::tempdir()?;
         let _generation = publish_single_weight_hf_test_generation(
             temp_dir.path(),
@@ -37883,22 +41945,37 @@ mod tests {
             TEST_HF_COMMIT_OID
         );
         let mismatch = norito::json!({"sha": OTHER_TEST_HF_COMMIT_OID});
-        let _ = validate_hf_model_info_resolved_commit(&mismatch, TEST_HF_COMMIT_OID)
-            .expect_err("provider commit mismatch must fail before import");
-        let _ = validate_hf_model_info_resolved_commit(
-            &norito::json!({"sha": "main"}),
-            TEST_HF_COMMIT_OID,
-        )
-        .expect_err("noncanonical provider commit must fail before import");
-        let _ = validate_hf_model_info_resolved_commit(
-            &norito::json!({"sha": "0123456789ABCDEF0123456789ABCDEF01234567"}),
-            TEST_HF_COMMIT_OID,
-        )
-        .expect_err("uppercase provider commit must fail before import");
-        let _ = validate_hf_model_info_resolved_commit(&norito::json!({}), TEST_HF_COMMIT_OID)
-            .expect_err("missing provider commit must fail before import");
-        let _ = validate_hf_model_info_resolved_commit(&matching, "main")
-            .expect_err("mutable authoritative revision must fail closed");
+        assert_eyre_error_contains(
+            validate_hf_model_info_resolved_commit(&mismatch, TEST_HF_COMMIT_OID)
+                .expect_err("provider commit mismatch must fail before import"),
+            "does not match authoritative commit",
+        );
+        assert_eyre_error_contains(
+            validate_hf_model_info_resolved_commit(
+                &norito::json!({"sha": "main"}),
+                TEST_HF_COMMIT_OID,
+            )
+            .expect_err("noncanonical provider commit must fail before import"),
+            "model-info `sha` is not a full lowercase commit OID",
+        );
+        assert_eyre_error_contains(
+            validate_hf_model_info_resolved_commit(
+                &norito::json!({"sha": "0123456789ABCDEF0123456789ABCDEF01234567"}),
+                TEST_HF_COMMIT_OID,
+            )
+            .expect_err("uppercase provider commit must fail before import"),
+            "model-info `sha` is not a full lowercase commit OID",
+        );
+        assert_eyre_error_contains(
+            validate_hf_model_info_resolved_commit(&norito::json!({}), TEST_HF_COMMIT_OID)
+                .expect_err("missing provider commit must fail before import"),
+            "model-info response omitted `sha`",
+        );
+        assert_eyre_error_contains(
+            validate_hf_model_info_resolved_commit(&matching, "main")
+                .expect_err("mutable authoritative revision must fail closed"),
+            "authoritative Hugging Face revision is not a full lowercase commit OID",
+        );
         Ok(())
     }
     #[test]
@@ -37920,15 +41997,26 @@ mod tests {
             norito::json!({"modelId": "openai-community/gpt2", "sha": TEST_HF_COMMIT_OID}),
             norito::json!({"modelId": "OpenAI-Community/GPT2", "sha": OTHER_TEST_HF_COMMIT_OID}),
         ] {
-            let _ = validate_hf_model_info_identity(
+            let error = validate_hf_model_info_identity(
                 &invalid,
                 "OpenAI-Community/GPT2",
                 TEST_HF_COMMIT_OID,
             )
             .expect_err("provider identity aliases and substitutions must fail closed");
+            assert_eyre_error_contains_any(
+                error,
+                &[
+                    "model-info response omitted `modelId`",
+                    "does not exactly match authoritative repository",
+                    "does not match authoritative commit",
+                ],
+            );
         }
-        let _ = validate_hf_model_info_identity(&matching, "bad../repo", TEST_HF_COMMIT_OID)
-            .expect_err("authoritative repository ID must use the shared canonical grammar");
+        assert_eyre_error_contains(
+            validate_hf_model_info_identity(&matching, "bad../repo", TEST_HF_COMMIT_OID)
+                .expect_err("authoritative repository ID must use the shared canonical grammar"),
+            "authoritative Hugging Face repository ID is not canonical",
+        );
         Ok(())
     }
     #[test]
@@ -37945,12 +42033,10 @@ mod tests {
         let selection = derive_hf_weight_selection_v1(&model_info, 1, u64::MAX, u64::MAX)?
             .expect("weight-bearing model-info must yield a selection");
         assert_eq!(selection.required_weight_files.len(), 1);
-        assert_eq!(selection.required_weight_files[0].path, "model.safetensors");
-        assert_eq!(
-            selection.required_weight_files[0].content_length,
-            payload_size
-        );
-        assert_eq!(selection.required_weight_files[0].lfs_sha256, digest);
+        let weight = &selection.required_weight_files[0];
+        assert_eq!(weight.path, "model.safetensors");
+        assert_eq!(weight.content_length, payload_size);
+        assert_eq!(weight.lfs_sha256, digest);
         for malformed in [
             norito::json!({"siblings": [{"rfilename": "model.safetensors", "lfs": {"size": 1}}]}),
             norito::json!({"siblings": [{"rfilename": "model.safetensors", "lfs": {"sha256": "ABC", "size": 1}}]}),
@@ -38003,6 +42089,119 @@ mod tests {
         Ok(())
     }
     #[test]
+    fn hf_import_selection_is_exact_bounded_and_excludes_alternate_weights() -> Result<()> {
+        let gguf = b"preferred gguf weights";
+        let safetensors = b"alternate safetensors weights";
+        let tokenizer = b"authenticated tokenizer metadata";
+        let tokenizer_sha256 = hex::encode(iroha_crypto::sha256(tokenizer));
+        let model_info = norito::json!({
+            "siblings": [
+                {
+                    "rfilename": "model.gguf",
+                    "lfs": {
+                        "sha256": (hex::encode(iroha_crypto::sha256(gguf))),
+                        "size": (u64::try_from(gguf.len())?)
+                    }
+                },
+                {
+                    "rfilename": "model.safetensors",
+                    "lfs": {
+                        "sha256": (hex::encode(iroha_crypto::sha256(safetensors))),
+                        "size": (u64::try_from(safetensors.len())?)
+                    }
+                },
+                {"rfilename": "config.json"},
+                {
+                    "rfilename": "tokenizer.json",
+                    "lfs": {
+                        "sha256": (tokenizer_sha256.clone()),
+                        "size": (u64::try_from(tokenizer.len())?)
+                    }
+                },
+                {"rfilename": "README.md"}
+            ]
+        });
+        let weight_selection = derive_hf_weight_selection_v1(&model_info, 8, 1_024, 4_096)?
+            .expect("preferred GGUF selection");
+        assert_eq!(weight_selection.model_format, SoraHfModelFormatV1::Gguf);
+        let canonical_allowlist = canonical_hf_import_file_allowlist(&[
+            " TOKENIZER.JSON ".to_owned(),
+            "*.safetensors".to_owned(),
+            "config.json".to_owned(),
+        ])?;
+        assert_eq!(
+            canonical_allowlist,
+            vec![
+                "*.safetensors".to_owned(),
+                "config.json".to_owned(),
+                "tokenizer.json".to_owned(),
+            ]
+        );
+        let selected = derive_hf_import_file_selection_v1(
+            &model_info,
+            &weight_selection,
+            &canonical_allowlist,
+            3,
+            1_024,
+            4_096,
+        )?;
+        assert_eq!(
+            selected
+                .iter()
+                .map(|file| file.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["model.gguf", "config.json", "tokenizer.json"]
+        );
+        assert_eq!(selected[1].lfs_sha256, None);
+        assert_eq!(
+            selected[2].lfs_sha256.as_deref(),
+            Some(tokenizer_sha256.as_str())
+        );
+        assert_eyre_error_contains(
+            derive_hf_import_file_selection_v1(
+                &model_info,
+                &weight_selection,
+                &canonical_allowlist,
+                2,
+                1_024,
+                4_096,
+            )
+            .expect_err("combined required file count must be bounded"),
+            "3 required files",
+        );
+        assert_eyre_error_contains(
+            derive_hf_import_file_selection_v1(
+                &model_info,
+                &weight_selection,
+                &canonical_allowlist,
+                3,
+                1_024,
+                u64::try_from(gguf.len() + tokenizer.len() - 1)?,
+            )
+            .expect_err("combined authenticated byte total must be bounded"),
+            "authenticated import total",
+        );
+        let mut case_colliding_model_info = model_info.clone();
+        case_colliding_model_info
+            .get_mut("siblings")
+            .and_then(norito::json::Value::as_array_mut)
+            .expect("test model-info siblings")
+            .push(norito::json!({"rfilename": "Config.json"}));
+        assert_eyre_error_contains(
+            derive_hf_import_file_selection_v1(
+                &case_colliding_model_info,
+                &weight_selection,
+                &canonical_allowlist,
+                8,
+                1_024,
+                4_096,
+            )
+            .expect_err("case-fold-colliding selected paths must fail on every host"),
+            "collide on case-insensitive filesystems",
+        );
+        Ok(())
+    }
+    #[test]
     fn hf_url_helpers_build_expected_routes() -> Result<()> {
         let info = hf_model_info_url(
             "huggingface.co/api",
@@ -38027,12 +42226,15 @@ mod tests {
                 "https://huggingface.co/openai-community/gpt2/resolve/{TEST_HF_COMMIT_OID}/config.json"
             )
         );
-        let _ = hf_model_info_url(
-            "https://huggingface.co/api?mutable=1",
-            "openai-community/gpt2",
-            TEST_HF_COMMIT_OID,
-        )
-        .expect_err("configured HF base URLs with query state must fail closed");
+        assert_eyre_error_contains(
+            hf_model_info_url(
+                "https://huggingface.co/api?mutable=1",
+                "openai-community/gpt2",
+                TEST_HF_COMMIT_OID,
+            )
+            .expect_err("configured HF base URLs with query state must fail closed"),
+            "base URL must not contain a query or fragment",
+        );
         Ok(())
     }
     fn hf_import_route_fixture(
@@ -38110,23 +42312,6 @@ mod tests {
             ),
             HttpFixtureResponse::json(tokenizer_json.to_vec()),
         );
-        for (path, body) in [
-            ("config.json", config_json),
-            ("tokenizer.json", tokenizer_json),
-        ] {
-            let route = format!("/openai-community/gpt2/resolve/main/{path}");
-            routes.insert(
-                ("HEAD".to_owned(), route.clone()),
-                HttpFixtureResponse::head_ok(
-                    "application/json",
-                    u64::try_from(body.len()).expect("fixture length fits in u64"),
-                ),
-            );
-            routes.insert(
-                ("GET".to_owned(), route),
-                HttpFixtureResponse::json(body.to_vec()),
-            );
-        }
         routes.insert(
             (
                 "HEAD".to_owned(),
@@ -38177,10 +42362,20 @@ mod tests {
         assert_eq!(manifest.requested_revision, TEST_HF_COMMIT_OID);
         assert_eq!(
             manifest.resolved_commit.as_deref(),
-            Some(TEST_HF_COMMIT_OID)
+            Some(TEST_HF_COMMIT_OID),
+            "unexpected import error: {:?}",
+            manifest.import_error
         );
         assert_eq!(manifest.pipeline_tag.as_deref(), Some("text-generation"));
         assert_eq!(manifest.library_name.as_deref(), Some("transformers"));
+        assert_eq!(
+            manifest.import_file_allowlist,
+            vec![
+                "*.safetensors".to_owned(),
+                "config.json".to_owned(),
+                "tokenizer.json".to_owned(),
+            ]
+        );
         assert_eq!(manifest.imported_files.len(), 3);
         assert_eq!(
             manifest
@@ -38194,7 +42389,6 @@ mod tests {
                 "tokenizer.json".to_owned(),
             ]
         );
-        assert!(manifest.skipped_files.is_empty());
         let imported_root = generation.files_root.clone();
         assert_eq!(
             fs::read(imported_root.join("weights.safetensors"))?,
@@ -38212,7 +42406,7 @@ mod tests {
         manager.reconcile_once()?;
         let repaired = read_hf_import_generation(temp_dir.path(), &source_id)?
             .expect("re-import should publish a replacement generation");
-        assert_ne!(generation.name, repaired.name);
+        assert_ne!(generation.root, repaired.root);
         assert_eq!(
             fs::read(repaired.files_root.join("config.json"))?,
             config_json,
@@ -38232,6 +42426,53 @@ mod tests {
         assert_eq!(
             projection.last_error.as_deref(),
             Some(HF_HOST_LOCAL_EXECUTION_DISABLED_REASON_V1)
+        );
+        Ok(())
+    }
+    #[test]
+    fn reconcile_once_requires_every_allowlist_selected_hf_file_atomically() -> Result<()> {
+        let mut fixture = GeneratedHfTestFixture::new("hf_required_ancillary_service")?;
+        let config_json = br#"{"model_type":"gpt2"}"#.to_vec();
+        let tokenizer_json = br#"{"version":"1.0"}"#.to_vec();
+        let (mut routes, model_info, _weights) =
+            hf_import_route_fixture(&config_json, &tokenizer_json)?;
+        fixture.set_resource_profile_from_model_info(&model_info);
+        routes.insert(
+            (
+                "HEAD".to_owned(),
+                format!("/openai-community/gpt2/resolve/{TEST_HF_COMMIT_OID}/tokenizer.json"),
+            ),
+            HttpFixtureResponse::text(404, "missing tokenizer"),
+        );
+        let (server, _captured) = spawn_recording_http_route_fixture(routes)?;
+        let temp_dir = tempfile::tempdir()?;
+        let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf());
+        config.hf.hub_base_url = server.base_url.clone();
+        config.hf.api_base_url = format!("{}/api", server.base_url);
+        config.hf.import_file_allowlist = vec![
+            "config.json".to_owned(),
+            "tokenizer.json".to_owned(),
+            "*.safetensors".to_owned(),
+        ];
+        let manager = SoracloudRuntimeManager::new(config, Arc::clone(&fixture.state));
+        manager.reconcile_once()?;
+        let source_id = fixture.source_id.to_string();
+        let generation = read_hf_import_generation(temp_dir.path(), &source_id)?
+            .expect("failed required ancillary import generation");
+        assert!(generation.manifest.imported_files.is_empty());
+        assert!(
+            generation
+                .manifest
+                .import_error
+                .as_deref()
+                .is_some_and(
+                    |error| error.contains("tokenizer.json") && error.contains("HEAD returned 404")
+                )
+        );
+        assert_eq!(
+            fs::read_dir(&generation.files_root)?.count(),
+            0,
+            "required ancillary failure must not publish a partial executable cache"
         );
         Ok(())
     }
@@ -39661,7 +43902,6 @@ mod tests {
         )?;
         let view = state.view();
         let bundle_registry = collect_service_revision_registry(&view);
-
         let error = build_test_runtime_snapshot(&view, &bundle_registry, &config, true)
             .expect_err("corrupt hosted-HTTP runtime state must fail snapshot construction");
         assert!(
@@ -39872,17 +44112,18 @@ mod tests {
     -> Result<()> {
         let mut state = test_state();
         let bundle = sample_inrou_test_bundle()?;
-        let deployment_state = sample_deployment_state(&bundle);
-        let lease_started_height = deployment_state
+        let mut deployment_state = sample_deployment_state(&bundle);
+        deployment_state
+            .service_lease
+            .as_mut()
+            .expect("hosted service lease")
+            .reporting_epoch = 7;
+        let lease = deployment_state
             .service_lease
             .as_ref()
-            .expect("hosted service lease")
-            .lease_started_height;
-        let reporting_epoch = deployment_state
-            .service_lease
-            .as_ref()
-            .expect("hosted service lease")
-            .reporting_epoch;
+            .expect("hosted service lease");
+        let lease_started_height = lease.lease_started_height;
+        let reporting_epoch = lease.reporting_epoch;
         {
             let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
             insert_service_deployment_fixture(world, &bundle, deployment_state.clone());
@@ -39947,13 +44188,10 @@ mod tests {
         );
         assert_eq!(submitted_usage[0].replica_slot, 1);
         assert_eq!(
-            submitted_usage[0].reporting_epoch,
-            deployment_state
-                .service_lease
-                .as_ref()
-                .expect("hosted service lease")
-                .reporting_epoch
+            submitted_usage[0].lease_started_height,
+            lease_started_height
         );
+        assert_eq!(submitted_usage[0].reporting_epoch, reporting_epoch);
         assert!(!submitted_usage[0].finalize_reporter);
         assert_eq!(
             submitted_usage[0].replica_accounted_egress_bytes,
@@ -39965,12 +44203,14 @@ mod tests {
         caught_up_lease.egress_reporter_checkpoints = vec![sample_service_lease_egress_checkpoint(
             &bundle,
             caught_up_lease.reporting_epoch,
+            1,
+            &ALICE_ID,
             8 * 1024 * 1024,
-            lease_started_height,
+            false,
         )];
         caught_up_lease
             .refresh_accounted_egress_bytes()
-            .expect("fixture egress aggregate");
+            .expect("caught-up checkpoint aggregate is representable");
         {
             let world = &mut Arc::get_mut(&mut caught_up_state)
                 .expect("unique caught-up test state")
@@ -40000,6 +44240,377 @@ mod tests {
             2,
             "no additional lease-usage report should be submitted once authoritative state matches"
         );
+        Ok(())
+    }
+
+    fn former_inrou_reporter_restart_fixture(
+        accounted_egress_bytes: u64,
+        finalize_reporter: bool,
+    ) -> Result<(SoraDeploymentBundleV1, Arc<State>, HostedHttpLeaseIdentity)> {
+        let bundle = sample_inrou_test_bundle()?;
+        let mut deployment = sample_deployment_state(&bundle);
+        let lease = deployment
+            .service_lease
+            .as_mut()
+            .expect("hosted service lease");
+        let lease_identity = HostedHttpLeaseIdentity {
+            lease_started_height: lease.lease_started_height,
+            reporting_epoch: lease.reporting_epoch,
+        };
+        lease.egress_reporter_checkpoints = vec![sample_service_lease_egress_checkpoint(
+            &bundle,
+            lease_identity.reporting_epoch,
+            1,
+            &ALICE_ID,
+            accounted_egress_bytes,
+            finalize_reporter,
+        )];
+        lease
+            .refresh_accounted_egress_bytes()
+            .expect("reporter checkpoint aggregate is representable");
+        let mut state = test_state();
+        {
+            let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
+            insert_service_deployment_fixture(world, &bundle, deployment);
+        }
+        Ok((bundle, state, lease_identity))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hosted_http_reconcile_recovers_removed_reporter_after_restart() -> Result<()> {
+        let (bundle, state, lease_identity) = former_inrou_reporter_restart_fixture(5, false)?;
+
+        let temp_dir = tempfile::tempdir()?;
+        let durable = InrouDurableEgressCheckpoint::load_or_create(
+            temp_dir.path(),
+            bundle.service.service_name.as_ref(),
+            lease_identity.lease_started_height,
+            lease_identity.reporting_epoch,
+            &bundle.service.service_version,
+            1,
+            &ALICE_ID,
+            None,
+        )?;
+        durable.advance_to(9)?;
+        drop(durable);
+
+        let mutation_sink = Arc::new(RecordingRuntimeMutationSink::default());
+        let mut manager = SoracloudRuntimeManager::new(
+            test_runtime_manager_config(temp_dir.path().to_path_buf())
+                .with_local_host_identity(ALICE_ID.clone(), canonical_inrou_test_peer_id()),
+            Arc::clone(&state),
+        )
+        .with_mutation_sink(mutation_sink.clone());
+        manager.attest_inrou_startup_worker_absence_for_test();
+        manager.ensure_runtime_state_directories()?;
+        let view = state.view();
+        manager.reconcile_hosted_http_workers(
+            &view,
+            &SoracloudRuntimeSnapshot::default(),
+            &BTreeMap::new(),
+        )?;
+
+        let submitted = mutation_sink.submitted_service_lease_usage();
+        assert_eq!(submitted.len(), 1);
+        assert_eq!(
+            submitted[0].lease_started_height,
+            lease_identity.lease_started_height
+        );
+        assert_eq!(submitted[0].reporting_epoch, lease_identity.reporting_epoch);
+        assert_eq!(submitted[0].replica_accounted_egress_bytes, 9);
+        assert!(submitted[0].finalize_reporter);
+        assert_eq!(
+            manager.inrou_replica_egress_accounting.lock().len(),
+            1,
+            "recovered accounting remains durable until WSV acknowledges the terminal value"
+        );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn former_reporter_recovery_requires_startup_worker_absence_attestation() -> Result<()> {
+        let (bundle, state, lease_identity) = former_inrou_reporter_restart_fixture(5, false)?;
+        let temp_dir = tempfile::tempdir()?;
+        let durable = InrouDurableEgressCheckpoint::load_or_create(
+            temp_dir.path(),
+            bundle.service.service_name.as_ref(),
+            lease_identity.lease_started_height,
+            lease_identity.reporting_epoch,
+            &bundle.service.service_version,
+            1,
+            &ALICE_ID,
+            None,
+        )?;
+        durable.advance_to(9)?;
+        drop(durable);
+
+        let manager = SoracloudRuntimeManager::new(
+            test_runtime_manager_config(temp_dir.path().to_path_buf())
+                .with_local_host_identity(ALICE_ID.clone(), canonical_inrou_test_peer_id()),
+            Arc::clone(&state),
+        );
+        manager.ensure_runtime_state_directories()?;
+        let view = state.view();
+        let error = manager
+            .reconcile_hosted_http_workers(
+                &view,
+                &SoracloudRuntimeSnapshot::default(),
+                &BTreeMap::new(),
+            )
+            .expect_err("former-reporter recovery must not trust process absence after restart");
+        assert!(
+            format!("{error:?}").contains("startup worker-absence attestation"),
+            "unexpected recovery rejection: {error:?}"
+        );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn former_reporter_recovery_rejects_a_missing_durable_checkpoint() -> Result<()> {
+        let (_bundle, state, _lease_identity) = former_inrou_reporter_restart_fixture(5, false)?;
+        let temp_dir = tempfile::tempdir()?;
+        let mut manager = SoracloudRuntimeManager::new(
+            test_runtime_manager_config(temp_dir.path().to_path_buf())
+                .with_local_host_identity(ALICE_ID.clone(), canonical_inrou_test_peer_id()),
+            Arc::clone(&state),
+        );
+        manager.attest_inrou_startup_worker_absence_for_test();
+        manager.ensure_runtime_state_directories()?;
+        let view = state.view();
+        let error = manager
+            .reconcile_hosted_http_workers(
+                &view,
+                &SoracloudRuntimeSnapshot::default(),
+                &BTreeMap::new(),
+            )
+            .expect_err("an admitted former reporter must retain its durable counter");
+        assert!(
+            format!("{error:?}").contains("is missing although an on-chain reporter checkpoint"),
+            "unexpected missing-checkpoint rejection: {error:?}"
+        );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn finalized_former_reporter_is_retired_only_after_attested_recovery() -> Result<()> {
+        let (bundle, state, lease_identity) = former_inrou_reporter_restart_fixture(9, true)?;
+        let temp_dir = tempfile::tempdir()?;
+        let durable = InrouDurableEgressCheckpoint::load_or_create(
+            temp_dir.path(),
+            bundle.service.service_name.as_ref(),
+            lease_identity.lease_started_height,
+            lease_identity.reporting_epoch,
+            &bundle.service.service_version,
+            1,
+            &ALICE_ID,
+            None,
+        )?;
+        durable.advance_to(9)?;
+        drop(durable);
+
+        let mutation_sink = Arc::new(RecordingRuntimeMutationSink::default());
+        let mut manager = SoracloudRuntimeManager::new(
+            test_runtime_manager_config(temp_dir.path().to_path_buf())
+                .with_local_host_identity(ALICE_ID.clone(), canonical_inrou_test_peer_id()),
+            Arc::clone(&state),
+        )
+        .with_mutation_sink(mutation_sink.clone());
+        manager.attest_inrou_startup_worker_absence_for_test();
+        manager.ensure_runtime_state_directories()?;
+        let view = state.view();
+        manager.reconcile_hosted_http_workers(
+            &view,
+            &SoracloudRuntimeSnapshot::default(),
+            &BTreeMap::new(),
+        )?;
+
+        assert!(mutation_sink.submitted_service_lease_usage().is_empty());
+        assert!(manager.inrou_replica_egress_accounting.lock().is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn hosted_http_reconcile_opens_the_exact_successor_reporting_epoch() -> Result<()> {
+        let bundle = sample_inrou_test_bundle()?;
+        let mut deployment = sample_deployment_state(&bundle);
+        let lease = deployment
+            .service_lease
+            .as_mut()
+            .expect("hosted service lease");
+        let reporting_epoch = 7;
+        let lease_started_height = lease.lease_started_height;
+        lease.reporting_epoch = reporting_epoch;
+        lease.egress_reporter_checkpoints = (0
+            ..SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1)
+            .map(|index| {
+                sample_service_lease_egress_checkpoint(
+                    &bundle,
+                    reporting_epoch,
+                    u16::try_from(index + 1)
+                        .expect("reporter-checkpoint limit fits the replica-slot domain"),
+                    &BOB_ID,
+                    u64::try_from(index).expect("test index fits u64"),
+                    true,
+                )
+            })
+            .collect();
+        lease
+            .refresh_accounted_egress_bytes()
+            .expect("full prior reporting epoch is representable");
+
+        let mut state = test_state();
+        let local_peer_id = canonical_inrou_test_peer_id();
+        let selected_guest_isa =
+            current_host_inrou_guest_isa().expect("tests require a supported Inrou host ISA");
+        {
+            let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
+            insert_service_revision_fixture(world, &bundle);
+            insert_service_deployment_fixture(world, &bundle, deployment);
+            insert_local_inrou_service_placement_fixture(
+                world,
+                &bundle,
+                local_peer_id,
+                selected_guest_isa,
+            );
+        }
+
+        let temp_dir = tempfile::tempdir()?;
+        let config = test_runtime_manager_config(temp_dir.path().to_path_buf())
+            .with_local_host_identity(ALICE_ID.clone(), local_peer_id);
+        let view = state.view();
+        let bundle_registry = collect_service_revision_registry(&view);
+        let snapshot_context = RuntimeSnapshotBuildContext {
+            bundle_registry: &bundle_registry,
+            state_dir: &config.state_dir,
+            artifacts_root: config.state_dir.join("artifacts"),
+            cache_budgets: &config.cache_budgets,
+            hf_config: &config.hf,
+            local_validator_account_id: config.local_validator_account_id.as_ref(),
+            local_peer_id: config.local_peer_id.as_deref(),
+            local_inrou_hosting_enabled: true,
+        };
+        let snapshot = build_runtime_snapshot(&view, &snapshot_context)?;
+        let replica_dir = snapshot
+            .services
+            .get(bundle.service.service_name.as_ref())
+            .and_then(|versions| versions.get(&bundle.service.service_version))
+            .and_then(|plan| plan.local_replicas.first())
+            .map(|replica| PathBuf::from(&replica.materialization_dir))
+            .expect("local successor reporter plan");
+        fs::create_dir_all(&replica_dir)?;
+
+        let mutation_sink = Arc::new(RecordingRuntimeMutationSink::default());
+        let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state))
+            .with_mutation_sink(mutation_sink.clone());
+        manager.ensure_runtime_state_directories()?;
+        manager.reconcile_hosted_http_workers(&view, &snapshot, &bundle_registry)?;
+
+        let submitted = mutation_sink.submitted_service_lease_usage();
+        assert_eq!(submitted.len(), 1);
+        assert_eq!(submitted[0].lease_started_height, lease_started_height);
+        assert_eq!(submitted[0].reporting_epoch, 8);
+        assert_eq!(submitted[0].replica_accounted_egress_bytes, 0);
+        assert!(!submitted[0].finalize_reporter);
+        assert!(manager.hosted_http_workers.lock().is_empty());
+        let persisted = read_hosted_http_runtime_state(&replica_dir)?
+            .expect("successor reporter catch-up state");
+        assert_eq!(persisted.health_status, SoraServiceHealthStatusV1::Degraded);
+        assert!(
+            persisted
+                .last_error
+                .as_deref()
+                .is_some_and(|error| error.contains("checkpoint catch-up"))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn hosted_http_reconcile_revalidates_fresh_exact_placement_before_starting() -> Result<()> {
+        let bundle = sample_inrou_test_bundle()?;
+        let mut state = test_state();
+        let local_peer_id = canonical_inrou_test_peer_id();
+        let reassigned_peer_id = "12D3KooWReassignedRuntimeHost";
+        let selected_guest_isa =
+            current_host_inrou_guest_isa().expect("tests require a supported Inrou host ISA");
+        {
+            let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
+            insert_service_revision_fixture(world, &bundle);
+            insert_service_deployment_fixture(world, &bundle, sample_deployment_state(&bundle));
+            insert_local_inrou_service_placement_fixture(
+                world,
+                &bundle,
+                local_peer_id,
+                selected_guest_isa,
+            );
+        }
+
+        let temp_dir = tempfile::tempdir()?;
+        let config = test_runtime_manager_config(temp_dir.path().to_path_buf())
+            .with_local_host_identity(ALICE_ID.clone(), local_peer_id);
+        let (bundle_registry, snapshot, replica_dir) = {
+            let view = state.view();
+            let bundle_registry = collect_service_revision_registry(&view);
+            let snapshot_context = RuntimeSnapshotBuildContext {
+                bundle_registry: &bundle_registry,
+                state_dir: &config.state_dir,
+                artifacts_root: config.state_dir.join("artifacts"),
+                cache_budgets: &config.cache_budgets,
+                hf_config: &config.hf,
+                local_validator_account_id: config.local_validator_account_id.as_ref(),
+                local_peer_id: config.local_peer_id.as_deref(),
+                local_inrou_hosting_enabled: true,
+            };
+            let snapshot = build_runtime_snapshot(&view, &snapshot_context)?;
+            let replica_dir = snapshot
+                .services
+                .get(bundle.service.service_name.as_ref())
+                .and_then(|versions| versions.get(&bundle.service.service_version))
+                .and_then(|plan| plan.local_replicas.first())
+                .map(|replica| PathBuf::from(&replica.materialization_dir))
+                .expect("initial local reporter plan");
+            (bundle_registry, snapshot, replica_dir)
+        };
+
+        {
+            let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
+            insert_local_inrou_service_placement_fixture(
+                world,
+                &bundle,
+                reassigned_peer_id,
+                selected_guest_isa,
+            );
+        }
+        fs::create_dir_all(&replica_dir)?;
+        let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state));
+        manager.ensure_runtime_state_directories()?;
+        let view = state.view();
+        assert_eq!(
+            manager.authoritative_reporter_lease_selection(
+                &view,
+                bundle.service.service_name.as_ref(),
+                &bundle.service.service_version,
+                1,
+            )?,
+            HostedHttpReporterLeaseSelection::NotAssigned,
+        );
+        assert!(
+            manager
+                .desired_hosted_http_worker_keys(&view, &snapshot)?
+                .is_empty(),
+            "a stale snapshot must not authorize a worker after exact peer reassignment"
+        );
+        manager.reconcile_hosted_http_workers(&view, &snapshot, &bundle_registry)?;
+        assert!(manager.hosted_http_workers.lock().is_empty());
+        let persisted =
+            read_hosted_http_runtime_state(&replica_dir)?.expect("fresh-placement rejection state");
+        assert_eq!(persisted.health_status, SoraServiceHealthStatusV1::Degraded);
+        assert!(persisted.last_error.as_deref().is_some_and(|error| {
+            error.contains("assignment changed") && error.contains("worker withheld")
+        }));
         Ok(())
     }
 
@@ -41061,9 +45672,12 @@ mod tests {
             let runtime_state = sample_runtime_state(&bundle);
             insert_service_runtime_fixture(world, &bundle, runtime_state);
         }
-        let enqueue_sequence = {
+        let (enqueue_sequence, enqueue_height) = {
             let view = state.view();
-            authoritative_soracloud_sequence(view.world())
+            (
+                authoritative_soracloud_sequence(view.world()),
+                committed_height(&view),
+            )
         };
         {
             let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
@@ -41072,14 +45686,16 @@ mod tests {
             valid.from_service_version = bundle.service.service_version.clone();
             valid.from_handler = "update".parse().expect("valid source handler");
             valid.enqueue_sequence = enqueue_sequence;
-            valid.available_after_height = enqueue_sequence;
-            valid.expires_at_height = enqueue_sequence.saturating_add(32);
+            valid.enqueue_height = enqueue_height;
+            valid.available_after_height = enqueue_height;
+            valid.expires_at_height = enqueue_height.saturating_add(32);
             valid.message_id = derive_soracloud_mailbox_message_id_v1(&valid);
             let mut stale = valid.clone();
             stale.to_service_version = "0.9.0".to_owned();
             stale.enqueue_sequence = enqueue_sequence.saturating_sub(1).max(1);
-            stale.available_after_height = stale.enqueue_sequence;
-            stale.expires_at_height = enqueue_sequence.saturating_add(32);
+            stale.enqueue_height = enqueue_height;
+            stale.available_after_height = enqueue_height;
+            stale.expires_at_height = enqueue_height.saturating_add(32);
             stale.message_id = derive_soracloud_mailbox_message_id_v1(&stale);
             stale.validate().expect("valid historic mailbox message");
             valid.validate().expect("valid current mailbox message");
@@ -41918,12 +46534,18 @@ mod tests {
     }
     #[test]
     fn inrou_v1_network_policy_accepts_only_isolated() -> Result<()> {
-        let _ = validate_inrou_v1_network_policy(&SoraNetworkPolicyV1::Open)
-            .expect_err("Inrou V1 must reject unrestricted egress");
-        let _ = validate_inrou_v1_network_policy(&SoraNetworkPolicyV1::Allowlist(vec![
-            SoraNetworkAllowlistEntryV1::new("8.8.8.8", [443]),
-        ]))
-        .expect_err("Inrou V1 must reject unmetered allowlist egress");
+        assert_eyre_error_contains(
+            validate_inrou_v1_network_policy(&SoraNetworkPolicyV1::Open)
+                .expect_err("Inrou V1 must reject unrestricted egress"),
+            "forbids unrestricted network egress",
+        );
+        assert_eyre_error_contains(
+            validate_inrou_v1_network_policy(&SoraNetworkPolicyV1::Allowlist(vec![
+                SoraNetworkAllowlistEntryV1::new("8.8.8.8", [443]),
+            ]))
+            .expect_err("Inrou V1 must reject unmetered allowlist egress"),
+            "the only release network policy is isolated",
+        );
         validate_inrou_v1_network_policy(&SoraNetworkPolicyV1::Isolated)?;
         Ok(())
     }
@@ -42165,8 +46787,11 @@ mod tests {
         let mut control = PortableVmQmpControl {
             reader: io::BufReader::new(supervisor_qmp),
         };
-        request_inrou_qmp_system_powerdown(&mut control, Duration::from_secs(1))
-            .expect_err("a rejected system_powerdown request must fail closed");
+        assert_eyre_error_contains(
+            request_inrou_qmp_system_powerdown(&mut control, Duration::from_secs(1))
+                .expect_err("a rejected system_powerdown request must fail closed"),
+            "inrou-system-powerdown",
+        );
         qemu.join().expect("QMP rejection fixture")?;
         Ok(())
     }
@@ -42353,62 +46978,65 @@ mod tests {
     fn hosted_http_worker_launch_requires_exact_open_reporter_checkpoint() {
         let open = |accounted_egress_bytes| HostedHttpReporterCheckpointState {
             lease_started_height: 17,
-            reporting_epoch: 1,
+            reporting_epoch: 23,
             accounted_egress_bytes,
             finalize_reporter: false,
         };
         assert!(hosted_http_reporter_checkpoint_is_current_open(
             Some(open(100)),
             17,
-            1,
+            23,
             100
         ));
         assert!(!hosted_http_reporter_checkpoint_is_current_open(
-            None, 17, 1, 0
+            None, 17, 23, 0
         ));
         assert!(!hosted_http_reporter_checkpoint_is_current_open(
             Some(open(50)),
             17,
-            1,
+            23,
             100
         ));
         assert!(!hosted_http_reporter_checkpoint_is_current_open(
             Some(open(100)),
             18,
-            1,
+            23,
             100
         ));
         assert!(!hosted_http_reporter_checkpoint_is_current_open(
             Some(open(100)),
             17,
-            2,
+            24,
             100
         ));
         assert!(!hosted_http_reporter_checkpoint_is_current_open(
             Some(HostedHttpReporterCheckpointState {
                 lease_started_height: 17,
-                reporting_epoch: 1,
+                reporting_epoch: 23,
                 accounted_egress_bytes: 100,
                 finalize_reporter: true,
             }),
             17,
-            1,
+            23,
             100
         ));
     }
     #[test]
     fn terminal_reporter_retirement_discards_only_unadmitted_zero_usage() {
+        hosted_http_terminal_reporter_action(false, None, 0)
+            .expect_err("an unproven worker shutdown must withhold terminal accounting");
         assert_eq!(
-            hosted_http_terminal_reporter_action(None, 0).expect("zero unadmitted reporter"),
+            hosted_http_terminal_reporter_action(true, None, 0).expect("zero unadmitted reporter"),
             HostedHttpTerminalReporterAction::Retire
         );
-        hosted_http_terminal_reporter_action(None, 1)
+        hosted_http_terminal_reporter_action(true, None, 1)
             .expect_err("nonzero usage without admission must fail closed");
         assert_eq!(
             hosted_http_terminal_reporter_action(
+                true,
                 Some(HostedHttpReporterCheckpointState {
                     lease_started_height: 17,
-                    reporting_epoch: 1,
+                    reporting_epoch: 23,
                     accounted_egress_bytes: 4,
                     finalize_reporter: false,
                 }),
@@ -42419,9 +47047,10 @@ mod tests {
         );
         assert_eq!(
             hosted_http_terminal_reporter_action(
+                true,
                 Some(HostedHttpReporterCheckpointState {
                     lease_started_height: 17,
-                    reporting_epoch: 1,
+                    reporting_epoch: 23,
                     accounted_egress_bytes: 5,
                     finalize_reporter: true,
                 }),
@@ -42431,15 +47060,36 @@ mod tests {
             HostedHttpTerminalReporterAction::Retire
         );
         hosted_http_terminal_reporter_action(
+            true,
             Some(HostedHttpReporterCheckpointState {
                 lease_started_height: 17,
-                reporting_epoch: 1,
+                reporting_epoch: 23,
                 accounted_egress_bytes: 4,
                 finalize_reporter: true,
             }),
             5,
         )
         .expect_err("a sealed stale checkpoint must not be advanced by a former reporter");
+    }
+    #[test]
+    fn desired_quarantined_worker_retains_its_open_reporter_after_attested_stop() {
+        assert_eq!(
+            hosted_http_attested_quarantine_disposition(true),
+            HostedHttpAttestedQuarantineDisposition::RetainOpenReporter
+        );
+        assert_eq!(
+            hosted_http_attested_quarantine_disposition(false),
+            HostedHttpAttestedQuarantineDisposition::FinalizeReporter
+        );
+    }
+    #[test]
+    fn attested_hosted_http_worker_shutdown_is_idempotent() {
+        let mut state = HostedHttpWorkerShutdownState::Running;
+        assert!(state.requires_shutdown());
+        state.attest_stopped();
+        assert!(!state.requires_shutdown());
+        state.attest_stopped();
+        assert_eq!(state, HostedHttpWorkerShutdownState::AttestedStopped);
     }
     #[cfg(unix)]
     #[test]
@@ -42449,7 +47099,7 @@ mod tests {
             temp_dir.path(),
             "portal",
             17,
-            1,
+            23,
             "1.0.0",
             1,
             &ALICE_ID,
@@ -42485,13 +47135,13 @@ mod tests {
             temp_dir.path(),
             "portal",
             17,
-            1,
+            23,
             "1.0.0",
             1,
             &ALICE_ID,
             Some(HostedHttpReporterCheckpointState {
                 lease_started_height: 17,
-                reporting_epoch: 1,
+                reporting_epoch: 23,
                 accounted_egress_bytes: 0,
                 finalize_reporter: false,
             }),
@@ -42503,13 +47153,13 @@ mod tests {
             temp_dir.path(),
             "portal",
             17,
-            1,
+            23,
             "1.0.0",
             1,
             &ALICE_ID,
             Some(HostedHttpReporterCheckpointState {
                 lease_started_height: 17,
-                reporting_epoch: 1,
+                reporting_epoch: 23,
                 accounted_egress_bytes: 0,
                 finalize_reporter: true,
             }),
@@ -42519,13 +47169,13 @@ mod tests {
     }
     #[cfg(unix)]
     #[test]
-    fn durable_inrou_egress_checkpoint_separates_lease_incarnations() -> Result<()> {
+    fn durable_inrou_egress_checkpoint_separates_leases_and_reporting_epochs() -> Result<()> {
         let temp_dir = tempfile::tempdir()?;
         let first = InrouDurableEgressCheckpoint::load_or_create(
             temp_dir.path(),
             "portal",
             17,
-            1,
+            23,
             "1.0.0",
             1,
             &ALICE_ID,
@@ -42536,7 +47186,7 @@ mod tests {
             temp_dir.path(),
             "portal",
             18,
-            1,
+            23,
             "1.0.0",
             1,
             &ALICE_ID,
@@ -42546,7 +47196,7 @@ mod tests {
             temp_dir.path(),
             "portal",
             17,
-            2,
+            24,
             "1.0.0",
             1,
             &ALICE_ID,
@@ -42561,13 +47211,13 @@ mod tests {
             temp_dir.path(),
             "portal",
             19,
-            1,
+            23,
             "1.0.0",
             1,
             &ALICE_ID,
             Some(HostedHttpReporterCheckpointState {
                 lease_started_height: 17,
-                reporting_epoch: 1,
+                reporting_epoch: 23,
                 accounted_egress_bytes: 0,
                 finalize_reporter: false,
             }),
@@ -42577,18 +47227,265 @@ mod tests {
             temp_dir.path(),
             "portal",
             17,
-            2,
+            24,
             "1.0.0",
             1,
             &ALICE_ID,
             Some(HostedHttpReporterCheckpointState {
                 lease_started_height: 17,
-                reporting_epoch: 1,
+                reporting_epoch: 23,
                 accounted_egress_bytes: 0,
                 finalize_reporter: false,
             }),
         )
         .expect_err("a durable key must not accept another reporting epoch's checkpoint");
+        Ok(())
+    }
+    #[cfg(unix)]
+    #[test]
+    fn recovered_reporters_seed_shared_revision_delta_exactly_once() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let first_durable = InrouDurableEgressCheckpoint::load_or_create(
+            temp_dir.path(),
+            "portal",
+            17,
+            23,
+            "1.0.0",
+            1,
+            &ALICE_ID,
+            None,
+        )?;
+        first_durable.advance_to(15)?;
+        let second_durable = InrouDurableEgressCheckpoint::load_or_create(
+            temp_dir.path(),
+            "portal",
+            17,
+            23,
+            "1.0.0",
+            2,
+            &ALICE_ID,
+            None,
+        )?;
+        second_durable.advance_to(27)?;
+        drop((first_durable, second_durable));
+
+        let config = test_runtime_manager_config(temp_dir.path().to_path_buf())
+            .with_local_host_identity(ALICE_ID.clone(), canonical_inrou_test_peer_id());
+        let manager = SoracloudRuntimeManager::new(config, test_state());
+        let revision = PortableVmEgressAccounting::new(30);
+        let first_key = ("portal".to_owned(), "1.0.0".to_owned(), 17, 23, 1);
+        let second_key = ("portal".to_owned(), "1.0.0".to_owned(), 17, 23, 2);
+        let checkpoint = |accounted_egress_bytes| HostedHttpReporterCheckpointState {
+            lease_started_height: 17,
+            reporting_epoch: 23,
+            accounted_egress_bytes,
+            finalize_reporter: false,
+        };
+
+        let first = manager.recover_or_reuse_inrou_reporter_egress_accounting(
+            &first_key,
+            &revision,
+            Some(checkpoint(10)),
+        )?;
+        let second = manager.recover_or_reuse_inrou_reporter_egress_accounting(
+            &second_key,
+            &revision,
+            Some(checkpoint(20)),
+        )?;
+        revision
+            .advance_recovered_revision_floor(30, &[(10, first.clone()), (20, second.clone())])?;
+        assert_eq!(revision.accounted_egress_bytes(), 42);
+        assert_eq!(first.accounted_egress_bytes(), 15);
+        assert_eq!(second.accounted_egress_bytes(), 27);
+        assert!(Arc::ptr_eq(&revision.update_gate, &first.update_gate));
+        assert!(Arc::ptr_eq(&revision.update_gate, &second.update_gate));
+
+        manager.recover_or_reuse_inrou_reporter_egress_accounting(
+            &first_key,
+            &revision,
+            Some(checkpoint(10)),
+        )?;
+        manager.recover_or_reuse_inrou_reporter_egress_accounting(
+            &second_key,
+            &revision,
+            Some(checkpoint(20)),
+        )?;
+        revision
+            .advance_recovered_revision_floor(30, &[(10, first.clone()), (20, second.clone())])?;
+        assert_eq!(
+            revision.accounted_egress_bytes(),
+            42,
+            "already recovered reporters must not add their durable delta twice"
+        );
+        assert_eq!(manager.inrou_replica_egress_accounting.lock().len(), 2);
+        Ok(())
+    }
+    #[cfg(unix)]
+    #[test]
+    fn recovered_revision_floor_preserves_local_delta_when_remote_authority_grows() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let durable = InrouDurableEgressCheckpoint::load_or_create(
+            temp_dir.path(),
+            "portal",
+            17,
+            23,
+            "1.0.0",
+            1,
+            &ALICE_ID,
+            None,
+        )?;
+        durable.advance_to(60)?;
+        drop(durable);
+
+        let manager = SoracloudRuntimeManager::new(
+            test_runtime_manager_config(temp_dir.path().to_path_buf())
+                .with_local_host_identity(ALICE_ID.clone(), canonical_inrou_test_peer_id()),
+            test_state(),
+        );
+        let revision = PortableVmEgressAccounting::new(100);
+        let reporter = manager.recover_or_reuse_inrou_reporter_egress_accounting(
+            &("portal".to_owned(), "1.0.0".to_owned(), 17, 23, 1),
+            &revision,
+            Some(HostedHttpReporterCheckpointState {
+                lease_started_height: 17,
+                reporting_epoch: 23,
+                accounted_egress_bytes: 50,
+                finalize_reporter: false,
+            }),
+        )?;
+
+        revision.advance_recovered_revision_floor(100, &[(50, reporter.clone())])?;
+        assert_eq!(revision.accounted_egress_bytes(), 110);
+        revision.advance_recovered_revision_floor(120, &[(50, reporter)])?;
+        assert_eq!(
+            revision.accounted_egress_bytes(),
+            130,
+            "remote authoritative growth must retain the outstanding local durable delta"
+        );
+        Ok(())
+    }
+    #[cfg(unix)]
+    #[test]
+    fn desired_unadmitted_reporter_seeds_revision_floor_and_later_admission_is_exact() -> Result<()>
+    {
+        let bundle = sample_inrou_test_bundle()?;
+        let deployment = sample_deployment_state(&bundle);
+        let lease = deployment
+            .service_lease
+            .as_ref()
+            .expect("hosted service lease");
+        let lease_started_height = lease.lease_started_height;
+        let reporting_epoch = lease.reporting_epoch;
+        let mut unadmitted_state = test_state();
+        {
+            let world = &mut Arc::get_mut(&mut unadmitted_state)
+                .expect("unique unadmitted state")
+                .world;
+            insert_service_deployment_fixture(world, &bundle, deployment.clone());
+        }
+
+        let temp_dir = tempfile::tempdir()?;
+        let durable = InrouDurableEgressCheckpoint::load_or_create(
+            temp_dir.path(),
+            bundle.service.service_name.as_ref(),
+            lease_started_height,
+            reporting_epoch,
+            &bundle.service.service_version,
+            1,
+            &ALICE_ID,
+            None,
+        )?;
+        durable.advance_to(10)?;
+        drop(durable);
+
+        let manager = SoracloudRuntimeManager::new(
+            test_runtime_manager_config(temp_dir.path().to_path_buf())
+                .with_local_host_identity(ALICE_ID.clone(), canonical_inrou_test_peer_id()),
+            Arc::clone(&unadmitted_state),
+        );
+        let revision_key = (
+            bundle.service.service_name.as_ref().to_owned(),
+            bundle.service.service_version.clone(),
+            lease_started_height,
+            reporting_epoch,
+        );
+        let reporter_key = (
+            revision_key.0.clone(),
+            revision_key.1.clone(),
+            revision_key.2,
+            revision_key.3,
+            1,
+        );
+        let revision = PortableVmEgressAccounting::new(0);
+        let reporter = manager.recover_or_reuse_inrou_reporter_egress_accounting(
+            &reporter_key,
+            &revision,
+            None,
+        )?;
+        let unadmitted_view = unadmitted_state.view();
+        let unadmitted_authoritative_total =
+            SoracloudRuntimeManager::authoritative_service_lease_egress_bytes(
+                &unadmitted_view,
+                &revision_key.0,
+                &revision_key.1,
+                revision_key.2,
+                revision_key.3,
+            )?;
+        assert_eq!(unadmitted_authoritative_total, 0);
+        manager.advance_inrou_revision_recovery_floor(
+            &unadmitted_view,
+            &revision_key,
+            &revision,
+            unadmitted_authoritative_total,
+        )?;
+        assert_eq!(reporter.accounted_egress_bytes(), 10);
+        assert_eq!(revision.accounted_egress_bytes(), 10);
+        drop(unadmitted_view);
+
+        let mut admitted_deployment = deployment;
+        let admitted_lease = admitted_deployment
+            .service_lease
+            .as_mut()
+            .expect("hosted service lease");
+        admitted_lease.egress_reporter_checkpoints = vec![sample_service_lease_egress_checkpoint(
+            &bundle,
+            reporting_epoch,
+            1,
+            &ALICE_ID,
+            10,
+            false,
+        )];
+        admitted_lease
+            .refresh_accounted_egress_bytes()
+            .expect("admitted checkpoint aggregate is representable");
+        let mut admitted_state = test_state();
+        {
+            let world = &mut Arc::get_mut(&mut admitted_state)
+                .expect("unique admitted state")
+                .world;
+            insert_service_deployment_fixture(world, &bundle, admitted_deployment);
+        }
+        let admitted_view = admitted_state.view();
+        let admitted_authoritative_total =
+            SoracloudRuntimeManager::authoritative_service_lease_egress_bytes(
+                &admitted_view,
+                &revision_key.0,
+                &revision_key.1,
+                revision_key.2,
+                revision_key.3,
+            )?;
+        assert_eq!(admitted_authoritative_total, 10);
+        manager.advance_inrou_revision_recovery_floor(
+            &admitted_view,
+            &revision_key,
+            &revision,
+            admitted_authoritative_total,
+        )?;
+        assert_eq!(
+            revision.accounted_egress_bytes(),
+            10,
+            "admission transfers the local delta into authority without adding it twice"
+        );
         Ok(())
     }
     #[cfg(unix)]
@@ -42599,7 +47496,7 @@ mod tests {
             temp_dir.path(),
             "portal",
             17,
-            1,
+            23,
             "1.0.0",
             1,
             &ALICE_ID,
@@ -42648,7 +47545,7 @@ mod tests {
             temp_dir.path(),
             "portal",
             17,
-            1,
+            23,
             "1.0.0",
             1,
             &ALICE_ID,
@@ -42662,13 +47559,13 @@ mod tests {
             temp_dir.path(),
             "portal",
             17,
-            1,
+            23,
             "1.0.0",
             1,
             &ALICE_ID,
             Some(HostedHttpReporterCheckpointState {
                 lease_started_height: 17,
-                reporting_epoch: 1,
+                reporting_epoch: 23,
                 accounted_egress_bytes: 10,
                 finalize_reporter: false,
             }),
@@ -42679,13 +47576,13 @@ mod tests {
             temp_dir.path(),
             "portal",
             17,
-            1,
+            23,
             "1.0.0",
             1,
             &ALICE_ID,
             Some(HostedHttpReporterCheckpointState {
                 lease_started_height: 17,
-                reporting_epoch: 1,
+                reporting_epoch: 23,
                 accounted_egress_bytes: 0,
                 finalize_reporter: false,
             }),
@@ -42707,7 +47604,7 @@ mod tests {
             &state_link,
             "portal",
             17,
-            1,
+            23,
             "1.0.0",
             1,
             &ALICE_ID,
@@ -43423,10 +48320,16 @@ mod tests {
                 gid: id,
                 ..accepted.clone()
             };
-            let _ = validate_portable_vm_child_identity_values(&rejected)
-                .expect_err("primary ids outside the canonical four slots must fail closed");
-            let _ = inrou_firewall_identity_slot(&rejected)
-                .expect_err("firewall custody must reject identities outside canonical slots");
+            assert_eyre_error_contains(
+                validate_portable_vm_child_identity_values(&rejected)
+                    .expect_err("primary ids outside the canonical four slots must fail closed"),
+                "one equal canonical slot pair",
+            );
+            assert_eyre_error_contains(
+                inrou_firewall_identity_slot(&rejected)
+                    .expect_err("firewall custody must reject identities outside canonical slots"),
+                "canonical PortableVM uid/gid slot",
+            );
         }
         for (uid, gid) in [(70_000, 70_001), (70_003, 70_002)] {
             let rejected = PortableVmChildIdentity {
@@ -43434,10 +48337,16 @@ mod tests {
                 gid,
                 ..accepted.clone()
             };
-            let _ = validate_portable_vm_child_identity_values(&rejected)
-                .expect_err("uid and primary gid must select the same canonical slot");
-            let _ = inrou_firewall_identity_slot(&rejected)
-                .expect_err("firewall custody must reject mismatched uid/gid slots");
+            assert_eyre_error_contains(
+                validate_portable_vm_child_identity_values(&rejected)
+                    .expect_err("uid and primary gid must select the same canonical slot"),
+                "one equal canonical slot pair",
+            );
+            assert_eyre_error_contains(
+                inrou_firewall_identity_slot(&rejected)
+                    .expect_err("firewall custody must reject mismatched uid/gid slots"),
+                "canonical PortableVM uid/gid slot",
+            );
         }
         for gid in [60_001, 65_534, 524_288, 2_147_483_648, u32::MAX] {
             let rejected = PortableVmChildIdentity {
@@ -43519,18 +48428,32 @@ mod tests {
             );
         }
         validate_inrou_reserved_shadow("iroha-inrou-0:!:20000:0:99999:7:::\n", &identity)?;
-        validate_inrou_reserved_shadow("iroha-inrou-0:$6$hash:20000:0:99999:7:::\n", &identity)
-            .expect_err("an unlocked password must fail closed");
-        validate_inrou_reserved_shadow("iroha-inrou-1:!:20000:0:99999:7:::\n", &identity)
-            .expect_err("a shadow row for a different canonical slot must fail closed");
+        assert_eyre_error_contains(
+            validate_inrou_reserved_shadow("iroha-inrou-0:$6$hash:20000:0:99999:7:::\n", &identity)
+                .expect_err("an unlocked password must fail closed"),
+            "locked password",
+        );
+        assert_eyre_error_contains(
+            validate_inrou_reserved_shadow("iroha-inrou-1:!:20000:0:99999:7:::\n", &identity)
+                .expect_err("a shadow row for a different canonical slot must fail closed"),
+            "must contain a locked `iroha-inrou-0` record",
+        );
         validate_inrou_reserved_gshadow("iroha-inrou-0:!::\n", &identity)?;
         for invalid in [
             "iroha-inrou-1:!::\n",
             "iroha-inrou-0:!:root:iroha-inrou-0\n",
             "docker:!:iroha-inrou-0:\niroha-inrou-0:!::\n",
         ] {
-            validate_inrou_reserved_gshadow(invalid, &identity)
+            let error = validate_inrou_reserved_gshadow(invalid, &identity)
                 .expect_err("gshadow administrators or members must fail closed");
+            assert_eyre_error_contains_any(
+                error,
+                &[
+                    "locked empty",
+                    "no administrators or members",
+                    "must not administer or join",
+                ],
+            );
         }
 
         validate_inrou_subordinate_id_unmapped(
@@ -43546,24 +48469,38 @@ mod tests {
             &identity,
         )?;
         for covered in [100_000, 165_535] {
+            assert_eyre_error_contains(
+                validate_inrou_subordinate_id_unmapped(
+                    "alice:100000:65536\n",
+                    "subuid",
+                    covered,
+                    &identity,
+                )
+                .expect_err("both subordinate-range boundaries must reserve the child id"),
+                "falls within local subuid range",
+            );
+        }
+        assert_eyre_error_contains(
             validate_inrou_subordinate_id_unmapped(
-                "alice:100000:65536\n",
+                "alice:4294967294:1\n",
                 "subuid",
-                covered,
+                u32::MAX - 1,
                 &identity,
             )
-            .expect_err("both subordinate-range boundaries must reserve the child id");
-        }
-        validate_inrou_subordinate_id_unmapped(
-            "alice:4294967294:1\n",
-            "subuid",
-            u32::MAX - 1,
-            &identity,
-        )
-        .expect_err("the highest valid subordinate id range must be enforced");
+            .expect_err("the highest valid subordinate id range must be enforced"),
+            "falls within local subuid range",
+        );
         for forbidden_owner in ["iroha-inrou-0:200000:1\n", "70000:200000:1\n"] {
-            validate_inrou_subordinate_id_unmapped(forbidden_owner, "subuid", 70_000, &identity)
-                .expect_err("service and numeric identity owners must not receive subids");
+            assert_eyre_error_contains(
+                validate_inrou_subordinate_id_unmapped(
+                    forbidden_owner,
+                    "subuid",
+                    70_000,
+                    &identity,
+                )
+                .expect_err("service and numeric identity owners must not receive subids"),
+                "must not delegate a range to Inrou owner",
+            );
         }
         for malformed in [
             "alice:100000:0\n",
@@ -43571,8 +48508,20 @@ mod tests {
             "alice:not-a-number:1\n",
             "alice:100000\n",
         ] {
-            validate_inrou_subordinate_id_unmapped(malformed, "subgid", 70_000, &identity)
-                .expect_err("malformed, empty, or overflowing subordinate ranges must fail closed");
+            let error =
+                validate_inrou_subordinate_id_unmapped(malformed, "subgid", 70_000, &identity)
+                    .expect_err(
+                        "malformed, empty, or overflowing subordinate ranges must fail closed",
+                    );
+            assert_eyre_error_contains_any(
+                error,
+                &[
+                    "must be nonempty",
+                    "overflows Linux",
+                    "parse local",
+                    "malformed record",
+                ],
+            );
         }
         Ok(())
     }
@@ -43892,7 +48841,6 @@ mod tests {
                 device_serial: "sora-index_state".to_owned(),
                 filesystem_type: "ext4".to_owned(),
                 mount_options: "rw,nofail".to_owned(),
-                initialize_filesystem: true,
             },
         }];
         let user_data = build_inrou_user_data(
@@ -43943,17 +48891,13 @@ mod tests {
         assert!(
             user_data.contains("Inrou volume mount path is unhealthy; failing closed: $mount_path")
         );
-        assert_eq!(
-            user_data.matches("mkfs.ext4 -F \"$device_path\"").count(),
-            1,
-            "only an explicitly new volume may be formatted, exactly once"
-        );
+        assert!(!user_data.contains("mkfs.ext4"));
+        assert!(!user_data.contains("block-volume initialization"));
         assert!(
             user_data.contains(
-                "new Inrou PortableVm volume unexpectedly contains a filesystem signature"
+                "volume mount failed; refusing destructive initialization of $device_path"
             )
         );
-        assert!(user_data.contains("volume mount failed; refusing to modify $device_path"));
         assert!(!user_data.contains("reformat"));
         assert!(user_data.contains("mount -t 'ext4' -o 'rw,nofail' \"$device_path\""));
         assert!(user_data.contains("chown inrou:inrou '/var/lib/ton-indexer'"));
@@ -43964,7 +48908,7 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn build_inrou_user_data_never_formats_existing_portable_block_mounts() -> Result<()> {
+    fn build_inrou_user_data_only_mounts_preformatted_portable_block_devices() -> Result<()> {
         let bundle = sample_inrou_test_bundle()?;
         let (_temp_dir, replica_plan, cache_key) =
             materialize_inrou_replica_plan_for_tests(&bundle)?;
@@ -43974,7 +48918,6 @@ mod tests {
                 device_serial: "sora-index_state".to_owned(),
                 filesystem_type: "ext4".to_owned(),
                 mount_options: "rw,nofail".to_owned(),
-                initialize_filesystem: false,
             },
         }];
 
@@ -43994,8 +48937,14 @@ mod tests {
         assert!(user_data.contains(
             "actual_filesystem=$(blkid -s TYPE -o value \"$device_path\" 2>/dev/null || true)"
         ));
-        assert!(user_data.contains("volume mount failed; refusing to modify $device_path"));
-        assert!(user_data.contains("filesystem check failed; refusing to modify $device_path"));
+        assert!(
+            user_data.contains(
+                "volume mount failed; refusing destructive initialization of $device_path"
+            )
+        );
+        assert!(user_data.contains(
+            "volume post-mount write probe failed; the device will not be reformatted: $device_path"
+        ));
         Ok(())
     }
     #[test]
@@ -44185,21 +49134,46 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn inrou_rootfs_base_binding_covers_signed_bundle_identity_and_selected_image() -> Result<()> {
+    fn inrou_rootfs_base_binding_covers_signed_bundle_image_and_volume_generation() -> Result<()> {
         let bundle = sample_inrou_test_bundle()?;
-        let selected_guest_isa =
-            current_host_inrou_guest_isa().expect("tests require a supported Inrou host ISA");
-        let plan = sample_inrou_runtime_plan(&bundle, selected_guest_isa);
-        let original = inrou_rootfs_base_binding(&bundle, &plan)?;
+        let (_temp_dir, replica_plan, _cache_key) =
+            materialize_inrou_replica_plan_for_tests(&bundle)?;
+        let plan = replica_plan.inrou.as_ref().expect("Inrou runtime plan");
+        let root_volume = replica_plan
+            .lease_volumes
+            .iter()
+            .find(|volume| volume.kind == SoraLeaseVolumeKindV1::PersistentRootLeaseVolume)
+            .expect("root volume");
+        let original = inrou_rootfs_base_binding(&bundle, plan, root_volume)?;
 
         let mut replacement = bundle.clone();
         replacement.container.bundle_hash = Hash::new(b"replacement-signed-bundle");
-        assert_ne!(original, inrou_rootfs_base_binding(&replacement, &plan)?);
+        assert_ne!(
+            original,
+            inrou_rootfs_base_binding(&replacement, plan, root_volume)?
+        );
 
-        let mut mismatched_plan = plan;
+        let mut renewed_volume = root_volume.clone();
+        renewed_volume.lease_expires_height += 10;
+        renewed_volume.local_materialization_dir = "/different/local/path".to_owned();
+        assert_eq!(
+            original,
+            inrou_rootfs_base_binding(&bundle, plan, &renewed_volume)?,
+            "renewal-only expiry and host-local path must not change persistent volume identity"
+        );
+
+        let mut next_generation = root_volume.clone();
+        next_generation.authoritative_generation += 1;
+        assert_ne!(
+            original,
+            inrou_rootfs_base_binding(&bundle, plan, &next_generation)?,
+            "an authoritative volume generation change must invalidate root-disk reuse"
+        );
+
+        let mut mismatched_plan = plan.clone();
         mismatched_plan.rootfs_image_path = "/inrou/other-rootfs.ext4".to_owned();
         assert_eyre_error_contains(
-            inrou_rootfs_base_binding(&bundle, &mismatched_plan)
+            inrou_rootfs_base_binding(&bundle, &mismatched_plan, root_volume)
                 .expect_err("an unsigned rootfs plan substitution must fail closed"),
             "does not match the signed bundle",
         );
@@ -44233,7 +49207,7 @@ mod tests {
     }
     #[cfg(not(windows))]
     #[test]
-    fn ensure_inrou_portable_root_disk_reuse_requires_matching_authenticated_base() -> Result<()> {
+    fn ensure_inrou_portable_root_disk_recovers_only_an_unmodified_missing_binding() -> Result<()> {
         let bundle = sample_inrou_test_bundle()?;
         let (temp_dir, replica_plan, _cache_key) =
             materialize_inrou_replica_plan_for_tests(&bundle)?;
@@ -44243,9 +49217,48 @@ mod tests {
             .find(|volume| volume.kind == SoraLeaseVolumeKindV1::PersistentRootLeaseVolume)
             .expect("root volume");
         let base_rootfs = temp_dir.path().join("base-rootfs.ext4");
+        fs::write(&base_rootfs, b"authenticated-base-rootfs")?;
+        let base_binding = Hash::new(b"authenticated-base-rootfs-v1");
+        let root_disk_path =
+            ensure_inrou_portable_root_disk(&base_rootfs, root_volume, base_binding)?;
+        let binding_path = inrou_root_disk_binding_path(&root_disk_path)?;
+        fs::remove_file(&binding_path)?;
+
+        let recovered = ensure_inrou_portable_root_disk(&base_rootfs, root_volume, base_binding)?;
+        assert_eq!(recovered, root_disk_path);
+        assert_eq!(fs::read(&recovered)?, fs::read(&base_rootfs)?);
+        validate_inrou_root_disk_binding(&recovered, base_binding)?;
+
+        fs::remove_file(&binding_path)?;
+        fs::write(&root_disk_path, b"mutated-persistent-root!!")?;
+        let error = ensure_inrou_portable_root_disk(&base_rootfs, root_volume, base_binding)
+            .expect_err("a mutated root disk with no binding must fail closed");
+        assert!(
+            error.to_string().contains("has no authenticated binding"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            !binding_path.exists(),
+            "rejected root-disk state must not receive a recovered binding"
+        );
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    #[test]
+    fn ensure_inrou_portable_root_disk_reuse_requires_matching_volume_generation() -> Result<()> {
+        let bundle = sample_inrou_test_bundle()?;
+        let (temp_dir, replica_plan, _cache_key) =
+            materialize_inrou_replica_plan_for_tests(&bundle)?;
+        let root_volume = replica_plan
+            .lease_volumes
+            .iter()
+            .find(|volume| volume.kind == SoraLeaseVolumeKindV1::PersistentRootLeaseVolume)
+            .expect("root volume");
+        let inrou = replica_plan.inrou.as_ref().expect("Inrou runtime plan");
+        let base_rootfs = temp_dir.path().join("base-rootfs.ext4");
         let base_bytes = b"authenticated-base-rootfs";
         fs::write(&base_rootfs, base_bytes)?;
-        let base_binding = Hash::new(b"authenticated-base-rootfs-v1");
+        let base_binding = inrou_rootfs_base_binding(&bundle, inrou, root_volume)?;
         let root_disk_path =
             ensure_inrou_portable_root_disk(&base_rootfs, root_volume, base_binding)?;
         let mutated = vec![0xA5; base_bytes.len()];
@@ -44253,16 +49266,19 @@ mod tests {
         let reused = ensure_inrou_portable_root_disk(&base_rootfs, root_volume, base_binding)?;
         assert_eq!(reused, root_disk_path);
         assert_eq!(fs::read(&reused)?, mutated);
+        let mut next_generation = root_volume.clone();
+        next_generation.authoritative_generation += 1;
+        let next_generation_binding = inrou_rootfs_base_binding(&bundle, inrou, &next_generation)?;
         let error = ensure_inrou_portable_root_disk(
             &base_rootfs,
-            root_volume,
-            Hash::new(b"authenticated-base-rootfs-v2"),
+            &next_generation,
+            next_generation_binding,
         )
-        .expect_err("a root disk from another authenticated base must not be reused");
+        .expect_err("a root disk from an older volume generation must not be reused");
         assert!(
             error
                 .to_string()
-                .contains("different authenticated base image")
+                .contains("different authenticated base image or logical volume identity")
         );
         Ok(())
     }
@@ -44311,13 +49327,10 @@ mod tests {
         )?;
         fs::set_permissions(&qemu_img, fs::Permissions::from_mode(0o755))?;
 
-        let lease_error = ensure_inrou_portable_lease_disks(&qemu_img, &replica_plan)
-            .err()
-            .expect("qemu-img failure must fail lease-disk creation");
-        assert!(
-            lease_error
-                .to_string()
-                .contains("create PortableVm lease disk")
+        assert_eyre_error_contains(
+            ensure_inrou_portable_lease_disks(&qemu_img, &qemu_img, &replica_plan)
+                .expect_err("qemu-img failure must fail lease-disk creation"),
+            "create PortableVm lease disk",
         );
         let lease_volume = replica_plan
             .lease_volumes
@@ -44341,7 +49354,47 @@ mod tests {
     }
     #[cfg(not(windows))]
     #[test]
-    fn ensure_inrou_portable_lease_disks_create_reusable_raw_images() -> Result<()> {
+    fn portable_lease_disk_formatter_failure_after_write_removes_staging_file() -> Result<()> {
+        let bundle = sample_inrou_test_bundle()?;
+        let (temp_dir, replica_plan, _cache_key) =
+            materialize_inrou_replica_plan_for_tests(&bundle)?;
+        let qemu_img = temp_dir.path().join("qemu-img");
+        fs::write(
+            &qemu_img,
+            "#!/bin/sh\nprev=''\ntarget=''\nfor arg in \"$@\"; do target=\"$prev\"; prev=\"$arg\"; done\ndd if=/dev/zero of=\"$target\" bs=1 count=0 seek=\"$prev\" 2>/dev/null\n",
+        )?;
+        fs::set_permissions(&qemu_img, fs::Permissions::from_mode(0o755))?;
+        let ext4_formatter = temp_dir.path().join("failing-mke2fs");
+        fs::write(
+            &ext4_formatter,
+            "#!/bin/sh\nprevious=''\ntarget=''\nfor arg in \"$@\"; do target=\"$previous\"; previous=\"$arg\"; done\nprintf '\\123\\357' | dd of=\"$target\" bs=1 seek=1080 conv=notrunc 2>/dev/null\nexit 19\n",
+        )?;
+        fs::set_permissions(&ext4_formatter, fs::Permissions::from_mode(0o755))?;
+
+        assert_eyre_error_contains(
+            ensure_inrou_portable_lease_disks(&qemu_img, &ext4_formatter, &replica_plan)
+                .expect_err("mke2fs failure must fail lease-disk creation"),
+            "format PortableVm lease disk",
+        );
+        let lease_volume = replica_plan
+            .lease_volumes
+            .iter()
+            .find(|volume| volume.kind != SoraLeaseVolumeKindV1::PersistentRootLeaseVolume)
+            .expect("shared lease volume");
+        let lease_dir = PathBuf::from(&lease_volume.local_materialization_dir);
+        assert!(!lease_dir.join("lease.raw").exists());
+        assert!(fs::read_dir(&lease_dir)?.all(|entry| {
+            !entry
+                .expect("directory entry")
+                .file_name()
+                .to_string_lossy()
+                .contains(".inrou-stage-")
+        }));
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    #[test]
+    fn ensure_inrou_portable_lease_disks_format_before_publish_and_reuse_ext4() -> Result<()> {
         let bundle = sample_inrou_test_bundle()?;
         let (temp_dir, replica_plan, _cache_key) =
             materialize_inrou_replica_plan_for_tests(&bundle)?;
@@ -44355,7 +49408,37 @@ mod tests {
             ),
         )?;
         fs::set_permissions(&qemu_img, fs::Permissions::from_mode(0o755))?;
-        let disks = ensure_inrou_portable_lease_disks(&qemu_img, &replica_plan)?;
+        let lease_volume = replica_plan
+            .lease_volumes
+            .iter()
+            .find(|volume| volume.kind != SoraLeaseVolumeKindV1::PersistentRootLeaseVolume)
+            .expect("shared lease volume");
+        let profile = inrou_ext4_volume_profile_v1(&replica_plan, lease_volume)?;
+        let expected_total_inodes = profile.total_inodes.to_string();
+        let expected_uuid = format_inrou_ext4_uuid_v1(&profile.uuid);
+        let superblock_fixture = temp_dir.path().join("inrou-ext4-v1.superblock");
+        fs::write(
+            &superblock_fixture,
+            exact_inrou_ext4_superblock_fixture_v1(profile),
+        )?;
+        let ext4_formatter = temp_dir.path().join("mke2fs");
+        let formatter_args_log = temp_dir.path().join("mke2fs.args");
+        let superblock_fixture = shell_single_quote(
+            superblock_fixture
+                .to_str()
+                .expect("temporary ext4 fixture path is UTF-8"),
+        );
+        fs::write(
+            &ext4_formatter,
+            format!(
+                "#!/bin/sh\nprintf 'MKE2FS_CONFIG=%s\\n' \"${{MKE2FS_CONFIG-}}\" >> {}\nprintf '%s\\n' \"$@\" >> {}\nprevious=''\ntarget=''\nfor arg in \"$@\"; do target=\"$previous\"; previous=\"$arg\"; done\ndd if={} of=\"$target\" bs=1024 seek=1 conv=notrunc 2>/dev/null\n",
+                formatter_args_log.display(),
+                formatter_args_log.display(),
+                superblock_fixture,
+            ),
+        )?;
+        fs::set_permissions(&ext4_formatter, fs::Permissions::from_mode(0o755))?;
+        let disks = ensure_inrou_portable_lease_disks(&qemu_img, &ext4_formatter, &replica_plan)?;
         assert_eq!(disks.len(), 1);
         assert_eq!(
             disks[0]
@@ -44365,10 +49448,7 @@ mod tests {
             Some("lease.raw")
         );
         assert_eq!(disks[0].device_serial, "sora-index_state");
-        assert!(
-            disks[0].initialize_filesystem,
-            "only the atomically installed new raw disk may request guest formatting"
-        );
+        validate_inrou_ext4_filesystem(&disks[0].image_path, profile)?;
         let first_args = fs::read_to_string(&args_log)?;
         assert!(first_args.contains("create"));
         assert!(first_args.contains("-f"));
@@ -44377,14 +49457,170 @@ mod tests {
         assert!(!first_args.lines().any(|argument| {
             argument == disks[0].image_path.to_str().expect("UTF-8 lease-disk path")
         }));
-        fs::write(&args_log, "")?;
-        let second_disks = ensure_inrou_portable_lease_disks(&qemu_img, &replica_plan)?;
-        assert_eq!(second_disks[0].image_path, disks[0].image_path);
+        let formatter_args = fs::read_to_string(&formatter_args_log)?;
         assert!(
-            !second_disks[0].initialize_filesystem,
-            "an existing persistent disk must never request guest formatting"
+            formatter_args
+                .lines()
+                .any(|line| line == "MKE2FS_CONFIG=/dev/null")
         );
+        assert!(formatter_args.lines().any(|argument| argument == "-F"));
+        assert!(formatter_args.lines().any(|argument| argument == "-t"));
+        assert!(formatter_args.lines().any(|argument| argument == "ext4"));
+        assert!(formatter_args.lines().any(|argument| argument == "-b"));
+        assert!(formatter_args.lines().any(|argument| argument == "4096"));
+        assert!(formatter_args.lines().any(|argument| argument == "-I"));
+        assert!(formatter_args.lines().any(|argument| argument == "256"));
+        assert!(formatter_args.lines().any(|argument| argument == "-N"));
+        assert!(
+            formatter_args
+                .lines()
+                .any(|argument| argument == expected_total_inodes)
+        );
+        assert!(
+            formatter_args
+                .lines()
+                .any(|argument| { argument == SORACLOUD_INROU_EXT4_FEATURES_V1 })
+        );
+        assert!(
+            formatter_args
+                .lines()
+                .any(|argument| { argument == SORACLOUD_INROU_EXT4_EXTENDED_OPTIONS_V1 })
+        );
+        assert!(
+            formatter_args
+                .lines()
+                .any(|argument| argument == expected_uuid)
+        );
+        assert!(formatter_args.contains(".lease.raw.inrou-stage-"));
+        assert!(!formatter_args.lines().any(|argument| {
+            argument == disks[0].image_path.to_str().expect("UTF-8 lease-disk path")
+        }));
+        let lease_dir = disks[0]
+            .image_path
+            .parent()
+            .expect("lease disk has a parent directory");
+        assert!(fs::read_dir(lease_dir)?.all(|entry| {
+            !entry
+                .expect("directory entry")
+                .file_name()
+                .to_string_lossy()
+                .contains(".inrou-stage-")
+        }));
+        fs::write(&args_log, "")?;
+        fs::write(&formatter_args_log, "")?;
+        let second_disks =
+            ensure_inrou_portable_lease_disks(&qemu_img, &ext4_formatter, &replica_plan)?;
+        assert_eq!(second_disks[0].image_path, disks[0].image_path);
+        validate_inrou_ext4_filesystem(&second_disks[0].image_path, profile)?;
         assert!(fs::read_to_string(&args_log)?.is_empty());
+        assert!(fs::read_to_string(&formatter_args_log)?.is_empty());
+
+        let mut next_generation = replica_plan.clone();
+        next_generation
+            .lease_volumes
+            .iter_mut()
+            .find(|volume| volume.volume_name == lease_volume.volume_name)
+            .expect("shared lease volume in cloned plan")
+            .authoritative_generation += 1;
+        assert_eyre_error_contains(
+            ensure_inrou_portable_lease_disks(&qemu_img, &ext4_formatter, &next_generation)
+                .expect_err("a new authoritative generation must not reuse the previous disk"),
+            "UUID outside its canonical logical-volume binding",
+        );
+
+        let mut different_storage_class = replica_plan.clone();
+        different_storage_class
+            .lease_volumes
+            .iter_mut()
+            .find(|volume| volume.volume_name == lease_volume.volume_name)
+            .expect("shared lease volume in cloned plan")
+            .storage_class = iroha_data_model::sorafs::pin_registry::StorageClass::Cold;
+        assert_eyre_error_contains(
+            ensure_inrou_portable_lease_disks(&qemu_img, &ext4_formatter, &different_storage_class)
+                .expect_err("a different storage class must not reuse the previous disk"),
+            "UUID outside its canonical logical-volume binding",
+        );
+
+        let mut corrupted = fs::OpenOptions::new()
+            .write(true)
+            .open(&second_disks[0].image_path)?;
+        corrupted.seek(io::SeekFrom::Start(1_024 + 0x60))?;
+        corrupted
+            .write_all(&(SORACLOUD_INROU_EXT4_INCOMPAT_FEATURES_V1 | 0x0001_0000).to_le_bytes())?;
+        corrupted.sync_all()?;
+        drop(corrupted);
+        assert_eyre_error_contains(
+            ensure_inrou_portable_lease_disks(&qemu_img, &ext4_formatter, &replica_plan)
+                .expect_err("an ext4 feature outside the exact V1 profile must fail closed"),
+            "incompatible feature mask",
+        );
+        Ok(())
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn inrou_ext4_profile_accepts_real_standard_mke2fs_output() -> Result<()> {
+        let Some(ext4_formatter) = resolve_inrou_ext4_formatter_executable() else {
+            println!(
+                "Skipping real mke2fs profile test: no trusted formatter exists at a standard system path."
+            );
+            return Ok(());
+        };
+        let bundle = sample_inrou_test_bundle()?;
+        let (temp_dir, replica_plan, _cache_key) =
+            materialize_inrou_replica_plan_for_tests(&bundle)?;
+        let qemu_img = temp_dir.path().join("qemu-img");
+        fs::write(
+            &qemu_img,
+            "#!/bin/sh\nprevious=''\ntarget=''\nfor arg in \"$@\"; do target=\"$previous\"; previous=\"$arg\"; done\ndd if=/dev/zero of=\"$target\" bs=1 count=0 seek=\"$previous\" 2>/dev/null\n",
+        )?;
+        fs::set_permissions(&qemu_img, fs::Permissions::from_mode(0o755))?;
+
+        let disks = ensure_inrou_portable_lease_disks(&qemu_img, &ext4_formatter, &replica_plan)?;
+        assert_eq!(disks.len(), 1);
+        let lease_volume = replica_plan
+            .lease_volumes
+            .iter()
+            .find(|volume| volume.kind != SoraLeaseVolumeKindV1::PersistentRootLeaseVolume)
+            .expect("shared lease volume");
+        let profile = inrou_ext4_volume_profile_v1(&replica_plan, lease_volume)?;
+        validate_inrou_ext4_filesystem(&disks[0].image_path, profile)?;
+
+        let reused = ensure_inrou_portable_lease_disks(&qemu_img, &ext4_formatter, &replica_plan)?;
+        assert_eq!(reused[0].image_path, disks[0].image_path);
+        validate_inrou_ext4_filesystem(&reused[0].image_path, profile)
+    }
+    #[cfg(not(windows))]
+    #[test]
+    fn ensure_inrou_portable_lease_disks_rejects_unformatted_published_disk() -> Result<()> {
+        let bundle = sample_inrou_test_bundle()?;
+        let (temp_dir, replica_plan, _cache_key) =
+            materialize_inrou_replica_plan_for_tests(&bundle)?;
+        let lease_volume = replica_plan
+            .lease_volumes
+            .iter()
+            .find(|volume| volume.kind != SoraLeaseVolumeKindV1::PersistentRootLeaseVolume)
+            .expect("shared lease volume");
+        let lease_dir =
+            ensure_secure_inrou_disk_directory(Path::new(&lease_volume.local_materialization_dir))?;
+        let lease_disk = lease_dir.join("lease.raw");
+        let file = fs::File::create(&lease_disk)?;
+        file.set_len(lease_volume.max_total_bytes)?;
+        drop(file);
+        fs::set_permissions(&lease_disk, fs::Permissions::from_mode(0o600))?;
+
+        assert_eyre_error_contains(
+            ensure_inrou_portable_lease_disks(
+                &temp_dir.path().join("unused-qemu-img"),
+                &temp_dir.path().join("unused-mke2fs"),
+                &replica_plan,
+            )
+            .expect_err("a published unformatted disk must fail closed instead of being mutated"),
+            "does not contain a canonical ext4 superblock",
+        );
+        assert_eq!(
+            fs::metadata(&lease_disk)?.len(),
+            lease_volume.max_total_bytes
+        );
         Ok(())
     }
 
@@ -44431,6 +49667,75 @@ exec python3 /tmp/inrou-health.py
         Ok((bundle, bundle_bytes))
     }
 
+    fn assert_portable_smoke_runtime(
+        manager: &SoracloudRuntimeManager,
+        runtime_root: &Path,
+        bundle: &SoraDeploymentBundleV1,
+    ) -> Result<()> {
+        let service_dir = runtime_root
+            .join("services")
+            .join(storage_path_component(bundle.service.service_name.as_ref()))
+            .join(storage_path_component(&bundle.service.service_version));
+        let runtime_state = wait_for_hosted_http_runtime_state_to_be_healthy(
+            manager,
+            &service_dir,
+            bundle.container.lifecycle.healthcheck_path.as_deref(),
+            Duration::from_secs(30),
+        )?;
+        let replica = runtime_state
+            .replicas
+            .first()
+            .expect("replica runtime state present");
+        assert_eq!(manager.hosted_http_workers.lock().len(), 1);
+        assert!(
+            service_dir
+                .join("replicas/replica-0001/inrou_cloud_init/meta-data")
+                .exists()
+        );
+        let volume_path = |kind, name| {
+            build_hosted_http_service_volume_dir(
+                runtime_root,
+                bundle.service.service_name.as_ref(),
+                &bundle.service.service_version,
+                kind,
+                name,
+            )
+        };
+        let root_volume = volume_path(
+            SoraLeaseVolumeKindV1::PersistentRootLeaseVolume,
+            "root_disk",
+        );
+        assert!(
+            hosted_http_per_replica_volume_materialization_dir(&root_volume, 1)
+                .join("rootfs.ext4")
+                .exists()
+        );
+        let lease_disk =
+            volume_path(SoraLeaseVolumeKindV1::ServiceLeaseVolume, "index_state").join("lease.raw");
+        assert!(lease_disk.exists());
+        let snapshot = manager.snapshot.read();
+        let runtime_plan = snapshot
+            .services
+            .get(bundle.service.service_name.as_ref())
+            .and_then(|versions| versions.get(&bundle.service.service_version))
+            .expect("portable-smoke runtime plan present");
+        let lease_volume = runtime_plan
+            .lease_volumes
+            .iter()
+            .find(|volume| volume.volume_name == "index_state")
+            .expect("portable-smoke shared lease volume present");
+        let profile = inrou_ext4_volume_profile_v1(runtime_plan, lease_volume)?;
+        validate_inrou_ext4_filesystem(&lease_disk, profile)?;
+        drop(snapshot);
+        probe_hosted_http_health(
+            replica
+                .listen_base_url
+                .as_deref()
+                .expect("replica listen base url"),
+            bundle.container.lifecycle.healthcheck_path.as_deref(),
+        )
+    }
+
     #[test]
     #[ignore = "requires a root Linux supervisor, installed sealed runtime closure, KVM guest assets, IROHA_RUN_IGNORED=1, and IROHA_INROU_PORTABLE=1"]
     fn inrou_portable_smoke_boots_debian_guest_and_serves_healthcheck() -> Result<()> {
@@ -44464,10 +49769,19 @@ exec python3 /tmp/inrou-health.py
             initrd_image.as_deref(),
         )?;
         let mut state = test_state();
-        let deployment_state = sample_deployment_state(&bundle);
+        let mut deployment_state = sample_deployment_state(&bundle);
         let local_peer_id = canonical_inrou_test_peer_id();
         let selected_guest_isa =
             current_host_inrou_guest_isa().expect("tests require a supported Inrou host ISA");
+        seed_open_inrou_reporter_fixture(
+            &mut deployment_state,
+            &bundle,
+            temp_dir.path(),
+            1,
+            &ALICE_ID,
+            local_peer_id,
+            selected_guest_isa,
+        )?;
         {
             let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
             insert_service_revision_fixture(world, &bundle);
@@ -44493,59 +49807,7 @@ exec python3 /tmp/inrou-health.py
             .qualify_inrou_startup_capability()
             .wrap_err("qualify the exact production Inrou launcher for the ignored smoke test")?;
         manager.reconcile_once()?;
-        let service_dir = temp_dir
-            .path()
-            .join("services")
-            .join(storage_path_component(bundle.service.service_name.as_ref()))
-            .join(storage_path_component(&bundle.service.service_version));
-        let runtime_state = wait_for_hosted_http_runtime_state_to_be_healthy(
-            &manager,
-            &service_dir,
-            bundle.container.lifecycle.healthcheck_path.as_deref(),
-            Duration::from_secs(30),
-        )?;
-        let replica = runtime_state
-            .replicas
-            .first()
-            .expect("replica runtime state present");
-        assert_eq!(manager.hosted_http_workers.lock().len(), 1);
-        assert!(
-            service_dir
-                .join("replicas/replica-0001/inrou_cloud_init/meta-data")
-                .exists()
-        );
-        assert!(
-            hosted_http_per_replica_volume_materialization_dir(
-                &build_hosted_http_service_volume_dir(
-                    temp_dir.path(),
-                    "web_portal",
-                    "2026.02.0",
-                    SoraLeaseVolumeKindV1::PersistentRootLeaseVolume,
-                    "root_disk",
-                ),
-                1,
-            )
-            .join("rootfs.ext4")
-            .exists()
-        );
-        assert!(
-            build_hosted_http_service_volume_dir(
-                temp_dir.path(),
-                "web_portal",
-                "2026.02.0",
-                SoraLeaseVolumeKindV1::ServiceLeaseVolume,
-                "index_state",
-            )
-            .join("lease.raw")
-            .exists()
-        );
-        probe_hosted_http_health(
-            replica
-                .listen_base_url
-                .as_deref()
-                .expect("replica listen base url"),
-            bundle.container.lifecycle.healthcheck_path.as_deref(),
-        )?;
+        assert_portable_smoke_runtime(&manager, temp_dir.path(), &bundle)?;
         Ok(())
     }
     include!("soracloud_runtime/tests/runtime_tail.rs");

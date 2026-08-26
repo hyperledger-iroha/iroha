@@ -149,9 +149,8 @@ use root_owned_artifact_publication::RootOwnedNoReplaceArtifactPublicationTarget
 use root_owned_artifact_publication::require_no_macos_extended_acl;
 pub use runtime_provider_broker::{
     BootleLanternIssuanceBrokerBackendErrorV1, BootleLanternIssuanceBrokerBackendV1,
-    BoundGlobalBeaconPartialSignerBrokerBackendV1,
-    BoundParliamentTlePartialReleaseSignerBrokerBackendV1, ConsensusSignerProviderQualificationV1,
-    GlobalBeaconPartialSignerBrokerBackendErrorV1, GlobalBeaconPartialSignerBrokerBackendV1,
+    ConsensusSignerProviderQualificationV1, GlobalBeaconPartialSignerBrokerBackendErrorV1,
+    GlobalBeaconPartialSignerBrokerBackendV1,
     ParliamentTlePartialReleaseSignerBrokerBackendErrorV1,
     ParliamentTlePartialReleaseSignerBrokerBackendV1, RuntimeProviderBrokerBackendRegistryV1,
     RuntimeProviderBrokerBackendsV1, RuntimeProviderBrokerDeploymentV1,
@@ -6300,8 +6299,11 @@ fn snapshot_mode_allows_restore(mode: SnapshotMode) -> bool {
 fn snapshot_failure_allows_empty_state_fallback(
     error: &TryReadSnapshotError,
     provisional_imported_prefix: bool,
+    emergency_fast: bool,
 ) -> bool {
-    !provisional_imported_prefix && snapshot_read_error_is_recoverable(error)
+    !emergency_fast
+        && !provisional_imported_prefix
+        && snapshot_read_error_is_recoverable(error)
 }
 fn preflight_empty_state_snapshot_fallback(
     kura: &Kura,
@@ -6643,17 +6645,24 @@ mod snapshot_read_error_tests {
         ];
         for failure in &failures {
             assert!(
-                !snapshot_failure_allows_empty_state_fallback(failure, true),
+                !snapshot_failure_allows_empty_state_fallback(failure, true, false),
                 "provisional imported history must never fall back after {failure}"
             );
         }
         assert!(snapshot_failure_allows_empty_state_fallback(
             &TryReadSnapshotError::NotFound,
             false,
+            false,
         ));
         assert!(snapshot_failure_allows_empty_state_fallback(
             &TryReadSnapshotError::SignatureInvalid("ordinary corrupt snapshot".to_owned()),
             false,
+            false,
+        ));
+        assert!(!snapshot_failure_allows_empty_state_fallback(
+            &TryReadSnapshotError::NotFound,
+            false,
+            true,
         ));
     }
     #[test]
@@ -7603,47 +7612,21 @@ impl Iroha {
                 .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
                 state
             }
-            Err(TryReadSnapshotError::NotFound) if !provisional_imported_prefix => {
-                preflight_empty_state_snapshot_fallback(
-                    kura.as_ref(),
-                    &NetworkId::from_genesis_hash(config.genesis.expected_hash),
-                    &config.nexus.configured_lane_catalog,
-                )?;
-                iroha_logger::info!("Didn't find a state snapshot; creating an empty state");
-                let genesis_public_key = effective_genesis_public_key.clone();
-                let mut world = World::with(
-                    [genesis_domain(genesis_public_key.clone())],
-                    [genesis_account(genesis_public_key)],
-                    [],
-                );
-                if let Some(genesis_block) = stored_genesis_block.as_ref().or(genesis.as_ref()) {
-                    iroha_core::sns::seed_genesis_alias_bootstrap(
-                        &mut world,
-                        &genesis_block.0,
-                        &config.nexus.dataspace_catalog,
-                    );
-                }
-                State::try_new_with_chain_and_network_id(
-                    world,
-                    Arc::clone(&kura),
-                    live_query_store.clone(),
-                    config.common.chain.clone(),
-                    NetworkId::from_genesis_hash(config.genesis.expected_hash),
-                    #[cfg(feature = "telemetry")]
-                    state_telemetry.clone(),
-                )
-                .map_err(|error| Report::new(error).change_context(StartError::InitKura))?
-            }
             Err(error)
                 if snapshot_failure_allows_empty_state_fallback(
                     &error,
                     provisional_imported_prefix,
+                    emergency_fast,
                 ) =>
             {
-                iroha_logger::warn!(
-                    ?error,
-                    "Failed to load state snapshot; checking whether Kura can rebuild from an empty state"
-                );
+                if matches!(&error, TryReadSnapshotError::NotFound) {
+                    iroha_logger::info!("Didn't find a state snapshot; creating an empty state");
+                } else {
+                    iroha_logger::warn!(
+                        ?error,
+                        "Failed to load state snapshot; checking whether Kura can rebuild from an empty state"
+                    );
+                }
                 preflight_empty_state_snapshot_fallback(
                     kura.as_ref(),
                     &NetworkId::from_genesis_hash(config.genesis.expected_hash),
@@ -7676,6 +7659,13 @@ impl Iroha {
                 )
                 .map_err(|error| Report::new(error).change_context(StartError::InitKura))?
             }
+            Err(error) if emergency_fast => {
+                return Err(Report::new(error)
+                    .change_context(StartError::InitKura)
+                    .attach(
+                        "emergency Fast startup requires one valid signed snapshot at the exact durable Kura tip; restart in Strict mode to rebuild or repair state",
+                    ));
+            }
             Err(error) => {
                 return Err(Report::new(error).change_context(StartError::InitKura));
             }
@@ -7691,7 +7681,7 @@ impl Iroha {
                 state.network_id, expected_network_id
             )));
         }
-        // Thread the display/configuration label into state for legacy VRF prehash binding.
+        // Keep the restored state's display/configuration label aligned with this deployment.
         state.chain_id = config.common.chain.clone();
         if emergency_fast {
             state.set_kagemusha_release_catalog(
@@ -7788,7 +7778,7 @@ impl Iroha {
                 "custom Nexus lane topology requires the authenticated Sumeragi v2 mode to be NPoS",
             ));
         }
-        if !snapshot_bootstrap_active && block_count.0 > 0 {
+        if !emergency_fast && !snapshot_bootstrap_active && block_count.0 > 0 {
             match kura
                 .v2_finality_artifact(1)
                 .map_err(|error| Report::new(StartError::InitKura).attach(error))?
@@ -8207,7 +8197,8 @@ impl Iroha {
             )
         };
         let authenticated_block_cadence = Duration::from_millis(signed_block_cadence_ms);
-        if state.committed_height() > 0
+        if !emergency_fast
+            && state.committed_height() > 0
             && state.sumeragi_block_cadence() != authenticated_block_cadence
         {
             return Err(Report::new(StartError::InitKura).attach(format!(
@@ -8233,7 +8224,7 @@ impl Iroha {
             "Consensus handshake caps"
         );
         let mut staged_v2_genesis = None;
-        if !snapshot_bootstrap_active {
+        if !emergency_fast && !snapshot_bootstrap_active {
             verify_genesis_metadata(
                 effective_genesis.expect("normal startup has signed genesis metadata"),
                 &config,
@@ -8249,7 +8240,7 @@ impl Iroha {
             .manifest_json
             .as_ref()
             .map(WithOrigin::resolve_relative_path);
-        if !snapshot_bootstrap_active && let Some(json_path) = cfg_manifest {
+        if !emergency_fast && !snapshot_bootstrap_active && let Some(json_path) = cfg_manifest {
             let manifest = read_genesis_manifest(&json_path)?;
             if let Err(err) = ensure_manifest_crypto_matches(&manifest, &config) {
                 return Err(Report::new(StartError::InitKura).attach(format!(
@@ -8338,7 +8329,10 @@ impl Iroha {
         .attach_with(|| config.network.address.clone().into_attachment())
         .change_context(StartError::StartP2p)?;
         supervisor.monitor(child);
-        if !snapshot_bootstrap_active && let Some(genesis_block) = genesis.as_ref() {
+        if !emergency_fast
+            && !snapshot_bootstrap_active
+            && let Some(genesis_block) = genesis.as_ref()
+        {
             // On non-empty storage, avoid re-validating the provided genesis signature.
             // Instead, ensure the optional provided payload matches the genesis already
             // persisted at height 1 and continue replay from stored data.
@@ -8486,7 +8480,7 @@ impl Iroha {
                     }
                 }
             }
-        } else if !snapshot_bootstrap_active && block_count.0 == 0 {
+        } else if !emergency_fast && !snapshot_bootstrap_active && block_count.0 == 0 {
             return Err(Report::new(StartError::InitKura)
                 .attach("missing genesis file for empty storage; provide `--genesis.file`"));
         }
@@ -8579,7 +8573,7 @@ impl Iroha {
         );
         // Recovery: scan recent persisted pipeline sidecars and log DAG fingerprint mismatches (best-effort).
         #[cfg(feature = "dag-recovery-verify")]
-        {
+        if !emergency_fast {
             use iroha_core::pipeline::access::{IvmStrategy, derive_for_transaction};
             use nonzero_ext::nonzero;
             use sha2::{Digest, Sha256};
@@ -8676,7 +8670,7 @@ impl Iroha {
             }
         }
         #[cfg(not(feature = "dag-recovery-verify"))]
-        {
+        if !emergency_fast {
             // Recovery sidecar scan is optional and only used for diagnostics; keep it lightweight
             let scan_n: usize = 16;
             let total = block_count.0;
@@ -8988,91 +8982,112 @@ impl Iroha {
             prepared_sorafs_reputation_archive.is_some(),
         )
         .map_err(|message| Report::new(StartError::StartP2p).attach(message))?;
-        let genesis_for_consensus = if snapshot_bootstrap_active || stored_genesis_block.is_some() {
-            None
+        let sumeragi = if emergency_fast {
+            drop(v2_replay_plan);
+            drop(startup_replay_inventory_guard);
+            iroha_logger::warn!(
+                "emergency Fast startup left consensus ingress closed and did not launch a Sumeragi OS thread"
+            );
+            SumeragiHandle::emergency_fast_disabled()
         } else {
-            genesis
-        };
-        let local_consensus_peer = config.common.trusted_peers.value().myself.id().clone();
-        match validate_threshold_signer_startup_readiness_v1(
-            &state,
-            &local_consensus_peer,
-            &runtime_deps,
-        )
-        .map_err(|message| Report::new(StartError::StartP2p).attach(message))?
-        {
-            ThresholdSignerStartupReadinessV1::Ready => {}
-            ThresholdSignerStartupReadinessV1::ParliamentTleShareUnavailable { key_session_id } => {
-                iroha_logger::warn!(
-                    key_session_id = ?key_session_id,
-                    "local Parliament TLE committee seat is not operational: no partial-release signer is resolved"
-                );
+            let genesis_for_consensus =
+                if snapshot_bootstrap_active || stored_genesis_block.is_some() {
+                    None
+                } else {
+                    genesis
+                };
+            let local_consensus_peer =
+                config.common.trusted_peers.value().myself.id().clone();
+            match validate_threshold_signer_startup_readiness_v1(
+                &state,
+                &local_consensus_peer,
+                &runtime_deps,
+            )
+            .map_err(|message| Report::new(StartError::StartP2p).attach(message))?
+            {
+                ThresholdSignerStartupReadinessV1::Ready => {}
+                ThresholdSignerStartupReadinessV1::ParliamentTleShareUnavailable {
+                    key_session_id,
+                } => {
+                    iroha_logger::warn!(
+                        key_session_id = ?key_session_id,
+                        "local Parliament TLE committee seat is not operational: no partial-release signer is resolved"
+                    );
+                }
             }
-        }
-        let sumeragi_cfg = config.sumeragi.clone();
-        log_startup_trace("irohad.sumeragi.starting", startup_trace_started_at);
-        let (sumeragi, child) = SumeragiStartArgs {
-            config: sumeragi_cfg.clone(),
-            common_config: config.common.clone(),
-            events_sender: events_sender.clone(),
-            state: state.clone(),
-            queue: queue.clone(),
-            kura: kura.clone(),
-            provider_ingest_finalized_archive: prepared_sorafs_provider_ingest_archive
-                .as_ref()
-                .map(|prepared| Arc::clone(prepared.archive())),
-            reputation_finalized_archive: prepared_sorafs_reputation_archive
-                .as_ref()
-                .map(|prepared| Arc::clone(prepared.archive())),
-            global_beacon_partial_signer: runtime_deps
-                .sumeragi_global_beacon_partial_signer
-                .clone(),
-            startup_replay_plan: v2_replay_plan,
-            startup_replay_inventory_guard,
-            network: network.clone(),
-            max_frame_bytes: config.network.max_frame_bytes,
-            max_frame_bytes_consensus: config.network.max_frame_bytes_consensus,
-            max_frame_bytes_control: config.network.max_frame_bytes_control,
-            max_frame_bytes_block_sync: config.network.max_frame_bytes_block_sync,
-            outbound_frame_queue_max_high_bytes: config
-                .network
-                .p2p_outbound_frame_queue_max_high_bytes
-                .get(),
-            genesis_network: GenesisWithPubKey {
-                genesis: genesis_for_consensus,
-                public_key: effective_genesis_public_key.clone(),
-                block_cadence: authenticated_block_cadence,
-                v2_bootstrap: staged_v2_genesis,
-            },
-        }
-        .start(supervisor.shutdown_signal())
-        .map_err(|error| {
-            Report::new(StartError::StartP2p)
-                .attach(format!("failed to start Sumeragi v2 reducer: {error:#}"))
-        })?;
-        supervisor.monitor(child);
-        log_startup_trace("irohad.sumeragi.started", startup_trace_started_at);
-        let trusted = config.common.trusted_peers.value();
-        let self_peer_id = trusted.myself.id().clone();
-        let trusted_peers: BTreeSet<_> = std::iter::once(self_peer_id.clone())
-            .chain(trusted.others.iter().map(|peer| peer.id().clone()))
-            .collect();
-        let max_peer_id = trusted_peers
-            .iter()
-            .max_by_key(|peer_id| peer_id.encoded_len())
-            .cloned()
-            .unwrap_or_else(|| self_peer_id.clone());
-        let (tx_gossiper, child) = TransactionGossiper::from_config(
-            config.transaction_gossiper,
-            &config.network,
-            self_peer_id,
-            max_peer_id,
-            network.clone(),
-            Arc::clone(&queue),
-            Arc::clone(&state),
-        )
-        .start(supervisor.shutdown_signal());
-        supervisor.monitor(child);
+            log_startup_trace("irohad.sumeragi.starting", startup_trace_started_at);
+            let (sumeragi, child) = SumeragiStartArgs {
+                config: config.sumeragi.clone(),
+                common_config: config.common.clone(),
+                events_sender: events_sender.clone(),
+                state: state.clone(),
+                queue: queue.clone(),
+                kura: kura.clone(),
+                provider_ingest_finalized_archive: prepared_sorafs_provider_ingest_archive
+                    .as_ref()
+                    .map(|prepared| Arc::clone(prepared.archive())),
+                reputation_finalized_archive: prepared_sorafs_reputation_archive
+                    .as_ref()
+                    .map(|prepared| Arc::clone(prepared.archive())),
+                global_beacon_partial_signer: runtime_deps
+                    .sumeragi_global_beacon_partial_signer
+                    .clone(),
+                startup_replay_plan: v2_replay_plan,
+                startup_replay_inventory_guard,
+                network: network.clone(),
+                max_frame_bytes: config.network.max_frame_bytes,
+                max_frame_bytes_consensus: config.network.max_frame_bytes_consensus,
+                max_frame_bytes_control: config.network.max_frame_bytes_control,
+                max_frame_bytes_block_sync: config.network.max_frame_bytes_block_sync,
+                outbound_frame_queue_max_high_bytes: config
+                    .network
+                    .p2p_outbound_frame_queue_max_high_bytes
+                    .get(),
+                genesis_network: GenesisWithPubKey {
+                    genesis: genesis_for_consensus,
+                    public_key: effective_genesis_public_key.clone(),
+                    block_cadence: authenticated_block_cadence,
+                    v2_bootstrap: staged_v2_genesis,
+                },
+            }
+            .start(supervisor.shutdown_signal())
+            .map_err(|error| {
+                Report::new(StartError::StartP2p)
+                    .attach(format!("failed to start Sumeragi v2 reducer: {error:#}"))
+            })?;
+            supervisor.monitor(child);
+            log_startup_trace("irohad.sumeragi.started", startup_trace_started_at);
+            sumeragi
+        };
+        let tx_gossiper = if emergency_fast {
+            iroha_logger::warn!(
+                "emergency Fast startup did not launch the transaction-gossip actor"
+            );
+            TransactionGossiperHandle::emergency_fast_disabled()
+        } else {
+            let trusted = config.common.trusted_peers.value();
+            let self_peer_id = trusted.myself.id().clone();
+            let trusted_peers: BTreeSet<_> = std::iter::once(self_peer_id.clone())
+                .chain(trusted.others.iter().map(|peer| peer.id().clone()))
+                .collect();
+            let max_peer_id = trusted_peers
+                .iter()
+                .max_by_key(|peer_id| peer_id.encoded_len())
+                .cloned()
+                .unwrap_or_else(|| self_peer_id.clone());
+            let (tx_gossiper, child) = TransactionGossiper::from_config(
+                config.transaction_gossiper,
+                &config.network,
+                self_peer_id,
+                max_peer_id,
+                network.clone(),
+                Arc::clone(&queue),
+                Arc::clone(&state),
+            )
+            .start(supervisor.shutdown_signal());
+            supervisor.monitor(child);
+            tx_gossiper
+        };
         if !emergency_fast
             && let Some(snapshot_maker) =
             SnapshotMaker::from_config(&config.snapshot, Arc::clone(&state), signing_key)
@@ -9320,29 +9335,32 @@ impl Iroha {
             } else {
                 sorafs_runtime_deps
             };
-        let sorafs_runtime_deps = if emergency_fast {
-            sorafs_node::NodeRuntimeDeps::default()
+        let mut sorafs_node = if emergency_fast {
+            None
         } else {
-            sorafs_runtime_deps
+            Some(
+                sorafs_node::NodeHandle::try_new_with_policies_and_runtime_deps(
+                    sorafs_storage_config,
+                    sorafs_repair_config,
+                    sorafs_gc_config,
+                    sorafs_runtime_deps,
+                )
+                .map_err(|err| {
+                    Report::new(StartError::StartTorii).attach(format!(
+                        "failed to initialise embedded SoraFS runtime: {err}"
+                    ))
+                })?,
+            )
         };
-        let mut sorafs_node = sorafs_node::NodeHandle::try_new_with_policies_and_runtime_deps(
-            sorafs_storage_config,
-            sorafs_repair_config,
-            sorafs_gc_config,
-            sorafs_runtime_deps,
-        )
-        .map_err(|err| {
-            Report::new(StartError::StartTorii).attach(format!(
-                "failed to initialise embedded SoraFS runtime: {err}"
-            ))
-        })?;
         let sorafs_provider_ingest_completed_musubi_capture = match (
             prepared_sorafs_provider_ingest_archive.as_mut(),
             sorafs_provider_ingest_config.as_ref(),
         ) {
             (Some(prepared), Some(provider_ingest_config)) => Some(
                 sorafs_provider_ingest_runtime::compose_inert_completed_musubi_capture_coordinator_v1(
-                    &sorafs_node,
+                    sorafs_node
+                        .as_ref()
+                        .expect("provider ingest is disabled during emergency Fast startup"),
                     prepared,
                     NetworkId::from_genesis_hash(config.genesis.expected_hash),
                     provider_ingest_config.max_page_rows,
@@ -9369,6 +9387,8 @@ impl Iroha {
                     ))
                 })?;
             sorafs_node
+                .as_mut()
+                .expect("Governance DAG service is disabled during emergency Fast startup")
                 .install_governance_dag_mirror_read_handle(runner.mirror_read_handle())
                 .map_err(|error| {
                     Report::new(StartError::StartTorii).attach(format!(
@@ -9410,7 +9430,11 @@ impl Iroha {
                     NetworkId::from_genesis_hash(config.genesis.expected_hash),
                     Arc::clone(&state),
                     Arc::clone(&queue),
-                    sorafs_node.clone(),
+                    sorafs_node::NodeHandle::clone(
+                        sorafs_node
+                            .as_ref()
+                            .expect("provider ingest is disabled during emergency Fast startup"),
+                    ),
                     Arc::clone(
                         sorafs_provider_ingest_runtime_query
                             .as_ref()
@@ -9438,6 +9462,9 @@ impl Iroha {
         let sorafs_reputation_runtime = if let Some(reputation_config) =
             sorafs_reputation_config.as_ref()
         {
+            let sorafs_node = sorafs_node
+                .as_ref()
+                .expect("reputation runtime is disabled during emergency Fast startup");
             let trust_policy = sorafs_node.reputation_trust_policy().ok_or_else(|| {
                 Report::new(StartError::StartTorii).attach(
                     "enabled committed SoraFS reputation runtime requires the configured canonical reputation trust policy",
@@ -9548,7 +9575,7 @@ impl Iroha {
                     query_qualification,
                     finalized_query,
                     Arc::clone(&state),
-                    sorafs_node.clone(),
+                    sorafs_node::NodeHandle::clone(sorafs_node),
                     supervisor.shutdown_signal(),
                 )
                 .map_err(|error| {
@@ -9571,12 +9598,15 @@ impl Iroha {
             sorafs_reputation_runtime.as_ref(),
             sorafs_reputation_config.as_ref(),
         ) {
+            let sorafs_node = sorafs_node
+                .as_ref()
+                .expect("reputation runtime is disabled during emergency Fast startup");
             let admission: Arc<
                 dyn sorafs_node::reputation::runtime::ReputationNativeOutcomeAdmissionApiV1,
             > = Arc::new(reputation_runtime.clone());
             let child = if sorafs_node.config().por_replay_archive_policy().is_some() {
                 sorafs_por_replay_archive_runtime::start(
-                    sorafs_node.clone(),
+                    sorafs_node::NodeHandle::clone(sorafs_node),
                     admission,
                     supervisor.shutdown_signal(),
                 )
@@ -9585,7 +9615,7 @@ impl Iroha {
                 // number of retained PoR terminals admitted by one reputation
                 // worker tick. Replay archival is independent and optional.
                 sorafs_por_replay_archive_runtime::start_reputation_reconciliation(
-                    sorafs_node.clone(),
+                    sorafs_node::NodeHandle::clone(sorafs_node),
                     admission,
                     reputation_config.poll_interval,
                     reputation_config.page_items,
@@ -9598,7 +9628,10 @@ impl Iroha {
                 ))
             })?;
             supervisor.monitor(child);
-        } else if sorafs_node.config().por_replay_archive_policy().is_some() {
+        } else if sorafs_node
+            .as_ref()
+            .is_some_and(|node| node.config().por_replay_archive_policy().is_some())
+        {
             return Err(Report::new(StartError::StartTorii).attach(
                 "enabled finalized PoR replay archival requires the committed reputation runtime",
             ));
@@ -9654,6 +9687,9 @@ impl Iroha {
         let sorafs_hedging_billing_runtime = if let Some(hedging_billing_config) =
             sorafs_hedging_billing_config
         {
+            let sorafs_node = sorafs_node
+                .as_ref()
+                .expect("hedging/billing runtime is disabled during emergency Fast startup");
             let feed_policy = sorafs_node
                 .hedging_feed_trust_policy()
                 .ok_or_else(|| {
@@ -9765,7 +9801,13 @@ impl Iroha {
                 .with_local_host_identity(local_validator_account_id, local_peer_id),
                 Arc::clone(&state),
             )
-            .with_sorafs_node(sorafs_node.clone())
+            .with_sorafs_node(
+                sorafs_node::NodeHandle::clone(
+                    sorafs_node
+                        .as_ref()
+                        .expect("Soracloud is disabled during emergency Fast startup"),
+                ),
+            )
             .with_remote_stream_token_operator_from_config(&config);
             let runtime_manager = if let Some(store) = soracloud_operator_preseed_store {
                 runtime_manager.with_operator_preseed_store(store)
@@ -9895,18 +9937,23 @@ impl Iroha {
             } else {
                 (None, None)
             };
-        let musubi_publication_context =
+        let musubi_publication_context = sorafs_node.as_ref().map(|sorafs_node| {
             musubi_publication_service::MusubiPublicationPrivateServiceContextV1::new(
                 NetworkId::from_genesis_hash(config.genesis.expected_hash),
                 Arc::clone(&state),
                 Arc::clone(&queue),
-                sorafs_node.clone(),
-            );
+                sorafs_node::NodeHandle::clone(sorafs_node),
+            )
+        });
         let runtime_deps = iroha_torii::ToriiRuntimeDeps::new(torii_telemetry)
             .with_parliament_tle_release_coordinator(parliament_tle_release_coordinator)
-            .with_sorafs_node(sorafs_node)
             .with_torii_proxy_bridge_signer(config.common.key_pair.clone())
             .with_vpn_relay_trust(vpn_relay_trust);
+        let runtime_deps = if let Some(sorafs_node) = sorafs_node {
+            runtime_deps.with_sorafs_node(sorafs_node)
+        } else {
+            runtime_deps
+        };
         let runtime_deps = if let Some(soracloud_runtime) = soracloud_runtime.as_ref() {
             runtime_deps
                 .with_soracloud_runtime(Arc::new(soracloud_runtime.clone()))
@@ -10174,7 +10221,8 @@ impl Iroha {
             let (_availability, publication_child) = musubi_publication_service::
                 build_and_start_injected_musubi_publication_private_service_v1(
                     musubi_publication_factory,
-                    musubi_publication_context,
+                    musubi_publication_context
+                        .expect("private Musubi publication is disabled during emergency Fast startup"),
                     supervisor.shutdown_signal(),
                 )
                 .map_err(|error| {
@@ -13282,10 +13330,11 @@ fn run_main_with_config_guard(
             ))
         })?;
     }
-    if args
-        .startup
-        .write_kagemusha_validator_qualification_seal
-        .is_none()
+    if !emergency_fast
+        && args
+            .startup
+            .write_kagemusha_validator_qualification_seal
+            .is_none()
     {
         kagemusha_validator_qualification::evaluate_stock_launcher_unavailable_v1(
             &kagemusha_startup_sources,
@@ -15172,9 +15221,7 @@ mod tests {
             "external adapter preflight and archive qualification must fail closed before consensus starts"
         );
         let node_state_open = source
-            .find(
-                "let sorafs_node = sorafs_node::NodeHandle::try_new_with_policies_and_runtime_deps",
-            )
+            .find("sorafs_node::NodeHandle::try_new_with_policies_and_runtime_deps")
             .expect("embedded SoraFS durable-state startup");
         let checkpoint_injection = source
             .find("with_provider_ingest_checkpoint_runtime")
@@ -15204,6 +15251,31 @@ mod tests {
             runtime_wiring.contains("sorafs_provider_ingest_preflight"),
             "provider ingest must consume the opaque state-free preflight token"
         );
+    }
+    #[test]
+    fn emergency_fast_does_not_construct_the_daemon_sorafs_node() {
+        let compact_source: String = include_str!("main.rs")
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect();
+        let startup_source = compact_source
+            .split_once("pub(crate)asyncfnstart_with_runtime_deps(")
+            .expect("start_with_runtime_deps source")
+            .1
+            .split_once("///Read-onlyhandletotheworldstateview.")
+            .expect("start_with_runtime_deps source boundary")
+            .0;
+        let fast_branch = startup_source
+            .find("letmutsorafs_node=ifemergency_fast{None}else{Some(")
+            .expect("emergency Fast SoraFS omission");
+        let durable_constructor = startup_source
+            .find("sorafs_node::NodeHandle::try_new_with_policies_and_runtime_deps(")
+            .expect("Strict SoraFS constructor");
+        let guarded_injection = startup_source
+            .find("letruntime_deps=ifletSome(sorafs_node)=sorafs_node{")
+            .expect("conditional Torii SoraFS injection");
+
+        assert!(fast_branch < durable_constructor && durable_constructor < guarded_injection);
     }
     #[test]
     fn emergency_fast_skips_tiered_state_directory_reconciliation() {
@@ -15261,6 +15333,86 @@ mod tests {
             .expect("Strict-only runtime setup")
             .1;
         assert!(kagemusha_runtime.contains("kagemusha_startup::install_runtime_effective_config("));
+    }
+    #[test]
+    fn emergency_fast_skips_stock_kagemusha_qualification() {
+        let startup = include_str!("main.rs")
+            .split_once("let emergency_fast = config.kura.init_mode == InitMode::Fast;")
+            .expect("emergency Fast mode selection")
+            .1
+            .split_once("if args.startup.check_config")
+            .expect("configuration-only command boundary")
+            .0;
+        let qualification = startup
+            .split_once("evaluate_stock_launcher_unavailable_v1")
+            .expect("stock Kagemusha qualification")
+            .0;
+        assert!(
+            qualification.contains("if !emergency_fast"),
+            "emergency Fast must branch before stock Kagemusha qualification reads release sources"
+        );
+    }
+    #[test]
+    fn emergency_fast_skips_strict_restart_audits_and_pipeline_diagnostics() {
+        let startup = include_str!("main.rs")
+            .split_once("pub(crate) async fn start_with_runtime_deps")
+            .expect("runtime-dependency startup entry")
+            .1;
+
+        assert!(startup.contains(
+            "if !emergency_fast && !snapshot_bootstrap_active && block_count.0 > 0"
+        ));
+        assert!(startup.contains(
+            "if !emergency_fast\n            && state.committed_height() > 0"
+        ));
+        assert!(startup.contains("if !emergency_fast && !snapshot_bootstrap_active {\n            verify_genesis_metadata("));
+        assert!(startup.contains(
+            "if !emergency_fast && !snapshot_bootstrap_active && let Some(json_path)"
+        ));
+        assert!(startup.contains(
+            "if !emergency_fast\n            && !snapshot_bootstrap_active\n            && let Some(genesis_block)"
+        ));
+
+        let diagnostics = startup
+            .split_once("// Recovery: scan recent persisted pipeline sidecars")
+            .expect("pipeline recovery diagnostics")
+            .1
+            .split_once("let state = Arc::new(state);")
+            .expect("end of pipeline recovery diagnostics")
+            .0;
+        assert_eq!(
+            diagnostics.matches("if !emergency_fast {").count(),
+            2,
+            "both feature variants must skip pipeline sidecars in emergency Fast mode"
+        );
+    }
+    #[test]
+    fn emergency_fast_uses_inert_consensus_and_transaction_gossip_handles() {
+        let startup = include_str!("main.rs")
+            .split_once("pub(crate) async fn start_with_runtime_deps")
+            .expect("runtime-dependency startup entry")
+            .1;
+        let consensus = startup
+            .split_once("let sumeragi = if emergency_fast")
+            .expect("emergency Fast consensus branch")
+            .1
+            .split_once("let tx_gossiper = if emergency_fast")
+            .expect("transaction-gossip branch")
+            .0;
+        assert!(consensus.contains("SumeragiHandle::emergency_fast_disabled()"));
+        assert!(consensus.contains("drop(startup_replay_inventory_guard)"));
+        assert!(consensus.contains("SumeragiStartArgs"));
+
+        let transaction_gossip = startup
+            .split_once("let tx_gossiper = if emergency_fast")
+            .expect("emergency Fast transaction-gossip branch")
+            .1
+            .split_once("if !emergency_fast")
+            .expect("snapshot-maker boundary")
+            .0;
+        assert!(transaction_gossip
+            .contains("TransactionGossiperHandle::emergency_fast_disabled()"));
+        assert!(transaction_gossip.contains("TransactionGossiper::from_config"));
     }
     #[test]
     fn enabled_reputation_runtime_has_no_validator_key_submitter_fallback() {
@@ -15518,7 +15670,7 @@ mod tests {
             .expect("SoraFS node construction");
         let publication_context = startup_source
             .find(
-                "musubi_publication_service::MusubiPublicationPrivateServiceContextV1::new(NetworkId::from_genesis_hash(config.genesis.expected_hash),Arc::clone(&state),Arc::clone(&queue),sorafs_node.clone())",
+                "musubi_publication_service::MusubiPublicationPrivateServiceContextV1::new(NetworkId::from_genesis_hash(config.genesis.expected_hash),Arc::clone(&state),Arc::clone(&queue),sorafs_node::NodeHandle::clone(sorafs_node))",
             )
             .expect("private publication context construction");
         let torii_runtime_deps = startup_source
@@ -15529,7 +15681,7 @@ mod tests {
             .expect("OS signal setup");
         let publication_start = startup_source
             .find(
-                "musubi_publication_service::build_and_start_injected_musubi_publication_private_service_v1(musubi_publication_factory,musubi_publication_context,supervisor.shutdown_signal(),)",
+                "musubi_publication_service::build_and_start_injected_musubi_publication_private_service_v1(musubi_publication_factory,musubi_publication_context.expect(\"privateMusubipublicationisdisabledduringemergencyFaststartup\"),supervisor.shutdown_signal(),)",
             )
             .expect("late-bound publication service startup");
         let publication_monitor = startup_source

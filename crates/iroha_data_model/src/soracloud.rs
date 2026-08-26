@@ -17,7 +17,8 @@ use crate::{
     peer::PeerId,
     proof::ProofAttachment,
     sorafs::pin_registry::{
-        MANIFEST_ROOT_CID_LENGTH, ManifestDigest, ManifestRootCid, ReplicationOrderId, StorageClass,
+        MANIFEST_ROOT_CID_LENGTH, ManifestDigest, ManifestRootCid, ReplicationOrderId,
+        StorageClass, derive_sorafs_auto_replication_order_id_v1,
     },
     zk::{BackendTag, OpenVerifyEnvelope, OpenVerifyEnvelopeBounds, StarkFriOpenProofV1},
 };
@@ -443,8 +444,6 @@ pub const SORA_SERVICE_ROLLOUT_STATE_VERSION_V1: u16 = 1;
 pub const SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraServiceLeaseStateV1`].
 pub const SORA_SERVICE_LEASE_STATE_VERSION_V1: u16 = 1;
-/// Consensus-block grace before an idle egress reporter may be force-finalized.
-pub const SORA_SERVICE_LEASE_REPORTER_IDLE_GRACE_BLOCKS_V1: u64 = 10_000;
 /// Schema version for [`SoraServiceLeaseUsageAuditV1`].
 pub const SORA_SERVICE_LEASE_USAGE_AUDIT_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraServiceLeaseReporterAssignmentV1`].

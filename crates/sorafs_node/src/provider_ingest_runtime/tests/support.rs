@@ -186,7 +186,7 @@ fn fixture_row(order_seed: u8) -> ProviderIngestFinalizedAssignmentV1 {
         None,
         Metadata::default(),
     );
-    manifest.status = PinStatus::Approved(7);
+    manifest.approve(7, None);
     let order_id = [order_seed; 32];
     let order_body = ReplicationOrderV1 {
         version: REPLICATION_ORDER_VERSION_V1,
@@ -624,7 +624,7 @@ fn completed_attestation_capture_source_row_with_order_id(
         None,
         Metadata::default(),
     );
-    pin.status = PinStatus::Approved(8);
+    pin.approve(8, None);
     let order_id = claim.replication_order();
     let order_body = ReplicationOrderV1 {
         version: REPLICATION_ORDER_VERSION_V1,
@@ -1103,7 +1103,7 @@ impl ProviderIngestCompletedMusubiSignedCaptureLedgerV1 for CaptureScannerLedger
                     if let Some(binding) =
                         rows.first_mut().and_then(|row| row.musubi_archive.as_mut())
                     {
-                        binding.replication_order = ReplicationOrderId::new([0xE2; 32]);
+                        binding.replication_order = ReplicationOrderId::new([0x62; 32]);
                     }
                 }
                 CaptureScannerLedgerFaultV1::MutatedAfterSigning

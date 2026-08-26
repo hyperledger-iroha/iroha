@@ -523,11 +523,71 @@ fn sorafs_storage_and_inventory_openapi_matches_authenticated_catalog() {
     assert!(!paths.contains_key("/v1/sorafs/storage/fetch"));
     let canonical = canonical_account_headers(false).into_iter().map(|(name, _)| name).collect::<BTreeSet<_>>();
     for path in ["/v1/sorafs/aliases", "/v1/sorafs/replication"] {
-        let headers = operation_header_requirements(openapi_operation(&document, path, "get")).into_iter().map(|(name, _)| name).collect::<BTreeSet<_>>();
-        for expected in &canonical {
-            assert!(headers.contains(expected), "{path} must document canonical auth header {expected}");
+        let operation = openapi_operation(&document, path, "get");
+        let headers = operation_header_requirements(operation).into_iter().map(|(name, required)| {
+            assert!(!required, "{path} canonical auth uses alternative proof sets");
+            name
+        }).collect::<BTreeSet<_>>();
+        assert_eq!(headers, canonical, "{path} canonical auth inventory");
+        assert_eq!(operation.get("security").and_then(Value::as_array).map(Vec::len), Some(2));
+        assert!(operation.get("x-iroha-canonical-auth-v1").and_then(Value::as_object).is_some(), "{path} canonical auth contract");
+    }
+    let aliases = openapi_operation(&document, "/v1/sorafs/aliases", "get");
+    assert_eq!(operation_response_schema_ref(aliases, "200", "aliases"), "#/components/schemas/SorafsAliasListResponseV1");
+    let alias_queries = operation_parameters(aliases, "aliases").iter()
+        .filter(|parameter| parameter.get("in").and_then(Value::as_str) == Some("query"))
+        .filter_map(|parameter| parameter.get("name").and_then(Value::as_str))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(alias_queries, BTreeSet::from(["limit", "offset", "namespace", "manifest_digest"]));
+    let namespace = parameter_schema(operation_parameter(aliases, "namespace", "aliases"), "alias namespace");
+    assert_eq!(namespace.get("minLength").and_then(Value::as_u64), Some(1));
+    assert_eq!(namespace.get("maxLength").and_then(Value::as_u64), Some(128));
+    assert_eq!(namespace.get("pattern").and_then(Value::as_str), Some("^[a-z0-9._-]+$"));
+    let schemas = component_schemas(&document);
+    assert_strict_object_schema(schemas, "SorafsAliasListResponseV1", &["attestation", "total_count", "returned_count", "offset", "limit", "aliases"], &[]);
+    assert_strict_object_schema(schemas, "SorafsAliasProjectionV1", &[
+        "alias", "namespace", "name", "manifest_digest_hex", "bound_by", "bound_epoch", "expiry_epoch", "proof_b64", "cache_state", "status_label", "lineage", "cache_rotation_due", "cache_age_seconds", "proof_generated_at_unix", "proof_expires_at_unix", "policy_positive_ttl_secs", "policy_refresh_window_secs", "policy_hard_expiry_secs", "policy_rotation_max_age_secs", "policy_successor_grace_secs", "policy_governance_grace_secs", "cache_evaluation", "cache_decision", "cache_reasons",
+    ], &["proof_expires_in_seconds"]);
+    for (name, required) in [
+        ("SorafsAliasCacheEvaluationV1", &["decision", "reasons", "ttl_expires_at", "ttl_expires_at_unix", "serve_until", "serve_until_unix", "successor", "governance", "policy_successor_grace_secs", "policy_governance_grace_secs"][..]),
+        ("SorafsAliasGovernanceAssessmentV1", &["ref_ids", "revoked", "frozen", "rotated", "flags", "effective_at_unix", "effective_at"]),
+        ("SorafsAliasGovernanceFlagsV1", &["revoked", "frozen", "rotated"]),
+        ("SorafsAliasLineageV1", &["successor_of_hex", "head_hex", "depth_to_head", "is_head", "superseded_by", "immediate_successor", "anomalies"]),
+        ("SorafsAliasLineageSuccessorV1", &["digest_hex", "status", "approved_epoch", "approved_at", "status_timestamp_unix"]),
+        ("SorafsAliasSuccessorAssessmentV1", &["exists", "head_hex", "approved", "approved_at", "approved_at_unix", "depth_to_head", "anomalies"]),
+    ] {
+        assert_strict_object_schema(schemas, name, required, &[]);
+    }
+    assert_eq!(contract_schema(schemas, "SorafsAliasManifestStatusV1").get("oneOf").and_then(Value::as_array).map(Vec::len), Some(3));
+    assert_eq!(contract_schema(schemas, "SorafsAliasCacheReasonV1").get("enum").and_then(Value::as_array).map(Vec::len), Some(17));
+    assert_property_refs(schemas, &[
+        PropertyRefContract { owner: "SorafsAliasListResponseV1", property: "attestation", expected: "#/components/schemas/SorafsRegistryAttestationV1" },
+        PropertyRefContract { owner: "SorafsAliasProjectionV1", property: "manifest_digest_hex", expected: "#/components/schemas/SorafsReplicationNonzeroHex32V1" },
+        PropertyRefContract { owner: "SorafsAliasProjectionV1", property: "lineage", expected: "#/components/schemas/SorafsAliasLineageV1" },
+        PropertyRefContract { owner: "SorafsAliasProjectionV1", property: "cache_evaluation", expected: "#/components/schemas/SorafsAliasCacheEvaluationV1" },
+    ]);
+    let replication = openapi_operation(&document, "/v1/sorafs/replication", "get");
+    let replication_queries = operation_parameters(replication, "replication").iter()
+        .filter(|parameter| parameter.get("in").and_then(Value::as_str) == Some("query"))
+        .filter_map(|parameter| parameter.get("name").and_then(Value::as_str))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(replication_queries, BTreeSet::from(["limit", "offset", "status", "manifest_digest"]));
+    for (operation, context) in [(aliases, "aliases"), (replication, "replication")] {
+        let digest = parameter_schema(operation_parameter(operation, "manifest_digest", context), context);
+        assert_nonzero_digest(digest, context);
+        for (name, allow_zero) in [("limit", false), ("offset", true)] {
+            let parameter = operation_parameter(operation, name, context);
+            let canonical_decimal = parameter.get("x-iroha-canonical-unsigned-decimal-v1").and_then(Value::as_object).unwrap_or_else(|| panic!("{context} {name} canonical decimal contract"));
+            assert_eq!(canonical_decimal.get("allow_zero").and_then(Value::as_bool), Some(allow_zero));
+            for flag in ["allow_leading_zero", "allow_percent_encoding", "allow_sign"] {
+                assert_eq!(canonical_decimal.get(flag).and_then(Value::as_bool), Some(false), "{context} {name} {flag}");
+            }
         }
     }
+    let statuses = parameter_schema(operation_parameter(replication, "status", "replication"), "replication status")
+        .get("enum").and_then(Value::as_array).expect("replication status enum")
+        .iter().filter_map(Value::as_str).collect::<Vec<_>>();
+    assert_eq!(statuses, ["pending", "completed", "cancelled", "expired"]);
     for (path, expected) in [
         ("/v1/sorafs/storage/car/{manifest_id}", &["Range", "Sora-Dag-Scope", "X-SoraFS-Chunker", "X-SoraFS-Nonce", "X-SoraFS-Stream-Token"][..]),
         ("/v1/sorafs/storage/chunk/{manifest_id}/{chunk_digest}", &["X-SoraFS-Nonce", "X-SoraFS-Stream-Token"][..]),
@@ -552,7 +612,7 @@ fn sorafs_pin_list_openapi_is_finalized_bounded_keyset_readback() {
     assert!(!names.contains("offset"));
     let schemas = component_schemas(&document);
     assert_strict_object_schema(schemas, "PinManifestPageV1", &["finalized_cursor", "charged_usage", "manifests", "has_more"], &["next_after_digest"]);
-    assert_strict_object_schema(schemas, "PinManifestSummaryV1", &["digest", "submitted_by", "submitted_epoch", "content_length", "retention_epoch", "status"], &["successor_of"]);
+    assert_strict_object_schema(schemas, "PinManifestSummaryV1", &["digest", "submitted_by", "submitted_epoch", "approved_epoch", "content_length", "retention_epoch", "status"], &["successor_of"]);
     assert_strict_object_schema(schemas, "PinResourceUsage", &["manifest_count", "content_bytes"], &[]);
     assert_property_refs(schemas, &[
         PropertyRefContract { owner: "PinManifestPageV1", property: "finalized_cursor", expected: "#/components/schemas/PinManifestFinalizedCursorV1" },
@@ -572,6 +632,13 @@ fn sorafs_pin_manifest_openapi_is_finalized_native_readback() {
     let names = parameters.iter().filter_map(|parameter| parameter.get("name").and_then(Value::as_str)).collect::<BTreeSet<_>>();
     assert_eq!(names, BTreeSet::from(["digest_hex", "expected_finalized_height", "expected_finalized_block_hash_hex"]));
     assert!(!names.contains("limit"), "the retired projection limit must not remain in the operation");
+    assert_nonzero_digest(
+        parameter_schema(
+            operation_parameter(operation, "digest_hex", PATH),
+            "manifest digest",
+        ),
+        "manifest digest",
+    );
     let height = operation_parameter(operation, "expected_finalized_height", PATH);
     assert_eq!(height.get("in").and_then(Value::as_str), Some("query"));
     assert_eq!(height.get("required").and_then(Value::as_bool), Some(false));
@@ -585,7 +652,7 @@ fn sorafs_pin_manifest_openapi_is_finalized_native_readback() {
     assert_strict_object_schema(schemas, "PinManifestFinalizedCursorV1", &["height", "block_hash"], &[]);
     assert_strict_object_schema(schemas, "PinManifestRecord", &[
         "digest", "root_cid", "chunker", "chunk_digest_sha3_256", "por_root", "content_length", "policy",
-        "submitted_by", "submitted_epoch", "alias", "metadata", "status", "council_envelope_digest",
+        "submitted_by", "submitted_epoch", "approved_epoch", "alias", "metadata", "status", "council_envelope_digest",
     ], &["successor_of", "retirement_reason", "pin_fee_payment"]);
     assert_property_refs(schemas, &[
         PropertyRefContract { owner: "PinManifestFinalizedRecordV1", property: "finalized_cursor", expected: "#/components/schemas/PinManifestFinalizedCursorV1" },
@@ -595,6 +662,18 @@ fn sorafs_pin_manifest_openapi_is_finalized_native_readback() {
     ]);
     assert_eq!(nullable_property_ref(schemas, "PinManifestRecord", "alias"), "#/components/schemas/ManifestAliasBinding");
     assert_eq!(nullable_property_ref(schemas, "PinManifestRecord", "council_envelope_digest"), "#/components/schemas/PinManifestBytes32V1");
+    let approved_epoch = contract_property(schemas, "PinManifestRecord", "approved_epoch");
+    let approved_epoch_variants = approved_epoch
+        .get("oneOf")
+        .and_then(Value::as_array)
+        .expect("required nullable approval epoch schema");
+    assert!(approved_epoch_variants.iter().any(|variant| {
+        variant.get("type").and_then(Value::as_str) == Some("integer")
+            && variant.get("format").and_then(Value::as_str) == Some("uint64")
+    }));
+    assert!(approved_epoch_variants.iter().any(|variant| {
+        variant.get("type").and_then(Value::as_str) == Some("null")
+    }));
     let content_length = contract_property(schemas, "PinManifestRecord", "content_length");
     assert_eq!(content_length.get("type").and_then(Value::as_str), Some("integer"));
     assert_eq!(content_length.get("format").and_then(Value::as_str), Some("uint64"));
@@ -617,10 +696,14 @@ fn sorafs_replication_openapi_is_a_strict_chain_authoritative_v1_projection() {
     let operation = openapi_operation(&document, PATH, "get");
     assert_eq!(operation_response_schema_ref(operation, "200", PATH), "#/components/schemas/SorafsReplicationListResponseV1");
     assert_description_inventory(operation.get("description").and_then(Value::as_str).expect("replication description"), "replication.description", "replication operation");
-    let names = operation_parameters(operation, PATH).iter().filter_map(|parameter| parameter.get("name").and_then(Value::as_str)).collect::<BTreeSet<_>>();
+    let names = operation_parameters(operation, PATH)
+        .iter()
+        .filter(|parameter| parameter.get("in").and_then(Value::as_str) == Some("query"))
+        .filter_map(|parameter| parameter.get("name").and_then(Value::as_str))
+        .collect::<BTreeSet<_>>();
     assert_eq!(names, BTreeSet::from(["limit", "offset", "status", "manifest_digest"]));
     let status = parameter_schema(operation_parameter(operation, "status", PATH), "replication status");
-    assert_eq!(value_strings(status.get("enum").expect("replication status enum"), "replication statuses").into_iter().collect::<BTreeSet<_>>(), BTreeSet::from(["pending", "completed", "expired"]));
+    assert_eq!(value_strings(status.get("enum").expect("replication status enum"), "replication statuses").into_iter().collect::<BTreeSet<_>>(), BTreeSet::from(["pending", "completed", "cancelled", "expired"]));
     assert_eq!(parameter_schema(operation_parameter(operation, "manifest_digest", PATH), "replication digest").get("pattern").and_then(Value::as_str), Some("^(?!0{64}$)[0-9a-f]{64}$"));
     let schemas = component_schemas(&document);
     for (name, required) in [
@@ -645,11 +728,12 @@ fn sorafs_replication_openapi_is_a_strict_chain_authoritative_v1_projection() {
         PropertyRefContract { owner: "SorafsReplicationOrderProjectionV1", property: "status", expected: "#/components/schemas/SorafsReplicationOrderStatusV1" },
     ]);
     let status_variants = contract_schema(schemas, "SorafsReplicationOrderStatusV1").get("oneOf").and_then(Value::as_array).expect("replication lifecycle variants");
-    assert_eq!(status_variants.len(), 3);
+    assert_eq!(status_variants.len(), 4);
     assert!(status_variants.iter().all(|variant| variant.get("additionalProperties").and_then(Value::as_bool) == Some(false)));
     let states = status_variants.iter().filter_map(|variant| variant.get("properties").and_then(|properties| properties.get("state")).and_then(|state| state.get("const")).and_then(Value::as_str)).collect::<BTreeSet<_>>();
-    assert_eq!(states, BTreeSet::from(["pending", "completed", "expired"]));
+    assert_eq!(states, BTreeSet::from(["pending", "completed", "cancelled", "expired"]));
     assert_eq!(status_variants[0].get("properties").and_then(Value::as_object).expect("pending status properties").keys().map(String::as_str).collect::<BTreeSet<_>>(), BTreeSet::from(["state"]));
+    assert!(status_variants[1..].iter().all(|variant| variant.get("properties").and_then(Value::as_object).is_some_and(|properties| properties.contains_key("epoch"))));
     let policies = contract_schema(schemas, "SorafsProviderIngestSignerPolicyV1").get("oneOf").and_then(Value::as_array).expect("signer-policy variants");
     assert_eq!(policies.len(), 2);
     assert_eq!(variant_property(policies, 0, "revision").get("const").and_then(Value::as_u64), Some(1));

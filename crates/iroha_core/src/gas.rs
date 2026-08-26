@@ -40,7 +40,9 @@ const BASE_EXECUTE_TRIGGER: u64 = 220;
 const BASE_UPGRADE: u64 = 2_000;
 const BASE_LOG: u64 = 8;
 const BASE_CUSTOM: u64 = 128;
-const BASE_SORACLOUD_PRIVATE_EXECUTION_COMMIT: u64 = BASE_REGISTER + BASE_CUSTOM;
+const BASE_SORACLOUD_PRIVATE_EXECUTION_PREPARE: u64 = BASE_REGISTER + BASE_CUSTOM;
+const BASE_SORACLOUD_PRIVATE_EXECUTION_RECEIPT: u64 = BASE_CUSTOM;
+const BASE_REGISTER_PIN_MANIFEST: u64 = BASE_REGISTER;
 const BASE_REGISTER_SMART_CONTRACT: u64 = 320;
 const BASE_KAIGI_CREATE: u64 = 420;
 const BASE_KAIGI_JOIN: u64 = 180;
@@ -64,9 +66,9 @@ pub const DEFAULT_ZK_GAS_PER_COMMITMENT: u64 = 500;
 const FIELD_ELEMENT_BYTES: usize = 32;
 /// Dynamic factors (per-byte) applied to encoded payloads where sensible.
 const PER_BYTE_JSON: u64 = 1; // charge per JSON byte
+const PER_BYTE_PIN_MANIFEST: u64 = 1;
 const PER_KAIGI_PROOF_BYTE: u64 = 5;
 const PER_BYTE_SEALED_COMMITMENT: u64 = 1;
-const PER_BYTE_SORACLOUD_PRIVATE_EXECUTION_MANIFEST: u64 = 1;
 static ZK_GAS_BASE_VERIFY: AtomicU64 = AtomicU64::new(DEFAULT_ZK_GAS_BASE_VERIFY);
 static ZK_GAS_PER_PUBLIC_INPUT: AtomicU64 = AtomicU64::new(DEFAULT_ZK_GAS_PER_PUBLIC_INPUT);
 static ZK_GAS_PER_PROOF_BYTE: AtomicU64 = AtomicU64::new(DEFAULT_ZK_GAS_PER_PROOF_BYTE);
@@ -218,13 +220,17 @@ fn gas_for_recursive_kagemusha_redeem_v4(
     }
     gas
 }
-fn gas_for_soracloud_private_execution_commit() -> u64 {
-    BASE_SORACLOUD_PRIVATE_EXECUTION_COMMIT
+fn gas_for_register_pin_manifest(manifest_bytes: usize) -> u64 {
+    BASE_REGISTER_PIN_MANIFEST.saturating_add(
+        PER_BYTE_PIN_MANIFEST.saturating_mul(u64::try_from(manifest_bytes).unwrap_or(u64::MAX)),
+    )
+}
+fn gas_for_soracloud_private_execution_receipt() -> u64 {
+    BASE_SORACLOUD_PRIVATE_EXECUTION_RECEIPT
 }
 fn gas_for_soracloud_private_execution_prepare(manifest_bytes: usize) -> u64 {
-    BASE_SORACLOUD_PRIVATE_EXECUTION_COMMIT.saturating_add(
-        PER_BYTE_SORACLOUD_PRIVATE_EXECUTION_MANIFEST
-            .saturating_mul(u64::try_from(manifest_bytes).unwrap_or(u64::MAX)),
+    BASE_SORACLOUD_PRIVATE_EXECUTION_PREPARE.saturating_add(
+        PER_BYTE_PIN_MANIFEST.saturating_mul(u64::try_from(manifest_bytes).unwrap_or(u64::MAX)),
     )
 }
 /// Compute gas for a single instruction using a simple schedule.
@@ -389,20 +395,19 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
     {
         return BASE_REGISTER_SMART_CONTRACT;
     }
-    if any
-        .downcast_ref::<dm_isi::soracloud::PrepareSoracloudPrivateUploadedModelExecution>()
-        .is_some()
+    if let Some(register) = any.downcast_ref::<dm_isi::sorafs::RegisterPinManifest>() {
+        return gas_for_register_pin_manifest(register.manifest_payload.len());
+    }
+    if let Some(prepare) =
+        any.downcast_ref::<dm_isi::soracloud::PrepareSoracloudPrivateUploadedModelExecution>()
     {
-        let prepare = any
-            .downcast_ref::<dm_isi::soracloud::PrepareSoracloudPrivateUploadedModelExecution>()
-            .expect("type checked above");
         return gas_for_soracloud_private_execution_prepare(prepare.output_manifest_payload.len());
     }
     if any
         .downcast_ref::<dm_isi::soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt>()
         .is_some()
     {
-        return gas_for_soracloud_private_execution_commit();
+        return gas_for_soracloud_private_execution_receipt();
     }
     // Unclassified instructions have a fixed first-release cost. Avoid encoding
     // the full instruction here: the retired per-byte factor was zero, so that
@@ -484,17 +489,35 @@ mod tests {
         assert!(large > small);
     }
     #[test]
+    fn pin_manifest_registration_gas_scales_with_manifest_bytes() {
+        let small = InstructionBox::from(dm_isi::sorafs::RegisterPinManifest::new(
+            vec![0; 1],
+            None,
+            None,
+        ));
+        let large = InstructionBox::from(dm_isi::sorafs::RegisterPinManifest::new(
+            vec![0; 4096],
+            None,
+            None,
+        ));
+        let small = meter_instruction(&small);
+        let large = meter_instruction(&large);
+        assert_eq!(small, BASE_REGISTER_PIN_MANIFEST + 1);
+        assert_eq!(large, BASE_REGISTER_PIN_MANIFEST + 4096);
+        assert_eq!(large - small, 4095);
+    }
+    #[test]
     fn private_execution_receipt_commit_has_fixed_nonzero_gas() {
         assert_eq!(
-            gas_for_soracloud_private_execution_commit(),
-            BASE_REGISTER + BASE_CUSTOM
+            gas_for_soracloud_private_execution_receipt(),
+            BASE_SORACLOUD_PRIVATE_EXECUTION_RECEIPT
         );
     }
     #[test]
     fn private_execution_prepare_gas_is_manifest_size_sensitive() {
         let small = gas_for_soracloud_private_execution_prepare(32);
         let large = gas_for_soracloud_private_execution_prepare(4_096);
-        assert!(small > BASE_SORACLOUD_PRIVATE_EXECUTION_COMMIT);
+        assert!(small > BASE_SORACLOUD_PRIVATE_EXECUTION_PREPARE);
         assert!(large > small);
     }
     #[test]

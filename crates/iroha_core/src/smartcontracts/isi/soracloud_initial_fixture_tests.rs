@@ -1026,8 +1026,14 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
         .as_ref()
         .expect("unassigned hosted-service lease")
         .reporting_epoch;
+    let lease_started_height = deployment_before_usage
+        .service_lease
+        .as_ref()
+        .expect("unassigned hosted-service lease")
+        .lease_started_height;
     let lease_error = isi::ReportSoracloudServiceLeaseUsage {
         service_name: lease_victim_name.clone(),
+        lease_started_height,
         reporting_epoch,
         active_service_version: lease_victim_version.to_owned(),
         replica_slot: 1,

@@ -1,3 +1,5 @@
+use crate::state::storage_transactions::TransactionsReadOnly;
+
 #[tokio::test]
 async fn ordinary_snapshot_hash_reconcile_rejects_ahead_suffix_without_mutation() {
     let tmp_root = tempdir().unwrap();
@@ -261,8 +263,15 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
         .expect("strict Kura init");
     let mut state = state_factory_with_kura(Arc::clone(&kura));
     let signing_key = checked_random_snapshot_keypair();
-    let block = signed_block_after_transaction(accepted_log_transaction("current"), None);
+    let transaction = accepted_log_transaction("current");
+    let transaction_hash = transaction.hash_as_entrypoint();
+    let block = signed_block_after_transaction(transaction, None);
     store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block));
+    let mut transaction_history = state.transactions.block();
+    transaction_history.insert_block_with_single_tx(transaction_hash, nonzero!(1_usize));
+    transaction_history
+        .commit()
+        .expect("commit snapshot transaction history fixture");
     store_complete_snapshot_commit_evidence_for_blocks(&state, &kura, &[Arc::clone(&block)]);
     try_write_snapshot(&state, &snapshot_store_dir, &signing_key, TEST_CHUNK_SIZE)
         .expect("write current snapshot");
@@ -321,6 +330,15 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
         );
     });
     assert_eq!(restored.committed_height(), 1);
+    assert_eq!(
+        restored.latest_block_hash_fast(),
+        Some(block.hash()),
+        "Fast State must expose the zero-copy Kura hash mapping at its exact tip"
+    );
+    assert!(
+        restored.transactions.view().get(&transaction_hash).is_none(),
+        "Fast restore must discard the disabled transaction-membership history"
+    );
     let state_view = restored.view();
     let unbounded_blocks = crate::smartcontracts::ValidQuery::execute(
         iroha_data_model::query::block::prelude::FindBlocks,
@@ -363,8 +381,30 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
         );
     }
 
+    let merkle_path = current_generation_artifact(&snapshot_store_dir, SNAPSHOT_MERKLE_FILE_NAME);
+    std::fs::remove_file(&merkle_path).expect("remove deferred Merkle sidecar");
+    std::fs::write(
+        merkle_path.with_file_name("operator-emergency-note"),
+        b"ignored by Fast",
+    )
+    .expect("add unrelated generation artifact");
+    let restored_without_merkle = try_read_snapshot(
+        &snapshot_store_dir,
+        &fast_kura,
+        LiveQueryStore::start_test,
+        block_count,
+        TEST_CHUNK_SIZE,
+        signing_key.public_key(),
+        &expected_network_id,
+        &crate::state::default_zk_config(),
+        #[cfg(feature = "telemetry")]
+        StateTelemetry::new(<_>::default(), true),
+    )
+    .expect("Fast restore must not require or inventory the deferred Merkle sidecar");
+    assert_eq!(restored_without_merkle.committed_height(), 1);
+
     let wrong_network_id = NetworkId::from_genesis_hash(dummy_block_hash(0xE1));
-    let network_error = try_read_snapshot(
+    let network_error = match try_read_snapshot(
         &snapshot_store_dir,
         &fast_kura,
         LiveQueryStore::start_test,
@@ -375,8 +415,10 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
-    )
-    .expect_err("Fast restore must retain exact network identity binding");
+    ) {
+        Ok(_) => panic!("Fast restore must retain exact network identity binding"),
+        Err(error) => error,
+    };
     assert!(matches!(
         network_error,
         TryReadError::NetworkIdMismatch { .. }
@@ -396,7 +438,7 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
         hex::encode(wrong_signature.payload()),
     )
     .expect("replace snapshot signature");
-    let signature_error = try_read_snapshot(
+    let signature_error = match try_read_snapshot(
         &snapshot_store_dir,
         &fast_kura,
         LiveQueryStore::start_test,
@@ -407,8 +449,10 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
-    )
-    .expect_err("Fast restore must retain ordinary outer signature verification");
+    ) {
+        Ok(_) => panic!("Fast restore must retain ordinary outer signature verification"),
+        Err(error) => error,
+    };
     assert!(matches!(signature_error, TryReadError::SignatureInvalid(_)));
 }
 #[tokio::test]

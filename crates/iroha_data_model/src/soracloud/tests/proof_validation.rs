@@ -911,10 +911,9 @@ fn rollout_provenance_payload_encodes_canonical_tuple() {
 #[test]
 fn agent_deploy_provenance_payload_encodes_canonical_tuple() {
     let manifest = sample_agent_apartment_manifest();
-    let encoded = encode_agent_deploy_provenance_payload(manifest.clone(), 10_000, Some(500_000))
+    let encoded = encode_agent_deploy_provenance_payload(manifest.clone(), 10_000, 500_000)
         .expect("encode payload");
-    let expected =
-        norito::to_bytes(&(manifest, 10_000u64, Some(500_000u64))).expect("encode tuple");
+    let expected = norito::to_bytes(&(manifest, 10_000u64, 500_000u64)).expect("encode tuple");
     assert_eq!(encoded, expected);
 }
 #[test]

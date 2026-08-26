@@ -117,6 +117,10 @@ run_python312_clean() {
 
 SCRIPT_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd -P)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"
+# Cargo and every authenticated helper must resolve workspace state from the
+# same canonical tree whose inputs are source-sealed below, regardless of the
+# caller's working directory.
+builtin cd "$ROOT_DIR"
 CRATE_DIR="$ROOT_DIR/crates/connect_norito_bridge"
 INC_DIR="$CRATE_DIR/include"
 if [[ -z "${NORITO_BRIDGE_OUT_DIR:-}" || -z "${NORITO_BRIDGE_BUILD_DIR:-}" ]]; then

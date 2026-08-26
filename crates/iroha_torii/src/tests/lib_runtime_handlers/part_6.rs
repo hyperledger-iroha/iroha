@@ -2015,7 +2015,6 @@ fn hosted_http_lease_volume_states(
                 lease_started_height: service_lease.lease_started_height,
                 lease_expires_height: service_lease.lease_expires_height,
                 authoritative_generation: 1,
-                last_materialized_sequence: None,
             },
         )
         .collect()

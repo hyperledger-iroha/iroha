@@ -1358,7 +1358,7 @@ fn bind_current_snapshot_generation_with_mode(
     let digest_hex = parse_snapshot_current_pointer(&pointer_bytes, &pointer_path)?;
     let generation_dir = generations_dir.join(&digest_hex);
     let generation_dir_identity = direct_snapshot_directory_identity(&generation_dir)?;
-    if !snapshot_generation_has_exact_artifact_inventory(&generation_dir)? {
+    if !emergency_fast && !snapshot_generation_has_exact_artifact_inventory(&generation_dir)? {
         return Err(TryReadError::SnapshotGenerationInvalid {
             path: generation_dir,
             reason: "generation does not contain exactly the four canonical artifacts".to_owned(),
@@ -1390,18 +1390,17 @@ fn bind_current_snapshot_generation_with_mode(
         &generation_dir.join(SNAPSHOT_SIGNATURE_FILE_NAME),
         SNAPSHOT_SIGNATURE_MAX_BYTES,
     )?;
-    let merkle_limit = snapshot_merkle_max_bytes(payload.len, merkle_chunk_size);
-    let merkle_path = generation_dir.join(SNAPSHOT_MERKLE_FILE_NAME);
-    let (merkle, merkle_bytes) = if emergency_fast {
-        let merkle = bind_snapshot_file_handle_without_digest(&merkle_path, merkle_limit)
-            .map_err(|error| TryReadError::IO(error, merkle_path.clone()))?
-            .ok_or_else(|| TryReadError::SnapshotGenerationInvalid {
-                path: merkle_path,
-                reason: "required generation artifact is missing".to_owned(),
-            })?;
-        (merkle, Vec::new())
+    let mut artifacts = vec![payload.clone(), digest, signature];
+    let merkle_bytes = if emergency_fast {
+        Vec::new()
     } else {
-        bind_required_snapshot_file(&merkle_path, merkle_limit)?
+        let merkle_limit = snapshot_merkle_max_bytes(payload.len, merkle_chunk_size);
+        let (merkle, bytes) = bind_required_snapshot_file(
+            &generation_dir.join(SNAPSHOT_MERKLE_FILE_NAME),
+            merkle_limit,
+        )?;
+        artifacts.push(merkle);
+        bytes
     };
     Ok(BoundSnapshotGeneration {
         store_dir: store_dir.to_path_buf(),
@@ -1412,7 +1411,7 @@ fn bind_current_snapshot_generation_with_mode(
         generation_dir,
         generation_dir_identity,
         payload: payload.clone(),
-        artifacts: vec![payload, digest, signature, merkle],
+        artifacts,
         bytes: SnapshotGenerationBytes {
             digest: digest_bytes,
             signature: signature_bytes,

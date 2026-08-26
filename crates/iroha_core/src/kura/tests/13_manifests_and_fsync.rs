@@ -503,6 +503,39 @@ fn fast_init_does_not_create_a_missing_store_root() {
 }
 
 #[test]
+fn fast_init_skips_disabled_writer_capacity_validation() {
+    let temp_dir = TempDir::new().unwrap();
+    let strict_config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let (strict_kura, _) = open_configured_kura_with_pending_limits(
+        &strict_config,
+        &SumeragiV2RuntimeLimits::default(),
+    )
+    .expect("Strict initializes the store");
+    drop(strict_kura);
+
+    let mut fast_config = strict_config;
+    fast_config.init_mode = InitMode::Fast;
+    fast_config.blocks_in_memory = NonZeroUsize::new(usize::MAX).unwrap();
+    fast_config.lane_history_retention = NonZeroUsize::new(usize::MAX).unwrap();
+    let mut unused_limits = SumeragiV2RuntimeLimits::default();
+    unused_limits.pending_certified_merge_entry_capacity =
+        NonZeroUsize::new(V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY_MAX.saturating_add(1)).unwrap();
+
+    let (fast_kura, BlockCount(count)) =
+        open_configured_kura_with_pending_limits(&fast_config, &unused_limits)
+            .expect("Fast ignores limits owned exclusively by disabled writers");
+    assert_eq!(count, 0);
+    assert_eq!(fast_kura.replica_registry_key_capacity, NonZeroUsize::MIN);
+    assert_eq!(fast_kura.native_amx_evidence_prune_intent_max_bytes, 0);
+    assert_eq!(fast_kura.blocks_in_memory, NonZeroUsize::new(256).unwrap());
+    assert_eq!(fast_kura.lane_history_retention, NonZeroUsize::MIN);
+    assert_eq!(
+        fast_kura.pending_control_sidecar_limits,
+        PendingControlSidecarLimits::default()
+    );
+}
+
+#[test]
 fn fast_init_defers_body_validation_without_rewriting_hashes() {
     let temp_dir = TempDir::new().unwrap();
     populate_store(&temp_dir, 3);
@@ -572,7 +605,7 @@ fn fast_init_defers_body_validation_without_rewriting_hashes() {
         kura.latest_autonomous_lane_block_artifacts_snapshot(
             test_network_id(b"fast-startup"),
             1,
-            |_| 0,
+            |_| Ok(0),
         ),
         Err(Error::EmergencyFastAuxiliaryUnavailable {
             subsystem: "autonomous-lane latest-route pointers"

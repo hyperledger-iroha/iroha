@@ -4556,11 +4556,23 @@ mod tests {
                 .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '@')
         );
         for retired in ["Taira Rollout Canary!", "taira-rollout-canary", ""] {
-            build_alias(retired, key_pair.public_key(), "wonderland.universal")
+            let error = build_alias(retired, key_pair.public_key(), "wonderland.universal")
                 .expect_err("alias prefixes are never sanitized or defaulted");
+            assert!(
+                error
+                    .to_string()
+                    .contains("alias prefix must contain 1..32 canonical lowercase ASCII"),
+                "{error}"
+            );
         }
-        build_alias(DEFAULT_ALIAS_PREFIX, key_pair.public_key(), "wonderland.")
+        let error = build_alias(DEFAULT_ALIAS_PREFIX, key_pair.public_key(), "wonderland.")
             .expect_err("dataspace labels are never defaulted");
+        assert!(
+            error
+                .to_string()
+                .contains("alias domain must end in a canonical dataspace label"),
+            "{error}"
+        );
     }
     #[test]
     fn public_root_requires_an_exact_origin() {
@@ -4581,7 +4593,9 @@ mod tests {
             "https://taira.sora.org#fragment",
             "HTTPS://TAIRA.SORA.ORG",
         ] {
-            normalize_root_url(invalid).expect_err("noncanonical public roots must fail closed");
+            let error = normalize_root_url(invalid)
+                .expect_err("noncanonical public roots must fail closed");
+            assert!(error.to_string().contains("public root URL"), "{error}");
         }
     }
     #[test]
@@ -4613,7 +4627,7 @@ mod tests {
             bundle_manifest_digest_hex: "22".repeat(32),
             guest_content_cid: "guest-cid".to_owned(),
             guest_manifest_digest_hex: "33".repeat(32),
-            submitted_tx_hash: Hash::new(b"submitted-canary-mutation").to_string(),
+            submitted_tx_hash: iroha_crypto::Hash::new(b"submitted-canary-mutation").to_string(),
             mutation_response_digest: "mutation-response-hash".to_owned(),
         }
     }
@@ -5001,8 +5015,14 @@ mod tests {
                 .expect("read config")
                 .contains("private_key = ")
         );
-        write_runtime_config(&path, &config)
+        let error = write_runtime_config(&path, &config)
             .expect_err("an existing runtime config must never be replaced");
+        assert!(
+            error
+                .to_string()
+                .contains("destination already exists and will not be replaced"),
+            "{error}"
+        );
     }
     #[test]
     fn inrou_canary_requires_exact_taira_client_identity_before_publication() {

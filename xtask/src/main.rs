@@ -9597,13 +9597,17 @@ fn require_release_router_openapi(
     let spec_bytes = generated
         .map_err(|err| format!("failed to generate OpenAPI from Torii router: {err}"))?
         .ok_or("Torii OpenAPI generation failed closed: the router exposed no authority")?;
-    validate_release_openapi_bytes(&spec_bytes)?;
-    Ok(spec_bytes)
+    let spec = validated_release_openapi_value(&spec_bytes)?;
+    Ok(norito::json::to_vec_pretty(&spec)?)
 }
 fn validate_release_openapi_bytes(spec_bytes: &[u8]) -> Result<(), Box<dyn Error>> {
+    validated_release_openapi_value(spec_bytes).map(|_| ())
+}
+fn validated_release_openapi_value(spec_bytes: &[u8]) -> Result<Value, Box<dyn Error>> {
     let spec = norito::json::from_slice::<Value>(spec_bytes)
         .map_err(|err| format!("failed to parse release OpenAPI document as JSON: {err}"))?;
-    openapi_validation::validate_release_openapi_spec(&spec)
+    openapi_validation::validate_release_openapi_spec(&spec)?;
+    Ok(spec)
 }
 const OPENAPI_MANIFEST_VERSION: u32 = 2;
 const OPENAPI_MANIFEST_SIGNATURE_DOMAIN_V2: &[u8] = b"iroha.openapi.manifest.signature.v2";
@@ -12004,7 +12008,7 @@ mod openapi_tests {
         );
     }
     #[test]
-    fn router_generation_preserves_exact_json_integer_bytes() {
+    fn router_generation_canonicalizes_json_without_losing_exact_integers() {
         let exact = br#"{
   "openapi": "3.1.0",
   "info": {"title": "Torii fixture", "version": "1.0.0"},
@@ -12015,8 +12019,17 @@ mod openapi_tests {
 
         let emitted = require_release_router_openapi(Ok(Some(exact.clone())))
             .expect("exact router document must be accepted");
+        let parsed = norito::json::from_slice::<Value>(&exact).expect("parse router fixture");
+        let canonical = norito::json::to_vec_pretty(&parsed).expect("render canonical fixture");
 
-        assert_eq!(emitted, exact);
+        assert_eq!(emitted, canonical);
+        assert!(
+            std::str::from_utf8(&emitted)
+                .expect("canonical OpenAPI is UTF-8")
+                .contains("18446744073709551615"),
+            "canonicalization must preserve exact u64 JSON integers"
+        );
+        assert!(!emitted.ends_with(b"\n"));
     }
     #[test]
     fn router_state_uses_configured_genesis_identity() {

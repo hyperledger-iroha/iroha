@@ -1794,7 +1794,6 @@ fn service_lease_v1_json_requires_explicit_null_empty_and_closed_fields() {
         lease_started_height: 1,
         lease_expires_height: 100,
         authoritative_generation: 1,
-        last_materialized_sequence: None,
     };
     let checkpoint = SoraServiceLeaseEgressCheckpointV1 {
         reporting_epoch: 1,
@@ -1814,7 +1813,6 @@ fn service_lease_v1_json_requires_explicit_null_empty_and_closed_fields() {
         accounted_egress_bytes: 0,
         last_updated_height: 1,
         finalize_reporter: false,
-        forced_finalization: false,
     };
 
     let lease_json = norito::json::to_value(&lease).expect("serialize service lease state");
@@ -1851,27 +1849,11 @@ fn service_lease_v1_json_requires_explicit_null_empty_and_closed_fields() {
     }
 
     let volume_json = norito::json::to_value(&volume).expect("serialize lease volume state");
-    assert!(
-        volume_json
-            .get("last_materialized_sequence")
-            .is_some_and(norito::json::Value::is_null),
-        "canonical last materialized sequence must be an explicit null"
-    );
     assert_eq!(
         norito::json::from_value::<SoraServiceLeaseVolumeStateV1>(volume_json.clone())
-            .expect("explicit-null lease volume must decode"),
+            .expect("canonical lease volume must decode"),
         volume
     );
-    let mut missing_materialized = volume_json.clone();
-    assert!(
-        missing_materialized
-            .as_object_mut()
-            .expect("lease volume JSON object")
-            .remove("last_materialized_sequence")
-            .is_some()
-    );
-    norito::json::from_value::<SoraServiceLeaseVolumeStateV1>(missing_materialized)
-        .expect_err("omitted last materialized sequence must be rejected");
 
     macro_rules! assert_unknown_rejected {
         ($value:expr, $ty:ty, $label:literal) => {{
@@ -2786,6 +2768,23 @@ fn private_runtime_receipt_validation_separates_submission_and_persisted_sequenc
 }
 
 #[test]
+fn private_runtime_receipt_rejects_emission_before_authorization_claim() {
+    let mut receipt = sample_private_uploaded_model_execution_receipt();
+    receipt.authorization_claim_block_height = receipt.emitted_block_height + 1;
+    let error = receipt
+        .validate()
+        .expect_err("receipt block height must not precede its authorization claim");
+    assert_soracloud_invalid_field(error, "emitted_block_height");
+
+    let mut receipt = sample_private_uploaded_model_execution_receipt();
+    receipt.authorization_claim_epoch = receipt.emitted_epoch + 1;
+    let error = receipt
+        .validate()
+        .expect_err("receipt epoch must not precede its authorization claim");
+    assert_soracloud_invalid_field(error, "emitted_epoch");
+}
+
+#[test]
 fn private_execution_claim_requires_submission_receipt_and_ledger_coordinates() {
     let mut receipt = sample_private_uploaded_model_execution_receipt();
     receipt.authorization_claim_block_height = 0;
@@ -3102,6 +3101,87 @@ fn agent_apartment_record_validation_accepts_consistent_state() {
         "valid agent apartment record must pass"
     );
 }
+
+#[cfg(feature = "json")]
+#[test]
+fn agent_apartment_record_json_rejects_removed_persisted_status() {
+    let mut value = norito::json::to_value(&sample_agent_apartment_record())
+        .expect("serialize agent apartment record");
+    value
+        .as_object_mut()
+        .expect("agent apartment record JSON object")
+        .insert("status".to_owned(), norito::json!("Running"));
+    let error = norito::json::from_value::<SoraAgentApartmentRecordV1>(value)
+        .expect_err("persisted apartment runtime status must not be accepted");
+    assert!(
+        matches!(error, json::Error::UnknownField { ref field } if field == "status"),
+        "unexpected removed-status rejection: {error}"
+    );
+}
+
+#[test]
+fn agent_apartment_current_view_status_uses_half_open_lease_height() {
+    let record = sample_agent_apartment_record();
+    assert_eq!(
+        record.runtime_status_at_current_height(record.lease_expires_height - 1),
+        SoraAgentRuntimeStatusV1::Running
+    );
+    assert_eq!(
+        record.runtime_status_at_current_height(record.lease_expires_height),
+        SoraAgentRuntimeStatusV1::LeaseExpired
+    );
+    assert_eq!(
+        record.runtime_status_at_current_height(record.lease_expires_height + 1),
+        SoraAgentRuntimeStatusV1::LeaseExpired
+    );
+}
+
+#[test]
+fn agent_apartment_current_view_status_fails_closed_before_latest_renewal() {
+    let mut record = sample_agent_apartment_record();
+    record.last_renewed_height = 50;
+    assert_eq!(
+        record.runtime_status_at_current_height(record.lease_started_height - 1),
+        SoraAgentRuntimeStatusV1::LeaseExpired,
+        "a row cannot be active before its deployment"
+    );
+    assert_eq!(
+        record.runtime_status_at_current_height(record.last_renewed_height - 1),
+        SoraAgentRuntimeStatusV1::LeaseExpired,
+        "a post-renewal row must fail closed when paired with an older view"
+    );
+    assert_eq!(
+        record.runtime_status_at_current_height(record.last_renewed_height),
+        SoraAgentRuntimeStatusV1::Running
+    );
+}
+
+#[test]
+fn agent_apartment_current_view_status_preserves_a_late_renewal_gap() {
+    let mut before_renewal = sample_agent_apartment_record();
+    before_renewal.lease_expires_height = 40;
+    assert_eq!(
+        before_renewal.runtime_status_at_current_height(45),
+        SoraAgentRuntimeStatusV1::LeaseExpired,
+        "the pre-renewal view must expose the elapsed lease gap"
+    );
+
+    let renewal_height = 50;
+    let mut after_renewal = before_renewal;
+    after_renewal.last_renewed_height = renewal_height;
+    after_renewal.lease_expires_height = 80;
+    assert_eq!(
+        after_renewal.runtime_status_at_current_height(45),
+        SoraAgentRuntimeStatusV1::LeaseExpired,
+        "a post-renewal row must not retroactively fill the earlier gap"
+    );
+    assert_eq!(
+        after_renewal.runtime_status_at_current_height(renewal_height),
+        SoraAgentRuntimeStatusV1::Running,
+        "the renewed lease becomes active at its current-view renewal height"
+    );
+}
+
 #[test]
 fn agent_apartment_record_validation_rejects_manifest_hash_mismatch() {
     let mut record = sample_agent_apartment_record();
@@ -3111,6 +3191,17 @@ fn agent_apartment_record_validation_rejects_manifest_hash_mismatch() {
         .expect_err("manifest hash must match embedded manifest");
     assert_soracloud_invalid_field(error, "manifest_hash");
 }
+
+#[test]
+fn agent_apartment_record_validation_rejects_non_runnable_latest_renewal() {
+    let mut record = sample_agent_apartment_record();
+    record.last_renewed_height = record.lease_expires_height;
+    let error = record
+        .validate()
+        .expect_err("latest renewal must leave a non-empty runnable interval");
+    assert_soracloud_invalid_field(error, "last_renewed_height");
+}
+
 #[test]
 fn agent_apartment_record_validation_rejects_mailbox_payload_hash_mismatch() {
     let mut record = sample_agent_apartment_record();

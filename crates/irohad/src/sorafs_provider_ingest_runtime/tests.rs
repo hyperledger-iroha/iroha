@@ -548,7 +548,7 @@ fn exact_test_musubi_inventory_item() -> MusubiProviderAttestationInventoryItemV
         )),
         ProviderId::new([0xC2; 32]),
         ArchiveId::new([0xC3; 32]),
-        ReplicationOrderId::new([0xC4; 32]),
+        ReplicationOrderId::new([0x44; 32]),
     )
 }
 fn test_musubi_inventory_binding() -> SorafsProviderAttestationRuntimeBinding {
@@ -776,7 +776,7 @@ fn test_completion_payload(
         FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions([InstructionBox::from(CompleteReplicationOrder {
-        order_id: ReplicationOrderId::new([0xB1; 32]),
+        order_id: ReplicationOrderId::new([0x31; 32]),
         provider_id,
         completion_epoch,
         expected_authority:
@@ -1482,7 +1482,7 @@ async fn governed_musubi_inventory_rejects_substituted_get_and_inventory_outputs
         scope.network_id,
         key.provider_id,
         ArchiveId::new([0xE6; 32]),
-        ReplicationOrderId::new([0xE7; 32]),
+        ReplicationOrderId::new([0x67; 32]),
     );
     let inventory = Arc::new(TestMusubiAttestationInventoryV1::new(item.clone()));
     *inventory
@@ -2233,11 +2233,16 @@ fn completion_payload_anchor_accepts_an_authenticated_committed_prefix() {
         block_hash: *committed_hashes[8].as_ref(),
     };
     let head_hash = *committed_hashes[9].as_ref();
+    let finalized_at_unix_ms = 1_700_000_009_999;
+    let completion_epoch = 1_700_000_009;
+    let head_at_unix_ms = 1_700_000_010_123;
     assert!(completion_payload_anchor_matches_committed_chain(
         cursor,
-        9,
+        completion_epoch,
+        finalized_at_unix_ms,
         10,
         head_hash,
+        head_at_unix_ms,
         &committed_hashes,
     ));
     assert!(!completion_payload_anchor_matches_committed_chain(
@@ -2245,23 +2250,47 @@ fn completion_payload_anchor_accepts_an_authenticated_committed_prefix() {
             block_hash: [0xA9; 32],
             ..cursor
         },
-        9,
+        completion_epoch,
+        finalized_at_unix_ms,
         10,
         head_hash,
+        head_at_unix_ms,
         &committed_hashes,
     ));
     assert!(!completion_payload_anchor_matches_committed_chain(
         cursor,
-        10,
+        completion_epoch + 1,
+        finalized_at_unix_ms,
         10,
         head_hash,
+        head_at_unix_ms,
         &committed_hashes,
     ));
     assert!(!completion_payload_anchor_matches_committed_chain(
         cursor,
-        9,
+        completion_epoch,
+        finalized_at_unix_ms,
         10,
         [0xAA; 32],
+        head_at_unix_ms,
+        &committed_hashes,
+    ));
+    assert!(!completion_payload_anchor_matches_committed_chain(
+        cursor,
+        cursor.height,
+        finalized_at_unix_ms,
+        10,
+        head_hash,
+        head_at_unix_ms,
+        &committed_hashes,
+    ));
+    assert!(!completion_payload_anchor_matches_committed_chain(
+        cursor,
+        completion_epoch,
+        finalized_at_unix_ms,
+        10,
+        head_hash,
+        finalized_at_unix_ms - 1_000,
         &committed_hashes,
     ));
 }

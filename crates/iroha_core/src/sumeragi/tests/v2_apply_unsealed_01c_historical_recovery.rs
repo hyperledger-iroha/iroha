@@ -588,7 +588,11 @@ v2_apply_test!(
             SumeragiAutonomousLaneExecutionStage::CertifiedBundleDurable,
         );
         assert_eq!(certified_row.source_bundle_hash, Some(source.bundle_hash));
-        assert!(fixture.state.has_pending_merge_execution_sources());
+        assert!(
+            fixture
+                .state
+                .has_pending_merge_execution_sources(active_context.context().mode)
+        );
         let nexus = fixture.state.nexus_snapshot();
         let state_view = fixture.state.view();
         for (((entrypoint, reservation), routing_plan), native_amx_receipt) in source
@@ -628,11 +632,18 @@ v2_apply_test!(
             .expect("derive the exact canonical merge application header");
         fixture
             .state
-            .build_merge_execution_batch(1, application_header.clone())
+            .build_merge_execution_batch(
+                1,
+                application_header.clone(),
+                active_context.context().mode,
+            )
             .expect("pre-execute the exact contiguous certified autonomous source");
         let candidate = fixture
             .state
-            .build_merge_execution_candidate(application_header.clone())
+            .build_merge_execution_candidate(
+                application_header.clone(),
+                active_context.context().mode,
+            )
             .expect("select the exact contiguous certified autonomous source");
         assert_eq!(candidate.carrier_height, 3);
         assert_eq!(candidate.carrier_parent_hash, successor.body.hash());
@@ -742,7 +753,7 @@ v2_apply_test!(
         .expect("authenticate exact merge QC against the frozen height context");
         fixture
             .state
-            .validate_certified_merge_entry_for_global_order(&entry)
+            .validate_certified_merge_entry_for_global_order(&entry, active_context.context().mode)
             .expect("validate exact autonomous merge entry against current WSV");
         let entry_hash = crate::merge::merge_ledger_entry_hash(&entry);
         assert_eq!(

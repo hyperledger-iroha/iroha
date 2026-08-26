@@ -1023,7 +1023,7 @@ fn location_reverse_indices_reject_reuse_and_retain_tombstones() {
     let mut block = state.block(header);
     let mut transaction = block.transaction();
     let pin = iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xA1; 32]);
-    let order = iroha_data_model::sorafs::pin_registry::ReplicationOrderId::new([0xA2; 32]);
+    let order = iroha_data_model::sorafs::pin_registry::ReplicationOrderId::new([0x22; 32]);
     let first = location_fixture(0xA3, pin, order);
     bind_location_reverse_indices(None, &first, &mut transaction)
         .expect("first exact location binding succeeds");
@@ -1037,7 +1037,7 @@ fn location_reverse_indices_reject_reuse_and_retain_tombstones() {
     let conflicting = location_fixture(
         0xA4,
         pin,
-        iroha_data_model::sorafs::pin_registry::ReplicationOrderId::new([0xA5; 32]),
+        iroha_data_model::sorafs::pin_registry::ReplicationOrderId::new([0x25; 32]),
     );
     bind_location_reverse_indices(None, &conflicting, &mut transaction)
         .expect_err("one pin manifest cannot be rebound to another location");

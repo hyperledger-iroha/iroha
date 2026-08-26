@@ -2047,11 +2047,9 @@ pub struct SoraAgentApartmentRecordV1 {
     pub manifest: AgentApartmentManifestV1,
     /// Canonical hash of the manifest.
     pub manifest_hash: Hash,
-    /// Current runtime status.
-    pub status: SoraAgentRuntimeStatusV1,
     /// Audit sequence that deployed the apartment.
     pub deployed_sequence: u64,
-    /// Consensus block height when the current lease began.
+    /// Consensus block height when this apartment lease incarnation began.
     pub lease_started_height: u64,
     /// Consensus block height when the lease expires.
     pub lease_expires_height: u64,
@@ -2096,6 +2094,29 @@ pub struct SoraAgentApartmentRecordV1 {
     pub autonomy_run_history: Vec<SoraAgentAutonomyRunRecordV1>,
 }
 impl SoraAgentApartmentRecordV1 {
+    /// Derive the apartment runtime status in its current committed state view.
+    ///
+    /// The record must be paired with the current height of the same state
+    /// view. It is not a historical query surface: after a renewal, the row no
+    /// longer contains the prior expiry needed to reconstruct earlier lease
+    /// gaps. Pairing a post-renewal row with an older view therefore fails
+    /// closed.
+    ///
+    /// Lease intervals are half-open. A row is runnable at and after its
+    /// latest renewal height, and strictly before `lease_expires_height`.
+    #[must_use]
+    pub fn runtime_status_at_current_height(
+        &self,
+        current_height: u64,
+    ) -> SoraAgentRuntimeStatusV1 {
+        if current_height >= self.last_renewed_height && current_height < self.lease_expires_height
+        {
+            SoraAgentRuntimeStatusV1::Running
+        } else {
+            SoraAgentRuntimeStatusV1::LeaseExpired
+        }
+    }
+
     /// Validate apartment lifecycle and deterministic-accounting invariants.
     ///
     /// # Errors
@@ -2155,6 +2176,13 @@ impl SoraAgentApartmentRecordV1 {
                 "sora agent apartment record",
                 "last_renewed_height",
                 "must be >= lease_started_height",
+            ));
+        }
+        if self.last_renewed_height >= self.lease_expires_height {
+            return Err(invalid_field(
+                "sora agent apartment record",
+                "last_renewed_height",
+                "must be less than lease_expires_height",
             ));
         }
         Ok(())

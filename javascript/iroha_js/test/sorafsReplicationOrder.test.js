@@ -16,7 +16,7 @@ test("decodeReplicationOrder returns structured replication order", () => {
   assert.equal(order.schemaVersion, 1);
   assert.equal(
     order.orderIdHex,
-    "abababababababababababababababababababababababababababababababab",
+    "2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b",
   );
   assert.equal(
     order.manifestCidHex,

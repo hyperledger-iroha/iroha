@@ -13,16 +13,19 @@ pub enum InitMode {
     /// Validate every canonical block body and parent link before startup completes.
     #[default]
     Strict,
-    /// Trust the durable local journal and skip historical body and sidecar audits.
+    /// Trust a signed current snapshot and the durable local marker/count/tip boundary.
     ///
     /// This emergency mode requires storage already initialized by Strict mode and an
-    /// already-current State snapshot. It admits only a stable, structurally readable commit
-    /// boundary and a bounded tip check, retains only a count plus bounded recent-block cache,
-    /// leaves local transaction/lane/merge production quarantined, rejects canonical mutation,
-    /// and neither repairs nor imports storage. Optional durable application services and
-    /// consensus active-height recovery remain offline. Operators should return to
-    /// [`Self::Strict`] after service is restored so the complete chain and deferred auxiliary
-    /// histories are audited before production resumes.
+    /// already-current State snapshot. It hashes the bounded payload once and retains signer,
+    /// network, maximum-size, and exact terminal height/hash checks while deferring historical,
+    /// Merkle, canonical, and semantic audits. The Merkle sidecar is not opened or required. It
+    /// counts and terminal-binds the signed hash array, maps the exact Kura prefix read-only,
+    /// discards disabled transaction-membership history, and caps the recent body cache at 256
+    /// entries. Local transaction/lane/merge production stays quarantined; canonical mutation,
+    /// repair, and import are rejected. Optional durable application services, background state
+    /// workers, Sumeragi, and transaction gossip remain offline. Operators should return to
+    /// [`Self::Strict`] after service is restored so the complete chain and deferred snapshot and
+    /// auxiliary histories are audited before production resumes.
     Fast,
 }
 impl JsonSerialize for InitMode {

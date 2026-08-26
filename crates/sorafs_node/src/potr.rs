@@ -371,9 +371,8 @@ pub struct PotrTracker {
     checkpoint_store: Option<Arc<PotrCheckpointStore>>,
 }
 impl PotrTracker {
-    /// Construct a bounded non-persistent tracker for unit tests.
-    #[cfg(test)]
-    fn in_memory(max_records: usize) -> Result<Self, PotrTrackerError> {
+    /// Construct a bounded non-persistent tracker for emergency-disabled startup and tests.
+    pub(crate) fn in_memory(max_records: usize) -> Result<Self, PotrTrackerError> {
         validate_policy(max_records, POTR_TRACKER_DEFAULT_CHECKPOINT_MAX_BYTES_V1)?;
         Ok(Self {
             max_records,

@@ -39,7 +39,6 @@ fn fixture_control_plane_service_lease(
                 accounted_egress_bytes: 256,
                 last_updated_height: 1,
                 finalize_reporter: false,
-                forced_finalization: false,
             },
         ],
         accounted_egress_bytes: 1_280,
@@ -166,7 +165,6 @@ fn control_plane_audit_event_projects_lease_reporting_epoch_rollover() {
             iroha_data_model::soracloud::SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1,
         )
         .expect("reporter checkpoint limit fits u32"),
-        forced_finalized_checkpoint_count: 0,
         settled_egress_bytes_delta: 4_096,
         settled_egress_bytes: 8_192,
     });

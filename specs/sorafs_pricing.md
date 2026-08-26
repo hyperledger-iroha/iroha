@@ -23,14 +23,43 @@ per GiB·month, egress is billed per logical GiB retrieved through gateways or t
 
 Tiers are keyed by `StorageClass` and are looked up for every telemetry window. The first-release
 schedule must contain exactly one Hot, Warm, and Cold row in that canonical order; lookup never
-falls back from one explicit class to another. If a provider or manifest does not specify a storage
-class, admission selects the schedule’s `default_storage_class` (Hot) before the exact lookup.
-Capacity declarations may override the tier by adding the metadata entry `sorafs.storage_class`
-(string value `hot`, `warm`, or `cold`) to the canonical declaration payload. The runtime mirrors
-this entry into the `CapacityDeclarationRecord` and rejects mismatched out-of-band overrides.
-Telemetry rejects unknown values and falls back to the schedule
-default when the metadata is absent. Capacity telemetry submissions also include an `egress_bytes`
+falls back from one explicit class to another. Every capacity declaration must include the metadata
+entry `sorafs.storage_class` with exactly one lowercase string value: `hot`, `warm`, or `cold`.
+Whitespace, case folding, unknown values, and omission are admission errors. The runtime mirrors
+the entry into the `CapacityDeclarationRecord` and rejects mismatched out-of-band values; telemetry
+uses that exact retained class and never substitutes the pricing schedule default. Capacity
+telemetry submissions also include an `egress_bytes`
 counter so the ledger-authoritative economics services can apply the corresponding egress fees alongside storage charges.
+
+The retained declaration summary must exactly match the canonical payload's
+`valid_from`, `valid_until`, and committed capacity, while `registered_epoch`
+must equal the transaction's consensus Unix second. The payload's
+`sorafs.owner_account_id` is the governed owner's exact canonical `AccountId`
+text; aliases, padding, and normalization are not valid capacity identities.
+Automatic replication
+selects a provider only when that exact declaration remains valid through the
+whole order deadline and its canonical chunker-profile commitment can hold the
+manifest's checked GiB ceiling. These declarations are required snapshot state;
+restore never substitutes an empty registry or accepts a partial projection.
+Capacity is an aggregate guarantee per provider and exact chunker profile: every
+automatic assignment for an approved pin whose order is pending or completed
+reserves its checked GiB ceiling, and the checked sum cannot exceed that
+profile's declaration. Expired and cancelled orders, and orders whose pins are
+retired, release the reservation.
+
+Snapshot restoration revalidates every active assignment against the retained
+owner, completion authority where completion is still outstanding, declaration
+window, storage class, exact profile, and aggregate capacity. It also validates
+the immutable derived order and retained completion anchors. It does not
+reconstruct the lexicographic provider roster that existed at issuance: that
+historical roster is not persisted, current governance records may legitimately
+change, and the authenticated consensus snapshot is itself the authority for
+the immutable assignment choice. Re-running selection against a later roster
+would reject valid history rather than strengthen it.
+Pin records retain an explicit nullable approval epoch even after retirement.
+`None` means the pin never entered the required replication set; `Some(epoch)`
+requires the exact derived automatic order issued at that epoch. This prevents
+retirement from erasing whether, or when, capacity was allocated.
 
 ### Storage charge calculation
 

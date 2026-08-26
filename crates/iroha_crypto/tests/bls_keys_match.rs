@@ -1,6 +1,7 @@
 //! Validate that stored BLS keypair fixtures line up with the expected public keys.
 #![cfg(feature = "bls")]
 use iroha_crypto::{BlsNormal, BlsSmall, KeyGenOption, KeyPair, PrivateKey, PublicKey};
+use zeroize::Zeroize as _;
 #[test]
 fn bls_keys_match_localnet_soranexus() {
     // Sanity-check the localnet BLS keypairs used by the Sora Nexus configs.
@@ -46,9 +47,26 @@ fn seeded_signatures_match_first_release_golden_bytes() {
     let small = BlsSmall::try_sign(message, &small_private).expect("small signature");
     BlsSmall::verify(message, &small, &small_public).expect("small signature verifies");
 
-    panic!(
-        "normal={}\nsmall={}",
+    assert_eq!(
         hex::encode_upper(normal),
-        hex::encode_upper(small)
+        "A778AB6D66906283D4814A72534BCB1ABE3395C1045C04DD8892B0DD54EF477A4376D94C7B6E5C77DCD0B97510992F4305B949CAA6F66FF6F8025BB72DB0430502ABB6331EA34A01FC6D2F908EE80EB54ABD9C67D39D359548A00746065AB02D"
     );
+    assert_eq!(
+        hex::encode_upper(small),
+        "898EB0B7FF7BCE8CD31DC53B3F4E2472BF053C811AD0C817AFA1F0C04C4F90BA2C7EE02B8EAB583D0A3D34E0889CBEA2"
+    );
+}
+
+#[test]
+fn explicit_bls_zeroize_destroys_key_material() {
+    let (_public, mut private) = BlsNormal::try_keypair(KeyGenOption::UseSeed(
+        b"iroha-bls-explicit-zeroize".to_vec(),
+    ))
+    .expect("normal keypair");
+
+    private.zeroize();
+
+    assert!(private.to_bytes().iter().all(|&byte| byte == 0));
+    assert!(private.try_public_key().is_err());
+    assert!(BlsNormal::try_sign(b"must not sign", &private).is_err());
 }

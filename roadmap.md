@@ -5,6 +5,24 @@ Last updated: 2026-08-26
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
 
+## Iroha crypto first-release closure
+
+- Add a production-source closure job for the minimal, application, consensus, node, and
+  `ffi_export` feature sets. Reject empty feature switches, backend-selection aliases,
+  unreferenced shipping modules/binaries, and public wrappers that only rename another fallible
+  operation.
+- Benchmark canonical key parsing/formatting, BLS key generation/signing/aggregation, VRF proof
+  construction, and threshold/timed-OVN arithmetic. Add deterministic output checks and allocation
+  budgets so later optimizations cannot reintroduce transient secret copies or hardware-dependent
+  results.
+- Complete an independent cryptographic and side-channel review of the adaptive threshold-BLS and
+  timed-OVN implementations, including complaint handling, transcript binding, secret custody and
+  erasure, pairing validation, corruption assumptions, and the scalar/accelerated target matrix.
+- Resolve the remaining production Clippy findings and bounded `dead_code` or lint exemptions in
+  adaptive threshold-BLS, timed-OVN, TLE, GOST, SM, and SoraNet handshake/PQ modules after proving
+  production reachability. Keep only release algorithms with owned callers, exact fixtures, and
+  deterministic cross-platform validation.
+
 ## SDK first-release closure
 
 - Generate one canonical signing-algorithm token registry for the node and every SDK, then reject
@@ -51,9 +69,12 @@ Completed history lives in [`status.md`](./status.md).
   count/length/tip marker and durable latest-route summary; Fast must never recover that authority
   by decoding every historical frame.
 - Add large-history startup benchmarks that separately report marker preflight, hash-journal
-  binding, deferred merge metadata, Sumeragi replay planning, and recursive disk accounting, then
-  enforce no-historical-hash, no-historical-body, and no-historical-cryptography regressions for
-  Fast mode.
+  binding, single-pass snapshot hashing, typed snapshot decode, required current-state index
+  projection, deferred merge metadata, Sumeragi replay planning, and recursive disk accounting,
+  then enforce zero-copy historical-hash, no-historical-body, no-deep-snapshot-validation, and
+  no-historical-cryptography regressions for Fast mode. If current-world typed decode or required
+  read-index projection dominates incident recovery, add a signed mmap/lazy World view rather than
+  weakening the signer, network, size, or exact-tip boundary.
 
 ## Norito archive API closure
 
@@ -281,10 +302,11 @@ Completed history lives in [`status.md`](./status.md).
   qualification.
 - Qualify the four locked `iroha-inrou-0` through `iroha-inrou-3` identities,
   files-only NSS and subid policy,
-  `/dev/kvm` custody, write-lease disk reclaim, anonymous QMP, bounded teardown,
-  and fail-secure stale-firewall workflow on a same-revision four-validator
-  Linux/AArch64 deployment. Archive operator-approved stale-chain cleanup and
-  lease-capable local-filesystem evidence with the canary.
+  `/dev/kvm` custody, pinned ext4 V1 write-lease mount/reuse/recovery and disk
+  reclaim, anonymous QMP, bounded teardown, and fail-secure stale-firewall
+  workflow on a same-revision four-validator Linux/AArch64 deployment. Archive
+  operator-approved stale-chain cleanup and lease-capable local-filesystem
+  evidence with the canary.
 - Before a public Taira reset, freeze one signed immutable source and artifact
   closure, supply an external exact four-host service/state inventory and
   runtime-only key custody, and use an authenticated replay-safe public executor.

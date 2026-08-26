@@ -150,6 +150,18 @@ macro_rules! soracloud_transaction_at {
         let mut $stx = $state_block.transaction();
     };
 }
+macro_rules! soracloud_transaction_at_height {
+    ($state:ident, $header:ident, $state_block:ident, $stx:ident, $height:expr) => {
+        let $header =
+            ValidBlock::new_dummy_and_modify_header(&checked_keypair().into_parts().1, |header| {
+                header.set_height(NonZeroU64::new($height).expect("nonzero test block height"));
+            })
+            .as_ref()
+            .header();
+        let mut $state_block = $state.block($header);
+        let mut $stx = $state_block.transaction();
+    };
+}
 macro_rules! permissioned_soracloud_transaction {
     ($kura:ident, $state:ident, $header:ident, $state_block:ident, $stx:ident) => {
         permissioned_soracloud_state!($kura, $state);
@@ -15615,7 +15627,7 @@ fn agent_deploy_provenance(
     autonomy_budget_units: u64,
 ) -> ManifestProvenance {
     let payload =
-        encode_agent_deploy_provenance_payload(manifest, lease_blocks, Some(autonomy_budget_units))
+        encode_agent_deploy_provenance_payload(manifest, lease_blocks, autonomy_budget_units)
             .expect("agent deploy payload");
     ManifestProvenance {
         signer: ALICE_KEYPAIR.public_key().clone(),
@@ -16479,6 +16491,30 @@ fn model_host_advertise_rejects_zero_signed_record_fields() -> Result<(), eyre::
     Ok(())
 }
 #[test]
+fn model_host_advertise_requires_exact_active_peer_binding() -> Result<(), eyre::Report> {
+    permissioned_soracloud_state!(kura, state);
+    soracloud_transaction_at!(state, header, state_block, state_transaction, 10);
+    let mut capability = sample_model_host_capability(ALICE_ID.clone(), 10, 110);
+    capability.peer_id = PeerId::from(BOB_ID.expect_single_signatory().clone()).to_string();
+    let provenance = model_host_advertise_provenance(&capability);
+    let error = isi::AdvertiseSoracloudModelHost {
+        capability,
+        provenance,
+    }
+    .execute(&ALICE_ID, &mut state_transaction)
+    .expect_err("a model-host advert must not redirect placement to another peer");
+    assert_invalid_parameter_contains(error, "active on-chain peer binding");
+    assert!(
+        state_transaction
+            .world
+            .soracloud_model_host_capabilities
+            .get(&ALICE_ID)
+            .is_none(),
+        "a peer-binding mismatch must not publish a model-host advert"
+    );
+    Ok(())
+}
+#[test]
 fn inrou_host_advertise_rejects_zero_fields_before_signature_verification()
 -> Result<(), eyre::Report> {
     permissioned_soracloud_state!(kura, state);
@@ -17178,6 +17214,93 @@ fn reconcile_soracloud_model_hosts_rebalances_inactive_validator_without_violati
             .assigned_hosts
             .iter()
             .all(|assignment| assignment.validator_account_id != ALICE_ID.clone())
+    );
+    Ok(())
+}
+#[test]
+fn reconcile_soracloud_model_hosts_rebalances_validator_after_peer_rebind()
+-> Result<(), eyre::Report> {
+    permissioned_soracloud_state!(kura, state);
+    let pool_id = Hash::new(b"peer-rebound-validator-pool");
+    let source_id = Hash::new(b"peer-rebound-validator-source");
+    soracloud_transaction_at!(state, initial_header, initial_block, initial_tx, 100);
+    insert_active_public_lane_validator(&mut initial_tx, BOB_ID.clone(), 900);
+    let alice_capability = sample_model_host_capability(ALICE_ID.clone(), 10, 500);
+    let bob_capability = sample_model_host_capability(BOB_ID.clone(), 10, 500);
+    record_model_host_capability(&mut initial_tx, alice_capability.clone())?;
+    record_model_host_capability(&mut initial_tx, bob_capability.clone())?;
+    record_hf_shared_lease_pool(
+        &mut initial_tx,
+        sample_hf_shared_lease_pool_record(pool_id, source_id, 100),
+    )?;
+    record_hf_placement(
+        &mut initial_tx,
+        SoraHfPlacementRecordV1 {
+            schema_version: SORA_HF_PLACEMENT_RECORD_VERSION_V1,
+            placement_id: Hash::new(b"peer-rebound-validator-placement"),
+            source_id,
+            pool_id,
+            status: SoraHfPlacementStatusV1::Ready,
+            selection_seed_hash: Hash::new(b"peer-rebound-validator-seed"),
+            resource_profile: sample_hf_resource_profile(),
+            eligible_validator_count: 2,
+            adaptive_target_host_count: 1,
+            assigned_hosts: vec![SoraHfPlacementHostAssignmentV1 {
+                validator_account_id: ALICE_ID.clone(),
+                peer_id: alice_capability.peer_id.clone(),
+                role: SoraHfPlacementHostRoleV1::Primary,
+                status: SoraHfPlacementHostStatusV1::Warm,
+                host_class: alice_capability.host_class.clone(),
+            }],
+            total_reservation_fee: "0.000001".parse().expect("total reservation fee"),
+            last_rebalance_at_ms: 100,
+            last_error: None,
+        },
+    )?;
+    initial_tx.apply();
+    initial_block.commit()?;
+
+    soracloud_transaction_at!(state, reconcile_header, reconcile_block, reconcile_tx, 111);
+    let rebound_peer_id = PeerId::from(checked_keypair().public_key().clone());
+    assert_ne!(rebound_peer_id.to_string(), alice_capability.peer_id);
+    reconcile_tx
+        .world
+        .public_lane_validators
+        .get_mut(&(LaneId::SINGLE, ALICE_ID.clone()))
+        .expect("active Alice validator fixture")
+        .peer_id = rebound_peer_id;
+    isi::ReconcileSoracloudModelHosts.execute(&ALICE_ID, &mut reconcile_tx)?;
+
+    assert!(
+        reconcile_tx
+            .world
+            .soracloud_model_host_capabilities
+            .get(&ALICE_ID)
+            .is_none(),
+        "peer rotation must evict the stale model-host capability"
+    );
+    assert_eq!(
+        reconcile_tx
+            .world
+            .soracloud_model_host_violation_evidence
+            .len(),
+        0,
+        "an administrative peer rotation must not manufacture violation evidence"
+    );
+    let placement = reconcile_tx
+        .world
+        .soracloud_hf_placements
+        .get(&pool_id)
+        .expect("rebalanced placement");
+    assert_eq!(placement.assigned_hosts.len(), 1);
+    assert_eq!(
+        placement.assigned_hosts[0].validator_account_id,
+        BOB_ID.clone()
+    );
+    assert_eq!(placement.assigned_hosts[0].peer_id, bob_capability.peer_id);
+    assert_eq!(
+        placement.last_error.as_deref(),
+        Some(MODEL_HOST_VALIDATOR_PEER_BINDING_CHANGED_REASON)
     );
     Ok(())
 }
@@ -19950,8 +20073,16 @@ fn seed_active_inrou_replica_runtime_fixture(
     runtime_state.peer_id = placement.peer_id;
     runtime_state.selected_guest_isa = placement.selected_guest_isa;
     runtime_state.materialized_bundle_hash = bundle.container.bundle_hash;
+    let lease_started_height = state_transaction
+        .world
+        .soracloud_service_deployments
+        .get(&runtime_state.service_name)
+        .and_then(|deployment| deployment.service_lease.as_ref())
+        .expect("hosted service lease")
+        .lease_started_height;
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: runtime_state.service_name.clone(),
+        lease_started_height,
         reporting_epoch: runtime_state.reporting_epoch,
         active_service_version: service_version.to_owned(),
         replica_slot: runtime_state.replica_slot,
@@ -20079,12 +20210,6 @@ fn active_inrou_resolver_requires_exact_admitted_lease_volume_economics() -> Res
         .validate()
         .expect("generation two remains row-local valid but is never live-reachable in v1");
     assert_rejected(&wrong_generation);
-    let mut unexpected_materialization = canonical.clone();
-    unexpected_materialization.lease_volume_states[0].last_materialized_sequence = Some(1);
-    unexpected_materialization
-        .validate()
-        .expect("a materialization marker remains row-local valid but has no v1 writer");
-    assert_rejected(&unexpected_materialization);
 
     stx.world
         .soracloud_service_deployments
@@ -21709,22 +21834,16 @@ fn report_soracloud_service_lease_usage_updates_authoritative_lease_state()
     stx.world
         .soracloud_inrou_host_capabilities
         .insert(ALICE_ID.clone(), capability);
-    let reporting_epoch = stx
+    let (lease_started_height, reporting_epoch) = stx
         .world
         .soracloud_service_deployments
         .get(&bundle.service.service_name)
         .and_then(|deployment| deployment.service_lease.as_ref())
-        .expect("hosted service lease")
-        .reporting_epoch;
-    let lease_started_height = stx
-        .world
-        .soracloud_service_deployments
-        .get(&bundle.service.service_name)
-        .and_then(|deployment| deployment.service_lease.as_ref())
-        .expect("hosted service lease")
-        .lease_started_height;
+        .map(|lease| (lease.lease_started_height, lease.reporting_epoch))
+        .expect("hosted service lease");
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 1,
@@ -21735,23 +21854,13 @@ fn report_soracloud_service_lease_usage_updates_authoritative_lease_state()
     stx.apply();
     state_block.commit()?;
 
-    let usage_header =
-        ValidBlock::new_dummy_and_modify_header(&checked_keypair().into_parts().1, |header| {
-            header.set_height(
-                NonZeroU64::new(
-                    lease_started_height
-                        .checked_add(1)
-                        .expect("the test lease height has a successor"),
-                )
-                .expect("the successor service-lease height is nonzero"),
-            );
-        })
-        .as_ref()
-        .header();
-    let mut usage_block = state.block(usage_header);
-    let mut usage_tx = usage_block.transaction();
+    let successor_height = lease_started_height
+        .checked_add(1)
+        .expect("the test lease height has a successor");
+    soracloud_transaction_at_height!(state, usage_header, usage_block, usage_tx, successor_height);
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 1,
@@ -21896,6 +22005,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
     for (authority, replica_slot) in [(&*ALICE_ID, 1_u16), (&*BOB_ID, 2_u16)] {
         isi::ReportSoracloudServiceLeaseUsage {
             service_name: bundle.service.service_name.clone(),
+            lease_started_height,
             reporting_epoch,
             active_service_version: bundle.service.service_version.clone(),
             replica_slot,
@@ -21906,21 +22016,10 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
     }
     stx.apply();
     state_block.commit()?;
-    let block_header =
-        ValidBlock::new_dummy_and_modify_header(&checked_keypair().into_parts().1, |header| {
-            header.set_height(
-                NonZeroU64::new(
-                    lease_started_height
-                        .checked_add(1)
-                        .expect("the test lease height has a successor"),
-                )
-                .expect("the successor service-lease height is nonzero"),
-            );
-        })
-        .as_ref()
-        .header();
-    let mut state_block = state.block(block_header);
-    let mut stx = state_block.transaction();
+    let successor_height = lease_started_height
+        .checked_add(1)
+        .expect("the test lease height has a successor");
+    soracloud_transaction_at_height!(state, block_header, state_block, stx, successor_height);
 
     let baseline = stx
         .world
@@ -21933,11 +22032,73 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
     mismatched_volume_clock
         .validate()
         .expect_err("leased-volume economics must match the containing service lease");
+    let zero_incarnation_error = isi::ReportSoracloudServiceLeaseUsage {
+        service_name: bundle.service.service_name.clone(),
+        lease_started_height: 0,
+        reporting_epoch,
+        active_service_version: bundle.service.service_version.clone(),
+        replica_slot: 1,
+        replica_accounted_egress_bytes: 0,
+        finalize_reporter: false,
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("a zero lease incarnation must fail closed");
+    assert_invalid_parameter_contains(
+        zero_incarnation_error,
+        "lease_started_height must be greater than zero",
+    );
+
+    let next_lease_started_height = lease_started_height
+        .checked_add(1)
+        .expect("fixture lease incarnation has a successor");
+    let mut next_incarnation = baseline.clone();
+    let next_incarnation_lease = next_incarnation
+        .service_lease
+        .as_mut()
+        .expect("hosted service lease");
+    assert!(next_lease_started_height < next_incarnation_lease.lease_expires_height);
+    next_incarnation_lease.lease_started_height = next_lease_started_height;
+    for volume in &mut next_incarnation.lease_volume_states {
+        volume.lease_started_height = next_lease_started_height;
+    }
+    next_incarnation
+        .validate()
+        .expect("successor lease incarnation fixture must remain valid");
+    stx.world.soracloud_service_deployments.insert(
+        bundle.service.service_name.clone(),
+        next_incarnation.clone(),
+    );
+    let stale_incarnation_error = isi::ReportSoracloudServiceLeaseUsage {
+        service_name: bundle.service.service_name.clone(),
+        lease_started_height,
+        reporting_epoch,
+        active_service_version: bundle.service.service_version.clone(),
+        replica_slot: 1,
+        replica_accounted_egress_bytes: 0,
+        finalize_reporter: false,
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err(
+        "a report for an old lease must be rejected even when epoch, revision, and slot match",
+    );
+    assert_invalid_parameter_contains(stale_incarnation_error, "lease-incarnation CAS expected");
+    assert_eq!(
+        stx.world
+            .soracloud_service_deployments
+            .get(&bundle.service.service_name),
+        Some(&next_incarnation),
+        "a stale lease report must not mutate the current incarnation",
+    );
+    stx.world
+        .soracloud_service_deployments
+        .insert(bundle.service.service_name.clone(), baseline.clone());
+
     let alice_bytes = 1024 * 1024;
     let bob_bytes = 10;
 
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 1,
@@ -21947,6 +22108,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
     .execute(&ALICE_ID, &mut stx)?;
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 2,
@@ -21995,6 +22157,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
         .expect_err("reporter checkpoint state growth must be protocol bounded");
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch: reporting_epoch.saturating_add(2),
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 1,
@@ -22005,6 +22168,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
     .expect_err("a report outside the current or exact successor epoch must be rejected");
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch: reporting_epoch.saturating_add(2),
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 1,
@@ -22045,6 +22209,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
 
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 1,
@@ -22064,6 +22229,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
     );
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 1,
@@ -22074,6 +22240,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
     .expect_err("an active assignment must not seal its reporter checkpoint");
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 1,
@@ -22084,6 +22251,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
     .expect_err("a reporter checkpoint must not decrease");
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 1,
@@ -22092,6 +22260,10 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
     }
     .execute(&BOB_ID, &mut stx)
     .expect_err("a validator must not spoof another replica slot");
+
+    stx.apply();
+    state_block.commit()?;
+    soracloud_transaction_at_height!(state, block_header, state_block, stx, 4);
 
     let placement_key = (
         bundle.service.service_name.as_ref().to_owned(),
@@ -22103,15 +22275,24 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
         .get(&placement_key)
         .cloned()
         .expect("two-reporter placement");
-    let alice_assignment = retired_alice_placement.placements[0].clone();
-    retired_alice_placement.placements[0].validator_account_id = CARPENTER_ID.clone();
-    retired_alice_placement.placements[0].peer_id =
+    let alice_assignment_index = retired_alice_placement
+        .placements
+        .iter()
+        .position(|assignment| {
+            assignment.replica_slot == 1 && assignment.validator_account_id == *ALICE_ID
+        })
+        .expect("Alice placement");
+    let alice_assignment = retired_alice_placement.placements[alice_assignment_index].clone();
+    let successor_assignment = &mut retired_alice_placement.placements[alice_assignment_index];
+    successor_assignment.validator_account_id = CARPENTER_ID.clone();
+    successor_assignment.peer_id =
         PeerId::from(CARPENTER_ID.expect_single_signatory().clone()).to_string();
     stx.world
         .soracloud_inrou_service_placements
         .insert(placement_key.clone(), retired_alice_placement.clone());
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 1,
@@ -22120,9 +22301,10 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
     }
     .execute(&ALICE_ID, &mut stx)
     .expect_err("a former reporter may only submit a terminal checkpoint");
-    let terminal_alice_bytes = alice_bytes;
+    let terminal_alice_bytes = alice_bytes + 1;
     let terminal = isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 1,
@@ -22144,8 +22326,13 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
         })
         .expect("finalized Alice checkpoint");
     assert!(finalized_checkpoint.finalize_reporter);
+    assert_eq!(
+        finalized_checkpoint.accounted_egress_bytes, terminal_alice_bytes,
+        "a former reporter's one terminal update must retain final in-flight usage"
+    );
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 1,
@@ -22154,12 +22341,25 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
     }
     .execute(&ALICE_ID, &mut stx)
     .expect_err("a sealed former reporter must not advance again");
-    retired_alice_placement.placements[0] = alice_assignment;
+    retired_alice_placement.placements[alice_assignment_index] = alice_assignment;
     stx.world
         .soracloud_inrou_service_placements
         .insert(placement_key, retired_alice_placement);
+    let reopen_with_increase_error = isi::ReportSoracloudServiceLeaseUsage {
+        service_name: bundle.service.service_name.clone(),
+        lease_started_height,
+        reporting_epoch,
+        active_service_version: bundle.service.service_version.clone(),
+        replica_slot: 1,
+        replica_accounted_egress_bytes: terminal_alice_bytes + 1,
+        finalize_reporter: false,
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("a finalized checkpoint must reopen at its exact terminal byte value");
+    assert_invalid_parameter_contains(reopen_with_increase_error, "exact terminal byte value");
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 1,
@@ -22180,6 +22380,41 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
         })
         .expect("reopened Alice checkpoint");
     assert!(!reopened_checkpoint.finalize_reporter);
+    assert_eq!(
+        reopened_checkpoint.accounted_egress_bytes, terminal_alice_bytes,
+        "reopening must preserve the finalized checkpoint's terminal counter"
+    );
+
+    stx.apply();
+    state_block.commit()?;
+    soracloud_transaction_at_height!(state, block_header, state_block, stx, 5);
+    isi::ReportSoracloudServiceLeaseUsage {
+        service_name: bundle.service.service_name.clone(),
+        lease_started_height,
+        reporting_epoch,
+        active_service_version: bundle.service.service_version.clone(),
+        replica_slot: 1,
+        replica_accounted_egress_bytes: terminal_alice_bytes + 1,
+        finalize_reporter: false,
+    }
+    .execute(&ALICE_ID, &mut stx)?;
+    let increased_checkpoint = stx
+        .world
+        .soracloud_service_deployments
+        .get(&bundle.service.service_name)
+        .and_then(|deployment| deployment.service_lease.as_ref())
+        .and_then(|lease| {
+            lease.egress_reporter_checkpoints.iter().find(|checkpoint| {
+                checkpoint.assignment.placement.replica_slot == 1
+                    && checkpoint.assignment.placement.validator_account_id == *ALICE_ID
+            })
+        })
+        .expect("increased Alice checkpoint");
+    assert_eq!(
+        increased_checkpoint.accounted_egress_bytes,
+        terminal_alice_bytes + 1,
+        "a reopened checkpoint may resume monotonic reporting in a later block"
+    );
 
     let mut capped_deployment = baseline.clone();
     let capped_lease = capped_deployment.service_lease.as_mut().expect("lease");
@@ -22209,6 +22444,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
     );
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 2,
@@ -22219,6 +22455,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
     .expect_err("a full current-epoch table must reject a new identity without rollover");
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch: reporting_epoch + 2,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 2,
@@ -22229,6 +22466,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
     .expect_err("rollover must reject a skipped reporting epoch");
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch: reporting_epoch + 1,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 2,
@@ -22239,6 +22477,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
     .expect_err("rollover must reject a nonzero successor counter");
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch: reporting_epoch + 1,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 2,
@@ -22274,6 +22513,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
     );
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch: reporting_epoch + 1,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 1,
@@ -22296,6 +22536,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
     );
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch: reporting_epoch + 1,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 2,
@@ -22362,6 +22603,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
     );
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch: reporting_epoch + 1,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 2,
@@ -22382,6 +22624,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
         .insert(bundle.service.service_name.clone(), overflowing_deployment);
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch: reporting_epoch + 1,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 2,
@@ -22396,6 +22639,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
         .insert(bundle.service.service_name.clone(), capped_deployment);
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch: reporting_epoch + 1,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 2,
@@ -22462,6 +22706,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
     assert_eq!(rollover.settled_egress_bytes, 7 + 4_096);
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 2,
@@ -25553,6 +25798,27 @@ fn private_uploaded_model_execution_receipt_persists_idempotently_from_exact_art
     .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
     seed_test_call_hash(&mut stx, 0xD1);
 
+    let private_artifact_chunker = iroha_data_model::sorafs::pin_registry::ChunkerProfileHandle {
+        profile_id: 1,
+        namespace: "sorafs".to_owned(),
+        name: "sf1".to_owned(),
+        semver: "1.0.0".to_owned(),
+        multihash_code: 0x1f,
+    };
+    let consensus_epoch = stx.block_unix_timestamp_ms() / 1_000;
+    crate::smartcontracts::isi::sorafs::seed_eligible_auto_replication_providers_for_test(
+        &mut stx,
+        &ALICE_ID,
+        1,
+        StorageClass::Warm,
+        &private_artifact_chunker,
+        consensus_epoch,
+        u64::from(
+            iroha_data_model::sorafs::pin_registry::SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1,
+        ),
+        3,
+    )?;
+
     let (model_manifest_payload, model_digest) = private_artifact_manifest_fixture(0xD1, 4_352);
     let mut bundle = sample_uploaded_model_bundle("portal", model_digest);
     bundle.runtime_format =
@@ -25902,19 +26168,306 @@ fn private_uploaded_model_execution_receipt_persists_idempotently_from_exact_art
     .expect_err("prepare must bind the deterministic output replication order");
     assert!(matches!(
         wrong_order_error,
-        InstructionExecutionError::InvariantViolation(ref message)
-            if message.contains("deterministic replication order")
+        InstructionExecutionError::InvalidParameter(
+            InvalidParameterError::SmartContract(ref message)
+        ) if message.contains("output_replication_order_id")
     ));
+
+    let claim_key = (
+        receipt.service_name.as_ref().to_owned(),
+        receipt.decryption_request_id.clone(),
+    );
+    stx.gov.sorafs_pin_policy.require_council_signatures = true;
+    let council_gated_error = isi::PrepareSoracloudPrivateUploadedModelExecution {
+        output_manifest_payload: output_manifest_payload.clone(),
+        receipt: receipt.clone(),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("private execution must not consume a claim behind unbounded council approval");
+    assert!(matches!(
+        council_gated_error,
+        InstructionExecutionError::InvariantViolation(ref message)
+            if message.contains("permissionless automatic output-pin approval")
+    ));
+    assert!(
+        stx.world
+            .soracloud_private_uploaded_model_execution_claims
+            .get(&claim_key)
+            .is_none(),
+        "council-gated output approval must fail before claim consumption"
+    );
+    stx.gov.sorafs_pin_policy.require_council_signatures = false;
+
+    let output_digest = receipt.output_artifact.sorafs_manifest_digest;
+    let output_pin = stx
+        .world
+        .pin_manifests
+        .get(&output_digest)
+        .expect("failed prepare still registered the exact private output pin");
+    assert!(
+        matches!(output_pin.status, PinStatus::Approved(_)),
+        "terminal-order tests require an already approved private output pin"
+    );
+    let original_replication_order = stx
+        .world
+        .replication_orders
+        .get(&receipt.output_replication_order_id)
+        .cloned()
+        .expect("approved private output pin has its automatic replication order");
+    let (original_output_pin_status, original_output_retention_epoch) = {
+        let output_pin = stx
+            .world
+            .pin_manifests
+            .get(&output_digest)
+            .expect("registered private output pin");
+        (output_pin.status, output_pin.policy.retention_epoch)
+    };
+
+    stx.world
+        .pin_manifests
+        .get_mut(&output_digest)
+        .expect("registered private output pin")
+        .status = PinStatus::Pending;
+    stx.world
+        .replication_orders
+        .remove(receipt.output_replication_order_id.clone());
+    let pending_output_pin_error = isi::PrepareSoracloudPrivateUploadedModelExecution {
+        output_manifest_payload: output_manifest_payload.clone(),
+        receipt: receipt.clone(),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("prepare must not claim an existing output pin that is still pending");
+    assert!(matches!(
+        pending_output_pin_error,
+        InstructionExecutionError::InvariantViolation(ref message)
+            if message.contains("not approved at the claim epoch")
+    ));
+    assert!(
+        stx.world
+            .soracloud_private_uploaded_model_execution_claims
+            .get(&claim_key)
+            .is_none(),
+        "pending output pin must be rejected before claim insertion"
+    );
+    stx.world
+        .pin_manifests
+        .get_mut(&output_digest)
+        .expect("registered private output pin")
+        .status = original_output_pin_status;
+    stx.world.replication_orders.insert(
+        receipt.output_replication_order_id,
+        original_replication_order.clone(),
+    );
+
+    let minimum_order_retention_epoch = original_replication_order
+        .deadline_epoch
+        .checked_add(iroha_data_model::soracloud::SORACLOUD_PRIVATE_OUTPUT_MIN_RETENTION_SECS_V1)
+        .expect("automatic-order receipt-recovery floor");
+    stx.world
+        .pin_manifests
+        .get_mut(&output_digest)
+        .expect("registered private output pin")
+        .policy
+        .retention_epoch = minimum_order_retention_epoch - 1;
+    let insufficient_order_retention_error =
+        prepare_soracloud_private_uploaded_model_execution_claim(&mut stx, receipt.clone())
+            .expect_err(
+                "prepare must reserve the receipt floor after the automatic-order deadline",
+            );
+    assert!(matches!(
+        insufficient_order_retention_error,
+        InstructionExecutionError::InvariantViolation(ref message)
+            if message.contains("receipt-recovery floor")
+    ));
+    assert!(
+        stx.world
+            .soracloud_private_uploaded_model_execution_claims
+            .get(&claim_key)
+            .is_none(),
+        "insufficient post-order retention must be rejected before claim insertion"
+    );
+    stx.world
+        .pin_manifests
+        .get_mut(&output_digest)
+        .expect("registered private output pin")
+        .policy
+        .retention_epoch = minimum_order_retention_epoch;
+    prepare_soracloud_private_uploaded_model_execution_claim(&mut stx, receipt.clone())
+        .expect("the exact automatic-order receipt-recovery boundary is admissible");
+    stx.world
+        .soracloud_private_uploaded_model_execution_claims
+        .remove(claim_key.clone());
+    stx.world
+        .pin_manifests
+        .get_mut(&output_digest)
+        .expect("registered private output pin")
+        .policy
+        .retention_epoch = original_output_retention_epoch;
+
+    let claim_epoch = stx.block_unix_timestamp_ms() / 1_000;
+    let model_digest = receipt.model_manifest_digest;
+    let (original_model_status, original_model_retention_epoch) = {
+        let model_pin = stx
+            .world
+            .pin_manifests
+            .get(&model_digest)
+            .expect("uploaded-model pin");
+        (model_pin.status, model_pin.policy.retention_epoch)
+    };
+    stx.world
+        .pin_manifests
+        .get_mut(&model_digest)
+        .expect("uploaded-model pin")
+        .status = PinStatus::Approved(claim_epoch + 1);
+    let future_model_approval_error =
+        prepare_soracloud_private_uploaded_model_execution_claim(&mut stx, receipt.clone())
+            .expect_err("prepare must reject a model pin approved after the claim epoch");
+    assert!(matches!(
+        future_model_approval_error,
+        InstructionExecutionError::InvariantViolation(ref message)
+            if message.contains("uploaded-model") && message.contains("after claim epoch")
+    ));
+    {
+        let model_pin = stx
+            .world
+            .pin_manifests
+            .get_mut(&model_digest)
+            .expect("uploaded-model pin");
+        model_pin.status = original_model_status;
+        model_pin.policy.retention_epoch = claim_epoch;
+    }
+    let expired_model_pin_error =
+        prepare_soracloud_private_uploaded_model_execution_claim(&mut stx, receipt.clone())
+            .expect_err("prepare must reject a model pin expired at the claim epoch");
+    assert!(matches!(
+        expired_model_pin_error,
+        InstructionExecutionError::InvariantViolation(ref message)
+            if message.contains("uploaded-model") && message.contains("not live at claim epoch")
+    ));
+    {
+        let model_pin = stx
+            .world
+            .pin_manifests
+            .get_mut(&model_digest)
+            .expect("uploaded-model pin");
+        model_pin.status = original_model_status;
+        model_pin.policy.retention_epoch = original_model_retention_epoch;
+    }
+
+    let input_digest = receipt.input_artifact.sorafs_manifest_digest;
+    let (original_input_status, original_input_retention_epoch) = {
+        let input_pin = stx
+            .world
+            .pin_manifests
+            .get(&input_digest)
+            .expect("private input pin");
+        (input_pin.status, input_pin.policy.retention_epoch)
+    };
+    stx.world
+        .pin_manifests
+        .get_mut(&input_digest)
+        .expect("private input pin")
+        .status = PinStatus::Approved(claim_epoch + 1);
+    let future_input_approval_error =
+        prepare_soracloud_private_uploaded_model_execution_claim(&mut stx, receipt.clone())
+            .expect_err("prepare must reject an input pin approved after the claim epoch");
+    assert!(matches!(
+        future_input_approval_error,
+        InstructionExecutionError::InvariantViolation(ref message)
+            if message.contains("private `input`") && message.contains("after claim epoch")
+    ));
+    {
+        let input_pin = stx
+            .world
+            .pin_manifests
+            .get_mut(&input_digest)
+            .expect("private input pin");
+        input_pin.status = original_input_status;
+        input_pin.policy.retention_epoch = claim_epoch;
+    }
+    let expired_input_pin_error =
+        prepare_soracloud_private_uploaded_model_execution_claim(&mut stx, receipt.clone())
+            .expect_err("prepare must reject an input pin expired at the claim epoch");
+    assert!(matches!(
+        expired_input_pin_error,
+        InstructionExecutionError::InvariantViolation(ref message)
+            if message.contains("private `input`") && message.contains("not live at claim epoch")
+    ));
+    {
+        let input_pin = stx
+            .world
+            .pin_manifests
+            .get_mut(&input_digest)
+            .expect("private input pin");
+        input_pin.status = original_input_status;
+        input_pin.policy.retention_epoch = original_input_retention_epoch;
+    }
+
+    stx.world
+        .replication_orders
+        .get_mut(&receipt.output_replication_order_id)
+        .expect("private output replication order")
+        .status = iroha_data_model::sorafs::pin_registry::ReplicationOrderStatus::Expired(
+        original_replication_order
+            .deadline_epoch
+            .checked_add(1)
+            .expect("expiration epoch"),
+    );
+    let expired_order_error = isi::PrepareSoracloudPrivateUploadedModelExecution {
+        output_manifest_payload: output_manifest_payload.clone(),
+        receipt: receipt.clone(),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("prepare must not freeze a claim behind an expired replication order");
+    assert!(matches!(
+        expired_order_error,
+        InstructionExecutionError::InvariantViolation(ref message)
+            if message.contains("expired") && message.contains("cannot back a new execution claim")
+    ));
+    assert!(
+        stx.world
+            .soracloud_private_uploaded_model_execution_claims
+            .get(&claim_key)
+            .is_none(),
+        "expired replication order must be rejected before claim insertion"
+    );
+
+    let claim_epoch = stx.block_unix_timestamp_ms() / 1_000;
+    let overdue_order = stx
+        .world
+        .replication_orders
+        .get_mut(&receipt.output_replication_order_id)
+        .expect("private output replication order");
+    overdue_order.status = iroha_data_model::sorafs::pin_registry::ReplicationOrderStatus::Pending;
+    overdue_order.deadline_epoch = claim_epoch.checked_sub(1).expect("overdue deadline epoch");
+    let overdue_order_error = isi::PrepareSoracloudPrivateUploadedModelExecution {
+        output_manifest_payload: output_manifest_payload.clone(),
+        receipt: receipt.clone(),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("prepare must not freeze a claim behind an overdue pending replication order");
+    assert!(matches!(
+        overdue_order_error,
+        InstructionExecutionError::InvariantViolation(ref message)
+            if message.contains("still pending after deadline")
+    ));
+    assert!(
+        stx.world
+            .soracloud_private_uploaded_model_execution_claims
+            .get(&claim_key)
+            .is_none(),
+        "overdue pending replication order must be rejected before claim insertion"
+    );
+    stx.world.replication_orders.insert(
+        receipt.output_replication_order_id,
+        original_replication_order,
+    );
 
     isi::PrepareSoracloudPrivateUploadedModelExecution {
         output_manifest_payload: output_manifest_payload.clone(),
         receipt: receipt.clone(),
     }
     .execute(&ALICE_ID, &mut stx)?;
-    let claim_key = (
-        receipt.service_name.as_ref().to_owned(),
-        receipt.decryption_request_id.clone(),
-    );
     let claim_before_retry = stx
         .world
         .soracloud_private_uploaded_model_execution_claims
@@ -25922,33 +26475,34 @@ fn private_uploaded_model_execution_receipt_persists_idempotently_from_exact_art
         .cloned()
         .expect("prepare persists an authorization claim");
     assert_eq!(claim_before_retry.receipt, receipt);
-    let output_digest = receipt.output_artifact.sorafs_manifest_digest;
     let output_pin_before_prepare_retry = stx
         .world
         .pin_manifests
         .get(&output_digest)
         .cloned()
         .expect("prepare ensures the output pin");
+    stx.gov.sorafs_pin_policy.require_council_signatures = true;
     isi::PrepareSoracloudPrivateUploadedModelExecution {
         output_manifest_payload: output_manifest_payload.clone(),
         receipt: receipt.clone(),
     }
     .execute(&ALICE_ID, &mut stx)?;
+    stx.gov.sorafs_pin_policy.require_council_signatures = false;
     assert_eq!(
         stx.world
             .soracloud_private_uploaded_model_execution_claims
             .get(&claim_key),
         Some(&claim_before_retry),
-        "exact prepare retry must not replace the claim"
+        "exact prepare retry must not replace the claim after governance changes"
     );
     assert_eq!(
         stx.world.pin_manifests.get(&output_digest),
         Some(&output_pin_before_prepare_retry),
-        "exact prepare retry must not mutate the output pin"
+        "exact prepare retry must not mutate the output pin after governance changes"
     );
     stx.world
         .replication_orders
-        .remove(receipt.output_replication_order_id);
+        .remove(receipt.output_replication_order_id.clone());
     let approved_output_status = stx
         .world
         .pin_manifests
@@ -26222,6 +26776,18 @@ fn private_uploaded_model_execution_receipt_persists_idempotently_from_exact_art
         receipt.output_artifact.ciphertext_bytes
     );
     assert_eq!(output_pin_before_replay.submitted_by, ALICE_ID.clone());
+    let early_retirement = iroha_data_model::isi::sorafs::RetirePinManifest {
+        digest: receipt.output_artifact.sorafs_manifest_digest,
+        reason: Some("early private-output retirement".to_owned()),
+    }
+    .execute(&ALICE_ID, &mut second_stx)
+    .expect_err("committed private output must remain pinned through its retention promise");
+    assert!(matches!(
+        early_retirement,
+        InstructionExecutionError::InvalidParameter(
+            InvalidParameterError::SmartContract(ref message)
+        ) if message.contains("cannot retire before its promised retention epoch")
+    ));
 
     isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
         receipt: receipt.clone(),

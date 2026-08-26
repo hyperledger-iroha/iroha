@@ -23,7 +23,7 @@ use iroha_data_model::{
         AssetEntry, AssetValue, Mintable, id::AssetId,
     },
     block::consensus_v2::{
-        SnapshotV2BootstrapRecord, finality::verify_validator_power_roster_pops,
+        ConsensusMode, SnapshotV2BootstrapRecord, finality::verify_validator_power_roster_pops,
     },
     block::{
         BlockHeader, SignedBlock,
@@ -165,8 +165,9 @@ use iroha_data_model::{
             CapacityFeeLedgerEntry, ProviderId,
         },
         pin_registry::{
-            ManifestAliasId, ManifestAliasRecord, ManifestDigest, PinManifestRecord,
+            ManifestAliasId, ManifestAliasRecord, ManifestDigest, PinManifestRecord, PinStatus,
             ProviderIngestCompletionAuthorityV1, ReplicationOrderId, ReplicationOrderRecord,
+            ReplicationOrderStatus,
         },
         pricing::{PricingScheduleRecord, ProviderCreditRecord},
     },
@@ -177,6 +178,7 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::{
     nft::CanModifyNftMetadata, sorafs::CanOperateSorafsRepair, trigger::CanExecuteTrigger,
 };
+use iroha_file_mmap::ReadOnlyMmap;
 use iroha_logger::prelude::*;
 use iroha_primitives::{
     const_vec::ConstVec,
@@ -1226,17 +1228,77 @@ macro_rules! build_world_view {
 /// monotonically and can be rolled back deterministically by truncating the tail. To avoid
 /// blocking read-only state views during block execution, block-scoped access buffers appended
 /// hashes and only applies them under a short write lock at commit time.
-#[derive(Default)]
 pub struct BlockHashes {
-    inner: parking_lot::RwLock<Vec<HashOf<BlockHeader>>>,
+    inner: parking_lot::RwLock<BlockHashStorage>,
     committed_height: AtomicUsize,
+}
+
+enum BlockHashStorage {
+    Owned(Vec<HashOf<BlockHeader>>),
+    EmergencyFastMapped(ReadOnlyMmap),
+}
+
+impl BlockHashStorage {
+    fn as_slice(&self) -> &[HashOf<BlockHeader>] {
+        match self {
+            Self::Owned(hashes) => hashes,
+            Self::EmergencyFastMapped(mapping) => mapped_block_hashes(mapping),
+        }
+    }
+}
+
+/// Interpret the fixed-width Kura hash journal without faulting or copying all
+/// of its pages during emergency Fast startup.
+#[allow(unsafe_code)]
+fn mapped_block_hashes(mapping: &ReadOnlyMmap) -> &[HashOf<BlockHeader>] {
+    let bytes = mapping.as_slice();
+    assert_eq!(
+        bytes.len() % Hash::LENGTH,
+        0,
+        "Kura hash mapping must contain complete fixed-width hashes"
+    );
+    assert!(
+        bytes
+            .as_ptr()
+            .align_offset(std::mem::align_of::<HashOf<BlockHeader>>())
+            == 0,
+        "Kura hash mapping must satisfy HashOf alignment"
+    );
+    // SAFETY: `Hash` and `HashOf<T>` are transparent wrappers around `[u8; 32]`
+    // and explicitly have no trap representation. The mapping is read-only,
+    // page-aligned, and retained for at least the returned slice lifetime.
+    unsafe {
+        std::slice::from_raw_parts(
+            bytes.as_ptr().cast::<HashOf<BlockHeader>>(),
+            bytes.len() / Hash::LENGTH,
+        )
+    }
+}
+
+impl Default for BlockHashes {
+    fn default() -> Self {
+        Self::new(Vec::new())
+    }
 }
 impl BlockHashes {
     /// Construct a new container from an explicit vector.
     pub fn new(initial: Vec<HashOf<BlockHeader>>) -> Self {
         let committed_height = initial.len();
         Self {
-            inner: parking_lot::RwLock::new(initial),
+            inner: parking_lot::RwLock::new(BlockHashStorage::Owned(initial)),
+            committed_height: AtomicUsize::new(committed_height),
+        }
+    }
+    /// Construct a zero-copy read-only view of the exact Kura hash prefix used
+    /// by emergency Fast mode.
+    fn new_emergency_fast_mapped(mapping: ReadOnlyMmap, committed_height: usize) -> Self {
+        assert_eq!(
+            mapping.len(),
+            committed_height.saturating_mul(Hash::LENGTH),
+            "mapped Kura hash prefix must match its committed height"
+        );
+        Self {
+            inner: parking_lot::RwLock::new(BlockHashStorage::EmergencyFastMapped(mapping)),
             committed_height: AtomicUsize::new(committed_height),
         }
     }
@@ -1262,7 +1324,7 @@ impl BlockHashes {
 /// Block-scoped access to the block hash log with staged updates.
 pub struct BlockHashesBlock<'a> {
     inner: &'a BlockHashes,
-    guard: Option<parking_lot::RwLockReadGuard<'a, Vec<HashOf<BlockHeader>>>>,
+    guard: Option<parking_lot::RwLockReadGuard<'a, BlockHashStorage>>,
     visible_len: usize,
     pending: Vec<HashOf<BlockHeader>>,
     visible: Vec<HashOf<BlockHeader>>,
@@ -1271,11 +1333,11 @@ impl<'a> BlockHashesBlock<'a> {
     fn new(inner: &'a BlockHashes, revert_latest: bool) -> Self {
         let guard = inner.inner.read();
         let visible_len = if revert_latest {
-            guard.len().saturating_sub(1)
+            guard.as_slice().len().saturating_sub(1)
         } else {
-            guard.len()
+            guard.as_slice().len()
         };
-        let visible = guard[..visible_len].to_vec();
+        let visible = guard.as_slice()[..visible_len].to_vec();
         Self {
             inner,
             guard: Some(guard),
@@ -1324,11 +1386,13 @@ impl<'a> BlockHashesBlock<'a> {
         let visible_len = self.visible_len;
         self.guard.take();
         let mut guard = self.inner.inner.write();
-        guard.truncate(visible_len);
-        guard.extend(pending);
+        let mut hashes = guard.as_slice().to_vec();
+        hashes.truncate(visible_len);
+        hashes.extend(pending);
+        *guard = BlockHashStorage::Owned(hashes);
         self.inner
             .committed_height
-            .store(guard.len(), Ordering::Release);
+            .store(guard.as_slice().len(), Ordering::Release);
     }
     /// Commit mutations in tests without exposing the block hash log publicly.
     pub fn commit_for_tests(self) {
@@ -1371,13 +1435,40 @@ impl std::ops::Deref for BlockHashesTransaction<'_> {
 }
 /// Read-only view of the committed block hashes.
 pub struct BlockHashesView<'a> {
-    guard: parking_lot::RwLockReadGuard<'a, Vec<HashOf<BlockHeader>>>,
+    guard: parking_lot::RwLockReadGuard<'a, BlockHashStorage>,
 }
 impl std::ops::Deref for BlockHashesView<'_> {
-    type Target = Vec<HashOf<BlockHeader>>;
+    type Target = [HashOf<BlockHeader>];
     #[allow(clippy::explicit_auto_deref)]
     fn deref(&self) -> &Self::Target {
-        &*self.guard
+        self.guard.as_slice()
+    }
+}
+#[cfg(test)]
+mod emergency_fast_block_hash_mapping_tests {
+    use super::*;
+    use std::io::Write as _;
+
+    #[test]
+    fn mapped_hash_journal_preserves_height_and_values_without_owned_copy() {
+        let hashes = [
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x31; 32])),
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x42; 32])),
+        ];
+        let mut file = tempfile::NamedTempFile::new().expect("create mapped hash fixture");
+        for hash in hashes {
+            file.write_all(hash.as_ref()).expect("write hash fixture");
+        }
+        let mapping = ReadOnlyMmap::copy_read_only(file.as_file(), hashes.len() * Hash::LENGTH)
+            .expect("map hash fixture");
+        let journal = BlockHashes::new_emergency_fast_mapped(mapping, hashes.len());
+
+        assert_eq!(journal.committed_height(), hashes.len());
+        assert_eq!(&*journal.view(), hashes.as_slice());
+        assert!(matches!(
+            &*journal.inner.read(),
+            BlockHashStorage::EmergencyFastMapped(_)
+        ));
     }
 }
 /// Small per-transaction cache to speed up hot permission checks
@@ -4280,7 +4371,6 @@ pub struct World {
     pub(crate) soracloud_private_uploaded_model_execution_claims:
         Storage<(String, String), SoraPrivateUploadedModelExecutionClaimV1>,
     /// Capacity declarations keyed by provider identifier.
-    #[norito(skip)]
     pub(crate) capacity_declarations: Storage<ProviderId, CapacityDeclarationRecord>,
     /// Aggregated fee ledger entries per provider.
     #[norito(skip)]
@@ -4995,7 +5085,6 @@ pub struct WorldBlock<'world> {
     pub(crate) soracloud_private_uploaded_model_execution_claims:
         StorageBlock<'world, (String, String), SoraPrivateUploadedModelExecutionClaimV1>,
     /// Capacity declarations keyed by provider identifier.
-    #[norito(skip)]
     pub(crate) capacity_declarations: StorageBlock<'world, ProviderId, CapacityDeclarationRecord>,
     /// Capacity fee ledger entries per provider.
     #[norito(skip)]
@@ -5034,7 +5123,6 @@ pub struct WorldBlock<'world> {
     #[norito(skip)]
     pub(crate) manifest_aliases: StorageBlock<'world, ManifestAliasId, ManifestAliasRecord>,
     /// Outstanding replication orders keyed by order identifier.
-    #[norito(skip)]
     pub(crate) replication_orders: StorageBlock<'world, ReplicationOrderId, ReplicationOrderRecord>,
     /// Content bundles keyed by bundle identifier.
     pub(crate) content_bundles: StorageBlock<'world, ContentBundleId, ContentBundleRecord>,
@@ -24947,7 +25035,7 @@ impl State {
                         dataspace.as_u64()
                     ));
                 }
-                for account_id in &accounts {
+                for account_id in accounts {
                     bindings.bind_account(*dataspace, account_id.clone());
                 }
             }
@@ -28189,6 +28277,7 @@ impl State {
                         batch,
                         &durable_admission.latest_execution_heights,
                         false,
+                        None,
                     )?;
                 }
                 Ok(())
@@ -29161,14 +29250,41 @@ impl State {
         block_height: u64,
     ) -> [u8; 32] {
         let world_view = self.world.view();
-        Self::lane_relay_committee_seed_from_sources(
+        match Self::lane_relay_committee_seed_from_sources(
             &world_view,
             &self.network_id,
             dataspace_id,
             lane_id,
             block_height,
-        )
-        .expect("lane relay fixture requires authenticated beacon entropy")
+        ) {
+            Ok(seed) => seed,
+            Err(_)
+                if world_view
+                    .global_beacon_key_sessions()
+                    .iter()
+                    .next()
+                    .is_none()
+                    && world_view
+                        .global_beacon_active_session()
+                        .iter()
+                        .next()
+                        .is_none()
+                    && world_view.global_beacon_pulses().iter().next().is_none()
+                    && world_view
+                        .global_beacon_latest_pulse()
+                        .iter()
+                        .next()
+                        .is_none() =>
+            {
+                Self::lane_relay_committee_seed_for_fixture(
+                    &self.network_id,
+                    dataspace_id,
+                    lane_id,
+                    block_height,
+                )
+            }
+            Err(error) => panic!("lane relay fixture requires a valid beacon: {error}"),
+        }
     }
     fn lane_relay_committee_seed_from_sources(
         world: &impl WorldReadOnly,
@@ -29177,38 +29293,45 @@ impl State {
         lane_id: LaneId,
         block_height: u64,
     ) -> Result<[u8; 32], crate::beacon::GlobalThresholdBeaconError> {
-        let pulse = match crate::beacon::verified_latest_global_threshold_beacon_pulse_v1(
+        let pulse = crate::beacon::verified_latest_global_threshold_beacon_pulse_v1(
             world,
             network_id,
             block_height.saturating_sub(1),
-        ) {
-            Ok(pulse) => pulse,
-            #[cfg(test)]
-            Err(_) => {
-                // Historical lane-selection fixtures predate the global beacon.
-                // Every non-test build has no configured/VRF fallback.
-                let legacy = crate::sumeragi::npos_seed_for_height_from_world(
-                    world,
-                    network_id,
-                    block_height,
-                );
-                let mut buffer =
-                    Vec::with_capacity(LANE_RELAY_SEED_DOMAIN.len() + legacy.len() + 12);
-                buffer.extend_from_slice(LANE_RELAY_SEED_DOMAIN);
-                buffer.extend_from_slice(&legacy);
-                buffer.extend_from_slice(&dataspace_id.as_u64().to_le_bytes());
-                buffer.extend_from_slice(&lane_id.as_u32().to_le_bytes());
-                return Ok(Hash::new(buffer).into());
-            }
-            #[cfg(not(test))]
-            Err(error) => return Err(error),
-        };
+        )?;
         Ok(crate::beacon::global_threshold_beacon_lane_relay_seed_v1(
             &pulse,
             block_height,
             dataspace_id.as_u64(),
             lane_id.as_u32(),
         ))
+    }
+    #[cfg(test)]
+    fn lane_relay_committee_seed_for_fixture(
+        network_id: &iroha_data_model::NetworkId,
+        dataspace_id: DataSpaceId,
+        lane_id: LaneId,
+        block_height: u64,
+    ) -> [u8; 32] {
+        // Unit fixtures that exercise lane authority independently of beacon
+        // persistence use explicit synthetic entropy. This helper is never an
+        // error recovery path for partially populated or invalid beacon state.
+        const TEST_ENTROPY_DOMAIN: &[u8] = b"iroha:lane-relay:test-entropy:v1";
+        let fixture_entropy = Hash::new_from_chunks(&[
+            TEST_ENTROPY_DOMAIN,
+            network_id.as_bytes(),
+            block_height.to_be_bytes().as_slice(),
+        ]);
+        let mut buffer = Vec::with_capacity(
+            LANE_RELAY_SEED_DOMAIN.len()
+                + Hash::LENGTH
+                + core::mem::size_of::<u64>()
+                + core::mem::size_of::<u32>(),
+        );
+        buffer.extend_from_slice(LANE_RELAY_SEED_DOMAIN);
+        buffer.extend_from_slice(fixture_entropy.as_ref());
+        buffer.extend_from_slice(&dataspace_id.as_u64().to_le_bytes());
+        buffer.extend_from_slice(&lane_id.as_u32().to_le_bytes());
+        Hash::new(buffer).into()
     }
     fn lane_relay_committee_from_pool(
         pool: &[PeerId],
@@ -30355,17 +30478,21 @@ impl State {
         Ok(executions)
     }
     #[cfg(test)]
-    fn canonical_merge_execution_sources(&self) -> Option<Vec<MergeExecutionSource>> {
+    fn canonical_merge_execution_sources(
+        &self,
+        frozen_mode: ConsensusMode,
+    ) -> Option<Vec<MergeExecutionSource>> {
         if self.ensure_merge_history_available().is_err() {
             return None;
         }
         let consensus = self.merge_consensus_snapshot();
-        self.canonical_merge_execution_sources_for_consensus(&consensus)
+        self.canonical_merge_execution_sources_for_consensus(&consensus, frozen_mode)
     }
     #[cfg(test)]
     fn canonical_merge_execution_sources_for_consensus(
         &self,
         consensus: &MergeConsensusSnapshot,
+        frozen_mode: ConsensusMode,
     ) -> Option<Vec<MergeExecutionSource>> {
         let lifecycle = &consensus.lifecycle;
         let nexus = &lifecycle.nexus;
@@ -30446,8 +30573,22 @@ impl State {
                 );
                 return None;
             }
-            let expected_epoch =
-                crate::sumeragi::epoch_for_height_from_world(&world, descriptor.proposal_height);
+            let expected_epoch = match crate::sumeragi::epoch_for_height_from_world(
+                &world,
+                descriptor.proposal_height,
+                frozen_mode,
+            ) {
+                Ok(epoch) => epoch,
+                Err(error) => {
+                    warn!(
+                        lane = %lane.id.as_u32(),
+                        lane_block_height = expected_height,
+                        %error,
+                        "deferring merge source selection because the committed epoch schedule is invalid"
+                    );
+                    return None;
+                }
+            };
             let durable_source = match self.kura.durable_autonomous_lane_merge_source(
                 lane.id,
                 expected_height,
@@ -30486,7 +30627,7 @@ impl State {
     /// replicated route/incarnation frontier; later certified heights or a certificate without
     /// its exact execution input cannot keep the merge producer selected. Exact candidate
     /// construction and follower validation remain authoritative.
-    pub(crate) fn has_pending_merge_execution_sources(&self) -> bool {
+    pub(crate) fn has_pending_merge_execution_sources(&self, frozen_mode: ConsensusMode) -> bool {
         if self.ensure_merge_history_available().is_err() {
             return false;
         }
@@ -30536,7 +30677,11 @@ impl State {
             let expected_epoch = crate::sumeragi::epoch_for_height_from_world(
                 &world,
                 certified.proposal.descriptor.proposal_height,
+                frozen_mode,
             );
+            let Ok(expected_epoch) = expected_epoch else {
+                return false;
+            };
             let ready = self
                 .kura
                 .durable_autonomous_lane_merge_source(
@@ -30557,6 +30702,7 @@ impl State {
         &self,
         epoch_id: u64,
         application_block_header: BlockHeader,
+        frozen_mode: ConsensusMode,
     ) -> Option<MergeExecutionBatch> {
         if self.ensure_merge_history_available().is_err() {
             return None;
@@ -30566,6 +30712,7 @@ impl State {
             epoch_id,
             application_block_header,
             &consensus,
+            frozen_mode,
         )
     }
     /// Build a self-contained autonomous execution candidate for an exact
@@ -30579,6 +30726,7 @@ impl State {
     pub(crate) fn build_merge_execution_candidate(
         &self,
         application_block_header: BlockHeader,
+        frozen_mode: ConsensusMode,
     ) -> Option<crate::merge::MergeLedgerCandidate> {
         if self.ensure_merge_history_available().is_err() {
             return None;
@@ -30591,6 +30739,7 @@ impl State {
             epoch_id,
             application_block_header,
             &consensus,
+            frozen_mode,
         )?;
         let lifecycle = &consensus.lifecycle;
         let nexus = &lifecycle.nexus;
@@ -30635,8 +30784,13 @@ impl State {
             lane_drain_certificates: Vec::new(),
             global_state_root: crate::merge::reduce_merge_hint_roots(&[]),
         };
-        self.validate_merge_candidate_for_global_round(&candidate, &parent_header, global_view)
-            .ok()?;
+        self.validate_merge_candidate_for_global_round(
+            &candidate,
+            &parent_header,
+            global_view,
+            frozen_mode,
+        )
+        .ok()?;
         Some(candidate)
     }
     fn build_merge_execution_batch_for_consensus(
@@ -30644,6 +30798,7 @@ impl State {
         epoch_id: u64,
         application_block_header: BlockHeader,
         consensus: &MergeConsensusSnapshot,
+        frozen_mode: ConsensusMode,
     ) -> Option<MergeExecutionBatch> {
         let lifecycle = &consensus.lifecycle;
         let admission = &consensus.admission;
@@ -30745,8 +30900,22 @@ impl State {
                 );
                 return None;
             }
-            let expected_epoch =
-                crate::sumeragi::epoch_for_height_from_world(&world, descriptor.proposal_height);
+            let expected_epoch = match crate::sumeragi::epoch_for_height_from_world(
+                &world,
+                descriptor.proposal_height,
+                frozen_mode,
+            ) {
+                Ok(epoch) => epoch,
+                Err(error) => {
+                    warn!(
+                        lane = %lane.id.as_u32(),
+                        lane_block_height = expected_height,
+                        %error,
+                        "deferring merge batch construction because the committed epoch schedule is invalid"
+                    );
+                    return None;
+                }
+            };
             let durable_source = match self.kura.durable_autonomous_lane_merge_source(
                 lane.id,
                 expected_height,
@@ -31124,6 +31293,7 @@ impl State {
         parent_header: &BlockHeader,
         global_view: u64,
         certificate: LaneDrainCertificateV1,
+        frozen_mode: ConsensusMode,
     ) -> Result<crate::merge::MergeLedgerCandidate, MergeLedgerCommitError> {
         let (body, committee) = self.pending_autoscale_lane_drain_body().ok_or_else(|| {
             MergeLedgerCommitError::ExecutionBatchInvalid(
@@ -31224,7 +31394,12 @@ impl State {
             lane_drain_certificates: vec![certificate],
             global_state_root: crate::merge::reduce_merge_hint_roots(&[]),
         };
-        self.validate_merge_candidate_for_global_round(&candidate, parent_header, global_view)?;
+        self.validate_merge_candidate_for_global_round(
+            &candidate,
+            parent_header,
+            global_view,
+            frozen_mode,
+        )?;
         Ok(candidate)
     }
     fn queue_plan_active_lane_bindings(
@@ -31744,6 +31919,7 @@ impl State {
         candidate: &crate::merge::MergeLedgerCandidate,
         parent_header: &BlockHeader,
         global_view: u64,
+        frozen_mode: ConsensusMode,
     ) -> Result<(), MergeLedgerCommitError> {
         self.ensure_merge_history_available()?;
         let consensus = self.merge_consensus_snapshot();
@@ -31787,6 +31963,7 @@ impl State {
             batch,
             &consensus.admission.latest_execution_heights,
             true,
+            Some(frozen_mode),
         )?;
         let sources = batch
             .lanes
@@ -31832,13 +32009,19 @@ impl State {
         candidate: &crate::merge::MergeLedgerCandidate,
         parent_header: &BlockHeader,
         global_view: u64,
+        frozen_mode: ConsensusMode,
     ) -> Result<(), MergeLedgerCommitError> {
         if candidate.execution_batch.is_some() {
             return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
                 "expected a relay-settlement merge candidate".to_owned(),
             ));
         }
-        self.validate_merge_candidate_for_global_round(candidate, parent_header, global_view)
+        self.validate_merge_candidate_for_global_round(
+            candidate,
+            parent_header,
+            global_view,
+            frozen_mode,
+        )
     }
     /// Expose relay-settlement candidate synthesis to focused unit tests.
     #[cfg(test)]
@@ -33160,6 +33343,15 @@ impl State {
         let active_routes = routes.iter().copied().collect::<BTreeSet<_>>();
         let network_id = self.network_id;
         let authority = self.view();
+        let authority_height = u64::try_from(authority.height())
+            .wrap_err("committed height does not fit the consensus height domain")?;
+        let frozen_mode = if authority_height == 0 {
+            self.authenticated_snapshot_v2_bootstrap()
+                .map(|bootstrap| bootstrap.context.mode)
+        } else {
+            self.sumeragi_v2_height_context(authority_height)?
+                .map(|context| context.mode)
+        };
         let mut evidence =
             BTreeMap::<AutonomousLaneDiagnosticKey, AutonomousLaneDiagnosticEvidence>::new();
         let mut autonomous_proposal_evidence = BTreeMap::<
@@ -33200,7 +33392,17 @@ impl State {
                 network_id,
                 SUMERAGI_AUTONOMOUS_LANE_EXECUTIONS_MAX,
                 |proposal_height| {
-                    crate::sumeragi::epoch_for_height_from_world(&authority.world, proposal_height)
+                    let frozen_mode = frozen_mode.ok_or_else(|| {
+                        format!(
+                            "autonomous diagnostics lack a signed consensus mode at committed height {authority_height}"
+                        )
+                    })?;
+                    crate::sumeragi::epoch_for_height_from_world(
+                        &authority.world,
+                        proposal_height,
+                        frozen_mode,
+                    )
+                    .map_err(|error| error.to_string())
                 },
             )
             .wrap_err("failed to read bounded autonomous payload diagnostics")?;
@@ -33256,10 +33458,22 @@ impl State {
                     },
                 )
             {
+                let frozen_mode = frozen_mode.ok_or_else(|| {
+                    eyre!(
+                        "autonomous diagnostics lack a signed consensus mode at committed height {authority_height}"
+                    )
+                })?;
                 let expected_epoch = crate::sumeragi::epoch_for_height_from_world(
                     &authority.world,
                     certified.proposal.descriptor.proposal_height,
-                );
+                    frozen_mode,
+                )
+                .map_err(|error| {
+                    eyre!(
+                        "cannot resolve autonomous diagnostic epoch at proposal height {}: {error}",
+                        certified.proposal.descriptor.proposal_height
+                    )
+                })?;
                 let finalized_key = {
                     let descriptor = &certified.proposal.descriptor;
                     (
@@ -36919,6 +37133,7 @@ impl State {
         batch: &MergeExecutionBatch,
         previous_heights: &BTreeMap<(LaneId, DataSpaceId, Hash), u64>,
         validate_live_authority: bool,
+        frozen_mode: Option<ConsensusMode>,
     ) -> Result<(), MergeLedgerCommitError> {
         let invalid_batch =
             |message: &str| MergeLedgerCommitError::ExecutionBatchInvalid(message.to_owned());
@@ -37178,16 +37393,29 @@ impl State {
                     "autonomous payload chain binding mismatch".to_owned(),
                 ));
             }
-            if validate_live_authority
-                && execution.autonomous_epoch
-                    != crate::sumeragi::epoch_for_height_from_world(
-                        world,
-                        descriptor.proposal_height,
+            if validate_live_authority {
+                let frozen_mode = frozen_mode.ok_or_else(|| {
+                    MergeLedgerCommitError::ExecutionBatchInvalid(
+                        "live autonomous execution validation lacks an authenticated consensus mode"
+                            .to_owned(),
                     )
-            {
-                return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                    "autonomous payload epoch binding differs from activation context".to_owned(),
-                ));
+                })?;
+                let expected_epoch = crate::sumeragi::epoch_for_height_from_world(
+                    world,
+                    descriptor.proposal_height,
+                    frozen_mode,
+                )
+                .map_err(|error| {
+                    MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                        "cannot resolve autonomous payload epoch from committed state: {error}"
+                    ))
+                })?;
+                if execution.autonomous_epoch != expected_epoch {
+                    return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                        "autonomous payload epoch binding differs from activation context"
+                            .to_owned(),
+                    ));
+                }
             }
             if execution.entrypoints.len() != descriptor.accepted_candidate_indices.len()
                 || execution.entrypoint_hashes != descriptor.accepted_transaction_hashes
@@ -37479,6 +37707,7 @@ impl State {
     pub(crate) fn validate_certified_merge_entry_for_global_order(
         &self,
         entry: &MergeLedgerEntry,
+        frozen_mode: ConsensusMode,
     ) -> Result<(), MergeLedgerCommitError> {
         self.ensure_merge_history_available()?;
         if !entry.has_current_version() {
@@ -37544,6 +37773,7 @@ impl State {
                 batch,
                 &consensus.admission.latest_execution_heights,
                 true,
+                Some(frozen_mode),
             )?;
         }
         Ok(())
@@ -37554,6 +37784,7 @@ impl State {
         round_header: &BlockHeader,
         expected_next_epoch: u64,
         selection: PendingCertifiedMergeSelection,
+        frozen_mode: ConsensusMode,
     ) -> Result<
         Option<(HashOf<MergeLedgerEntry>, MergeLedgerEntry, BlockHeader)>,
         MergeLedgerCommitError,
@@ -37574,7 +37805,7 @@ impl State {
                 {
                     return false;
                 }
-                match self.validate_certified_merge_entry_for_global_order(entry) {
+                match self.validate_certified_merge_entry_for_global_order(entry, frozen_mode) {
                     Ok(()) => true,
                     Err(err) => {
                         debug!(
@@ -37819,6 +38050,7 @@ impl State {
         &self,
         carrier_header: BlockHeader,
         entry: &MergeLedgerEntry,
+        frozen_mode: ConsensusMode,
     ) -> Result<StateBlock<'_>, MergeLedgerCommitError> {
         crate::smartcontracts::ivm::active_runtime_abi_hash(
             &self.world.view(),
@@ -37830,7 +38062,7 @@ impl State {
             ))
         })?;
         self.block_with_pristine_stage(carrier_header, |state_block| {
-            state_block.stage_certified_merge_entry(entry)
+            state_block.stage_certified_merge_entry(entry, frozen_mode)
         })
     }
     /// Resolve and stage a compact certified merge reference before running
@@ -37839,6 +38071,7 @@ impl State {
         &self,
         carrier_header: BlockHeader,
         reference: &iroha_data_model::block::CertifiedMergeLedgerReference,
+        frozen_mode: ConsensusMode,
     ) -> Result<StateBlock<'_>, MergeLedgerCommitError> {
         crate::smartcontracts::ivm::active_runtime_abi_hash(
             &self.world.view(),
@@ -37850,7 +38083,7 @@ impl State {
             ))
         })?;
         self.block_with_pristine_stage(carrier_header, |state_block| {
-            state_block.stage_certified_merge_reference(reference)
+            state_block.stage_certified_merge_reference(reference, frozen_mode)
         })
     }
     /// Stage proposal-native QueuePlan certificates on the pristine carrier
@@ -46307,6 +46540,7 @@ impl<'state> StateBlock<'state> {
     pub(crate) fn stage_certified_merge_reference(
         &mut self,
         reference: &iroha_data_model::block::CertifiedMergeLedgerReference,
+        frozen_mode: ConsensusMode,
     ) -> Result<(), MergeLedgerCommitError> {
         let replay_entry = self
             .state_ref
@@ -46333,13 +46567,14 @@ impl<'state> StateBlock<'state> {
                 "compact certified merge reference does not match its resolved sidecar".to_owned(),
             ));
         }
-        self.stage_certified_merge_entry(&entry)
+        self.stage_certified_merge_entry(&entry, frozen_mode)
     }
     /// Re-execute and stage a caller-resolved certified merge entry before any
     /// lifecycle, policy, or ordinary transaction effect is applied.
     pub(crate) fn stage_certified_merge_entry(
         &mut self,
         entry: &MergeLedgerEntry,
+        frozen_mode: ConsensusMode,
     ) -> Result<(), MergeLedgerCommitError> {
         self.ensure_pristine_execution_control_stage()?;
         if entry.merge_qc.carrier_height != self._curr_block.height().get()
@@ -46351,7 +46586,7 @@ impl<'state> StateBlock<'state> {
             ));
         }
         self.state_ref
-            .validate_certified_merge_entry_for_global_order(entry)?;
+            .validate_certified_merge_entry_for_global_order(entry, frozen_mode)?;
         let Some(batch) = entry.execution_batch.as_ref() else {
             if !entry.lane_drain_certificates.is_empty() {
                 self.stage_autoscale_lane_drain_commitment(entry)

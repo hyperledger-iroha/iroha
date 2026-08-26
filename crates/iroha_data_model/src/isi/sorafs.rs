@@ -123,9 +123,9 @@ pub struct IssueReplicationOrder {
         /// Canonical Norito-encoded replication order payload.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
         pub order_payload: Vec<u8>,
-        /// Epoch (inclusive) when the order is issued.
+        /// Unix second (inclusive) when the order is issued.
         pub issued_epoch: u64,
-        /// Epoch (inclusive) when the order expires.
+        /// Unix second (inclusive) when the order expires.
         pub deadline_epoch: u64,
         /// Optional immutable Musubi archive purpose installed atomically with this order.
         pub musubi_archive: Option<ArchiveId>,
@@ -139,7 +139,7 @@ pub struct CompleteReplicationOrder {
     pub order_id: ReplicationOrderId,
         /// Provider assignment whose ingestion is complete.
         pub provider_id: ProviderId,
-        /// Epoch (inclusive) when replication completed.
+        /// Unix second (inclusive) when replication completed.
         pub completion_epoch: u64,
         /// Exact chain-authoritative provider owner and signer policy expected at commit.
         pub expected_authority: ProviderIngestCompletionAuthorityV1,
@@ -169,7 +169,7 @@ isi! {
 pub struct ExpireReplicationOrder {
     /// Identifier of the replication order.
     pub order_id: ReplicationOrderId,
-        /// Epoch at which the order is expired; must be later than its deadline.
+        /// Unix second at which the order is expired; must be later than its deadline and no later than consensus time.
         pub expiration_epoch: u64,
     }
 }

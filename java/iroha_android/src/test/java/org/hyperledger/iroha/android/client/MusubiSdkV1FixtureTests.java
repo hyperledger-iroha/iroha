@@ -477,7 +477,7 @@ public final class MusubiSdkV1FixtureTests {
     final FixtureExecutor executor = new FixtureExecutor(responses);
     final MusubiToriiClientV1 client =
         MusubiToriiClientV1.builder()
-            .baseUri(URI.create("http://localhost:8080"))
+            .baseUri(URI.create("https://localhost:8080"))
             .executor(executor)
             .localSigningContext(new LocalSigningContext(NETWORK_ID))
             .build();
@@ -1428,7 +1428,7 @@ public final class MusubiSdkV1FixtureTests {
         JsonEncoder.encode(responseValue).getBytes(StandardCharsets.UTF_8));
     final MusubiToriiClientV1 client =
         MusubiToriiClientV1.builder()
-            .baseUri(URI.create("http://localhost:8080"))
+            .baseUri(URI.create("https://localhost:8080"))
             .executor(new FixtureExecutor(responses))
             .localSigningContext(new LocalSigningContext(NETWORK_ID))
             .build();

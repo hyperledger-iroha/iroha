@@ -168,6 +168,25 @@ const txStatusErrorMessageContract = JSON.parse(
     "utf8",
   ),
 );
+const sorafsReplicationOrderNativeFixture = JSON.parse(
+  readFileSync(
+    new URL(
+      "../../../fixtures/sorafs_manifest/replication_order/order_v1.json",
+      import.meta.url,
+    ),
+    "utf8",
+  ),
+);
+const SORAFS_REPLICATION_ORDER_BYTES = Buffer.from(
+  sorafsReplicationOrderNativeFixture.norito_bytes_hex,
+  "hex",
+);
+const SORAFS_REPLICATION_ORDER_ID_HEX =
+  sorafsReplicationOrderNativeFixture.order_id_hex;
+const SORAFS_REPLICATION_MANIFEST_DIGEST_HEX =
+  sorafsReplicationOrderNativeFixture.manifest_digest_hex;
+const SORAFS_REPLICATION_PROVIDER_HEX =
+  sorafsReplicationOrderNativeFixture.assignments[0].provider_id_hex;
 const nativeTest = makeNativeTest(test);
 
 function canonicalTransactionCodecNative(overrides = {}) {
@@ -505,6 +524,256 @@ const FIXTURE_ASSET_ID_A = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 const FIXTURE_ASSET_ID_B = "61CtjvNd9T3THAR65GsMVHr82Bjc";
 const FIXTURE_ASSET_ID_C = "5Pz9SwdN9eXPbiXPX9HRCpzCcE3o";
 const FIXTURE_ASSET_ID_D = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1";
+
+function sorafsRegistryAttestationFixture() {
+  return {
+    block_height: 1,
+    block_hash_hex: "98".repeat(32),
+    chain_id: "fixture-chain",
+  };
+}
+
+function sorafsAliasRfc3339Fixture(unixSeconds) {
+  return new Date(unixSeconds * 1000).toISOString().replace(".000Z", "Z");
+}
+
+function sorafsAliasRecordFixture({
+  namespace = "sora",
+  name = "docs",
+  manifestDigestHex = "a".repeat(64),
+  proofExpiresInSeconds = 888,
+} = {}) {
+  const proofGeneratedAtUnix = 1_700_000_000;
+  const proofExpiresAtUnix = 1_700_000_900;
+  const policySuccessorGraceSecs = 300;
+  const policyGovernanceGraceSecs = 120;
+  const record = {
+    alias: `${namespace}/${name}`,
+    namespace,
+    name,
+    manifest_digest_hex: manifestDigestHex,
+    bound_by: FIXTURE_ALICE_ID,
+    bound_epoch: 10,
+    expiry_epoch: 99,
+    proof_b64: Buffer.from("proof").toString("base64"),
+    cache_state: "fresh",
+    status_label: "fresh",
+    lineage: {
+      successor_of_hex: null,
+      head_hex: manifestDigestHex,
+      depth_to_head: 0,
+      is_head: true,
+      superseded_by: null,
+      immediate_successor: null,
+      anomalies: [],
+    },
+    cache_rotation_due: false,
+    cache_age_seconds: 12,
+    proof_generated_at_unix: proofGeneratedAtUnix,
+    proof_expires_at_unix: proofExpiresAtUnix,
+    policy_positive_ttl_secs: 600,
+    policy_refresh_window_secs: 120,
+    policy_hard_expiry_secs: 1_800,
+    policy_rotation_max_age_secs: 3_600,
+    policy_successor_grace_secs: policySuccessorGraceSecs,
+    policy_governance_grace_secs: policyGovernanceGraceSecs,
+    cache_evaluation: {
+      decision: "serve",
+      reasons: [],
+      ttl_expires_at: sorafsAliasRfc3339Fixture(proofExpiresAtUnix),
+      ttl_expires_at_unix: proofExpiresAtUnix,
+      serve_until: null,
+      serve_until_unix: null,
+      successor: {
+        exists: false,
+        head_hex: manifestDigestHex,
+        approved: false,
+        approved_at: null,
+        approved_at_unix: null,
+        depth_to_head: 0,
+        anomalies: [],
+      },
+      governance: {
+        ref_ids: [],
+        revoked: false,
+        frozen: false,
+        rotated: false,
+        flags: { revoked: false, frozen: false, rotated: false },
+        effective_at_unix: null,
+        effective_at: null,
+      },
+      policy_successor_grace_secs: policySuccessorGraceSecs,
+      policy_governance_grace_secs: policyGovernanceGraceSecs,
+    },
+    cache_decision: "serve",
+    cache_reasons: [],
+  };
+  if (proofExpiresInSeconds !== null) {
+    record.proof_expires_in_seconds = proofExpiresInSeconds;
+  }
+  return record;
+}
+
+function sorafsAliasListFixture({
+  aliases = [sorafsAliasRecordFixture()],
+  totalCount = aliases.length,
+  offset = 0,
+  limit = 50,
+} = {}) {
+  return {
+    attestation: sorafsRegistryAttestationFixture(),
+    total_count: totalCount,
+    returned_count: aliases.length,
+    offset,
+    limit,
+    aliases,
+  };
+}
+
+function sorafsAliasRecordWithPendingSuccessorFixture() {
+  const record = sorafsAliasRecordFixture();
+  const successorDigestHex = "b".repeat(64);
+  const successor = {
+    digest_hex: successorDigestHex,
+    status: { state: "pending" },
+    approved_epoch: null,
+    approved_at: null,
+    status_timestamp_unix: null,
+  };
+  record.lineage.head_hex = successorDigestHex;
+  record.lineage.depth_to_head = 1;
+  record.lineage.is_head = false;
+  record.lineage.immediate_successor = successor;
+  record.cache_evaluation.successor.exists = true;
+  record.cache_evaluation.successor.head_hex = successorDigestHex;
+  record.cache_evaluation.successor.depth_to_head = 1;
+  record.cache_state = "pending-successor";
+  record.status_label = "pending-successor";
+  record.cache_decision = "hold";
+  record.cache_reasons = ["PendingSuccessor"];
+  record.cache_evaluation.decision = "hold";
+  record.cache_evaluation.reasons = ["PendingSuccessor"];
+  return record;
+}
+
+function sorafsExpiredAliasRecordFixture() {
+  const record = sorafsAliasRecordFixture({ proofExpiresInSeconds: null });
+  record.cache_state = "hard-expired";
+  record.status_label = "hard-expired";
+  record.cache_age_seconds =
+    record.proof_expires_at_unix - record.proof_generated_at_unix;
+  record.cache_decision = "refuse";
+  record.cache_reasons = ["HardExpired"];
+  record.cache_evaluation.decision = "refuse";
+  record.cache_evaluation.reasons = ["HardExpired"];
+  return record;
+}
+
+function sorafsPinManifestFinalizedFixture({
+  digestHex = "e".repeat(64),
+  status = { status: "Approved", value: 45 },
+  approvedEpoch = 45,
+  submittedEpoch = 42,
+  retentionEpoch = 900,
+  councilEnvelopeDigest = null,
+} = {}) {
+  return {
+    finalized_cursor: {
+      height: 7,
+      block_hash: Array(32).fill(0x99),
+    },
+    manifest: {
+      digest: [...Buffer.from(digestHex, "hex")],
+      root_cid: [1, 0x71, 0x1f, 32, ...Array(32).fill(0x22)],
+      chunker: {
+        profile_id: 1,
+        namespace: "sorafs",
+        name: "sf1",
+        semver: "1.0.0",
+        multihash_code: 0x1f,
+      },
+      chunk_digest_sha3_256: Array(32).fill(0x33),
+      por_root: Array(32).fill(0x44),
+      content_length: 4096,
+      policy: {
+        min_replicas: 3,
+        storage_class: { type: "Hot", value: null },
+        retention_epoch: retentionEpoch,
+      },
+      submitted_by: FIXTURE_CAROL_ID,
+      submitted_epoch: submittedEpoch,
+      approved_epoch: approvedEpoch,
+      alias: null,
+      metadata: { note: "demo" },
+      status,
+      council_envelope_digest: councilEnvelopeDigest,
+    },
+  };
+}
+
+function sorafsReplicationCompletionFixture({
+  providerHex,
+  completionEpoch,
+  assignmentRevision = 1,
+}) {
+  return {
+    provider_hex: providerHex,
+    completed_by: FIXTURE_BOB_ID,
+    completion_epoch: completionEpoch,
+    assignment_revision: assignmentRevision,
+    completion_authority: {
+      provider_owner: FIXTURE_BOB_ID,
+      signer_policy: {
+        policy_id_hex: "a1".repeat(32),
+        revision: 1,
+        predecessor_digest_hex: null,
+        policy_digest_hex: "a2".repeat(32),
+      },
+    },
+    finalized_anchor: {
+      height: 1,
+      block_hash_hex: "a3".repeat(32),
+    },
+  };
+}
+
+function sorafsReplicationOrderFixture({
+  status = { state: "pending" },
+  assignmentRevision = 1,
+  providerCompletions = [],
+} = {}) {
+  const fixture = sorafsReplicationOrderNativeFixture;
+  const assignments = fixture.assignments.map((assignment) => ({
+    provider_id_hex: assignment.provider_id_hex,
+    slice_gib: assignment.slice_gib,
+    lane: assignment.lane,
+  }));
+  return {
+    order_id_hex: fixture.order_id_hex,
+    manifest_digest_hex: fixture.manifest_digest_hex,
+    issued_by: FIXTURE_BOB_ID,
+    issued_epoch: fixture.issued_at,
+    deadline_epoch: fixture.deadline_at,
+    status,
+    canonical_order_b64: SORAFS_REPLICATION_ORDER_BYTES.toString("base64"),
+    assignment_revision: assignmentRevision,
+    order: {
+      version: fixture.schema_version,
+      order_id_hex: fixture.order_id_hex,
+      manifest_cid_b64: Buffer.from(fixture.manifest_cid_hex, "hex").toString("base64"),
+      manifest_digest_hex: fixture.manifest_digest_hex,
+      chunking_profile: "sorafs.sf1@1.0.0",
+      target_replicas: fixture.target_replicas,
+      assignments,
+      issued_at: fixture.issued_at,
+      deadline_at: fixture.deadline_at,
+      sla: { ...fixture.sla },
+      metadata: fixture.metadata.map((entry) => ({ ...entry })),
+    },
+    provider_completions: providerCompletions,
+    providers: assignments.map((assignment) => assignment.provider_id_hex),
+  };
+}
 
 function fixtureMultisigAccountId() {
   const members = ["multisig-a", "multisig-b", "multisig-c"].map((label) => {
@@ -2615,113 +2884,121 @@ test("getIsoMessageStatus rejects unknown ISO status values and pacs002 codes", 
   );
 });
 
-test("getSorafsPinManifest enforces alias proof policy", async () => {
-  const native = requireSorafsNative();
-  const policy = native.sorafsAliasPolicyDefaults();
-  const now = Math.floor(Date.now() / 1000);
-  const fixture = native.sorafsAliasProofFixture({
-    manifestCidHex: CANONICAL_ALIAS_MANIFEST_CID_HEX,
-    generatedAtUnix: now - 60,
-    expiresAtUnix: now + 600,
-  });
-  const proof = fixture.proofB64;
-  const evaluation = native.sorafsEvaluateAliasProof(proof, policy, now);
-
-  let called = 0;
-  const fetchImpl = async () => {
-    called += 1;
-    return createResponse({
-      status: 200,
-      jsonData: { digest_hex: "deadbeef" },
-      headers: {
-        "content-type": "application/json",
-        "sora-proof": proof,
-        "sora-name": fixture.alias,
-        "sora-proof-status": evaluation.status_label,
-      },
-    });
-  };
-
+test("getSorafsPinManifest normalizes the exact finalized native record", async () => {
+  const digestHex = "e".repeat(64);
+  const payload = sorafsPinManifestFinalizedFixture({ digestHex });
+  let capturedUrl;
   const client = new ToriiClient(BASE_URL, {
-    fetchImpl,
-    sorafsAliasPolicy: policy,
+    fetchImpl: async (url) => {
+      capturedUrl = url;
+      return createResponse({
+        status: 200,
+        jsonData: payload,
+        headers: { "content-type": "application/json" },
+      });
+    },
   });
-  const result = await client.getSorafsPinManifest("deadbeef");
-  assert.equal(called, 1);
-  assert.deepEqual(result, { digest_hex: "deadbeef" });
+  const result = await client.getSorafsPinManifest(digestHex, {
+    expectedFinalizedHeight: 7,
+    expectedFinalizedBlockHashHex: "99".repeat(32),
+  });
+  const parsed = new URL(capturedUrl);
+  assert.equal(parsed.searchParams.get("expected_finalized_height"), "7");
+  assert.equal(
+    parsed.searchParams.get("expected_finalized_block_hash_hex"),
+    "99".repeat(32),
+  );
+  assert.equal(result?.finalized_cursor.height, 7);
+  assert.equal(Buffer.from(result?.manifest.digest ?? []).toString("hex"), digestHex);
+  assert.deepEqual(result?.manifest.status, { status: "Approved", value: 45 });
+  assert.equal(result?.manifest.approved_epoch, 45);
+  assert.equal(result?.manifest.policy.storage_class.type, "Hot");
+  assert.equal("attestation" in result, false);
+  assert.equal("aliases" in result, false);
+  assert.equal("replication_orders" in result, false);
 });
 
-test("getSorafsPinManifest rejects stale alias proof", async () => {
-  const native = requireSorafsNative();
-  const policy = native.sorafsAliasPolicyDefaults();
-  const now = Math.floor(Date.now() / 1000);
-  const fixture = native.sorafsAliasProofFixture({
-    manifestCidHex: CANONICAL_ALIAS_MANIFEST_CID_HEX,
-    generatedAtUnix: now - 10_000,
-    expiresAtUnix: now - 1,
-  });
-  const proof = fixture.proofB64;
-  const evaluation = native.sorafsEvaluateAliasProof(proof, policy, now);
-
+test("getSorafsPinManifest rejects retired projection fields and forged digests", async () => {
+  const digestHex = "e".repeat(64);
+  let payload = {
+    ...sorafsPinManifestFinalizedFixture({ digestHex }),
+    attestation: null,
+  };
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () =>
       createResponse({
         status: 200,
-        jsonData: {},
-        headers: {
-          "content-type": "application/json",
-          "sora-proof": proof,
-          "sora-name": fixture.alias,
-          "sora-proof-status": evaluation.status_label,
-        },
+        jsonData: payload,
+        headers: { "content-type": "application/json" },
       }),
-    sorafsAliasPolicy: policy,
   });
-
   await assert.rejects(
-    () => client.getSorafsPinManifest("deadbeef"),
-    /alias proof/i,
+    () => client.getSorafsPinManifest(digestHex),
+    /contains unknown field attestation/,
+  );
+  payload = sorafsPinManifestFinalizedFixture({ digestHex: "d".repeat(64) });
+  await assert.rejects(
+    () => client.getSorafsPinManifest(digestHex),
+    /does not match the requested digest/,
+  );
+  await assert.rejects(
+    () => client.getSorafsPinManifest(digestHex, { headers: {} }),
+    /unsupported fields: headers/,
+  );
+  await assert.rejects(
+    () => client.getSorafsPinManifest(digestHex, { expectedFinalizedHeight: 7 }),
+    /must be supplied together/,
   );
 });
 
-test("getSorafsPinManifest invokes warning hook for refresh-window proofs", async () => {
-  const native = requireSorafsNative();
-  const policy = native.sorafsAliasPolicyDefaults();
-  const now = Math.floor(Date.now() / 1000);
-  const refreshStart = policy.positiveTtlSecs - policy.refreshWindowSecs;
-  const fixture = native.sorafsAliasProofFixture({
-    manifestCidHex: CANONICAL_ALIAS_MANIFEST_CID_HEX,
-    generatedAtUnix: now - (refreshStart + 10),
-    expiresAtUnix: now + 600,
+test("getSorafsPinManifest enforces required approval history after retirement", async () => {
+  const digestHex = "e".repeat(64);
+  let payload = sorafsPinManifestFinalizedFixture({
+    digestHex,
+    status: { status: "Retired", value: 60 },
+    approvedEpoch: 45,
+    councilEnvelopeDigest: Array(32).fill(0x55),
   });
-  const proof = fixture.proofB64;
-  const evaluation = native.sorafsEvaluateAliasProof(proof, policy, now);
-  assert.equal(evaluation.state, "refresh_window");
-
-  let warning = null;
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () =>
       createResponse({
         status: 200,
-        jsonData: { digest_hex: "deadbeef" },
-        headers: {
-          "content-type": "application/json",
-          "sora-proof": proof,
-          "sora-name": fixture.alias,
-          "sora-proof-status": evaluation.status_label,
-        },
+        jsonData: payload,
+        headers: { "content-type": "application/json" },
       }),
-    sorafsAliasPolicy: policy,
-    onSorafsAliasWarning: (payload) => {
-      warning = payload;
-    },
   });
+  const retired = await client.getSorafsPinManifest(digestHex);
+  assert.equal(retired?.manifest.approved_epoch, 45);
+  assert.deepEqual(retired?.manifest.status, { status: "Retired", value: 60 });
 
-  const result = await client.getSorafsPinManifest("deadbeef");
-  assert.deepEqual(result, { digest_hex: "deadbeef" });
-  assert.ok(warning, "warning hook not invoked");
-  assert.equal(warning?.alias, fixture.alias);
-  assert.equal(warning?.evaluation?.state, "refresh_window");
+  const missingApproval = sorafsPinManifestFinalizedFixture({ digestHex });
+  delete missingApproval.manifest.approved_epoch;
+  payload = missingApproval;
+  await assert.rejects(
+    () => client.getSorafsPinManifest(digestHex),
+    /missing required field approved_epoch/,
+  );
+
+  payload = sorafsPinManifestFinalizedFixture({
+    digestHex,
+    status: { status: "Retired", value: 44 },
+    approvedEpoch: 45,
+  });
+  await assert.rejects(
+    () => client.getSorafsPinManifest(digestHex),
+    /does not exactly retain its pin lifecycle history/,
+  );
+
+  payload = sorafsPinManifestFinalizedFixture({
+    digestHex,
+    status: { status: "Retired", value: 60 },
+    approvedEpoch: null,
+    councilEnvelopeDigest: Array(32).fill(0x55),
+  });
+  await assert.rejects(
+    () => client.getSorafsPinManifest(digestHex),
+    /does not exactly retain its pin lifecycle history/,
+  );
 });
 
 test("getSorafsPinManifest returns null when Torii responds with 404", async () => {
@@ -2732,22 +3009,8 @@ test("getSorafsPinManifest returns null when Torii responds with 404", async () 
       jsonData: { code: "ERR_NOT_FOUND" },
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.getSorafsPinManifest("deadbeef".repeat(4));
+  const result = await client.getSorafsPinManifest("deadbeef".repeat(8));
   assert.equal(result, null);
-});
-
-test("getSorafsPinManifestTyped rejects when Torii responds with 404", async () => {
-  const fetchImpl = async () =>
-    createResponse({
-      status: 404,
-      headers: { "content-type": "application/json" },
-      jsonData: { code: "ERR_NOT_FOUND" },
-    });
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await assert.rejects(
-    () => client.getSorafsPinManifestTyped("deadbeef".repeat(4)),
-    /sorafs pin manifest endpoint returned 404/,
-  );
 });
 
 test("registerSorafsPinManifest posts only an exact canonical V1 transaction", async () => {
@@ -2869,225 +3132,265 @@ test("registerSorafsPinManifestTyped rejects pre-finality fee or custody claims"
   );
 });
 
-test("getSorafsPinManifestTyped normalizes manifest, aliases, and orders", async () => {
-  const native = requireSorafsNative();
-  const policy = native.sorafsAliasPolicyDefaults();
-  const now = Math.floor(Date.now() / 1000);
-  const fixture = native.sorafsAliasProofFixture({
-    manifestCidHex: CANONICAL_ALIAS_MANIFEST_CID_HEX,
-    generatedAtUnix: now - 120,
-    expiresAtUnix: now + 600,
-  });
-  const proof = fixture.proofB64;
-  const evaluation = native.sorafsEvaluateAliasProof(proof, policy, now);
-
-  const manifestHex = "e".repeat(64);
-  const parentHex = "f".repeat(64);
-  const councilHex = "1".repeat(64);
-  const aliasProof = Buffer.from("pin-alias").toString("base64");
-  const manifestRecord = {
-    digest_hex: manifestHex,
-    chunker: {
-      profile_id: 1,
-      namespace: "sorafs",
-      name: "sf1",
-      semver: "1.0.0",
-      multihash_code: 0,
-    },
-    chunk_digest_sha3_256_hex: "2".repeat(64),
-    pin_policy: { min_replicas: 3 },
-    submitted_by: FIXTURE_CAROL_ID,
-    submitted_epoch: 42,
-    status: { state: "approved", epoch: 45 },
-    metadata: { note: "demo" },
-    alias: { namespace: "docs", name: "main", proof_b64: aliasProof },
-    successor_of_hex: parentHex,
-    status_timestamp_unix: 123,
-    governance_refs: [
-      {
-        cid: "cid-1",
-        kind: "AliasRotate",
-        effective_at: "2025-01-01T00:00:00Z",
-        effective_at_unix: 1_700_000_000,
-        targets: { alias: "docs/main", pin_digest_hex: manifestHex },
-        signers: [FIXTURE_CAROL_ID],
-      },
-    ],
-    council_envelope_digest_hex: councilHex,
-    lineage: {
-      successor_of_hex: parentHex,
-      head_hex: manifestHex,
-      depth_to_head: 0,
-      is_head: true,
-      superseded_by: null,
-      immediate_successor: null,
-      anomalies: [],
-    },
-  };
-  const aliasRecord = {
-    alias: "sora/docs",
-    namespace: "sora",
-    name: "docs",
-    manifest_digest_hex: manifestHex,
-    bound_by: FIXTURE_ALICE_ID,
-    bound_epoch: 10,
-    expiry_epoch: 99,
-    proof_b64: Buffer.from("proof").toString("base64"),
-    cache_state: "fresh",
-    cache_rotation_due: false,
-    cache_age_seconds: 12,
-    cache_decision: "serve",
-    cache_reasons: ["ttl_ok"],
-    cache_evaluation: { decision: "serve" },
-    lineage: { head_hex: manifestHex },
-  };
-  const providerHex = "d".repeat(64);
-  const orderRecord = {
-    order_id_hex: "c".repeat(64),
-    manifest_digest_hex: manifestHex,
-    issued_by: FIXTURE_BOB_ID,
-    issued_epoch: 50,
-    deadline_epoch: 80,
-    status: { state: "pending" },
-    canonical_order_b64: Buffer.from("order").toString("base64"),
-    order: { order_id_hex: "c".repeat(64), policy_hash_hex: manifestHex },
-    receipts: [
-      {
-        provider_hex: providerHex,
-        status: "pending",
-        timestamp: 123,
-        por_sample_digest_hex: null,
-      },
-    ],
-    providers: [providerHex],
-  };
-
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () =>
-      createResponse({
-        status: 200,
-        jsonData: {
-          attestation: { block_height: 1 },
-          manifest: manifestRecord,
-          aliases: [aliasRecord],
-          replication_orders: [orderRecord],
-        },
-        headers: {
-          "content-type": "application/json",
-          "sora-proof": proof,
-          "sora-name": fixture.alias,
-          "sora-proof-status": evaluation.status_label,
-        },
-      }),
-    sorafsAliasPolicy: policy,
-  });
-
-  const detail = await client.getSorafsPinManifestTyped(manifestHex);
-  assert.equal(detail.manifest.digest_hex, manifestHex);
-  assert.equal(detail.aliases.length, 1);
-  assert.equal(detail.replication_orders.length, 1);
-  assert.equal(detail.replication_orders[0].providers[0], providerHex);
-  assert.equal(detail.attestation?.block_height, 1);
-});
-
-test("getSorafsPinManifestTyped rejects non-integer status timestamps", async () => {
-  const manifestHex = "e".repeat(64);
-  const manifestRecord = {
-    digest_hex: manifestHex,
-    chunker: {
-      profile_id: 1,
-      namespace: "sorafs",
-      name: "sf1",
-      semver: "1.0.0",
-      multihash_code: 0,
-    },
-    chunk_digest_sha3_256_hex: "2".repeat(64),
-    pin_policy: { min_replicas: 3 },
-    submitted_by: FIXTURE_CAROL_ID,
-    submitted_epoch: 42,
-    status: { state: "approved", epoch: 45 },
-    metadata: {},
-    status_timestamp_unix: 123.5,
-  };
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () =>
-      createResponse({
-        status: 200,
-        jsonData: {
-          attestation: null,
-          manifest: manifestRecord,
-          aliases: [],
-          replication_orders: [],
-        },
-        headers: { "content-type": "application/json" },
-      }),
-  });
-  await assert.rejects(
-    () => client.getSorafsPinManifestTyped(manifestHex),
-    (error) => {
-      assert(error instanceof RangeError);
-      assert.match(error.message, /status_timestamp_unix/);
-      return true;
-    },
-  );
-});
-
 test("listSorafsAliases signs, normalizes response, and applies filters", async () => {
   let captured;
   const manifestHex = "a".repeat(64);
-  const aliasRecord = {
-    alias: "sora/docs",
-    namespace: "sora",
-    name: "docs",
-    manifest_digest_hex: manifestHex,
-    bound_by: FIXTURE_ALICE_ID,
-    bound_epoch: 10,
-    expiry_epoch: 99,
-    proof_b64: Buffer.from("proof").toString("base64"),
-    cache_state: "fresh",
-    cache_rotation_due: false,
-    cache_age_seconds: 12,
-    cache_decision: "serve",
-    cache_reasons: ["ttl_ok"],
-    cache_evaluation: { decision: "serve" },
-    lineage: { head_hex: manifestHex },
-  };
+  const aliasRecord = sorafsAliasRecordFixture({ manifestDigestHex: manifestHex });
   const fetchImpl = async (url, init) => {
     captured = { url, init };
     return createResponse({
       status: 200,
-      jsonData: {
-        attestation: { block_height: 1 },
-        total_count: 1,
-        returned_count: 1,
-        offset: 0,
-        limit: 50,
-        aliases: [aliasRecord],
-      },
+      jsonData: sorafsAliasListFixture({ aliases: [aliasRecord], limit: 5 }),
       headers: { "content-type": "application/json" },
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const result = await client.listSorafsAliases({
-    namespace: "Sora",
-    manifestDigestHex: `0x${manifestHex}`,
+    namespace: "sora",
+    manifestDigestHex: manifestHex,
     limit: "5",
-    offset: 10n,
+    offset: 0n,
     canonicalAuth: SORAFS_CANONICAL_AUTH,
   });
   assert.ok(captured?.url?.startsWith(`${BASE_URL}/v1/sorafs/aliases`));
   assert.equal(captured?.init?.headers?.["X-Iroha-Account"], CANONICAL_AUTH_ALIAS);
   assert.ok(captured?.init?.headers?.["X-Iroha-Signature"]);
   const parsed = new URL(captured.url);
-  assert.equal(parsed.searchParams.get("namespace"), "Sora");
+  assert.equal(parsed.searchParams.get("namespace"), "sora");
   assert.equal(parsed.searchParams.get("manifest_digest"), manifestHex);
   assert.equal(parsed.searchParams.get("limit"), "5");
-  assert.equal(parsed.searchParams.get("offset"), "10");
+  assert.equal(parsed.searchParams.get("offset"), "0");
   assert.equal(result.aliases.length, 1);
-  assert.equal(result.aliases[0].alias, aliasRecord.alias);
-  assert.equal(result.aliases[0].cache_state, "fresh");
-  assert.deepEqual(result.aliases[0].cache_reasons, aliasRecord.cache_reasons);
-  assert.equal(result.attestation?.block_height, 1);
+  assert.deepEqual(result.aliases[0], aliasRecord);
+  assert.deepEqual(result.attestation, sorafsRegistryAttestationFixture());
+});
+
+test("listSorafsAliases rejects open, coercive, and inconsistent response projections", async () => {
+  let responsePayload;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createResponse({
+        status: 200,
+        jsonData: responsePayload,
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  const cases = [
+    {
+      mutate: (page) => { page.future = true; },
+      error: /contains unknown field future/,
+    },
+    {
+      mutate: (page) => { delete page.attestation; },
+      error: /missing required field attestation/,
+    },
+    {
+      mutate: (page) => { page.attestation.future = true; },
+      error: /attestation contains unknown field future/,
+    },
+    {
+      mutate: (page) => { page.aliases[0].future = true; },
+      error: /aliases\[0\] contains unknown field future/,
+    },
+    {
+      mutate: (page) => { delete page.aliases[0].status_label; },
+      error: /missing required field status_label/,
+    },
+    {
+      mutate: (page) => { page.aliases[0].lineage.future = true; },
+      error: /lineage contains unknown field future/,
+    },
+    {
+      fixture: () => sorafsAliasListFixture({
+        aliases: [sorafsAliasRecordWithPendingSuccessorFixture()],
+      }),
+      mutate: (page) => { page.aliases[0].lineage.immediate_successor.future = true; },
+      error: /immediate_successor contains unknown field future/,
+    },
+    {
+      fixture: () => sorafsAliasListFixture({
+        aliases: [sorafsAliasRecordWithPendingSuccessorFixture()],
+      }),
+      mutate: (page) => {
+        page.aliases[0].lineage.immediate_successor.status.epoch = 1;
+      },
+      error: /status contains unknown field epoch/,
+    },
+    {
+      fixture: () => sorafsAliasListFixture({
+        aliases: [sorafsAliasRecordWithPendingSuccessorFixture()],
+      }),
+      mutate: (page) => {
+        page.aliases[0].lineage.immediate_successor.approved_epoch = 1;
+      },
+      error: /inconsistent status and retained approval epoch/,
+    },
+    {
+      mutate: (page) => { page.aliases[0].cache_evaluation.future = true; },
+      error: /cache_evaluation contains unknown field future/,
+    },
+    {
+      mutate: (page) => { page.aliases[0].cache_evaluation.successor.future = true; },
+      error: /successor contains unknown field future/,
+    },
+    {
+      mutate: (page) => { page.aliases[0].cache_evaluation.governance.future = true; },
+      error: /governance contains unknown field future/,
+    },
+    {
+      mutate: (page) => {
+        page.aliases[0].cache_evaluation.governance.flags.future = true;
+      },
+      error: /flags contains unknown field future/,
+    },
+    {
+      mutate: (page) => { page.total_count = "1"; },
+      error: /total_count must be a non-negative JSON safe integer/,
+    },
+    {
+      mutate: (page) => { page.aliases[0].cache_rotation_due = "false"; },
+      error: /cache_rotation_due must be a boolean/,
+    },
+    {
+      mutate: (page) => {
+        page.aliases[0].manifest_digest_hex = page.aliases[0].manifest_digest_hex.toUpperCase();
+      },
+      error: /manifest_digest_hex must be an exact lowercase/,
+    },
+    {
+      mutate: (page) => { page.aliases[0].bound_by = ` ${FIXTURE_ALICE_ID}`; },
+      error: /bound_by must not contain surrounding whitespace/,
+    },
+    {
+      mutate: (page) => { page.aliases[0].proof_b64 = "cHJvb2Y"; },
+      error: /proof_b64 must be canonical standard-base64/,
+    },
+    {
+      mutate: (page) => { page.aliases[0].alias = "sora/other"; },
+      error: /alias must exactly equal namespace\/name/,
+    },
+    {
+      mutate: (page) => { page.returned_count = 0; },
+      error: /pagination counts are inconsistent/,
+    },
+    {
+      mutate: (page) => { page.aliases[0].cache_state = "refresh"; },
+      error: /cache_state must equal status_label/,
+    },
+    {
+      mutate: (page) => {
+        page.aliases[0].cache_decision = "refuse";
+        page.aliases[0].cache_reasons = ["hard_expired"];
+      },
+      error: /cache_reasons\[0\] has an unsupported first-release value/,
+    },
+    {
+      mutate: (page) => { page.aliases[0].cache_evaluation.decision = "hold"; },
+      error: /cache_decision and cache_reasons must equal cache_evaluation/,
+    },
+    {
+      mutate: (page) => {
+        page.aliases[0].cache_evaluation.reasons = ["RotationDue"];
+      },
+      error: /cache_decision and cache_reasons must equal cache_evaluation/,
+    },
+    {
+      mutate: (page) => {
+        page.aliases[0].cache_evaluation.policy_successor_grace_secs += 1;
+      },
+      error: /cache_evaluation must duplicate the proof and policy values/,
+    },
+    {
+      mutate: (page) => {
+        page.aliases[0].cache_evaluation.successor.head_hex = "c".repeat(64);
+      },
+      error: /cache_evaluation\.successor must equal lineage/,
+    },
+    {
+      mutate: (page) => {
+        page.aliases[0].cache_evaluation.ttl_expires_at =
+          `${page.aliases[0].cache_evaluation.ttl_expires_at.slice(0, -1)}.000Z`;
+      },
+      error: /ttl_expires_at must exactly represent/,
+    },
+    {
+      mutate: (page) => { page.aliases[0].proof_expires_in_seconds = null; },
+      error: /proof_expires_in_seconds must be a positive JSON safe integer/,
+    },
+  ];
+  for (const { fixture, mutate, error } of cases) {
+    responsePayload = fixture?.() ?? sorafsAliasListFixture();
+    mutate(responsePayload);
+    // eslint-disable-next-line no-await-in-loop
+    await assert.rejects(
+      () => client.listSorafsAliases({ canonicalAuth: SORAFS_CANONICAL_AUTH }),
+      error,
+    );
+  }
+});
+
+test("listSorafsAliases preserves conditional proof expiry omission", async () => {
+  let alias = sorafsExpiredAliasRecordFixture();
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createResponse({
+        status: 200,
+        jsonData: sorafsAliasListFixture({ aliases: [alias] }),
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  const response = await client.listSorafsAliases({
+    canonicalAuth: SORAFS_CANONICAL_AUTH,
+  });
+  assert.equal(
+    Object.hasOwn(response.aliases[0], "proof_expires_in_seconds"),
+    false,
+  );
+
+  alias = sorafsExpiredAliasRecordFixture();
+  alias.proof_expires_in_seconds = null;
+  await assert.rejects(
+    () => client.listSorafsAliases({ canonicalAuth: SORAFS_CANONICAL_AUTH }),
+    /proof_expires_in_seconds must be a positive JSON safe integer/,
+  );
+
+  alias = sorafsAliasRecordWithPendingSuccessorFixture();
+  const pendingSuccessor = await client.listSorafsAliases({
+    canonicalAuth: SORAFS_CANONICAL_AUTH,
+  });
+  assert.equal(pendingSuccessor.aliases[0].status_label, "pending-successor");
+  assert.deepEqual(
+    pendingSuccessor.aliases[0].lineage.immediate_successor?.status,
+    { state: "pending" },
+  );
+});
+
+test("listSorafsAliases requires canonical first-release query spellings", async () => {
+  let fetchCalls = 0;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      throw new Error("fetch must not run for an invalid alias query");
+    },
+  });
+  const cases = [
+    { namespace: "Sora" },
+    { namespace: " sora" },
+    { manifestDigestHex: `0x${"a".repeat(64)}` },
+    { manifestDigestHex: "0".repeat(64) },
+    { limit: 501 },
+    { offset: 0x1_0000_0000 },
+  ];
+  for (const options of cases) {
+    // eslint-disable-next-line no-await-in-loop
+    await assert.rejects(
+      () => client.listSorafsAliases({
+        ...options,
+        canonicalAuth: SORAFS_CANONICAL_AUTH,
+      }),
+    );
+  }
+  assert.equal(fetchCalls, 0);
 });
 
 test("listSorafsPinManifests enforces the finalized bounded keyset contract", async () => {
@@ -3099,6 +3402,7 @@ test("listSorafsPinManifests enforces the finalized bounded keyset contract", as
     digest: manifestDigest,
     submitted_by: FIXTURE_CAROL_ID,
     submitted_epoch: 42,
+    approved_epoch: 45,
     content_length: 4096,
     retention_epoch: 900,
     status: { status: "Approved", value: 45 },
@@ -3193,6 +3497,7 @@ test("listSorafsPinManifests rejects retired shapes and forged page cursors", as
         digest,
         submitted_by: FIXTURE_CAROL_ID,
         submitted_epoch: 1,
+        approved_epoch: null,
         content_length: 7,
         retention_epoch: 10,
         status: { status: "Pending", value: null },
@@ -3251,34 +3556,16 @@ test("listSorafsPinManifests rejects retired shapes and forged page cursors", as
 
 test("listSorafsReplicationOrders signs, normalizes response, and validates status filter", async () => {
   let captured;
-  const manifestHex = "b".repeat(64);
-  const orderHex = "c".repeat(64);
-  const providerHex = "d".repeat(64);
-  const orderRecord = {
-    order_id_hex: orderHex,
-    manifest_digest_hex: manifestHex,
-    issued_by: FIXTURE_BOB_ID,
-    issued_epoch: 50,
-    deadline_epoch: 80,
-    status: { state: "pending" },
-    canonical_order_b64: Buffer.from("order").toString("base64"),
-    order: { order_id_hex: orderHex, policy_hash_hex: manifestHex },
-    receipts: [
-      {
-        provider_hex: providerHex,
-        status: "pending",
-        timestamp: 123,
-        por_sample_digest_hex: null,
-      },
-    ],
-    providers: [providerHex],
-  };
+  const manifestHex = SORAFS_REPLICATION_MANIFEST_DIGEST_HEX;
+  const orderHex = SORAFS_REPLICATION_ORDER_ID_HEX;
+  const providerHex = SORAFS_REPLICATION_PROVIDER_HEX;
+  const orderRecord = sorafsReplicationOrderFixture();
   const fetchImpl = async (url, init) => {
     captured = { url, init };
     return createResponse({
       status: 200,
       jsonData: {
-        attestation: null,
+        attestation: sorafsRegistryAttestationFixture(),
         total_count: 1,
         returned_count: 1,
         offset: 0,
@@ -3290,7 +3577,7 @@ test("listSorafsReplicationOrders signs, normalizes response, and validates stat
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const result = await client.listSorafsReplicationOrders({
-    status: "Pending",
+    status: "pending",
     manifestDigestHex: manifestHex,
     limit: 20,
     canonicalAuth: SORAFS_CANONICAL_AUTH,
@@ -3303,7 +3590,9 @@ test("listSorafsReplicationOrders signs, normalizes response, and validates stat
   assert.equal(parsed.searchParams.get("manifest_digest"), manifestHex);
   assert.equal(parsed.searchParams.get("limit"), "20");
   assert.equal(result.replication_orders[0].order_id_hex, orderHex);
-  assert.equal(result.replication_orders[0].receipts[0].provider_hex, providerHex);
+  assert.equal(result.replication_orders[0].providers[0], providerHex);
+  assert.deepEqual(result.replication_orders[0].provider_completions, []);
+  assert.deepEqual(result.replication_orders[0].status, { state: "pending" });
   await assert.rejects(
     () => client.listSorafsReplicationOrders({
       status: "finished",
@@ -3316,6 +3605,82 @@ test("listSorafsReplicationOrders signs, normalizes response, and validates stat
       assert.match(error.message, /sorafsReplicationList\.status/i);
       return true;
     },
+  );
+});
+
+test("listSorafsReplicationOrders accepts cancelled and rejects retired wire shapes", async () => {
+  const issuedEpoch = sorafsReplicationOrderNativeFixture.issued_at;
+  const deadlineEpoch = sorafsReplicationOrderNativeFixture.deadline_at;
+  let orderRecord = sorafsReplicationOrderFixture({
+    status: { state: "cancelled", epoch: issuedEpoch + 60 },
+  });
+  let capturedUrl;
+  let attestation = sorafsRegistryAttestationFixture();
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async (url) => {
+      capturedUrl = url;
+      return createResponse({
+        status: 200,
+        jsonData: {
+          attestation,
+          total_count: 1,
+          returned_count: 1,
+          offset: 0,
+          limit: 20,
+          replication_orders: [orderRecord],
+        },
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  const result = await client.listSorafsReplicationOrders({
+    status: "cancelled",
+    canonicalAuth: SORAFS_CANONICAL_AUTH,
+  });
+  assert.equal(new URL(capturedUrl).searchParams.get("status"), "cancelled");
+  assert.deepEqual(result.replication_orders[0].status, {
+    state: "cancelled",
+    epoch: issuedEpoch + 60,
+  });
+
+  attestation = null;
+  await assert.rejects(
+    () => client.listSorafsReplicationOrders({ canonicalAuth: SORAFS_CANONICAL_AUTH }),
+    /attestation is missing required field block_height/,
+  );
+  attestation = sorafsRegistryAttestationFixture();
+
+  orderRecord = sorafsReplicationOrderFixture({
+    status: { state: "pending", epoch: null },
+  });
+  await assert.rejects(
+    () => client.listSorafsReplicationOrders({ canonicalAuth: SORAFS_CANONICAL_AUTH }),
+    /status contains unknown field epoch/,
+  );
+
+  const staleReceipts = sorafsReplicationOrderFixture();
+  delete staleReceipts.provider_completions;
+  staleReceipts.receipts = [];
+  orderRecord = staleReceipts;
+  await assert.rejects(
+    () => client.listSorafsReplicationOrders({ canonicalAuth: SORAFS_CANONICAL_AUTH }),
+    /contains unknown field receipts/,
+  );
+
+  const substitutedProjection = sorafsReplicationOrderFixture();
+  substitutedProjection.order.metadata[0].value = "substituted";
+  orderRecord = substitutedProjection;
+  await assert.rejects(
+    () => client.listSorafsReplicationOrders({ canonicalAuth: SORAFS_CANONICAL_AUTH }),
+    /order does not exactly match its canonical bytes and ledger record/,
+  );
+
+  orderRecord = sorafsReplicationOrderFixture({
+    status: { state: "cancelled", epoch: deadlineEpoch + 1 },
+  });
+  await assert.rejects(
+    () => client.listSorafsReplicationOrders({ canonicalAuth: SORAFS_CANONICAL_AUTH }),
+    /status conflicts with its retained completion lifecycle/,
   );
 });
 
@@ -5018,33 +5383,6 @@ test("space-directory mutation drafts reject inline private-key fields", async (
 });
 
 test("iterateSorafsAliases paginates alias listings", async () => {
-  const baseAliasRecord = {
-    alias: "sora/docs",
-    namespace: "sora",
-    name: "docs",
-    manifest_digest_hex: "0".repeat(64),
-    bound_by: FIXTURE_ALICE_ID,
-    bound_epoch: 10,
-    expiry_epoch: 99,
-    proof_b64: Buffer.from("proof").toString("base64"),
-    cache_state: "fresh",
-    status_label: "ok",
-    cache_rotation_due: false,
-    cache_age_seconds: 12,
-    proof_generated_at_unix: 1,
-    proof_expires_at_unix: 2,
-    proof_expires_in_seconds: 1,
-    policy_positive_ttl_secs: 60,
-    policy_refresh_window_secs: 30,
-    policy_hard_expiry_secs: 120,
-    policy_rotation_max_age_secs: 600,
-    policy_successor_grace_secs: 10,
-    policy_governance_grace_secs: 5,
-    cache_decision: "serve",
-    cache_reasons: ["ttl_ok"],
-    cache_evaluation: { decision: "serve" },
-    lineage: { head_hex: "0".repeat(64) },
-  };
   const fetchImpl = async (url) => {
     const parsed = new URL(url);
     const offset = Number(parsed.searchParams.get("offset") ?? "0");
@@ -5052,33 +5390,27 @@ test("iterateSorafsAliases paginates alias listings", async () => {
     if (offset >= 2) {
       return createResponse({
         status: 200,
-        jsonData: {
-          attestation: null,
-          total_count: 2,
-          returned_count: 0,
+        jsonData: sorafsAliasListFixture({
+          aliases: [],
+          totalCount: 2,
           offset,
           limit,
-          aliases: [],
-        },
+        }),
         headers: { "content-type": "application/json" },
       });
     }
-    const record = {
-      ...JSON.parse(JSON.stringify(baseAliasRecord)),
-      alias: `sora/docs-${offset}`,
+    const record = sorafsAliasRecordFixture({
       name: `docs-${offset}`,
-      manifest_digest_hex: `${offset}`.repeat(64),
-    };
+      manifestDigestHex: `${offset + 1}`.repeat(64),
+    });
     return createResponse({
       status: 200,
-      jsonData: {
-        attestation: null,
-        total_count: 2,
-        returned_count: 1,
+      jsonData: sorafsAliasListFixture({
+        aliases: [record],
+        totalCount: 2,
         offset,
         limit,
-        aliases: [record],
-      },
+      }),
       headers: { "content-type": "application/json" },
     });
   };
@@ -5100,6 +5432,7 @@ test("iterateSorafsPinManifests locks the first finalized anchor and advances ke
     digest: Array(32).fill(byte),
     submitted_by: FIXTURE_CAROL_ID,
     submitted_epoch: 42,
+    approved_epoch: 45,
     content_length: 100,
     retention_epoch: 900,
     status: { status: "Approved", value: 45 },
@@ -5156,25 +5489,6 @@ test("iterateSorafsPinManifests locks the first finalized anchor and advances ke
 });
 
 test("iterateSorafsReplicationOrders paginates results", async () => {
-  const baseOrder = {
-    order_id_hex: "c".repeat(64),
-    manifest_digest_hex: "b".repeat(64),
-    issued_by: FIXTURE_BOB_ID,
-    issued_epoch: 50,
-    deadline_epoch: 80,
-    status: { state: "pending", epoch: null },
-    canonical_order_b64: Buffer.from("order").toString("base64"),
-    order: { order_id_hex: "c".repeat(64) },
-    receipts: [
-      {
-        provider_hex: "d".repeat(64),
-        status: "pending",
-        timestamp: 123,
-        por_sample_digest_hex: null,
-      },
-    ],
-    providers: ["d".repeat(64)],
-  };
   const fetchImpl = async (url) => {
     const parsed = new URL(url);
     const offset = Number(parsed.searchParams.get("offset") ?? "0");
@@ -5183,7 +5497,7 @@ test("iterateSorafsReplicationOrders paginates results", async () => {
       return createResponse({
         status: 200,
         jsonData: {
-          attestation: null,
+          attestation: sorafsRegistryAttestationFixture(),
           total_count: 2,
           returned_count: 0,
           offset,
@@ -5193,14 +5507,11 @@ test("iterateSorafsReplicationOrders paginates results", async () => {
         headers: { "content-type": "application/json" },
       });
     }
-    const record = {
-      ...JSON.parse(JSON.stringify(baseOrder)),
-      order_id_hex: `${offset}`.repeat(64),
-    };
+    const record = sorafsReplicationOrderFixture();
     return createResponse({
       status: 200,
       jsonData: {
-        attestation: null,
+        attestation: sorafsRegistryAttestationFixture(),
         total_count: 2,
         returned_count: 1,
         offset,
@@ -5219,7 +5530,10 @@ test("iterateSorafsReplicationOrders paginates results", async () => {
   })) {
     ids.push(order.order_id_hex);
   }
-  assert.deepEqual(ids, ["0".repeat(64), "1".repeat(64)]);
+  assert.deepEqual(ids, [
+    SORAFS_REPLICATION_ORDER_ID_HEX,
+    SORAFS_REPLICATION_ORDER_ID_HEX,
+  ]);
 });
 
 test("SoraFS iterators reject unsupported options", () => {
@@ -6783,7 +7097,7 @@ test("SoraFS registry helpers reject non-object options", async () => {
     /listSorafsReplicationOrders options must be an object/,
   );
   await assert.rejects(
-    () => client.getSorafsPinManifest("deadbeef", "invalid"),
+    () => client.getSorafsPinManifest("deadbeef".repeat(8), "invalid"),
     /getSorafsPinManifest options must be an object/,
   );
 });
@@ -6834,7 +7148,7 @@ test("SoraFS registry helpers reject unsupported option fields", async () => {
   }
 });
 
-test("SoraFS legacy inventory helpers require canonical account authentication", async () => {
+test("SoraFS inventory helpers require canonical account authentication", async () => {
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => {
       throw new Error("fetch should not run without canonical authentication");

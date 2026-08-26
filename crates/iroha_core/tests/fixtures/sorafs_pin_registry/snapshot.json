@@ -14,6 +14,7 @@
   "manifests": [
     {
       "alias_label": "sora/docs",
+      "approved_epoch": 5,
       "chunk_digest_sha3_256_hex": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
       "chunker_handle": "sorafs.sf1@1.0.0",
       "council_envelope_digest_hex": "28f4f97c2c432e6ad9208cc895234f98d50d4286e4c97328117494a952707745",

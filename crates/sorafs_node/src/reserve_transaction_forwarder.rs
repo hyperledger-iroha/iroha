@@ -730,9 +730,8 @@ pub struct ReserveTransactionForwarder {
     store: Option<Arc<AtomicCheckpointStore>>,
 }
 impl ReserveTransactionForwarder {
-    /// Construct a non-persistent forwarder for focused composition tests.
-    #[cfg(test)]
-    fn in_memory(
+    /// Construct a non-persistent forwarder for emergency-disabled startup and tests.
+    pub(crate) fn in_memory(
         policy: ReserveTransactionForwarderPolicyV1,
     ) -> Result<Self, ReserveTransactionForwarderError> {
         policy.validate()?;

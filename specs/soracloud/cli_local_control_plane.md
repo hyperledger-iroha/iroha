@@ -412,11 +412,24 @@ do not select shipping behavior. Shipping enablement comes only from the exact
 PortableVm atomically copies the verified base image into a standalone mutable
 raw root disk. The sandbox never needs the host base-image path, and startup
 never gives root `qemu-img` a guest-mutated root image to parse. Shared lease
-volumes are exact-size persistent raw block devices. Only a raw
-disk atomically created for the current launch may be formatted; an existing
-disk, filesystem mismatch, mount failure, or post-mount probe failure aborts
-startup without reformatting. The NoCloud seed and application archive remain
-separate read-only devices.
+volumes are exact-size persistent raw block devices. For a new lease disk, the
+supervisor runs root-custodied standard-path `mke2fs` against an exclusive
+staging file with an empty `mke2fs.conf` and the exact V1 feature, 4-KiB block,
+256-byte inode, inode-count, block-group, flex-group, 16-MiB journal, label, and
+logical-volume-derived UUID profile. That UUID also binds the service revision,
+volume kind, storage class, and authoritative generation, so a generation
+rollover fails closed instead of inheriting old contents. Lease sizes are
+positive multiples of one 128-MiB block group. The supervisor validates that
+complete static superblock contract, syncs the file, and only then atomically
+publishes `lease.raw`. An existing published disk must retain the exact size,
+logical-volume UUID, geometry, and feature masks; the only additional
+incompatible feature accepted is ext4's dynamic journal-recovery bit. The
+supervisor never reformats it.
+Guest cloud-init verifies the filesystem type before mounting it and never
+runs a formatter. The subsequent read-write mount can replay the journal and
+the health probe intentionally writes into the filesystem; a mismatch or
+failure aborts startup without destructive reinitialization. The NoCloud seed
+and application archive remain separate read-only devices.
 
 Inrou V1 accepts only `Isolated` networking. `Open` and `Allowlist` are
 rejected until kernel-owned counters can meter every guest byte; no unmetered

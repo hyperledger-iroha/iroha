@@ -79,12 +79,8 @@ struct PrivateUploadedModelExecuteRequestForTest {
     service_name: String,
     service_version: String,
     weight_version: String,
-    #[norito(required)]
-    model_id: Option<String>,
-    #[norito(required)]
-    model_name: Option<String>,
-    #[norito(required)]
-    bundle_root: Option<Hash>,
+    model_id: String,
+    bundle_root: Hash,
     decryption_request_id: String,
     input_artifact: SoraPrivateModelArtifactRefV1,
     output_recipient: SoraUploadedModelEncryptionRecipientV1,
@@ -425,9 +421,8 @@ fn private_uploaded_model_execute_request(
         service_name: bundle.service_name.to_string(),
         service_version: PRIVATE_MODEL_SERVICE_VERSION.to_owned(),
         weight_version: bundle.weight_version.clone(),
-        model_id: Some(bundle.model_id.clone()),
-        model_name: None,
-        bundle_root: Some(bundle.bundle_root),
+        model_id: bundle.model_id.clone(),
+        bundle_root: bundle.bundle_root,
         decryption_request_id: decryption_request_id.to_owned(),
         input_artifact,
         output_recipient: bundle.upload_recipient.clone(),

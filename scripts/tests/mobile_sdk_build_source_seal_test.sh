@@ -111,4 +111,32 @@ test_build_source_seal() {
       fail "source seal mutation failure was not explicit"
       ;;
   esac
+
+  # The first external build helper must inherit the canonical source root,
+  # even when the caller invokes the builder from another workspace.
+  local foreign_caller="$TMP_DIR/source-seal-foreign-caller"
+  local helper_cwd_marker="$root/.build-helper-cwd"
+  local helper_status
+  mkdir -p "$foreign_caller"
+  printf '%s\n' \
+    "#!$TEST_PYTHON_BINARY" \
+    'from pathlib import Path' \
+    'marker = Path(__file__).resolve().parents[1] / ".build-helper-cwd"' \
+    'marker.write_text(str(Path.cwd().resolve()), encoding="utf-8")' \
+    'raise SystemExit(73)' \
+    >"$root/scripts/exec_with_file_lock.py"
+  chmod 0700 "$root/scripts/exec_with_file_lock.py"
+  set +e
+  (
+    cd "$foreign_caller"
+    /bin/bash "$root/scripts/build_norito_xcframework.sh" >/dev/null 2>&1
+  )
+  helper_status=$?
+  set -e
+  [[ "$helper_status" == "73" ]] \
+    || fail "expected the build-helper cwd probe to stop the fixture builder"
+  [[ -f "$helper_cwd_marker" ]] \
+    || fail "build-helper cwd probe did not record its working directory"
+  [[ "$(<"$helper_cwd_marker")" == "$root" ]] \
+    || fail "Apple builder did not anchor helpers to its source-sealed root"
 }

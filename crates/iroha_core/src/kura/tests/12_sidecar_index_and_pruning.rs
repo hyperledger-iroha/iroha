@@ -209,9 +209,8 @@ fn strict_init_repairs_only_the_hash_suffix_above_v2_finality() {
     store
         .write_block_hash(2, forged)
         .expect("corrupt only the unfinalized hash suffix");
-    let validation =
-        Kura::init_canonical_chain(&mut store, 3, Some(2))
-            .expect("repair above finality must succeed");
+    let validation = Kura::init_canonical_chain(&mut store, 3, Some(2))
+        .expect("repair above finality must succeed");
     assert!(validation.hash_mismatch);
     assert!(!validation.truncated);
     assert_eq!(
@@ -456,8 +455,8 @@ fn hash_only_snapshot_rejects_shorter_existing_prefix() {
         .expect("second hash exists");
     {
         let mut block_data = kura.block_data.lock();
-        for (_, block) in block_data.iter_mut() {
-            *block = None;
+        for index in 0..block_data.len() {
+            block_data[index].1 = None;
         }
     }
     kura.hard_fork_hash_only_block_count

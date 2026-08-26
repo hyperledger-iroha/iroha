@@ -5300,31 +5300,6 @@ macro_rules! sorafs_limit_filter {
     };
 }
 
-macro_rules! sorafs_offset_filter {
-    ($name:ident, $selector:ident, $selector_key:literal) => {
-        #[doc = concat!("Offset-based list filter for `", stringify!($name), "`.")]
-        #[derive(Debug, Default, Clone)]
-        pub struct $name<'a> {
-            /// Maximum number of records to return.
-            pub limit: Option<u32>,
-            /// Offset for pagination.
-            pub offset: Option<u32>,
-            /// Optional endpoint-specific selector.
-            pub $selector: Option<&'a str>,
-            /// Optional manifest digest filter (hex-encoded).
-            pub manifest_digest: Option<&'a str>,
-        }
-        impl $name<'_> {
-            fn apply_to_url(&self, url: &mut Url) {
-                append_optional_query(url, "limit", self.limit);
-                append_optional_query(url, "offset", self.offset);
-                append_optional_query(url, $selector_key, self.$selector);
-                append_optional_query(url, "manifest_digest", self.manifest_digest);
-            }
-        }
-    };
-}
-
 sorafs_finalized_anchor!(SorafsPinFinalizedAnchor);
 /// Filters for the finalized /v1/sorafs/pin keyset page.
 #[derive(Debug, Default, Clone, Copy)]
@@ -5335,17 +5310,21 @@ pub struct SorafsPinListFilter<'a> {
     pub limit: Option<u32>,
     /// Maximum canonical encoded page bytes (1 KiB through 256 KiB).
     pub max_bytes: Option<u32>,
-    /// Canonical lowercase exclusive manifest-digest cursor.
+    /// Exact non-zero lowercase 32-byte exclusive manifest-digest cursor.
     pub after_digest_hex: Option<&'a str>,
     /// Optional closed lifecycle selector.
     pub status: Option<PinStatusKindV1>,
 }
 impl SorafsPinListFilter<'_> {
-    fn apply_to_url(self, url: &mut Url) {
+    fn apply_to_url(self, url: &mut Url) -> Result<()> {
+        let after_digest_hex = self
+            .after_digest_hex
+            .map(|digest| require_nonzero_lower_hex32(digest, "SoraFS pin-list cursor"))
+            .transpose()?;
         self.finalized.apply_to_url(url);
         append_optional_query(url, "limit", self.limit);
         append_optional_query(url, "max_bytes", self.max_bytes);
-        append_optional_query(url, "after_digest_hex", self.after_digest_hex);
+        append_optional_query(url, "after_digest_hex", after_digest_hex);
         if let Some(status) = self.status {
             let status = match status {
                 PinStatusKindV1::Pending => "pending",
@@ -5354,10 +5333,90 @@ impl SorafsPinListFilter<'_> {
             };
             append_optional_query(url, "status", Some(status));
         }
+        Ok(())
     }
 }
-sorafs_offset_filter!(SorafsAliasListFilter, namespace, "namespace");
-sorafs_offset_filter!(SorafsReplicationListFilter, status, "status");
+
+/// Offset-based filters for the authenticated `SoraFS` alias projection.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SorafsAliasListFilter<'a> {
+    /// Maximum number of records to return.
+    pub limit: Option<u32>,
+    /// Offset for pagination.
+    pub offset: Option<u32>,
+    /// Optional exact namespace selector.
+    pub namespace: Option<&'a str>,
+    /// Optional canonical non-zero lowercase manifest digest.
+    pub manifest_digest: Option<&'a str>,
+}
+impl SorafsAliasListFilter<'_> {
+    fn apply_to_url(&self, url: &mut Url) -> Result<()> {
+        let manifest_digest = self
+            .manifest_digest
+            .map(|digest| require_nonzero_lower_hex32(digest, "SoraFS alias manifest digest"))
+            .transpose()?;
+        append_optional_query(url, "limit", self.limit);
+        append_optional_query(url, "offset", self.offset);
+        append_optional_query(url, "namespace", self.namespace);
+        append_optional_query(url, "manifest_digest", manifest_digest);
+        Ok(())
+    }
+}
+
+/// Closed lifecycle selector for the authenticated `SoraFS` replication projection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SorafsReplicationStatus {
+    /// Orders still awaiting their required provider completions.
+    Pending,
+    /// Orders whose required provider completions are committed.
+    Completed,
+    /// Orders cancelled when their target pin was retired.
+    Cancelled,
+    /// Incomplete orders expired after their inclusive deadline.
+    Expired,
+}
+impl SorafsReplicationStatus {
+    /// Return the exact lowercase query label accepted by Torii V1.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Completed => "completed",
+            Self::Cancelled => "cancelled",
+            Self::Expired => "expired",
+        }
+    }
+}
+
+/// Offset-based filters for the authenticated `SoraFS` replication projection.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SorafsReplicationListFilter<'a> {
+    /// Maximum number of records to return.
+    pub limit: Option<u32>,
+    /// Offset for pagination.
+    pub offset: Option<u32>,
+    /// Optional exact lifecycle selector.
+    pub status: Option<SorafsReplicationStatus>,
+    /// Optional canonical non-zero lowercase manifest digest.
+    pub manifest_digest: Option<&'a str>,
+}
+impl SorafsReplicationListFilter<'_> {
+    fn apply_to_url(&self, url: &mut Url) -> Result<()> {
+        let manifest_digest = self
+            .manifest_digest
+            .map(|digest| require_nonzero_lower_hex32(digest, "SoraFS replication manifest digest"))
+            .transpose()?;
+        append_optional_query(url, "limit", self.limit);
+        append_optional_query(url, "offset", self.offset);
+        append_optional_query(
+            url,
+            "status",
+            self.status.map(SorafsReplicationStatus::as_str),
+        );
+        append_optional_query(url, "manifest_digest", manifest_digest);
+        Ok(())
+    }
+}
 sorafs_finalized_anchor!(SorafsRepairFinalizedAnchor);
 sorafs_finalized_id_filter!(
     SorafsRepairTasksFilter,
@@ -9800,7 +9859,7 @@ mod evidence_http_tests {
         with_mock_http(respond_with(&store, response), || {
             let client = client_with_base_url(base_url());
             let resp = client
-                .get_sorafs_pin_manifest("deadbeef")
+                .get_sorafs_pin_manifest(&"11".repeat(32))
                 .expect("fresh alias proof should be accepted");
             assert_eq!(resp.status(), StatusCode::OK);
         });
@@ -9823,7 +9882,7 @@ mod evidence_http_tests {
         with_mock_http(respond_with(&store, response), || {
             let client = client_with_base_url(base_url());
             let err = client
-                .get_sorafs_pin_manifest("deadbeef")
+                .get_sorafs_pin_manifest(&"11".repeat(32))
                 .expect_err("stale alias proof should be rejected");
             assert!(err.to_string().contains("alias proof"));
         });
@@ -14953,21 +15012,23 @@ impl Client {
     }
     /// Convenience: GET `/v1/sorafs/pin` to list manifests in the pin registry.
     /// # Errors
-    /// Returns an error if request construction or the HTTP call fails.
+    /// Returns an error for a noncanonical manifest-digest cursor, request construction, or an
+    /// HTTP failure.
     pub fn get_sorafs_pin_registry(
         &self,
         filter: &SorafsPinListFilter<'_>,
     ) -> Result<Response<Vec<u8>>> {
-        self.send_sorafs_endpoint(
-            SorafsEndpoint::anonymous_json_get("v1/sorafs/pin"),
-            Vec::new(),
-            |url| filter.apply_to_url(url),
-        )
+        let endpoint = SorafsEndpoint::anonymous_json_get("v1/sorafs/pin");
+        let mut url = join_torii_url(&self.torii_url, endpoint.path);
+        filter.apply_to_url(&mut url)?;
+        self.send_sorafs_url(endpoint, url, Vec::new())
     }
     /// Convenience: GET `/v1/sorafs/pin/{digest}` to inspect a specific manifest record.
     /// # Errors
-    /// Returns an error if request construction or the HTTP call fails.
+    /// Returns an error if `digest_hex` is not an exact non-zero lowercase 32-byte digest, or if
+    /// request construction or the HTTP call fails.
     pub fn get_sorafs_pin_manifest(&self, digest_hex: &str) -> Result<Response<Vec<u8>>> {
+        let digest_hex = require_nonzero_lower_hex32(digest_hex, "SoraFS pin manifest digest")?;
         let path = format!("v1/sorafs/pin/{digest_hex}");
         let url = join_torii_url(&self.torii_url, &path);
         let response = self
@@ -15745,12 +15806,33 @@ impl Client {
             successor_of,
         ))
     }
-    sorafs_filtered_get_methods!(
-        get_sorafs_aliases(filter: &SorafsAliasListFilter<'_>) =>
-            SorafsEndpoint::account_json_get("v1/sorafs/aliases"),
-        get_sorafs_replication_orders(filter: &SorafsReplicationListFilter<'_>) =>
-            SorafsEndpoint::account_json_get("v1/sorafs/replication"),
-    );
+    /// Fetch the authenticated, filtered `SoraFS` alias projection.
+    /// # Errors
+    /// Returns an error for a noncanonical manifest digest, request construction, signing, or
+    /// transport failure.
+    pub fn get_sorafs_aliases(
+        &self,
+        filter: &SorafsAliasListFilter<'_>,
+    ) -> Result<Response<Vec<u8>>> {
+        let endpoint = SorafsEndpoint::account_json_get("v1/sorafs/aliases");
+        let mut url = join_torii_url(&self.torii_url, endpoint.path);
+        filter.apply_to_url(&mut url)?;
+        self.send_sorafs_url(endpoint, url, Vec::new())
+    }
+
+    /// Fetch the authenticated, filtered `SoraFS` replication-order projection.
+    /// # Errors
+    /// Returns an error for a noncanonical manifest digest, request construction, signing, or
+    /// transport failure.
+    pub fn get_sorafs_replication_orders(
+        &self,
+        filter: &SorafsReplicationListFilter<'_>,
+    ) -> Result<Response<Vec<u8>>> {
+        let endpoint = SorafsEndpoint::account_json_get("v1/sorafs/replication");
+        let mut url = join_torii_url(&self.torii_url, endpoint.path);
+        filter.apply_to_url(&mut url)?;
+        self.send_sorafs_url(endpoint, url, Vec::new())
+    }
     /// Fetch chain-authoritative `SoraFS` repair counters at an optional finalized anchor.
     /// # Errors
     /// Returns an error if request construction or the HTTP call fails.
@@ -27087,7 +27169,9 @@ mod tests {
             after_digest_hex: Some(&after_digest),
             status: Some(PinStatusKindV1::Approved),
         };
-        filter.apply_to_url(&mut url);
+        filter
+            .apply_to_url(&mut url)
+            .expect("pin-list filter must be canonical");
         assert_eq!(
             url.query(),
             Some(

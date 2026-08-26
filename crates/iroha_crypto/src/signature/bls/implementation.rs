@@ -242,7 +242,7 @@ impl<C: BlsConfiguration + ?Sized> Clone for ManagedSecretKey<C> {
     }
 }
 impl<C: BlsConfiguration + ?Sized> ManagedSecretKey<C> {
-    fn new(secret: W3fSecretKey<C::Engine>) -> Self {
+    fn new(secret: &W3fSecretKey<C::Engine>) -> Self {
         Self {
             bytes: Zeroizing::new(secret.into_vartime().to_bytes()),
             _marker: PhantomData,
@@ -271,7 +271,7 @@ impl<C: BlsConfiguration + ?Sized> ManagedSecretKey<C> {
         }
         let secret = W3fSecretKey::<C::Engine>::from_bytes(bytes)
             .map_err(|err| ParseError(err.to_string()))?;
-        Ok(Self::new(secret))
+        Ok(Self::new(&secret))
     }
     fn try_sign_bytes(&self, message: &[u8]) -> Result<Vec<u8>, Error> {
         #[cfg(feature = "rand")]
@@ -336,6 +336,7 @@ fn bls_seed_material_is_all_zero(seed: &[u8]) -> bool {
 fn bls_seed_material_all_zero_error(context: &str) -> Error {
     Error::KeyGen(format!("BLS {context} seed material must not be all zero"))
 }
+#[cfg(feature = "rand")]
 fn ensure_bls_seed_material_not_all_zero(context: &str, seed: &[u8]) -> Result<(), Error> {
     if bls_seed_material_is_all_zero(seed) {
         return Err(bls_seed_material_all_zero_error(context));
@@ -420,7 +421,7 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
                 let deterministic_rng = crate::rng::rng_from_seed_slice(okm.as_slice());
                 let secret = SecretKeyVT::<C::Engine>::from_seed(okm.as_slice())
                     .into_split(deterministic_rng);
-                ManagedSecretKey::new(secret)
+                ManagedSecretKey::new(&secret)
             }
             KeyGenOption::FromPrivateKey(key) => key,
         };
@@ -440,7 +441,7 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
         let split_seed = checked_entropy_from_rng("key split", BLS_RNG_SEED_LEN, rng)?;
         let split_rng = crate::rng::rng_from_seed_slice(split_seed.as_slice());
         let secret = SecretKeyVT::<C::Engine>::from_seed(seed.as_slice()).into_split(split_rng);
-        let private_key = ManagedSecretKey::new(secret);
+        let private_key = ManagedSecretKey::new(&secret);
         let public_key = private_key
             .try_public_key()
             .map_err(|err| Error::KeyGen(err.to_string()))?;
@@ -789,7 +790,7 @@ mod tests {
         let deterministic_rng = crate::rng::rng_from_seed_slice(&okm);
         let secret = SecretKeyVT::<C::Engine>::from_seed(&okm).into_split(deterministic_rng);
         okm.zeroize();
-        let private = ManagedSecretKey::new(secret);
+        let private = ManagedSecretKey::new(&secret);
         let public = private
             .try_public_key()
             .expect("reference public key derives");
@@ -853,6 +854,7 @@ mod tests {
         private.zeroize();
         assert!(private.as_bytes().iter().all(|&byte| byte == 0));
         assert!(private.try_public_key().is_err());
+        assert!(BlsImpl::<NormalConfiguration>::try_sign(b"must not sign", &private).is_err());
     }
     #[cfg(feature = "rand")]
     #[test]

@@ -1063,7 +1063,7 @@ fn provider_bundle_attestation_requires_controller_quorum_and_exact_finalized_co
         attestation_set_digest,
         musubi_provider_bundle_attestation_set_digest_v1(
             binding.archive_id,
-            ReplicationOrderId::new([0xFB; 32]),
+            ReplicationOrderId::new([0x7B; 32]),
             &[reference],
         )
         .expect("different order remains a valid commitment")

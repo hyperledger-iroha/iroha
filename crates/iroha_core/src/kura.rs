@@ -490,6 +490,8 @@ fn default_fastpq_proof_sidecar_queue_cap() -> usize {
 fn default_pipeline_sidecar_queue_cap() -> usize {
     BLOCKS_IN_MEMORY.get()
 }
+const EMERGENCY_FAST_RECENT_BLOCK_CACHE_CAPACITY: NonZeroUsize =
+    NonZeroUsize::new(256).expect("the emergency Fast cache ceiling is non-zero");
 fn default_fastpq_proof_sidecar_max_bytes() -> usize {
     usize::try_from(FASTPQ_DEFAULTS::PROOF_SIDECAR_MAX_BYTES.get())
         .unwrap_or(usize::MAX)
@@ -2099,10 +2101,16 @@ impl Kura {
                 config.store_dir.resolve_relative_path(),
             )
         })?;
-        let pending_control_sidecar_limits = PendingControlSidecarLimits::from_config(
-            sumeragi_limits,
-            &config.store_dir.resolve_relative_path(),
-        )?;
+        let pending_control_sidecar_limits = if config.init_mode == InitMode::Fast {
+            // Consensus and every sidecar writer remain disabled for the whole Fast process.
+            // Do not let their unused production bounds delay or reject an emergency read boot.
+            PendingControlSidecarLimits::default()
+        } else {
+            PendingControlSidecarLimits::from_config(
+                sumeragi_limits,
+                &config.store_dir.resolve_relative_path(),
+            )?
+        };
         let provisional_hash_only_prefix = bootstrap_policy
             .enabled
             .then_some(bootstrap_policy.audited_height)
@@ -2324,15 +2332,22 @@ impl Kura {
         if configured_store_dir.as_os_str().is_empty() {
             return Err(Error::EmptyStoreRoot);
         }
-        let replica_registry_key_capacity = config
-            .replica_advert
-            .validate(config.blocks_in_memory)
-            .map_err(|error| Error::InvalidKuraReplicaAdvertConfiguration(error.to_string()))?;
-        let native_amx_evidence_prune_intent_max_bytes =
+        let replica_registry_key_capacity = if config.init_mode == InitMode::Fast {
+            NonZeroUsize::MIN
+        } else {
+            config
+                .replica_advert
+                .validate(config.blocks_in_memory)
+                .map_err(|error| Error::InvalidKuraReplicaAdvertConfiguration(error.to_string()))?
+        };
+        let native_amx_evidence_prune_intent_max_bytes = if config.init_mode == InitMode::Fast {
+            0
+        } else {
             Self::native_amx_evidence_prune_intent_max_bytes_for_retention(
                 config.lane_history_retention,
                 pending_control_sidecar_limits.aggregate_bytes,
-            )?;
+            )?
+        };
         if config.init_mode == InitMode::Strict {
             create_dir_all_with_context(&configured_store_dir)?;
         }
@@ -2350,7 +2365,22 @@ impl Kura {
         if config.init_mode == InitMode::Strict {
             Self::reject_retired_commit_roster_artifacts(&store_root)?;
         }
-        let lane_history_retention = config.lane_history_retention;
+        let blocks_in_memory = if config.init_mode == InitMode::Fast {
+            NonZeroUsize::new(
+                config
+                    .blocks_in_memory
+                    .get()
+                    .min(EMERGENCY_FAST_RECENT_BLOCK_CACHE_CAPACITY.get()),
+            )
+            .expect("the emergency Fast cache ceiling is non-zero")
+        } else {
+            config.blocks_in_memory
+        };
+        let lane_history_retention = if config.init_mode == InitMode::Fast {
+            NonZeroUsize::MIN
+        } else {
+            config.lane_history_retention
+        };
         let primary_lane = lane_config.primary();
         let authenticated_configured_catalog = configured_catalog_hash.is_some();
         let mut provisional_open = provisional_hash_only_prefix.is_some();
@@ -2826,7 +2856,7 @@ impl Kura {
             merge_carrier_lock: Mutex::new(()),
             merge_carrier_index: Mutex::new(MergeCarrierIndex::default()),
             pipeline_sidecar_queue: Mutex::new(VecDeque::new()),
-            pipeline_sidecar_queue_cap: AtomicUsize::new(config.blocks_in_memory.get()),
+            pipeline_sidecar_queue_cap: AtomicUsize::new(blocks_in_memory.get()),
             fastpq_proof_queue: Mutex::new(VecDeque::new()),
             fastpq_proof_sidecar_queue_cap: AtomicUsize::new(
                 default_fastpq_proof_sidecar_queue_cap(),
@@ -2877,7 +2907,7 @@ impl Kura {
             disk_usage_initialized: AtomicBool::new(false),
             disk_usage_total_initialized: AtomicBool::new(false),
             disk_usage_total_last_refresh: AtomicU64::new(0),
-            blocks_in_memory: config.blocks_in_memory,
+            blocks_in_memory,
             lane_history_retention,
             pending_control_sidecar_limits,
             native_amx_evidence_prune_intent_max_bytes,
@@ -3076,6 +3106,16 @@ impl Kura {
             &LaneConfig::default(),
             BLOCKS_IN_MEMORY,
         )
+    }
+    /// Create an empty isolated Kura with emergency Fast read semantics for
+    /// focused snapshot-deserialization tests.
+    #[cfg(test)]
+    pub(crate) fn blank_emergency_fast_kura_for_testing() -> Arc<Kura> {
+        let mut kura = Self::blank_kura_for_testing();
+        Arc::get_mut(&mut kura)
+            .expect("fresh test Kura has one owner")
+            .auxiliary_history_deferred = true;
+        kura
     }
     /// Return the number of FASTPQ proof snapshots awaiting persistence in tests.
     #[cfg(test)]
@@ -12174,10 +12214,10 @@ impl Kura {
     }
     /// Open the exact durable journal without decoding historical block bodies.
     ///
-    /// Commit-marker reconciliation has already established the durable count and
-    /// removed any unpublished suffix. Fast mode deliberately trusts the remaining
-    /// hash journal. Normal reads and State replay still decode each requested block
-    /// and compare its canonical hash before use.
+    /// Read-only preflight has already bound the durable count and terminal hash.
+    /// Fast mode leaves any unpublished suffix untouched and deliberately trusts the
+    /// committed journal prefix. A requested block is still decoded and checked
+    /// lazily before it is returned.
     fn init_fast_mode(
         block_store: &mut BlockStore,
         block_index_count: usize,
@@ -21687,6 +21727,55 @@ impl Kura {
             return Err(Error::HashesFileHeightMismatch);
         }
         Ok((usize::try_from(count)?, boundary_hash))
+    }
+    /// Map the exact durable hash prefix used by emergency Fast state reads.
+    ///
+    /// The mapping is copy-on-write and read-only, so startup neither copies
+    /// the complete journal nor permits State to mutate it. Kura's exclusive
+    /// store lock keeps the mapped file from being truncated by another node
+    /// process; this Fast process never starts a writer.
+    pub(crate) fn emergency_fast_snapshot_hash_mapping(
+        &self,
+        snapshot_height: usize,
+    ) -> Result<Option<ReadOnlyMmap>> {
+        if !self.emergency_fast_startup_enabled() {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "emergency Fast hash mapping requested after Strict startup",
+                ),
+                self.active_blocks_dir.lock().clone(),
+            ));
+        }
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        self.ensure_canonical_storage_not_poisoned()?;
+        let mut store = self.block_store.lock();
+        let durable_count = store.read_exact_durable_index_count()?;
+        if usize::try_from(durable_count)? != snapshot_height {
+            return Err(Error::HashesFileHeightMismatch);
+        }
+        if snapshot_height == 0 {
+            return Ok(None);
+        }
+        let byte_len = snapshot_height
+            .checked_mul(Hash::LENGTH)
+            .ok_or(Error::HashesFileHeightMismatch)?;
+        let hashes_path = store.path_to_blockchain.join(HASHES_FILE_NAME);
+        let hashes_file = store.hashes_file.as_mut().ok_or_else(|| {
+            Error::IO(
+                std::io::Error::new(
+                    ErrorKind::NotFound,
+                    "emergency Fast hash journal is not open read-only",
+                ),
+                hashes_path,
+            )
+        })?;
+        let file_len = hashes_file.try_io(|file| file.metadata().map(|metadata| metadata.len()))?;
+        let mapping = hashes_file
+            .try_io(|file| ReadOnlyMmap::copy_read_only_with_file_len(file, byte_len, file_len))?;
+        Ok(Some(mapping))
     }
     /// Mint the lightweight canonical-journal binding used by emergency Fast replay planning.
     ///
@@ -32363,23 +32452,6 @@ impl Kura {
             true,
         )
     }
-    /// Read one autonomous lane artifact without repairing or scanning historical sidecars.
-    #[must_use]
-    pub(crate) fn read_autonomous_lane_block_artifact_without_sidecar_repair(
-        &self,
-        lane_id: LaneId,
-        lane_block_height: u64,
-        expected_network_id: iroha_data_model::NetworkId,
-        expected_epoch: u64,
-    ) -> Option<AutonomousLaneBlockArtifact> {
-        self.read_autonomous_lane_block_artifact_with_recovery_policy(
-            lane_id,
-            lane_block_height,
-            expected_network_id,
-            expected_epoch,
-            false,
-        )
-    }
     fn read_autonomous_lane_block_artifact_with_recovery_policy(
         &self,
         lane_id: LaneId,
@@ -33460,7 +33532,7 @@ impl Kura {
         mut epoch_for_height: F,
     ) -> Result<Vec<(AutonomousLaneBlockArtifact, LaneBlockProposalV1)>>
     where
-        F: FnMut(u64) -> u64,
+        F: FnMut(u64) -> Result<u64, String>,
     {
         if self.auxiliary_history_deferred {
             return Err(Error::EmergencyFastAuxiliaryUnavailable {
@@ -33495,7 +33567,12 @@ impl Kura {
             if pointer.network_id != expected_network_id {
                 continue;
             }
-            let expected_epoch = epoch_for_height(pointer.proposal_height);
+            let expected_epoch = epoch_for_height(pointer.proposal_height).map_err(|reason| {
+                Error::AutonomousEpochResolution {
+                    proposal_height: pointer.proposal_height,
+                    reason,
+                }
+            })?;
             let record = {
                 let _guard = self.sidecar_lock.lock();
                 if self.prune_recovery_is_required() {

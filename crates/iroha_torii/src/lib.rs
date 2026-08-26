@@ -29822,6 +29822,7 @@ fn soracloud_local_read_error_response(
 ) -> Response {
     let status = match error.kind {
         SoracloudRuntimeExecutionErrorKind::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
+        SoracloudRuntimeExecutionErrorKind::Conflict => StatusCode::CONFLICT,
         SoracloudRuntimeExecutionErrorKind::InvalidRequest => StatusCode::BAD_REQUEST,
         SoracloudRuntimeExecutionErrorKind::Internal => StatusCode::INTERNAL_SERVER_ERROR,
     };
@@ -29835,6 +29836,17 @@ fn soracloud_local_read_error_response(
             );
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         })
+}
+#[cfg(all(test, feature = "app_api"))]
+#[test]
+fn soracloud_local_read_conflict_maps_to_http_conflict() {
+    let response = soracloud_local_read_error_response(
+        iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Conflict,
+            "terminal Soracloud local-read fixture",
+        ),
+    );
+    assert_eq!(response.status(), StatusCode::CONFLICT);
 }
 #[cfg(feature = "app_api")]
 fn soracloud_public_runtime_unavailable(message: impl Into<String>) -> Response {
@@ -45025,6 +45037,30 @@ fn emergency_fast_runtime_deps_drop_external_services_and_signers() {
 
 #[cfg(test)]
 #[test]
+fn emergency_fast_uses_only_the_process_local_sorafs_facade() {
+    let compact_source: String = include_str!("lib.rs")
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect();
+    let fast_facade = compact_source
+        .find(
+            "letsorafs_node=ifemergency_fast{sorafs_node::NodeHandle::try_new_emergency_disabled(",
+        )
+        .expect("emergency-disabled SoraFS facade");
+    let durable_constructor = compact_source[fast_facade..]
+        .find("sorafs_node::NodeHandle::try_new_with_policies_and_runtime_deps(")
+        .map(|offset| fast_facade + offset)
+        .expect("Strict SoraFS constructor");
+    let process_local_por = compact_source[fast_facade..]
+        .find("ifemergency_fast{(Arc::new(sorafs::PorCoordinator::with_record_limit(1)),None,)")
+        .map(|offset| fast_facade + offset)
+        .expect("process-local emergency PoR coordinator");
+
+    assert!(fast_facade < durable_constructor && durable_constructor < process_local_por);
+}
+
+#[cfg(test)]
+#[test]
 fn emergency_fast_does_not_configure_or_start_the_background_zk_prover() {
     let source = include_str!("lib.rs");
     let app_services = source
@@ -48521,10 +48557,20 @@ impl Torii {
             )
         });
         #[cfg(feature = "app_api")]
-        let sorafs_cache =
-            shared_sorafs_cache.or_else(|| build_sorafs_cache(&config, sorafs_admission.clone()));
+        let sorafs_cache = if emergency_fast {
+            None
+        } else {
+            shared_sorafs_cache.or_else(|| build_sorafs_cache(&config, sorafs_admission.clone()))
+        };
         #[cfg(feature = "app_api")]
-        let sorafs_node = {
+        let sorafs_node = if emergency_fast {
+            let data_dir = sorafs_node::config::StorageConfig::from(&config.sorafs_storage)
+                .data_dir()
+                .clone();
+            sorafs_node::NodeHandle::try_new_emergency_disabled(data_dir).unwrap_or_else(|err| {
+                panic!("failed to initialise emergency-disabled SoraFS facade: {err}")
+            })
+        } else {
             let storage_config = sorafs_node::config::StorageConfig::from(&config.sorafs_storage);
             let repair_config = sorafs_node::config::RepairConfig::from(&config.sorafs_repair);
             let gc_config = sorafs_node::config::GcConfig::from(&config.sorafs_gc);
@@ -49098,10 +49144,17 @@ impl Torii {
             shared_sorafs_stream_token_signer,
         );
         #[cfg(feature = "app_api")]
-        let (por_coordinator, por_runtime) =
-            build_por_components(&config, &network_id, &sorafs_node, sorafs_admission.clone());
+        let (por_coordinator, por_runtime) = if emergency_fast {
+            (Arc::new(sorafs::PorCoordinator::with_record_limit(1)), None)
+        } else {
+            build_por_components(&config, &network_id, &sorafs_node, sorafs_admission.clone())
+        };
         #[cfg(feature = "app_api")]
-        let gc_runtime = build_gc_runtime(&sorafs_node, state.clone());
+        let gc_runtime = if emergency_fast {
+            None
+        } else {
+            build_gc_runtime(&sorafs_node, state.clone())
+        };
         #[cfg(feature = "app_api")]
         let account_onboarding = config.account_onboarding.as_ref().map(|cfg| {
             let mut api_token_hashes_by_domain = BTreeMap::new();

@@ -1,4 +1,4 @@
-use crate::{
+use crate::runtime_provider_broker::api::{
     ConsensusSignerProviderQualificationV1, GlobalBeaconPartialSignerBrokerBackendErrorV1,
     GlobalBeaconPartialSignerBrokerBackendV1,
     ParliamentTlePartialReleaseSignerBrokerBackendErrorV1,

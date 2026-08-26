@@ -99,14 +99,10 @@ public final class SoracloudPrivateUploadedModelExecutionReceipt {
           "outputArtifact.artifactHash must differ from inputArtifact.artifactHash");
     }
     this.outputReplicationOrderId =
-        canonicalFixedBytes32(outputReplicationOrderId, "outputReplicationOrderId");
-    boolean nonzeroReplicationOrderId = false;
-    for (final byte value : this.outputReplicationOrderId) {
-      nonzeroReplicationOrderId |= value != 0;
-    }
-    if (!nonzeroReplicationOrderId) {
-      throw new IllegalArgumentException("outputReplicationOrderId must not be all zero");
-    }
+        SoracloudPrivateModelValidation.requireSorafsAutoReplicationOrderIdV1(
+            outputReplicationOrderId,
+            this.outputArtifact.sorafsManifestDigest(),
+            "outputReplicationOrderId");
     this.inputCommitment =
         SoracloudPrivateModelValidation.requireSoracloudHash(
             inputCommitment, "inputCommitment");
@@ -165,6 +161,7 @@ public final class SoracloudPrivateUploadedModelExecutionReceipt {
 
   public SoracloudPrivateModelArtifactRef outputArtifact() { return outputArtifact; }
 
+  /** Return a defensive copy of the deterministic SoraFS replication-order identifier. */
   public byte[] outputReplicationOrderId() { return outputReplicationOrderId.clone(); }
 
   public String inputCommitment() { return inputCommitment; }
@@ -180,7 +177,7 @@ public final class SoracloudPrivateUploadedModelExecutionReceipt {
   /** Unsigned 64-bit block height at which consensus froze the execution authorization. */
   public BigInteger authorizationClaimBlockHeight() { return authorizationClaimBlockHeight; }
 
-  /** Unsigned 64-bit consensus epoch at which execution authorization was frozen. */
+  /** Unsigned 64-bit consensus Unix-seconds epoch at which authorization was frozen. */
   public BigInteger authorizationClaimEpoch() { return authorizationClaimEpoch; }
 
   /** Unsigned 64-bit ledger sequence, represented without signed narrowing. */
@@ -193,12 +190,8 @@ public final class SoracloudPrivateUploadedModelExecutionReceipt {
   public BigInteger emittedEpoch() { return emittedEpoch; }
 
   private static byte[] canonicalManifestDigest(final byte[] value) {
-    return canonicalFixedBytes32(value, "modelManifestDigest");
-  }
-
-  private static byte[] canonicalFixedBytes32(final byte[] value, final String field) {
     if (value == null || value.length != 32) {
-      throw new IllegalArgumentException(field + " must contain exactly 32 bytes");
+      throw new IllegalArgumentException("modelManifestDigest must contain exactly 32 bytes");
     }
     return value.clone();
   }

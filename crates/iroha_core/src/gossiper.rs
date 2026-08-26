@@ -266,17 +266,31 @@ impl GossipTargetSeed {
 /// [`TransactionGossiper`] actor handle.
 #[derive(Clone)]
 pub struct TransactionGossiperHandle {
-    message_sender: mpsc::Sender<Arc<TransactionGossip>>,
+    message_sender: Option<mpsc::Sender<Arc<TransactionGossip>>>,
 }
 impl TransactionGossiperHandle {
+    /// Construct the inert handle used by emergency Fast mode.
+    ///
+    /// Transaction admission is closed in that mode, so retaining an actor,
+    /// timer, queue, topology clone, or network fanout path would only consume
+    /// outage-recovery resources.
+    #[must_use]
+    pub fn emergency_fast_disabled() -> Self {
+        Self {
+            message_sender: None,
+        }
+    }
     /// Send [`TransactionGossip`] to actor.
     ///
     /// Messages are best-effort: if the queue is full, the gossip is dropped
     /// to avoid blocking consensus traffic.
     pub fn gossip(&self, gossip: Arc<TransactionGossip>) {
+        let Some(message_sender) = self.message_sender.as_ref() else {
+            return;
+        };
         let txs = gossip.txs.len();
         let plane = gossip_plane_label(gossip.plane);
-        match self.message_sender.try_send(gossip) {
+        match message_sender.try_send(gossip) {
             Ok(()) => {}
             Err(mpsc::error::TrySendError::Full(_)) => {
                 iroha_logger::debug!(
@@ -302,7 +316,9 @@ mod handle_tests {
     #[test]
     fn gossip_drops_when_queue_full() {
         let (message_sender, mut message_receiver) = mpsc::channel(1);
-        let handle = TransactionGossiperHandle { message_sender };
+        let handle = TransactionGossiperHandle {
+            message_sender: Some(message_sender),
+        };
         let msg1 = TransactionGossip {
             txs: Vec::new(),
             routes: Vec::new(),
@@ -317,6 +333,8 @@ mod handle_tests {
         };
         handle
             .message_sender
+            .as_ref()
+            .expect("ordinary test handle has a sender")
             .try_send(Arc::new(msg1))
             .expect("queue has space");
         handle.gossip(Arc::new(msg2));
@@ -328,6 +346,17 @@ mod handle_tests {
             message_receiver.try_recv(),
             Err(mpsc::error::TryRecvError::Empty)
         ));
+    }
+    #[test]
+    fn emergency_fast_handle_has_no_actor_queue() {
+        let handle = TransactionGossiperHandle::emergency_fast_disabled();
+        assert!(handle.message_sender.is_none());
+        handle.gossip(Arc::new(TransactionGossip {
+            txs: Vec::new(),
+            routes: Vec::new(),
+            plans: Vec::new(),
+            plane: GossipPlane::Public,
+        }));
     }
 }
 /// Actor which gossips transactions and receives transaction gossips
@@ -365,7 +394,9 @@ impl TransactionGossiper {
     pub fn start(self, shutdown_signal: ShutdownSignal) -> (TransactionGossiperHandle, Child) {
         let (message_sender, message_receiver) = mpsc::channel(1);
         (
-            TransactionGossiperHandle { message_sender },
+            TransactionGossiperHandle {
+                message_sender: Some(message_sender),
+            },
             Child::new(
                 tokio::task::spawn(self.run(message_receiver, shutdown_signal)),
                 OnShutdown::Abort,

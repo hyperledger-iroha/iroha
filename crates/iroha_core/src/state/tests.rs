@@ -107,7 +107,7 @@ use iroha_data_model::{
     },
     sorafs::pin_registry::{
         ChunkerProfileHandle, ManifestDigest, ManifestRootCid, PinManifestRecord, PinPolicy,
-        PinStatus, ReplicationOrderId, StorageClass,
+        ReplicationOrderId, ReplicationOrderStatus, StorageClass,
     },
     transaction::ExecutionStep,
 };
@@ -1747,6 +1747,16 @@ fn deserialize_state_snapshot_value_with_kura(
 }
 fn deserialize_state_snapshot_value(value: norito::json::Value) -> Result<State, json::Error> {
     deserialize_state_snapshot_value_with_kura(value, Kura::blank_kura_for_testing())
+}
+fn deserialize_state_snapshot_value_emergency_fast(state: &State) -> Result<State, json::Error> {
+    let input = norito::json::to_json(state)?;
+    deserialize::KuraSeed {
+        kura: Kura::blank_emergency_fast_kura_for_testing(),
+        query_handle: LiveQueryStore::start_test(),
+        #[cfg(feature = "telemetry")]
+        telemetry: crate::telemetry::StateTelemetry::default(),
+    }
+    .into_state_from_json_str_emergency_fast(&input)
 }
 fn install_axt_counter_for_test(state: &State, dataspace: DataSpaceId, next: u64, generation: u64) {
     let record = AxtHandleCounterRecord::try_from_parts(next, generation)
@@ -7339,7 +7349,7 @@ state_test! { sync pending_drain_body_and_candidate_use_embedded_close_committee
     assert_eq!(body.final_frontier.lane_block_height, 0);
     assert!(body.final_frontier.lane_block_descriptor_hash.is_none());
     let certificate = autoscale_drain_certificate_for_test(body, &keypairs);
-    let_row! { candidate = state .merge_drain_candidate_for_next_carrier(&parent_header, 7, certificate.clone()) .expect("valid exact drain certificate produces a cert-only candidate") };
+    let_row! { candidate = state .merge_drain_candidate_for_next_carrier(&parent_header, 7, certificate.clone(), ConsensusMode::Permissioned) .expect("valid exact drain certificate produces a cert-only candidate") };
     assert!(candidate.lane_snapshots.is_empty());
     assert!(candidate.execution_batch.is_none());
     assert_eq!(candidate.lane_drain_certificates, vec![certificate.clone()]);
@@ -7351,36 +7361,50 @@ state_test! { sync pending_drain_body_and_candidate_use_embedded_close_committee
         state.validate_merge_candidate_for_global_round(
             &unsupported_candidate,
             &parent_header,
-            7
+            7,
+            ConsensusMode::Permissioned,
         ),
         Err(MergeLedgerCommitError::ExecutionBatchInvalid(ref message))
             if message.contains("unsupported merge ledger candidate version")
     ));
     let_row! { empty_candidate = crate::merge::MergeLedgerCandidate { lane_drain_certificates: Vec::new(), ..candidate.clone() } };
     assert!(matches!(
-        state.validate_merge_candidate_for_global_round(&empty_candidate, &parent_header, 7),
+        state.validate_merge_candidate_for_global_round(
+            &empty_candidate,
+            &parent_header,
+            7,
+            ConsensusMode::Permissioned,
+        ),
         Err(MergeLedgerCommitError::EmptyEntry)
     ));
     let mut mixed_candidate = candidate.clone();
     mixed_candidate.lane_snapshots = merge_candidate_with_lanes(1, 1).lane_snapshots;
     assert!(matches!(
-        state.validate_merge_candidate_for_global_round(&mixed_candidate, &parent_header, 7),
+        state.validate_merge_candidate_for_global_round(
+            &mixed_candidate,
+            &parent_header,
+            7,
+            ConsensusMode::Permissioned,
+        ),
         Err(MergeLedgerCommitError::ExecutionBatchInvalid(_))
     ));
     let qc = merge_qc_for_candidate(&state, &candidate, &unrelated_keypairs, &[0, 1, 2]);
     let entry = merge_entry_from_candidate(candidate.clone(), qc);
     state
-        .validate_certified_merge_entry_for_global_order(&entry)
+        .validate_certified_merge_entry_for_global_order(&entry, ConsensusMode::Permissioned)
         .expect("certificate-only drain entry is globally admissible");
     let mut unsupported_entry = entry.clone();
     unsupported_entry.version = MergeLedgerEntry::VERSION + 1;
     assert!(matches!(
-        state.validate_certified_merge_entry_for_global_order(&unsupported_entry),
+        state.validate_certified_merge_entry_for_global_order(
+            &unsupported_entry,
+            ConsensusMode::Permissioned,
+        ),
         Err(MergeLedgerCommitError::ExecutionBatchInvalid(ref message))
             if message.contains("unsupported merge ledger entry version")
     ));
     let_row! { carrier_header = BlockHeader::new( nonzero!(2_u64), Some(parent_header.hash()), None, None, 101, 7, ) };
-    let_row! { carrier = state .block_with_certified_merge_entry(carrier_header, &entry) .expect("exact global carrier stages a certificate-only drain") };
+    let_row! { carrier = state .block_with_certified_merge_entry(carrier_header, &entry, ConsensusMode::Permissioned) .expect("exact global carrier stages a certificate-only drain") };
     let_row! { staged_lane = carrier .nexus .lane_catalog .lanes() .iter() .find(|lane| lane.id == lane_id) .expect("staged drain lane remains in the catalog") };
     let_row! { staged_drain = decode_autoscale_lane_drain_state(staged_lane) .expect("staged drain metadata is canonical") .expect("staged drain metadata remains present") };
     let_row! { staged_commitment = staged_drain .commitment .expect("certificate-only carrier stages the drain commitment") };
@@ -7399,7 +7423,12 @@ state_test! { sync pending_drain_body_and_candidate_use_embedded_close_committee
     wrong_order.validator_set.swap(0, 1);
     assert!(
         state
-            .merge_drain_candidate_for_next_carrier(&parent_header, 7, wrong_order)
+            .merge_drain_candidate_for_next_carrier(
+                &parent_header,
+                7,
+                wrong_order,
+                ConsensusMode::Permissioned,
+            )
             .is_err(),
         "certificate validator order must equal the embedded intent order"
     );
@@ -7420,14 +7449,24 @@ state_test! { sync pending_drain_body_and_candidate_use_embedded_close_committee
         "an unrepaired exact-incarnation application marker must block drain"
     );
     assert!(matches!(
-        state.merge_drain_candidate_for_next_carrier(&parent_header, 7, certificate.clone()),
+        state.merge_drain_candidate_for_next_carrier(
+            &parent_header,
+            7,
+            certificate.clone(),
+            ConsensusMode::Permissioned,
+        ),
         Err(MergeLedgerCommitError::ExecutionBatchInvalid(_))
     ));
     let mut duplicated = candidate;
     duplicated.lane_drain_certificates.push(certificate);
     assert!(
         state
-            .validate_merge_candidate_for_global_round(&duplicated, &parent_header, 7)
+            .validate_merge_candidate_for_global_round(
+                &duplicated,
+                &parent_header,
+                7,
+                ConsensusMode::Permissioned,
+            )
             .is_err(),
         "a merge candidate may carry at most one drain certificate"
     );
@@ -20880,7 +20919,7 @@ state_test! { sync canonical_reset_filters_same_incarnation_certified_lane_block
         Some(stale_lane_block_height)
     );
     assert!(
-        !state.has_pending_merge_execution_sources(),
+        !state.has_pending_merge_execution_sources(ConsensusMode::Permissioned),
         "a certified height beyond the exact frontier successor must not keep execution readiness asserted"
     );
     state
@@ -20902,13 +20941,18 @@ state_test! { sync canonical_reset_filters_same_incarnation_certified_lane_block
         state.unapplied_certified_lane_block_height(lane_id, DataSpaceId::UNIVERSAL),
         None
     );
-    assert!(!state.has_pending_merge_execution_sources());
-    assert!(state.canonical_merge_execution_sources().is_none());
+    assert!(!state.has_pending_merge_execution_sources(ConsensusMode::Permissioned));
+    assert!(
+        state
+            .canonical_merge_execution_sources(ConsensusMode::Permissioned)
+            .is_none()
+    );
     assert!(
         state
             .build_merge_execution_batch(
                 1,
                 BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0),
+                ConsensusMode::Permissioned,
             )
             .is_none()
     );
@@ -20955,11 +20999,13 @@ state_test! { sync canonical_reset_filters_same_incarnation_certified_lane_block
         Some(fresh_lane_block_height)
     );
     assert!(
-        !state.has_pending_merge_execution_sources(),
+        !state.has_pending_merge_execution_sources(ConsensusMode::Permissioned),
         "a fresh certificate without its independently durable autonomous payload and execution input is not merge-ready"
     );
     assert!(
-        state.canonical_merge_execution_sources().is_none(),
+        state
+            .canonical_merge_execution_sources(ConsensusMode::Permissioned)
+            .is_none(),
         "test-only source collection must require the same complete durable source"
     );
 }
@@ -33189,7 +33235,6 @@ fn sample_snapshot_hosted_service_deployment(
                 lease_started_height,
                 lease_expires_height,
                 authoritative_generation: 1,
-                last_materialized_sequence: None,
             },
         )
         .collect();
@@ -33298,82 +33343,164 @@ fn sample_snapshot_private_pin(digest: ManifestDigest, content_length: u64) -> P
     record.approve(1, None);
     record
 }
-fn sample_snapshot_private_replication_order(
-    receipt: &SoraPrivateUploadedModelExecutionReceiptV1,
+fn seed_snapshot_auto_replication_capacity(
+    world: &mut World,
     pin: &PinManifestRecord,
-    completed: bool,
-) -> iroha_data_model::sorafs::pin_registry::ReplicationOrderRecord {
-    let provider = iroha_data_model::sorafs::capacity::ProviderId::new([0xD4; 32]);
-    let order = sorafs_manifest::capacity::ReplicationOrderV1 {
-        version: sorafs_manifest::capacity::REPLICATION_ORDER_VERSION_V1,
-        order_id: *receipt.output_replication_order_id.as_bytes(),
-        manifest_cid: pin.root_cid.as_bytes().to_vec(),
-        manifest_digest: *pin.digest.as_bytes(),
-        chunking_profile: pin.chunker.to_handle(),
-        target_replicas: pin.policy.min_replicas,
-        assignments: vec![sorafs_manifest::capacity::ReplicationAssignmentV1 {
-            provider_id: *provider.as_bytes(),
-            slice_gib: 1,
-            lane: None,
-        }],
-        issued_at: 1_700_000_000,
-        deadline_at: 1_700_086_400,
-        sla: sorafs_manifest::capacity::ReplicationOrderSlaV1 {
-            ingest_deadline_secs: 86_400,
-            min_availability_percent_milli: 99_500,
-            min_por_success_percent_milli: 98_000,
-        },
-        metadata: Vec::new(),
+    order: &ReplicationOrderRecord,
+) {
+    let completion = order
+        .provider_completions
+        .first()
+        .expect("completed snapshot automatic order has a provider");
+    let provider_id = completion.provider_id;
+    let owner_literal = completion.completed_by.to_string();
+    let storage_class = match pin.policy.storage_class {
+        StorageClass::Hot => "hot",
+        StorageClass::Warm => "warm",
+        StorageClass::Cold => "cold",
     };
-    order
-        .validate()
-        .expect("canonical snapshot private replication order");
-    let completion_epoch = 2;
-    let provider_completions = completed
-        .then(|| {
-            vec![iroha_data_model::sorafs::pin_registry::ReplicationOrderCompletionRecord {
-                provider_id: provider,
-                completed_by: ALICE_ID.clone(),
-                completion_epoch,
-                assignment_revision: 1,
-                completion_authority:
-                    iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionAuthorityV1::new(
-                        ALICE_ID.clone(),
-                        iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1 {
-                            policy_id: [0xD5; 32],
-                            revision: 1,
-                            predecessor_digest: None,
-                            policy_digest: [0xD6; 32],
-                        },
-                    ),
-                finalized_anchor:
-                    iroha_data_model::sorafs::pin_registry::ProviderIngestFinalizedAnchorV1 {
-                        height: 1,
-                        block_hash: [0xD7; 32],
-                    },
-            }]
-        })
-        .unwrap_or_default();
-    iroha_data_model::sorafs::pin_registry::ReplicationOrderRecord {
-        order_id: receipt.output_replication_order_id,
-        manifest_digest: pin.digest,
-        manifest_root_cid: pin.root_cid,
-        musubi_archive: None,
-        issued_by: ALICE_ID.clone(),
-        issued_epoch: 1,
-        deadline_epoch: 86_401,
-        canonical_order: norito::encode_canonical(&order)
-            .expect("encode canonical snapshot private replication order"),
-        assignment_revision: 1,
-        provider_completions,
-        status: if completed {
-            iroha_data_model::sorafs::pin_registry::ReplicationOrderStatus::Completed(
-                completion_epoch,
-            )
-        } else {
-            iroha_data_model::sorafs::pin_registry::ReplicationOrderStatus::Pending
+    let declaration = sorafs_manifest::capacity::CapacityDeclarationV1 {
+        version: sorafs_manifest::capacity::CAPACITY_DECLARATION_VERSION_V1,
+        provider_id: *provider_id.as_bytes(),
+        stake: sorafs_manifest::provider_advert::StakePointer {
+            pool_id: [0xD9; 32],
+            stake_amount: "1".parse().expect("canonical positive XOR stake"),
         },
-    }
+        committed_capacity_gib: 1_024,
+        chunker_commitments: vec![sorafs_manifest::capacity::ChunkerCommitmentV1 {
+            profile_id: pin.chunker.to_handle(),
+            profile_aliases: None,
+            committed_gib: 1_024,
+            capability_refs: Vec::new(),
+        }],
+        lane_commitments: Vec::new(),
+        pricing: None,
+        valid_from: order.issued_epoch,
+        valid_until: order.deadline_epoch,
+        metadata: vec![
+            sorafs_manifest::capacity::CapacityMetadataEntry {
+                key: "sorafs.owner_account_id".to_owned(),
+                value: owner_literal.clone(),
+            },
+            sorafs_manifest::capacity::CapacityMetadataEntry {
+                key: "sorafs.storage_class".to_owned(),
+                value: storage_class.to_owned(),
+            },
+        ],
+    };
+    declaration
+        .validate()
+        .expect("canonical automatic replication capacity declaration");
+    let mut metadata = Metadata::default();
+    metadata.insert(
+        "sorafs.owner_account_id"
+            .parse()
+            .expect("static owner metadata key"),
+        Json::new(owner_literal),
+    );
+    metadata.insert(
+        "sorafs.storage_class"
+            .parse()
+            .expect("static storage-class metadata key"),
+        Json::new(storage_class),
+    );
+    world
+        .provider_owners
+        .insert(provider_id, completion.completed_by.clone());
+    world
+        .provider_ingest_completion_authorities
+        .insert(provider_id, completion.completion_authority.clone());
+    world.capacity_declarations.insert(
+        provider_id,
+        CapacityDeclarationRecord::new(
+            provider_id,
+            norito::encode_canonical(&declaration)
+                .expect("canonical automatic replication capacity payload"),
+            declaration.committed_capacity_gib,
+            order.issued_epoch,
+            declaration.valid_from,
+            declaration.valid_until,
+            metadata,
+        ),
+    );
+}
+fn sample_snapshot_approved_pin_world() -> (World, ManifestDigest, ReplicationOrderId) {
+    let digest = ManifestDigest::new([0xD5; 32]);
+    let pin = sample_snapshot_private_pin(digest, 128);
+    let order = crate::smartcontracts::isi::sorafs::completed_auto_replication_order_for_test(
+        &pin, &ALICE_ID,
+    )
+    .expect("canonical completed automatic replication order");
+    let order_id = order.order_id;
+    let mut world = World::default();
+    seed_snapshot_auto_replication_capacity(&mut world, &pin, &order);
+    world.pin_manifests.insert(digest, pin);
+    world.replication_orders.insert(order_id, order);
+    (world, digest, order_id)
+}
+fn sample_snapshot_capacity_declaration_world() -> (World, ProviderId, CapacityDeclarationRecord) {
+    let provider_id = ProviderId::new([0xC5; 32]);
+    let owner_literal = ALICE_ID.to_string();
+    let declaration = sorafs_manifest::capacity::CapacityDeclarationV1 {
+        version: sorafs_manifest::capacity::CAPACITY_DECLARATION_VERSION_V1,
+        provider_id: *provider_id.as_bytes(),
+        stake: sorafs_manifest::provider_advert::StakePointer {
+            pool_id: [0xC6; 32],
+            stake_amount: "1".parse().expect("canonical positive XOR stake"),
+        },
+        committed_capacity_gib: 1,
+        chunker_commitments: vec![sorafs_manifest::capacity::ChunkerCommitmentV1 {
+            profile_id: "sorafs.sf1@1.0.0".to_owned(),
+            profile_aliases: None,
+            committed_gib: 1,
+            capability_refs: vec![sorafs_manifest::provider_advert::CapabilityType::ToriiGateway],
+        }],
+        lane_commitments: Vec::new(),
+        pricing: None,
+        valid_from: 10,
+        valid_until: 100,
+        metadata: vec![
+            sorafs_manifest::capacity::CapacityMetadataEntry {
+                key: "sorafs.owner_account_id".to_owned(),
+                value: owner_literal.clone(),
+            },
+            sorafs_manifest::capacity::CapacityMetadataEntry {
+                key: "sorafs.storage_class".to_owned(),
+                value: "hot".to_owned(),
+            },
+        ],
+    };
+    declaration
+        .validate()
+        .expect("canonical snapshot capacity declaration");
+    let mut metadata = Metadata::default();
+    metadata.insert(
+        "sorafs.owner_account_id"
+            .parse()
+            .expect("static owner metadata key"),
+        Json::new(owner_literal),
+    );
+    metadata.insert(
+        "sorafs.storage_class"
+            .parse()
+            .expect("static storage-class metadata key"),
+        Json::new("hot"),
+    );
+    let record = CapacityDeclarationRecord::new(
+        provider_id,
+        norito::encode_canonical(&declaration).expect("canonical capacity declaration payload"),
+        declaration.committed_capacity_gib,
+        20,
+        declaration.valid_from,
+        declaration.valid_until,
+        metadata,
+    );
+    let mut world = World::default();
+    world.provider_owners.insert(provider_id, ALICE_ID.clone());
+    world
+        .capacity_declarations
+        .insert(provider_id, record.clone());
+    (world, provider_id, record)
 }
 fn sample_snapshot_private_uploaded_model_receipt(
     service_bundle: &SoraDeploymentBundleV1,
@@ -33672,15 +33799,41 @@ fn sample_snapshot_private_uploaded_model_world(
             sample_snapshot_private_pin(artifact.sorafs_manifest_digest, artifact.ciphertext_bytes),
         );
     }
-    let output_pin = world
+    let automatic_orders = {
+        let pin_manifests = world.pin_manifests.view();
+        pin_manifests
+            .iter()
+            .map(|(_, pin)| {
+                crate::smartcontracts::isi::sorafs::completed_auto_replication_order_for_test(
+                    pin, &ALICE_ID,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .expect("canonical completed private artifact replication orders")
+    };
+    let capacity_order = automatic_orders
+        .first()
+        .cloned()
+        .expect("private snapshot has automatic replication orders");
+    let capacity_pin = world
         .pin_manifests
         .view()
-        .get(&receipt.output_artifact.sorafs_manifest_digest)
+        .get(&capacity_order.manifest_digest)
         .cloned()
-        .expect("snapshot private output pin");
-    world.replication_orders.insert(
-        receipt.output_replication_order_id,
-        sample_snapshot_private_replication_order(&receipt, &output_pin, true),
+        .expect("automatic replication order retains its pin");
+    seed_snapshot_auto_replication_capacity(&mut world, &capacity_pin, &capacity_order);
+    for replication_order in automatic_orders {
+        world
+            .replication_orders
+            .insert(replication_order.order_id, replication_order);
+    }
+    assert!(
+        world
+            .replication_orders
+            .view()
+            .get(&receipt.output_replication_order_id)
+            .is_some(),
+        "snapshot receipt must reference its deterministic output replication order"
     );
     let (release, release_event) = sample_snapshot_private_decryption_release(
         service_bundle,
@@ -34011,19 +34164,95 @@ fn sample_snapshot_hf_runtime_receipt_world(attributed_source_id: Option<Hash>) 
         .insert(receipt.receipt_id, receipt);
     world
 }
-fn snapshot_state_from_world(world: World) -> State {
+fn snapshot_state_from_world(mut world: World) -> State {
     // Snapshot fixtures intentionally exercise independently pruned Soracloud
     // projections.  An exhausted watermark is a valid persisted state and keeps
     // each fixture focused on the projection invariant under test instead of
     // synthesizing every historical sequence owner that has already been pruned.
+    let committed_hashes = {
+        let replication_orders = world.replication_orders.view();
+        let mut hashes = Vec::<Option<[u8; 32]>>::new();
+        for (_, order) in replication_orders.iter() {
+            for completion in &order.provider_completions {
+                let index = usize::try_from(completion.finalized_anchor.height)
+                    .ok()
+                    .and_then(|height| height.checked_sub(1))
+                    .expect("snapshot fixture completion anchor uses a one-based height");
+                if hashes.len() <= index {
+                    hashes.resize(index + 1, None);
+                }
+                match hashes[index] {
+                    Some(existing) => assert_eq!(
+                        existing, completion.finalized_anchor.block_hash,
+                        "snapshot fixture completions at one height must commit the same block"
+                    ),
+                    None => hashes[index] = Some(completion.finalized_anchor.block_hash),
+                }
+            }
+        }
+        drop(replication_orders);
+        let private_execution_claims = world
+            .soracloud_private_uploaded_model_execution_claims
+            .view();
+        let private_execution_receipts = world
+            .soracloud_private_uploaded_model_execution_receipts
+            .view();
+        let private_execution_height = private_execution_claims
+            .iter()
+            .map(|(_, claim)| claim.claimed_block_height)
+            .chain(private_execution_receipts.iter().flat_map(|(_, receipt)| {
+                [
+                    receipt.authorization_claim_block_height,
+                    receipt.emitted_block_height,
+                ]
+            }))
+            .max()
+            .unwrap_or(0);
+        let private_execution_height = usize::try_from(private_execution_height)
+            .expect("snapshot private execution height fits usize");
+        if hashes.len() < private_execution_height {
+            hashes.resize(private_execution_height, None);
+        }
+        hashes
+            .into_iter()
+            .enumerate()
+            .map(|(index, hash)| {
+                let hash = hash.unwrap_or_else(|| {
+                    let mut filler = [0xA9; 32];
+                    filler[..8].copy_from_slice(
+                        &u64::try_from(index + 1)
+                            .expect("snapshot fixture height fits u64")
+                            .to_le_bytes(),
+                    );
+                    filler
+                });
+                HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(hash))
+            })
+            .collect::<Vec<_>>()
+    };
+    if let Some(genesis_hash) = committed_hashes.first() {
+        let revision = MusubiResolverIndexRevisionV1::new(1)
+            .expect("default snapshot resolver revision is one");
+        world.musubi_resolver_index_checkpoints.insert(
+            revision,
+            MusubiRegistrySnapshotV1 {
+                finalized_height: 1,
+                finalized_block_hash: *genesis_hash.as_ref(),
+                index_revision: 1,
+            },
+        );
+    }
     let mut block = world.block();
     *block.soracloud_sequence_watermark.get_mut() = u64::MAX;
     block.commit();
-    State::new(
+    let mut state = State::new(
         world,
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
-    )
+    );
+    state.block_hashes = BlockHashes::new(committed_hashes);
+    seed_autoscale_sample_history_for_snapshot_test(&state);
+    state
 }
 state_test! { sync inrou_reachable_restore_rejects_invalid_and_miskeyed_runtime_records
     let service_name: Name = "snapshot_runtime".parse().expect("valid service name");
@@ -34363,7 +34592,6 @@ state_test! { sync service_deployment_restore_requires_exact_admitted_revision_b
             lease_started_height: 1,
             lease_expires_height: 100,
             authoritative_generation: 1,
-            last_materialized_sequence: None,
         },
     ];
     exact_volume_mismatch
@@ -34644,6 +34872,86 @@ state_test! { sync sorafs_pin_manifests_are_required_in_state_snapshot
         "unexpected missing pin-registry error: {error}"
     );
 }
+state_test! { sync capacity_declarations_are_required_validated_and_restored_in_state_snapshot
+    let (canonical_world, provider_id, record) =
+        sample_snapshot_capacity_declaration_world();
+    let canonical = norito::json::to_value(&snapshot_state_from_world(canonical_world))
+        .expect("serialize canonical capacity declaration snapshot");
+    let restored = deserialize_state_snapshot_value(canonical)
+        .expect("canonical capacity declaration must restore");
+    assert_eq!(
+        restored.world.capacity_declarations.view().get(&provider_id),
+        Some(&record),
+        "capacity declaration must survive snapshot restore"
+    );
+
+    let state = blank_state();
+    let mut missing =
+        norito::json::to_value(&state).expect("serialize state capacity declarations");
+    let_row! { norito::json::Value::Object(root) = &mut missing else { panic!("state snapshot must be an object"); } };
+    let_row! { norito::json::Value::Object(world) = root .get_mut("world") .expect("state snapshot world") else { panic!("world snapshot must be an object"); } };
+    assert!(world.remove("capacity_declarations").is_some());
+    let error = deserialize_state_snapshot_value(missing)
+        .err()
+        .expect("a snapshot that erases capacity declarations must fail closed");
+    assert!(
+        error.to_string().contains("capacity_declarations"),
+        "unexpected missing capacity-declaration error: {error}"
+    );
+
+    let (mut mismatched_summary_world, provider_id, mut record) =
+        sample_snapshot_capacity_declaration_world();
+    record.committed_capacity_gib += 1;
+    mismatched_summary_world
+        .capacity_declarations
+        .insert(provider_id, record);
+    let mismatched_summary =
+        norito::json::to_value(&snapshot_state_from_world(mismatched_summary_world))
+            .expect("serialize mismatched capacity summary");
+    let error = deserialize_state_snapshot_value(mismatched_summary)
+        .err()
+        .expect("a capacity declaration with a mismatched projection must fail restore");
+    assert!(
+        error
+            .to_string()
+            .contains("capacity does not match the stored capacity summary"),
+        "unexpected capacity-summary error: {error}"
+    );
+
+    let (mut mismatched_key_world, provider_id, record) =
+        sample_snapshot_capacity_declaration_world();
+    assert_eq!(record.provider_id, provider_id);
+    mismatched_key_world.capacity_declarations =
+        [(ProviderId::new([0xC7; 32]), record)].into_iter().collect();
+    let mismatched_key = norito::json::to_value(&snapshot_state_from_world(mismatched_key_world))
+        .expect("serialize capacity declaration under a different provider key");
+    let error = deserialize_state_snapshot_value(mismatched_key)
+        .err()
+        .expect("a capacity declaration under a different provider key must fail restore");
+    assert!(
+        error
+            .to_string()
+            .contains("does not match its stored provider"),
+        "unexpected capacity-key error: {error}"
+    );
+
+    let (mut owner_mismatch_world, provider_id, _) =
+        sample_snapshot_capacity_declaration_world();
+    owner_mismatch_world
+        .provider_owners
+        .insert(provider_id, BOB_ID.clone());
+    let owner_mismatch = norito::json::to_value(&snapshot_state_from_world(owner_mismatch_world))
+        .expect("serialize owner-mismatched capacity declaration");
+    let error = deserialize_state_snapshot_value(owner_mismatch)
+        .err()
+        .expect("a capacity declaration with a different governed owner must fail restore");
+    assert!(
+        error
+            .to_string()
+            .contains("does not exactly match its governance-established provider owner"),
+        "unexpected capacity-owner error: {error}"
+    );
+}
 state_test! { sync sorafs_replication_orders_are_required_in_state_snapshot
     let state = blank_state();
     let mut snapshot = norito::json::to_value(&state).expect("serialize state replication orders");
@@ -34652,10 +34960,266 @@ state_test! { sync sorafs_replication_orders_are_required_in_state_snapshot
     assert!(world.remove("replication_orders").is_some());
     let error = deserialize_state_snapshot_value(snapshot)
         .err()
-        .expect("a snapshot that erases replication-order evidence must fail closed");
+        .expect("a snapshot that erases replication orders must fail closed");
     assert!(
         error.to_string().contains("replication_orders"),
-        "unexpected missing replication-order store error: {error}"
+        "unexpected missing replication-order error: {error}"
+    );
+}
+state_test! { sync approved_pin_snapshot_requires_its_exact_automatic_replication_order
+    let (canonical_world, _, _) = sample_snapshot_approved_pin_world();
+    let canonical = norito::json::to_value(&snapshot_state_from_world(canonical_world))
+        .expect("serialize canonical approved-pin snapshot");
+    deserialize_state_snapshot_value(canonical)
+        .expect("approved pin with its exact automatic replication order must restore");
+
+    let (mut mismatched_history_world, digest, _) = sample_snapshot_approved_pin_world();
+    let pins = mismatched_history_world.pin_manifests.view();
+    let mut mismatched_history = pins
+        .get(&digest)
+        .cloned()
+        .expect("snapshot approved pin");
+    drop(pins);
+    mismatched_history.approved_epoch = Some(2);
+    mismatched_history_world
+        .pin_manifests
+        .insert(digest, mismatched_history);
+    let mismatched_history =
+        norito::json::to_value(&snapshot_state_from_world(mismatched_history_world))
+            .expect("serialize pin with substituted approval history");
+    let error = deserialize_state_snapshot_value(mismatched_history)
+        .err()
+        .expect("approval history must exactly match the pin lifecycle");
+    assert!(
+        error.to_string().contains("immutable approval epoch"),
+        "unexpected approval-history error: {error}"
+    );
+
+    let (mut retired_missing_world, digest, _) = sample_snapshot_approved_pin_world();
+    let pins = retired_missing_world.pin_manifests.view();
+    let mut retired_pin = pins
+        .get(&digest)
+        .cloned()
+        .expect("snapshot approved pin");
+    drop(pins);
+    retired_pin.retire(u64::MAX, Some("retained history".to_owned()));
+    retired_missing_world.pin_manifests.insert(digest, retired_pin);
+    retired_missing_world.replication_orders = Storage::default();
+    let retired_missing =
+        norito::json::to_value(&snapshot_state_from_world(retired_missing_world))
+            .expect("serialize formerly approved retired pin without its automatic order");
+    let error = deserialize_state_snapshot_value(retired_missing)
+        .err()
+        .expect("retired approval history still requires its automatic order");
+    assert!(
+        error
+            .to_string()
+            .contains("missing its mandatory automatic replication order"),
+        "unexpected retired automatic-order error: {error}"
+    );
+
+    let (mut never_approved_world, digest, _) = sample_snapshot_approved_pin_world();
+    let pins = never_approved_world.pin_manifests.view();
+    let mut never_approved_pin = pins
+        .get(&digest)
+        .cloned()
+        .expect("snapshot approved pin");
+    drop(pins);
+    never_approved_pin.retire(u64::MAX, Some("withdrawn before approval".to_owned()));
+    never_approved_pin.approved_epoch = None;
+    never_approved_world
+        .pin_manifests
+        .insert(digest, never_approved_pin);
+    let never_approved =
+        norito::json::to_value(&snapshot_state_from_world(never_approved_world))
+            .expect("serialize never-approved retired pin with a forged automatic order");
+    let error = deserialize_state_snapshot_value(never_approved)
+        .err()
+        .expect("a never-approved pin cannot retain an automatic order");
+    assert!(
+        error.to_string().contains("targets a pin that was never approved"),
+        "unexpected never-approved automatic-order error: {error}"
+    );
+
+    let (mut mismatched_order_world, _, order_id) = sample_snapshot_approved_pin_world();
+    let replication_orders = mismatched_order_world.replication_orders.view();
+    let mut mismatched_order = replication_orders
+        .get(&order_id)
+        .cloned()
+        .expect("snapshot automatic replication order");
+    drop(replication_orders);
+    mismatched_order.assignment_revision = 2;
+    for completion in &mut mismatched_order.provider_completions {
+        completion.assignment_revision = 2;
+    }
+    mismatched_order_world
+        .replication_orders
+        .insert(order_id, mismatched_order);
+    let mismatched_order =
+        norito::json::to_value(&snapshot_state_from_world(mismatched_order_world))
+            .expect("serialize mismatched automatic replication order");
+    let error = deserialize_state_snapshot_value(mismatched_order)
+        .err()
+        .expect("a non-derived automatic replication order must fail restore");
+    assert!(
+        error
+            .to_string()
+            .contains("does not exactly match its derived first-release"),
+        "unexpected mismatched automatic-order error: {error}"
+    );
+
+    let (mut missing_order_world, _, order_id) = sample_snapshot_approved_pin_world();
+    assert!(
+        missing_order_world
+            .replication_orders
+            .view()
+            .get(&order_id)
+            .is_some()
+    );
+    missing_order_world.replication_orders = Storage::default();
+    let missing_order = norito::json::to_value(&snapshot_state_from_world(missing_order_world))
+        .expect("serialize approved pin without its automatic order");
+    let error = deserialize_state_snapshot_value(missing_order)
+        .err()
+        .expect("approved pin without its automatic order must fail restore");
+    assert!(
+        error
+            .to_string()
+            .contains("missing its mandatory automatic replication order"),
+        "unexpected missing automatic-order error: {error}"
+    );
+
+    let (mut orphan_order_world, digest, _) = sample_snapshot_approved_pin_world();
+    assert!(orphan_order_world.pin_manifests.view().get(&digest).is_some());
+    orphan_order_world.pin_manifests = Storage::default();
+    let orphan_order = norito::json::to_value(&snapshot_state_from_world(orphan_order_world))
+        .expect("serialize orphan automatic replication order");
+    let error = deserialize_state_snapshot_value(orphan_order)
+        .err()
+        .expect("automatic order targeting a missing pin must fail restore");
+    assert!(
+        error
+            .to_string()
+            .contains("replication order targets a missing pin manifest"),
+        "unexpected orphan automatic-order error: {error}"
+    );
+}
+state_test! { sync replication_order_completion_snapshot_anchors_match_committed_prefix
+    let (wrong_hash_world, _, order_id) = sample_snapshot_approved_pin_world();
+    let mut wrong_hash_state = snapshot_state_from_world(wrong_hash_world);
+    let replication_orders = wrong_hash_state.world.replication_orders.view();
+    let mut wrong_hash_order = replication_orders
+        .get(&order_id)
+        .cloned()
+        .expect("snapshot completed replication order");
+    drop(replication_orders);
+    wrong_hash_order.provider_completions[0]
+        .finalized_anchor
+        .block_hash = [0xE8; 32];
+    wrong_hash_state
+        .world
+        .replication_orders
+        .insert(order_id, wrong_hash_order);
+    let wrong_hash = norito::json::to_value(&wrong_hash_state)
+        .expect("serialize wrong-hash completion anchor snapshot");
+    let error = deserialize_state_snapshot_value(wrong_hash)
+        .err()
+        .expect("a completion anchor with the wrong committed hash must fail restore");
+    assert!(
+        error
+            .to_string()
+            .contains("finalized anchor hash does not match committed block height"),
+        "unexpected completion-anchor hash error: {error}"
+    );
+
+    let (out_of_range_world, _, order_id) = sample_snapshot_approved_pin_world();
+    let mut out_of_range_state = snapshot_state_from_world(out_of_range_world);
+    let replication_orders = out_of_range_state.world.replication_orders.view();
+    let mut out_of_range_order = replication_orders
+        .get(&order_id)
+        .cloned()
+        .expect("snapshot completed replication order");
+    drop(replication_orders);
+    out_of_range_order.provider_completions[0]
+        .finalized_anchor
+        .height = 2;
+    out_of_range_state
+        .world
+        .replication_orders
+        .insert(order_id, out_of_range_order);
+    let out_of_range = norito::json::to_value(&out_of_range_state)
+        .expect("serialize out-of-range completion anchor snapshot");
+    let error = deserialize_state_snapshot_value(out_of_range)
+        .err()
+        .expect("a completion anchor beyond the committed prefix must fail restore");
+    assert!(
+        error
+            .to_string()
+            .contains("anchors unavailable committed height 2"),
+        "unexpected completion-anchor height error: {error}"
+    );
+}
+state_test! { sync emergency_fast_snapshot_defers_replication_order_completion_anchor_scan
+    let (world, _, order_id) = sample_snapshot_approved_pin_world();
+    let mut state = snapshot_state_from_world(world);
+    let replication_orders = state.world.replication_orders.view();
+    let mut order = replication_orders
+        .get(&order_id)
+        .cloned()
+        .expect("snapshot completed replication order");
+    drop(replication_orders);
+    order.provider_completions[0].finalized_anchor.block_hash = [0xE8; 32];
+    state.world.replication_orders.insert(order_id, order);
+    deserialize_state_snapshot_value_emergency_fast(&state)
+        .expect("emergency Fast restore must defer the completion-anchor prefix scan");
+}
+state_test! { sync automatic_replication_snapshot_rejects_oversubscribed_capacity
+    let (mut world, _, _) = sample_snapshot_approved_pin_world();
+    let second_digest = ManifestDigest::new([0xD4; 32]);
+    let second_pin = sample_snapshot_private_pin(second_digest, 128);
+    let second_order =
+        crate::smartcontracts::isi::sorafs::completed_auto_replication_order_for_test(
+            &second_pin,
+            &ALICE_ID,
+        )
+        .expect("canonical second automatic replication order");
+    world.pin_manifests.insert(second_digest, second_pin);
+    world
+        .replication_orders
+        .insert(second_order.order_id, second_order);
+
+    let provider_id = ProviderId::new([0xD5; 32]);
+    let declarations = world.capacity_declarations.view();
+    let mut capacity_record = declarations
+        .get(&provider_id)
+        .cloned()
+        .expect("snapshot automatic provider capacity");
+    drop(declarations);
+    let mut declaration: sorafs_manifest::capacity::CapacityDeclarationV1 =
+        norito::decode_from_bytes(&capacity_record.declaration)
+            .expect("decode snapshot automatic provider capacity");
+    declaration.committed_capacity_gib = 1;
+    declaration.chunker_commitments[0].committed_gib = 1;
+    declaration
+        .validate()
+        .expect("reduced provider capacity remains canonical");
+    capacity_record.committed_capacity_gib = 1;
+    capacity_record.declaration = norito::encode_canonical(&declaration)
+        .expect("encode reduced automatic provider capacity");
+    world
+        .capacity_declarations
+        .insert(provider_id, capacity_record);
+
+    let oversubscribed = norito::json::to_value(&snapshot_state_from_world(world))
+        .expect("serialize oversubscribed automatic replication capacity");
+    let error = deserialize_state_snapshot_value(oversubscribed)
+        .err()
+        .expect("automatic allocations beyond retained capacity must fail restore");
+    assert!(
+        error
+            .to_string()
+            .contains("automatic replication allocations oversubscribe provider"),
+        "unexpected automatic capacity oversubscription error: {error}"
     );
 }
 state_test! { sync soracloud_private_execution_claims_are_required_in_state_snapshot
@@ -34688,15 +35252,332 @@ state_test! { large_stack private_uploaded_model_receipt_restore_validates_durab
         ),
     ))
     .expect("serialize canonical private uploaded-model receipt snapshot");
-    deserialize_state_snapshot_value(canonical)
+    deserialize_state_snapshot_value(canonical.clone())
         .expect("canonical private uploaded-model execution evidence must restore");
+
+    for (case, claimed_epoch) in [("before release", 3), ("different same-block epoch", 5)] {
+        let mut inconsistent_epoch_world = sample_snapshot_private_uploaded_model_world(
+            &service_bundle,
+            uploaded_model_bundle.clone(),
+            receipt.clone(),
+        );
+        let claim_key = (
+            receipt.service_name.as_ref().to_owned(),
+            receipt.decryption_request_id.clone(),
+        );
+        let claims = inconsistent_epoch_world
+            .soracloud_private_uploaded_model_execution_claims
+            .view();
+        let mut claim = claims
+            .get(&claim_key)
+            .cloned()
+            .expect("snapshot private execution claim");
+        drop(claims);
+        claim.claimed_epoch = claimed_epoch;
+        inconsistent_epoch_world
+            .soracloud_private_uploaded_model_execution_claims
+            .insert(claim_key, claim);
+        let inconsistent_epoch = norito::json::to_value(&snapshot_state_from_world(
+            inconsistent_epoch_world,
+        ))
+        .expect("serialize private claim with an inconsistent authorization epoch");
+        let error = deserialize_state_snapshot_value(inconsistent_epoch)
+            .err()
+            .expect("a private claim epoch inconsistent with its release event must fail restore");
+        assert!(
+            error
+                .to_string()
+                .contains("claim epoch must not precede its decryption authorization"),
+            "unexpected {case} private claim epoch error: {error}"
+        );
+    }
+
+    let mut future_claim_height = canonical.clone();
+    let_row! { norito::json::Value::Object(root) = &mut future_claim_height else { panic!("state snapshot must be an object"); } };
+    let_row! { norito::json::Value::Array(block_hashes) = root .get_mut("block_hashes") .expect("state snapshot block hashes") else { panic!("block_hashes must be an array"); } };
+    block_hashes.truncate(3);
+    let error = deserialize_state_snapshot_value(future_claim_height)
+        .err()
+        .expect("private claim height beyond the committed snapshot prefix must fail restore");
+    assert!(
+        error.to_string().contains("anchors future block height 4"),
+        "unexpected future private claim height error: {error}"
+    );
+
+    let mut future_receipt_height = canonical;
+    let_row! { norito::json::Value::Object(root) = &mut future_receipt_height else { panic!("state snapshot must be an object"); } };
+    let_row! { norito::json::Value::Array(block_hashes) = root .get_mut("block_hashes") .expect("state snapshot block hashes") else { panic!("block_hashes must be an array"); } };
+    block_hashes.truncate(4);
+    let error = deserialize_state_snapshot_value(future_receipt_height)
+        .err()
+        .expect("private receipt height beyond the committed snapshot prefix must fail restore");
+    assert!(
+        error.to_string().contains("anchors future emission block height 5"),
+        "unexpected future private receipt height error: {error}"
+    );
+
+    let mut missing_order_world = sample_snapshot_private_uploaded_model_world(
+        &service_bundle,
+        uploaded_model_bundle.clone(),
+        receipt.clone(),
+    );
+    missing_order_world.soracloud_private_uploaded_model_execution_receipts = Storage::default();
+    missing_order_world.soracloud_sequence_watermark = Cell::new(4);
+    let retained_orders = missing_order_world
+        .replication_orders
+        .view()
+        .iter()
+        .filter(|(order_id, _)| **order_id != receipt.output_replication_order_id)
+        .map(|(order_id, order)| (*order_id, order.clone()))
+        .collect();
+    missing_order_world.replication_orders = retained_orders;
+    let missing_order = norito::json::to_value(&snapshot_state_from_world(missing_order_world))
+        .expect("serialize private claim snapshot without its replication order");
+    let error = deserialize_state_snapshot_value(missing_order)
+        .err()
+        .expect("private claim without its automatic replication order must not restore");
+    assert!(
+        error
+            .to_string()
+            .contains("missing its deterministic automatic replication order"),
+        "unexpected missing private output replication-order error: {error}"
+    );
+
+    let mut pending_output_pin_world = sample_snapshot_private_uploaded_model_world(
+        &service_bundle,
+        uploaded_model_bundle.clone(),
+        receipt.clone(),
+    );
+    let pins = pending_output_pin_world.pin_manifests.view();
+    let mut pending_output_pin = pins
+        .get(&receipt.output_artifact.sorafs_manifest_digest)
+        .cloned()
+        .expect("snapshot private output pin");
+    drop(pins);
+    pending_output_pin.status = PinStatus::Pending;
+    pending_output_pin.approved_epoch = None;
+    pending_output_pin_world.pin_manifests.insert(
+        receipt.output_artifact.sorafs_manifest_digest,
+        pending_output_pin,
+    );
+    let retained_orders = pending_output_pin_world
+        .replication_orders
+        .view()
+        .iter()
+        .filter(|(order_id, _)| **order_id != receipt.output_replication_order_id)
+        .map(|(order_id, order)| (*order_id, order.clone()))
+        .collect();
+    pending_output_pin_world.replication_orders = retained_orders;
+    let pending_output_pin = norito::json::to_value(&snapshot_state_from_world(
+        pending_output_pin_world,
+    ))
+    .expect("serialize private claim with a pending output pin");
+    let error = deserialize_state_snapshot_value(pending_output_pin)
+        .err()
+        .expect("a private claim cannot predate permissionless output-pin approval");
+    assert!(
+        error.to_string().contains(
+            "private output pin was not attester-owned, approved, live, and retained"
+        ),
+        "unexpected pending private output pin error: {error}"
+    );
+
+    let mut future_order_world = sample_snapshot_private_uploaded_model_world(
+        &service_bundle,
+        uploaded_model_bundle.clone(),
+        receipt.clone(),
+    );
+    let orders = future_order_world.replication_orders.view();
+    let mut future_order = orders
+        .get(&receipt.output_replication_order_id)
+        .cloned()
+        .expect("snapshot private output replication order");
+    drop(orders);
+    future_order.issued_epoch = receipt.authorization_claim_epoch + 1;
+    future_order_world
+        .replication_orders
+        .insert(future_order.order_id, future_order);
+    let future_order = norito::json::to_value(&snapshot_state_from_world(future_order_world))
+        .expect("serialize private claim with a future-issued replication order");
+    let error = deserialize_state_snapshot_value(future_order)
+        .err()
+        .expect("a replication order issued after its private claim must not restore");
+    assert!(
+        error.to_string().contains("was issued after the claim epoch"),
+        "unexpected future-issued private output order error: {error}"
+    );
+
+    let mut preterminal_order_world = sample_snapshot_private_uploaded_model_world(
+        &service_bundle,
+        uploaded_model_bundle.clone(),
+        receipt.clone(),
+    );
+    let orders = preterminal_order_world.replication_orders.view();
+    let mut preterminal_order = orders
+        .get(&receipt.output_replication_order_id)
+        .cloned()
+        .expect("snapshot private output replication order");
+    drop(orders);
+    preterminal_order.status = ReplicationOrderStatus::Expired(
+        receipt
+            .authorization_claim_epoch
+            .checked_sub(1)
+            .expect("pre-claim terminal epoch"),
+    );
+    preterminal_order_world
+        .replication_orders
+        .insert(preterminal_order.order_id, preterminal_order);
+    let preterminal_order =
+        norito::json::to_value(&snapshot_state_from_world(preterminal_order_world))
+            .expect("serialize private claim with a pre-claim terminal replication order");
+    let error = deserialize_state_snapshot_value(preterminal_order)
+        .err()
+        .expect("an order terminal before its private claim must not restore");
+    assert!(
+        error
+            .to_string()
+            .contains("was already terminal before the claim epoch"),
+        "unexpected preterminal private output order error: {error}"
+    );
+
+    let mut same_epoch_retirement_world = sample_snapshot_private_uploaded_model_world(
+        &service_bundle,
+        uploaded_model_bundle.clone(),
+        receipt.clone(),
+    );
+    same_epoch_retirement_world.soracloud_private_uploaded_model_execution_receipts =
+        Storage::default();
+    same_epoch_retirement_world.soracloud_sequence_watermark = Cell::new(4);
+    let pins = same_epoch_retirement_world.pin_manifests.view();
+    let mut retired_output_pin = pins
+        .get(&receipt.output_artifact.sorafs_manifest_digest)
+        .cloned()
+        .expect("snapshot private output pin");
+    drop(pins);
+    retired_output_pin.retire(
+        receipt.authorization_claim_epoch,
+        Some("retired after same-epoch claim".to_owned()),
+    );
+    same_epoch_retirement_world.pin_manifests.insert(
+        receipt.output_artifact.sorafs_manifest_digest,
+        retired_output_pin,
+    );
+    let orders = same_epoch_retirement_world.replication_orders.view();
+    let mut cancelled_output_order = orders
+        .get(&receipt.output_replication_order_id)
+        .cloned()
+        .expect("snapshot private output replication order");
+    drop(orders);
+    cancelled_output_order.provider_completions.clear();
+    cancelled_output_order.status =
+        ReplicationOrderStatus::Cancelled(receipt.authorization_claim_epoch);
+    same_epoch_retirement_world
+        .replication_orders
+        .insert(cancelled_output_order.order_id, cancelled_output_order);
+    let same_epoch_retirement = norito::json::to_value(&snapshot_state_from_world(
+        same_epoch_retirement_world,
+    ))
+    .expect("serialize output retired after a same-epoch private claim");
+    deserialize_state_snapshot_value(same_epoch_retirement).expect(
+        "second-resolution restore must admit claim followed by output retirement in the same epoch",
+    );
+
+    let mut short_order_recovery_world = sample_snapshot_private_uploaded_model_world(
+        &service_bundle,
+        uploaded_model_bundle.clone(),
+        receipt.clone(),
+    );
+    let order_deadline = short_order_recovery_world
+        .replication_orders
+        .view()
+        .get(&receipt.output_replication_order_id)
+        .expect("snapshot private output replication order")
+        .deadline_epoch;
+    let pins = short_order_recovery_world.pin_manifests.view();
+    let mut short_order_recovery_pin = pins
+        .get(&receipt.output_artifact.sorafs_manifest_digest)
+        .cloned()
+        .expect("snapshot private output pin");
+    drop(pins);
+    short_order_recovery_pin.policy.retention_epoch = order_deadline
+        .checked_add(SORACLOUD_PRIVATE_OUTPUT_MIN_RETENTION_SECS_V1 - 1)
+        .expect("short replication-order recovery horizon");
+    short_order_recovery_world.pin_manifests.insert(
+        receipt.output_artifact.sorafs_manifest_digest,
+        short_order_recovery_pin,
+    );
+    let short_order_recovery = norito::json::to_value(&snapshot_state_from_world(
+        short_order_recovery_world,
+    ))
+    .expect("serialize private claim with a short replication-order recovery horizon");
+    let error = deserialize_state_snapshot_value(short_order_recovery)
+        .err()
+        .expect("a private output pin must retain its order deadline plus receipt floor");
+    assert!(
+        error
+            .to_string()
+            .contains("replication-order deadline plus receipt-recovery floor"),
+        "unexpected short private output order-recovery error: {error}"
+    );
+
+    let mut pending_order_world = sample_snapshot_private_uploaded_model_world(
+        &service_bundle,
+        uploaded_model_bundle.clone(),
+        receipt.clone(),
+    );
+    let replication_orders = pending_order_world.replication_orders.view();
+    let mut pending_order = replication_orders
+        .get(&receipt.output_replication_order_id)
+        .cloned()
+        .expect("snapshot private output replication order");
+    drop(replication_orders);
+    pending_order.provider_completions.clear();
+    pending_order.status = ReplicationOrderStatus::Pending;
+    pending_order_world
+        .replication_orders
+        .insert(pending_order.order_id, pending_order);
+    let pending_order = norito::json::to_value(&snapshot_state_from_world(pending_order_world))
+        .expect("serialize private receipt snapshot with pending replication");
+    let error = deserialize_state_snapshot_value(pending_order)
+        .err()
+        .expect("private receipt with pending replication evidence must not restore");
+    assert!(
+        error.to_string().contains("AwaitingReplicationQuorum"),
+        "unexpected pending private output replication-order error: {error}"
+    );
+
+    let mut timestamp_mismatch_world = sample_snapshot_private_uploaded_model_world(
+        &service_bundle,
+        uploaded_model_bundle.clone(),
+        receipt.clone(),
+    );
+    let replication_orders = timestamp_mismatch_world.replication_orders.view();
+    let mut timestamp_mismatch_order = replication_orders
+        .get(&receipt.output_replication_order_id)
+        .cloned()
+        .expect("snapshot private output replication order");
+    drop(replication_orders);
+    timestamp_mismatch_order.deadline_epoch -= 1;
+    timestamp_mismatch_world.replication_orders.insert(
+        timestamp_mismatch_order.order_id,
+        timestamp_mismatch_order,
+    );
+    let timestamp_mismatch =
+        norito::json::to_value(&snapshot_state_from_world(timestamp_mismatch_world))
+            .expect("serialize private receipt snapshot with mismatched order timestamps");
+    let error = deserialize_state_snapshot_value(timestamp_mismatch)
+        .err()
+        .expect("replication-order record timestamps must remain payload-bound on restore");
+    assert!(
+        error.to_string().contains("bound to its record"),
+        "unexpected replication-order timestamp-binding error: {error}"
+    );
 
     let mut retired_dependencies_world = sample_snapshot_private_uploaded_model_world(
         &service_bundle,
         uploaded_model_bundle.clone(),
         receipt.clone(),
     );
-    let retirement_epoch = receipt.authorization_claim_epoch.saturating_add(1);
     for digest in [
         receipt.model_manifest_digest,
         receipt.input_artifact.sorafs_manifest_digest,
@@ -34707,7 +35588,7 @@ state_test! { large_stack private_uploaded_model_receipt_restore_validates_durab
             .get(&digest)
             .cloned()
             .expect("authorization-time pin fixture");
-        retired_pin.status = PinStatus::Retired(retirement_epoch);
+        retired_pin.retire(u64::MAX, Some("retention fulfilled".to_owned()));
         retired_dependencies_world
             .pin_manifests
             .insert(digest, retired_pin);
@@ -34718,6 +35599,76 @@ state_test! { large_stack private_uploaded_model_receipt_restore_validates_durab
     .expect("serialize private receipt after authorization-time pins retired");
     deserialize_state_snapshot_value(retired_dependencies)
         .expect("historically prepared claim remains valid after input and model pin retirement");
+
+    for (dependency, digest) in [
+        ("model", receipt.model_manifest_digest),
+        (
+            "input",
+            receipt.input_artifact.sorafs_manifest_digest,
+        ),
+    ] {
+        let mut late_approval_world = sample_snapshot_private_uploaded_model_world(
+            &service_bundle,
+            uploaded_model_bundle.clone(),
+            receipt.clone(),
+        );
+        let mut late_approval_pin = late_approval_world
+            .pin_manifests
+            .view()
+            .get(&digest)
+            .cloned()
+            .expect("private dependency pin fixture");
+        late_approval_pin.approved_epoch = Some(
+            receipt
+                .authorization_claim_epoch
+                .checked_add(1)
+                .expect("late approval epoch"),
+        );
+        late_approval_pin.retire(u64::MAX, Some("retention fulfilled".to_owned()));
+        late_approval_world
+            .pin_manifests
+            .insert(digest, late_approval_pin);
+        let late_approval = norito::json::to_value(&snapshot_state_from_world(late_approval_world))
+            .expect("serialize private claim whose retired dependency was approved too late");
+        let error = deserialize_state_snapshot_value(late_approval)
+            .err()
+            .expect("retired private dependency must prove approval by the claim epoch");
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("{dependency} pin does not prove it was approved")),
+            "unexpected late-approved private {dependency} pin error: {error}"
+        );
+
+        let mut expired_retention_world = sample_snapshot_private_uploaded_model_world(
+            &service_bundle,
+            uploaded_model_bundle.clone(),
+            receipt.clone(),
+        );
+        let mut expired_retention_pin = expired_retention_world
+            .pin_manifests
+            .view()
+            .get(&digest)
+            .cloned()
+            .expect("private dependency pin fixture");
+        expired_retention_pin.policy.retention_epoch = receipt.authorization_claim_epoch;
+        expired_retention_pin.retire(u64::MAX, Some("retention fulfilled".to_owned()));
+        expired_retention_world
+            .pin_manifests
+            .insert(digest, expired_retention_pin);
+        let expired_retention =
+            norito::json::to_value(&snapshot_state_from_world(expired_retention_world))
+                .expect("serialize private claim whose dependency retention elapsed too early");
+        let error = deserialize_state_snapshot_value(expired_retention)
+            .err()
+            .expect("retired private dependency must prove retention through the claim epoch");
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("{dependency} pin does not prove it was approved")),
+            "unexpected expired-retention private {dependency} pin error: {error}"
+        );
+    }
 
     let mut missing_claim_world = sample_snapshot_private_uploaded_model_world(
         &service_bundle,
@@ -34765,63 +35716,34 @@ state_test! { large_stack private_uploaded_model_receipt_restore_validates_durab
         "unexpected mismatched claim-coordinate restore error: {error}"
     );
 
-    let mut missing_replication_order_world = sample_snapshot_private_uploaded_model_world(
-        &service_bundle,
-        uploaded_model_bundle.clone(),
-        receipt.clone(),
-    );
-    missing_replication_order_world.replication_orders = Storage::default();
-    let missing_replication_order = norito::json::to_value(&snapshot_state_from_world(
-        missing_replication_order_world,
-    ))
-    .expect("serialize private receipt without replication order");
-    let error = deserialize_state_snapshot_value(missing_replication_order)
-        .err()
-        .expect("private receipt must not restore without its exact replication order");
-    assert!(
-        error.to_string().contains("AwaitingReplicationOrder"),
-        "unexpected missing private replication-order restore error: {error}"
-    );
-
-    let mut pending_replication_world = sample_snapshot_private_uploaded_model_world(
-        &service_bundle,
-        uploaded_model_bundle.clone(),
-        receipt.clone(),
-    );
-    let pending_output_pin = pending_replication_world
-        .pin_manifests
-        .view()
-        .get(&receipt.output_artifact.sorafs_manifest_digest)
-        .cloned()
-        .expect("snapshot private output pin");
-    pending_replication_world.replication_orders.insert(
-        receipt.output_replication_order_id,
-        sample_snapshot_private_replication_order(&receipt, &pending_output_pin, false),
-    );
-    let pending_replication = norito::json::to_value(&snapshot_state_from_world(
-        pending_replication_world,
-    ))
-    .expect("serialize private receipt with pending replication order");
-    let error = deserialize_state_snapshot_value(pending_replication)
-        .err()
-        .expect("private receipt must not restore before provider quorum");
-    assert!(
-        error.to_string().contains("AwaitingReplicationQuorum"),
-        "unexpected pending private replication-order restore error: {error}"
-    );
-
     let mut short_retention_world = sample_snapshot_private_uploaded_model_world(
         &service_bundle,
         uploaded_model_bundle.clone(),
         receipt.clone(),
     );
+    let output_order_deadline = short_retention_world
+        .replication_orders
+        .view()
+        .get(&receipt.output_replication_order_id)
+        .expect("snapshot private output replication order")
+        .deadline_epoch;
+    let mut late_emitted_receipt = receipt.clone();
+    late_emitted_receipt.emitted_epoch = output_order_deadline
+        .checked_add(1)
+        .expect("late receipt emission epoch");
+    late_emitted_receipt
+        .validate()
+        .expect("canonical late-emitted private receipt");
+    short_retention_world
+        .soracloud_private_uploaded_model_execution_receipts
+        .insert(late_emitted_receipt.receipt_id, late_emitted_receipt.clone());
     let mut short_retention_pin = short_retention_world
         .pin_manifests
         .view()
         .get(&receipt.output_artifact.sorafs_manifest_digest)
         .cloned()
         .expect("snapshot private output pin");
-    short_retention_pin.policy.retention_epoch = receipt
+    short_retention_pin.policy.retention_epoch = late_emitted_receipt
         .emitted_epoch
         .checked_add(SORACLOUD_PRIVATE_OUTPUT_MIN_RETENTION_SECS_V1 - 1)
         .expect("short snapshot retention epoch");
@@ -35180,13 +36102,15 @@ state_test! { large_stack private_uploaded_model_receipt_restore_validates_durab
         .get(&duplicate_release.output_artifact.sorafs_manifest_digest)
         .cloned()
         .expect("duplicate-release output pin");
-    duplicate_release_world.replication_orders.insert(
-        duplicate_release.output_replication_order_id,
-        sample_snapshot_private_replication_order(
-            &duplicate_release,
+    let duplicate_output_order =
+        crate::smartcontracts::isi::sorafs::completed_auto_replication_order_for_test(
             &duplicate_output_pin,
-            true,
-        ),
+            &ALICE_ID,
+        )
+        .expect("canonical duplicate-release automatic replication order");
+    duplicate_release_world.replication_orders.insert(
+        duplicate_output_order.order_id,
+        duplicate_output_order,
     );
     duplicate_release_world
         .soracloud_private_uploaded_model_execution_receipts
@@ -35347,25 +36271,6 @@ state_test! { sync hosted_service_restore_requires_lease_and_latest_rollover_ope
         "unexpected lease-volume generation restore error: {error}"
     );
 
-    let mut unexpected_materialization = deployment.clone();
-    unexpected_materialization.lease_volume_states[0].last_materialized_sequence = Some(1);
-    unexpected_materialization
-        .validate()
-        .expect("materialization metadata is structurally valid but has no first-release writer");
-    let unexpected_materialization = norito::json::to_value(&snapshot_state_from_world(world_with(
-        unexpected_materialization,
-        vec![deploy_event.clone()],
-    )))
-    .expect("serialize never-live lease-volume materialization marker");
-    let error = deserialize_state_snapshot_value(unexpected_materialization)
-        .err()
-        .expect("restore must reject a materialization marker no live writer can produce");
-    assert!(
-        error.to_string().contains("last_materialized_sequence")
-            && error.to_string().contains("must be absent"),
-        "unexpected lease-volume materialization restore error: {error}"
-    );
-
     let mut missing_lease = deployment.clone();
     missing_lease.service_lease = None;
     missing_lease.lease_volume_states.clear();
@@ -35386,9 +36291,7 @@ state_test! { sync hosted_service_restore_requires_lease_and_latest_rollover_ope
         "unexpected hosted-service lease-presence restore error: {error}"
     );
 
-    let settled_egress_bytes = 0_u128;
-    let rollover_height = 1_u64
-        + iroha_data_model::soracloud::SORA_SERVICE_LEASE_REPORTER_IDLE_GRACE_BLOCKS_V1;
+    let settled_egress_bytes = 1_u128;
     let reporter_placement = sample_snapshot_inrou_placement(
         bundle.service.service_name.clone(),
         bundle.service.service_version.clone(),
@@ -35439,17 +36342,20 @@ state_test! { sync hosted_service_restore_requires_lease_and_latest_rollover_ope
             .cmp(&right.0.placement.validator_account_id)
     });
     for (index, (assignment, signer)) in historical_assignments.into_iter().enumerate() {
-        let sequence = 2_u64
-            .checked_add(u64::try_from(index).expect("checkpoint index fits u64"))
+        let index = u64::try_from(index).expect("checkpoint index fits u64");
+        let block_height = 2_u64
+            .checked_add(index)
+            .expect("fixture block height");
+        let open_sequence = 2_u64
+            .checked_add(index.checked_mul(2).expect("fixture audit sequence"))
             .expect("fixture audit sequence");
         pre_rollover_lease.egress_reporter_checkpoints.push(
             iroha_data_model::soracloud::SoraServiceLeaseEgressCheckpointV1 {
                 reporting_epoch: 1,
                 assignment: assignment.clone(),
                 accounted_egress_bytes: 0,
-                last_updated_height: 1,
+                last_updated_height: block_height,
                 finalize_reporter: false,
-                forced_finalization: false,
             },
         );
         pre_rollover_lease
@@ -35471,32 +36377,87 @@ state_test! { sync hosted_service_restore_requires_lease_and_latest_rollover_ope
         pre_rollover_lease
             .refresh_accounted_egress_bytes()
             .expect("historical reporter aggregate");
-        let mut event = deploy_event.clone();
-        event.sequence = sequence;
-        event.action =
+        let mut open_event = deploy_event.clone();
+        open_event.sequence = open_sequence;
+        open_event.block_height = block_height;
+        open_event.block_timestamp_ms = block_height.saturating_mul(1_000);
+        open_event.action =
             iroha_data_model::soracloud::SoraServiceLifecycleActionV1::LeaseUsage;
-        event.from_version = Some(bundle.service.service_version.clone());
-        event.lease_usage = Some(
+        open_event.from_version = Some(bundle.service.service_version.clone());
+        open_event.lease_usage = Some(
+            iroha_data_model::soracloud::SoraServiceLeaseUsageAuditV1 {
+                schema_version:
+                    iroha_data_model::soracloud::SORA_SERVICE_LEASE_USAGE_AUDIT_VERSION_V1,
+                reporting_epoch: 1,
+                assignment: assignment.clone(),
+                replica_accounted_egress_bytes: 0,
+                finalize_reporter: false,
+            },
+        );
+        open_event.service_lease_commitment = Some(
+            iroha_data_model::soracloud::derive_soracloud_service_lease_commitment_v1(
+                &pre_rollover_lease,
+            ),
+        );
+        open_event.signer = signer.clone();
+        open_event
+            .validate()
+            .expect("historical reporter opener audit fixture");
+        rollover_history.push(open_event);
+
+        let checkpoint = pre_rollover_lease
+            .egress_reporter_checkpoints
+            .iter_mut()
+            .find(|checkpoint| checkpoint.assignment == assignment)
+            .expect("newly opened historical reporter checkpoint");
+        let terminal_bytes = if index == 0 { 1 } else { 0 };
+        let terminal_block_height = block_height
+            .checked_add(1)
+            .expect("fixture terminal block height");
+        checkpoint.accounted_egress_bytes = terminal_bytes;
+        checkpoint.finalize_reporter = true;
+        checkpoint.last_updated_height = terminal_block_height;
+        pre_rollover_lease
+            .refresh_accounted_egress_bytes()
+            .expect("historical terminal reporter aggregate");
+        let mut terminal_event = deploy_event.clone();
+        terminal_event.sequence = open_sequence
+            .checked_add(1)
+            .expect("fixture terminal audit sequence");
+        terminal_event.block_height = terminal_block_height;
+        terminal_event.block_timestamp_ms = terminal_block_height.saturating_mul(1_000);
+        terminal_event.action =
+            iroha_data_model::soracloud::SoraServiceLifecycleActionV1::LeaseUsage;
+        terminal_event.from_version = Some(bundle.service.service_version.clone());
+        terminal_event.lease_usage = Some(
             iroha_data_model::soracloud::SoraServiceLeaseUsageAuditV1 {
                 schema_version:
                     iroha_data_model::soracloud::SORA_SERVICE_LEASE_USAGE_AUDIT_VERSION_V1,
                 reporting_epoch: 1,
                 assignment,
-                replica_accounted_egress_bytes: 0,
-                finalize_reporter: false,
+                replica_accounted_egress_bytes: terminal_bytes,
+                finalize_reporter: true,
             },
         );
-        event.service_lease_commitment = Some(
+        terminal_event.service_lease_commitment = Some(
             iroha_data_model::soracloud::derive_soracloud_service_lease_commitment_v1(
                 &pre_rollover_lease,
             ),
         );
-        event.signer = signer;
-        event
+        terminal_event.signer = signer;
+        terminal_event
             .validate()
-            .expect("historical reporter opener audit fixture");
-        rollover_history.push(event);
+            .expect("historical reporter terminal audit fixture");
+        rollover_history.push(terminal_event);
     }
+    let rollover_height = 2_u64
+        .checked_add(
+            u64::try_from(
+                iroha_data_model::soracloud::SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1,
+            )
+            .expect("checkpoint limit fits u64"),
+        )
+        .expect("rollover fixture block height");
     let mut rolled_deployment = deployment;
     let lease = rolled_deployment
         .service_lease
@@ -35512,7 +36473,6 @@ state_test! { sync hosted_service_restore_requires_lease_and_latest_rollover_ope
             accounted_egress_bytes: 0,
             last_updated_height: rollover_height,
             finalize_reporter: false,
-            forced_finalization: false,
         },
     ];
     rolled_deployment
@@ -35524,7 +36484,9 @@ state_test! { sync hosted_service_restore_requires_lease_and_latest_rollover_ope
             u64::try_from(
                 iroha_data_model::soracloud::SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1,
             )
-            .expect("checkpoint limit fits u64"),
+            .expect("checkpoint limit fits u64")
+            .checked_mul(2)
+            .expect("rollover fixture audit sequence"),
         )
         .expect("rollover audit sequence");
     rollover_event.block_height = rollover_height;
@@ -35560,10 +36522,6 @@ state_test! { sync hosted_service_restore_requires_lease_and_latest_rollover_ope
             active_service_version: bundle.service.service_version.clone(),
             replica_slot: 1,
             finalized_checkpoint_count: u32::try_from(
-                iroha_data_model::soracloud::SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1,
-            )
-            .expect("checkpoint limit fits u32"),
-            forced_finalized_checkpoint_count: u32::try_from(
                 iroha_data_model::soracloud::SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1,
             )
             .expect("checkpoint limit fits u32"),
@@ -36777,7 +37735,6 @@ fn sample_snapshot_autonomy_apartment_world(
         schema_version: iroha_data_model::soracloud::SORA_AGENT_APARTMENT_RECORD_VERSION_V1,
         manifest,
         manifest_hash,
-        status: iroha_data_model::soracloud::SoraAgentRuntimeStatusV1::Running,
         deployed_sequence: 1,
         lease_started_height: 1,
         lease_expires_height: 100,

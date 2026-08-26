@@ -83,23 +83,27 @@ pub(super) fn replay_blocks_from_kura_range(
         let roster = topology.as_ref().to_vec();
         let mut validation_topology =
             crate::sumeragi::network_topology::Topology::new(roster.clone());
-        let view = signed.header().view_change_index();
-        let (mode, seed) = {
-            let state_view = state.view();
-            (
-                crate::sumeragi::effective_consensus_mode(&state_view, fallback_consensus_mode),
-                crate::sumeragi::prf_seed_for_height(&state_view, height),
-            )
-        };
-        match mode {
-            ConsensusMode::Permissioned => {
-                validation_topology.canonicalize_order();
-                validation_topology.shuffle_prf(seed, height);
-                validation_topology.nth_rotation(view);
-            }
-            ConsensusMode::Npos => {
-                let leader = validation_topology.leader_index_prf(seed, height, view);
-                validation_topology.rotate_preserve_view_to_front(leader);
+        if signed.header().is_genesis() {
+            validation_topology.canonicalize_order();
+        } else {
+            let view = signed.header().view_change_index();
+            let (mode, seed) = {
+                let state_view = state.view();
+                let mode =
+                    crate::sumeragi::effective_consensus_mode(&state_view, fallback_consensus_mode);
+                let seed = replay_fixture_leader_seed(&state_view, height, mode);
+                (mode, seed)
+            };
+            match mode {
+                ConsensusMode::Permissioned => {
+                    validation_topology.canonicalize_order();
+                    validation_topology.shuffle_prf(seed, height);
+                    validation_topology.nth_rotation(view);
+                }
+                ConsensusMode::Npos => {
+                    let leader = validation_topology.leader_index_prf(seed, height, view);
+                    validation_topology.rotate_preserve_view_to_front(leader);
+                }
             }
         }
         let mut voting_block = None;
@@ -152,6 +156,32 @@ fn configure_replay_fixture_parameters(state: &State) {
         SumeragiNposParameters::default().into_custom_parameter(),
     ));
     parameters.commit();
+}
+fn replay_fixture_leader_seed(
+    state_view: &StateView<'_>,
+    height: u64,
+    mode: ConsensusMode,
+) -> [u8; 32] {
+    match mode {
+        ConsensusMode::Permissioned => {
+            let mut preimage = b"sumeragi-v2:permissioned-leader-seed".to_vec();
+            preimage.extend_from_slice(&state_view.network_id().encode());
+            Hash::new(preimage).into()
+        }
+        ConsensusMode::Npos => {
+            let world = state_view.world();
+            assert_eq!(
+                crate::sumeragi::epoch_for_height_from_world(world, height, mode)
+                    .expect("NPoS replay fixture has committed epoch parameters"),
+                0,
+                "compact replay fixtures remain inside the signed genesis epoch"
+            );
+            world
+                .sumeragi_npos_parameters()
+                .expect("NPoS replay fixture requires committed genesis parameters")
+                .epoch_seed()
+        }
+    }
 }
 fn rebind_test_execution_context_validators_and_resign(
     block: &mut SignedBlock,
@@ -206,6 +236,28 @@ fn clear_test_execution_context_and_resign(
         .replace_signatures(std::collections::BTreeSet::from([signature]))
         .expect("replace legacy replay fixture signature");
 }
+fn rebind_test_confidential_features_and_resign(
+    block: &mut SignedBlock,
+    state: &State,
+    private_key: &iroha_crypto::PrivateKey,
+) {
+    let height = block.header().height().get();
+    let digest = {
+        let view = state.query_view();
+        compute_confidential_feature_digest(view.world(), view.zk(), view.sccp_registry(), height)
+    };
+    let mut header = block.header();
+    header.set_confidential_features((!digest.is_empty()).then_some(digest));
+    block.replace_header_for_testing(header);
+    let signature = iroha_data_model::block::BlockSignature::new(
+        0,
+        iroha_crypto::SignatureOf::try_from_hash(private_key, block.hash())
+            .expect("re-sign confidential-feature replay fixture"),
+    );
+    block
+        .replace_signatures(std::collections::BTreeSet::from([signature]))
+        .expect("replace confidential-feature replay-fixture signature");
+}
 fn assert_canonical_successful_fixture_results(block: &SignedBlock) {
     assert!(block.has_results(), "committed fixture must carry results");
     let result_count = block.results().len();
@@ -214,9 +266,13 @@ fn assert_canonical_successful_fixture_results(block: &SignedBlock) {
         block.results().all(|result| result.as_ref().is_ok()),
         "committed fixture results must all succeed"
     );
-    assert_eq!(
-        block.committed_fragment_count(),
-        Some(u64::try_from(result_count).expect("fixture result count fits u64"))
+    let minimum_committed_fragment_count =
+        u64::try_from(result_count).expect("fixture result count fits u64");
+    assert!(
+        block
+            .committed_fragment_count()
+            .is_some_and(|count| count >= minimum_committed_fragment_count),
+        "committed fragments must cover every successful external result"
     );
     block
         .validate_entrypoint_merkle_cache()
@@ -809,21 +865,26 @@ fn replay_rotates_topology_for_npos_prf_leader() {
 fn replay_rotates_topology_for_npos_prf_leader_impl() {
     use iroha_crypto::Algorithm;
     use iroha_data_model::{
+        events::time::{ExecutionTime, TimeEventFilter},
         parameter::system::{Parameter, SumeragiConsensusMode, SumeragiNposParameters},
         peer::PeerId,
+        trigger::{
+            Trigger,
+            action::{Action, Repeats},
+        },
     };
     use iroha_genesis::{GENESIS_DOMAIN_ID, GenesisBuilder, GenesisTopologyEntry};
     use iroha_test_samples::{
         SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR, gen_account_in,
     };
-    use std::borrow::Cow;
     let chain_id = ChainId::from("iroha:test:npos-replay");
-    let peer_a = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let peer_b = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let peers = vec![
-        PeerId::new(peer_a.public_key().clone()),
-        PeerId::new(peer_b.public_key().clone()),
-    ];
+    let peer_keypairs = (0..4)
+        .map(|_| crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal))
+        .collect::<Vec<_>>();
+    let peers = peer_keypairs
+        .iter()
+        .map(|keypair| PeerId::new(keypair.public_key().clone()))
+        .collect::<Vec<_>>();
     let topology = crate::sumeragi::network_topology::Topology::new(peers.clone());
     let height = 2;
     let view = 0u64;
@@ -837,16 +898,16 @@ fn replay_rotates_topology_for_npos_prf_leader_impl() {
         epoch_seed: seed,
         ..Default::default()
     };
-    let topology_entries = vec![
-        GenesisTopologyEntry::new(
-            PeerId::new(peer_a.public_key().clone()),
-            iroha_crypto::bls_normal_pop_prove(peer_a.private_key()).expect("generate pop a"),
-        ),
-        GenesisTopologyEntry::new(
-            PeerId::new(peer_b.public_key().clone()),
-            iroha_crypto::bls_normal_pop_prove(peer_b.private_key()).expect("generate pop b"),
-        ),
-    ];
+    let topology_entries = peer_keypairs
+        .iter()
+        .map(|keypair| {
+            GenesisTopologyEntry::new(
+                PeerId::new(keypair.public_key().clone()),
+                iroha_crypto::bls_normal_pop_prove(keypair.private_key())
+                    .expect("generate validator proof of possession"),
+            )
+        })
+        .collect::<Vec<_>>();
     let (user_id, user_keypair) = gen_account_in("wonderland");
     let mut genesis_builder =
         GenesisBuilder::new_without_executor(chain_id.clone(), "ivm/libs/not/installed")
@@ -856,57 +917,72 @@ fn replay_rotates_topology_for_npos_prf_leader_impl() {
         .domain(DomainId::try_new("wonderland", "universal").expect("domain id"))
         .account(user_keypair.public_key().clone())
         .finish_domain();
+    let heartbeat_trigger = Trigger::new(
+        "npos_replay_heartbeat".parse().expect("trigger id"),
+        Action::new(
+            vec![InstructionBox::from(Log::new(
+                iroha_data_model::Level::INFO,
+                "advance the NPoS replay fixture clock".to_owned(),
+            ))],
+            Repeats::Exactly(1),
+            user_id,
+            TimeEventFilter::new(ExecutionTime::PreCommit),
+        )
+        .expect("heartbeat trigger action"),
+    );
+    genesis_builder = genesis_builder.append_instruction(Register::trigger(heartbeat_trigger));
     let genesis_block = genesis_builder
         .build_raw()
         .with_consensus_mode(SumeragiConsensusMode::Npos)
         .with_consensus_meta()
         .build_and_sign(&SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
         .expect("genesis");
-    let genesis_signed = genesis_block.0.clone();
+    let mut genesis_signed = genesis_block.0.clone();
     let kura = Kura::blank_kura_for_testing();
     let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
+    let validator_accounts = peer_keypairs
+        .iter()
+        .map(|keypair| AccountId::new(keypair.public_key().clone()))
+        .collect::<Vec<_>>();
     let make_world = || {
-        World::with(
+        let accounts = std::iter::once(new_genesis_account(&genesis_id).build(&genesis_id))
+            .chain(
+                validator_accounts
+                    .iter()
+                    .cloned()
+                    .map(|validator| Account::new(validator).build(&genesis_id)),
+            )
+            .collect::<Vec<_>>();
+        let world = World::with(
             [Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id)],
-            [new_genesis_account(&genesis_id).build(&genesis_id)],
+            accounts,
             [],
-        )
+        );
+        {
+            let mut block = world.block();
+            for (validator, keypair) in validator_accounts.iter().zip(&peer_keypairs) {
+                let peer_id = PeerId::new(keypair.public_key().clone());
+                block.public_lane_validators.insert(
+                    (LaneId::SINGLE, validator.clone()),
+                    iroha_data_model::nexus::PublicLaneValidatorRecord {
+                        lane_id: LaneId::SINGLE,
+                        validator: validator.clone(),
+                        peer_id,
+                        stake_account: validator.clone(),
+                        total_stake: iroha_primitives::numeric::Quantity::from(1_000_u64),
+                        self_stake: iroha_primitives::numeric::Quantity::from(1_000_u64),
+                        metadata: iroha_data_model::metadata::Metadata::default(),
+                        status: iroha_data_model::nexus::PublicLaneValidatorStatus::Active,
+                        activation_epoch: None,
+                        activation_height: None,
+                        last_reward_epoch: None,
+                    },
+                );
+            }
+            block.commit();
+        }
+        world
     };
-    let tx = TransactionBuilder::new(
-        *DEFAULT_TEST_NETWORK_ID,
-        user_id.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Log::new(
-        iroha_logger::Level::INFO,
-        "npos replay".to_owned(),
-    )])
-    .sign(user_keypair.private_key());
-    let accepted = crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-    let mut base_topology = crate::sumeragi::network_topology::Topology::new(peers.clone());
-    base_topology.block_committed(peers.clone(), genesis_signed.hash());
-    let leader_peer = base_topology
-        .as_ref()
-        .get(leader_index)
-        .expect("leader index within topology");
-    let signer = if leader_peer.public_key() == peer_a.public_key() {
-        peer_a.private_key()
-    } else {
-        peer_b.private_key()
-    };
-    let new_block = crate::block::BlockBuilder::new(vec![accepted])
-        .chain(0, Some(&genesis_signed))
-        .sign(signer)
-        .unpack(|_| {});
-    let mut signed_block: SignedBlock = new_block.into();
-    let mut validation_topology = crate::sumeragi::network_topology::Topology::new(peers.clone());
-    validation_topology.rotate_preserve_view_to_front(leader_index);
-    rebind_test_execution_context_validators_and_resign(
-        &mut signed_block,
-        &validation_topology,
-        signer,
-    );
-    let block_arc = Arc::new(signed_block);
     let materialize_state = State::new_with_chain(
         make_world(),
         Arc::clone(&kura),
@@ -914,12 +990,36 @@ fn replay_rotates_topology_for_npos_prf_leader_impl() {
         chain_id.clone(),
     );
     configure_replay_fixture_parameters(&materialize_state);
+    rebind_test_confidential_features_and_resign(
+        &mut genesis_signed,
+        &materialize_state,
+        SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
+    );
+    let mut base_topology = crate::sumeragi::network_topology::Topology::new(peers.clone());
+    base_topology.block_committed(peers.clone(), genesis_signed.hash());
+    let leader_peer = base_topology
+        .as_ref()
+        .get(leader_index)
+        .expect("leader index within topology");
+    let signer = peer_keypairs
+        .iter()
+        .find(|keypair| keypair.public_key() == leader_peer.public_key())
+        .expect("selected leader belongs to the exact validator committee")
+        .private_key();
+    let new_block = crate::block::BlockBuilder::new(Vec::new())
+        .chain(0, Some(&genesis_signed))
+        .sign(signer)
+        .unpack(|_| {});
+    let mut signed_block: SignedBlock = new_block.into();
+    let mut validation_topology = crate::sumeragi::network_topology::Topology::new(peers.clone());
+    validation_topology.rotate_preserve_view_to_front(leader_index);
+    rebind_test_confidential_features_and_resign(&mut signed_block, &materialize_state, signer);
     let genesis_signed =
         commit_replay_validated_block(&materialize_state, &topology, genesis_signed, &genesis_id);
     let signed_block = commit_replay_validated_block(
         &materialize_state,
         &validation_topology,
-        (*block_arc).clone(),
+        signed_block,
         &genesis_id,
     );
     kura.store_block(Arc::new(genesis_signed))
@@ -1002,7 +1102,7 @@ fn replay_rejects_non_authoritative_signature_topology_rotation_impl() {
     let view = 0_u64;
     let prf_seed = {
         let state_view = state.view();
-        crate::sumeragi::prf_seed_for_height(&state_view, height)
+        replay_fixture_leader_seed(&state_view, height, ConsensusMode::Permissioned)
     };
     let mut expected_topology = crate::sumeragi::network_topology::Topology::new(fallback_peers);
     expected_topology.canonicalize_order();

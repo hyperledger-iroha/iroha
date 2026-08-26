@@ -98,7 +98,12 @@ fn autonomous_merge_source_for_queue_plan_admission_test(
         .find(|keypair| keypair.public_key() == producer.public_key())
         .expect("fixture retains the deterministic producer key");
     let network_id = state.network_id;
-    let epoch = crate::sumeragi::epoch_for_height_from_world(&state.world.view(), proposal_height);
+    let epoch = crate::sumeragi::epoch_for_height_from_world(
+        &state.world.view(),
+        proposal_height,
+        ConsensusMode::Permissioned,
+    )
+    .expect("permissioned fixture epoch");
     let payload = crate::lane_consensus::LaneExecutablePayloadV1::new_signed_with_reservations(
         network_id,
         epoch,
@@ -443,11 +448,30 @@ fn persist_merge_carrier_finality_chain_for_state_test(
         artifact.verify().expect("fixture finality verifies");
         artifact
     }
-    let parent_finality = artifact_for_block(state, parent, None, keypairs);
-    let _ = state
-        .kura
-        .store_v2_finality_artifact(&parent_finality)
-        .expect("persist exact parent finality");
+    let mut parent_finality = None;
+    for height in 1..=parent.header().height().get() {
+        let height = usize::try_from(height)
+            .ok()
+            .and_then(NonZeroUsize::new)
+            .expect("fixture finality height fits usize");
+        let block = state
+            .kura
+            .get_block(height)
+            .expect("contiguous fixture parent block is durable");
+        let artifact =
+            artifact_for_block(state, block.as_ref(), parent_finality.as_ref(), keypairs);
+        let _ = state
+            .kura
+            .store_v2_finality_artifact(&artifact)
+            .expect("persist contiguous parent finality");
+        parent_finality = Some(artifact);
+    }
+    let parent_finality = parent_finality.expect("fixture has a genesis finality artifact");
+    assert_eq!(
+        parent_finality.subject.block_hash,
+        parent.hash(),
+        "fixture finality chain ends at the exact carrier parent",
+    );
     let carrier_finality = artifact_for_block(state, carrier, Some(&parent_finality), keypairs);
     let _ = state
         .kura
@@ -635,7 +659,12 @@ fn autonomous_merge_commit_authorization_fixture_inner(
     SignedBlock,
     Option<AxtHandleReplayKey>,
 ) {
-    let (state, validator_keypairs, commit_keypairs, parent) = configured_single_lane_merge_state();
+    let (state, validator_keypairs, commit_keypairs, parent) =
+        configured_single_lane_queue_plan_state();
+    let authority_height = parent.header().height().get();
+    let carrier_height = authority_height
+        .checked_add(1)
+        .expect("fixture carrier height");
     if seed_due_start_effect {
         let mut locks = GovernanceLocksForReferendum::default();
         locks.locks.insert(
@@ -644,7 +673,7 @@ fn autonomous_merge_commit_authorization_fixture_inner(
                 owner: (*ALICE_ID).clone(),
                 amount: Quantity::from(1_u32),
                 slashed: Quantity::zero(),
-                expiry_height: 1,
+                expiry_height: authority_height,
                 direction: 0,
                 duration_blocks: 0,
                 custody: GovernanceLockCustody {
@@ -656,9 +685,7 @@ fn autonomous_merge_commit_authorization_fixture_inner(
             },
         );
         let mut world = state.world.block();
-        world
-            .governance_locks
-            .insert("autonomous-merge-due-start-effect".to_owned(), locks);
+        world.put_governance_locks("autonomous-merge-due-start-effect".to_owned(), locks);
         world.commit();
     }
     let expired_axt_replay_key = seed_expired_axt_replay.then(|| {
@@ -688,7 +715,7 @@ fn autonomous_merge_commit_authorization_fixture_inner(
         &state,
         routing_plan.clone(),
         &validator_keypairs,
-        1,
+        authority_height,
         tag,
         &entrypoint,
     );
@@ -709,7 +736,7 @@ fn autonomous_merge_commit_authorization_fixture_inner(
         &validator_keypairs,
     );
     let application_header = BlockHeader::new(
-        nonzero!(2_u64),
+        NonZeroU64::new(carrier_height).expect("fixture carrier height is non-zero"),
         Some(parent.hash()),
         None,
         None,
@@ -748,7 +775,7 @@ fn autonomous_merge_commit_authorization_fixture_inner(
         version: crate::merge::MergeLedgerCandidate::VERSION,
         epoch_id: 1,
         view: 0,
-        carrier_height: 2,
+        carrier_height,
         carrier_parent_hash: parent.hash(),
         lane_catalog_hash: merge_lane_catalog_hash(&lifecycle.nexus.lane_catalog),
         incarnation_root: LaneLifecycleParameterV1::incarnation_root(&incarnation_entries),
@@ -760,7 +787,12 @@ fn autonomous_merge_commit_authorization_fixture_inner(
         global_state_root: crate::merge::reduce_merge_hint_roots(&[]),
     };
     state
-        .validate_merge_candidate_for_global_round(&candidate, &parent.header(), 0)
+        .validate_merge_candidate_for_global_round(
+            &candidate,
+            &parent.header(),
+            0,
+            ConsensusMode::Permissioned,
+        )
         .expect("fixture autonomous execution candidate is valid");
     let qc = merge_qc_for_candidate(&state, &candidate, &commit_keypairs, &[0]);
     let entry = merge_entry_from_candidate(candidate, qc);
@@ -790,7 +822,11 @@ fn staged_autonomous_merge_commit_block<'state>(
     carrier: &SignedBlock,
 ) -> StateBlock<'state> {
     let mut state_block = state
-        .block_with_certified_merge_entry(carrier.header().clone(), entry)
+        .block_with_certified_merge_entry(
+            carrier.header().clone(),
+            entry,
+            ConsensusMode::Permissioned,
+        )
         .expect("certified autonomous execution must stage on its exact carrier");
     assert!(
         state_block
@@ -826,7 +862,11 @@ fn production_validated_autonomous_merge_commit_block<'state>(
     carrier: &SignedBlock,
 ) -> StateBlock<'state> {
     let mut state_block = state
-        .block_with_certified_merge_entry(carrier.header().clone(), entry)
+        .block_with_certified_merge_entry(
+            carrier.header().clone(),
+            entry,
+            ConsensusMode::Permissioned,
+        )
         .expect("certified autonomous execution must stage on its exact carrier");
     let valid = ValidBlock::validate_unchecked(carrier.clone(), &mut state_block).unpack(|_| {});
     let _witness = state_block
@@ -869,6 +909,17 @@ fn autonomous_carrier_transaction_height(state_block: &StateBlock<'_>) -> NonZer
         .ok()
         .and_then(NonZeroUsize::new)
         .expect("autonomous carrier height fits canonical transaction storage")
+}
+fn autonomous_carrier_parent_height(carrier: &SignedBlock) -> usize {
+    usize::try_from(
+        carrier
+            .header()
+            .height()
+            .get()
+            .checked_sub(1)
+            .expect("autonomous carrier has a parent"),
+    )
+    .expect("autonomous carrier parent height fits usize")
 }
 struct ExactTestStateBlockCommitAuthorization {
     carrier_block_hash: HashOf<BlockHeader>,

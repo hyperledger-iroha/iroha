@@ -1186,6 +1186,28 @@ fn private_uploaded_model_execution_receipt_requires_canonical_commitments_and_i
         }
     ));
 
+    let mut substituted_replication_order = canonical.clone();
+    substituted_replication_order.output_replication_order_id = ReplicationOrderId::new([0x65; 32]);
+    substituted_replication_order.request_commitment =
+        derive_soracloud_private_model_request_commitment_v1(&substituted_replication_order);
+    substituted_replication_order.result_commitment =
+        derive_soracloud_private_model_result_commitment_v1(&substituted_replication_order);
+    substituted_replication_order.receipt_id =
+        derive_soracloud_private_uploaded_model_execution_receipt_id_v1(
+            &substituted_replication_order,
+        );
+    let error = substituted_replication_order
+        .validate()
+        .expect_err("a resealed receipt must not reference another output's replication order");
+    assert!(matches!(
+        error,
+        SoracloudManifestError::InvalidField {
+            manifest: "sora private uploaded model execution receipt",
+            field: "output_replication_order_id",
+            ..
+        }
+    ));
+
     let mut substituted_request = canonical.clone();
     substituted_request.request_commitment = sample_hash(0xE1);
     substituted_request.receipt_id =

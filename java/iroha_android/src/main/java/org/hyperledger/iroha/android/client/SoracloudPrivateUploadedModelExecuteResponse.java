@@ -7,7 +7,7 @@ import java.util.Objects;
 public final class SoracloudPrivateUploadedModelExecuteResponse {
   private final long schemaVersion;
   private final Map<String, Object> status;
-  private final String submissionStatus;
+  private final SoracloudPrivateUploadedModelSubmissionPhase submissionPhase;
   private final String transactionHash;
   private final SoracloudPrivateUploadedModelExecutionReceipt receipt;
   private final SoracloudPrivateModelArtifactRef outputArtifact;
@@ -15,16 +15,14 @@ public final class SoracloudPrivateUploadedModelExecuteResponse {
   public SoracloudPrivateUploadedModelExecuteResponse(
       final long schemaVersion,
       final Map<String, Object> status,
-      final String submissionStatus,
+      final SoracloudPrivateUploadedModelSubmissionPhase submissionPhase,
       final String transactionHash,
       final SoracloudPrivateUploadedModelExecutionReceipt receipt,
       final SoracloudPrivateModelArtifactRef outputArtifact) {
     SoracloudPrivateModelValidation.requireSchemaVersion(schemaVersion, "schemaVersion");
     this.schemaVersion = schemaVersion;
     this.status = SoracloudPrivateModelValidation.snapshotUploadedModelStatus(status);
-    this.submissionStatus =
-        SoracloudPrivateModelValidation.requireSubmissionStatus(
-            submissionStatus, "submissionStatus");
+    this.submissionPhase = Objects.requireNonNull(submissionPhase, "submissionPhase");
     this.transactionHash =
         transactionHash == null
             ? null
@@ -33,16 +31,20 @@ public final class SoracloudPrivateUploadedModelExecuteResponse {
     this.receipt = Objects.requireNonNull(receipt, "receipt");
     this.outputArtifact = Objects.requireNonNull(outputArtifact, "outputArtifact");
     SoracloudPrivateModelValidation.requireExecuteResponseState(
-        this.submissionStatus, this.transactionHash, this.receipt, this.outputArtifact);
+        this.submissionPhase, this.transactionHash, this.receipt, this.outputArtifact);
+    SoracloudPrivateModelValidation.requireUploadedModelStatusMatchesReceipt(
+        this.status, this.receipt, "status");
   }
 
   public long schemaVersion() { return schemaVersion; }
 
   public Map<String, Object> status() { return status; }
 
-  public String submissionStatus() { return submissionStatus; }
+  public SoracloudPrivateUploadedModelSubmissionPhase submissionPhase() {
+    return submissionPhase;
+  }
 
-  /** Current phase transaction hash when signed; absent while awaiting output durability or committed. */
+  /** Phase transaction hash; absent before durability submission and after receipt commit. */
   public String transactionHash() { return transactionHash; }
 
   public SoracloudPrivateUploadedModelExecutionReceipt receipt() { return receipt; }

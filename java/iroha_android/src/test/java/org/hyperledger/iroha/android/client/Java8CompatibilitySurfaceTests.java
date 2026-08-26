@@ -421,8 +421,8 @@ public final class Java8CompatibilitySurfaceTests {
     final String outputManifestDigest = fixedBytes32Json(0x33);
     return "{"
         + "\"schema_version\":1,"
-        + "\"status\":{\"status\":\"finalized\",\"service_name\":\"portal\"},"
-        + "\"submission_status\":\"submitted\","
+        + "\"status\":{\"schema_version\":1,\"bundle\":{},\"artifact\":null},"
+        + "\"submission_phase\":\"receipt_submitted\","
         + "\"transaction_hash\":\"" + CANONICAL_HASH + "\","
         + "\"receipt\":{"
         + "\"schema_version\":1,"
@@ -458,7 +458,9 @@ public final class Java8CompatibilitySurfaceTests {
         + "\"ciphertext_bytes\":96,"
         + "\"artifact_role\":\"output\""
         + "},"
-        + "\"output_replication_order_id\":" + fixedBytes32Json(0x44) + ","
+        + "\"output_replication_order_id\":"
+        + outputReplicationOrderIdJson()
+        + ","
         + "\"input_commitment\":\"" + CANONICAL_HASH + "\","
         + "\"output_commitment\":\"" + CANONICAL_HASH + "\","
         + "\"output_recipient\":{"
@@ -498,5 +500,10 @@ public final class Java8CompatibilitySurfaceTests {
       json.append(value);
     }
     return json.append(']').toString();
+  }
+
+  private static String outputReplicationOrderIdJson() {
+    return "[223,84,153,93,189,208,15,57,18,144,6,143,35,114,49,183,"
+        + "235,169,151,26,48,191,231,173,2,235,241,47,189,13,37,69]";
   }
 }

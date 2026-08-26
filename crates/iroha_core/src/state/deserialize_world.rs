@@ -65,18 +65,13 @@ struct SoracloudInrouPersistedStateV1<'a> {
     inrou_service_placements: &'a Storage<(String, String), SoraInrouServicePlacementRecordV1>,
     uploaded_model_bundles: &'a Storage<(String, String, String), SoraUploadedModelBundleV1>,
     pin_manifests: &'a Storage<ManifestDigest, PinManifestRecord>,
-    replication_orders: &'a Storage<
-        iroha_data_model::sorafs::pin_registry::ReplicationOrderId,
-        iroha_data_model::sorafs::pin_registry::ReplicationOrderRecord,
-    >,
+    replication_orders: &'a Storage<ReplicationOrderId, ReplicationOrderRecord>,
     mailbox_messages: &'a Storage<Hash, SoraServiceMailboxMessageV1>,
     runtime_receipts: &'a Storage<Hash, SoraRuntimeReceiptV1>,
     private_uploaded_model_execution_receipts:
         &'a Storage<Hash, SoraPrivateUploadedModelExecutionReceiptV1>,
-    private_uploaded_model_execution_claims: &'a Storage<
-        (String, String),
-        iroha_data_model::soracloud::SoraPrivateUploadedModelExecutionClaimV1,
-    >,
+    private_uploaded_model_execution_claims:
+        &'a Storage<(String, String), SoraPrivateUploadedModelExecutionClaimV1>,
 }
 
 impl SoracloudInrouPersistedStateV1<'_> {
@@ -1020,18 +1015,13 @@ impl SoracloudInrouPersistedStateV1<'_> {
                                     "lease reporter assignment references no retained revision",
                                 )
                             })?;
-                        let assignment_version_active = usage.assignment.service_version
-                            == event.to_version
-                            || folded_rollout.as_ref().is_some_and(|rollout| {
-                                rollout.stage == SoraRolloutStageV1::Canary
-                                    && (usage.assignment.service_version
-                                        == rollout.baseline_version
-                                        || usage.assignment.service_version
-                                            == rollout.candidate_version)
-                            });
-                        if !assignment_version_active
-                            || assignment_bundle.service.execution_plane
-                                != iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService
+                        if !lease_usage_assignment_version_is_writer_reachable(
+                            &usage.assignment.service_version,
+                            usage.finalize_reporter,
+                            &event.to_version,
+                            folded_rollout.as_ref(),
+                        ) || assignment_bundle.service.execution_plane
+                            != iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService
                             || assignment_bundle.container.runtime
                                 != iroha_data_model::soracloud::SoraContainerRuntimeV1::Inrou
                             || usage.assignment.placement.replica_slot
@@ -1041,7 +1031,7 @@ impl SoracloudInrouPersistedStateV1<'_> {
                         {
                             return Err(invalid_soracloud_state(
                                 "soracloud_service_audit_events",
-                                "lease reporter assignment was not writer-reachable for the event's active Inrou revisions",
+                                "lease reporter assignment was not writer-reachable for the retained Inrou revision and event transition",
                             ));
                         }
                         let expected = replay_soracloud_service_lease_usage(
@@ -1381,12 +1371,12 @@ impl SoracloudInrouPersistedStateV1<'_> {
                             ),
                         )
                     })?;
-                    if rollover.lease_started_height != lease.lease_started_height
-                        || rollover.previous_reporting_epoch != reporting_epoch
-                        || rollover.active_service_version != event.to_version
-                        || settled_egress_bytes.checked_add(rollover.settled_egress_bytes_delta)
-                            != Some(rollover.settled_egress_bytes)
-                    {
+                    if !lease_rollover_extends_settlement_chain(
+                        rollover,
+                        lease.lease_started_height,
+                        reporting_epoch,
+                        settled_egress_bytes,
+                    ) {
                         return Err(invalid_soracloud_state(
                             "soracloud_service_audit_events",
                             format!(
@@ -2432,12 +2422,6 @@ impl SoracloudInrouPersistedStateV1<'_> {
             apartment.validate().map_err(|error| {
                 invalid_soracloud_state("soracloud_agent_apartments", error.to_string())
             })?;
-            if apartment.status != iroha_data_model::soracloud::SoraAgentRuntimeStatusV1::Running {
-                return Err(invalid_soracloud_state(
-                    "soracloud_agent_apartments",
-                    "first-release apartment rows must retain the only writer-produced Running status",
-                ));
-            }
             if key.as_str() != apartment.manifest.apartment_name.as_ref() {
                 return Err(invalid_soracloud_state(
                     "soracloud_agent_apartments",
@@ -3941,7 +3925,6 @@ impl SoracloudInrouPersistedStateV1<'_> {
                 "ordered mailbox receipts are disabled until consensus-verifiable deterministic execution and self-contained effect certificates are implemented",
             ));
         }
-        let mut consumed_mailbox_messages = std::collections::BTreeSet::new();
         for (key, receipt) in runtime_receipts.iter() {
             receipt.validate().map_err(|error| {
                 invalid_soracloud_state("soracloud_runtime_receipts", error.to_string())
@@ -4023,88 +4006,26 @@ impl SoracloudInrouPersistedStateV1<'_> {
                     ));
                 }
             }
-            if let Some(message_id) = receipt.mailbox_message_id {
-                // Executor eligibility was proven by the consensus Apply instruction. Do not
-                // re-resolve it against mutable current validator topology here: validators may
-                // exit, rotate peers, or re-register after this historical receipt. The host is
-                // structurally canonical and content-bound into the receipt identifier instead.
-                if !matches!(
-                    receipt.execution_host.as_ref(),
-                    Some(
-                        iroha_data_model::soracloud::SoraRuntimeExecutionHostV1::DeterministicValidator(_)
+            if matches!(
+                receipt.execution_host.as_ref(),
+                Some(
+                    iroha_data_model::soracloud::SoraRuntimeExecutionHostV1::DeterministicValidator(
+                        _
                     )
-                ) {
-                    return Err(invalid_soracloud_state(
-                        "soracloud_runtime_receipts",
-                        "mailbox receipts must carry deterministic-validator execution_host attribution",
-                    ));
-                }
-                let expected_receipt_id =
-                    crate::soracloud_runtime::ordered_mailbox_runtime_receipt_id(receipt)
-                        .ok_or_else(|| {
-                            invalid_soracloud_state(
-                                "soracloud_runtime_receipts",
-                                "mailbox receipt is missing its source message ID",
-                            )
-                        })?;
-                if receipt.receipt_id != expected_receipt_id {
-                    return Err(invalid_soracloud_state(
-                        "soracloud_runtime_receipts",
-                        "mailbox receipt_id must equal its canonical sequence-independent ordered-mailbox receipt ID",
-                    ));
-                }
-                let message = mailbox_messages.get(&message_id).ok_or_else(|| {
-                    invalid_soracloud_state(
-                        "soracloud_runtime_receipts",
-                        "mailbox receipt must reference an authoritative mailbox message",
-                    )
-                })?;
-                if message.to_service != receipt.service_name
-                    || message.to_service_version != receipt.service_version
-                    || message.to_handler != receipt.handler_name
-                    || message.payload_commitment != receipt.request_commitment
-                {
-                    return Err(invalid_soracloud_state(
-                        "soracloud_runtime_receipts",
-                        "mailbox receipt must match the exact destination revision, handler, and payload commitment",
-                    ));
-                }
-                if receipt.emitted_sequence < message.available_after_height
-                    || receipt.emitted_sequence >= message.expires_at_height
-                {
-                    return Err(invalid_soracloud_state(
-                        "soracloud_runtime_receipts",
-                        "mailbox receipt sequence must be within the message delivery window",
-                    ));
-                }
-                if !consumed_mailbox_messages.insert(message_id) {
-                    return Err(invalid_soracloud_state(
-                        "soracloud_runtime_receipts",
-                        "one mailbox message must not be consumed by multiple receipts",
-                    ));
-                }
-            } else {
-                if matches!(
-                    receipt.execution_host.as_ref(),
-                    Some(
-                        iroha_data_model::soracloud::SoraRuntimeExecutionHostV1::DeterministicValidator(
-                            _
-                        )
-                    )
-                ) {
-                    return Err(invalid_soracloud_state(
-                        "soracloud_runtime_receipts",
-                        "deterministic-validator attribution requires an authoritative mailbox message",
-                    ));
-                }
-                let expected_receipt_id =
-                    iroha_data_model::soracloud::derive_soracloud_local_read_receipt_id_v1(receipt);
-                if receipt.receipt_id != expected_receipt_id {
-                    return Err(invalid_soracloud_state(
-                        "soracloud_runtime_receipts",
-                        "non-mailbox receipt_id must equal its canonical sequence-independent local-read receipt ID",
-                    ));
-                }
+                )
+            ) {
+                return Err(invalid_soracloud_state(
+                    "soracloud_runtime_receipts",
+                    "deterministic-validator receipts are disabled with ordered mailbox execution",
+                ));
+            }
+            let expected_receipt_id =
+                iroha_data_model::soracloud::derive_soracloud_local_read_receipt_id_v1(receipt);
+            if receipt.receipt_id != expected_receipt_id {
+                return Err(invalid_soracloud_state(
+                    "soracloud_runtime_receipts",
+                    "local-read receipt_id must equal its canonical sequence-independent receipt ID",
+                ));
             }
         }
 
@@ -4218,6 +4139,16 @@ impl SoracloudInrouPersistedStateV1<'_> {
                     "claim block height must fall inside its decryption-authorization window",
                 ));
             }
+            let release_epoch = release_event.block_timestamp_ms / 1_000;
+            if claim.claimed_epoch < release_epoch
+                || claim.claimed_block_height == release_event.block_height
+                    && claim.claimed_epoch != release_epoch
+            {
+                return Err(invalid_soracloud_state(
+                    "soracloud_private_uploaded_model_execution_claims",
+                    "claim epoch must not precede its decryption authorization and must equal the release epoch when both occur in the same block",
+                ));
+            }
 
             let require_exact_pin =
                 |artifact: &iroha_data_model::soracloud::SoraPrivateModelArtifactRefV1| {
@@ -4247,6 +4178,23 @@ impl SoracloudInrouPersistedStateV1<'_> {
                     }
                     Ok(pin)
                 };
+            let dependency_pin_was_live_at_claim = |pin: &PinManifestRecord| {
+                pin.approved_epoch
+                    .is_some_and(|approved_epoch| approved_epoch <= claim.claimed_epoch)
+                    && pin.policy.retention_epoch > claim.claimed_epoch
+                    && match pin.status {
+                        PinStatus::Approved(approved_epoch) => {
+                            approved_epoch <= claim.claimed_epoch
+                        }
+                        PinStatus::Retired(retired_epoch) => {
+                            // Lifecycle epochs have one-second resolution. A claim followed by
+                            // retirement later in the same block/second is reachable, so equality
+                            // cannot prove that retirement preceded the claim.
+                            retired_epoch >= claim.claimed_epoch
+                        }
+                        PinStatus::Pending => false,
+                    }
+            };
             let model_pin = pin_manifests
                 .get(&bundle.sorafs_manifest_digest)
                 .ok_or_else(|| {
@@ -4258,47 +4206,95 @@ impl SoracloudInrouPersistedStateV1<'_> {
             if model_pin.digest != bundle.sorafs_manifest_digest
                 || model_pin.content_length != bundle.ciphertext_bytes
                 || model_pin.submitted_epoch > claim.claimed_epoch
-                || !matches!(
-                    model_pin.status,
-                    iroha_data_model::sorafs::pin_registry::PinStatus::Approved(epoch)
-                        if epoch <= claim.claimed_epoch
-                ) && !matches!(
-                    model_pin.status,
-                    iroha_data_model::sorafs::pin_registry::PinStatus::Retired(epoch)
-                        if epoch > claim.claimed_epoch
-                )
+                || !dependency_pin_was_live_at_claim(model_pin)
             {
                 return Err(invalid_soracloud_state(
                     "soracloud_private_uploaded_model_execution_claims",
-                    "prepared private execution model pin was not approved and live at the claim epoch",
+                    "prepared private execution model pin does not prove it was approved, live, and retained at the claim epoch",
                 ));
             }
             let input_pin = require_exact_pin(&receipt.input_artifact)?;
-            if !matches!(
-                input_pin.status,
-                iroha_data_model::sorafs::pin_registry::PinStatus::Approved(epoch)
-                    if epoch <= claim.claimed_epoch
-            ) && !matches!(
-                input_pin.status,
-                iroha_data_model::sorafs::pin_registry::PinStatus::Retired(epoch)
-                    if epoch > claim.claimed_epoch
-            ) {
+            if !dependency_pin_was_live_at_claim(input_pin) {
                 return Err(invalid_soracloud_state(
                     "soracloud_private_uploaded_model_execution_claims",
-                    "prepared private input pin was not approved and live at the claim epoch",
+                    "prepared private input pin does not prove it was approved, live, and retained at the claim epoch",
                 ));
             }
             let output_pin = require_exact_pin(&receipt.output_artifact)?;
             if output_pin.submitted_by != receipt.attesting_validator.validator_account_id
-                || matches!(
-                    output_pin.status,
-                    iroha_data_model::sorafs::pin_registry::PinStatus::Retired(epoch)
-                        if epoch <= claim.claimed_epoch
-                )
+                || !dependency_pin_was_live_at_claim(output_pin)
             {
                 return Err(invalid_soracloud_state(
                     "soracloud_private_uploaded_model_execution_claims",
-                    "prepared private output pin was not attester-owned and live at the claim epoch",
+                    "prepared private output pin was not attester-owned, approved, live, and retained at the claim epoch",
+                ));
+            }
+            let output_order = replication_orders
+                .get(&receipt.output_replication_order_id)
+                .ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_private_uploaded_model_execution_claims",
+                        "prepared private output pin is missing its deterministic automatic replication order",
+                    )
+                })?;
+            let output_order_label = hex::encode(output_order.order_id.as_bytes());
+            if output_order.issued_epoch > claim.claimed_epoch {
+                return Err(invalid_soracloud_state(
+                    "soracloud_private_uploaded_model_execution_claims",
+                    "prepared private output automatic replication order was issued after the claim epoch",
+                ));
+            }
+            match output_order.status {
+                ReplicationOrderStatus::Pending
+                    if claim.claimed_epoch > output_order.deadline_epoch =>
+                {
+                    return Err(invalid_soracloud_state(
+                        "soracloud_private_uploaded_model_execution_claims",
+                        "prepared private output automatic replication order was already overdue at the claim epoch",
+                    ));
+                }
+                ReplicationOrderStatus::Expired(epoch)
+                | ReplicationOrderStatus::Cancelled(epoch)
+                    if epoch < claim.claimed_epoch =>
+                {
+                    return Err(invalid_soracloud_state(
+                        "soracloud_private_uploaded_model_execution_claims",
+                        "prepared private output automatic replication order was already terminal before the claim epoch",
+                    ));
+                }
+                ReplicationOrderStatus::Pending
+                | ReplicationOrderStatus::Completed(_)
+                | ReplicationOrderStatus::Expired(_)
+                | ReplicationOrderStatus::Cancelled(_) => {}
+            }
+            crate::smartcontracts::isi::sorafs::validate_stored_automatic_replication_order(
+                output_pin,
+                output_order,
+                &output_order_label,
+            )
+            .map_err(|error| {
+                invalid_soracloud_state(
+                    "soracloud_private_uploaded_model_execution_claims",
+                    format!(
+                        "prepared private output automatic replication order is invalid: {error}"
+                    ),
+                )
+            })?;
+            let minimum_order_retention_epoch = output_order
+                .deadline_epoch
+                .checked_add(
+                    iroha_data_model::soracloud::SORACLOUD_PRIVATE_OUTPUT_MIN_RETENTION_SECS_V1,
+                )
+                .ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_private_uploaded_model_execution_claims",
+                        "prepared private output replication-order recovery horizon overflows",
+                    )
+                })?;
+            if output_pin.policy.retention_epoch < minimum_order_retention_epoch {
+                return Err(invalid_soracloud_state(
+                    "soracloud_private_uploaded_model_execution_claims",
+                    "prepared private output pin does not retain the replication-order deadline plus receipt-recovery floor",
                 ));
             }
             let minimum_retention_epoch = claim
@@ -4403,6 +4399,53 @@ impl SoracloudInrouPersistedStateV1<'_> {
                     ),
                 ));
             }
+            let replication_order = replication_orders
+                .get(&receipt.output_replication_order_id)
+                .ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_private_uploaded_model_execution_receipts",
+                        "private output artifact must retain its exact completed replication order",
+                    )
+                })?;
+            match output_pin.status {
+                PinStatus::Approved(_) | PinStatus::Retired(_) => {}
+                PinStatus::Pending => {
+                    return Err(invalid_soracloud_state(
+                        "soracloud_private_uploaded_model_execution_receipts",
+                        "private output artifact pin cannot remain pending after receipt commit",
+                    ));
+                }
+            }
+            let order_label = hex::encode(replication_order.order_id.as_bytes());
+            crate::smartcontracts::isi::sorafs::validate_stored_automatic_replication_order(
+                output_pin,
+                replication_order,
+                &order_label,
+            )
+            .map_err(|error| {
+                invalid_soracloud_state(
+                    "soracloud_private_uploaded_model_execution_receipts",
+                    format!("private output replication order is invalid: {error}"),
+                )
+            })?;
+            let ReplicationOrderStatus::Completed(completion_epoch) = replication_order.status
+            else {
+                return Err(invalid_soracloud_state(
+                    "soracloud_private_uploaded_model_execution_receipts",
+                    "private output artifact must retain a completed replication order",
+                ));
+            };
+            if matches!(
+                output_pin.status,
+                PinStatus::Retired(retired_epoch)
+                    if retired_epoch < output_pin.policy.retention_epoch
+                        || completion_epoch > retired_epoch
+            ) {
+                return Err(invalid_soracloud_state(
+                    "soracloud_private_uploaded_model_execution_receipts",
+                    "private output replication order must prove the exact pin-policy quorum and promised retention before retirement",
+                ));
+            }
         }
         if authoritative_sequences.contains(&0) {
             return Err(invalid_soracloud_state(
@@ -4425,6 +4468,37 @@ impl SoracloudInrouPersistedStateV1<'_> {
     }
 }
 
+fn lease_usage_assignment_version_is_writer_reachable(
+    assignment_service_version: &str,
+    finalize_reporter: bool,
+    event_to_version: &str,
+    rollout: Option<&iroha_data_model::soracloud::SoraServiceRolloutStateV1>,
+) -> bool {
+    // The live writer authenticates a former reporter against its retained
+    // checkpoint, so its one terminal event may legitimately follow promotion
+    // or rollback of the revision that originally admitted that checkpoint.
+    finalize_reporter
+        || assignment_service_version == event_to_version
+        || rollout.is_some_and(|rollout| {
+            rollout.stage == iroha_data_model::soracloud::SoraRolloutStageV1::Canary
+                && (assignment_service_version == rollout.baseline_version
+                    || assignment_service_version == rollout.candidate_version)
+        })
+}
+
+fn lease_rollover_extends_settlement_chain(
+    rollover: &iroha_data_model::soracloud::SoraServiceLeaseReportingEpochRolloverV1,
+    lease_started_height: u64,
+    previous_reporting_epoch: u64,
+    settled_egress_bytes: u128,
+) -> bool {
+    rollover.lease_started_height == lease_started_height
+        && rollover.previous_reporting_epoch == previous_reporting_epoch
+        && previous_reporting_epoch.checked_add(1) == Some(rollover.new_reporting_epoch)
+        && settled_egress_bytes.checked_add(rollover.settled_egress_bytes_delta)
+            == Some(rollover.settled_egress_bytes)
+}
+
 fn replay_soracloud_service_lease_usage(
     prior: &iroha_data_model::soracloud::SoraServiceLeaseStateV1,
     usage: &iroha_data_model::soracloud::SoraServiceLeaseUsageAuditV1,
@@ -4433,8 +4507,8 @@ fn replay_soracloud_service_lease_usage(
     accounted_storage_bytes: u64,
 ) -> Result<iroha_data_model::soracloud::SoraServiceLeaseStateV1, String> {
     use iroha_data_model::soracloud::{
-        SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1,
-        SORA_SERVICE_LEASE_REPORTER_IDLE_GRACE_BLOCKS_V1, SoraServiceLeaseEgressCheckpointV1,
+        SORA_SERVICE_LEASE_MAX_EGRESS_BYTES_PER_REPORTER_BLOCK_V1,
+        SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1, SoraServiceLeaseEgressCheckpointV1,
         SoraServiceLeaseStatusV1,
     };
 
@@ -4469,25 +4543,25 @@ fn replay_soracloud_service_lease_usage(
             {
                 return Err("an exact reporter no-op must not consume an audit sequence".to_owned());
             }
+            if checkpoint.finalize_reporter
+                && !usage.finalize_reporter
+                && usage.replica_accounted_egress_bytes != checkpoint.accounted_egress_bytes
+            {
+                return Err(
+                    "a finalized reporter checkpoint must reopen at its exact terminal byte value before increasing"
+                        .to_owned(),
+                );
+            }
             if usage.replica_accounted_egress_bytes < checkpoint.accounted_egress_bytes {
                 return Err("lease usage must not decrease reporter bytes".to_owned());
             }
             if checkpoint.finalize_reporter && usage.finalize_reporter {
                 return Err("an already-finalized reporter cannot finalize again".to_owned());
             }
-            if usage.finalize_reporter
-                && usage.replica_accounted_egress_bytes != checkpoint.accounted_egress_bytes
-            {
-                return Err(
-                    "terminal reporter finalization must preserve the last admitted byte counter"
-                        .to_owned(),
-                );
-            }
-            const MAX_EGRESS_BYTES_PER_REPORTER_BLOCK: u64 = 1024 * 1024 * 1024;
             let delta = usage.replica_accounted_egress_bytes - checkpoint.accounted_egress_bytes;
             let elapsed_blocks = block_height.saturating_sub(checkpoint.last_updated_height);
             let maximum_delta = elapsed_blocks
-                .checked_mul(MAX_EGRESS_BYTES_PER_REPORTER_BLOCK)
+                .checked_mul(SORA_SERVICE_LEASE_MAX_EGRESS_BYTES_PER_REPORTER_BLOCK_V1)
                 .unwrap_or(u64::MAX);
             if delta > maximum_delta {
                 return Err("lease usage exceeds the elapsed-block egress bound".to_owned());
@@ -4495,7 +4569,6 @@ fn replay_soracloud_service_lease_usage(
             checkpoint.accounted_egress_bytes = usage.replica_accounted_egress_bytes;
             checkpoint.last_updated_height = block_height;
             checkpoint.finalize_reporter = usage.finalize_reporter;
-            checkpoint.forced_finalization = false;
         } else {
             if usage.replica_accounted_egress_bytes != 0 || usage.finalize_reporter {
                 return Err(
@@ -4514,7 +4587,6 @@ fn replay_soracloud_service_lease_usage(
                     accounted_egress_bytes: 0,
                     last_updated_height: block_height,
                     finalize_reporter: false,
-                    forced_finalization: false,
                 });
         }
     } else {
@@ -4535,25 +4607,15 @@ fn replay_soracloud_service_lease_usage(
                 "lease rollover trigger is not the one canonical successor transition".to_owned(),
             );
         }
-        let mut forced_finalized_checkpoint_count = 0_u32;
-        for checkpoint in &mut next.egress_reporter_checkpoints {
-            if checkpoint.finalize_reporter {
-                continue;
-            }
-            let force_height = checkpoint
-                .last_updated_height
-                .checked_add(SORA_SERVICE_LEASE_REPORTER_IDLE_GRACE_BLOCKS_V1)
-                .ok_or_else(|| "reporter force-finalization height overflows u64".to_owned())?;
-            if block_height < force_height {
-                return Err(
-                    "rollover force-finalizes a reporter before the idle grace elapsed".to_owned(),
-                );
-            }
-            checkpoint.finalize_reporter = true;
-            checkpoint.forced_finalization = true;
-            forced_finalized_checkpoint_count = forced_finalized_checkpoint_count
-                .checked_add(1)
-                .ok_or_else(|| "forced-finalization count overflows u32".to_owned())?;
+        if next
+            .egress_reporter_checkpoints
+            .iter()
+            .any(|checkpoint| !checkpoint.finalize_reporter)
+        {
+            return Err(
+                "every prior-epoch reporter checkpoint must be finalized before rollover"
+                    .to_owned(),
+            );
         }
         let settled_delta = next
             .egress_reporter_checkpoints
@@ -4576,7 +4638,6 @@ fn replay_soracloud_service_lease_usage(
                 != Some(SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1)
             || rollover.settled_egress_bytes_delta != settled_delta
             || rollover.settled_egress_bytes != settled
-            || rollover.forced_finalized_checkpoint_count != forced_finalized_checkpoint_count
         {
             return Err(
                 "lease rollover audit does not match the exact replayed settlement".to_owned(),
@@ -4590,7 +4651,6 @@ fn replay_soracloud_service_lease_usage(
             accounted_egress_bytes: 0,
             last_updated_height: block_height,
             finalize_reporter: false,
-            forced_finalization: false,
         }];
     }
     next.egress_reporter_checkpoints.sort_by(|left, right| {
@@ -4632,6 +4692,158 @@ fn replay_soracloud_service_lease_usage(
         }
     }
     Ok(next)
+}
+
+#[cfg(test)]
+mod soracloud_service_lease_replay_tests {
+    use super::{
+        lease_rollover_extends_settlement_chain,
+        lease_usage_assignment_version_is_writer_reachable, replay_soracloud_service_lease_usage,
+    };
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::{
+        account::AccountId,
+        peer::PeerId,
+        soracloud::{
+            SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1,
+            SORA_SERVICE_LEASE_REPORTER_ASSIGNMENT_VERSION_V1,
+            SORA_SERVICE_LEASE_REPORTING_EPOCH_ROLLOVER_VERSION_V1,
+            SORA_SERVICE_LEASE_STATE_VERSION_V1, SORA_SERVICE_LEASE_USAGE_AUDIT_VERSION_V1,
+            SoraInrouGuestIsaV1, SoraInrouReplicaPlacementV1, SoraServiceLeaseEgressCheckpointV1,
+            SoraServiceLeaseReporterAssignmentV1, SoraServiceLeaseReportingEpochRolloverV1,
+            SoraServiceLeaseStateV1, SoraServiceLeaseStatusV1, SoraServiceLeaseUsageAuditV1,
+        },
+    };
+
+    fn sample_assignment(service_version: &str) -> SoraServiceLeaseReporterAssignmentV1 {
+        let key_pair = KeyPair::try_from_seed(vec![91; 32], Algorithm::Ed25519)
+            .expect("derive deterministic lease reporter");
+        SoraServiceLeaseReporterAssignmentV1 {
+            schema_version: SORA_SERVICE_LEASE_REPORTER_ASSIGNMENT_VERSION_V1,
+            service_version: service_version.to_owned(),
+            placement: SoraInrouReplicaPlacementV1 {
+                replica_slot: 1,
+                validator_account_id: AccountId::new(key_pair.public_key().clone()),
+                peer_id: PeerId::from(key_pair.public_key().clone()).to_string(),
+                selected_guest_isa: SoraInrouGuestIsaV1::Aarch64,
+                selected_geography_tag: None,
+                selection_latency_ms: None,
+            },
+            placement_reconciled_at_ms: 1,
+        }
+    }
+
+    fn finalized_lease(
+        assignment: SoraServiceLeaseReporterAssignmentV1,
+    ) -> SoraServiceLeaseStateV1 {
+        let lease = SoraServiceLeaseStateV1 {
+            schema_version: SORA_SERVICE_LEASE_STATE_VERSION_V1,
+            status: SoraServiceLeaseStatusV1::Active,
+            quota_class: "replay-test".to_owned(),
+            deployment_deposit: "1".parse().expect("deployment deposit"),
+            prepaid_runtime_balance: "100".parse().expect("prepaid balance"),
+            runtime_price_per_block: "0.001".parse().expect("runtime price"),
+            storage_price_per_gib_block: "0.001".parse().expect("storage price"),
+            egress_price_per_mib: "0.001".parse().expect("egress price"),
+            lease_started_height: 1,
+            lease_expires_height: 100,
+            reporting_epoch: 1,
+            settled_egress_bytes: 0,
+            egress_reporter_checkpoints: vec![SoraServiceLeaseEgressCheckpointV1 {
+                reporting_epoch: 1,
+                assignment,
+                accounted_egress_bytes: 10,
+                last_updated_height: 10,
+                finalize_reporter: true,
+            }],
+            accounted_egress_bytes: 10,
+            last_status_reason: None,
+        };
+        lease.validate().expect("valid finalized lease fixture");
+        lease
+    }
+
+    #[test]
+    fn retired_revision_terminal_usage_remains_writer_reachable() {
+        let assignment = sample_assignment("retired");
+        assert!(lease_usage_assignment_version_is_writer_reachable(
+            "retired", true, "current", None,
+        ));
+        assert!(!lease_usage_assignment_version_is_writer_reachable(
+            "retired", false, "current", None,
+        ));
+
+        let mut lease = finalized_lease(assignment.clone());
+        lease.egress_reporter_checkpoints[0].finalize_reporter = false;
+        let usage = SoraServiceLeaseUsageAuditV1 {
+            schema_version: SORA_SERVICE_LEASE_USAGE_AUDIT_VERSION_V1,
+            reporting_epoch: 1,
+            assignment,
+            replica_accounted_egress_bytes: 11,
+            finalize_reporter: true,
+        };
+        let terminal = replay_soracloud_service_lease_usage(&lease, &usage, None, 11, 0)
+            .expect("retired reporter's one terminal monotonic update must replay");
+        assert!(terminal.egress_reporter_checkpoints[0].finalize_reporter);
+        assert_eq!(
+            terminal.egress_reporter_checkpoints[0].accounted_egress_bytes,
+            11
+        );
+    }
+
+    #[test]
+    fn baseline_reporter_rollover_extends_candidate_head_settlement_chain() {
+        let assignment = sample_assignment("baseline");
+        let rollover = SoraServiceLeaseReportingEpochRolloverV1 {
+            schema_version: SORA_SERVICE_LEASE_REPORTING_EPOCH_ROLLOVER_VERSION_V1,
+            lease_started_height: 1,
+            previous_reporting_epoch: 3,
+            new_reporting_epoch: 4,
+            reporter_account_id: assignment.placement.validator_account_id,
+            active_service_version: assignment.service_version,
+            replica_slot: 1,
+            finalized_checkpoint_count: u32::try_from(
+                SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1,
+            )
+            .expect("checkpoint bound fits u32"),
+            settled_egress_bytes_delta: 7,
+            settled_egress_bytes: 12,
+        };
+        rollover.validate().expect("valid baseline rollover");
+        let event_to_version = "candidate";
+        assert_ne!(rollover.active_service_version, event_to_version);
+        assert!(lease_rollover_extends_settlement_chain(&rollover, 1, 3, 5,));
+    }
+
+    #[test]
+    fn replay_requires_exact_terminal_value_before_reopened_growth() {
+        let assignment = sample_assignment("current");
+        let lease = finalized_lease(assignment.clone());
+        let mut usage = SoraServiceLeaseUsageAuditV1 {
+            schema_version: SORA_SERVICE_LEASE_USAGE_AUDIT_VERSION_V1,
+            reporting_epoch: 1,
+            assignment,
+            replica_accounted_egress_bytes: 11,
+            finalize_reporter: false,
+        };
+
+        let error = replay_soracloud_service_lease_usage(&lease, &usage, None, 11, 0)
+            .expect_err("reopen-and-increase must not replay");
+        assert!(error.contains("exact terminal byte value"), "{error}");
+
+        usage.replica_accounted_egress_bytes = 10;
+        let reopened = replay_soracloud_service_lease_usage(&lease, &usage, None, 11, 0)
+            .expect("exact terminal value reopens the reporter");
+        assert!(!reopened.egress_reporter_checkpoints[0].finalize_reporter);
+
+        usage.replica_accounted_egress_bytes = 11;
+        let increased = replay_soracloud_service_lease_usage(&reopened, &usage, None, 12, 0)
+            .expect("a reopened reporter may grow monotonically in a later block");
+        assert_eq!(
+            increased.egress_reporter_checkpoints[0].accounted_egress_bytes,
+            11
+        );
+    }
 }
 
 fn register_soracloud_sequence(
@@ -6469,15 +6681,13 @@ fn parse_world(
                         field: "world.axt_replay_ledger".to_owned(),
                         message: error.to_string(),
                     })?;
-                let budget_record =
-                    budget_ledger
-                        .get(&record.budget_key)
-                        .ok_or_else(|| json::Error::InvalidField {
-                            field: "world.axt_replay_ledger".to_owned(),
-                            message:
-                                "AXT replay record references a missing permanent budget family"
-                                    .to_owned(),
-                        })?;
+                let budget_record = budget_ledger.get(&record.budget_key).ok_or_else(|| {
+                    json::Error::InvalidField {
+                        field: "world.axt_replay_ledger".to_owned(),
+                        message: "AXT replay record references a missing permanent budget family"
+                            .to_owned(),
+                    }
+                })?;
                 budget_record
                     .validate_for_key(&record.budget_key)
                     .map_err(|error| json::Error::InvalidField {
@@ -6563,16 +6773,15 @@ fn parse_world(
             }
             let budgets = axt_handle_budget_ledger.view();
             for (key, _) in budgets.iter() {
-                let counter =
-                    counters
-                        .get(&key.asset_dsid())
-                        .ok_or_else(|| json::Error::InvalidField {
-                            field: "world.axt_handle_counters".to_owned(),
-                            message: format!(
-                                "AXT budget family for dataspace {} has no permanent counter ratchet",
-                                key.asset_dsid().as_u64()
-                            ),
-                        })?;
+                let counter = counters.get(&key.asset_dsid()).ok_or_else(|| {
+                    json::Error::InvalidField {
+                        field: "world.axt_handle_counters".to_owned(),
+                        message: format!(
+                            "AXT budget family for dataspace {} has no permanent counter ratchet",
+                            key.asset_dsid().as_u64()
+                        ),
+                    }
+                })?;
                 if counter.next() <= AxtHandleCounterRecord::initial(0).next() {
                     return Err(json::Error::InvalidField {
                         field: "world.axt_handle_counters".to_owned(),
@@ -6803,6 +7012,7 @@ fn parse_world(
         &mut map,
         "soracloud_private_uploaded_model_execution_receipts",
     )?;
+    let capacity_declarations = take_required(&mut map, "capacity_declarations")?;
     let soracloud_private_uploaded_model_execution_claims = take_required(
         &mut map,
         "soracloud_private_uploaded_model_execution_claims",
@@ -6859,6 +7069,7 @@ fn parse_world(
             &provider_owners,
             &provider_ingest_completion_authorities,
         )?;
+        validate_capacity_declarations(&capacity_declarations, &provider_owners)?;
     }
     let zk_assets = take_optional_default(&mut map, "zk_assets")?;
     let elections = take_required(&mut map, "elections")?;
@@ -6901,6 +7112,13 @@ fn parse_world(
             &musubi_locations_by_pin,
             &musubi_locations_by_replication_order,
             &musubi_locations_by_provider,
+        )?;
+        validate_automatic_replication_capacity_state(
+            &capacity_declarations,
+            &provider_owners,
+            &provider_ingest_completion_authorities,
+            &pin_manifests,
+            &replication_orders,
         )?;
     }
     let content_bundles = take_optional_default(&mut map, "content_bundles")?;
@@ -7086,7 +7304,7 @@ fn parse_world(
         soracloud_runtime_receipts,
         soracloud_private_uploaded_model_execution_receipts,
         soracloud_private_uploaded_model_execution_claims,
-        capacity_declarations: Storage::default(),
+        capacity_declarations,
         capacity_fee_ledger: Storage::default(),
         capacity_disputes: Storage::default(),
         provider_owners,
@@ -7195,28 +7413,29 @@ fn parse_world(
         let parliament_attempts_view = world.parliament_attempts.view();
         let governance_proposals_view = world.governance_proposals.view();
         for (attempt_id, attempt) in parliament_attempts_view.iter() {
-        if attempt_id != &attempt.attempt().id {
-            return Err(json::Error::InvalidField {
-                field: "parliament_attempts".into(),
-                message: "Parliament attempt storage key differs from its embedded canonical id"
-                    .into(),
-            });
-        }
-        attempt
-            .validate()
-            .map_err(|error| json::Error::InvalidField {
-                field: "parliament_attempts".into(),
-                message: format!("invalid persisted Parliament attempt: {error}"),
-            })?;
-        let proposal_id = *attempt.proposal_content_id().as_bytes();
-        let proposal = governance_proposals_view.get(&proposal_id).ok_or_else(|| {
-            json::Error::InvalidField {
-                field: "parliament_attempts".into(),
-                message: "Parliament attempt references a missing exact governance proposal"
-                    .to_owned(),
+            if attempt_id != &attempt.attempt().id {
+                return Err(json::Error::InvalidField {
+                    field: "parliament_attempts".into(),
+                    message:
+                        "Parliament attempt storage key differs from its embedded canonical id"
+                            .into(),
+                });
             }
-        })?;
-        attempt
+            attempt
+                .validate()
+                .map_err(|error| json::Error::InvalidField {
+                    field: "parliament_attempts".into(),
+                    message: format!("invalid persisted Parliament attempt: {error}"),
+                })?;
+            let proposal_id = *attempt.proposal_content_id().as_bytes();
+            let proposal = governance_proposals_view.get(&proposal_id).ok_or_else(|| {
+                json::Error::InvalidField {
+                    field: "parliament_attempts".into(),
+                    message: "Parliament attempt references a missing exact governance proposal"
+                        .to_owned(),
+                }
+            })?;
+            attempt
             .validate_proposal_bindings_v1(&proposal.kind)
             .map_err(|error| json::Error::InvalidField {
                 field: "parliament_attempts".into(),
@@ -7228,119 +7447,120 @@ fn parse_world(
         validate_tle_ovn_persistence(&world)?;
         validate_global_beacon_persistence(&world)?;
         for (proposal_id, proposal) in governance_proposals_view.iter() {
-        if let Some(reason) = proposal.first_release_exact_json_u64_invariant_error() {
-            return Err(json::Error::InvalidField {
-                field: "governance_proposals".into(),
-                message: reason.to_owned(),
-            });
-        }
-        if proposal.kind.fingerprint() != *proposal_id {
-            return Err(json::Error::InvalidField {
-                field: "governance_proposals".into(),
-                message: "governance proposal storage key differs from its exact typed fingerprint"
-                    .to_owned(),
-            });
-        }
-        let proposal_operator = match &proposal.kind {
-            iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(payload) => {
-                Some(&payload.proposal_operator)
+            if let Some(reason) = proposal.first_release_exact_json_u64_invariant_error() {
+                return Err(json::Error::InvalidField {
+                    field: "governance_proposals".into(),
+                    message: reason.to_owned(),
+                });
             }
-            iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(
-                payload,
-            ) => Some(&payload.proposal_operator),
-            _ => None,
-        };
-        if proposal_operator.is_some_and(|operator| operator != &proposal.proposer) {
-            return Err(json::Error::InvalidField {
-                field: "governance_proposals".into(),
-                message: "validation-fee proposal operator differs from its retained proposer"
-                    .to_owned(),
-            });
-        }
-        let referendum_id = hex::encode(proposal_id);
-        if world
-            .governance_referenda
-            .view()
-            .get(&referendum_id)
-            .is_some()
-            || world.governance_locks.view().get(&referendum_id).is_some()
-            || world
-                .governance_slashes
+            if proposal.kind.fingerprint() != *proposal_id {
+                return Err(json::Error::InvalidField {
+                    field: "governance_proposals".into(),
+                    message:
+                        "governance proposal storage key differs from its exact typed fingerprint"
+                            .to_owned(),
+                });
+            }
+            let proposal_operator = match &proposal.kind {
+                iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(payload) => {
+                    Some(&payload.proposal_operator)
+                }
+                iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(
+                    payload,
+                ) => Some(&payload.proposal_operator),
+                _ => None,
+            };
+            if proposal_operator.is_some_and(|operator| operator != &proposal.proposer) {
+                return Err(json::Error::InvalidField {
+                    field: "governance_proposals".into(),
+                    message: "validation-fee proposal operator differs from its retained proposer"
+                        .to_owned(),
+                });
+            }
+            let referendum_id = hex::encode(proposal_id);
+            if world
+                .governance_referenda
                 .view()
                 .get(&referendum_id)
                 .is_some()
-            || world.elections.view().get(&referendum_id).is_some()
-        {
-            return Err(json::Error::InvalidField {
+                || world.governance_locks.view().get(&referendum_id).is_some()
+                || world
+                    .governance_slashes
+                    .view()
+                    .get(&referendum_id)
+                    .is_some()
+                || world.elections.view().get(&referendum_id).is_some()
+            {
+                return Err(json::Error::InvalidField {
                 field: "governance_proposals".into(),
                 message:
                     "certificate-only governance proposals cannot retain legacy public referendum or pipeline state"
                         .to_owned(),
             });
-        }
-        let governed_subject =
-            proposal
-                .kind
-                .governed_subject_id_v1()
-                .map_err(|error| json::Error::InvalidField {
+            }
+            let governed_subject = proposal.kind.governed_subject_id_v1().map_err(|error| {
+                json::Error::InvalidField {
                     field: "governance_proposals".into(),
                     message: format!(
                         "failed to derive governance proposal's governed subject: {error}"
                     ),
-                })?;
-        let proposal_content_id =
-            iroha_data_model::governance::types::ProposalContentId::new(*proposal_id);
-        let mut proposal_attempts = parliament_attempts_view
-            .iter()
-            .filter(|(_, attempt)| attempt.proposal_content_id() == proposal_content_id)
-            .map(|(_, attempt)| attempt)
-            .collect::<Vec<_>>();
-        proposal_attempts.sort_unstable_by_key(|attempt| attempt.attempt().sequence);
-        for (index, attempt) in proposal_attempts.iter().enumerate() {
-            let expected_sequence =
-                u32::try_from(index).map_err(|_| json::Error::InvalidField {
-                    field: "parliament_attempts".into(),
-                    message:
-                        "governance Parliament attempt history exceeds the u32 sequence domain"
-                            .to_owned(),
-                })?;
-            if attempt.attempt().sequence != expected_sequence {
-                return Err(json::Error::InvalidField {
+                }
+            })?;
+            let proposal_content_id =
+                iroha_data_model::governance::types::ProposalContentId::new(*proposal_id);
+            let mut proposal_attempts = parliament_attempts_view
+                .iter()
+                .filter(|(_, attempt)| attempt.proposal_content_id() == proposal_content_id)
+                .map(|(_, attempt)| attempt)
+                .collect::<Vec<_>>();
+            proposal_attempts.sort_unstable_by_key(|attempt| attempt.attempt().sequence);
+            for (index, attempt) in proposal_attempts.iter().enumerate() {
+                let expected_sequence =
+                    u32::try_from(index).map_err(|_| json::Error::InvalidField {
+                        field: "parliament_attempts".into(),
+                        message:
+                            "governance Parliament attempt history exceeds the u32 sequence domain"
+                                .to_owned(),
+                    })?;
+                if attempt.attempt().sequence != expected_sequence {
+                    return Err(json::Error::InvalidField {
                     field: "parliament_attempts".into(),
                     message:
                         "governance Parliament attempt history is not an exact contiguous sequence"
                             .to_owned(),
                 });
-            }
-            if attempt.policy_version() != 1 {
-                return Err(json::Error::InvalidField {
-                    field: "parliament_attempts".into(),
-                    message: "governance Parliament attempt has a non-V1 policy version".to_owned(),
-                });
-            }
-            if let Some(certificate) = attempt.certificate() {
-                let certificate_subject = match certificate.expected_head {
-                    iroha_data_model::governance::types::GovernanceExpectedHeadV1::Absent(head) => {
-                        head.subject_id
-                    }
-                    iroha_data_model::governance::types::GovernanceExpectedHeadV1::Present(
-                        head,
-                    ) => head.subject_id,
-                };
-                if certificate.proposal_content_id != proposal_content_id
-                    || certificate.governance_attempt_sequence != expected_sequence
-                    || certificate.effect_preimage_hash != proposal.kind.effect_preimage_hash_v1()
-                    || certificate_subject != governed_subject
-                {
+                }
+                if attempt.policy_version() != 1 {
                     return Err(json::Error::InvalidField {
+                        field: "parliament_attempts".into(),
+                        message: "governance Parliament attempt has a non-V1 policy version"
+                            .to_owned(),
+                    });
+                }
+                if let Some(certificate) = attempt.certificate() {
+                    let certificate_subject = match certificate.expected_head {
+                        iroha_data_model::governance::types::GovernanceExpectedHeadV1::Absent(
+                            head,
+                        ) => head.subject_id,
+                        iroha_data_model::governance::types::GovernanceExpectedHeadV1::Present(
+                            head,
+                        ) => head.subject_id,
+                    };
+                    if certificate.proposal_content_id != proposal_content_id
+                        || certificate.governance_attempt_sequence != expected_sequence
+                        || certificate.effect_preimage_hash
+                            != proposal.kind.effect_preimage_hash_v1()
+                        || certificate_subject != governed_subject
+                    {
+                        return Err(json::Error::InvalidField {
                         field: "parliament_attempts".into(),
                         message: "Parliament certificate differs from its exact governance proposal effect"
                             .to_owned(),
                     });
+                    }
                 }
-            }
-            let is_latest = index + 1 == proposal_attempts.len();
-            if !is_latest
+                let is_latest = index + 1 == proposal_attempts.len();
+                if !is_latest
                 && !matches!(
                     attempt.attempt().status,
                     iroha_data_model::governance::types::GovernanceAttemptStatusV1::Rejected
@@ -7355,25 +7575,25 @@ fn parse_world(
                             .to_owned(),
                 });
             }
-        }
-        let latest_attempt = proposal_attempts.last().copied();
-        let status_matches_attempt = proposal_status_matches_latest_attempt_v1(
-            proposal.status,
-            latest_attempt.map(|attempt| attempt.attempt().status),
-        ) && latest_attempt.is_none_or(|attempt| {
-            proposal.status != GovernanceProposalStatus::Enacted
-                || attempt.certificate().is_some_and(|certificate| {
-                    attempt.terminal_height() == Some(certificate.enact_at_height)
-                })
-        });
-        if !status_matches_attempt {
-            return Err(json::Error::InvalidField {
+            }
+            let latest_attempt = proposal_attempts.last().copied();
+            let status_matches_attempt = proposal_status_matches_latest_attempt_v1(
+                proposal.status,
+                latest_attempt.map(|attempt| attempt.attempt().status),
+            ) && latest_attempt.is_none_or(|attempt| {
+                proposal.status != GovernanceProposalStatus::Enacted
+                    || attempt.certificate().is_some_and(|certificate| {
+                        attempt.terminal_height() == Some(certificate.enact_at_height)
+                    })
+            });
+            if !status_matches_attempt {
+                return Err(json::Error::InvalidField {
                 field: "governance_proposals".into(),
                 message:
                     "governance proposal status does not match its exact Parliament attempt outcome"
                         .to_owned(),
             });
-        }
+            }
         }
         MusubiPersistedState {
             namespace_bindings: &world.musubi_namespace_bindings,
@@ -8952,6 +9172,7 @@ mod decode_tests {
     }
     #[test]
     fn snapshot_norito_records_require_exact_canonical_bytes() {
+        SNAPSHOT_NORITO_CANONICAL_PASSES.with(|passes| passes.set(0));
         let encoded = 7_u64.encode();
         let record = SnapshotNoritoBlob {
             encoded_hex: hex::encode(&encoded),
@@ -8972,6 +9193,20 @@ mod decode_tests {
         )
         .expect_err("trailing or alternate Norito bytes must fail closed");
         assert!(error.to_string().contains("fixture"));
+        SNAPSHOT_NORITO_CANONICAL_PASSES.with(|passes| assert_eq!(passes.get(), 1));
+    }
+    #[test]
+    fn emergency_fast_norito_records_skip_canonical_reserialization() {
+        SNAPSHOT_NORITO_CANONICAL_PASSES.with(|passes| passes.set(0));
+        let record = SnapshotNoritoBlob {
+            encoded_hex: hex::encode(7_u64.encode()),
+        };
+        assert_eq!(
+            decode_snapshot_records::<u64>(vec![record], "fixture", false)
+                .expect("Fast keeps exact typed Norito decoding"),
+            [7]
+        );
+        SNAPSHOT_NORITO_CANONICAL_PASSES.with(|passes| assert_eq!(passes.get(), 0));
     }
     #[test]
     fn take_parameters_cell_rejects_legacy_blocks_envelope() {

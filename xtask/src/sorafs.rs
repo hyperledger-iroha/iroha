@@ -4626,6 +4626,7 @@ fn pin_fixture_order_snapshot(order: &ReplicationOrderRecord) -> Result<json::Ma
         ReplicationOrderStatus::Pending => ("pending", None),
         ReplicationOrderStatus::Completed(epoch) => ("completed", Some(epoch)),
         ReplicationOrderStatus::Expired(epoch) => ("expired", Some(epoch)),
+        ReplicationOrderStatus::Cancelled(epoch) => ("cancelled", Some(epoch)),
     };
     order_obj.insert("status".into(), Value::String(status_label.into()));
     order_obj.insert(

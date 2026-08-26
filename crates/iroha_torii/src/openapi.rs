@@ -1,9 +1,10 @@
 //! Static authority for Torii's OpenAPI description.
 //!
-//! The package-local document is an exact mirror of the canonical release
-//! artifact. Torii parses it once with Norito JSON, then removes only operations
-//! disabled by the compiled route catalog. This keeps every feature profile
-//! aligned with the mounted router without compiling a second schema builder.
+//! The package-local document is the source-owned contract authority. Torii
+//! parses it once with Norito JSON, then removes only operations disabled by the
+//! compiled route catalog. This keeps every feature profile aligned with the
+//! mounted router without compiling a second schema builder. Signed release
+//! mirrors are synchronized separately after the source merge is recorded.
 use iroha_torii_shared::route_catalog::{
     CATALOGED_ROUTES, CatalogProjection, EnabledFeatures, HttpMethod as CatalogHttpMethod,
     RouteCatalog,
@@ -12,7 +13,7 @@ use norito::json::{Map, Value};
 use std::{collections::BTreeSet, sync::LazyLock};
 /// OpenAPI operation extension consumed by the MCP policy bridge.
 pub(crate) const TOOL_EFFECT_EXTENSION: &str = "x-iroha-tool-effect";
-/// Package-local, release-provenance-bound mirror of `artifacts/openapi/torii.json`.
+/// Package-local source authority for Torii's OpenAPI contract.
 const CANONICAL_OPENAPI_JSON: &str = include_str!("../assets/openapi/torii.json");
 static COMPILED_OPENAPI_SPEC: LazyLock<Value> = LazyLock::new(|| {
     let mut document: Value = norito::json::from_str(CANONICAL_OPENAPI_JSON)
@@ -895,16 +896,16 @@ mod tests {
         );
         assert_eq!(
             operation_response_schema_ref(execute, "200", "private uploaded-model execute",),
-            "#/components/schemas/PrivateUploadedModelExecuteResponse"
+            "#/components/schemas/PrivateUploadedModelExecuteCommittedResponse"
         );
         assert_eq!(
             operation_response_schema_ref(execute, "202", "private uploaded-model execute",),
-            "#/components/schemas/PrivateUploadedModelExecuteResponse"
+            "#/components/schemas/PrivateUploadedModelExecuteAcceptedResponse"
         );
         assert_eq!(
             execute["responses"]["202"]["description"].as_str(),
             Some(
-                "Encrypted output durably ingested. Prepare atomically ensures its paid pin and freezes authorization; Receipt follows only after pin approval and replication quorum"
+                "Encrypted output durably ingested. Prepare atomically ensures its approved paid pin and freezes authorization; Receipt follows only after replication quorum"
             )
         );
         assert_strict_object_schema(
@@ -912,7 +913,6 @@ mod tests {
             "PrivateUploadedModelExecuteRequest",
             &[
                 "model_id",
-                "model_name",
                 "bundle_root",
                 "service_name",
                 "service_version",
@@ -923,13 +923,22 @@ mod tests {
             ],
             &[],
         );
+        assert_eq!(
+            property_ref(schemas, "PrivateUploadedModelExecuteRequest", "bundle_root"),
+            "#/components/schemas/Hash"
+        );
+        assert_eq!(
+            component_properties(schemas, "PrivateUploadedModelExecuteRequest")["model_id"]["type"]
+                .as_str(),
+            Some("string")
+        );
         assert_strict_object_schema(
             schemas,
             "PrivateUploadedModelExecuteResponse",
             &[
                 "schema_version",
                 "status",
-                "submission_status",
+                "submission_phase",
                 "transaction_hash",
                 "receipt",
                 "output_artifact",
@@ -943,6 +952,97 @@ mod tests {
         assert_eq!(
             property_ref(schemas, "PrivateUploadedModelExecuteResponse", "receipt"),
             "#/components/schemas/SoraPrivateUploadedModelExecutionReceiptV1"
+        );
+        assert_eq!(
+            property_ref(
+                schemas,
+                "PrivateUploadedModelExecuteResponse",
+                "submission_phase"
+            ),
+            "#/components/schemas/PrivateUploadedModelSubmissionPhaseV1"
+        );
+        let submission_phases = schemas["PrivateUploadedModelSubmissionPhaseV1"]["enum"]
+            .as_array()
+            .expect("private uploaded-model submission phase enum")
+            .iter()
+            .map(|phase| phase.as_str().expect("submission phase string"))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            submission_phases,
+            BTreeSet::from([
+                "awaiting_output_durability",
+                "prepare_submitted",
+                "receipt_submitted",
+                "committed",
+            ])
+        );
+        let response_variants = schemas["PrivateUploadedModelExecuteResponse"]["oneOf"]
+            .as_array()
+            .expect("private uploaded-model execute response state union");
+        assert_eq!(response_variants.len(), 4);
+        for (phase, requires_hash, assigned_receipt) in [
+            ("awaiting_output_durability", false, false),
+            ("prepare_submitted", true, false),
+            ("receipt_submitted", true, false),
+            ("committed", false, true),
+        ] {
+            let variant = response_variants
+                .iter()
+                .find(|variant| {
+                    variant["properties"]["submission_phase"]["const"].as_str() == Some(phase)
+                })
+                .unwrap_or_else(|| panic!("missing private execute response phase {phase}"));
+            let transaction_hash = &variant["properties"]["transaction_hash"];
+            if requires_hash {
+                assert_eq!(
+                    transaction_hash["$ref"].as_str(),
+                    Some("#/components/schemas/Hash"),
+                    "{phase} must require a transaction hash"
+                );
+            } else {
+                assert_eq!(
+                    transaction_hash["type"].as_str(),
+                    Some("null"),
+                    "{phase} must require a null transaction hash"
+                );
+            }
+            let receipt = &variant["properties"]["receipt"];
+            for coordinate in [
+                "authorization_claim_block_height",
+                "authorization_claim_epoch",
+                "emitted_sequence",
+                "emitted_block_height",
+                "emitted_epoch",
+            ] {
+                let coordinate_schema = &receipt["properties"][coordinate];
+                if assigned_receipt {
+                    assert_eq!(coordinate_schema["minimum"].as_u64(), Some(1));
+                    assert_eq!(coordinate_schema["format"].as_str(), Some("uint64"));
+                } else {
+                    assert_eq!(coordinate_schema["const"].as_u64(), Some(0));
+                }
+            }
+        }
+        let accepted_phases = schemas["PrivateUploadedModelExecuteAcceptedResponse"]["allOf"][1]
+            ["properties"]["submission_phase"]["enum"]
+            .as_array()
+            .expect("HTTP 202 private execute phase enum")
+            .iter()
+            .map(|phase| phase.as_str().expect("HTTP 202 private execute phase string"))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            accepted_phases,
+            BTreeSet::from([
+                "awaiting_output_durability",
+                "prepare_submitted",
+                "receipt_submitted",
+            ])
+        );
+        assert_eq!(
+            schemas["PrivateUploadedModelExecuteCommittedResponse"]["allOf"][1]["properties"]
+                ["submission_phase"]["const"]
+                .as_str(),
+            Some("committed")
         );
         assert_strict_object_schema(
             schemas,
@@ -983,21 +1083,13 @@ mod tests {
             ],
             &[],
         );
-        let output_replication_order_id = &component_properties(
-            schemas,
-            "SoraPrivateUploadedModelExecutionReceiptV1",
-        )["output_replication_order_id"];
         assert_eq!(
-            output_replication_order_id
-                .get("minItems")
-                .and_then(Value::as_u64),
-            Some(32)
-        );
-        assert_eq!(
-            output_replication_order_id
-                .get("maxItems")
-                .and_then(Value::as_u64),
-            Some(32)
+            property_ref(
+                schemas,
+                "SoraPrivateUploadedModelExecutionReceiptV1",
+                "output_replication_order_id",
+            ),
+            "#/components/schemas/ReplicationOrderId"
         );
         for coordinate in [
             "authorization_claim_block_height",
@@ -1485,7 +1577,7 @@ mod tests {
                 "/v1/soracloud/model/upload/private/execute",
                 "post",
                 Some("PrivateUploadedModelExecuteRequest"),
-                "PrivateUploadedModelExecuteResponse",
+                "PrivateUploadedModelExecuteCommittedResponse",
             ),
             (
                 "/v1/soracloud/model/upload/private/receipts",

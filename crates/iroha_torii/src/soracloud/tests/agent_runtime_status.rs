@@ -35,7 +35,6 @@ fn authoritative_agent_autonomy_status_includes_runtime_recent_runs() -> Result<
             SoraAgentApartmentRecordV1 {
                 schema_version: iroha_data_model::soracloud::SORA_AGENT_APARTMENT_RECORD_VERSION_V1,
                 manifest_hash: Hash::new(b"agent-manifest"),
-                status: SoraAgentRuntimeStatusV1::Running,
                 deployed_sequence: 1,
                 lease_started_height: 1,
                 lease_expires_height: 100,

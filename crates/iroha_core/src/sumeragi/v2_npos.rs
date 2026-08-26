@@ -636,44 +636,6 @@ pub(crate) fn validate_finalized_epoch_record(
         true,
     )
 }
-/// Authenticate the retired VRF successor-seed construction for regression
-/// tests only.
-///
-/// Production successor contexts consume the finalized global threshold
-/// beacon in `v2_context`; retaining this helper only lets the remaining VRF
-/// accountability tests prove which legacy reveal observations used to affect
-/// entropy while that record lifecycle is retired separately.
-#[cfg(test)]
-fn authenticated_legacy_vrf_successor_seed(
-    network_id: &iroha_data_model::NetworkId,
-    epoch: u64,
-    epoch_end_height: u64,
-    leader_seed: [u8; 32],
-    roster: &[wire::ValidatorPower],
-    params: NposEpochParams,
-    record: &VrfEpochRecord,
-) -> Result<[u8; 32], V2NposError> {
-    let cutoff_height = epoch_end_height
-        .checked_sub(1)
-        .ok_or(V2NposError::InvalidSchedule)?;
-    let context = VrfRecordValidationContext {
-        network_id,
-        height: cutoff_height,
-        epoch,
-        epoch_end_height,
-        leader_seed,
-        roster,
-    };
-    let schedule = EpochSchedule::for_context(
-        context,
-        params.epoch_length_blocks,
-        params.commit_deadline_offset,
-        params.reveal_deadline_offset,
-    )?;
-    let roster_len = u32::try_from(roster.len()).map_err(|_| V2NposError::RosterTooLarge)?;
-    validate_authenticated_record(context, schedule, record, roster_len, false)?;
-    Ok(super::next_epoch_seed_from_record(record))
-}
 #[cfg(test)]
 impl EpochSchedule {
     fn for_context(
@@ -1720,7 +1682,6 @@ mod tests {
             "struct ActiveVrfLifecycle",
             "fn from_parts",
             "pub(crate) fn validate_finalized_epoch_record",
-            "fn authenticated_legacy_vrf_successor_seed",
             "impl EpochSchedule",
             "impl ActiveVrfLifecycle",
             "fn verify_vrf_reveal_for_chain",
@@ -1844,13 +1805,6 @@ mod tests {
             commit_end: 3,
             reveal_end: 6,
             position,
-        }
-    }
-    fn epoch_params() -> NposEpochParams {
-        NposEpochParams {
-            epoch_length_blocks: 10,
-            commit_deadline_offset: 3,
-            reveal_deadline_offset: 6,
         }
     }
     fn state_with_record(record: Option<VrfEpochRecord>) -> State {
@@ -2020,187 +1974,6 @@ mod tests {
             validate_candidate_records(&context, &state, None),
             Err(V2NposError::MissingCommittedParameters)
         ));
-    }
-    #[test]
-    fn authenticated_pre_boundary_reveals_drive_only_the_immediate_successor_seed() {
-        let keys = keys();
-        let commit_context = context(2, &keys);
-        let mut commits = lifecycle_at(2, 2, None, None, &keys);
-        for signer in 0..2_u32 {
-            let signer_index = usize::try_from(signer).expect("small signer");
-            let (_, commitment, _) = material(&keys[signer_index], &commit_context, signer);
-            let message = sign_commit(
-                &keys[signer_index],
-                &commit_context,
-                VrfCommit {
-                    epoch: 0,
-                    commitment,
-                    signer,
-                    bls_sig: Vec::new(),
-                },
-            );
-            assert_eq!(
-                commits.accept_commit(
-                    message,
-                    Some(&commit_context.roster[signer_index].validator),
-                ),
-                V2VrfIngressOutcome::Accepted
-            );
-        }
-        let committed = commits
-            .pending_records()
-            .pop()
-            .expect("two authenticated commitments");
-        let reveal_context = context(4, &keys);
-        let authenticated_reveal = |signer: u32| {
-            let (reveal, _, vrf_proof) = material(
-                &keys[usize::try_from(signer).expect("small signer")],
-                &reveal_context,
-                signer,
-            );
-            sign_reveal(
-                &keys[usize::try_from(signer).expect("small signer")],
-                &reveal_context,
-                VrfReveal {
-                    epoch: 0,
-                    reveal,
-                    signer,
-                    vrf_proof,
-                    bls_sig: Vec::new(),
-                },
-            )
-        };
-        let mut one_reveal = lifecycle_at(4, 4, Some(committed.clone()), None, &keys);
-        assert_eq!(
-            one_reveal.accept_reveal(
-                authenticated_reveal(0),
-                Some(&reveal_context.roster[0].validator),
-            ),
-            V2VrfIngressOutcome::Accepted
-        );
-        let one_reveal = one_reveal
-            .pending_records()
-            .pop()
-            .expect("one authenticated reveal");
-        let mut two_reveals = lifecycle_at(4, 4, Some(committed.clone()), None, &keys);
-        for signer in 0..2_u32 {
-            let signer_index = usize::try_from(signer).expect("small signer");
-            assert_eq!(
-                two_reveals.accept_reveal(
-                    authenticated_reveal(signer),
-                    Some(&reveal_context.roster[signer_index].validator),
-                ),
-                V2VrfIngressOutcome::Accepted
-            );
-        }
-        let two_reveals = two_reveals
-            .pending_records()
-            .pop()
-            .expect("two authenticated reveals");
-        let seed_with_one = authenticated_legacy_vrf_successor_seed(
-            &reveal_context.network_id,
-            reveal_context.epoch,
-            reveal_context.epoch_end_height,
-            reveal_context.leader_seed,
-            &reveal_context.roster,
-            epoch_params(),
-            &one_reveal,
-        )
-        .expect("one-reveal successor seed");
-        let seed_with_two = authenticated_legacy_vrf_successor_seed(
-            &reveal_context.network_id,
-            reveal_context.epoch,
-            reveal_context.epoch_end_height,
-            reveal_context.leader_seed,
-            &reveal_context.roster,
-            epoch_params(),
-            &two_reveals,
-        )
-        .expect("two-reveal successor seed");
-        assert_ne!(seed_with_one, seed_with_two);
-        let mut mismatched_params = epoch_params();
-        mismatched_params.reveal_deadline_offset -= 1;
-        assert!(
-            authenticated_legacy_vrf_successor_seed(
-                &reveal_context.network_id,
-                reveal_context.epoch,
-                reveal_context.epoch_end_height,
-                reveal_context.leader_seed,
-                &reveal_context.roster,
-                mismatched_params,
-                &one_reveal,
-            )
-            .is_err(),
-            "the record schedule must match the independently committed epoch parameters"
-        );
-        let mut reordered = two_reveals.clone();
-        reordered.participants.reverse();
-        assert!(
-            authenticated_legacy_vrf_successor_seed(
-                &reveal_context.network_id,
-                reveal_context.epoch,
-                reveal_context.epoch_end_height,
-                reveal_context.leader_seed,
-                &reveal_context.roster,
-                epoch_params(),
-                &reordered,
-            )
-            .is_err()
-        );
-        let mut forged = two_reveals;
-        forged.participants[0]
-            .reveal
-            .as_mut()
-            .expect("authenticated reveal")[0] ^= 1;
-        assert!(
-            authenticated_legacy_vrf_successor_seed(
-                &reveal_context.network_id,
-                reveal_context.epoch,
-                reveal_context.epoch_end_height,
-                reveal_context.leader_seed,
-                &reveal_context.roster,
-                epoch_params(),
-                &forged,
-            )
-            .is_err()
-        );
-        let late_context = context(7, &keys);
-        let mut late = lifecycle_at(7, 7, Some(committed.clone()), None, &keys);
-        assert_eq!(
-            late.accept_reveal(
-                authenticated_reveal(0),
-                Some(&late_context.roster[0].validator),
-            ),
-            V2VrfIngressOutcome::AcceptedLate
-        );
-        let late = late
-            .pending_records()
-            .pop()
-            .expect("authenticated late reveal");
-        let late_seed = authenticated_legacy_vrf_successor_seed(
-            &late_context.network_id,
-            late_context.epoch,
-            late_context.epoch_end_height,
-            late_context.leader_seed,
-            &late_context.roster,
-            epoch_params(),
-            &late,
-        )
-        .expect("late reveal record remains authenticated");
-        let no_reveal_seed = authenticated_legacy_vrf_successor_seed(
-            &late_context.network_id,
-            late_context.epoch,
-            late_context.epoch_end_height,
-            late_context.leader_seed,
-            &late_context.roster,
-            epoch_params(),
-            &committed,
-        )
-        .expect("commit-only record remains authenticated");
-        assert_eq!(
-            late_seed, no_reveal_seed,
-            "late reveals never affect entropy"
-        );
     }
     #[test]
     fn first_mutable_genesis_epoch_candidate_must_commit_the_schedule_snapshot() {

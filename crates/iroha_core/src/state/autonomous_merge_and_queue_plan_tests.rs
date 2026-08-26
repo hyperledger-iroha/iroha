@@ -26,7 +26,10 @@ fn canonical_wsv_authorization_commits_exact_autonomous_execution_once() {
         &state, &entry, &carrier,
     ))
     .expect("exact authorized autonomous execution must commit");
-    assert_eq!(state.committed_height(), 2);
+    assert_eq!(
+        state.committed_height(),
+        usize::try_from(carrier.header().height().get()).expect("carrier height fits usize"),
+    );
     assert!(
         state
             .merge_execution_already_applied(
@@ -230,7 +233,11 @@ fn assert_autonomous_batch_transfer_carrier_roundtrip(mode: QueuePlanTransferFix
             .expect("committed marker lookup"),
         "batch effects and receipt-bound execution must have one applied marker set"
     );
-    match state.block_with_certified_merge_entry(carrier.header().clone(), &entry) {
+    match state.block_with_certified_merge_entry(
+        carrier.header().clone(),
+        &entry,
+        ConsensusMode::Permissioned,
+    ) {
         Err(MergeLedgerCommitError::NonMonotonicEpoch {
             expected,
             attempted,
@@ -270,6 +277,7 @@ fn assert_fastpq_batch_rejected(
         &batch,
         &std::collections::BTreeMap::new(),
         true,
+        Some(ConsensusMode::Permissioned),
     ) {
         Err(MergeLedgerCommitError::ExecutionBatchInvalid(reason)) => {
             assert_eq!(reason, expected_reason)
@@ -280,7 +288,7 @@ fn assert_fastpq_batch_rejected(
 include!("autonomous_merge_fastpq_shape_tests.rs");
 #[test]
 fn sealed_reveal_fastpq_transcripts_bind_inner_call_to_outer_lane_identity() {
-    let (state, entry, _) = autonomous_merge_transfer_commit_authorization_fixture();
+    let (state, entry, carrier) = autonomous_merge_transfer_commit_authorization_fixture();
     let lane = &entry
         .execution_batch
         .as_ref()
@@ -307,15 +315,7 @@ fn sealed_reveal_fastpq_transcripts_bind_inner_call_to_outer_lane_identity() {
 
     let mut transcript = lane.fastpq_transcripts[0].transcripts[0].clone();
     transcript.batch_hash = inner_call_hash;
-    let header = BlockHeader::new(
-        nonzero!(2_u64),
-        state.latest_block_hash_fast(),
-        None,
-        None,
-        2,
-        0,
-    );
-    let mut state_block = state.block(header);
+    let mut state_block = state.block(carrier.header().clone());
     state_block
         .fastpq_transcripts
         .insert(inner_call_hash, vec![transcript]);
@@ -332,7 +332,7 @@ fn sealed_reveal_fastpq_transcripts_bind_inner_call_to_outer_lane_identity() {
 }
 #[test]
 fn sealed_reveal_batch_outcomes_bind_inner_call_to_outer_result_leaf() {
-    let (state, entry, _) = autonomous_merge_batch_transfer_commit_authorization_fixture(
+    let (state, entry, carrier) = autonomous_merge_batch_transfer_commit_authorization_fixture(
         QueuePlanTransferFixture::AtomicBatch,
     );
     let lane = &entry
@@ -362,15 +362,7 @@ fn sealed_reveal_batch_outcomes_bind_inner_call_to_outer_result_leaf() {
     let expected_outcomes = lane.results[0].batch_transfer_outcomes().to_vec();
     let mut result = lane.results[0].clone();
     result.set_batch_transfer_outcomes(Vec::new());
-    let header = BlockHeader::new(
-        nonzero!(2_u64),
-        state.latest_block_hash_fast(),
-        None,
-        None,
-        2,
-        0,
-    );
-    let mut state_block = state.block(header);
+    let mut state_block = state.block(carrier.header().clone());
     state_block.batch_transfer_outcomes.insert(
         HashOf::<TransactionEntrypoint>::from_untyped_unchecked(inner_call_hash),
         expected_outcomes.clone(),
@@ -389,7 +381,7 @@ fn sealed_reveal_batch_outcomes_bind_inner_call_to_outer_result_leaf() {
 }
 #[test]
 fn unbound_fastpq_transcript_remains_a_fail_closed_commit_surface() {
-    let (state, entry, _) = autonomous_merge_transfer_commit_authorization_fixture();
+    let (state, entry, carrier) = autonomous_merge_transfer_commit_authorization_fixture();
     let lane = &entry
         .execution_batch
         .as_ref()
@@ -398,15 +390,7 @@ fn unbound_fastpq_transcript_remains_a_fail_closed_commit_surface() {
     let unbound_hash = Hash::new(b"unbound FASTPQ transcript");
     let mut transcript = lane.fastpq_transcripts[0].transcripts[0].clone();
     transcript.batch_hash = unbound_hash;
-    let header = BlockHeader::new(
-        nonzero!(2_u64),
-        state.latest_block_hash_fast(),
-        None,
-        None,
-        2,
-        0,
-    );
-    let mut state_block = state.block(header);
+    let mut state_block = state.block(carrier.header().clone());
     state_block
         .fastpq_transcripts
         .insert(unbound_hash, vec![transcript]);
@@ -424,7 +408,7 @@ fn unbound_fastpq_transcript_remains_a_fail_closed_commit_surface() {
 }
 #[test]
 fn unbound_batch_transfer_outcome_remains_a_fail_closed_commit_surface() {
-    let (state, entry, _) = autonomous_merge_batch_transfer_commit_authorization_fixture(
+    let (state, entry, carrier) = autonomous_merge_batch_transfer_commit_authorization_fixture(
         QueuePlanTransferFixture::AtomicBatch,
     );
     let lane = &entry
@@ -437,15 +421,7 @@ fn unbound_batch_transfer_outcome_remains_a_fail_closed_commit_surface() {
         .first()
         .expect("atomic batch emits a receipt")
         .clone();
-    let header = BlockHeader::new(
-        nonzero!(2_u64),
-        state.latest_block_hash_fast(),
-        None,
-        None,
-        2,
-        0,
-    );
-    let mut state_block = state.block(header);
+    let mut state_block = state.block(carrier.header().clone());
     let unbound_hash = Hash::new(b"unbound autonomous batch-transfer outcome");
     state_block.batch_transfer_outcomes.insert(
         HashOf::<TransactionEntrypoint>::from_untyped_unchecked(unbound_hash),
@@ -474,7 +450,10 @@ fn autonomous_execution_commit_rejects_missing_apply_carrier_authorization() {
         state_block.commit(),
         Err(TransactionsBlockError::MergeAdmission)
     ));
-    assert_eq!(state.committed_height(), 1);
+    assert_eq!(
+        state.committed_height(),
+        autonomous_carrier_parent_height(&carrier),
+    );
 }
 #[test]
 fn autonomous_execution_commit_rejects_missing_wsv_authorization() {
@@ -488,7 +467,10 @@ fn autonomous_execution_commit_rejects_missing_wsv_authorization() {
         commit_staged_autonomous_for_test(state_block),
         Err(TransactionsBlockError::MergeAdmission)
     ));
-    assert_eq!(state.committed_height(), 1);
+    assert_eq!(
+        state.committed_height(),
+        autonomous_carrier_parent_height(&carrier),
+    );
 }
 #[test]
 fn autonomous_execution_commit_rejects_missing_carrier_metadata_authorization() {
@@ -502,7 +484,10 @@ fn autonomous_execution_commit_rejects_missing_carrier_metadata_authorization() 
         commit_staged_autonomous_for_test(state_block),
         Err(TransactionsBlockError::MergeAdmission)
     ));
-    assert_eq!(state.committed_height(), 1);
+    assert_eq!(
+        state.committed_height(),
+        autonomous_carrier_parent_height(&carrier),
+    );
 }
 #[test]
 fn autonomous_execution_commit_rejects_mismatched_wsv_authorization() {
@@ -517,7 +502,10 @@ fn autonomous_execution_commit_rejects_mismatched_wsv_authorization() {
         commit_staged_autonomous_for_test(state_block),
         Err(TransactionsBlockError::MergeAdmission)
     ));
-    assert_eq!(state.committed_height(), 1);
+    assert_eq!(
+        state.committed_height(),
+        autonomous_carrier_parent_height(&carrier),
+    );
 }
 #[test]
 fn autonomous_execution_commit_rejects_replayed_carrier_metadata_authorization() {
@@ -539,7 +527,10 @@ fn autonomous_execution_commit_rejects_replayed_carrier_metadata_authorization()
         commit_staged_autonomous_for_test(second_block),
         Err(TransactionsBlockError::MergeAdmission)
     ));
-    assert_eq!(second_state.committed_height(), 1);
+    assert_eq!(
+        second_state.committed_height(),
+        autonomous_carrier_parent_height(&second_carrier),
+    );
 }
 #[test]
 fn autonomous_execution_commit_rejects_stale_authorized_base() {
@@ -554,7 +545,10 @@ fn autonomous_execution_commit_rejects_stale_authorized_base() {
         commit_staged_autonomous_for_test(state_block),
         Err(TransactionsBlockError::MergeAdmission)
     ));
-    assert_eq!(state.committed_height(), 1);
+    assert_eq!(
+        state.committed_height(),
+        autonomous_carrier_parent_height(&carrier),
+    );
 }
 #[test]
 fn autonomous_execution_commit_rejects_post_stage_wsv_drift() {
@@ -570,7 +564,10 @@ fn autonomous_execution_commit_rejects_post_stage_wsv_drift() {
         commit_staged_autonomous_for_test(state_block),
         Err(TransactionsBlockError::MergeAdmission)
     ));
-    assert_eq!(state.committed_height(), 1);
+    assert_eq!(
+        state.committed_height(),
+        autonomous_carrier_parent_height(&carrier),
+    );
 }
 #[test]
 fn autonomous_execution_commit_rejects_post_stage_runtime_surface_drift() {
@@ -588,7 +585,10 @@ fn autonomous_execution_commit_rejects_post_stage_runtime_surface_drift() {
         commit_staged_autonomous_for_test(state_block),
         Err(TransactionsBlockError::MergeAdmission)
     ));
-    assert_eq!(state.committed_height(), 1);
+    assert_eq!(
+        state.committed_height(),
+        autonomous_carrier_parent_height(&carrier),
+    );
 }
 #[test]
 fn autonomous_execution_commit_rejects_post_publication_event_surface_drift() {
@@ -605,7 +605,10 @@ fn autonomous_execution_commit_rejects_post_publication_event_surface_drift() {
         commit_staged_autonomous_for_test(state_block),
         Err(TransactionsBlockError::MergeAdmission)
     ));
-    assert_eq!(state.committed_height(), 1);
+    assert_eq!(
+        state.committed_height(),
+        autonomous_carrier_parent_height(&carrier),
+    );
 }
 #[test]
 fn autonomous_execution_defers_expired_axt_replay_pruning() {
@@ -646,7 +649,10 @@ fn autonomous_execution_rejects_post_stage_axt_replay_drift() {
         commit_staged_autonomous_for_test(state_block),
         Err(TransactionsBlockError::MergeAdmission)
     ));
-    assert_eq!(state.committed_height(), 1);
+    assert_eq!(
+        state.committed_height(),
+        autonomous_carrier_parent_height(&carrier),
+    );
 }
 #[test]
 fn autonomous_execution_stage_rejects_preexisting_axt_replay_overlay() {
@@ -665,7 +671,7 @@ fn autonomous_execution_stage_rejects_preexisting_axt_replay_overlay() {
         .axt_replay_ledger
         .insert(replay_key, axt_replay_record_for_key(&replay_key, 0, 0));
     assert!(matches!(
-        state_block.stage_certified_merge_entry(&entry),
+        state_block.stage_certified_merge_entry(&entry, ConsensusMode::Permissioned),
         Err(MergeLedgerCommitError::ExecutionStageNotPristine)
     ));
 }
@@ -673,7 +679,11 @@ fn autonomous_execution_stage_rejects_preexisting_axt_replay_overlay() {
 fn autonomous_execution_pre_vote_rejects_due_start_of_block_effect() {
     let (state, entry, carrier, _) = autonomous_merge_commit_authorization_fixture(false, true);
     let mut state_block = state
-        .block_with_certified_merge_entry(carrier.header().clone(), &entry)
+        .block_with_certified_merge_entry(
+            carrier.header().clone(),
+            &entry,
+            ConsensusMode::Permissioned,
+        )
         .expect("certified execution stages before due block effects run");
     stage_exact_empty_autonomous_carrier_membership_for_pre_vote(&mut state_block);
     assert!(matches!(
@@ -686,15 +696,19 @@ fn autonomous_execution_pre_vote_rejects_due_start_of_block_effect() {
             .world
             .governance_locks
             .get("autonomous-merge-due-start-effect")
-            .is_some_and(|locks| locks.locks.is_empty()),
-        "the regression fixture must exercise an actual due start-of-block mutation"
+            .is_none(),
+        "the due start-of-block mutation must remove the now-empty indexed lock container"
     );
 }
 #[test]
 fn autonomous_execution_pre_vote_requires_exact_empty_carrier_membership() {
     let (state, entry, carrier, _) = autonomous_merge_commit_authorization_fixture(false, false);
     let mut state_block = state
-        .block_with_certified_merge_entry(carrier.header().clone(), &entry)
+        .block_with_certified_merge_entry(
+            carrier.header().clone(),
+            &entry,
+            ConsensusMode::Permissioned,
+        )
         .expect("certified execution stages before the canonical carrier row");
     assert!(matches!(
         state_block.validate_staged_merge_execution_authorization(),
@@ -706,7 +720,11 @@ fn autonomous_execution_pre_vote_requires_exact_empty_carrier_membership() {
 fn autonomous_execution_pre_vote_rejects_wrong_carrier_membership_height() {
     let (state, entry, carrier, _) = autonomous_merge_commit_authorization_fixture(false, false);
     let mut state_block = state
-        .block_with_certified_merge_entry(carrier.header().clone(), &entry)
+        .block_with_certified_merge_entry(
+            carrier.header().clone(),
+            &entry,
+            ConsensusMode::Permissioned,
+        )
         .expect("certified execution stages before the canonical carrier row");
     let wrong_height = NonZeroUsize::new(
         autonomous_carrier_transaction_height(&state_block)
@@ -728,7 +746,11 @@ fn autonomous_execution_pre_vote_rejects_wrong_carrier_membership_height() {
 fn autonomous_execution_pre_vote_rejects_non_empty_carrier_membership() {
     let (state, entry, carrier, _) = autonomous_merge_commit_authorization_fixture(false, false);
     let mut state_block = state
-        .block_with_certified_merge_entry(carrier.header().clone(), &entry)
+        .block_with_certified_merge_entry(
+            carrier.header().clone(),
+            &entry,
+            ConsensusMode::Permissioned,
+        )
         .expect("certified execution stages before the canonical carrier row");
     let carrier_height = autonomous_carrier_transaction_height(&state_block);
     let unexpected_transaction = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
@@ -747,7 +769,11 @@ fn autonomous_execution_pre_vote_rejects_non_empty_carrier_membership() {
 fn autonomous_execution_pre_vote_rejects_premature_pending_carrier_hash() {
     let (state, entry, carrier, _) = autonomous_merge_commit_authorization_fixture(false, false);
     let mut state_block = state
-        .block_with_certified_merge_entry(carrier.header().clone(), &entry)
+        .block_with_certified_merge_entry(
+            carrier.header().clone(),
+            &entry,
+            ConsensusMode::Permissioned,
+        )
         .expect("certified execution stages before the canonical carrier row");
     stage_exact_empty_autonomous_carrier_membership_for_pre_vote(&mut state_block);
     state_block.block_hashes.push(carrier.hash());
@@ -763,7 +789,11 @@ fn autonomous_execution_finality_rejects_unbound_event_surface_drift() {
         let (state, entry, carrier, _) =
             autonomous_merge_commit_authorization_fixture(false, false);
         let mut state_block = state
-            .block_with_certified_merge_entry(carrier.header().clone(), &entry)
+            .block_with_certified_merge_entry(
+                carrier.header().clone(),
+                &entry,
+                ConsensusMode::Permissioned,
+            )
             .expect("certified autonomous execution must stage on its exact carrier");
         stage_exact_empty_autonomous_carrier_membership_for_pre_vote(&mut state_block);
         let expected_event = EventBox::from(BlockEvent {
@@ -789,7 +819,11 @@ fn autonomous_execution_finality_rejects_unbound_event_surface_drift() {
     }
     let (state, entry, carrier, _) = autonomous_merge_commit_authorization_fixture(false, false);
     let mut state_block = state
-        .block_with_certified_merge_entry(carrier.header().clone(), &entry)
+        .block_with_certified_merge_entry(
+            carrier.header().clone(),
+            &entry,
+            ConsensusMode::Permissioned,
+        )
         .expect("certified autonomous execution must stage on its exact carrier");
     stage_exact_empty_autonomous_carrier_membership_for_pre_vote(&mut state_block);
     state_block
@@ -863,6 +897,7 @@ fn configured_two_lane_merge_state() -> (State, Vec<KeyPair>, Vec<KeyPair>, Sign
     kura.store_block(Arc::new(parent.clone()))
         .expect("store two-lane merge fixture carrier parent");
     commit_block_metadata_to_state(&state, &parent);
+    let parent = advance_queue_plan_fixture_to_beacon_parent(&state, parent);
     (state, validator_keypairs, commit_keypairs, parent)
 }
 #[inline(never)]
@@ -876,7 +911,7 @@ fn assert_queue_plan_native_exact_compare_and_set() {
         &state,
         routing_plan,
         &validator_keypairs,
-        1,
+        queue_plan_authority_height_for_state_test(&state),
         0x59,
     );
     assert_eq!(
@@ -962,7 +997,7 @@ fn assert_queue_plan_native_multi_route_preflight_is_atomic() {
         &state,
         routing_plan,
         &validator_keypairs,
-        1,
+        queue_plan_authority_height_for_state_test(&state),
         0x79,
     );
     let admission = crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v2(
@@ -1056,14 +1091,14 @@ fn assert_queue_plan_native_batch_rollback_is_atomic() {
         &state,
         first_plan,
         &validator_keypairs,
-        1,
+        queue_plan_authority_height_for_state_test(&state),
         0x79,
     );
     let (_, second_certificate) = queue_plan_admission_certificate_for_state_test(
         &state,
         second_plan,
         &validator_keypairs,
-        1,
+        queue_plan_authority_height_for_state_test(&state),
         0x7A,
     );
     let first_registry_key_for_order =
@@ -1224,7 +1259,7 @@ fn queue_plan_registry_absence_rejects_an_orphan_pending_obligation() {
         &state,
         routing_plan,
         &validator_keypairs,
-        1,
+        queue_plan_authority_height_for_state_test(&state),
         0x5A,
     );
     seed_exact_queue_plan_admission_state_for_test(&state, &certificate);
@@ -1273,7 +1308,7 @@ fn queue_plan_conflict_requires_pending_or_applied_owner_evidence() {
         &state,
         routing_plan.clone(),
         &validator_keypairs,
-        1,
+        queue_plan_authority_height_for_state_test(&state),
         tag,
     );
     let registry_key = State::queue_plan_admission_registry_marker_key(&binding.registry_key())
@@ -1371,7 +1406,11 @@ fn queue_plan_conflict_requires_pending_or_applied_owner_evidence() {
     );
     state.record_direct_committed_entrypoints(
         committed_memberships,
-        NonZeroUsize::new(2).expect("fixture applied height"),
+        NonZeroUsize::new(
+            usize::try_from(queue_plan_proposal_height_for_state_test(&state))
+                .expect("fixture applied height fits usize"),
+        )
+        .expect("fixture applied height is non-zero"),
     );
     assert_eq!(
         state
@@ -1437,7 +1476,7 @@ fn queue_plan_conflict_requires_pending_or_applied_owner_evidence() {
         &state,
         routing_plan.clone(),
         &validator_keypairs,
-        1,
+        queue_plan_authority_height_for_state_test(&state),
         sealed_tag,
     );
     let sealed_binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
@@ -1497,7 +1536,15 @@ fn queue_plan_conflict_requires_pending_or_applied_owner_evidence() {
     );
     state.record_direct_committed_entrypoints(
         sealed_memberships,
-        NonZeroUsize::new(3).expect("fixture sealed applied height"),
+        NonZeroUsize::new(
+            usize::try_from(
+                queue_plan_proposal_height_for_state_test(&state)
+                    .checked_add(1)
+                    .expect("fixture sealed applied height"),
+            )
+            .expect("fixture sealed applied height fits usize"),
+        )
+        .expect("fixture sealed applied height is non-zero"),
     );
     assert_eq!(
         state
@@ -1530,7 +1577,7 @@ fn queue_plan_native_pending_obligations_count_all_unique_routes_and_block_drain
         &state,
         routing_plan,
         &validator_keypairs,
-        1,
+        queue_plan_authority_height_for_state_test(&state),
         0x6A,
     );
     let obligation = queue_plan_pending_obligation_for_test(&state, &certificate);
@@ -1594,7 +1641,7 @@ fn execution_routing_reads_only_the_exact_live_pending_queue_plan_binding() {
         &state,
         routing_plan.clone(),
         &validator_keypairs,
-        1,
+        queue_plan_authority_height_for_state_test(&state),
         tag,
     );
     let entrypoint = queue_plan_entrypoint_for_state_test(&state, tag);
@@ -1603,7 +1650,7 @@ fn execution_routing_reads_only_the_exact_live_pending_queue_plan_binding() {
             &state.view(),
             &entrypoint,
             &routing_plan,
-            2,
+            queue_plan_proposal_height_for_state_test(&state),
         )
         .expect("absent execution binding lookup")
         .is_none()
@@ -1615,7 +1662,7 @@ fn execution_routing_reads_only_the_exact_live_pending_queue_plan_binding() {
             &state.view(),
             &entrypoint,
             &routing_plan,
-            2,
+            queue_plan_proposal_height_for_state_test(&state),
         )
         .expect("exact execution binding lookup"),
         Some(binding)
@@ -1633,7 +1680,7 @@ fn execution_routing_reads_only_the_exact_live_pending_queue_plan_binding() {
             &state.view(),
             &entrypoint,
             &substituted_plan,
-            2,
+            queue_plan_proposal_height_for_state_test(&state),
         )
         .is_err(),
         "the registry hash must not authenticate a substituted same-topology plan"
@@ -1648,7 +1695,7 @@ fn execution_routing_reads_only_the_exact_live_pending_queue_plan_binding() {
             &state.view(),
             &entrypoint,
             &routing_plan,
-            2,
+            queue_plan_proposal_height_for_state_test(&state),
         )
         .is_err(),
         "an old binding must not authorize a recreated lane incarnation"
@@ -1683,7 +1730,7 @@ fn native_lane_drift_reconciliation_fixture(
         &state,
         committed_plan.clone(),
         &validator_keypairs,
-        1,
+        queue_plan_authority_height_for_state_test(&state),
         tag,
     );
     if seed_binding {
@@ -1702,7 +1749,7 @@ fn block_execution_routing_preserves_authenticated_native_lane_choice() {
             &committed_plan,
             &fresh_plan,
             &state.view(),
-            2,
+            queue_plan_proposal_height_for_state_test(&state),
         )
         .expect("the exact pending binding authenticates lane-only Native-AMX drift"),
         committed_plan,
@@ -1718,7 +1765,7 @@ fn block_execution_routing_rejects_lane_drift_without_pending_binding() {
             &committed_plan,
             &fresh_plan,
             &state.view(),
-            2,
+            queue_plan_proposal_height_for_state_test(&state),
         ),
         Err(crate::queue::ExecutionRoutingReconciliationError::MissingPendingAdmission)
     ));
@@ -1736,7 +1783,7 @@ fn block_execution_routing_rejects_topology_drift_with_pending_binding() {
             &committed_plan,
             &fresh_plan,
             &state.view(),
-            2,
+            queue_plan_proposal_height_for_state_test(&state),
         ),
         Err(crate::queue::ExecutionRoutingReconciliationError::TopologyMismatch)
     ));
@@ -1755,7 +1802,7 @@ fn block_execution_routing_rejects_admitted_lane_incarnation_aba() {
             &committed_plan,
             &fresh_plan,
             &state.view(),
-            2,
+            queue_plan_proposal_height_for_state_test(&state),
         ),
         Err(crate::queue::ExecutionRoutingReconciliationError::InvalidPendingAdmission(_))
     ));
@@ -1775,7 +1822,7 @@ fn queue_plan_same_route_roles_share_one_pending_route_counter() {
         &state,
         routing_plan,
         &validator_keypairs,
-        1,
+        queue_plan_authority_height_for_state_test(&state),
         0x6B,
     );
     assert_eq!(
@@ -1846,7 +1893,7 @@ fn queue_plan_pending_obligation_authenticates_copies_before_counter_mutation() 
         &state,
         routing_plan.clone(),
         &validator_keypairs,
-        1,
+        queue_plan_authority_height_for_state_test(&state),
         tag,
     );
     let admission = crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v2(
@@ -1998,14 +2045,14 @@ fn queue_plan_route_accumulator_rejects_positive_undercount_and_overcount_atomic
             &state,
             routing_plan.clone(),
             &validator_keypairs,
-            1,
+            queue_plan_authority_height_for_state_test(&state),
             0x71,
         );
         let (second_binding, second_certificate) = queue_plan_admission_certificate_for_state_test(
             &state,
             routing_plan,
             &validator_keypairs,
-            1,
+            queue_plan_authority_height_for_state_test(&state),
             0x72,
         );
         let first_admission =
@@ -2222,7 +2269,7 @@ fn queue_plan_route_accumulator_rejects_positive_undercount_and_overcount_atomic
             &state,
             routing_plan,
             &validator_keypairs,
-            1,
+            queue_plan_authority_height_for_state_test(&state),
             0x73,
         );
         let admission =
@@ -2327,7 +2374,7 @@ fn queue_plan_pending_resolution_corrupt_route_counts_fail_without_partial_mutat
             &state,
             routing_plan,
             &validator_keypairs,
-            1,
+            queue_plan_authority_height_for_state_test(&state),
             tag,
         );
         let obligation = queue_plan_pending_obligation_for_test(&state, &certificate);
@@ -2458,14 +2505,14 @@ fn queue_plan_pending_resolution_corrupt_route_counts_fail_without_partial_mutat
         &state,
         first_plan,
         &validator_keypairs,
-        1,
+        queue_plan_authority_height_for_state_test(&state),
         0x7B,
     );
     let (second_binding, second_certificate) = queue_plan_admission_certificate_for_state_test(
         &state,
         second_plan,
         &validator_keypairs,
-        1,
+        queue_plan_authority_height_for_state_test(&state),
         0x7C,
     );
     let first_obligation = queue_plan_pending_obligation_for_test(&state, &first_certificate);
@@ -2596,7 +2643,7 @@ fn queue_plan_registry_presence_is_bounded_and_malformed_markers_fail_closed() {
         &state,
         routing_plan,
         &validator_keypairs,
-        1,
+        queue_plan_authority_height_for_state_test(&state),
         0x5A,
     );
     assert!(
@@ -2661,7 +2708,11 @@ fn queue_plan_registry_presence_is_bounded_and_malformed_markers_fail_closed() {
 }
 #[test]
 fn autonomous_execution_requires_exact_pre_carrier_queue_plan_admission() {
-    let (state, validator_keypairs, _, parent) = configured_single_lane_merge_state();
+    let (state, validator_keypairs, _, parent) = configured_single_lane_queue_plan_state();
+    let authority_height = parent.header().height().get();
+    let carrier_height = authority_height
+        .checked_add(1)
+        .expect("fixture carrier height");
     // Autonomous lane certification is checked against the exact route committee. Keep this
     // focused fixture's global signing topology identical so its source helper cannot substitute
     // a different committee.
@@ -2676,7 +2727,7 @@ fn autonomous_execution_requires_exact_pre_carrier_queue_plan_admission() {
         &state,
         routing_plan.clone(),
         &validator_keypairs,
-        1,
+        authority_height,
         tag,
     );
     binding
@@ -2698,7 +2749,7 @@ fn autonomous_execution_requires_exact_pre_carrier_queue_plan_admission() {
         &validator_keypairs,
     );
     let application_header = BlockHeader::new(
-        nonzero!(2_u64),
+        NonZeroU64::new(carrier_height).expect("fixture carrier height is non-zero"),
         Some(parent.hash()),
         None,
         None,
@@ -2748,7 +2799,7 @@ fn autonomous_execution_requires_exact_pre_carrier_queue_plan_admission() {
         version: crate::merge::MergeLedgerCandidate::VERSION,
         epoch_id: 1,
         view: 0,
-        carrier_height: 2,
+        carrier_height,
         carrier_parent_hash: parent.hash(),
         lane_catalog_hash: merge_lane_catalog_hash(&lifecycle.nexus.lane_catalog),
         active_lanes: active_lanes.clone(),
@@ -2760,12 +2811,21 @@ fn autonomous_execution_requires_exact_pre_carrier_queue_plan_admission() {
         global_state_root: crate::merge::reduce_merge_hint_roots(&[]),
     };
     state
-        .validate_merge_candidate_for_global_round(&base, &parent.header(), 0)
+        .validate_merge_candidate_for_global_round(
+            &base,
+            &parent.header(),
+            0,
+            ConsensusMode::Permissioned,
+        )
         .expect("candidate is valid with exact committed pre-carrier authority");
 }
 #[test]
 fn pending_queue_plan_admission_keeps_historical_eligibility_after_frontier_advance() {
-    let (state, validator_keypairs, _, parent) = configured_single_lane_merge_state();
+    let (state, validator_keypairs, _, parent) = configured_single_lane_queue_plan_state();
+    let authority_height = parent.header().height().get();
+    let proposal_height = authority_height
+        .checked_add(1)
+        .expect("fixture proposal height");
     let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
         LaneId::SINGLE,
         DataSpaceId::UNIVERSAL,
@@ -2774,12 +2834,12 @@ fn pending_queue_plan_admission_keeps_historical_eligibility_after_frontier_adva
         &state,
         routing_plan,
         &validator_keypairs,
-        1,
+        authority_height,
         0x63,
     );
     assert_eq!(
         state
-            .classify_pending_queue_plan_admission(&certificate, 2)
+            .classify_pending_queue_plan_admission(&certificate, proposal_height)
             .expect("certificate is classifiable at its authority frontier")
             .1,
         PendingQueuePlanAdmissionDisposition::EligibleAbsent
@@ -2790,10 +2850,19 @@ fn pending_queue_plan_admission_keeps_historical_eligibility_after_frontier_adva
         .store_block(Arc::new(successor.clone()))
         .expect("store the canonical successor before committing State metadata");
     commit_block_metadata_to_state(&state, &successor);
-    assert_eq!(state.committed_height(), 2);
+    assert_eq!(
+        state.committed_height(),
+        usize::try_from(successor.header().height().get()).expect("successor height fits usize"),
+    );
+    let next_proposal_height = successor
+        .header()
+        .height()
+        .get()
+        .checked_add(1)
+        .expect("fixture next proposal height");
     assert_eq!(
         state
-            .classify_pending_queue_plan_admission(&certificate, 3)
+            .classify_pending_queue_plan_admission(&certificate, next_proposal_height)
             .expect("historically bound certificate remains classifiable after advancement")
             .1,
         PendingQueuePlanAdmissionDisposition::EligibleAbsent,
@@ -2802,8 +2871,12 @@ fn pending_queue_plan_admission_keeps_historical_eligibility_after_frontier_adva
 }
 #[test]
 fn pending_queue_plan_admission_is_future_until_its_canonical_frontier_arrives() {
-    let (state, validator_keypairs, _, parent) = configured_single_lane_merge_state();
+    let (state, validator_keypairs, _, parent) = configured_single_lane_queue_plan_state();
     let successor = empty_global_block_after(Some(&parent));
+    let future_authority_height = successor.header().height().get();
+    let future_proposal_height = future_authority_height
+        .checked_add(1)
+        .expect("fixture future proposal height");
     // Construct an authentic certificate at H + 1, then restore the receiver to H. The durable
     // certificate can arrive before block sync, so classification must retain it without treating
     // the locally missing predecessor as stale.
@@ -2820,7 +2893,7 @@ fn pending_queue_plan_admission_is_future_until_its_canonical_frontier_arrives()
         &state,
         routing_plan,
         &validator_keypairs,
-        2,
+        future_authority_height,
         0x64,
     );
     {
@@ -2828,10 +2901,13 @@ fn pending_queue_plan_admission_is_future_until_its_canonical_frontier_arrives()
         assert_eq!(block_hashes.last().copied(), Some(parent.hash()));
         block_hashes.commit_for_tests();
     }
-    assert_eq!(state.committed_height(), 1);
+    assert_eq!(
+        state.committed_height(),
+        usize::try_from(parent.header().height().get()).expect("parent height fits usize"),
+    );
     assert_eq!(
         state
-            .classify_pending_queue_plan_admission(&certificate, 3)
+            .classify_pending_queue_plan_admission(&certificate, future_proposal_height)
             .expect("future authenticated certificate is retained, not rejected")
             .1,
         PendingQueuePlanAdmissionDisposition::Future
@@ -2843,7 +2919,7 @@ fn pending_queue_plan_admission_is_future_until_its_canonical_frontier_arrives()
     commit_block_metadata_to_state(&state, &successor);
     assert_eq!(
         state
-            .classify_pending_queue_plan_admission(&certificate, 3)
+            .classify_pending_queue_plan_admission(&certificate, future_proposal_height)
             .expect("certificate is reclassifiable after canonical catch-up")
             .1,
         PendingQueuePlanAdmissionDisposition::EligibleAbsent
@@ -2851,7 +2927,11 @@ fn pending_queue_plan_admission_is_future_until_its_canonical_frontier_arrives()
 }
 #[test]
 fn pending_queue_plan_admission_keeps_mutated_history_roster_and_incarnation_stale() {
-    let (state, validator_keypairs, _, parent) = configured_single_lane_merge_state();
+    let (state, validator_keypairs, _, parent) = configured_single_lane_queue_plan_state();
+    let authority_height = parent.header().height().get();
+    let proposal_height = authority_height
+        .checked_add(1)
+        .expect("fixture proposal height");
     let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
         LaneId::SINGLE,
         DataSpaceId::UNIVERSAL,
@@ -2868,7 +2948,7 @@ fn pending_queue_plan_admission_keeps_mutated_history_roster_and_incarnation_sta
         &state,
         routing_plan.clone(),
         &validator_keypairs,
-        1,
+        authority_height,
         0x65,
     );
     {
@@ -2878,7 +2958,7 @@ fn pending_queue_plan_admission_keeps_mutated_history_roster_and_incarnation_sta
     }
     assert_eq!(
         state
-            .classify_pending_queue_plan_admission(&predecessor_certificate, 2)
+            .classify_pending_queue_plan_admission(&predecessor_certificate, proposal_height)
             .expect("authenticated predecessor mutation is classifiable")
             .1,
         PendingQueuePlanAdmissionDisposition::Stale
@@ -2898,7 +2978,7 @@ fn pending_queue_plan_admission_keeps_mutated_history_roster_and_incarnation_sta
         &state,
         routing_plan.clone(),
         &alternate_validator_keypairs,
-        1,
+        authority_height,
         0x66,
     );
     let original_validator_ids = validator_keypairs
@@ -2915,7 +2995,7 @@ fn pending_queue_plan_admission_keeps_mutated_history_roster_and_incarnation_sta
     );
     assert_eq!(
         state
-            .classify_pending_queue_plan_admission(&roster_certificate, 2)
+            .classify_pending_queue_plan_admission(&roster_certificate, proposal_height)
             .expect("authenticated roster mutation is classifiable")
             .1,
         PendingQueuePlanAdmissionDisposition::Stale
@@ -2924,7 +3004,7 @@ fn pending_queue_plan_admission_keeps_mutated_history_roster_and_incarnation_sta
         &state,
         routing_plan,
         &validator_keypairs,
-        1,
+        authority_height,
         0x67,
     );
     let original_incarnation = state
@@ -2936,7 +3016,7 @@ fn pending_queue_plan_admission_keeps_mutated_history_roster_and_incarnation_sta
     );
     assert_eq!(
         state
-            .classify_pending_queue_plan_admission(&incarnation_certificate, 2)
+            .classify_pending_queue_plan_admission(&incarnation_certificate, proposal_height)
             .expect("authenticated incarnation mutation is classifiable")
             .1,
         PendingQueuePlanAdmissionDisposition::Stale

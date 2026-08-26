@@ -2969,10 +2969,11 @@ pub struct SoraPrivateUploadedModelExecutionReceiptV1 {
     pub input_artifact: SoraPrivateModelArtifactRefV1,
     /// Encrypted output artifact persisted outside chain state.
     pub output_artifact: SoraPrivateModelArtifactRefV1,
-    /// Exact completed generic `SoraFS` replication order proving output durability.
+    /// Exact deterministic automatic `SoraFS` replication order for output durability.
     ///
     /// The identifier is deterministically known from the output manifest digest before pin
-    /// registration, while consensus requires the referenced order to be complete before commit.
+    /// registration. Prepare binds the canonical order, while receipt consensus requires that
+    /// order to have reached its exact provider quorum before commit.
     pub output_replication_order_id: ReplicationOrderId,
     /// Runtime-blinded commitment over the canonical plaintext input envelope.
     pub input_commitment: Hash,
@@ -3002,7 +3003,7 @@ pub struct SoraPrivateUploadedModelExecutionReceiptV1 {
     /// Ledger-assigned block height at which the private execution receipt was persisted.
     ///
     /// A submission must set this to zero. Ledger execution records the exact block height so
-    /// snapshot restore can prove that the decryption authorization was still active.
+    /// snapshot restore can anchor the receipt to the committed block prefix.
     pub emitted_block_height: u64,
     /// Ledger-assigned consensus Unix-seconds epoch at which the receipt was persisted.
     ///
@@ -3021,8 +3022,8 @@ fn append_private_uploaded_model_receipt_transcript_part<T: Encode>(
 /// Derive the canonical V1 request commitment for a private uploaded-model receipt.
 ///
 /// Every field needed to resolve the exact encrypted model, input envelope, and requested output
-/// destination is bound. The ledger-assigned sequence and result-side plaintext commitment are
-/// deliberately excluded.
+/// destination is bound. All ledger-assigned coordinates and the result-side plaintext commitment
+/// are deliberately excluded.
 #[must_use]
 pub fn derive_soracloud_private_model_request_commitment_v1(
     receipt: &SoraPrivateUploadedModelExecutionReceiptV1,
@@ -3339,27 +3340,32 @@ impl SoraPrivateUploadedModelExecutionReceiptV1 {
             ));
         }
         if require_assigned_sequence
-            && (self.emitted_block_height < self.authorization_claim_block_height
-                || self.emitted_epoch < self.authorization_claim_epoch)
+            && self.emitted_block_height < self.authorization_claim_block_height
         {
             return Err(invalid_field(
                 "sora private uploaded model execution receipt",
                 "emitted_block_height",
-                "receipt persistence coordinates must not precede the authorization claim",
+                "receipt block height must not precede the authorization claim",
+            ));
+        }
+        if require_assigned_sequence && self.emitted_epoch < self.authorization_claim_epoch {
+            return Err(invalid_field(
+                "sora private uploaded model execution receipt",
+                "emitted_epoch",
+                "receipt epoch must not precede the authorization claim",
             ));
         }
         self.input_artifact.validate()?;
         self.output_artifact.validate()?;
-        if self
-            .output_replication_order_id
-            .as_bytes()
-            .iter()
-            .all(|byte| *byte == 0)
-        {
+        let expected_output_replication_order_id =
+            derive_sorafs_auto_replication_order_id_v1(
+                &self.output_artifact.sorafs_manifest_digest,
+            );
+        if self.output_replication_order_id != expected_output_replication_order_id {
             return Err(invalid_field(
                 "sora private uploaded model execution receipt",
                 "output_replication_order_id",
-                "must not be the zero replication-order identifier",
+                "must equal the deterministic automatic order for output_artifact.sorafs_manifest_digest",
             ));
         }
         self.output_recipient.validate()?;

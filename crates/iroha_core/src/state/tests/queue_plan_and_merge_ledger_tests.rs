@@ -7,7 +7,8 @@ fn pending_queue_plan_evidence_blocks_every_bound_route_and_classifies_losers() 
     let (state, validator_keypairs, _, parent) = configured_two_lane_merge_state();
     let participant_lane = LaneId::new(1);
     let_row! { routing_plan = crate::queue::RoutingPlan::native_amx( crate::queue::RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL), vec![crate::queue::RouteLeg::new( crate::queue::RoutingDecision::new(participant_lane, DataSpaceId::UNIVERSAL), crate::queue::RouteLegRole::Participant, )], ) };
-    let_row! { (binding, certificate) = queue_plan_admission_certificate_for_state_test( &state, routing_plan, &validator_keypairs, 1, 0x61, ) };
+    let_row! { (binding, certificate) = queue_plan_admission_certificate_for_state_test( &state, routing_plan, &validator_keypairs, queue_plan_authority_height_for_state_test(&state), 0x61, ) };
+    let proposal_height = binding.admission_context.proposal_height;
     let_row! { pending_hash = state .kura .persist_pending_queue_plan_admission_certificate(&certificate) .expect("persist participant-bound QueuePlan certificate") };
     let_row! { participant_incarnation = state .lane_incarnation(participant_lane) .expect("participant lane incarnation") };
     assert!(
@@ -35,7 +36,7 @@ fn pending_queue_plan_evidence_blocks_every_bound_route_and_classifies_losers() 
     let_row! { stale_hash = state .kura .persist_pending_queue_plan_admission_certificate(&certificate) .expect("persist authenticated stale QueuePlan certificate") };
     assert_eq!(
         state
-            .classify_pending_queue_plan_admission(&certificate, 2)
+            .classify_pending_queue_plan_admission(&certificate, proposal_height)
             .expect("authenticated stale evidence is classifiable")
             .1,
         PendingQueuePlanAdmissionDisposition::Stale
@@ -80,7 +81,7 @@ fn pending_queue_plan_evidence_blocks_every_bound_route_and_classifies_losers() 
     }
     assert!(
         state
-            .classify_pending_queue_plan_admission(&certificate, 2)
+            .classify_pending_queue_plan_admission(&certificate, proposal_height)
             .is_err(),
         "a conflicting registry hash without pending-or-applied owner evidence is corrupt"
     );
@@ -149,7 +150,7 @@ fn pending_queue_plan_evidence_blocks_every_bound_route_and_classifies_losers() 
     );
     assert_eq!(
         state
-            .classify_pending_queue_plan_admission(&certificate, 2)
+            .classify_pending_queue_plan_admission(&certificate, proposal_height)
             .expect("delayed incarnation-A evidence remains classifiable")
             .1,
         PendingQueuePlanAdmissionDisposition::Stale
@@ -161,7 +162,11 @@ fn pending_queue_plan_evidence_blocks_every_bound_route_and_classifies_losers() 
     let delayed_write_set_before = delayed_block.merge_execution_write_set_root();
     assert!(
         delayed_block
-            .stage_queue_plan_admissions(&[certificate.clone()], &active_lanes, 2)
+            .stage_queue_plan_admissions(
+                &[certificate.clone()],
+                &active_lanes,
+                carrier.header().height().get(),
+            )
             .is_err(),
         "the production StateBlock boundary must reject delayed incarnation-A evidence"
     );
@@ -279,7 +284,7 @@ state_test! { sync staged_merge_missing_transaction_block_mutates_nothing
     let roots_before = state.world.merge_hint_roots.view().clone();
     let global_root_before = *state.world.merge_global_state_root.view();
     let cache_before = state.merge_ledger.snapshot();
-    let_row! { mut state_block = state .block_with_certified_merge_entry(carrier.header().clone(), &entry) .expect("stage exact certified merge entry") };
+    let_row! { mut state_block = state .block_with_certified_merge_entry(carrier.header().clone(), &entry, ConsensusMode::Permissioned) .expect("stage exact certified merge entry") };
     state_block.block_hashes.push(carrier.hash());
     let_row! { error = state_block .commit() .expect_err("missing transaction membership must abort the staged merge") };
     assert!(matches!(error, TransactionsBlockError::MissingInsertBlock));
@@ -345,7 +350,7 @@ state_test! { sync stale_staged_merge_fails_before_wsv_when_admission_advances
         .kura
         .store_block_with_merge_entry(Arc::new(second_carrier.clone()), &second)
         .expect("store second exact Kura carrier");
-    let_row! { mut stale_block = state .block_with_certified_merge_entry(second_carrier.header().clone(), &second) .expect("stage epoch two before the competing admission publication") };
+    let_row! { mut stale_block = state .block_with_certified_merge_entry(second_carrier.header().clone(), &second, ConsensusMode::Permissioned) .expect("stage epoch two before the competing admission publication") };
     stale_block.block_hashes.push(second_carrier.hash());
     insert_empty_transaction_block_for_state_commit(&mut stale_block, &second_carrier);
     {
@@ -386,7 +391,7 @@ state_test! { sync same_block_merge_and_lane_replacement_preserves_history_and_p
     let_row! { canonical_incarnations = iroha_data_model::nexus::LaneLifecycleParameterV1::canonical_incarnations( &catalog, &state.lane_incarnations_snapshot(), ) .expect("current lane incarnation set is canonical") };
     let_row! { plan = iroha_data_model::nexus::LaneLifecyclePlan { additions: vec![ catalog .lanes() .iter() .find(|lane| lane.id == replaced_lane) .expect("replaceable lane is in the catalog") .clone(), ], retire: vec![replaced_lane], } };
     let_row! { payload = iroha_data_model::nexus::LaneLifecycleParameterV1::new( &catalog, &canonical_incarnations, plan, ) .expect("same-id lifecycle replacement payload is canonical") };
-    let_row! { mut state_block = state .block_with_certified_merge_entry(carrier.header().clone(), &entry) .expect("stage merge before the same-block lane replacement") };
+    let_row! { mut state_block = state .block_with_certified_merge_entry(carrier.header().clone(), &entry, ConsensusMode::Permissioned) .expect("stage merge before the same-block lane replacement") };
     {
         let mut transaction = state_block.transaction();
         transaction
@@ -450,7 +455,7 @@ state_test! { sync empty_and_zero_activation_merge_entries_fail_live_and_recover
         ),
     ] {
         let_row! { live_state = State::new_for_testing( World::default(), Kura::blank_kura_for_testing(), LiveQueryStore::start_test(), ) };
-        let_row! { live_error = live_state .validate_certified_merge_entry_for_global_order(&entry) .expect_err("malformed live merge entry must fail closed") };
+        let_row! { live_error = live_state .validate_certified_merge_entry_for_global_order(&entry, ConsensusMode::Permissioned) .expect_err("malformed live merge entry must fail closed") };
         assert!(
             live_error.to_string().contains(expected_live),
             "{label} live rejection used the wrong rule: {live_error}"
@@ -1356,7 +1361,7 @@ state_test! { sync merge_relay_candidate_signing_rejects_insufficient_nexus_fee_
     let_row! { (state, _sponsor_id, _asset_def_id, _commit_keypairs) = setup_nexus_fee_merge_state(Quantity::from(1_u32), Quantity::from(3_u32), [0x53; 32]) };
     let_row! { candidate = state .merge_entry_candidates_from_lane_relays() .into_iter() .next() .expect("merge candidate") };
     let_row! { parent = state .latest_block_header_fast() .expect("merge candidate requires a committed parent") };
-    let_row! { err = state .validate_merge_relay_candidate_for_round(&candidate, &parent, candidate.view) .expect_err("honest validators must reject an unpayable candidate before signing") };
+    let_row! { err = state .validate_merge_relay_candidate_for_round(&candidate, &parent, candidate.view, ConsensusMode::Permissioned) .expect_err("honest validators must reject an unpayable candidate before signing") };
     assert!(matches!(
         err,
         MergeLedgerCommitError::InsufficientNexusFeeBalance { .. }
@@ -1387,7 +1392,7 @@ state_test! { sync staged_fee_merge_kura_failure_publishes_no_burn_or_receipt_ca
     let_row! { parent = state .kura .get_block(NonZeroUsize::new(1).expect("non-zero parent height")) .expect("fee merge carrier parent") };
     let carrier = certified_merge_carrier_after(&parent, &entry);
     let entry_hash = entry.canonical_hash();
-    let_row! { state_block = state .block_with_certified_merge_entry(carrier.header().clone(), &entry) .expect("stage fee merge before Kura publication") };
+    let_row! { state_block = state .block_with_certified_merge_entry(carrier.header().clone(), &entry, ConsensusMode::Permissioned) .expect("stage fee merge before Kura publication") };
     state.kura.fail_next_merge_append_for_test();
     state
         .kura
@@ -1456,7 +1461,7 @@ fn staged_fee_merge_missing_transaction_membership_publishes_no_burn_or_receipt_
         .store_block_with_merge_entry(Arc::new(carrier.clone()), &entry)
         .expect("persist exact fee merge carrier");
     let_row! { receipt_marker = State::nexus_fee_receipt_marker_key(&source_id).expect("fee receipt marker key") };
-    let_row! { mut state_block = state .block_with_certified_merge_entry(carrier.header().clone(), &entry) .expect("stage exact fee merge carrier") };
+    let_row! { mut state_block = state .block_with_certified_merge_entry(carrier.header().clone(), &entry, ConsensusMode::Permissioned) .expect("stage exact fee merge carrier") };
     state_block.block_hashes.push(carrier.hash());
     let_row! { error = state_block .commit() .expect_err("missing transaction membership must abort fee merge publication") };
     assert!(matches!(error, TransactionsBlockError::MissingInsertBlock));
@@ -1527,7 +1532,7 @@ state_test! { sync exact_merge_carrier_replay_burns_settlement_once
         Quantity::from(10_u32)
     );
     let reference = iroha_data_model::block::CertifiedMergeLedgerReference::new(&entry);
-    let_row! { mut state_block = state .block_with_certified_merge_reference(carrier.as_ref().header().clone(), &reference) .expect("exact durable carrier reference stages settlement") };
+    let_row! { mut state_block = state .block_with_certified_merge_reference(carrier.as_ref().header().clone(), &reference, ConsensusMode::Permissioned) .expect("exact durable carrier reference stages settlement") };
     let _ = state_block.apply_without_execution(&carrier, Vec::new());
     state_block
         .commit()
@@ -1667,7 +1672,7 @@ state_test! { sync live_merge_rejects_historical_incarnation_reuse_beyond_rollin
         "the rolling query cache intentionally forgot the first incarnation"
     );
     state.merge_admission.write().binding_history = history;
-    let_row! { live_err = state .validate_certified_merge_entry_for_global_order(&replay) .expect_err("live admission must consult the full binding history") };
+    let_row! { live_err = state .validate_certified_merge_entry_for_global_order(&replay, ConsensusMode::Permissioned) .expect_err("live admission must consult the full binding history") };
     assert_eq!(live_err.to_string(), shared_err.to_string());
     assert!(matches!(
         live_err,

@@ -20,8 +20,10 @@ import org.bouncycastle.crypto.params.X25519PublicKeyParameters;
 import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.address.AccountIdLiteral;
 import org.hyperledger.iroha.android.address.PublicKeyCodec;
+import org.hyperledger.iroha.android.crypto.Blake3;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
 import org.hyperledger.iroha.android.model.NetworkId;
+import org.hyperledger.iroha.android.numeric.NumericV1;
 import org.hyperledger.iroha.android.util.HashLiteral;
 
 /** Shared invariants for the Soracloud private uploaded-model client surface. */
@@ -37,6 +39,9 @@ final class SoracloudPrivateModelValidation {
   static final String X25519_HKDF_SHA256 = "X25519HkdfSha256";
   static final String AES_256_GCM = "Aes256Gcm";
   private static final int MAX_JSON_DEPTH = 128;
+  private static final int AUTO_REPLICATION_ORDER_NAMESPACE_TAG = 0x80;
+  private static final byte[] AUTO_REPLICATION_ORDER_DOMAIN_V1 =
+      "sorafs:auto-replication-order:v1".getBytes(StandardCharsets.US_ASCII);
 
   private static final String ZERO_PREHASH_SENTINEL =
       "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E";
@@ -205,6 +210,41 @@ final class SoracloudPrivateModelValidation {
     return canonical;
   }
 
+  static byte[] requireSorafsAutoReplicationOrderIdV1(
+      final byte[] value, final byte[] outputManifestDigest, final String field) {
+    if (value == null || value.length != 32) {
+      throw new IllegalArgumentException(field + " must contain exactly 32 bytes");
+    }
+    final byte[] expected = deriveSorafsAutoReplicationOrderIdV1(outputManifestDigest);
+    if (!Arrays.equals(value, expected)) {
+      throw new IllegalArgumentException(
+          field
+              + " must equal the tagged automatic replication-order ID derived from "
+              + "outputArtifact.sorafsManifestDigest");
+    }
+    return value.clone();
+  }
+
+  static byte[] deriveSorafsAutoReplicationOrderIdV1(final byte[] outputManifestDigest) {
+    if (outputManifestDigest == null || outputManifestDigest.length != 32) {
+      throw new IllegalArgumentException(
+          "outputManifestDigest must contain exactly 32 bytes");
+    }
+    final byte[] preimage =
+        Arrays.copyOf(
+            AUTO_REPLICATION_ORDER_DOMAIN_V1,
+            AUTO_REPLICATION_ORDER_DOMAIN_V1.length + outputManifestDigest.length);
+    System.arraycopy(
+        outputManifestDigest,
+        0,
+        preimage,
+        AUTO_REPLICATION_ORDER_DOMAIN_V1.length,
+        outputManifestDigest.length);
+    final byte[] orderId = Blake3.hash(preimage);
+    orderId[0] = (byte) (orderId[0] | AUTO_REPLICATION_ORDER_NAMESPACE_TAG);
+    return orderId;
+  }
+
   static void requireValidatorIdentity(
       final String validatorAccountId, final String peerId) {
     final String canonicalAccount =
@@ -289,35 +329,430 @@ final class SoracloudPrivateModelValidation {
     }
   }
 
-  static String requireSubmissionStatus(final String value, final String field) {
-    final String canonical = requireCanonicalString(value, field);
-    if (!"submitted".equals(canonical) && !"committed".equals(canonical)) {
-      throw new IllegalArgumentException(field + " must equal submitted or committed");
-    }
-    return canonical;
-  }
-
   static Map<String, Object> snapshotUploadedModelStatus(
       final Map<String, Object> status) {
     Objects.requireNonNull(status, "status");
-    if (status.size() != 3
-        || !status.containsKey("schema_version")
-        || !status.containsKey("bundle")
-        || !status.containsKey("artifact")) {
-      throw new IllegalArgumentException(
-          "status must contain exactly schema_version, bundle, and artifact");
-    }
-    requireSchemaVersion(
-        JsonNumbers.asLong(status.get("schema_version"), "status.schema_version"),
-        "status.schema_version");
-    if (!(status.get("bundle") instanceof Map<?, ?>)) {
-      throw new IllegalArgumentException("status.bundle must be a JSON object");
-    }
-    final Object artifact = status.get("artifact");
-    if (artifact != null && !(artifact instanceof Map<?, ?>)) {
-      throw new IllegalArgumentException("status.artifact must be null or a JSON object");
-    }
+    validateUploadedModelStatus(status, "status");
     return immutableJsonObject(status, "status", new IdentityHashMap<>(), 0);
+  }
+
+  static void validateUploadedModelStatus(
+      final Map<String, Object> status, final String path) {
+    requireExactFields(status, path, "schema_version", "bundle", "artifact");
+    requireSchemaVersionOne(status.get("schema_version"), path + ".schema_version");
+    final Map<String, Object> bundle =
+        exactObject(
+            status.get("bundle"),
+            path + ".bundle",
+            "schema_version",
+            "service_name",
+            "model_id",
+            "weight_version",
+            "family",
+            "modalities",
+            "plaintext_root",
+            "runtime_format",
+            "bundle_root",
+            "sorafs_manifest_digest",
+            "chunk_count",
+            "plaintext_bytes",
+            "ciphertext_bytes",
+            "chunk_manifest_root",
+            "upload_recipient",
+            "wrapped_bundle_key",
+            "pricing_policy",
+            "decryption_policy_ref");
+    validateUploadedModelBundle(bundle, path + ".bundle");
+    if (status.get("artifact") != null) {
+      validateUploadedModelArtifactStatus(
+          exactObject(
+              status.get("artifact"),
+              path + ".artifact",
+              "service_name",
+              "model_name",
+              "artifact_id",
+              "training_job_id",
+              "weight_version",
+              "weight_artifact_hash",
+              "dataset_ref",
+              "training_config_hash",
+              "reproducibility_hash",
+              "provenance_attestation_hash",
+              "registered_sequence",
+              "consumed_by_version",
+              "chunk_manifest_root"),
+          path + ".artifact");
+    }
+  }
+
+  static void requireUploadedModelStatusMatchesReceipt(
+      final Map<String, Object> status,
+      final SoracloudPrivateUploadedModelExecutionReceipt receipt,
+      final String path) {
+    @SuppressWarnings("unchecked")
+    final Map<String, Object> bundle = (Map<String, Object>) status.get("bundle");
+    requireEqual(bundle.get("service_name"), receipt.serviceName(), path + ".bundle.service_name");
+    requireEqual(bundle.get("model_id"), receipt.modelId(), path + ".bundle.model_id");
+    requireEqual(
+        bundle.get("weight_version"), receipt.weightVersion(), path + ".bundle.weight_version");
+    requireEqual(
+        bundle.get("bundle_root"), receipt.modelBundleRoot(), path + ".bundle.bundle_root");
+    requireEqual(
+        bundle.get("decryption_policy_ref"),
+        receipt.policyId(),
+        path + ".bundle.decryption_policy_ref");
+    if (!Arrays.equals(
+        exactManifestDigest(
+            bundle.get("sorafs_manifest_digest"), path + ".bundle.sorafs_manifest_digest"),
+        receipt.modelManifestDigest())) {
+      throw new IllegalArgumentException(
+          path + ".bundle.sorafs_manifest_digest must match receipt.modelManifestDigest");
+    }
+    if (status.get("artifact") != null) {
+      @SuppressWarnings("unchecked")
+      final Map<String, Object> artifact = (Map<String, Object>) status.get("artifact");
+      requireEqual(
+          artifact.get("service_name"), receipt.serviceName(), path + ".artifact.service_name");
+      requireEqual(
+          artifact.get("weight_version"),
+          receipt.weightVersion(),
+          path + ".artifact.weight_version");
+      requireEqual(
+          artifact.get("chunk_manifest_root"),
+          bundle.get("chunk_manifest_root"),
+          path + ".artifact.chunk_manifest_root");
+    }
+  }
+
+  private static void validateUploadedModelBundle(
+      final Map<String, Object> bundle, final String path) {
+    requireSchemaVersionOne(bundle.get("schema_version"), path + ".schema_version");
+    requireCanonicalName(
+        exactString(bundle.get("service_name"), path + ".service_name"),
+        path + ".service_name");
+    requireIdentifier(
+        exactString(bundle.get("model_id"), path + ".model_id"), path + ".model_id");
+    requireIdentifier(
+        exactString(bundle.get("weight_version"), path + ".weight_version"),
+        path + ".weight_version");
+    requireCanonicalString(exactString(bundle.get("family"), path + ".family"), path + ".family");
+    final List<Object> modalities = exactArray(bundle.get("modalities"), path + ".modalities");
+    if (modalities.isEmpty()) {
+      throw new IllegalArgumentException(path + ".modalities must not be empty");
+    }
+    final List<String> canonicalModalities = new ArrayList<>();
+    for (int index = 0; index < modalities.size(); index++) {
+      final String modality =
+          requireCanonicalString(
+              exactString(modalities.get(index), path + ".modalities[" + index + "]"),
+              path + ".modalities[" + index + "]");
+      if (canonicalModalities.contains(modality)) {
+        throw new IllegalArgumentException(path + ".modalities entries must be unique");
+      }
+      canonicalModalities.add(modality);
+    }
+    exactHash(bundle.get("plaintext_root"), path + ".plaintext_root");
+    exactUnitVariant(
+        bundle.get("runtime_format"),
+        "runtime_format",
+        "DeterministicQuantizedCpuV1",
+        path + ".runtime_format");
+    exactHash(bundle.get("bundle_root"), path + ".bundle_root");
+    exactManifestDigest(bundle.get("sorafs_manifest_digest"), path + ".sorafs_manifest_digest");
+    exactUnsigned(
+        bundle.get("chunk_count"), path + ".chunk_count", BigInteger.valueOf(U32_MAX), true);
+    exactUnsigned(bundle.get("plaintext_bytes"), path + ".plaintext_bytes", U64_MAX, true);
+    exactUnsigned(bundle.get("ciphertext_bytes"), path + ".ciphertext_bytes", U64_MAX, true);
+    exactHash(bundle.get("chunk_manifest_root"), path + ".chunk_manifest_root");
+    final Map<String, Object> recipient =
+        exactObject(
+            bundle.get("upload_recipient"),
+            path + ".upload_recipient",
+            "schema_version",
+            "key_id",
+            "key_version",
+            "kem",
+            "aead",
+            "public_key_bytes",
+            "public_key_fingerprint");
+    validateUploadedModelRecipient(recipient, path + ".upload_recipient");
+    validateUploadedModelWrappedKey(
+        exactObject(
+            bundle.get("wrapped_bundle_key"),
+            path + ".wrapped_bundle_key",
+            "schema_version",
+            "recipient_key_id",
+            "recipient_key_version",
+            "kem",
+            "aead",
+            "ephemeral_public_key",
+            "nonce",
+            "wrapped_key_ciphertext",
+            "ciphertext_hash",
+            "aad_digest"),
+        recipient,
+        path + ".wrapped_bundle_key");
+    final Map<String, Object> pricing =
+        exactObject(bundle.get("pricing_policy"), path + ".pricing_policy", "storage_price");
+    final String storagePrice =
+        exactString(pricing.get("storage_price"), path + ".pricing_policy.storage_price");
+    try {
+      NumericV1.QuantityValue.parseCanonical(storagePrice);
+    } catch (final IllegalArgumentException error) {
+      throw new IllegalArgumentException(
+          path + ".pricing_policy.storage_price must be a canonical quantity", error);
+    }
+    requireCanonicalString(
+        exactString(bundle.get("decryption_policy_ref"), path + ".decryption_policy_ref"),
+        path + ".decryption_policy_ref");
+  }
+
+  private static void validateUploadedModelArtifactStatus(
+      final Map<String, Object> artifact, final String path) {
+    requireCanonicalName(
+        exactString(artifact.get("service_name"), path + ".service_name"),
+        path + ".service_name");
+    for (final String field :
+        Arrays.asList("model_name", "artifact_id", "training_job_id", "dataset_ref")) {
+      requireCanonicalString(
+          exactString(artifact.get(field), path + "." + field), path + "." + field);
+    }
+    final String weightVersion =
+        optionalString(artifact.get("weight_version"), path + ".weight_version");
+    if (weightVersion != null) {
+      requireIdentifier(weightVersion, path + ".weight_version");
+    }
+    for (final String field :
+        Arrays.asList(
+            "weight_artifact_hash",
+            "training_config_hash",
+            "reproducibility_hash",
+            "provenance_attestation_hash")) {
+      exactHash(artifact.get(field), path + "." + field);
+    }
+    exactUnsigned(
+        artifact.get("registered_sequence"), path + ".registered_sequence", U64_MAX, true);
+    final String consumed =
+        optionalString(artifact.get("consumed_by_version"), path + ".consumed_by_version");
+    if (consumed != null) {
+      requireCanonicalString(consumed, path + ".consumed_by_version");
+    }
+    if (artifact.get("chunk_manifest_root") != null) {
+      exactHash(artifact.get("chunk_manifest_root"), path + ".chunk_manifest_root");
+    }
+  }
+
+  private static void validateUploadedModelRecipient(
+      final Map<String, Object> recipient, final String path) {
+    final long schemaVersion =
+        exactUnsigned(
+                recipient.get("schema_version"),
+                path + ".schema_version",
+                BigInteger.ONE,
+                true)
+            .longValue();
+    final String keyId = exactString(recipient.get("key_id"), path + ".key_id");
+    final long keyVersion =
+        exactUnsigned(
+                recipient.get("key_version"),
+                path + ".key_version",
+                BigInteger.valueOf(U32_MAX),
+                true)
+            .longValue();
+    final String kem =
+        exactUnitVariant(recipient.get("kem"), "kem", X25519_HKDF_SHA256, path + ".kem");
+    final String aead =
+        exactUnitVariant(recipient.get("aead"), "aead", AES_256_GCM, path + ".aead");
+    new SoracloudUploadedModelEncryptionRecipient(
+        schemaVersion,
+        keyId,
+        keyVersion,
+        kem,
+        aead,
+        exactString(recipient.get("public_key_bytes"), path + ".public_key_bytes"),
+        exactHash(recipient.get("public_key_fingerprint"), path + ".public_key_fingerprint"));
+  }
+
+  private static void validateUploadedModelWrappedKey(
+      final Map<String, Object> wrappedKey,
+      final Map<String, Object> recipient,
+      final String path) {
+    requireSchemaVersionOne(wrappedKey.get("schema_version"), path + ".schema_version");
+    final String keyId =
+        requireCanonicalString(
+            exactString(wrappedKey.get("recipient_key_id"), path + ".recipient_key_id"),
+            path + ".recipient_key_id");
+    final BigInteger keyVersion =
+        exactUnsigned(
+            wrappedKey.get("recipient_key_version"),
+            path + ".recipient_key_version",
+            BigInteger.valueOf(U32_MAX),
+            true);
+    exactUnitVariant(wrappedKey.get("kem"), "kem", X25519_HKDF_SHA256, path + ".kem");
+    exactUnitVariant(wrappedKey.get("aead"), "aead", AES_256_GCM, path + ".aead");
+    decodeCanonicalX25519PublicKey(
+        exactString(wrappedKey.get("ephemeral_public_key"), path + ".ephemeral_public_key"),
+        path + ".ephemeral_public_key");
+    canonicalBase64(wrappedKey.get("nonce"), path + ".nonce", 1, 256);
+    final byte[] ciphertext =
+        canonicalBase64(
+            wrappedKey.get("wrapped_key_ciphertext"),
+            path + ".wrapped_key_ciphertext",
+            1,
+            4096);
+    final String ciphertextHash =
+        exactHash(wrappedKey.get("ciphertext_hash"), path + ".ciphertext_hash");
+    if (!HashLiteral.canonicalize(IrohaHash.prehash(ciphertext)).equals(ciphertextHash)) {
+      throw new IllegalArgumentException(
+          path + ".ciphertext_hash must match wrapped_key_ciphertext");
+    }
+    exactHash(wrappedKey.get("aad_digest"), path + ".aad_digest");
+    if (!keyId.equals(recipient.get("key_id"))
+        || !keyVersion.equals(
+            exactUnsigned(
+                recipient.get("key_version"),
+                path + ".recipient_key_version",
+                BigInteger.valueOf(U32_MAX),
+                true))) {
+      throw new IllegalArgumentException(path + " recipient key must match upload_recipient");
+    }
+  }
+
+  @SuppressWarnings("unchecked")
+  private static Map<String, Object> exactObject(
+      final Object value, final String path, final String... fields) {
+    if (!(value instanceof Map<?, ?>)) {
+      throw new IllegalArgumentException(path + " must be a JSON object");
+    }
+    final Map<?, ?> raw = (Map<?, ?>) value;
+    for (final Object key : raw.keySet()) {
+      if (!(key instanceof String)) {
+        throw new IllegalArgumentException(path + " keys must be strings");
+      }
+    }
+    final Map<String, Object> object = (Map<String, Object>) value;
+    requireExactFields(object, path, fields);
+    return object;
+  }
+
+  private static void requireExactFields(
+      final Map<String, Object> value, final String path, final String... fields) {
+    if (value.size() != fields.length) {
+      throw new IllegalArgumentException(path + " must contain the exact V1 field set");
+    }
+    for (final String field : fields) {
+      if (!value.containsKey(field)) {
+        throw new IllegalArgumentException(path + "." + field + " is missing required field");
+      }
+    }
+  }
+
+  @SuppressWarnings("unchecked")
+  private static List<Object> exactArray(final Object value, final String path) {
+    if (!(value instanceof List<?>)) {
+      throw new IllegalArgumentException(path + " must be a JSON array");
+    }
+    return (List<Object>) value;
+  }
+
+  private static String exactString(final Object value, final String path) {
+    if (!(value instanceof String)) {
+      throw new IllegalArgumentException(path + " must be a string");
+    }
+    return (String) value;
+  }
+
+  private static String optionalString(final Object value, final String path) {
+    return value == null ? null : exactString(value, path);
+  }
+
+  private static void requireSchemaVersionOne(final Object value, final String path) {
+    if (!BigInteger.ONE.equals(exactUnsigned(value, path, BigInteger.ONE, true))) {
+      throw new IllegalArgumentException(path + " must equal 1");
+    }
+  }
+
+  private static BigInteger exactUnsigned(
+      final Object value, final String path, final BigInteger maximum, final boolean positive) {
+    final BigInteger parsed;
+    if (value instanceof BigInteger) {
+      parsed = (BigInteger) value;
+    } else if (value instanceof Byte
+        || value instanceof Short
+        || value instanceof Integer
+        || value instanceof Long) {
+      parsed = BigInteger.valueOf(((Number) value).longValue());
+    } else {
+      throw new IllegalArgumentException(path + " must be an integer");
+    }
+    if (parsed.signum() < (positive ? 1 : 0) || parsed.compareTo(maximum) > 0) {
+      throw new IllegalArgumentException(path + " is outside its unsigned range");
+    }
+    return parsed;
+  }
+
+  private static byte[] exactManifestDigest(final Object value, final String path) {
+    final List<Object> values = exactArray(value, path);
+    if (values.size() != 32) {
+      throw new IllegalArgumentException(path + " must contain exactly 32 bytes");
+    }
+    final byte[] digest = new byte[32];
+    for (int index = 0; index < digest.length; index++) {
+      digest[index] =
+          exactUnsigned(
+                  values.get(index),
+                  path + "[" + index + "]",
+                  BigInteger.valueOf(255L),
+                  false)
+              .byteValue();
+    }
+    return digest;
+  }
+
+  private static String exactHash(final Object value, final String path) {
+    return requireSoracloudHash(exactString(value, path), path);
+  }
+
+  private static String exactUnitVariant(
+      final Object value,
+      final String tag,
+      final String expected,
+      final String path) {
+    final Map<String, Object> variant = exactObject(value, path, tag, "value");
+    if (!expected.equals(exactString(variant.get(tag), path + "." + tag))) {
+      throw new IllegalArgumentException(path + "." + tag + " must equal " + expected);
+    }
+    if (variant.get("value") != null) {
+      throw new IllegalArgumentException(path + ".value must be null");
+    }
+    return expected;
+  }
+
+  private static byte[] canonicalBase64(
+      final Object value,
+      final String path,
+      final int minimumBytes,
+      final int maximumBytes) {
+    final String encoded = exactString(value, path);
+    final byte[] decoded;
+    try {
+      decoded = Base64.getDecoder().decode(encoded);
+    } catch (final IllegalArgumentException error) {
+      throw new IllegalArgumentException(path + " must be canonical base64", error);
+    }
+    if (decoded.length < minimumBytes
+        || decoded.length > maximumBytes
+        || !Base64.getEncoder().encodeToString(decoded).equals(encoded)) {
+      throw new IllegalArgumentException(path + " must be canonical base64 within its V1 bounds");
+    }
+    return decoded;
+  }
+
+  private static void requireEqual(
+      final Object actual, final Object expected, final String path) {
+    if (!Objects.equals(actual, expected)) {
+      throw new IllegalArgumentException(path + " must match receipt");
+    }
   }
 
   private static Map<String, Object> immutableJsonObject(
@@ -396,31 +831,31 @@ final class SoracloudPrivateModelValidation {
   }
 
   static void requireExecuteResponseState(
-      final String submissionStatus,
+      final SoracloudPrivateUploadedModelSubmissionPhase submissionPhase,
       final String transactionHash,
       final SoracloudPrivateUploadedModelExecutionReceipt receipt,
       final SoracloudPrivateModelArtifactRef outputArtifact) {
-    final String canonicalStatus = requireSubmissionStatus(submissionStatus, "submissionStatus");
+    final SoracloudPrivateUploadedModelSubmissionPhase canonicalPhase =
+        Objects.requireNonNull(submissionPhase, "submissionPhase");
     Objects.requireNonNull(receipt, "receipt");
     Objects.requireNonNull(outputArtifact, "outputArtifact");
-    if ("committed".equals(canonicalStatus) && transactionHash != null) {
-      throw new IllegalArgumentException("transactionHash must be null for committed");
+    if (canonicalPhase.requiresTransactionHash() != (transactionHash != null)) {
+      throw new IllegalArgumentException(
+          canonicalPhase.requiresTransactionHash()
+              ? "transactionHash is required for " + canonicalPhase.wireValue()
+              : "transactionHash must be null for " + canonicalPhase.wireValue());
     }
-    if ("submitted".equals(canonicalStatus)
-        && (receipt.authorizationClaimBlockHeight().signum() != 0
-            || receipt.authorizationClaimEpoch().signum() != 0
-            || receipt.emittedSequence().signum() != 0
-            || receipt.emittedBlockHeight().signum() != 0
-            || receipt.emittedEpoch().signum() != 0)) {
-      throw new IllegalArgumentException("submitted receipt must use zero ledger coordinates");
-    }
-    if ("committed".equals(canonicalStatus)
-        && (receipt.authorizationClaimBlockHeight().signum() <= 0
-            || receipt.authorizationClaimEpoch().signum() <= 0
-            || receipt.emittedSequence().signum() <= 0
-            || receipt.emittedBlockHeight().signum() <= 0
-            || receipt.emittedEpoch().signum() <= 0)) {
-      throw new IllegalArgumentException("committed receipt must use positive ledger coordinates");
+    final boolean receiptIsAssigned =
+        receipt.authorizationClaimBlockHeight().signum() > 0
+            && receipt.authorizationClaimEpoch().signum() > 0
+            && receipt.emittedSequence().signum() > 0
+            && receipt.emittedBlockHeight().signum() > 0
+            && receipt.emittedEpoch().signum() > 0;
+    if (canonicalPhase.requiresAssignedReceipt() != receiptIsAssigned) {
+      throw new IllegalArgumentException(
+          canonicalPhase.requiresAssignedReceipt()
+              ? "committed receipt must use positive ledger coordinates"
+              : canonicalPhase.wireValue() + " receipt must use zero ledger coordinates");
     }
     if (!sameArtifact(outputArtifact, receipt.outputArtifact())) {
       throw new IllegalArgumentException("outputArtifact must match receipt.outputArtifact");
