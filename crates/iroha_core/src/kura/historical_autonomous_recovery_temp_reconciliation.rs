@@ -176,7 +176,7 @@ impl Kura {
                 "historical recovery publication artifact is empty or oversized",
             ));
         }
-        let name = path.file_name().ok_or_else(|| {
+        let _name = path.file_name().ok_or_else(|| {
             Self::invalid_historical_autonomous_recovery(
                 path.to_path_buf(),
                 "historical recovery publication artifact has no direct entry name",
@@ -186,7 +186,7 @@ impl Kura {
         let mut file = std::fs::File::from(
             rustix::fs::openat(
                 &immediate.file,
-                name,
+                _name,
                 rustix::fs::OFlags::RDONLY
                     | rustix::fs::OFlags::NOFOLLOW
                     | rustix::fs::OFlags::CLOEXEC,
@@ -656,7 +656,7 @@ impl Kura {
                 "historical recovery publication removal escapes its bound directory",
             ));
         }
-        let name = artifact.path.file_name().ok_or_else(|| {
+        let _name = artifact.path.file_name().ok_or_else(|| {
             Self::invalid_historical_autonomous_recovery(
                 artifact.path.clone(),
                 "historical recovery publication removal target has no direct name",
@@ -677,10 +677,13 @@ impl Kura {
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt as _;
-            let current =
-                rustix::fs::statat(&immediate.file, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
-                    .map_err(std::io::Error::from)
-                    .map_err(|error| Error::IO(error, artifact.path.clone()))?;
+            let current = rustix::fs::statat(
+                &immediate.file,
+                _name,
+                rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+            )
+            .map_err(std::io::Error::from)
+            .map_err(|error| Error::IO(error, artifact.path.clone()))?;
             if rustix::fs::FileType::from_raw_mode(current.st_mode)
                 != rustix::fs::FileType::RegularFile
                 || current.st_dev as u64 != opened.dev()
@@ -692,7 +695,7 @@ impl Kura {
                     "historical recovery publication artifact changed before descriptor-relative removal",
                 ));
             }
-            rustix::fs::unlinkat(&immediate.file, name, rustix::fs::AtFlags::empty())
+            rustix::fs::unlinkat(&immediate.file, _name, rustix::fs::AtFlags::empty())
                 .map_err(std::io::Error::from)
                 .map_err(|error| Error::IO(error, artifact.path.clone()))?;
         }

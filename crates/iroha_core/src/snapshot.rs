@@ -3797,7 +3797,10 @@ fn publish_immutable_snapshot_generation(
     match std::fs::symlink_metadata(&generations_dir) {
         Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            #[cfg(unix)]
             let mut builder = std::fs::DirBuilder::new();
+            #[cfg(not(unix))]
+            let builder = std::fs::DirBuilder::new();
             #[cfg(unix)]
             {
                 use std::os::unix::fs::DirBuilderExt;

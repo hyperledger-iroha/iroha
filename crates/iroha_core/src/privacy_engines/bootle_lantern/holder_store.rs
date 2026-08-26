@@ -34,12 +34,14 @@ use iroha_data_model::privacy::{
 };
 use rand_core_06::{CryptoRng, OsRng, RngCore};
 use sha2::{Digest as _, Sha256};
+#[cfg(unix)]
+use std::io::Read as _;
 #[cfg(test)]
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
-    io::{Read, Write},
+    io::Write,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock},
 };
@@ -2746,7 +2748,10 @@ fn ensure_holder_root_v1(root: &Path) -> Result<(), BootleLanternHolderStoreErro
             if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
                 return Err(BootleLanternHolderStoreErrorV1::Corrupt);
             }
+            #[cfg(unix)]
             let mut builder = fs::DirBuilder::new();
+            #[cfg(not(unix))]
+            let builder = fs::DirBuilder::new();
             #[cfg(unix)]
             {
                 use std::os::unix::fs::DirBuilderExt as _;
@@ -2775,7 +2780,10 @@ fn ensure_private_subdirectory_v1(
     match fs::symlink_metadata(path) {
         Ok(_) => validate_private_directory_v1(path),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            #[cfg(unix)]
             let mut builder = fs::DirBuilder::new();
+            #[cfg(not(unix))]
+            let builder = fs::DirBuilder::new();
             #[cfg(unix)]
             {
                 use std::os::unix::fs::DirBuilderExt as _;

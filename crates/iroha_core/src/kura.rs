@@ -6410,7 +6410,7 @@ impl Kura {
                 path.to_path_buf(),
             ));
         }
-        let file_name = path.file_name().ok_or_else(|| {
+        let _file_name = path.file_name().ok_or_else(|| {
             Error::IO(
                 std::io::Error::new(
                     ErrorKind::InvalidInput,
@@ -6423,7 +6423,7 @@ impl Kura {
         let file = std::fs::File::from(
             rustix::fs::openat(
                 &immediate.file,
-                file_name,
+                _file_name,
                 rustix::fs::OFlags::RDWR
                     | rustix::fs::OFlags::NOFOLLOW
                     | rustix::fs::OFlags::CLOEXEC,
@@ -6521,7 +6521,7 @@ impl Kura {
         path: &Path,
         create: bool,
         append: bool,
-        namespace: Option<&BoundProgressNamespace>,
+        _namespace: Option<&BoundProgressNamespace>,
     ) -> std::io::Result<std::fs::File> {
         let before = match secure_file_metadata::from_path(path) {
             Ok(metadata) => Some(metadata),
@@ -6548,7 +6548,7 @@ impl Kura {
                 std::io::Error::new(ErrorKind::InvalidInput, "sidecar path has no file name")
             })?;
             let owned_parent;
-            let parent = if let Some(namespace) = namespace {
+            let parent = if let Some(namespace) = _namespace {
                 let immediate = namespace.directories.first().ok_or_else(|| {
                     std::io::Error::new(
                         ErrorKind::InvalidData,
@@ -6691,14 +6691,14 @@ impl Kura {
                 "progress temp is outside its bound namespace",
             ));
         }
-        let name = path.file_name().ok_or_else(|| {
+        let _name = path.file_name().ok_or_else(|| {
             std::io::Error::new(ErrorKind::InvalidInput, "progress temp has no entry name")
         })?;
         #[cfg(unix)]
         {
             let entry = match rustix::fs::statat(
                 &immediate.file,
-                name,
+                _name,
                 rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
             ) {
                 Ok(entry) => entry,
@@ -6714,7 +6714,7 @@ impl Kura {
                     "progress temp is not a direct single-link regular file",
                 ));
             }
-            rustix::fs::unlinkat(&immediate.file, name, rustix::fs::AtFlags::empty())
+            rustix::fs::unlinkat(&immediate.file, _name, rustix::fs::AtFlags::empty())
                 .map_err(std::io::Error::from)?;
             return Ok(());
         }
@@ -6755,7 +6755,7 @@ impl Kura {
                 "progress file is outside its bound namespace",
             ));
         }
-        let name = path.file_name().ok_or_else(|| {
+        let _name = path.file_name().ok_or_else(|| {
             std::io::Error::new(ErrorKind::InvalidInput, "progress file has no entry name")
         })?;
         let expected_metadata = secure_file_metadata::from_file(expected)?;
@@ -6768,9 +6768,12 @@ impl Kura {
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt as _;
-            let entry =
-                rustix::fs::statat(&immediate.file, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
-                    .map_err(std::io::Error::from)?;
+            let entry = rustix::fs::statat(
+                &immediate.file,
+                _name,
+                rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+            )
+            .map_err(std::io::Error::from)?;
             if rustix::fs::FileType::from_raw_mode(entry.st_mode)
                 != rustix::fs::FileType::RegularFile
                 || expected_metadata.nlink() != 1
@@ -6783,7 +6786,7 @@ impl Kura {
                     "progress file changed before exact-object removal",
                 ));
             }
-            rustix::fs::unlinkat(&immediate.file, name, rustix::fs::AtFlags::empty())
+            rustix::fs::unlinkat(&immediate.file, _name, rustix::fs::AtFlags::empty())
                 .map_err(std::io::Error::from)?;
             return Ok(());
         }
@@ -6819,7 +6822,7 @@ impl Kura {
                 "progress temp is outside its bound namespace",
             ));
         }
-        let name = path.file_name().ok_or_else(|| {
+        let _name = path.file_name().ok_or_else(|| {
             std::io::Error::new(ErrorKind::InvalidInput, "progress temp has no entry name")
         })?;
         #[cfg(unix)]
@@ -6827,7 +6830,7 @@ impl Kura {
             let file = std::fs::File::from(
                 rustix::fs::openat(
                     &immediate.file,
-                    name,
+                    _name,
                     rustix::fs::OFlags::RDWR
                         | rustix::fs::OFlags::CREATE
                         | rustix::fs::OFlags::EXCL
@@ -6838,9 +6841,12 @@ impl Kura {
                 .map_err(std::io::Error::from)?,
             );
             let metadata = secure_file_metadata::from_file(&file)?;
-            let entry =
-                rustix::fs::statat(&immediate.file, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
-                    .map_err(std::io::Error::from)?;
+            let entry = rustix::fs::statat(
+                &immediate.file,
+                _name,
+                rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+            )
+            .map_err(std::io::Error::from)?;
             use std::os::unix::fs::MetadataExt as _;
             if !metadata.is_file()
                 || metadata.nlink() != 1
@@ -6886,7 +6892,7 @@ impl Kura {
             published: false,
             source,
         };
-        let published = |source| BoundProgressPromotionError {
+        let _published = |source| BoundProgressPromotionError {
             published: true,
             source,
         };
@@ -6908,13 +6914,13 @@ impl Kura {
                 "progress promotion escapes its bound namespace",
             )));
         }
-        let temp_name = temp_path
+        let _temp_name = temp_path
             .file_name()
             .ok_or_else(|| {
                 std::io::Error::new(ErrorKind::InvalidInput, "progress temp has no entry name")
             })
             .map_err(unpublished)?;
-        let main_name = main_path
+        let _main_name = main_path
             .file_name()
             .ok_or_else(|| {
                 std::io::Error::new(ErrorKind::InvalidInput, "progress index has no entry name")
@@ -6926,7 +6932,7 @@ impl Kura {
             let metadata = temp.metadata().map_err(unpublished)?;
             let before = rustix::fs::statat(
                 &immediate.file,
-                temp_name,
+                _temp_name,
                 rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
             )
             .map_err(std::io::Error::from)
@@ -6942,21 +6948,21 @@ impl Kura {
                     "progress temp changed before promotion",
                 )));
             }
-            rustix::fs::renameat(&immediate.file, temp_name, &immediate.file, main_name)
+            rustix::fs::renameat(&immediate.file, _temp_name, &immediate.file, _main_name)
                 .map_err(std::io::Error::from)
                 .map_err(unpublished)?;
             let after = rustix::fs::statat(
                 &immediate.file,
-                main_name,
+                _main_name,
                 rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
             )
             .map_err(std::io::Error::from)
-            .map_err(published)?;
+            .map_err(_published)?;
             if after.st_dev as u64 != metadata.dev()
                 || after.st_ino as u64 != metadata.ino()
                 || after.st_nlink as u64 != 1
             {
-                return Err(published(std::io::Error::new(
+                return Err(_published(std::io::Error::new(
                     ErrorKind::InvalidData,
                     "promoted progress index has the wrong identity",
                 )));
@@ -7021,7 +7027,7 @@ impl Kura {
             published: false,
             source,
         };
-        let published = |source| BoundProgressPromotionError {
+        let _published = |source| BoundProgressPromotionError {
             published: true,
             source,
         };
@@ -7043,13 +7049,13 @@ impl Kura {
                 "progress append-intent promotion escapes its bound namespace",
             )));
         }
-        let temp_name = temp_path
+        let _temp_name = temp_path
             .file_name()
             .ok_or_else(|| {
                 std::io::Error::new(ErrorKind::InvalidInput, "progress build has no entry name")
             })
             .map_err(unpublished)?;
-        let intent_name = intent_path
+        let _intent_name = intent_path
             .file_name()
             .ok_or_else(|| {
                 std::io::Error::new(ErrorKind::InvalidInput, "progress intent has no entry name")
@@ -7061,7 +7067,7 @@ impl Kura {
             let metadata = temp.metadata().map_err(unpublished)?;
             let before = rustix::fs::statat(
                 &immediate.file,
-                temp_name,
+                _temp_name,
                 rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
             )
             .map_err(std::io::Error::from)
@@ -7079,25 +7085,25 @@ impl Kura {
             }
             rustix::fs::renameat_with(
                 &immediate.file,
-                temp_name,
+                _temp_name,
                 &immediate.file,
-                intent_name,
+                _intent_name,
                 rustix::fs::RenameFlags::NOREPLACE,
             )
             .map_err(std::io::Error::from)
             .map_err(unpublished)?;
             let after = rustix::fs::statat(
                 &immediate.file,
-                intent_name,
+                _intent_name,
                 rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
             )
             .map_err(std::io::Error::from)
-            .map_err(published)?;
+            .map_err(_published)?;
             if after.st_dev as u64 != metadata.dev()
                 || after.st_ino as u64 != metadata.ino()
                 || after.st_nlink as u64 != 1
             {
-                return Err(published(std::io::Error::new(
+                return Err(_published(std::io::Error::new(
                     ErrorKind::InvalidData,
                     "published progress append intent has the wrong identity",
                 )));
@@ -7520,14 +7526,14 @@ impl Kura {
             .directories
             .iter()
             .enumerate()
-            .all(|(index, directory)| {
+            .all(|(_index, directory)| {
                 let Ok(opened) = secure_file_metadata::from_file(&directory.file) else {
                     return false;
                 };
                 #[cfg(unix)]
                 if let Some(name) = directory.entry_name.as_deref() {
                     use std::os::unix::fs::MetadataExt as _;
-                    let Some(parent) = namespace.directories.get(index.saturating_add(1)) else {
+                    let Some(parent) = namespace.directories.get(_index.saturating_add(1)) else {
                         return false;
                     };
                     let Ok(entry) = rustix::fs::statat(
@@ -9538,7 +9544,7 @@ impl Kura {
                         "pending merge directory does not exist",
                     )
                 })?;
-        let file_name = path.file_name().ok_or_else(|| {
+        let _file_name = path.file_name().ok_or_else(|| {
             Self::invalid_pending_merge_entry_error(
                 path.to_path_buf(),
                 "pending merge temporary has no filename",
@@ -9574,7 +9580,7 @@ impl Kura {
             std::fs::File::from(
                 rustix::fs::openat(
                     &opened_directory,
-                    file_name,
+                    _file_name,
                     rustix::fs::OFlags::WRONLY
                         | rustix::fs::OFlags::CREATE
                         | rustix::fs::OFlags::EXCL
@@ -9779,7 +9785,7 @@ impl Kura {
                         "pending QueuePlan admission directory does not exist",
                     )
                 })?;
-        let file_name = path.file_name().ok_or_else(|| {
+        let _file_name = path.file_name().ok_or_else(|| {
             Self::invalid_pending_queue_plan_admission_error(
                 path.to_path_buf(),
                 "pending QueuePlan admission temporary has no filename",
@@ -9815,7 +9821,7 @@ impl Kura {
             std::fs::File::from(
                 rustix::fs::openat(
                     &opened_directory,
-                    file_name,
+                    _file_name,
                     rustix::fs::OFlags::WRONLY
                         | rustix::fs::OFlags::CREATE
                         | rustix::fs::OFlags::EXCL

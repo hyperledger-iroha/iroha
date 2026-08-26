@@ -359,14 +359,14 @@ impl Kura {
                 format_args!("has invalid byte length {}", before.len()),
             ));
         }
-        let name = path.file_name().ok_or_else(|| {
+        let _name = path.file_name().ok_or_else(|| {
             Self::invalid_canonical_prune_intent_artifact(path, "has no direct entry name")
         })?;
         #[cfg(unix)]
         let mut file = std::fs::File::from(
             rustix::fs::openat(
                 &immediate.file,
-                name,
+                _name,
                 rustix::fs::OFlags::RDONLY
                     | rustix::fs::OFlags::NOFOLLOW
                     | rustix::fs::OFlags::CLOEXEC,
@@ -476,13 +476,13 @@ impl Kura {
         namespace: &BoundProgressNamespace,
         artifact: &CanonicalPruneIntentArtifact,
     ) -> Result<()> {
-        let immediate = namespace.directories.first().ok_or_else(|| {
+        let _immediate = namespace.directories.first().ok_or_else(|| {
             Self::invalid_canonical_prune_intent_artifact(
                 &artifact.path,
                 "has no descriptor-bound root namespace for removal",
             )
         })?;
-        let name = artifact.path.file_name().ok_or_else(|| {
+        let _name = artifact.path.file_name().ok_or_else(|| {
             Self::invalid_canonical_prune_intent_artifact(
                 &artifact.path,
                 "has no direct entry name for removal",
@@ -502,10 +502,13 @@ impl Kura {
         }
         #[cfg(unix)]
         {
-            let current =
-                rustix::fs::statat(&immediate.file, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
-                    .map_err(std::io::Error::from)
-                    .map_err(|error| Error::IO(error, artifact.path.clone()))?;
+            let current = rustix::fs::statat(
+                &_immediate.file,
+                _name,
+                rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+            )
+            .map_err(std::io::Error::from)
+            .map_err(|error| Error::IO(error, artifact.path.clone()))?;
             use std::os::unix::fs::MetadataExt as _;
             if rustix::fs::FileType::from_raw_mode(current.st_mode)
                 != rustix::fs::FileType::RegularFile
@@ -518,7 +521,7 @@ impl Kura {
                     "changed before descriptor-relative removal",
                 ));
             }
-            rustix::fs::unlinkat(&immediate.file, name, rustix::fs::AtFlags::empty())
+            rustix::fs::unlinkat(&_immediate.file, _name, rustix::fs::AtFlags::empty())
                 .map_err(std::io::Error::from)
                 .map_err(|error| Error::IO(error, artifact.path.clone()))?;
         }

@@ -12,27 +12,33 @@ use std::{
     ffi::{OsStr, OsString},
     fs::{self, Metadata},
     io::{self, Read, Write},
-    os::unix::{
-        fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
-        process::{CommandExt, ExitStatusExt},
-    },
+    os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Component, Path, PathBuf},
-    process::{Child, Command, ExitCode, Stdio},
+    process::{Command, ExitCode},
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
+#[cfg(feature = "dev-tools")]
 #[path = "iroha_authenticated_tool_controller/kagemusha_promotion_publisher.rs"]
 mod kagemusha_promotion_publisher;
 #[path = "iroha_authenticated_tool_controller/kagemusha_python_launcher.rs"]
 mod kagemusha_python_launcher;
 
 #[cfg(target_os = "macos")]
-use std::{fs::File, os::fd::AsRawFd, process::Output};
+use std::{
+    fs::File,
+    os::{
+        fd::AsRawFd,
+        unix::process::{CommandExt, ExitStatusExt},
+    },
+    process::{Child, Output, Stdio},
+    time::Instant,
+};
 
 const CONTRACT: &str = "iroha.authenticated-tool-os-isolation.v1";
 const CONTROLLER_ERROR: u8 = 125;
@@ -155,6 +161,7 @@ fn entrypoint(arguments: Vec<OsString>) -> Result<u8> {
         Some("launch-kagemusha-sealed-builder-v1") => {
             kagemusha_python_launcher::launch_sealed_builder(&arguments[2..])
         }
+        #[cfg(feature = "dev-tools")]
         Some("promote-kagemusha-release-v4") => {
             kagemusha_promotion_publisher::promote(&arguments[2..])
         }
