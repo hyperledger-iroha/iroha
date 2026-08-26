@@ -131,27 +131,34 @@ fn maybe_duration_to_ms(duration: Option<Duration>, label: &str) -> Result<Optio
         .map(|value| duration_to_ms(value, label))
         .transpose()
 }
+#[expect(dead_code, reason = "called by Norito default hook")]
 fn default_progress_interval_ms() -> u64 {
     u64::try_from(DEFAULT_PROGRESS_INTERVAL.as_millis())
         .expect("default progress interval should fit into u64")
 }
+#[expect(dead_code, reason = "called by Norito default hook")]
 fn default_progress_timeout_ms() -> u64 {
     u64::try_from(DEFAULT_PROGRESS_TIMEOUT.as_millis())
         .expect("default progress timeout should fit into u64")
 }
+#[expect(dead_code, reason = "called by Norito default hook")]
 fn default_shutdown_drain_timeout_ms() -> u64 {
     u64::try_from(DEFAULT_SHUTDOWN_DRAIN_TIMEOUT.as_millis())
         .expect("default shutdown drain timeout should fit into u64")
 }
+#[expect(dead_code, reason = "called by Norito default hook")]
 fn default_submitters() -> u32 {
     1
 }
+#[expect(dead_code, reason = "called by Norito default hook")]
 fn default_packet_loss_percent() -> u8 {
     DEFAULT_NETWORK_PACKET_LOSS_PERCENT
 }
+#[expect(dead_code, reason = "called by Norito default hook")]
 fn default_sumeragi_block_max_transactions() -> u64 {
     DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS
 }
+#[expect(dead_code, reason = "called by Norito default hook")]
 fn default_sumeragi_proposal_queue_scan_multiplier() -> u64 {
     DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER
 }

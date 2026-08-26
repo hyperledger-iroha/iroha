@@ -1,4 +1,8 @@
 #![allow(unexpected_cfgs)]
+#![cfg_attr(
+    not(target_os = "linux"),
+    allow(dead_code, reason = "Linux-only helper paths are inert on other hosts")
+)]
 //! Runs the privileged Sora VPN helper and its authenticated control protocol.
 use blake3::{Hasher as Blake3Hasher, hash as blake3_hash};
 use hex::FromHexError;
@@ -779,8 +783,7 @@ fn decode_authenticated_network_plan(
         relay_certificate_sha256,
         directory_snapshot_digest,
     ]
-    .iter()
-    .any(|value| *value == [0_u8; 32])
+    .contains(&[0_u8; 32])
     {
         return Err(ControllerError::State(
             "network-worker fixed plan contains an all-zero trust digest".to_owned(),

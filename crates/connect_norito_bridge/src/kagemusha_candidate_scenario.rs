@@ -1,6 +1,6 @@
 //! Host-side validation for the non-shipping Android candidate-lab seed set.
 use super::{
-    KagemushaNoteOpeningV2, KagemushaOutputMembershipPathsV4,
+    KagemushaCanonicalDecodeSchema, KagemushaNoteOpeningV2, KagemushaOutputMembershipPathsV4,
     KagemushaRecipientOutputProverMaterialV2, decode_canonical_kagemusha_archive,
     derive_kagemusha_owned_note_v2,
 };
@@ -16,7 +16,7 @@ use sha2::{Digest as _, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
     fs::{self, OpenOptions},
-    io::Read as _,
+    io::Read,
     ops::Deref,
     os::unix::fs::{MetadataExt as _, OpenOptionsExt as _},
     path::Path,
@@ -219,7 +219,7 @@ pub(super) fn bytes<'a>(
 }
 fn decode<T>(payload: &[u8], label: &str) -> Result<T, String>
 where
-    T: norito::NoritoSerialize,
+    T: KagemushaCanonicalDecodeSchema + norito::NoritoSerialize,
     for<'de> T: norito::NoritoDeserialize<'de>,
 {
     decode_canonical_kagemusha_archive(payload)

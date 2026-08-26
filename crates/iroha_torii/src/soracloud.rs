@@ -120,6 +120,7 @@ use iroha_data_model::{
     },
     sorafs::pin_registry::{
         ManifestDigest, ManifestRootCid, PinManifestRecord, PinStatus, StorageClass,
+        derive_sorafs_auto_replication_order_id_v1,
     },
     transaction::SignedTransaction,
 };
@@ -6402,7 +6403,7 @@ fn authoritative_private_uploaded_model_execute_response(
     let required_retention_margin_seconds = required_retention_margin
         .as_secs()
         .saturating_add(u64::from(required_retention_margin.subsec_nanos() != 0));
-    let input_pin = require_active_private_model_artifact_pin(
+    let _ = require_active_private_model_artifact_pin(
         app,
         &request.input_artifact,
         required_retention_margin_seconds,
@@ -6493,6 +6494,9 @@ fn authoritative_private_uploaded_model_execute_response(
         attesting_validator: result.attesting_validator,
         input_artifact: request.input_artifact,
         output_artifact: output.artifact.clone(),
+        output_replication_order_id: derive_sorafs_auto_replication_order_id_v1(
+            &output.artifact.sorafs_manifest_digest,
+        ),
         input_commitment: result.input_commitment,
         output_commitment: result.output_commitment,
         output_recipient: result.output_recipient,
@@ -15034,6 +15038,8 @@ mod tests {
         weight_version: &str,
     ) -> (Hash, SoraPrivateUploadedModelExecutionReceiptV1) {
         let placeholder = Hash::new([receipt_seed; 32]);
+        let output_artifact =
+            sample_private_model_artifact_ref("output", receipt_seed.wrapping_add(4));
         let mut receipt = SoraPrivateUploadedModelExecutionReceiptV1 {
             schema_version: SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1,
             network_id,
@@ -15066,10 +15072,10 @@ mod tests {
                 "input",
                 receipt_seed.wrapping_add(3),
             ),
-            output_artifact: sample_private_model_artifact_ref(
-                "output",
-                receipt_seed.wrapping_add(4),
+            output_replication_order_id: derive_sorafs_auto_replication_order_id_v1(
+                &output_artifact.sorafs_manifest_digest,
             ),
+            output_artifact,
             input_commitment: Hash::new([receipt_seed.wrapping_add(5); 32]),
             output_commitment: Hash::new([receipt_seed.wrapping_add(6); 32]),
             request_commitment: placeholder,

@@ -7570,8 +7570,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
         })?;
         #[cfg(feature = "quic")]
         let quic_max_incoming = max_incoming
-            .map(core::num::NonZeroUsize::get)
-            .unwrap_or(max_total_connections)
+            .map_or(max_total_connections, core::num::NonZeroUsize::get)
             .min(max_total_connections);
         #[cfg(feature = "quic")]
         let quic_flow_control = crate::transport::quic::FlowControlConfig {
@@ -7985,8 +7984,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
                 Some(
                     tls_listen_address
                         .as_ref()
-                        .map(|x| x.value().clone())
-                        .unwrap_or_else(|| listen_addr.value().clone()),
+                        .map_or_else(|| listen_addr.value().clone(), |x| x.value().clone()),
                 )
             } else {
                 tls_listen_address.as_ref().map(|x| x.value().clone())
@@ -11068,7 +11066,11 @@ mod quic_tests {
     }
 }
 #[cfg(feature = "p2p_tls")]
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    clippy::fn_params_excessive_bools,
+    reason = "validated transport policy"
+)]
 async fn start_tls_listener<T, E>(
     addr: std::net::SocketAddr,
     key_pair: iroha_crypto::KeyPair,
@@ -11100,6 +11102,9 @@ where
     T: boilerplate::Pload + message::ClassifyTopic,
     E: boilerplate::Enc,
 {
+    // Unique conn ids for TLS path.
+    static NEXT_TLS_CONN_ID: std::sync::OnceLock<std::sync::atomic::AtomicU64> =
+        std::sync::OnceLock::new();
     // Generate a self-signed certificate for the TLS server.
     let rcgen::CertifiedKey { cert, signing_key } =
         rcgen::generate_simple_self_signed(["iroha-tls".to_owned()])
@@ -11119,9 +11124,6 @@ where
     server_cfg.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
     let acceptor = tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(server_cfg));
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    // Unique conn ids for TLS path
-    static NEXT_TLS_CONN_ID: std::sync::OnceLock<std::sync::atomic::AtomicU64> =
-        std::sync::OnceLock::new();
     let id_alloc = NEXT_TLS_CONN_ID.get_or_init(|| std::sync::atomic::AtomicU64::new(1 << 59));
     let task = tokio::spawn(async move {
         let mut children = tokio::task::JoinSet::new();

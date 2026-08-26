@@ -179,7 +179,7 @@ struct MachoSlice {
 pub(super) fn launch_readiness(arguments: &[OsString]) -> Result<u8> {
     #[cfg(target_os = "macos")]
     {
-        return launch_readiness_macos(parse_readiness(arguments)?);
+        launch_readiness_macos(parse_readiness(arguments)?)
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -193,7 +193,7 @@ pub(super) fn launch_readiness(arguments: &[OsString]) -> Result<u8> {
 pub(super) fn launch_sealed_builder(arguments: &[OsString]) -> Result<u8> {
     #[cfg(target_os = "macos")]
     {
-        return launch_builder_macos(parse_builder(arguments)?);
+        launch_builder_macos(parse_builder(arguments)?)
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -1045,7 +1045,7 @@ mod macos {
     const ACL_FIRST_ENTRY: i32 = 0;
 
     #[derive(Debug)]
-    pub(crate) struct PinnedFile {
+    pub(super) struct PinnedFile {
         path: PathBuf,
         file: File,
         stable: StableMetadata,
@@ -1053,7 +1053,7 @@ mod macos {
     }
 
     impl PinnedFile {
-        pub(crate) fn file_mut(&mut self) -> &mut File {
+        pub(super) fn file_mut(&mut self) -> &mut File {
             &mut self.file
         }
     }
@@ -1109,7 +1109,7 @@ mod macos {
         fn waitid(id_type: i32, id: u32, information: *mut std::ffi::c_void, options: i32) -> i32;
     }
 
-    pub(crate) fn validate_root_launch_identity() -> Result<()> {
+    pub(super) fn validate_root_launch_identity() -> Result<()> {
         if effective_uid() != 0
             || effective_gid() != 0
             || unsafe { getuid() } != 0
@@ -1136,8 +1136,7 @@ mod macos {
                 0,
             )
         } != 0
-            || length < 2
-            || length > 128
+            || !(2..=128).contains(&length)
         {
             return Err(ControllerError::policy(
                 "macOS build identity is unavailable",
@@ -1174,7 +1173,7 @@ mod macos {
         Ok(build)
     }
 
-    pub(crate) fn require_macos_tcb(expected: &str) -> Result<[u8; 32]> {
+    pub(super) fn require_macos_tcb(expected: &str) -> Result<[u8; 32]> {
         if observed_macos_build()? != expected {
             return Err(ControllerError::policy(
                 "macOS build differs from the native-launch TCB pin",
@@ -1187,7 +1186,7 @@ mod macos {
         Ok(os_tcb_digest(expected))
     }
 
-    pub(crate) fn require_root_custody(path: &Path, directory: bool) -> Result<()> {
+    pub(super) fn require_root_custody(path: &Path, directory: bool) -> Result<()> {
         if !path.is_absolute()
             || path
                 .components()
@@ -1266,7 +1265,7 @@ mod macos {
         Ok(())
     }
 
-    pub(crate) fn validate_open_file_custody(file: &File, path: &Path) -> Result<()> {
+    pub(super) fn validate_open_file_custody(file: &File, path: &Path) -> Result<()> {
         require_no_xattrs(file, path)
     }
 
@@ -1302,6 +1301,7 @@ mod macos {
         }
     }
 
+    #[allow(clippy::large_stack_arrays, reason = "bounded hashing buffer")]
     fn hash_open_file(file: &mut File) -> Result<[u8; 32]> {
         let before = file
             .metadata()
@@ -1332,13 +1332,12 @@ mod macos {
         Ok(hash.finish())
     }
 
-    pub(crate) fn pin_regular(path: &Path, expected: [u8; 32]) -> Result<PinnedFile> {
+    pub(super) fn pin_regular(path: &Path, expected: [u8; 32]) -> Result<PinnedFile> {
         require_root_custody(path, false)?;
         let mut file = open_nofollow(path, true)?;
         let metadata = file
             .metadata()
             .map_err(|_| ControllerError::policy("pinned file metadata is unavailable"))?;
-        use std::os::unix::fs::MetadataExt;
         if metadata.uid() != 0
             || metadata.nlink() != 1
             || metadata.permissions().mode() & 0o022 != 0
@@ -1365,7 +1364,7 @@ mod macos {
         })
     }
 
-    pub(crate) fn validate_pinned(file: &mut PinnedFile) -> Result<()> {
+    pub(super) fn validate_pinned(file: &mut PinnedFile) -> Result<()> {
         let descriptor_metadata = file
             .file
             .metadata()
@@ -1387,6 +1386,7 @@ mod macos {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines, reason = "audited runtime authentication")]
     pub(super) fn authenticate_runtime(
         root: &Path,
         expected_tree: [u8; 32],
@@ -1395,7 +1395,6 @@ mod macos {
         require_root_custody(root, true)?;
         let root_metadata = fs::symlink_metadata(root)
             .map_err(|_| ControllerError::policy("Python runtime root is unavailable"))?;
-        use std::os::unix::fs::MetadataExt;
         let root_device = root_metadata.dev();
         let mut paths = vec![root.to_path_buf()];
         let mut index = 0usize;
@@ -1503,14 +1502,10 @@ mod macos {
                 let is_macho = count == 4
                     && matches!(
                         prefix,
-                        [0xfe, 0xed, 0xfa, 0xce]
-                            | [0xce, 0xfa, 0xed, 0xfe]
-                            | [0xfe, 0xed, 0xfa, 0xcf]
-                            | [0xcf, 0xfa, 0xed, 0xfe]
-                            | [0xca, 0xfe, 0xba, 0xbe]
-                            | [0xbe, 0xba, 0xfe, 0xca]
-                            | [0xca, 0xfe, 0xba, 0xbf]
-                            | [0xbf, 0xba, 0xfe, 0xca]
+                        [0xfe, 0xed, 0xfa, 0xce | 0xcf]
+                            | [0xce | 0xcf, 0xfa, 0xed, 0xfe]
+                            | [0xca, 0xfe, 0xba, 0xbe | 0xbf]
+                            | [0xbe | 0xbf, 0xba, 0xfe, 0xca]
                     );
                 let pinned = PinnedFile {
                     path: path.clone(),
@@ -1682,7 +1677,7 @@ mod macos {
         let child = command
             .spawn()
             .map_err(|_| ControllerError::policy("native Python child could not be executed"))?;
-        let process_group = child.id() as i32;
+        let process_group = child.id().cast_signed();
         let watchdog = Watchdog::start(process_group)?;
         let mut job = MacosJob::new(child, process_group, watchdog);
         let stdout = job
@@ -1820,6 +1815,10 @@ mod macos {
         Ok(unsafe { OwnedFd::from_raw_fd(descriptor) })
     }
 
+    #[allow(
+        clippy::case_sensitive_file_extension_comparisons,
+        reason = "canonical .json suffix"
+    )]
     pub(super) fn publish_report(path: &Path, payload: &[u8]) -> Result<()> {
         if path.parent() != Some(Path::new(REPORT_PARENT)) {
             return Err(ControllerError::policy(
@@ -1900,6 +1899,7 @@ use macos::{
 };
 
 #[cfg(target_os = "macos")]
+#[allow(clippy::needless_pass_by_value, reason = "consumes one-shot launch")]
 fn launch_readiness_macos(launch: ReadinessLaunch) -> Result<u8> {
     use std::{io::Write, os::fd::AsRawFd, process::Command};
 
@@ -1988,16 +1988,21 @@ fn launch_readiness_macos(launch: ReadinessLaunch) -> Result<u8> {
     macos::validate_pinned(&mut gate_execution)?;
     std::io::stdout()
         .write_all(&captured.stdout)
-        .and_then(|_| std::io::stdout().flush())
+        .and_then(|()| std::io::stdout().flush())
         .map_err(|_| ControllerError::policy("readiness stdout forwarding failed"))?;
     std::io::stderr()
         .write_all(&captured.stderr)
-        .and_then(|_| std::io::stderr().flush())
+        .and_then(|()| std::io::stderr().flush())
         .map_err(|_| ControllerError::policy("readiness stderr forwarding failed"))?;
     exit_status(captured.status)
 }
 
 #[cfg(target_os = "macos")]
+#[allow(
+    clippy::needless_pass_by_value,
+    clippy::too_many_lines,
+    reason = "one-shot build corridor"
+)]
 fn launch_builder_macos(launch: BuilderLaunch) -> Result<u8> {
     use std::{io::Write, os::fd::AsRawFd, process::Command};
 
@@ -2074,7 +2079,7 @@ fn launch_builder_macos(launch: BuilderLaunch) -> Result<u8> {
     macos::validate_pinned(&mut builder)?;
     std::io::stderr()
         .write_all(&captured.stderr)
-        .and_then(|_| std::io::stderr().flush())
+        .and_then(|()| std::io::stderr().flush())
         .map_err(|_| ControllerError::policy("builder stderr forwarding failed"))?;
     let status = exit_status(captured.status)?;
     if status != 0 {
@@ -2295,8 +2300,9 @@ mod tests {
             let raw_size = 12 + value.len() + 1;
             let size = (raw_size + 3) & !3;
             let mut bytes = vec![0u8; size];
+            let size_u32 = u32::try_from(size).expect("synthetic Mach-O command size fits u32");
             bytes[0..4].copy_from_slice(&kind.to_le_bytes());
-            bytes[4..8].copy_from_slice(&(size as u32).to_le_bytes());
+            bytes[4..8].copy_from_slice(&size_u32.to_le_bytes());
             bytes[8..12].copy_from_slice(&12u32.to_le_bytes());
             bytes[12..12 + value.len()].copy_from_slice(value.as_bytes());
             bytes
@@ -2310,7 +2316,9 @@ mod tests {
         bytes[0..4].copy_from_slice(&[0xcf, 0xfa, 0xed, 0xfe]);
         bytes[12..16].copy_from_slice(&2u32.to_le_bytes());
         bytes[16..20].copy_from_slice(&(1u32 + u32::from(rpath.is_some())).to_le_bytes());
-        bytes[20..24].copy_from_slice(&(commands.len() as u32).to_le_bytes());
+        let commands_len =
+            u32::try_from(commands.len()).expect("synthetic Mach-O commands fit u32");
+        bytes[20..24].copy_from_slice(&commands_len.to_le_bytes());
         bytes.extend(commands);
         bytes
     }

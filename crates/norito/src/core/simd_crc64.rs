@@ -298,10 +298,7 @@ fn load_override_from_env() -> Option<GpuLib> {
         None
     }
 }
-#[cfg(all(
-    any(feature = "metal-crc64", feature = "cuda-crc64"),
-    target_os = "macos"
-))]
+#[cfg(all(feature = "metal-crc64", target_os = "macos"))]
 unsafe fn load_metal_crc64() -> Option<GpuLib> {
     const RTLD_LAZY: c_int = 1;
     unsafe extern "C" {
@@ -348,7 +345,7 @@ unsafe fn load_metal_crc64() -> Option<GpuLib> {
     }
     None
 }
-#[cfg(all(any(feature = "metal-crc64", feature = "cuda-crc64"), unix))]
+#[cfg(all(feature = "cuda-crc64", unix))]
 unsafe fn load_cuda_crc64() -> Option<GpuLib> {
     const RTLD_LAZY: c_int = 1;
     unsafe extern "C" {
@@ -391,7 +388,7 @@ unsafe fn load_cuda_crc64() -> Option<GpuLib> {
     }
     None
 }
-#[cfg(all(any(feature = "metal-crc64", feature = "cuda-crc64"), windows))]
+#[cfg(all(feature = "cuda-crc64", windows))]
 unsafe fn load_cuda_crc64() -> Option<GpuLib> {
     use std::{env, os::windows::ffi::OsStrExt, path::PathBuf, ptr};
     unsafe extern "system" {

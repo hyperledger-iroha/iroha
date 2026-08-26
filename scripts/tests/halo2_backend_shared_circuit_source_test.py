@@ -92,7 +92,7 @@ SHARDS = (
         opening_lines=1_904,
         line_ceiling=906,
         postimage_sha256=(
-            "945fa60cca5f019755a3cac229a4e2c529d5c69bbf44f2dc43d3acf8b4270948"
+            "257c06020fa11f94c6aef99fc61e7d85c30991cb49f278e4453a76de01af679a"
         ),
         test_contract_sha256=(
             "e0a813fba2f82587efbb55b2e655dee3b1497833a13b9802491a78012a55e842"

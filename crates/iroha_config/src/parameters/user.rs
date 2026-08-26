@@ -3023,7 +3023,7 @@ mod governance_tests {
     #[test]
     fn parliament_timed_ovn_file_config_parses_deterministic_height_windows() {
         let table: toml::Table = toml::from_str(
-            r#"
+            r"
 [parliament_timed_ovn]
 registration_phase_blocks = 11
 survivor_freeze_phase_blocks = 12
@@ -3032,7 +3032,7 @@ release_delay_blocks = 14
 opening_phase_blocks = 15
 max_ballot_retries = 15
 max_corpus_entries = 16
-"#,
+",
         )
         .expect("parse timed-OVN policy TOML");
         let parsed = ConfigReader::new()
@@ -35542,10 +35542,10 @@ publish_delay_seconds = 17
     #[test]
     fn soracloud_runtime_rejects_host_local_hf_execution() {
         let table = table_with_soracloud_runtime(
-            r#"
+            r"
 [hf]
 local_execution_enabled = true
-"#,
+",
         );
         let error = actual::Root::from_toml_source(TomlSource::inline(table))
             .expect_err("host-local HF execution must be rejected during user-config parsing");
@@ -35953,7 +35953,7 @@ max_storage_bytes = 10737418240
         for (uid, gid) in [(70_000_u32, 70_001_u32), (70_003, 70_002)] {
             let result = actual::Root::from_toml_source(TomlSource::inline(
                 table_with_soracloud_runtime(&format!(
-                    r#"
+                    r"
 [inrou]
 enabled = true
 portable_vm_uid = {uid}
@@ -35961,7 +35961,7 @@ portable_vm_gid = {gid}
 max_cpu_millis = 1000
 max_memory_bytes = 1073741824
 max_storage_bytes = 10737418240
-"#,
+",
                 )),
             ));
             assert!(result.is_err(), "uid/gid must select the same Inrou slot");
@@ -36024,7 +36024,7 @@ max_storage_bytes = 10737418240
     #[should_panic(expected = "inrou.enabled requires soracloud_runtime.production_mode = true")]
     fn soracloud_runtime_nonproduction_rejects_exact_portable_vm_v1() {
         let _ = actual::Root::from_toml_source(TomlSource::inline(table_with_soracloud_runtime(
-            r#"
+            r"
 [inrou]
 enabled = true
 portable_vm_uid = 70000
@@ -36032,7 +36032,7 @@ portable_vm_gid = 70000
 max_cpu_millis = 1000
 max_memory_bytes = 1073741824
 max_storage_bytes = 10737418240
-"#,
+",
         )));
     }
     #[test]

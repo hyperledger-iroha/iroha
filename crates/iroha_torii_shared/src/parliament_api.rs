@@ -1699,7 +1699,7 @@ mod tests {
 
     #[test]
     fn full_state_payload_bound_is_not_smaller_than_private_corpus_bound() {
-        assert!(PARLIAMENT_ATTEMPT_READ_MAX_STATE_BYTES_V1 >= 1_000 * (3_624 + 2_858));
+        const { assert!(PARLIAMENT_ATTEMPT_READ_MAX_STATE_BYTES_V1 >= 1_000 * (3_624 + 2_858)) }
     }
 
     #[test]

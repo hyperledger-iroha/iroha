@@ -35,8 +35,8 @@ summary: Implemented SF-6c deterministic multi-provider fixture harness and rema
    - `crates/sorafs_orchestrator/tests/multi_peer_fetch.rs` injects transient
      provider failures and corrupted chunks while proving the orchestrator
      retries, verifies digests, and assembles the canonical payload.
-   - `integration_tests/tests/sorafs_orchestrator_parity.rs` replays the shared
-     JSON fixture across Rust and SDK bindings.
+   - `crates/iroha_js_host` and `crates/connect_norito_bridge` exercise the
+     shared local-fetch contract at their respective SDK boundaries.
 
 ## Test Scenarios
 

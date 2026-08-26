@@ -22,8 +22,6 @@ mod norito_streaming_roundtrip;
 mod sorafs_gateway_capability_refusal;
 #[path = "sorafs_gateway_conformance.rs"]
 mod sorafs_gateway_conformance;
-#[path = "sorafs_orchestrator_parity.rs"]
-mod sorafs_orchestrator_parity;
 #[path = "soranet_web_deploy.rs"]
 mod soranet_web_deploy;
 #[path = "streaming/mod.rs"]

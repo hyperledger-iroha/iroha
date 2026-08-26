@@ -5,7 +5,7 @@ use iroha_config::parameters::defaults;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
-    state::{ConfidentialTreeProfile, State, StateTransaction, World, WorldReadOnly},
+    state::{State, StateTransaction, World, WorldReadOnly},
     zk::confidential_v2,
 };
 use iroha_crypto::Hash;
@@ -788,8 +788,12 @@ fn zk_roots_are_bounded_in_world_state() {
             .push_commitment(note, nonzero!(4_usize))
             .expect("seed bounded root transition");
     }
-    stx.world.zk_assets.remove(asset_def_id.clone());
-    stx.world.zk_assets.insert(asset_def_id.clone(), zk_state);
+    stx.world
+        .zk_assets_mut_for_testing()
+        .remove(asset_def_id.clone());
+    stx.world
+        .zk_assets_mut_for_testing()
+        .insert(asset_def_id.clone(), zk_state);
     stx.apply();
     block.commit().expect("commit bounded root-history fixture");
     // Assert bounded roots in world state
@@ -948,8 +952,12 @@ fn frontier_checkpoints_respect_reorg_depth_bound() {
         zk_state
             .record_frontier_checkpoint(h, 1, 3)
             .expect("record bounded frontier checkpoint");
-        stx.world.zk_assets.remove(asset_def_id.clone());
-        stx.world.zk_assets.insert(asset_def_id.clone(), zk_state);
+        stx.world
+            .zk_assets_mut_for_testing()
+            .remove(asset_def_id.clone());
+        stx.world
+            .zk_assets_mut_for_testing()
+            .insert(asset_def_id.clone(), zk_state);
         stx.apply();
         block.commit().expect("commit frontier checkpoint block");
     }

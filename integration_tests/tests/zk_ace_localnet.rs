@@ -7,7 +7,7 @@ use iroha::{
     client::Client,
     data_model::{
         metadata::Metadata,
-        prelude::{AssetDefinitionId, DomainId, QueryBuilderExt},
+        prelude::{AssetBalanceScope, AssetDefinitionId, DomainId, QueryBuilderExt},
         privacy::{
             PRIVACY_ZK_ACE_POLICY_INITIAL_EPOCH_V1, PrivacyCompiledProfileResultV1,
             PrivacyCompiledProfileUnavailableReasonV1, PrivacyPolicyDigestV1, PrivacyPolicyIdV1,
@@ -158,9 +158,14 @@ fn zk_ace_privacy_transfer_fails_closed_taira_localnet() -> Result<()> {
     );
 
     let witness = witness(0x11);
-    let transfer =
-        ZkAcePrivacyTransferV1::try_new(policy(&witness), ALICE_ID.clone(), BOB_ID.clone(), 19)
-            .wrap_err("construct governed ZK-ACE transfer")?;
+    let transfer = ZkAcePrivacyTransferV1::try_new(
+        policy(&witness),
+        ALICE_ID.clone(),
+        BOB_ID.clone(),
+        AssetBalanceScope::Global,
+        19,
+    )
+    .wrap_err("construct governed ZK-ACE transfer")?;
     let creation_time = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .wrap_err("system clock before Unix epoch")?;

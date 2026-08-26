@@ -216,8 +216,10 @@ use napi::{
     sys,
 };
 use napi_derive::napi;
+#[cfg(test)]
+use norito::codec::Encode;
 use norito::{
-    codec::{DecodeAll, Encode},
+    codec::DecodeAll,
     core as norito_core, decode_from_bytes,
     json::{self, Map, Value},
 };
@@ -17580,8 +17582,10 @@ seiyaku Privacy {
             let error = decode_canonical_signed_transaction_v1(&rejected)
                 .expect_err("noncanonical signed transaction must fail closed");
             assert_eq!(error.status, napi::Status::InvalidArg, "{label}");
-            let public_error = encode_signed_transaction_versioned(Uint8Array::from(rejected))
-                .expect_err("public canonical V1 validator must reject noncanonical bytes");
+            let Err(public_error) = encode_signed_transaction_versioned(Uint8Array::from(rejected))
+            else {
+                panic!("public canonical V1 validator must reject noncanonical bytes");
+            };
             assert_eq!(public_error.status, napi::Status::InvalidArg, "{label}");
         }
     }

@@ -141,8 +141,12 @@ features = ["beep", "cuda", "htm"]
 reason = "CUDA awaits qualified PTX provenance, HTM needs unstable RTM intrinsics, and beep needs host ALSA development files."
 
 [feature_exclusions.iroha_core]
-features = ["cuda", "kagemusha-candidate-source-seal", "kaigi_privacy_mocks"]
-reason = "CUDA forwards qualified IVM code, the source seal requires its authenticated builder environment, and privacy mocks intentionally reject non-test builds."
+features = ["cuda", "kagemusha-candidate-source-seal", "kagemusha-generation-memory-lab", "kaigi_privacy_mocks", "privacy-release-evidence", "simd"]
+reason = "CUDA forwards qualified IVM code, the source seal requires its authenticated builder environment, the generation-memory and privacy-release roots run only in dedicated evidence corridors, privacy mocks intentionally reject non-test builds, and portable SIMD still requires unstable core::simd on the pinned stable toolchain."
+
+[feature_exclusions.integration_tests]
+features = ["privacy-release-evidence"]
+reason = "The native exact-12 privacy fixture builders run only in the dedicated four-peer release corridor."
 
 [feature_exclusions.irohad]
 features = ["accel-cuda", "beep"]

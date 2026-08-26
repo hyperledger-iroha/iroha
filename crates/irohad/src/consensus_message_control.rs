@@ -38,7 +38,7 @@ use std::{
     },
 };
 /// Environment variable consumed only by the feature-isolated test daemon.
-pub(crate) const CONTROL_DIR_ENV: &str = "IROHA_TEST_CONSENSUS_MESSAGE_CONTROL_DIR";
+const CONTROL_DIR_ENV: &str = "IROHA_TEST_CONSENSUS_MESSAGE_CONTROL_DIR";
 const CONTROL_FILE: &str = "command.norito.json";
 const ACK_FILE: &str = "ack.norito.json";
 const FORMAT_VERSION: u64 = 5;
@@ -430,15 +430,16 @@ struct HeldDescriptor {
     meta: MessageMeta,
     size_bytes: usize,
 }
-pub(crate) struct HeldMessage<R = NetworkReplyRoute, O = ()> {
-    pub(crate) sequence: u64,
-    pub(crate) peer: Peer,
-    pub(crate) authenticated_via: PeerId,
-    pub(crate) message: NetworkMessage,
-    pub(crate) size_bytes: usize,
-    pub(crate) reply_route: Option<R>,
+#[expect(clippy::redundant_pub_crate, reason = "parent daemon access")]
+pub(super) struct HeldMessage<R = NetworkReplyRoute, O = ()> {
+    pub(super) sequence: u64,
+    pub(super) peer: Peer,
+    pub(super) authenticated_via: PeerId,
+    pub(super) message: NetworkMessage,
+    pub(super) size_bytes: usize,
+    pub(super) reply_route: Option<R>,
     /// Exact local-only ownership retained with the controlled occurrence.
-    pub(crate) ownership: Option<O>,
+    pub(super) ownership: Option<O>,
 }
 struct HeldEntry<R, O> {
     descriptor: HeldDescriptor,
@@ -449,7 +450,8 @@ struct HeldEntry<R, O> {
     ownership: Option<O>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Admission {
+#[expect(clippy::redundant_pub_crate, reason = "parent daemon access")]
+pub(super) enum Admission {
     Pass,
     /// The controller atomically retained the complete local occurrence.
     Held,
@@ -457,7 +459,8 @@ pub(crate) enum Admission {
 }
 /// Terminal disposition of one exact controlled release.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ReleaseOutcome {
+#[expect(clippy::redundant_pub_crate, reason = "parent daemon access")]
+pub(super) enum ReleaseOutcome {
     /// Ordinary ingress accepted, coalesced, or found the occurrence obsolete.
     Delivered,
     /// The exact reply authority retired before ordinary ingress succeeded.
@@ -527,7 +530,8 @@ struct RootIdentity {
     inode: u64,
 }
 /// Feature-only controller shared by relay workers and its file watcher.
-pub(crate) struct Controller<R = NetworkReplyRoute, O = ()> {
+#[expect(clippy::redundant_pub_crate, reason = "parent daemon access")]
+pub(super) struct Controller<R = NetworkReplyRoute, O = ()> {
     root: PathBuf,
     root_identity: RootIdentity,
     state: Mutex<State<R, O>>,
@@ -535,7 +539,7 @@ pub(crate) struct Controller<R = NetworkReplyRoute, O = ()> {
 }
 impl<O> Controller<NetworkReplyRoute, O> {
     /// Open and pin the explicitly configured private control directory.
-    pub(crate) fn from_env() -> Result<Option<Self>, ControlError> {
+    pub(super) fn from_env() -> Result<Option<Self>, ControlError> {
         let Some(raw) = env::var_os(CONTROL_DIR_ENV) else {
             return Ok(None);
         };
@@ -574,7 +578,7 @@ impl<O> Controller<NetworkReplyRoute, O> {
 impl<R, O> Controller<R, O> {
     /// Construct an isolated controller for daemon boundary tests.
     #[cfg(test)]
-    pub(crate) fn for_tests() -> (tempfile::TempDir, Self) {
+    pub(super) fn for_tests() -> (tempfile::TempDir, Self) {
         use std::os::unix::fs::PermissionsExt;
         let parent = tempfile::tempdir().expect("temporary parent");
         let root = parent.path().join("control");
@@ -591,7 +595,7 @@ impl<R, O> Controller<R, O> {
     }
     /// Hold and FIFO-release every subsequently admitted message in tests.
     #[cfg(test)]
-    pub(crate) fn drain_subsequent_messages_for_tests(&self) {
+    pub(super) fn drain_subsequent_messages_for_tests(&self) {
         let mut state = self.state.lock().expect("message control state poisoned");
         state.drain_next_rules = Some(Vec::new());
     }
@@ -604,7 +608,7 @@ impl<R, O> Controller<R, O> {
         Ok(())
     }
     /// Read and atomically apply one newer canonical command, if present.
-    pub(crate) fn poll_command(&self) -> Result<(), ControlError> {
+    pub(super) fn poll_command(&self) -> Result<(), ControlError> {
         self.validate_root()?;
         let path = self.root.join(CONTROL_FILE);
         let bytes = match read_stable_private_file(&path, MAX_COMMAND_BYTES) {
@@ -639,7 +643,8 @@ impl<R, O> Controller<R, O> {
         self.publish_ack()
     }
     /// Apply the current receiver-local rule to an authenticated inbound message.
-    pub(crate) fn admit(
+    #[expect(clippy::type_complexity, reason = "preserves the exact ingress tuple")]
+    pub(super) fn admit(
         &self,
         peer: Peer,
         authenticated_via: &PeerId,
@@ -658,7 +663,8 @@ impl<R, O> Controller<R, O> {
             })
     }
     /// Apply one rule while retaining an exact local-only reply authority.
-    pub(crate) fn admit_with_reply_route(
+    #[expect(clippy::type_complexity, reason = "preserves reply authority")]
+    fn admit_with_reply_route(
         &self,
         peer: Peer,
         authenticated_via: &PeerId,
@@ -690,7 +696,9 @@ impl<R, O> Controller<R, O> {
     /// in the same map entry as its semantic payload and exact reply route, then
     /// returns it only from [`Self::next_release`]. This avoids a side-map race
     /// or a release-time reacquisition window.
-    pub(crate) fn admit_with_reply_route_and_ownership(
+    #[expect(clippy::too_many_lines, reason = "keeps fail-closed admission atomic")]
+    #[expect(clippy::type_complexity, reason = "preserves retained ownership")]
+    pub(super) fn admit_with_reply_route_and_ownership(
         &self,
         peer: Peer,
         authenticated_via: &PeerId,
@@ -774,39 +782,38 @@ impl<R, O> Controller<R, O> {
                     drop(state);
                     self.publish_ack()?;
                     return Err(ControlError::HoldQueueOverflow);
-                } else {
-                    let sequence = state.next_sequence;
-                    let Some(next_sequence) = state.next_sequence.checked_add(1) else {
-                        state.fatal = true;
-                        state.last_error = Some("sequence_overflow".to_owned());
-                        drop(state);
-                        self.publish_ack()?;
-                        return Err(ControlError::SequenceOverflow);
-                    };
-                    state.next_sequence = next_sequence;
-                    let descriptor = HeldDescriptor {
-                        sequence,
-                        meta,
-                        size_bytes,
-                    };
-                    state.held.insert(
-                        sequence,
-                        HeldEntry {
-                            descriptor,
-                            peer,
-                            authenticated_via: authenticated_via.clone(),
-                            message,
-                            reply_route,
-                            ownership,
-                        },
-                    );
-                    state.held_bytes = state
-                        .held_bytes
-                        .checked_add(size_bytes)
-                        .ok_or(ControlError::HeldBytesOverflow)?;
-                    if draining {
-                        state.release_pending.push_back(sequence);
-                    }
+                }
+                let sequence = state.next_sequence;
+                let Some(next_sequence) = state.next_sequence.checked_add(1) else {
+                    state.fatal = true;
+                    state.last_error = Some("sequence_overflow".to_owned());
+                    drop(state);
+                    self.publish_ack()?;
+                    return Err(ControlError::SequenceOverflow);
+                };
+                state.next_sequence = next_sequence;
+                let descriptor = HeldDescriptor {
+                    sequence,
+                    meta,
+                    size_bytes,
+                };
+                state.held.insert(
+                    sequence,
+                    HeldEntry {
+                        descriptor,
+                        peer,
+                        authenticated_via: authenticated_via.clone(),
+                        message,
+                        reply_route,
+                        ownership,
+                    },
+                );
+                state.held_bytes = state
+                    .held_bytes
+                    .checked_add(size_bytes)
+                    .ok_or(ControlError::HeldBytesOverflow)?;
+                if draining {
+                    state.release_pending.push_back(sequence);
                 }
             }
         }
@@ -815,7 +822,7 @@ impl<R, O> Controller<R, O> {
         Ok((Admission::Held, None))
     }
     /// Take the next prevalidated release entry in exact ingress order.
-    pub(crate) fn next_release(&self) -> Result<Option<HeldMessage<R, O>>, ControlError> {
+    pub(super) fn next_release(&self) -> Result<Option<HeldMessage<R, O>>, ControlError> {
         let mut state = self.state.lock().expect("message control state poisoned");
         if state.fatal || state.in_flight.is_some() {
             return Ok(None);
@@ -846,7 +853,7 @@ impl<R, O> Controller<R, O> {
         }))
     }
     /// Record exact completion of one release. Failure permanently closes the controller.
-    pub(crate) fn complete_release(
+    pub(super) fn complete_release(
         &self,
         sequence: u64,
         outcome: ReleaseOutcome,
@@ -877,10 +884,9 @@ impl<R, O> Controller<R, O> {
         }
         drop(state);
         self.publish_ack()?;
-        if outcome != ReleaseOutcome::Failed {
-            Ok(())
-        } else {
-            Err(ControlError::DownstreamDeliveryFailed)
+        match outcome {
+            ReleaseOutcome::Delivered | ReleaseOutcome::Retired => Ok(()),
+            ReleaseOutcome::Failed => Err(ControlError::DownstreamDeliveryFailed),
         }
     }
     fn publish_ack(&self) -> Result<(), ControlError> {
@@ -904,7 +910,7 @@ fn hold_capacity_available<R, O>(state: &State<R, O>, incoming_bytes: usize) -> 
     state
         .held
         .len()
-        .checked_add(if state.in_flight.is_some() { 1 } else { 0 })
+        .checked_add(usize::from(state.in_flight.is_some()))
         .is_some_and(|count| count < state.queue_capacity)
         && state
             .held_bytes
@@ -935,7 +941,7 @@ fn apply_command<R, O>(
         < state
             .held
             .len()
-            .saturating_add(if state.in_flight.is_some() { 1 } else { 0 })
+            .saturating_add(usize::from(state.in_flight.is_some()))
     {
         return Err(ControlError::QueueCapacityBelowHeld);
     }
@@ -1069,6 +1075,7 @@ fn parse_command(bytes: &[u8]) -> Result<Command, ControlError> {
         drain,
     })
 }
+#[expect(clippy::too_many_lines, reason = "audits canonical parsing")]
 fn parse_rule(value: &Value) -> Result<Rule, ControlError> {
     let object = exact_object(
         value,
@@ -1446,6 +1453,7 @@ fn object_value<const N: usize>(entries: [(&str, Value); N]) -> Value {
     }
     Value::Object(object)
 }
+#[expect(clippy::too_many_lines, reason = "keeps payload projection exhaustive")]
 fn message_meta(
     peer: &Peer,
     authenticated_via: &PeerId,
@@ -1646,6 +1654,7 @@ fn message_meta(
 /// every descriptor it publishes must still be parseable by the independent
 /// test-network client. Invalid traffic therefore fails the controller closed
 /// without poisoning its acknowledgement with an unrepresentable entry.
+#[expect(clippy::too_many_lines, reason = "audits descriptor invariants")]
 fn validate_message_meta(meta: &MessageMeta) -> Result<(), ControlError> {
     if meta.height == Some(0)
         || meta
@@ -1706,7 +1715,7 @@ fn validate_message_meta(meta: &MessageMeta) -> Result<(), ControlError> {
                 && !has_single_signer
                 && has_certificate_signers
         }
-        MessageKind::PayloadManifest => {
+        MessageKind::PayloadManifest | MessageKind::CertifiedBodyResponse => {
             has_round
                 && meta.subject.is_some()
                 && meta.execution_commitment.is_none()
@@ -1739,15 +1748,6 @@ fn validate_message_meta(meta: &MessageMeta) -> Result<(), ControlError> {
                 && has_single_signer
                 && !has_certificate_signers
                 && !has_manifest_hash
-                && !has_chunk_index
-        }
-        MessageKind::CertifiedBodyResponse => {
-            has_round
-                && meta.subject.is_some()
-                && meta.execution_commitment.is_none()
-                && !has_single_signer
-                && !has_certificate_signers
-                && has_manifest_hash
                 && !has_chunk_index
         }
         MessageKind::CommitCertificateRequest => {
@@ -1803,7 +1803,7 @@ fn read_stable_private_file_after_open(
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+        options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed());
     }
     let mut file = options.open(path).map_err(ControlError::Io)?;
     after_open_before_metadata();
@@ -1975,7 +1975,8 @@ fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     }
 }
 #[derive(Debug)]
-pub(crate) enum ControlError {
+#[expect(clippy::redundant_pub_crate, reason = "parent daemon access")]
+pub(super) enum ControlError {
     Io(std::io::Error),
     UnsafeRoot,
     UnsafeFile,
@@ -2016,7 +2017,7 @@ pub(crate) enum ControlError {
     InvalidMessageDescriptor,
 }
 impl ControlError {
-    pub(crate) const fn code(&self) -> &'static str {
+    pub(super) const fn code(&self) -> &'static str {
         match self {
             Self::Io(_) => "io_error",
             Self::UnsafeRoot => "unsafe_root",
@@ -2219,7 +2220,7 @@ mod tests {
     fn chunk_message(marker: u8) -> NetworkMessage {
         NetworkMessage::SumeragiBlock(Arc::new(BlockMessageWire::new(BlockMessage::V2(
             ConsensusMessageV2::new(ConsensusMessageV2Payload::PayloadChunk(PayloadChunk {
-                manifest_hash: HashOf::<PayloadManifest>::from_untyped_unchecked(Hash::new(&[
+                manifest_hash: HashOf::<PayloadManifest>::from_untyped_unchecked(Hash::new([
                     marker,
                 ])),
                 index: u32::from(marker),
@@ -2929,6 +2930,7 @@ mod tests {
         }
     }
     #[test]
+    #[expect(clippy::too_many_lines, reason = "audits coordinate coupling")]
     fn payload_chunk_rule_roundtrips_and_rejects_incompatible_coordinates() {
         let sender = peer(7);
         let chunk_rule = Rule {
@@ -3039,8 +3041,10 @@ mod tests {
     }
     #[test]
     fn stale_duplicate_reordered_and_unknown_releases_are_atomic() {
-        let mut state = State::<NetworkReplyRoute>::default();
-        state.revision = 4;
+        let mut state = State::<NetworkReplyRoute> {
+            revision: 4,
+            ..State::default()
+        };
         let original_rules = state.rules.clone();
         assert!(matches!(
             apply_command(
@@ -3065,9 +3069,11 @@ mod tests {
     }
     #[test]
     fn hold_capacity_is_bounded_by_count_bytes_and_checked_arithmetic() {
-        let mut state = State::<NetworkReplyRoute>::default();
-        state.queue_capacity = 2;
-        state.held_bytes = MAX_HELD_BYTES - 4;
+        let mut state = State::<NetworkReplyRoute> {
+            queue_capacity: 2,
+            held_bytes: MAX_HELD_BYTES - 4,
+            ..State::default()
+        };
         assert!(hold_capacity_available(&state, 4));
         assert!(!hold_capacity_available(&state, 5));
         state.held_bytes = usize::MAX;
@@ -3179,6 +3185,7 @@ mod tests {
         ));
     }
     #[test]
+    #[expect(clippy::too_many_lines, reason = "audits atomic FIFO rule cutover")]
     fn drain_fence_holds_racing_chunks_fifo_until_atomic_cutover() {
         let (_parent, controller) = test_controller();
         let sender = transport_peer(11);

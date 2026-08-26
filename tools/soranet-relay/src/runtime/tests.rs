@@ -11,6 +11,7 @@ mod tests {
         constant_rate,
         privacy::{PrivacyAggregator, PrivacyConfig, ProxyPolicyEventBuffer},
         scheduler::CellClass,
+        vpn::VpnSession,
     };
     use ed25519_dalek::SigningKey;
     use iroha_crypto::{

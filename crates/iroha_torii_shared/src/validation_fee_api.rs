@@ -957,6 +957,7 @@ mod tests {
                 .expect("derive deterministic validation-fee fixture account");
         AccountId::new(key_pair.public_key().clone())
     }
+    #[expect(clippy::too_many_lines, reason = "canonical Parliament authorization")]
     fn parliament_authorization(
         proposal_fingerprint: [u8; 32],
         enacted_at_height: u64,
@@ -1142,10 +1143,6 @@ mod tests {
         );
     }
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the focused schema test keeps every required and retired mobile policy key auditable together"
-    )]
     fn verified_current_policy_shape_has_exact_mobile_keys_and_recipient_evidence() {
         let authorization = parliament_authorization([0x02; 32], 107);
         let proposal = verified_parliament_proposal("ValidationFeePolicyV1", &authorization)

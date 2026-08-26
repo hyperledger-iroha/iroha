@@ -1181,7 +1181,7 @@ fn prepare_bundle_metadata(
     source_identity: &FullSourceTreeIdentityV1,
     vesta_params_input: &mut OpenedInput,
     pallas_params_input: &mut OpenedInput,
-    memory_guard: &KagemushaGenerationMemoryGuardV4,
+    memory_guard: KagemushaGenerationMemoryGuardV4,
     vesta_proving_key_output: &mut (dyn Write + Send),
     pallas_proving_key_output: &mut (dyn Write + Send),
 ) -> Result<PreparedBundle, Box<dyn Error>> {
@@ -1258,7 +1258,7 @@ fn prepare_bundle_metadata(
     let generated = generate_kagemusha_pasta_cycle_artifacts_v4(
         requested_vesta_params,
         requested_pallas_params,
-        memory_guard,
+        &memory_guard,
         vesta_proving_key_output,
         pallas_proving_key_output,
     )
@@ -1670,6 +1670,7 @@ fn portable_source_identifier(value: &str, maximum_len: usize) -> bool {
             byte.is_ascii_alphanumeric() || matches!(*byte, b'.' | b'_' | b'@' | b'+' | b'-')
         })
 }
+#[expect(clippy::too_many_lines, reason = "authenticated source projection")]
 fn decode_embedded_source_seal(
     projection_hex: Option<&str>,
     projection_sha256: Option<&str>,
@@ -2096,7 +2097,7 @@ fn build_candidate(
             &source_identity,
             &mut vesta_params_input,
             &mut pallas_params_input,
-            &memory_guard,
+            memory_guard,
             &mut vesta_proving_key_output,
             &mut pallas_proving_key_output,
         )?;
@@ -2169,7 +2170,7 @@ fn build_candidate(
             false,
         )?;
         let qualification_receipt =
-            generate_staged_candidate_recursive_step_two_receipt_v4(&publication, &memory_guard)?;
+            generate_staged_candidate_recursive_step_two_receipt_v4(&publication, memory_guard)?;
         let qualification_receipt_bytes = canonical_norito_bytes(
             &qualification_receipt,
             "V4 actual-recursion qualification receipt",
@@ -2195,7 +2196,7 @@ fn build_candidate(
             true,
         )?;
         let verified_receipt =
-            verify_staged_candidate_recursive_step_two_receipt_v4(&publication, &memory_guard)?;
+            verify_staged_candidate_recursive_step_two_receipt_v4(&publication, memory_guard)?;
         if verified_receipt != qualification_receipt {
             return Err("stored V4 qualification receipt changed after atomic publication".into());
         }
@@ -2266,7 +2267,7 @@ fn publish_staged_candidate(
             expected_memory_enforcement_profile,
             true,
         )?;
-        verify_staged_candidate_recursive_step_two_receipt_v4(&publication, &memory_guard)?;
+        verify_staged_candidate_recursive_step_two_receipt_v4(&publication, memory_guard)?;
         validate_current_source(required(options, "source-commit"), expected_tree)?;
         trusted_parent.publish_presynced(std::ffi::OsStr::new(staging_name), &publication)
     }
@@ -2460,10 +2461,12 @@ fn verify_staged_candidate_for_publication(
     }
     Ok(())
 }
+#[expect(clippy::similar_names, reason = "symmetric Eq and Ep roles")]
+#[expect(clippy::too_many_lines, reason = "audited candidate qualification")]
 fn process_staged_candidate_recursive_step_two_v4(
     publication: &PublicationDirectory,
     receipt: Option<&KagemushaRecursiveSpendQualificationReceiptV4>,
-    memory_guard: &KagemushaGenerationMemoryGuardV4,
+    memory_guard: KagemushaGenerationMemoryGuardV4,
 ) -> Result<KagemushaRecursiveSpendQualificationReceiptV4, Box<dyn Error>> {
     let mut candidate_input = publication.open_bound_input(
         CANDIDATE_MANIFEST_NORITO_FILE_NAME,
@@ -2581,14 +2584,14 @@ fn process_staged_candidate_recursive_step_two_v4(
             &candidate_record,
             candidate_sha256,
             manifest_sha256,
-            memory_guard,
+            &memory_guard,
             step_eq_proving_key_file,
             step_ep_proving_key_file,
             &mut load,
         ),
         Some(receipt) => {
             let qualification_memory_contract =
-                KagemushaQualificationMemoryContractV4::for_operator(memory_guard);
+                KagemushaQualificationMemoryContractV4::for_operator(&memory_guard);
             let evidence = verify_candidate_recursive_step_two_receipt_v4(
                 &candidate_record,
                 candidate_sha256,
@@ -2613,13 +2616,13 @@ fn process_staged_candidate_recursive_step_two_v4(
 }
 fn generate_staged_candidate_recursive_step_two_receipt_v4(
     publication: &PublicationDirectory,
-    memory_guard: &KagemushaGenerationMemoryGuardV4,
+    memory_guard: KagemushaGenerationMemoryGuardV4,
 ) -> Result<KagemushaRecursiveSpendQualificationReceiptV4, Box<dyn Error>> {
     process_staged_candidate_recursive_step_two_v4(publication, None, memory_guard)
 }
 fn verify_staged_candidate_recursive_step_two_receipt_v4(
     publication: &PublicationDirectory,
-    memory_guard: &KagemushaGenerationMemoryGuardV4,
+    memory_guard: KagemushaGenerationMemoryGuardV4,
 ) -> Result<KagemushaRecursiveSpendQualificationReceiptV4, Box<dyn Error>> {
     publication.verify_candidate_inventory()?;
     let mut candidate_input = publication.open_bound_input(
@@ -2692,7 +2695,7 @@ fn validate_candidate(
         )?;
         validate_current_manifest_source(manifest)?;
         let qualification_receipt =
-            verify_staged_candidate_recursive_step_two_receipt_v4(&candidate, &memory_guard)?;
+            verify_staged_candidate_recursive_step_two_receipt_v4(&candidate, memory_guard)?;
         qualification_receipt
             .validate_against_candidate(&candidate_record)
             .map_err(|error| format!("invalid candidate qualification receipt: {error}"))?;
@@ -2939,7 +2942,7 @@ fn validate_candidate(
         candidate.verify_candidate_inventory()?;
         validate_current_manifest_source(manifest)?;
         let final_receipt =
-            verify_staged_candidate_recursive_step_two_receipt_v4(&candidate, &memory_guard)?;
+            verify_staged_candidate_recursive_step_two_receipt_v4(&candidate, memory_guard)?;
         if final_receipt != qualification_receipt {
             return Err(
                 "candidate qualification receipt changed before validation publication".into(),
@@ -2993,7 +2996,7 @@ fn finalize_release(
         )?;
         validate_current_manifest_source(&candidate_record.manifest)?;
         let qualification_receipt =
-            verify_staged_candidate_recursive_step_two_receipt_v4(&candidate, &memory_guard)?;
+            verify_staged_candidate_recursive_step_two_receipt_v4(&candidate, memory_guard)?;
         let qualification_receipt_bytes = canonical_norito_bytes(
             &qualification_receipt,
             "V4 actual-recursion qualification receipt",
@@ -3430,7 +3433,7 @@ fn finalize_release(
         candidate.verify_candidate_inventory()?;
         validate_current_manifest_source(&candidate_record.manifest)?;
         let final_receipt =
-            verify_staged_candidate_recursive_step_two_receipt_v4(&candidate, &memory_guard)?;
+            verify_staged_candidate_recursive_step_two_receipt_v4(&candidate, memory_guard)?;
         if final_receipt != qualification_receipt {
             return Err("V4 qualification receipt changed before final release publication".into());
         }

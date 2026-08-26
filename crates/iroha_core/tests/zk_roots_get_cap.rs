@@ -165,8 +165,12 @@ fn zk_roots_get_respects_cap_and_max() {
             .push_commitment(commitment, nonzero!(4_usize))
             .expect("seed bounded confidential root history");
     }
-    stx.world.zk_assets.remove(asset_def_id.clone());
-    stx.world.zk_assets.insert(asset_def_id.clone(), zk_state);
+    stx.world
+        .zk_assets_mut_for_testing()
+        .remove(asset_def_id.clone());
+    stx.world
+        .zk_assets_mut_for_testing()
+        .insert(asset_def_id.clone(), zk_state);
     let zk_snapshot = stx
         .world
         .zk_assets()

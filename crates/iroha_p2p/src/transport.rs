@@ -140,6 +140,7 @@ pub mod quic {
         }
     }
     /// Checked QUIC flow-control limits shared by client and server endpoints.
+    #[expect(clippy::struct_field_names, reason = "explicit byte-unit fields")]
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub struct FlowControlGeometry {
         /// Credit granted to each individual stream.
@@ -770,6 +771,10 @@ pub mod tls {
     use tokio::io::{AsyncRead, AsyncWrite};
     use tokio_rustls::{TlsConnector, client::TlsStream};
     /// Upgrade an already-connected TCP stream to TLS 1.3.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error when `host` is not a valid TLS server name or the TLS handshake fails.
     pub async fn connect_tls<S>(host: &str, tcp: S) -> tokio::io::Result<TlsStream<S>>
     where
         S: AsyncRead + AsyncWrite + Unpin,
@@ -799,6 +804,11 @@ pub mod tls {
     ///
     /// This is intended for `https://` proxy connections where operator-supplied pins can prevent
     /// MITM capture of proxy credentials.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error when `host` is not a valid TLS server name, the certificate does not
+    /// match `expected_cert_der`, or the TLS handshake fails.
     pub async fn connect_tls_pinned<S>(
         host: &str,
         tcp: S,

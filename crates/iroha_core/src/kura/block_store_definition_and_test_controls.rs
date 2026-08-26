@@ -461,20 +461,6 @@ impl Kura {
     pub(crate) fn fail_next_block_write_for_tests(&self) {
         self.fail_next_block_write.store(true, Ordering::Relaxed);
     }
-    #[cfg(all(test, feature = "sumeragi-main-loop-tests"))]
-    pub(crate) fn fail_next_block_write_with_unreadable_old_marker_for_tests(&self) {
-        self.block_store
-            .lock()
-            .fail_next_commit_marker_write_and_readback
-            .store(true, Ordering::Release);
-    }
-    #[cfg(all(test, feature = "sumeragi-main-loop-tests"))]
-    pub(crate) fn fail_next_block_write_with_unreadable_new_marker_for_tests(&self) {
-        self.block_store
-            .lock()
-            .fail_next_commit_marker_ack_and_readback
-            .store(true, Ordering::Release);
-    }
     #[cfg(test)]
     pub(crate) fn poison_canonical_storage_for_tests(&self) {
         self.poison_canonical_storage(
@@ -487,20 +473,6 @@ impl Kura {
         let store = self.block_store.lock();
         let path = store.commit_marker_path();
         std::fs::write(&path, bytes).map_err(|error| Error::IO(error, path))
-    }
-    #[cfg(all(test, feature = "sumeragi-main-loop-tests"))]
-    pub(crate) fn canonical_commit_marker_count_for_tests(&self) -> Result<u64> {
-        let mut block_store = self.block_store.lock();
-        let path = block_store.commit_marker_path();
-        block_store
-            .read_commit_marker()?
-            .map(|marker| marker.count)
-            .ok_or_else(|| {
-                Error::IO(
-                    std::io::Error::new(ErrorKind::NotFound, "canonical commit marker is missing"),
-                    path,
-                )
-            })
     }
     #[cfg(test)]
     pub(crate) fn publish_exact_commit_marker_for_tests(&self) -> Result<()> {

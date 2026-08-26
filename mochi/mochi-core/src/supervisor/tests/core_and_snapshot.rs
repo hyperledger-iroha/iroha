@@ -1500,26 +1500,25 @@ fn generated_genesis_binds_topology_specific_block_cadence() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let _stub = KagamiStub::install(temp.path());
-    for (preset, expected_cadence_ms) in [(ProfilePreset::FourPeerBft, 1_000)] {
-        let supervisor = SupervisorBuilder::new(preset)
-            .data_root(temp.path().join(format!("cadence-{}", preset.slug())))
-            .build()
-            .expect("build supervisor");
-        let manifest = RawGenesisTransaction::from_path(supervisor.genesis_manifest())
-            .expect("load generated genesis manifest");
-        let actual_cadence_ms = manifest
-            .effective_parameters()
-            .expect("derive effective genesis parameters")
-            .sumeragi()
-            .block_cadence_ms()
-            .get();
-        assert_eq!(
-            actual_cadence_ms,
-            expected_cadence_ms,
-            "{} must sign the topology-appropriate local cadence",
-            preset.slug()
-        );
-    }
+    let (preset, expected_cadence_ms) = (ProfilePreset::FourPeerBft, 1_000);
+    let supervisor = SupervisorBuilder::new(preset)
+        .data_root(temp.path().join(format!("cadence-{}", preset.slug())))
+        .build()
+        .expect("build supervisor");
+    let manifest = RawGenesisTransaction::from_path(supervisor.genesis_manifest())
+        .expect("load generated genesis manifest");
+    let actual_cadence_ms = manifest
+        .effective_parameters()
+        .expect("derive effective genesis parameters")
+        .sumeragi()
+        .block_cadence_ms()
+        .get();
+    assert_eq!(
+        actual_cadence_ms,
+        expected_cadence_ms,
+        "{} must sign the topology-appropriate local cadence",
+        preset.slug()
+    );
 }
 #[cfg(unix)]
 #[test]

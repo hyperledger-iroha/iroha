@@ -185,7 +185,7 @@ REPLACEMENT_MARKERS = {
     ),
 }
 
-REPLACEMENT_SOURCE_PINS = {
+OPENING_REPLACEMENT_SOURCE_PINS = {
     "crates/norito/tests/aos_ncb_more_golden.rs": (
         "e3727e973be22bcca426934398e2205085d17f7a",
         "4d1154124399e218a597a5a70a8dbdd565db89fd0f87726a5a471736846b5fd8",
@@ -209,6 +209,16 @@ REPLACEMENT_SOURCE_PINS = {
         "4535283cfa1333630e62b2e27ff29036f0156d65dfb9cdf8893b41f17d6955a0",
         2_416,
         69,
+    ),
+}
+
+REPLACEMENT_SOURCE_PINS = {
+    **OPENING_REPLACEMENT_SOURCE_PINS,
+    "crates/norito/tests/codec.rs": (
+        "4f1d755d3982c18669094aff58f80a4572d9f2b9",
+        "a0f45a11fdb725e917f7f9aaaec0e6d866a0d3e236623ae0e3f8303d59781666",
+        15_454,
+        455,
     ),
 }
 
@@ -374,7 +384,7 @@ def _authenticate_openings() -> tuple[bytes, bytes]:
         OPENING_LOCK_BYTES,
         OPENING_LOCK_LINES,
     )
-    for path, (blob, sha256, byte_count, line_count) in REPLACEMENT_SOURCE_PINS.items():
+    for path, (blob, sha256, byte_count, line_count) in OPENING_REPLACEMENT_SOURCE_PINS.items():
         _authenticate_blob(path, blob, sha256, byte_count, line_count)
     return group, manifest
 

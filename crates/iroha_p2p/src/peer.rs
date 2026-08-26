@@ -13369,6 +13369,7 @@ mod state {
             Ok(())
         }
         #[allow(unused_variables, clippy::too_many_lines, clippy::single_match_else)]
+        #[allow(clippy::large_futures, reason = "bounded dial hot path")]
         pub(super) async fn connect_to(
             Self {
                 peer_addr,
@@ -13874,6 +13875,7 @@ mod state {
     }
     #[cfg(test)]
     mod dial_policy_tests {
+        #![allow(clippy::large_futures, reason = "direct production-future coverage")]
         use super::*;
         use std::{sync::Arc, time::Duration};
         fn connecting_to(

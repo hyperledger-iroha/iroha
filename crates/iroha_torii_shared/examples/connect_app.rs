@@ -64,6 +64,7 @@ async fn main() -> anyhow::Result<()> {
     run_connect_app().await
 }
 #[cfg(feature = "connect")]
+#[expect(clippy::too_many_lines, reason = "one-shot Connect app protocol")]
 #[allow(clippy::future_not_send)]
 async fn run_connect_app() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1);
@@ -85,8 +86,8 @@ async fn run_connect_app() -> anyhow::Result<()> {
     }
     let client = Client::new();
     let x = X25519Sha256::new();
-    let (app_pk, app_sk) = x.try_keypair(KeyGenOption::Random)?;
-    let app_pk_bytes: [u8; 32] = *app_pk.as_bytes();
+    let (app_public_key, app_secret_key) = x.try_keypair(KeyGenOption::Random)?;
+    let app_pk_bytes: [u8; 32] = *app_public_key.as_bytes();
     let mut nonce = [0u8; 16];
     rand::rngs::OsRng.try_fill_bytes(&mut nonce)?;
     if nonce.iter().all(|byte| *byte == 0) {
@@ -171,8 +172,12 @@ async fn run_connect_app() -> anyhow::Result<()> {
     else {
         anyhow::bail!("expected the one-shot wallet Approve control");
     };
-    let account: AccountId = account_id.parse()?;
-    let signatory = account
+    let parsed_account = AccountId::parse_encoded(&account_id)?;
+    if parsed_account.canonical() != account_id {
+        anyhow::bail!("wallet returned a noncanonical Connect account identifier");
+    }
+    let signatory = parsed_account
+        .account_id()
         .try_signatory()
         .ok_or_else(|| anyhow::anyhow!("Connect demo requires a single-key account"))?;
     let relay_auth = sdk::relay_auth_hash(&sid_arr, &token_relay);
@@ -190,8 +195,9 @@ async fn run_connect_app() -> anyhow::Result<()> {
     )
     .map_err(anyhow::Error::msg)?;
     let wallet_pk_bytes: [u8; 32] = wallet_pk;
-    let (k_app, k_wallet) = sdk::x25519_derive_keys(&app_sk.to_bytes(), &wallet_pk_bytes, &sid_arr)
-        .expect("x25519 derive keys");
+    let (k_app, k_wallet) =
+        sdk::x25519_derive_keys(&app_secret_key.to_bytes(), &wallet_pk_bytes, &sid_arr)
+            .expect("x25519 derive keys");
     send_app_action(&mut ws, &k_app, &sid_arr, action.as_str()).await?;
     if let Some(Ok(Message::Binary(bin))) = ws.next().await {
         let mut cursor = bin.as_ref();

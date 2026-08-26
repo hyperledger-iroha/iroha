@@ -145,14 +145,51 @@ def test_checked_in_manifest_exhaustively_maps_locked_workspace() -> None:
     } == {
         "connect_norito_bridge": ("cuda",),
         "iroha_audio": ("libopus",),
+        "integration_tests": ("privacy-release-evidence",),
         "iroha_core": (
             "cuda",
             "kagemusha-candidate-source-seal",
+            "kagemusha-generation-memory-lab",
             "kaigi_privacy_mocks",
+            "privacy-release-evidence",
+            "simd",
         ),
         "irohad": ("accel-cuda", "beep"),
         "ivm": ("beep", "cuda", "htm"),
     }
+
+
+def test_checked_in_iroha_core_profile_omits_dedicated_roots() -> None:
+    """The stable profile retains every ordinary non-excluded feature root."""
+
+    metadata = rust_ci.load_cargo_metadata(root=ROOT)
+    workspace = rust_ci.workspace_packages(metadata, root=ROOT)
+    manifest = rust_ci.load_lane_manifest()
+    commands = rust_ci.commands_for_checks(
+        ("iroha_core",),
+        ("clippy",),
+        feature_exclusions=manifest.feature_exclusions,
+        workspace=workspace,
+    )
+
+    assert len(commands) == 1
+    command = commands[0]
+    assert "--all-features" not in command
+    feature_argument = command[command.index("--features") + 1]
+    enabled = set(feature_argument.split(","))
+    exclusion = manifest.feature_exclusions["iroha_core"]
+    expected = set(workspace["iroha_core"].feature_definitions) - {
+        "default",
+        *exclusion.features,
+    }
+    assert enabled == expected
+    assert "simd" not in enabled
+    assert "kagemusha-generation-memory-lab" not in enabled
+    assert "privacy-release-evidence" not in enabled
+    assert "kagemusha-candidate-evidence-lab" in enabled
+    assert "iroha-core-tests" in enabled
+    assert "test-network-native-amx-fault-injection" in enabled
+    assert "node" in enabled
 
 
 def test_package_change_expands_reverse_dependency_closure(tmp_path: Path) -> None:

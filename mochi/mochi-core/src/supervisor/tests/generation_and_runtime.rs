@@ -1127,50 +1127,49 @@ fn genesis_topology_matches_peer_configuration_across_presets() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let _stub = KagamiStub::install(temp.path());
-    for preset in [ProfilePreset::FourPeerBft] {
-        let supervisor = SupervisorBuilder::new(preset)
-            .data_root(temp.path())
-            .build()
-            .expect("build supervisor");
-        let bytes = fs::read(supervisor.genesis_manifest()).expect("genesis manifest readable");
-        let manifest: norito::json::Value =
-            norito::json::from_slice(&bytes).expect("parse genesis json");
-        let transactions = manifest
-            .get("transactions")
-            .and_then(norito::json::Value::as_array)
-            .expect("transactions array");
-        let topology = transactions
-            .iter()
-            .filter_map(|tx| tx.get("topology").and_then(norito::json::Value::as_array))
-            .find(|entries| !entries.is_empty())
-            .expect("non-empty topology transaction present");
-        let actual_peer_ids: Vec<PeerId> = topology
-            .iter()
-            .map(|entry| {
-                let topology_entry: GenesisTopologyEntry =
-                    norito::json::from_value(entry.clone()).expect("topology entry should decode");
-                topology_entry.peer
-            })
-            .collect();
-        let expected_peer_ids: Vec<PeerId> = supervisor
-            .peers()
-            .iter()
-            .map(|peer| peer.peer_id())
-            .collect();
-        assert_eq!(
-            actual_peer_ids, expected_peer_ids,
-            "topology should mirror prepared peers for preset {preset:?}"
-        );
-        let chain = manifest
-            .get("chain")
-            .and_then(norito::json::Value::as_str)
-            .expect("chain field");
-        assert_eq!(
-            chain,
-            supervisor.chain_id(),
-            "manifest chain id should match supervisor for preset {preset:?}"
-        );
-    }
+    let preset = ProfilePreset::FourPeerBft;
+    let supervisor = SupervisorBuilder::new(preset)
+        .data_root(temp.path())
+        .build()
+        .expect("build supervisor");
+    let bytes = fs::read(supervisor.genesis_manifest()).expect("genesis manifest readable");
+    let manifest: norito::json::Value =
+        norito::json::from_slice(&bytes).expect("parse genesis json");
+    let transactions = manifest
+        .get("transactions")
+        .and_then(norito::json::Value::as_array)
+        .expect("transactions array");
+    let topology = transactions
+        .iter()
+        .filter_map(|tx| tx.get("topology").and_then(norito::json::Value::as_array))
+        .find(|entries| !entries.is_empty())
+        .expect("non-empty topology transaction present");
+    let actual_peer_ids: Vec<PeerId> = topology
+        .iter()
+        .map(|entry| {
+            let topology_entry: GenesisTopologyEntry =
+                norito::json::from_value(entry.clone()).expect("topology entry should decode");
+            topology_entry.peer
+        })
+        .collect();
+    let expected_peer_ids: Vec<PeerId> = supervisor
+        .peers()
+        .iter()
+        .map(|peer| peer.peer_id())
+        .collect();
+    assert_eq!(
+        actual_peer_ids, expected_peer_ids,
+        "topology should mirror prepared peers for preset {preset:?}"
+    );
+    let chain = manifest
+        .get("chain")
+        .and_then(norito::json::Value::as_str)
+        .expect("chain field");
+    assert_eq!(
+        chain,
+        supervisor.chain_id(),
+        "manifest chain id should match supervisor for preset {preset:?}"
+    );
 }
 #[test]
 fn peer_spec_peer_id_roundtrip() {

@@ -6,7 +6,7 @@ fn identity(inode: u64) -> FileIdentity {
     FileIdentity {
         device: 7,
         inode,
-        mode: 0o100444,
+        mode: 0o100_444,
         uid: 0,
         gid: 0,
         links: 1,
@@ -157,7 +157,7 @@ fn exact_inventory_allows_only_seventeen_to_one_temp_to_eighteen() {
     );
     let mut staging = initial.clone();
     let mut temporary = identity(90);
-    temporary.mode = 0o100600;
+    temporary.mode = 0o100_600;
     temporary.size = 0;
     staging.insert(
         ".promotion-record-v4.norito.tmp.0123456789abcdef0123456789abcdef".to_owned(),
@@ -169,7 +169,7 @@ fn exact_inventory_allows_only_seventeen_to_one_temp_to_eighteen() {
     );
     let mut committed = initial.clone();
     let mut final_identity = identity(91);
-    final_identity.mode = 0o100600;
+    final_identity.mode = 0o100_600;
     committed.insert(FINAL_NAME.to_owned(), final_identity);
     assert_eq!(
         classify_inventory(&initial, &committed).expect("committed"),
@@ -227,7 +227,7 @@ fn inventory_rejects_temp_multiplicity_and_every_other_delta() {
         "fedcba9876543210fedcba9876543210",
     ] {
         let mut temporary = identity(current.len() as u64 + 40);
-        temporary.mode = 0o100600;
+        temporary.mode = 0o100_600;
         current.insert(format!("{TEMP_PREFIX}{suffix}"), temporary);
     }
     assert!(classify_inventory(&initial, &current).is_err());
@@ -389,6 +389,7 @@ fn report_cross_checks_exact_fields_inventory_and_digests() {
 }
 
 #[test]
+#[expect(clippy::too_many_lines, reason = "complete report mutation matrix")]
 fn report_rejects_every_noncanonical_type_order_scalar_and_artifact_binding() {
     let (report, expected) = valid_report();
     let text = String::from_utf8(report).expect("UTF-8");
@@ -397,7 +398,7 @@ fn report_rejects_every_noncanonical_type_order_scalar_and_artifact_binding() {
     let second_artifact =
         norito::json::to_json(&expected.artifacts[1]).expect("second artifact JSON");
     let mutations = [
-        text.replacen("{", "{ ", 1),
+        text.replacen('{', "{ ", 1),
         text.replacen("\"status\":\"verified\"", "\"status\":\"failed\"", 1),
         text.replacen("\"status\":\"verified\",", "", 1),
         text.replacen(
@@ -506,7 +507,7 @@ fn bounded_identity_rejects_special_empty_oversized_and_inexact_members() {
     for mutation in 0..4 {
         observed = identity(1);
         match mutation {
-            0 => observed.mode = 0o010600,
+            0 => observed.mode = 0o010_600,
             1 => observed.size = 0,
             2 => observed.size = 129,
             _ => observed.size = 127,

@@ -248,7 +248,7 @@ enum PublicationPhase {
 pub(super) fn promote(arguments: &[OsString]) -> Result<u8> {
     #[cfg(target_os = "macos")]
     {
-        return promote_macos(parse_request(arguments)?);
+        promote_macos(parse_request(arguments)?)
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -399,7 +399,7 @@ fn validate_regular_identity(
     maximum: u64,
     allow_empty: bool,
 ) -> Result<()> {
-    if identity.mode & 0o170000 != 0o100000
+    if identity.mode & 0o170_000 != 0o100_000
         || identity.uid != 0
         || identity.links != 1
         || identity.mode & 0o6022 != 0
@@ -607,6 +607,7 @@ fn identity_from_file(file: &mut File, hash_contents: bool) -> Result<FileIdenti
 }
 
 #[cfg(target_os = "macos")]
+#[allow(clippy::large_stack_arrays, reason = "bounded descriptor buffer")]
 fn identity_from_file_checked(
     file: &mut File,
     hash_contents: bool,
@@ -1394,7 +1395,6 @@ impl ExecutableSnapshot {
         let mut limited_source = Read::take(source.file_mut(), MAX_KAGAMI_BYTES + 1);
         let copied = io::copy(&mut limited_source, &mut output)
             .map_err(|_| ControllerError::policy("authenticated Kagami snapshot copy failed"))?;
-        drop(limited_source);
         source
             .file_mut()
             .seek(SeekFrom::Start(0))
@@ -1520,6 +1520,7 @@ fn seatbelt_temp_regex(bundle: &Path) -> Result<String> {
     Ok(regex)
 }
 
+#[allow(clippy::format_push_string, reason = "authenticated Seatbelt literals")]
 fn sandbox_profile(executable: &Path, bundle: &Path, release_policy: &Path) -> Result<String> {
     let mut ancestors = BTreeSet::new();
     for path in [executable, bundle, release_policy] {
@@ -1584,7 +1585,7 @@ fn run_sandboxed(mut command: Command, candidate: &mut CandidateSnapshot) -> Res
     let mut child = command
         .spawn()
         .map_err(|_| ControllerError::policy("promotion Seatbelt launch failed"))?;
-    let process_group = child.id() as i32;
+    let process_group = child.id().cast_signed();
     let watchdog = match super::Watchdog::start(process_group) {
         Ok(watchdog) => watchdog,
         Err(error) => {
@@ -1694,11 +1695,16 @@ fn child_exit(status: ExitStatus) -> Result<u8> {
 fn forward_stderr(bytes: &[u8]) -> Result<()> {
     io::stderr()
         .write_all(bytes)
-        .and_then(|_| io::stderr().flush())
+        .and_then(|()| io::stderr().flush())
         .map_err(|_| ControllerError::policy("Kagami promotion stderr forwarding failed"))
 }
 
 #[cfg(target_os = "macos")]
+#[allow(
+    clippy::needless_pass_by_value,
+    clippy::too_many_lines,
+    reason = "audited promotion corridor"
+)]
 fn promote_macos(request: PromotionRequest) -> Result<u8> {
     kagemusha_python_launcher::validate_root_launch_identity()?;
     kagemusha_python_launcher::require_macos_tcb(&request.expected_macos_build)?;
@@ -1860,7 +1866,7 @@ fn promote_macos(request: PromotionRequest) -> Result<u8> {
     }
     io::stdout()
         .write_all(&captured.stdout)
-        .and_then(|_| io::stdout().flush())
+        .and_then(|()| io::stdout().flush())
         .map_err(|_| commit_uncertain("Kagami report forwarding failed"))?;
     Ok(0)
 }

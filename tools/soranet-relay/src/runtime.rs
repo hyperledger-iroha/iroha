@@ -4132,6 +4132,10 @@ impl RelayRuntime {
             }
         }
     }
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "binds authenticated tunnel context"
+    )]
     async fn serve_vpn_backend_tunnel(
         connection: Connection,
         remote: SocketAddr,

@@ -2382,7 +2382,8 @@ fn release_circuit_params_directory_snapshot_matches_stat_v1(
 #[cfg(unix)]
 #[expect(
     clippy::too_many_arguments,
-    reason = "the directory and both exact leaf identities form one atomic publication set"
+    clippy::similar_names,
+    reason = "the directory and explicitly paired Eq/Ep leaf identities form one atomic publication set"
 )]
 fn verify_release_circuit_params_directory_contents_v1(
     parent: &File,
@@ -2519,7 +2520,8 @@ fn cleanup_release_circuit_params_staging_v1(
 #[cfg(unix)]
 #[expect(
     clippy::too_many_lines,
-    reason = "the two-file private staging set, single directory rename, and post-publication durability classification form one ordered operation"
+    clippy::similar_names,
+    reason = "the explicitly paired Eq/Ep staging set, single directory rename, and post-publication durability classification form one ordered operation"
 )]
 fn write_release_circuit_params_directory_with_hooks_v1<B, S>(
     path: &Path,
@@ -2627,10 +2629,10 @@ where
         // APFS includes staged regular entries in the directory link count.
         // Admit exactly the two known Eq/Ep leaf transitions and no decrease.
         if !staging_snapshot.matches_except_links(complete_staging_snapshot)
-            || !complete_staging_snapshot
+            || complete_staging_snapshot
                 .links
                 .checked_sub(staging_snapshot.links)
-                .is_some_and(|delta| delta <= 2)
+                .is_none_or(|delta| delta > 2)
         {
             bail!("circuit-parameter staging directory changed while its leaves were staged");
         }

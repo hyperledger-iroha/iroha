@@ -215,7 +215,7 @@ pub struct PreparedGenesisArtifacts<'a> {
     pub signed_block: &'a std::path::Path,
     /// Canonical one-line genesis verifier key.
     pub public_key: &'a std::path::Path,
-    /// Canonical LF-terminated checked NetworkId for the exact genesis header hash.
+    /// Canonical LF-terminated checked `NetworkId` for the exact genesis header hash.
     pub expected_hash: &'a std::path::Path,
 }
 /// Runtime genesis artifact paths, normalized relative to the Compose file.

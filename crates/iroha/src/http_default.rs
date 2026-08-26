@@ -235,6 +235,7 @@ impl DefaultRequest {
         let direct_client = direct_loopback
             .then(|| build_direct_loopback_http_client(&url))
             .transpose()?;
+        #[allow(clippy::option_if_let_else, reason = "lazy client selection")]
         let client = match &direct_client {
             Some(client) => client,
             None => http_client(),
@@ -586,26 +587,7 @@ mod tests {
 
     #[test]
     fn kagemusha_lifecycle_loopback_transport_ignores_proxy_environment() {
-        const CHILD: &str = "IROHA_LOOPBACK_PROXY_TEST_CHILD";
-        const TARGET: &str = "IROHA_LOOPBACK_PROXY_TEST_TARGET";
-        if std::env::var_os(CHILD).is_some() {
-            let url = std::env::var(TARGET).expect("child target URL");
-            let response = DefaultRequestBuilder::new(
-                crate::http::Method::POST,
-                Url::parse(&url).expect("child target URL parse"),
-            )
-            .direct_loopback()
-            .body(b"authenticated fee quote".to_vec())
-            .timeout(Duration::from_secs(2))
-            .build()
-            .expect("child direct request")
-            .send()
-            .expect("child direct response");
-            assert_eq!(response.status(), http::StatusCode::OK);
-            return;
-        }
-
-        fn serve_once(listener: TcpListener, status: &str) -> bool {
+        fn serve_once(listener: &TcpListener, status: &str) -> bool {
             listener
                 .set_nonblocking(true)
                 .expect("nonblocking listener");
@@ -637,12 +619,31 @@ mod tests {
             }
         }
 
+        const CHILD: &str = "IROHA_LOOPBACK_PROXY_TEST_CHILD";
+        const TARGET: &str = "IROHA_LOOPBACK_PROXY_TEST_TARGET";
+        if std::env::var_os(CHILD).is_some() {
+            let url = std::env::var(TARGET).expect("child target URL");
+            let response = DefaultRequestBuilder::new(
+                crate::http::Method::POST,
+                Url::parse(&url).expect("child target URL parse"),
+            )
+            .direct_loopback()
+            .body(b"authenticated fee quote".to_vec())
+            .timeout(Duration::from_secs(2))
+            .build()
+            .expect("child direct request")
+            .send()
+            .expect("child direct response");
+            assert_eq!(response.status(), http::StatusCode::OK);
+            return;
+        }
+
         let target_listener = TcpListener::bind("127.0.0.1:0").expect("target listener");
         let target_address = target_listener.local_addr().expect("target address");
         let proxy_listener = TcpListener::bind("127.0.0.1:0").expect("proxy listener");
         let proxy_address = proxy_listener.local_addr().expect("proxy address");
-        let target_server = thread::spawn(move || serve_once(target_listener, "200 OK"));
-        let proxy_server = thread::spawn(move || serve_once(proxy_listener, "502 Bad Gateway"));
+        let target_server = thread::spawn(move || serve_once(&target_listener, "200 OK"));
+        let proxy_server = thread::spawn(move || serve_once(&proxy_listener, "502 Bad Gateway"));
         let proxy_url = format!("http://{proxy_address}");
         let child = std::process::Command::new(std::env::current_exe().expect("test executable"))
             .args([

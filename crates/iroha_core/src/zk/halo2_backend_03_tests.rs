@@ -130,7 +130,7 @@ fn tiny_add_public_fixture() -> TinyAddPublicFixture {
 #[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_anon_transfer_2x2_merkle8_pow5_ipa_zk1_noncanonical() {
-    use ff::PrimeField as _;
+    use ff::{Field as _, PrimeField as _};
     let (vk_envelope, proof) = anon_transfer_pow5_fixture();
     let mut prf_env = zk1::wrap_start();
     zk1::wrap_append_proof(&mut prf_env, &proof);
@@ -673,14 +673,8 @@ fn halo2_verify_add2inst_public_ipa() {
 fn halo2_verify_anon_transfer_ipa() {
     let k = 6u32;
     let params: PastaParams = pasta_params_new(k);
-    let vk_h2: VerifyingKey<Curve> =
-        keygen_vk(&params, &pasta_tiny::AnonTransfer2x2::default()).expect("vk");
-    let pk = keygen_pk(
-        &params,
-        vk_h2.clone(),
-        &pasta_tiny::AnonTransfer2x2::default(),
-    )
-    .expect("pk");
+    let vk_h2: VerifyingKey<Curve> = keygen_vk(&params, &pasta_tiny::AnonTransfer2x2).expect("vk");
+    let pk = keygen_pk(&params, vk_h2.clone(), &pasta_tiny::AnonTransfer2x2).expect("pk");
 
     let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
     halo2_proofs::plonk::create_proof::<
@@ -693,7 +687,7 @@ fn halo2_verify_anon_transfer_ipa() {
     >(
         &params,
         &pk,
-        &[pasta_tiny::AnonTransfer2x2::default()],
+        &[pasta_tiny::AnonTransfer2x2],
         &[&[][..]],
         OsRng,
         &mut transcript,

@@ -7,7 +7,6 @@ use iroha::{
     client::{
         SccpBridgeSubmitResponse, SccpCapabilities, SccpDestinationProofSubmitRequest,
         SccpNativeMessageSubmitRequest, SccpRecentMessages, SccpRecentMessagesQuery,
-        SccpRegistryLimits, SccpResourceLimits,
     },
     data_model::{bridge::SccpRegistryV1, prelude::*},
 };
@@ -773,6 +772,7 @@ fn render_sccp_normalized_codec_value(value: &iroha_sccp::SccpNormalizedCodecVal
 mod tests {
     use super::*;
     use clap::Parser as _;
+    use iroha::client::{SccpRegistryLimits, SccpResourceLimits};
     use iroha_crypto::{Algorithm, KeyPair, Signature};
     use std::{cell::Cell, path::PathBuf};
     use tempfile::tempdir;
@@ -1210,7 +1210,7 @@ mod tests {
                 asset_id: Some("xor".to_owned()),
                 route_id: Some("taira_eth_xor".to_owned()),
                 recipient: None,
-                amount: "5".to_owned(),
+                amount: Quantity::from(5_u32),
                 payload_projection: iroha_sccp::SccpPayloadProjectionV1::Transfer(
                     iroha_sccp::SccpTransferProjectionV1 {
                         version: 1,

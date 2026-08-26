@@ -2088,10 +2088,10 @@ fn prepare_supervisor_with_overrides(
     }
     builder = overrides.clone().apply_to(builder);
     builder = builder.auto_build_binaries(resolved_build_binaries(overrides, config.as_ref()));
-    if should_default_workspace_root(overrides, config.as_ref()) {
-        if let Ok(workspace_root) = env::current_dir() {
-            builder = builder.data_root(sandbox_root_for_workspace(workspace_root));
-        }
+    if should_default_workspace_root(overrides, config.as_ref())
+        && let Ok(workspace_root) = env::current_dir()
+    {
+        builder = builder.data_root(sandbox_root_for_workspace(workspace_root));
     }
     match builder.build() {
         Ok(supervisor) => (Some(supervisor), None, config),
@@ -4696,13 +4696,13 @@ impl MochiApp {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        if let Some(old) = previous.as_mut() {
-            if let Err(primary) = old.stop_all() {
-                let restore = Self::start_requested_peer_aliases(old, &previously_running);
-                let error = Self::combine_with_running_set_restore(primary, restore);
-                self.supervisor = previous;
-                return Err(error);
-            }
+        if let Some(old) = previous.as_mut()
+            && let Err(primary) = old.stop_all()
+        {
+            let restore = Self::start_requested_peer_aliases(old, &previously_running);
+            let error = Self::combine_with_running_set_restore(primary, restore);
+            self.supervisor = previous;
+            return Err(error);
         }
         self.reset_runtime_state_after_maintenance();
         let build_result = match previous {
@@ -5773,14 +5773,13 @@ impl MochiApp {
                                 parse_profile_preset(&self.settings_profile_input)
                                     .unwrap_or(ProfilePreset::FourPeerBft)
                             };
-                            for preset in [ProfilePreset::FourPeerBft] {
-                                let selected = selected_profile == preset;
-                                if ui
-                                    .add(Button::selectable(selected, preset.label()))
-                                    .clicked()
-                                {
-                                    self.set_quickstart_preset(preset);
-                                }
+                            let preset = ProfilePreset::FourPeerBft;
+                            let selected = selected_profile == preset;
+                            if ui
+                                .add(Button::selectable(selected, preset.label()))
+                                .clicked()
+                            {
+                                self.set_quickstart_preset(preset);
                             }
                         });
                         ui.add_space(8.0);
@@ -6448,26 +6447,25 @@ impl MochiApp {
                 ui.add_space(10.0);
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new("Preset").small().color(palette.text_muted));
-                    for preset in [ProfilePreset::FourPeerBft] {
-                        let selected = selected_preset == preset;
-                        let button = Button::selectable(selected, preset.label())
-                            .fill(if selected {
-                                palette.accent_soft
+                    let preset = ProfilePreset::FourPeerBft;
+                    let selected = selected_preset == preset;
+                    let button = Button::selectable(selected, preset.label())
+                        .fill(if selected {
+                            palette.accent_soft
+                        } else {
+                            palette.surface
+                        })
+                        .stroke(Stroke::new(
+                            1.0,
+                            if selected {
+                                palette.accent
                             } else {
-                                palette.surface
-                            })
-                            .stroke(Stroke::new(
-                                1.0,
-                                if selected {
-                                    palette.accent
-                                } else {
-                                    palette.border
-                                },
-                            ))
-                            .corner_radius(CornerRadius::same(8));
-                        if ui.add(button).clicked() {
-                            self.set_quickstart_preset(preset);
-                        }
+                                palette.border
+                            },
+                        ))
+                        .corner_radius(CornerRadius::same(8));
+                    if ui.add(button).clicked() {
+                        self.set_quickstart_preset(preset);
                     }
                 });
                 ui.add_space(8.0);
@@ -11848,7 +11846,7 @@ impl PeerStatusView {
         governance: Option<&&SumeragiLaneGovernance>,
     ) -> RelayIngestState {
         if let Some(relay) = relay {
-            if relay.qc.is_none() {
+            if relay.finality_authority.is_none() {
                 return RelayIngestState::MissingQc;
             }
             if relay.da_commitment_hash.is_none() {

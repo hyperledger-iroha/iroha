@@ -1262,14 +1262,12 @@ fn prepare_sumeragi_relay_work_boundary<R: SumeragiReplyRouteLiveness, O>(
             };
             return SumeragiRelayPreparationBoundary::Dropped(ownership);
         }
-        Ok((consensus_message_control::Admission::Consumed, None)) => {
-            return SumeragiRelayPreparationBoundary::Rejected {
-                error: SumeragiRelayPreparationBoundaryError::InvalidPassDisposition,
-                ownership: None,
-            };
-        }
         Ok((consensus_message_control::Admission::Pass, Some(message))) => message,
-        Ok((consensus_message_control::Admission::Pass, None)) => {
+        Ok((
+            consensus_message_control::Admission::Consumed
+            | consensus_message_control::Admission::Pass,
+            None,
+        )) => {
             return SumeragiRelayPreparationBoundary::Rejected {
                 error: SumeragiRelayPreparationBoundaryError::InvalidPassDisposition,
                 ownership: None,
@@ -4733,8 +4731,8 @@ mod network_relay_tests {
         let live_prepared = match live_reentry {
             SumeragiRelayPreparationBoundary::Prepared(parts) => parts,
             SumeragiRelayPreparationBoundary::Held => panic!("release was held twice"),
-            SumeragiRelayPreparationBoundary::Dropped(_) => panic!("release was dropped"),
-            SumeragiRelayPreparationBoundary::RetiredInactiveReplyRoute(_) => {
+            SumeragiRelayPreparationBoundary::Dropped(()) => panic!("release was dropped"),
+            SumeragiRelayPreparationBoundary::RetiredInactiveReplyRoute(()) => {
                 panic!("live release was retired during re-entry")
             }
             SumeragiRelayPreparationBoundary::Rejected { .. } => {
@@ -4840,7 +4838,7 @@ mod network_relay_tests {
                     ownership: canceled_ownership,
                 },
             ),
-            SumeragiRelayPreparationBoundary::RetiredInactiveReplyRoute(_)
+            SumeragiRelayPreparationBoundary::RetiredInactiveReplyRoute(())
         ));
         controller
             .complete_release(
@@ -8476,17 +8474,11 @@ impl Iroha {
         // Recovery: scan recent persisted pipeline sidecars and log DAG fingerprint mismatches (best-effort).
         #[cfg(feature = "dag-recovery-verify")]
         {
+            use std::collections::{BTreeMap, BTreeSet};
+
             use iroha_core::pipeline::access::{IvmStrategy, derive_for_transaction};
-            use nonzero_ext::nonzero;
             use sha2::{Digest, Sha256};
-            // Choose strategy based on configured pipeline prepass
-            let view = state.query_view();
-            let dyn_pre = state.pipeline_snapshot().dynamic_prepass;
-            let strategy = if dyn_pre {
-                IvmStrategy::DynamicThenConservative
-            } else {
-                IvmStrategy::Conservative
-            };
+
             // Deterministic fingerprint over interned access ids + call hashes
             fn fp_from_access(
                 key_count: usize,
@@ -8495,13 +8487,12 @@ impl Iroha {
                     iroha_data_model::transaction::signed::TransactionEntrypoint,
                 >],
             ) -> [u8; 32] {
-                use std::collections::BTreeMap;
                 let mut map: BTreeMap<&str, u32> = BTreeMap::new();
-                for aset in access.iter() {
-                    for k in aset.read_keys.iter() {
+                for aset in access {
+                    for k in &aset.read_keys {
                         map.entry(k.as_str()).or_insert(u32::MAX);
                     }
-                    for k in aset.write_keys.iter() {
+                    for k in &aset.write_keys {
                         map.entry(k.as_str()).or_insert(u32::MAX);
                     }
                 }
@@ -8511,24 +8502,33 @@ impl Iroha {
                     next = next.saturating_add(1);
                 }
                 let mut hasher = Sha256::new();
-                hasher.update(&(key_count as u64).to_le_bytes());
-                for aset in access.iter() {
-                    hasher.update(&(aset.read_keys.len() as u64).to_le_bytes());
-                    for k in aset.read_keys.iter() {
+                hasher.update((key_count as u64).to_le_bytes());
+                for aset in access {
+                    hasher.update((aset.read_keys.len() as u64).to_le_bytes());
+                    for k in &aset.read_keys {
                         let id = *map.get(k.as_str()).expect("interned");
-                        hasher.update(&id.to_le_bytes());
+                        hasher.update(id.to_le_bytes());
                     }
-                    hasher.update(&(aset.write_keys.len() as u64).to_le_bytes());
-                    for k in aset.write_keys.iter() {
+                    hasher.update((aset.write_keys.len() as u64).to_le_bytes());
+                    for k in &aset.write_keys {
                         let id = *map.get(k.as_str()).expect("interned");
-                        hasher.update(&id.to_le_bytes());
+                        hasher.update(id.to_le_bytes());
                     }
                 }
-                for ch in call_hashes.iter() {
+                for ch in call_hashes {
                     hasher.update(ch.as_ref());
                 }
                 hasher.finalize().into()
             }
+
+            // Choose strategy based on configured pipeline prepass
+            let view = state.query_view();
+            let dyn_pre = state.pipeline_snapshot().dynamic_prepass;
+            let strategy = if dyn_pre {
+                IvmStrategy::DynamicThenConservative
+            } else {
+                IvmStrategy::Conservative
+            };
             // Scan recent blocks for persisted sidecars and compare fingerprints
             let scan_n: usize = 16;
             let total = block_count.0;
@@ -8536,36 +8536,35 @@ impl Iroha {
             for h in start..=total {
                 if let Some(sidecar) = kura.read_pipeline_metadata(h as u64) {
                     let exp = sidecar.dag.fingerprint;
-                    if let Some(height) = std::num::NonZeroUsize::new(h) {
-                        if let Some(block) = kura.get_block(height) {
-                            let txs: Vec<&iroha_data_model::transaction::SignedTransaction> =
-                                block.external_transactions().collect();
-                            let access: Vec<_> = txs
-                                .iter()
-                                .map(|tx| derive_for_transaction(tx, Some(&view), strategy))
-                                .collect();
-                            use std::collections::BTreeSet;
-                            let mut keys = BTreeSet::new();
-                            for aset in access.iter() {
-                                for k in aset.read_keys.iter() {
-                                    keys.insert(k.as_str());
-                                }
-                                for k in aset.write_keys.iter() {
-                                    keys.insert(k.as_str());
-                                }
+                    if let Some(height) = std::num::NonZeroUsize::new(h)
+                        && let Some(block) = kura.get_block(height)
+                    {
+                        let txs: Vec<&iroha_data_model::transaction::SignedTransaction> =
+                            block.external_transactions().collect();
+                        let access: Vec<_> = txs
+                            .iter()
+                            .map(|tx| derive_for_transaction(tx, Some(&view), strategy))
+                            .collect();
+                        let mut keys = BTreeSet::new();
+                        for aset in &access {
+                            for k in &aset.read_keys {
+                                keys.insert(k.as_str());
                             }
-                            let key_count = keys.len();
-                            let call_hashes: Vec<_> =
-                                txs.iter().map(|tx| tx.hash_as_entrypoint()).collect();
-                            let got = fp_from_access(key_count, &access, &call_hashes);
-                            if got != exp {
-                                iroha_logger::warn!(
-                                    height = h,
-                                    expected=%hex::encode(exp),
-                                    actual=%hex::encode(got),
-                                    "startup: pipeline DAG fingerprint mismatch (persisted vs recomputed)"
-                                );
+                            for k in &aset.write_keys {
+                                keys.insert(k.as_str());
                             }
+                        }
+                        let key_count = keys.len();
+                        let call_hashes: Vec<_> =
+                            txs.iter().map(|tx| tx.hash_as_entrypoint()).collect();
+                        let got = fp_from_access(key_count, &access, &call_hashes);
+                        if got != exp {
+                            iroha_logger::warn!(
+                                height = h,
+                                expected=%hex::encode(exp),
+                                actual=%hex::encode(got),
+                                "startup: pipeline DAG fingerprint mismatch (persisted vs recomputed)"
+                            );
                         }
                     }
                 }
@@ -10201,7 +10200,7 @@ async fn start_telemetry(
                 .attach(MSG_SUBSCRIBE)?;
             let metrics_url = telemetry_cfg.telegram_metrics_url.clone().or_else(|| {
                 let addr = config.torii.address.value().to_string();
-                url::Url::parse(&format!("http://{}/metrics", addr)).ok()
+                reqwest::Url::parse(&format!("http://{addr}/metrics")).ok()
             });
             let mut cfg = telemetry_cfg.clone();
             cfg.telegram_metrics_url = metrics_url;
@@ -12455,6 +12454,7 @@ mod accel_tests {
         ivm::reset_metal_backend_for_tests();
     }
 }
+#[cfg(any(not(feature = "telemetry"), not(feature = "dev-telemetry")))]
 fn log_config_warning(message: &str) {
     iroha_logger::warn!(target: "config", "{message}");
 }
@@ -16569,6 +16569,7 @@ mod tests {
         }
         #[cfg(feature = "test-network-message-control")]
         #[tokio::test]
+        #[expect(clippy::too_many_lines, reason = "hold/reconnect route lifecycle")]
         async fn hold_release_same_source_reconnect_retires_old_delivery_without_rebinding_new_route()
          {
             let (_control_dir, controller) = crate::consensus_message_control::Controller::<
@@ -16818,6 +16819,7 @@ mod tests {
         }
         #[cfg(feature = "test-network-message-control")]
         #[tokio::test]
+        #[expect(clippy::too_many_lines, reason = "layered relay ownership lifecycle")]
         async fn hold_release_preserves_exact_layered_ownership_until_recorded_terminal() {
             let (_control_dir, controller) = crate::consensus_message_control::Controller::<
                 NetworkReplyRoute,
@@ -18488,8 +18490,7 @@ mod tests {
         #[cfg(feature = "sm")]
         #[test]
         fn manifest_crypto_applies_without_genesis_block() -> eyre::Result<()> {
-            let genesis_keys = KeyPair::random();
-            let mut config_table = config_factory(genesis_keys.public_key());
+            let mut config_table = sample_config_table();
             iroha_config::base::toml::Writer::new(&mut config_table)
                 .write(["kura", "store_dir"], "./storage")
                 .write(["snapshot", "store_dir"], "./snapshots")
@@ -18500,10 +18501,12 @@ mod tests {
             {
                 genesis_table.remove("file");
             }
-            let mut manifest_crypto = ManifestCrypto::default();
-            manifest_crypto.default_hash = "sm3-256".to_owned();
-            manifest_crypto.allowed_signing = vec![Algorithm::Ed25519, Algorithm::Sm2];
-            manifest_crypto.sm2_distid_default = "CN1234567812345678".to_owned();
+            let manifest_crypto = ManifestCrypto {
+                default_hash: "sm3-256".to_owned(),
+                allowed_signing: vec![Algorithm::Ed25519, Algorithm::Sm2],
+                sm2_distid_default: "CN1234567812345678".to_owned(),
+                ..ManifestCrypto::default()
+            };
             let manifest = GenesisBuilder::new_without_executor(
                 ChainId::from("test-chain"),
                 PathBuf::from("."),

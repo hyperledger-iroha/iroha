@@ -491,7 +491,7 @@ fn validate_distinct_fixture_identities(fixtures: &[FixtureOutput]) -> Result<()
 }
 fn render_fixtures(fixtures_path: &Path) -> Result<RenderedFixtures, String> {
     let _chain_guard = ChainDiscriminantReset::new(DEFAULT_CHAIN_DISCRIMINANT);
-    let source_bytes = fs::read(&fixtures_path)
+    let source_bytes = fs::read(fixtures_path)
         .map_err(|err| format!("failed to read {}: {err}", fixtures_path.display()))?;
     let mut entries: Vec<PayloadFileEntry> = norito::json::from_slice(&source_bytes)
         .map_err(|err| format!("invalid payload JSON: {err}"))?;

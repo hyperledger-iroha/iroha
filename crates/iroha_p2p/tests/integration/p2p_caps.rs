@@ -395,6 +395,7 @@ async fn tcp_global_frame_cap_disconnects() {
     .await;
 }
 #[cfg(feature = "p2p_tls")]
+#[expect(clippy::too_many_lines, reason = "complete TLS frame-cap lifecycle")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tls_global_frame_cap_disconnects() {
     let _cap_test_guard = FRAME_CAP_TEST_LOCK.lock().await;

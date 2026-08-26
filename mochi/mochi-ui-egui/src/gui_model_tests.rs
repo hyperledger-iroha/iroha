@@ -477,7 +477,7 @@ fn maintenance_reset_invokes_kagami_and_cleans_storage() {
             "snapshot directory should exist for {}",
             peer.alias()
         );
-        let entries = fs::read_dir(&snapshot_dir)
+        let entries = fs::read_dir(snapshot_dir)
             .expect("snapshot dir entries")
             .map(|entry| entry.expect("snapshot entry").file_name())
             .collect::<Vec<_>>();
@@ -1572,7 +1572,7 @@ fn lane_status_rows_surface_relay_lag_and_cursor() {
         nexus_fee_receipts: Vec::new(),
         native_amx_receipts: Vec::new(),
     };
-    let envelope = LaneRelayEnvelope::new(header, None, None, settlement, 256).expect("envelope");
+    let envelope = LaneRelayEnvelope::new(header, None, settlement, 256).expect("envelope");
     diagnostics.lane_relay_envelopes = vec![envelope];
     view.record_snapshot(snapshot, Some(sumeragi), Some(diagnostics), None, None, now);
     let rows = view.lane_status_rows(&lane_catalog_snapshot(None));

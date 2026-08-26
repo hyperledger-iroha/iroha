@@ -773,8 +773,10 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let empty = temp.path().join("empty");
         fs::create_dir(&empty).expect("create empty root");
-        let mut overrides = CliOverrides::default();
-        overrides.data_root = Some(empty.clone());
+        let overrides = CliOverrides {
+            data_root: Some(empty.clone()),
+            ..CliOverrides::default()
+        };
         assert_eq!(
             require_disposable_data_root(&overrides).expect("empty root accepted"),
             empty
@@ -795,8 +797,10 @@ mod tests {
         let link = temp.path().join("link");
         fs::create_dir(&target).expect("create target");
         symlink(&target, &link).expect("create symlink");
-        let mut overrides = CliOverrides::default();
-        overrides.data_root = Some(link);
+        let overrides = CliOverrides {
+            data_root: Some(link),
+            ..CliOverrides::default()
+        };
         assert!(
             require_disposable_data_root(&overrides)
                 .expect_err("symlink root must fail")

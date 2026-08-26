@@ -1,5 +1,144 @@
 const INROU_HEALTH_SERVER_PY: &str = include_str!("fixtures/inrou_health_server.py");
 
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "complete durable outbox recovery fixture"
+)]
+fn private_execution_reconcile_retains_rejection_and_advances_later_entry() -> Result<()> {
+    use iroha_data_model::soracloud::{
+        DecryptionAuthorityPolicyV1, DecryptionRequestV1, SoraDecryptionRequestRecordV1,
+    };
+
+    let temp_dir = tempfile::tempdir()?;
+    let mut state = test_state();
+    insert_public_lane_validator_fixture(
+        &mut Arc::get_mut(&mut state).expect("unique test state").world,
+        PublicLaneValidatorStatus::Active,
+    );
+    let config = test_runtime_manager_config(temp_dir.path().to_path_buf())
+        .with_local_host_identity(ALICE_ID.clone(), canonical_inrou_test_peer_id());
+    let binding = resolve_private_execution_journal_deployment_binding(
+        state.as_ref(),
+        &config,
+        temp_dir.path(),
+    )
+    .map_err(|error| eyre::eyre!(error.message))?;
+    let sorafs_node = test_sorafs_node(&temp_dir);
+    let bundle = load_deployment_bundle_fixture()?;
+    let policy: DecryptionAuthorityPolicyV1 = norito::json::from_str(include_str!(
+        "../../../../../fixtures/soracloud/decryption_authority_policy_v1.json"
+    ))?;
+    let request: DecryptionRequestV1 = norito::json::from_str(include_str!(
+        "../../../../../fixtures/soracloud/decryption_request_v1.json"
+    ))?;
+
+    for (sequence, seed) in [(1, 0xD1), (2, 0xD2)] {
+        let output_ciphertext = vec![seed; 257];
+        ingest_sorafs_payload(&sorafs_node, &output_ciphertext)?;
+        let (_, mut entry) = private_execution_journal_test_fixture(seed)?;
+        entry.receipt.network_id = binding.network_id;
+        entry.receipt.policy_id = "phi_threshold_policy".to_owned();
+        entry.receipt.output_artifact.artifact_hash = Hash::new(&output_ciphertext);
+        private_execution_journal_test_reseal_receipt(&mut entry.receipt);
+
+        let mut request = request.clone();
+        request.request_id = entry.decryption_request_id.clone();
+        request.ciphertext_commitment = entry.receipt.input_artifact.artifact_hash;
+        let record = SoraDecryptionRequestRecordV1 {
+            schema_version: iroha_data_model::soracloud::SORA_DECRYPTION_REQUEST_RECORD_VERSION_V1,
+            service_name: entry.service_name.clone(),
+            service_version: entry.receipt.service_version.clone(),
+            policy: policy.clone(),
+            request,
+            sequence,
+            signer: ALICE_KEYPAIR.public_key().clone(),
+        };
+        record.validate()?;
+        let mut event = sample_service_audit_event(&bundle, sequence);
+        event.block_height = 1;
+        event.action = SoraServiceLifecycleActionV1::DecryptionRequest;
+        event.service_name = record.service_name.clone();
+        event.to_version.clone_from(&record.service_version);
+        event.governance_tx_hash = Some(record.request.governance_tx_hash);
+        event.binding_name = Some(record.request.binding_name.clone());
+        event.state_key = Some(record.request.state_key.clone());
+        event.policy_name = Some(record.request.policy_name.clone());
+        event.policy_snapshot_hash = Some(record.policy_snapshot_hash());
+        event.jurisdiction_tag = Some(record.request.jurisdiction_tag.clone());
+        event.consent_evidence_hash = record.request.consent_evidence_hash;
+        event.break_glass = Some(record.request.break_glass);
+        event.break_glass_reason = record.request.break_glass_reason.clone();
+        event.validate()?;
+        let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
+        world
+            .soracloud_decryption_request_records_mut_for_testing()
+            .insert(
+                (
+                    entry.service_name.as_ref().to_owned(),
+                    entry.decryption_request_id.clone(),
+                ),
+                record,
+            );
+        world
+            .soracloud_service_audit_events_mut_for_testing()
+            .insert(sequence, event);
+
+        store_private_execution_journal_entry(temp_dir.path(), binding, &entry, None)?;
+    }
+
+    let entries = list_private_execution_journal_entries(temp_dir.path(), binding)?;
+    assert_eq!(entries.len(), 2);
+    let mut rejected = entries[0].clone();
+    let actionable = entries[1].clone();
+    let endpoint = private_execution_phase_endpoint(rejected.phase);
+    let payload = build_soracloud_runtime_submission_payload_with_instructions(
+        binding.network_id,
+        ALICE_ID.clone(),
+        vec![private_execution_phase_instruction(&rejected)],
+        config.submission.fee_payment_intent(),
+        endpoint,
+    )?;
+    let transaction = sign_soracloud_runtime_submission_payload(payload, &ALICE_KEYPAIR, endpoint)?;
+    rejected.transaction_hash = Some(transaction.hash().into());
+    rejected.signed_transaction = Some(transaction);
+    rejected.submission_attempt = 1;
+    store_private_execution_journal_entry(temp_dir.path(), binding, &rejected, None)?;
+    let mutation_sink = Arc::new(RecordingRuntimeMutationSink {
+        private_execution_network_id: Some(binding.network_id),
+        ..Default::default()
+    });
+    let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state))
+        .with_mutation_sink(mutation_sink.clone())
+        .with_sorafs_node(sorafs_node);
+
+    manager.reconcile_private_execution_outbox()?;
+
+    assert_eq!(
+        load_private_execution_journal_entry(
+            temp_dir.path(),
+            binding,
+            &rejected.service_name,
+            &rejected.decryption_request_id,
+        )?,
+        Some(rejected),
+    );
+    let advanced = load_private_execution_journal_entry(
+        temp_dir.path(),
+        binding,
+        &actionable.service_name,
+        &actionable.decryption_request_id,
+    )?
+    .expect("later journal evidence remains durable");
+    assert_eq!(advanced.submission_attempt, 1);
+    let transaction = advanced
+        .signed_transaction
+        .as_ref()
+        .expect("later entry advanced to signed evidence");
+    assert_eq!(advanced.transaction_hash, Some(transaction.hash().into()));
+    Ok(())
+}
+
 fn url_host_port(url: &str) -> Option<(String, u16)> {
     let parsed = reqwest::Url::parse(url).ok()?;
     Some((
@@ -10,6 +149,10 @@ fn url_host_port(url: &str) -> Option<(String, u16)> {
 
 #[test]
 #[ignore = "requires an unprivileged guest plus a complete canonical IROHA_INROU_PORTABLE_SMOKE_BUNDLE_FILE"]
+#[expect(
+    clippy::too_many_lines,
+    reason = "complete external-bundle smoke lifecycle"
+)]
 fn inrou_portable_smoke_boots_external_bundle_and_serves_healthcheck() -> Result<()> {
     if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1")
         || std::env::var("IROHA_INROU_PORTABLE").ok().as_deref() != Some("1")
@@ -491,14 +634,14 @@ fn warmed_ordered_mailbox_invalidates_a_changed_bundle_file() -> Result<()> {
             .health_status,
         SoraServiceHealthStatusV1::Degraded
     );
-    let stats = handle.ivm_runtime_cache_stats();
-    assert_eq!(stats.artifact_reads, 2);
-    assert_eq!(stats.artifact_hashes, 2);
-    assert_eq!(stats.contract_preparations, 1);
-    assert_eq!(stats.runtime_allocations, 1);
-    assert_eq!(stats.invalidations, 1);
-    assert_eq!(stats.prepared_entries, 0);
-    assert_eq!(stats.idle_runtimes, 0);
+    let cache_stats = handle.ivm_runtime_cache_stats();
+    assert_eq!(cache_stats.artifact_reads, 2);
+    assert_eq!(cache_stats.artifact_hashes, 2);
+    assert_eq!(cache_stats.contract_preparations, 1);
+    assert_eq!(cache_stats.runtime_allocations, 1);
+    assert_eq!(cache_stats.invalidations, 1);
+    assert_eq!(cache_stats.prepared_entries, 0);
+    assert_eq!(cache_stats.idle_runtimes, 0);
     Ok(())
 }
 #[test]

@@ -2189,6 +2189,7 @@ struct RenderPeerFeatures<'a> {
     onboarding_private_key_file: &'a Path,
     onboarding_token_hash: &'a [u8; 32],
 }
+#[derive(Clone, Copy)]
 enum LocalnetGenesisIdentitySource {
     BootstrapInline(HashOf<BlockHeader>),
     PublishedFile,

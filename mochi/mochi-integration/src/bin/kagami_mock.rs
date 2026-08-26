@@ -460,14 +460,14 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             "permissioned".to_owned(),
         ])
         .expect("sign with mock kagami");
-        let wire = fs::read(signed).expect("read signed output");
+        let wire = fs::read(&signed).expect("read signed output");
         let block = decode_framed_signed_block(&wire).expect("decode signed output");
         assert_eq!(
             fs::read(bound).expect("read bound output"),
             manifest_json.as_bytes()
         );
         assert_eq!(
-            fs::read_to_string(expected_hash).expect("read exact hash"),
+            fs::read_to_string(&expected_hash).expect("read exact hash"),
             format!("{}\n", NetworkId::from_genesis_hash(block.hash()))
         );
         let identity_path = expected_hash.to_string_lossy().replace('\\', "\\\\");

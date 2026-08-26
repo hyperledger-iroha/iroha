@@ -250,7 +250,7 @@ mod tests {
         let expected = format!("{BEGIN}\ncurrent\n{END}");
         assert!(
             prepare_outputs(
-                &[header.clone()],
+                std::slice::from_ref(&header),
                 &[runtime],
                 &abi_golden,
                 &gas_golden,

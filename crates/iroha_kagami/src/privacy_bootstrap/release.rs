@@ -1408,6 +1408,7 @@ fn render_release_config_v1(
     }
     Ok(rendered.into_bytes())
 }
+#[expect(clippy::too_many_lines, reason = "complete secret-free template audit")]
 fn validate_secret_free_config_template_v1(config: &toml::Value) -> color_eyre::Result<()> {
     let root = config
         .as_table()

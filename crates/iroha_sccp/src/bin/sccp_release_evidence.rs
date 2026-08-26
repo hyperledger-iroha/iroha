@@ -1067,6 +1067,7 @@ fn validate_sora_finality_anchor_policy(
         checkpoint_finality_artifact_hash,
     })
 }
+#[derive(Debug)]
 struct ValidatedReleaseTrustV1 {
     release_keys: [[u8; 32]; 2],
 }
@@ -3303,8 +3304,7 @@ mod tests {
             let candidate = release_trust_policy_with_proof_string(proof_index, field, replacement);
             let error =
                 validate_release_trust_policy(&candidate, "test-fixture", &mut BTreeSet::new())
-                    .err()
-                    .expect("diagnostic circuit mutation must be rejected");
+                    .expect_err("diagnostic circuit mutation must be rejected");
             assert_eq!(error, expected_error);
         }
     }

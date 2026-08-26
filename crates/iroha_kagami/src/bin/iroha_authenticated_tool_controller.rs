@@ -182,7 +182,8 @@ struct ReaderResult {
 }
 
 fn main() -> ExitCode {
-    match entrypoint(env::args_os().collect()) {
+    let arguments = env::args_os().collect::<Vec<_>>();
+    match entrypoint(&arguments) {
         Ok(code) => ExitCode::from(code),
         Err(error) => {
             eprintln!("authenticated-tool-controller: {}", error.message);
@@ -192,12 +193,12 @@ fn main() -> ExitCode {
 }
 
 #[cfg(any(target_os = "macos", test))]
-fn entrypoint(arguments: Vec<OsString>) -> Result<u8> {
+fn entrypoint(arguments: &[OsString]) -> Result<u8> {
     if arguments.len() < 2 {
         return Err(ControllerError::policy("missing subcommand"));
     }
     match arguments[1].to_str() {
-        Some("run-v1") => run(parse_request(&arguments[2..])?),
+        Some("run-v1") => run(&parse_request(&arguments[2..])?),
         Some("qualify-host-v1") => qualify_host(&arguments[2..]),
         Some("qualification-probe-v1") => qualification_probe(&arguments[2..]),
         Some("launch-kagemusha-readiness-v1") => {
@@ -214,7 +215,7 @@ fn entrypoint(arguments: Vec<OsString>) -> Result<u8> {
 }
 
 #[cfg(all(not(target_os = "macos"), not(test)))]
-fn entrypoint(arguments: Vec<OsString>) -> Result<u8> {
+fn entrypoint(arguments: &[OsString]) -> Result<u8> {
     if arguments.len() < 2 {
         return Err(ControllerError::policy("missing subcommand"));
     }
@@ -240,6 +241,11 @@ fn entrypoint(arguments: Vec<OsString>) -> Result<u8> {
 }
 
 #[cfg(any(target_os = "macos", test))]
+#[allow(
+    clippy::similar_names,
+    clippy::too_many_lines,
+    reason = "audited isolation parser"
+)]
 fn parse_request(arguments: &[OsString]) -> Result<Request> {
     if arguments.len() > MAX_ARGUMENTS {
         return Err(ControllerError::policy("request has too many arguments"));
@@ -686,10 +692,10 @@ fn validate_tool_arguments(tool: &[OsString]) -> Result<()> {
 }
 
 #[cfg(any(target_os = "macos", test))]
-fn run(request: Request) -> Result<u8> {
-    validate_environment(&request)?;
+fn run(request: &Request) -> Result<u8> {
+    validate_environment(request)?;
     validate_no_inherited_fds()?;
-    validate_runtime_identity(&request)?;
+    validate_runtime_identity(request)?;
     match request.platform {
         Platform::Macos => {
             #[cfg(target_os = "macos")]
@@ -786,6 +792,7 @@ impl Drop for QualificationRoot {
 }
 
 #[cfg(target_os = "macos")]
+#[allow(clippy::too_many_lines, reason = "complete host qualification")]
 fn qualify_macos_host() -> Result<()> {
     validate_no_inherited_fds()?;
     let executable = env::current_exe()
@@ -1008,7 +1015,7 @@ fn qualify_macos_host() -> Result<()> {
         let rendered = probe
             .into_iter()
             .map(|argument| match argument.to_str() {
-                Some("allowed") | Some("other") => case.join(argument).into_os_string(),
+                Some("allowed" | "other") => case.join(argument).into_os_string(),
                 _ => argument,
             })
             .collect::<Vec<_>>();
@@ -1091,11 +1098,12 @@ fn qualify_macos_host() -> Result<()> {
 #[cfg(target_os = "macos")]
 fn write_qualification_file(path: &Path, bytes: &[u8]) -> Result<()> {
     fs::write(path, bytes)
-        .and_then(|_| fs::set_permissions(path, fs::Permissions::from_mode(0o600)))
+        .and_then(|()| fs::set_permissions(path, fs::Permissions::from_mode(0o600)))
         .map_err(|_| ControllerError::policy("host qualification input could not be created"))
 }
 
 #[cfg(target_os = "macos")]
+#[allow(clippy::too_many_arguments, reason = "explicit isolation contract")]
 fn qualification_command(
     executable: &Path,
     temporary: &Path,
@@ -1188,6 +1196,7 @@ fn qualification_command(
 }
 
 #[cfg(target_os = "macos")]
+#[allow(clippy::too_many_arguments, reason = "explicit isolation mapping")]
 fn run_qualification_request(
     executable: &Path,
     temporary: &Path,
@@ -1214,7 +1223,7 @@ fn run_qualification_request(
 }
 
 #[cfg(target_os = "macos")]
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "explicit quota mapping")]
 fn run_qualification_request_with_quotas(
     executable: &Path,
     temporary: &Path,
@@ -1314,7 +1323,7 @@ fn qualify_watchdog(executable: &Path, temporary: &Path) -> Result<()> {
     };
     controller
         .kill()
-        .and_then(|_| controller.wait().map(|_| ()))
+        .and_then(|()| controller.wait().map(|_| ()))
         .map_err(|_| ControllerError::policy("host watchdog controller could not be killed"))?;
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
@@ -1337,6 +1346,7 @@ fn qualify_watchdog(executable: &Path, temporary: &Path) -> Result<()> {
 }
 
 #[cfg(target_os = "macos")]
+#[allow(clippy::similar_names, reason = "canonical PID and PPID fields")]
 fn qualification_child_pids(parent: u32) -> Result<Vec<u32>> {
     let output = Command::new("/bin/ps")
         .args(["-axo", "pid=,ppid="])
@@ -1565,6 +1575,7 @@ fn validate_no_inherited_fds() -> Result<()> {
     unsafe_code,
     reason = "Unix credential queries have no safe standard-library wrappers"
 )]
+#[allow(clippy::similar_names, reason = "real/effective UID/GID pairs")]
 #[cfg(any(target_os = "macos", test))]
 fn validate_runtime_identity(request: &Request) -> Result<()> {
     unsafe extern "C" {
@@ -1599,28 +1610,29 @@ fn validate_runtime_identity(request: &Request) -> Result<()> {
 }
 
 #[cfg(target_os = "macos")]
-fn run_macos(request: Request) -> Result<u8> {
-    let executable = PathBuf::from(&request.tool[0]);
-    let executable = fs::canonicalize(&executable)
+#[allow(clippy::too_many_lines, reason = "complete isolated lifecycle")]
+fn run_macos(request: &Request) -> Result<u8> {
+    let requested_executable = Path::new(&request.tool[0]);
+    let executable = fs::canonicalize(requested_executable)
         .map_err(|_| ControllerError::policy("tool executable is unavailable"))?;
-    if executable != PathBuf::from(&request.tool[0]) {
+    if executable != requested_executable {
         return Err(ControllerError::policy(
             "tool executable must be canonical and symlink-free",
         ));
     }
     validate_trusted_path(&executable, false)?;
     validate_trusted_path(Path::new(SANDBOX_EXEC), true)?;
-    validate_working_directory(&request)?;
-    prepare_writable_files(&request)?;
-    let readable_snapshots = validate_readable_inputs(&request)?;
+    validate_working_directory(request)?;
+    prepare_writable_files(request)?;
+    let readable_snapshots = validate_readable_inputs(request)?;
     let executable_identity = file_identity(&executable, true, true)?;
     let initial_root = if request.deny_all_writes {
         None
     } else {
         Some(root_snapshot(&request.working_directory)?)
     };
-    validate_write_state(&request, initial_root.as_ref())?;
-    let profile = macos_profile(&request, &executable)?;
+    validate_write_state(request, initial_root.as_ref())?;
+    let profile = macos_profile(request, &executable)?;
     validate_sandbox_profile(&profile)?;
 
     let environment: Vec<(OsString, OsString)> = env::vars_os().collect();
@@ -1647,7 +1659,7 @@ fn run_macos(request: Request) -> Result<u8> {
     let mut child = command
         .spawn()
         .map_err(|_| ControllerError::policy("failed to execute macOS Seatbelt controller"))?;
-    let process_group = child.id() as i32;
+    let process_group = child.id().cast_signed();
     let watchdog = match Watchdog::start(process_group) {
         Ok(watchdog) => watchdog,
         Err(error) => {
@@ -1703,7 +1715,7 @@ fn run_macos(request: Request) -> Result<u8> {
                 .map_err(|_| ControllerError::policy("failed to reap isolated tool"))?;
         }
         if !request.deny_all_writes
-            && let Err(error) = validate_write_state(&request, initial_root.as_ref())
+            && let Err(error) = validate_write_state(request, initial_root.as_ref())
         {
             failure = Some(error);
             terminate_process_group(&mut job.child, process_group)?;
@@ -1736,11 +1748,11 @@ fn run_macos(request: Request) -> Result<u8> {
     }
     io::stdout()
         .write_all(&stdout_result.bytes)
-        .and_then(|_| io::stdout().flush())
+        .and_then(|()| io::stdout().flush())
         .map_err(|_| ControllerError::policy("failed to forward tool stdout"))?;
     io::stderr()
         .write_all(&stderr_result.bytes)
-        .and_then(|_| io::stderr().flush())
+        .and_then(|()| io::stderr().flush())
         .map_err(|_| ControllerError::policy("failed to forward tool stderr"))?;
 
     ensure_empty_process_group(process_group)?;
@@ -1752,7 +1764,7 @@ fn run_macos(request: Request) -> Result<u8> {
     }
     validate_readable_snapshots(&readable_snapshots)?;
     if !request.deny_all_writes {
-        validate_write_state(&request, initial_root.as_ref())?;
+        validate_write_state(request, initial_root.as_ref())?;
     }
     if let Some(error) = failure {
         return Err(error);
@@ -1890,6 +1902,7 @@ fn validate_sandbox_profile(profile: &str) -> Result<()> {
 }
 
 #[cfg(target_os = "macos")]
+#[allow(clippy::too_many_lines, reason = "complete Seatbelt policy")]
 fn macos_profile(request: &Request, executable: &Path) -> Result<String> {
     let executable_literal = seatbelt_literal(executable)?;
     let mut profile = format!(
@@ -2089,7 +2102,7 @@ fn validate_readable_path(path: &Path, require_directory: bool) -> Result<()> {
 #[cfg(any(target_os = "macos", test))]
 fn validate_readable_snapshots(snapshots: &[(PathBuf, FileIdentity)]) -> Result<()> {
     for (path, expected) in snapshots {
-        let require_regular = expected.mode & 0o170000 == 0o100000;
+        let require_regular = expected.mode & 0o170_000 == 0o100_000;
         if file_identity(path, require_regular, false)? != *expected {
             return Err(ControllerError::policy(format!(
                 "readable input changed during execution: {}",
@@ -2102,6 +2115,11 @@ fn validate_readable_snapshots(snapshots: &[(PathBuf, FileIdentity)]) -> Result<
 
 #[cfg(any(target_os = "macos", test))]
 fn prepare_writable_files(request: &Request) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    const SAFE_CREATE_FLAGS: i32 = 0x0000_0100 | 0x0100_0000; // O_NOFOLLOW | O_CLOEXEC.
+    #[cfg(target_os = "linux")]
+    const SAFE_CREATE_FLAGS: i32 = 0x0002_0000 | 0x0008_0000; // O_NOFOLLOW | O_CLOEXEC.
+
     if request.deny_all_writes {
         return Ok(());
     }
@@ -2114,10 +2132,6 @@ fn prepare_writable_files(request: &Request) -> Result<()> {
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 let mut options = fs::OpenOptions::new();
-                #[cfg(target_os = "macos")]
-                const SAFE_CREATE_FLAGS: i32 = 0x0000_0100 | 0x0100_0000; // O_NOFOLLOW | O_CLOEXEC.
-                #[cfg(target_os = "linux")]
-                const SAFE_CREATE_FLAGS: i32 = 0x0002_0000 | 0x0008_0000; // O_NOFOLLOW | O_CLOEXEC.
                 options
                     .write(true)
                     .create_new(true)
@@ -2362,7 +2376,7 @@ fn directory_stable_fields(identity: &FileIdentity) -> (u64, u64, u32, u32, u32)
 
 #[cfg(any(target_os = "macos", test))]
 fn validate_writable_identity(name: &str, identity: &FileIdentity, limit: u64) -> Result<()> {
-    if identity.mode & 0o170000 != 0o100000
+    if identity.mode & 0o170_000 != 0o100_000
         || identity.links != 1
         || identity.uid != effective_uid()
         || identity.mode & 0o077 != 0
@@ -2411,11 +2425,12 @@ fn file_identity(path: &Path, require_regular: bool, hash_contents: bool) -> Res
 
 #[cfg(any(target_os = "macos", test))]
 fn sha256_file(path: &Path) -> Result<[u8; 32]> {
-    let mut options = fs::OpenOptions::new();
     #[cfg(target_os = "macos")]
     const SAFE_OPEN_FLAGS: i32 = 0x0000_0100 | 0x0100_0000; // O_NOFOLLOW | O_CLOEXEC.
     #[cfg(target_os = "linux")]
     const SAFE_OPEN_FLAGS: i32 = 0x0002_0000 | 0x0008_0000; // O_NOFOLLOW | O_CLOEXEC.
+
+    let mut options = fs::OpenOptions::new();
     options.read(true).custom_flags(SAFE_OPEN_FLAGS);
     let mut file = options
         .open(path)
@@ -2429,10 +2444,10 @@ fn sha256_file(path: &Path) -> Result<[u8; 32]> {
         ));
     }
     let mut hash = Sha256::new();
-    let mut buffer = [0u8; 64 * 1024];
+    let mut buffer = vec![0u8; 64 * 1024].into_boxed_slice();
     loop {
         let count = file
-            .read(&mut buffer)
+            .read(buffer.as_mut())
             .map_err(|_| ControllerError::policy("authenticated file read failed"))?;
         if count == 0 {
             break;
@@ -2715,6 +2730,7 @@ fn effective_gid() -> u32 {
     unsafe_code,
     reason = "the non-production hostile probe intentionally exercises denied raw Unix operations"
 )]
+#[allow(clippy::too_many_lines, reason = "complete hostile-operation probe")]
 fn qualification_probe(arguments: &[OsString]) -> Result<u8> {
     let action = arguments
         .first()
@@ -2725,8 +2741,8 @@ fn qualification_probe(arguments: &[OsString]) -> Result<u8> {
             let path = probe_path(arguments, 1)?;
             fs::write(path, b"qualified\n")
                 .map_err(|_| ControllerError::policy("qualification write failed"))?;
-            print!("qualified stdout\n");
-            eprint!("qualified stderr\n");
+            println!("qualified stdout");
+            eprintln!("qualified stderr");
             Ok(0)
         }
         "write" => {
@@ -2932,6 +2948,9 @@ struct Sha256 {
 }
 
 #[cfg(any(target_os = "macos", test))]
+#[allow(clippy::many_single_char_names, reason = "SHA-256 notation")]
+#[allow(clippy::needless_range_loop, reason = "SHA-256 rounds")]
+#[allow(clippy::unreadable_literal, reason = "SHA-256 constants")]
 impl Sha256 {
     const K: [u32; 64] = [
         0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
@@ -3151,8 +3170,8 @@ mod tests {
 
     #[test]
     fn no_new_privileges_requires_a_non_setid_exact_image() {
-        assert!(trusted_executable_mode_is_safe(0o100755));
-        for unsafe_mode in [0o104755, 0o102755, 0o100775, 0o100644] {
+        assert!(trusted_executable_mode_is_safe(0o100_755));
+        for unsafe_mode in [0o104_755, 0o102_755, 0o100_775, 0o100_644] {
             assert!(
                 !trusted_executable_mode_is_safe(unsafe_mode),
                 "unsafe executable mode {unsafe_mode:o}"

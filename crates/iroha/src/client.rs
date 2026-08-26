@@ -2919,7 +2919,7 @@ fn validate_parliament_transition_draft_response(
 
 fn validate_parliament_attempt_state_frame(state_payload_hex: &str) -> Result<()> {
     if state_payload_hex.is_empty()
-        || state_payload_hex.len() % 2 != 0
+        || !state_payload_hex.len().is_multiple_of(2)
         || state_payload_hex.len() / 2 > PARLIAMENT_ATTEMPT_READ_MAX_STATE_BYTES_V1
         || !state_payload_hex
             .bytes()
@@ -2980,10 +2980,10 @@ mod parliament_draft_response_validation_tests {
     };
 
     fn framed_draft(
-        instruction: iroha_data_model::isi::InstructionBox,
+        instruction: &iroha_data_model::isi::InstructionBox,
     ) -> ParliamentInstructionDraftV1 {
-        let wire_id = Instruction::id(&*instruction).to_owned();
-        let payload = Instruction::dyn_encode(&*instruction);
+        let wire_id = Instruction::id(&**instruction).to_owned();
+        let payload = Instruction::dyn_encode(&**instruction);
         let framed = iroha_data_model::isi::frame_instruction_payload(&wire_id, &payload)
             .expect("frame Parliament client fixture instruction");
         ParliamentInstructionDraftV1 {
@@ -3019,7 +3019,7 @@ mod parliament_draft_response_validation_tests {
             version: PARLIAMENT_API_VERSION_V1,
             proposal_content_id: expected.proposal_content_id(),
             governance_attempt_id: expected.governance_attempt_id(),
-            tx_instructions: vec![framed_draft(expected.clone().into())],
+            tx_instructions: vec![framed_draft(&expected.clone().into())],
         };
         assert!(validate_parliament_attempt_draft_response(&response, &request).is_ok());
 
@@ -3043,7 +3043,7 @@ mod parliament_draft_response_validation_tests {
             governance_attempt_id: request.governance_attempt_id,
             transition_kind: request.transition.kind(),
             transition_digest: request.transition.digest_v1(),
-            tx_instructions: vec![framed_draft(expected.into())],
+            tx_instructions: vec![framed_draft(&expected.into())],
         };
         assert!(validate_parliament_transition_draft_response(&response, &request).is_ok());
 
@@ -3111,24 +3111,22 @@ fn validate_validation_fee_proposal_detail(detail: &ValidationFeeProposalDetailV
     let certificate = detail.governance_certificate.as_ref();
     match detail.proposal.status {
         ValidationFeeProposalStatusV1::Proposed => {}
-        ValidationFeeProposalStatusV1::Rejected if certificate.is_none() => {}
-        ValidationFeeProposalStatusV1::Enacted
-        | ValidationFeeProposalStatusV1::Superseded
-        | ValidationFeeProposalStatusV1::ExecutionFailed
-            if certificate.is_none() =>
-        {
-            return Err(eyre!(
-                "terminal certified validation-fee proposal has no Parliament certificate"
-            ));
-        }
         ValidationFeeProposalStatusV1::Rejected => {
-            return Err(eyre!(
-                "rejected validation-fee proposal unexpectedly carries a Parliament certificate"
-            ));
+            if certificate.is_some() {
+                return Err(eyre!(
+                    "rejected validation-fee proposal unexpectedly carries a Parliament certificate"
+                ));
+            }
         }
         ValidationFeeProposalStatusV1::Enacted
         | ValidationFeeProposalStatusV1::Superseded
-        | ValidationFeeProposalStatusV1::ExecutionFailed => {}
+        | ValidationFeeProposalStatusV1::ExecutionFailed => {
+            if certificate.is_none() {
+                return Err(eyre!(
+                    "terminal certified validation-fee proposal has no Parliament certificate"
+                ));
+            }
+        }
     }
     let Some(certificate) = certificate else {
         return Ok(());
@@ -3160,7 +3158,7 @@ fn decode_governance_proposal_instruction_draft(
     label: &str,
 ) -> Result<InstructionBox> {
     if draft.payload_hex.is_empty()
-        || draft.payload_hex.len() % 2 != 0
+        || !draft.payload_hex.len().is_multiple_of(2)
         || !draft
             .payload_hex
             .bytes()
@@ -12455,17 +12453,18 @@ impl Client {
             .lock()
             .expect("data model compatibility lock");
         match cached.clone() {
-            DataModelCompatibility::Unchecked | DataModelCompatibility::Compatible => {}
             DataModelCompatibility::SubmitCompatible if !require_fresh_probe => return Ok(()),
-            DataModelCompatibility::SubmitCompatible => {}
             DataModelCompatibility::Incompatible(err) if !require_fresh_probe => {
                 return Err(err.into());
             }
-            DataModelCompatibility::Incompatible(_) => {}
             DataModelCompatibility::SchemaIncompatible(err) if !require_fresh_probe => {
                 return Err(err.into());
             }
-            DataModelCompatibility::SchemaIncompatible(_) => {}
+            DataModelCompatibility::Unchecked
+            | DataModelCompatibility::Compatible
+            | DataModelCompatibility::SubmitCompatible
+            | DataModelCompatibility::Incompatible(_)
+            | DataModelCompatibility::SchemaIncompatible(_) => {}
         }
         let capabilities = self.get_node_capabilities_json_with_transport(direct_loopback)?;
         let outcome = match parse_optional_u64(
@@ -17456,12 +17455,11 @@ impl Client {
         }
         if let (Some((after_height, after_id)), Some((first_height, first_id))) =
             (after, order_keys.first().copied())
+            && (first_height, first_id) <= (after_height, after_id)
         {
-            if (first_height, first_id) <= (after_height, after_id) {
-                return Err(eyre!(
-                    "validation-fee proposal page did not advance beyond its cursor"
-                ));
-            }
+            return Err(eyre!(
+                "validation-fee proposal page did not advance beyond its cursor"
+            ));
         }
         if let Some(next_cursor) = result.next_cursor.as_deref() {
             if result.proposals.len() != limit_usize {
@@ -25583,8 +25581,8 @@ mod tests {
         let signed_transaction_hash = transaction.hash();
         let receipt = TransactionSubmissionReceipt::sign(
             iroha_data_model::transaction::TransactionSubmissionReceiptPayload {
-                entrypoint_hash: entrypoint_hash.clone(),
-                signed_transaction_hash: Some(signed_transaction_hash.clone()),
+                entrypoint_hash,
+                signed_transaction_hash: Some(signed_transaction_hash),
                 submitted_at_ms: 1,
                 submitted_at_height: 1,
                 signer: signer.public_key().clone(),

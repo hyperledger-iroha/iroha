@@ -538,21 +538,21 @@ fn parse_bundle_config(path: &Path, contents: &str) -> Result<BundleConfig, Conf
                 config.chain_id = Some(trimmed.to_owned());
             }
         }
-        if let Some(profile) = supervisor.get("genesis_profile").and_then(Value::as_str) {
-            if !profile.is_empty() {
-                if profile_genesis.is_some() {
-                    return Err(ConfigError::new(format!(
-                        "config {} sets genesis_profile in both `supervisor.profile` and `supervisor.genesis_profile`",
-                        path.display()
-                    )));
-                }
-                config.genesis_profile = Some(profile.parse().map_err(|err: String| {
-                    ConfigError::new(format!(
-                        "invalid genesis_profile `{profile}` in {}: {err}",
-                        path.display()
-                    ))
-                })?);
+        if let Some(profile) = supervisor.get("genesis_profile").and_then(Value::as_str)
+            && !profile.is_empty()
+        {
+            if profile_genesis.is_some() {
+                return Err(ConfigError::new(format!(
+                    "config {} sets genesis_profile in both `supervisor.profile` and `supervisor.genesis_profile`",
+                    path.display()
+                )));
             }
+            config.genesis_profile = Some(profile.parse().map_err(|err: String| {
+                ConfigError::new(format!(
+                    "invalid genesis_profile `{profile}` in {}: {err}",
+                    path.display()
+                ))
+            })?);
         }
         if config.genesis_profile.is_none() {
             config.genesis_profile = profile_genesis;

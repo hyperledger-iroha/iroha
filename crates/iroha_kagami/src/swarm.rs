@@ -1666,6 +1666,7 @@ type PreparedRuntimeProjection = (
     actual::Root,
 );
 #[expect(
+    clippy::too_many_arguments,
     clippy::too_many_lines,
     reason = "runtime projection is one ordered security transformation from admitted host config to byte-exact container inputs"
 )]

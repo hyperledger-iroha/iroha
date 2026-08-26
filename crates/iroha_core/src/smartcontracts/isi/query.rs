@@ -8689,7 +8689,7 @@ mod tests {
         let role1 = Role::new("r1".parse().unwrap(), ALICE_ID.clone()).build(&ALICE_ID);
         let role2 = Role::new("r2".parse().unwrap(), ALICE_ID.clone()).build(&ALICE_ID);
         let world = {
-            let mut w = World::with(
+            let w = World::with(
                 [domain],
                 [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
                 [],
@@ -8746,7 +8746,7 @@ mod tests {
         };
         let domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
         let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let mut world = World::with([domain], [account], []);
+        let world = World::with([domain], [account], []);
         // Add 2 time triggers
         {
             let mut block = world.triggers.block();

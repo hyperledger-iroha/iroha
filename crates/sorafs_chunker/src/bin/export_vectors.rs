@@ -28,6 +28,7 @@ struct CliOptions {
     // Internal override used by focused signature tests and the staged owner.
     signature_out: Option<PathBuf>,
 }
+#[derive(Debug)]
 enum CliError {
     Help,
     Message(String),

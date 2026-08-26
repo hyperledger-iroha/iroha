@@ -12315,6 +12315,18 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_candidate_lab_
     }
     #[cfg(not(all(target_os = "ios", not(target_abi = "sim"))))]
     {
+        let _ = (
+            candidate_path_ptr,
+            candidate_path_len,
+            roster_path_ptr,
+            roster_path_len,
+            artifact_root_path_ptr,
+            artifact_root_path_len,
+            scenario_path_ptr,
+            scenario_path_len,
+            launch_nonce_ptr,
+            launch_nonce_len,
+        );
         ERR_KAGEMUSHA_RECURSIVE_SPEND_V4_UNAVAILABLE
     }
 }
@@ -12361,6 +12373,20 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_candidate_lab_
     }
     #[cfg(not(all(target_os = "ios", not(target_abi = "sim"))))]
     {
+        let _ = (
+            candidate_path_ptr,
+            candidate_path_len,
+            roster_path_ptr,
+            roster_path_len,
+            artifact_root_path_ptr,
+            artifact_root_path_len,
+            scenario_path_ptr,
+            scenario_path_len,
+            checkpoint_ptr,
+            checkpoint_len,
+            launch_nonce_ptr,
+            launch_nonce_len,
+        );
         ERR_KAGEMUSHA_RECURSIVE_SPEND_V4_UNAVAILABLE
     }
 }
@@ -19213,7 +19239,6 @@ mod kagemusha_bridge_tests {
             .flat_map(|profile| profile.artifacts.iter())
             .collect::<Vec<_>>();
         assert_eq!(descriptors.len(), fixture.framed_artifacts.len());
-        drop(write_bytes);
         for (descriptor, framed) in descriptors.iter().zip(&fixture.framed_artifacts) {
             let relative = release_path(&descriptor.file_name);
             let mut destination = output

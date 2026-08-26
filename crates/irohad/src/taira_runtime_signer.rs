@@ -222,18 +222,18 @@ fn validate_taira_launcher_config_v1(config: &Config) -> Result<(), String> {
             .nexus
             .storage
             .local_budget_bytes
-            .map(|bytes| bytes.get()),
+            .map(|bytes| bytes.0),
         config
             .nexus
             .storage
             .effective_local_budget_bytes
-            .map(|bytes| bytes.get()),
+            .map(|bytes| bytes.0),
         config.nexus.storage.disk_budget_weights,
         config
             .nexus
             .storage
             .configured_sorafs_max_capacity_bytes()
-            .map(|bytes| bytes.get()),
+            .map(|bytes| bytes.0),
         config.torii.sorafs_storage.enabled,
         config.torii.sorafs_storage.max_capacity_bytes.get(),
     )
@@ -573,8 +573,10 @@ mod tests {
     };
 
     fn canonical_runtime_profile() -> SoracloudRuntime {
-        let mut runtime = SoracloudRuntime::default();
-        runtime.production_mode = true;
+        let mut runtime = SoracloudRuntime {
+            production_mode: true,
+            ..SoracloudRuntime::default()
+        };
         runtime.inrou.enabled = true;
         runtime.inrou.portable_vm_uid = NonZeroU32::new(70_000);
         runtime.inrou.portable_vm_gid = NonZeroU32::new(70_000);

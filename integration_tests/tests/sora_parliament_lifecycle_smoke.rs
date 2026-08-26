@@ -27,7 +27,7 @@ use iroha::{
             parliament_ballot_participant_hash_v1, parliament_candidate_root_v1,
         },
         isi::{
-            InstructionBox, Log,
+            InstructionBox, Log, SetParameter,
             consensus_keys::{
                 ApplyThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleActionV1,
                 ThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleSignatureV1,
@@ -50,7 +50,7 @@ use iroha::{
             },
         },
         parameter::{
-            Parameter, SetParameter,
+            Parameter,
             system::{ConsensusHandshakeMetadata, SumeragiConsensusMode, consensus_metadata},
         },
         peer::PeerId,
@@ -177,7 +177,7 @@ fn citizen_accounts(keys: &[KeyPair]) -> Vec<AccountId> {
 fn client_for(base: &Client, account: &AccountId, keys: &[KeyPair]) -> Client {
     let key = keys
         .iter()
-        .find(|key| key.public_key() == account.signatory())
+        .find(|key| key.public_key() == account.expect_single_signatory())
         .expect("selected citizen owns one deterministic key")
         .clone();
     let mut client = base.clone();
@@ -280,7 +280,7 @@ fn read_attempt(
 }
 
 fn ordered_validator_roster(network: &sandbox::SerializedNetwork) -> Result<Vec<PeerId>> {
-    let roster = iroha_core::sumeragi::signed_genesis_voting_peers(&network.genesis().0)
+    let roster = iroha_core::sumeragi::signed_genesis_voting_peers(&network.genesis())
         .wrap_err("read exact signed genesis voting roster")?;
     if roster.len() != VALIDATOR_COUNT {
         return Err(eyre!("expected exactly four signed validators"));
@@ -513,16 +513,8 @@ fn stage_contract_artifact(
         client.submit_all_blocking(instructions, fee())?;
     }
     client.submit_blocking(RegisterSmartContractCode { manifest }, fee())?;
-    let code_hash: [u8; 32] = verified
-        .code_hash
-        .as_ref()
-        .try_into()
-        .expect("IVM contract code hash is fixed at 32 bytes");
-    let abi_hash: [u8; 32] = verified
-        .abi_hash
-        .as_ref()
-        .try_into()
-        .expect("IVM ABI hash is fixed at 32 bytes");
+    let code_hash = *verified.code_hash.as_ref();
+    let abi_hash = *verified.abi_hash.as_ref();
     Ok((
         ContractCodeHash::new(code_hash),
         ContractAbiHash::new(abi_hash),

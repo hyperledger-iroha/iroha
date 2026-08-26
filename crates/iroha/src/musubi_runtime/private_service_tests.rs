@@ -1921,6 +1921,7 @@ fn private_service_accepts_exact_storage_and_provider_readback_evidence() {
 }
 #[cfg(unix)]
 #[test]
+#[expect(clippy::too_many_lines, reason = "complete durable-journal scenario")]
 fn durable_readback_journal_separates_replacement_and_renewal_targets() {
     let mut fixture = control_service_fixture(false, false);
     let root = tempfile::tempdir().expect("durable readback journal root");

@@ -62,10 +62,14 @@ pub trait GlobalBeaconPartialSignerBrokerBackendV1: Send + Sync {
     /// Return the production runtime handle.
     fn handle(&self) -> &str;
     /// Return the live public qualification.
+    /// # Errors
+    /// Returns a payload-free error when the live provider cannot supply its qualification.
     fn qualification(
         &self,
     ) -> Result<ConsensusSignerProviderQualificationV1, GlobalBeaconPartialSignerBrokerBackendErrorV1>;
     /// Sign one exact broker-validated canonical pulse payload.
+    /// # Errors
+    /// Returns a payload-free error when the provider cannot sign the validated pulse.
     fn sign_partial(
         &self,
         session: &iroha_core::beacon::ValidatedGlobalThresholdBeaconSessionV1,
@@ -148,6 +152,8 @@ pub trait ParliamentTlePartialReleaseSignerBrokerBackendV1: Send + Sync {
     /// Return the production runtime handle.
     fn handle(&self) -> &str;
     /// Return the live public qualification.
+    /// # Errors
+    /// Returns a payload-free error when the live provider cannot supply its qualification.
     fn qualification(
         &self,
     ) -> Result<
@@ -155,6 +161,8 @@ pub trait ParliamentTlePartialReleaseSignerBrokerBackendV1: Send + Sync {
         ParliamentTlePartialReleaseSignerBrokerBackendErrorV1,
     >;
     /// Sign one exact broker-validated public release projection.
+    /// # Errors
+    /// Returns a payload-free error when the provider cannot sign the validated projection.
     fn sign_projected_partial_release(
         &self,
         projection: &iroha_core::tle_release::ValidatedTleReleaseProjectionV1,

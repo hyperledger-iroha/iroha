@@ -215,10 +215,6 @@ struct AttestedVerificationReceipt {
     signed_genesis_sha256: String,
 }
 #[derive(Debug, Clone, Copy)]
-#[expect(
-    clippy::struct_field_names,
-    reason = "explicit hash suffixes distinguish three security-bound hash domains"
-)]
 struct ValidatedSignedGenesis {
     block_hash: HashOf<BlockHeader>,
     proposal_wire_hash: Hash,

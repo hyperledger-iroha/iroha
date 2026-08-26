@@ -552,10 +552,10 @@ fn valid_inference_url_identity(url: &str, repo_id: &str, resolved_revision: &st
     let mut raw_revision = None;
     for pair in query.split('&') {
         let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
-        if key.eq_ignore_ascii_case("revision") {
-            if key != "revision" || raw_revision.replace(value).is_some() {
-                return false;
-            }
+        if key.eq_ignore_ascii_case("revision")
+            && (key != "revision" || raw_revision.replace(value).is_some())
+        {
+            return false;
         }
     }
     if raw_revision != Some(resolved_revision) {

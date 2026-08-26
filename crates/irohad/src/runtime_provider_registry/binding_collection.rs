@@ -185,16 +185,15 @@ fn collect_soracloud_hf_credential_provider_binding(
     config: &Config,
     bindings: &mut Vec<IrohaRuntimeProviderBindingV1>,
 ) -> Result<(), IrohaRuntimeProviderRegistryErrorV1> {
-    match config
+    if let Some(binding) = config
         .soracloud_runtime
         .hf
         .inference_credential_provider
         .as_ref()
     {
-        Some(binding) => bindings.push(
+        bindings.push(
             IrohaRuntimeProviderBindingV1::try_new_soracloud_hf_credential_provider(binding)?,
-        ),
-        None => {}
+        );
     }
     Ok(())
 }

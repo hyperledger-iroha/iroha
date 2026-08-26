@@ -177,8 +177,7 @@ fn detached_lane_path_previews_retain_selection_lease_until_drop() {
     let error = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(&data_root)
         .build()
-        .err()
-        .expect("detached previews must retain the shared selection lease");
+        .expect_err("detached previews must retain the shared selection lease");
     assert!(matches!(error, SupervisorError::GenerationLocked { .. }));
     drop(previews);
     SupervisorBuilder::new(ProfilePreset::FourPeerBft)

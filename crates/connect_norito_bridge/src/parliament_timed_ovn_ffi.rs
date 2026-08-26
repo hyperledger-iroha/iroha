@@ -1599,7 +1599,7 @@ mod tests {
         );
 
         let authority_string = authority.to_string();
-        let mut output = 1_usize as *mut c_uchar;
+        let mut output = ptr::dangling_mut::<c_uchar>();
         let mut output_len = 7;
         let status = unsafe {
             connect_norito_parliament_timed_ovn_registration_from_proof_v1(

@@ -49,6 +49,7 @@ fn autonomy_workflow_json_is_exact_and_requires_explicit_nullable_step_id() -> R
 }
 
 #[test]
+#[expect(clippy::too_many_lines, reason = "complete autonomy replay fixture")]
 fn execute_apartment_generated_hf_autonomy_run_stays_inert_and_persists_failure() -> Result<()> {
     let mut state = test_state();
     let fixture = insert_generated_hf_service_fixture(
@@ -269,6 +270,7 @@ fn execute_apartment_generated_hf_autonomy_run_stays_inert_and_persists_failure(
     Ok(())
 }
 #[test]
+#[expect(clippy::too_many_lines, reason = "complete workflow failure fixture")]
 fn execute_apartment_generated_hf_autonomy_workflow_stays_inert_before_first_step() -> Result<()> {
     let mut state = test_state();
     let fixture = insert_generated_hf_service_fixture(

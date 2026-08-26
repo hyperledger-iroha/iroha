@@ -361,7 +361,7 @@ use tiered::{TieredKeyHandle, TieredSnapshotDiff, TieredSnapshotPayload};
 fn checked_keypair() -> KeyPair {
     KeyPair::try_random().expect("state fixture key generation should succeed")
 }
-#[cfg(any(test, feature = "bench"))]
+#[cfg(test)]
 pub(crate) fn checked_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
     KeyPair::try_random_with_algorithm(algorithm)
         .expect("state fixture key generation for requested algorithm should succeed")

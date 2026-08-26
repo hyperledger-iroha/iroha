@@ -39,7 +39,7 @@ path = "tests/integration.rs"
 
 [features]
 default = []
-dev-tools = []
+dev-tools = ["vote-tally"]
 vote-tally = ["dep:halo2_proofs"]
 
 [dependencies]
