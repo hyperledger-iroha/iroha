@@ -115,6 +115,12 @@ if [[ ! -d "$ROOT_ARG" ]]; then
 fi
 
 ROOT_DIR="$(cd "$ROOT_ARG" && pwd -P)"
+
+has_local_git_metadata() {
+  local metadata="$ROOT_DIR/.git"
+  [[ ! -L "$metadata" && ( -d "$metadata" || -f "$metadata" ) ]]
+}
+
 APPLE_ARTIFACT_DIR="${MOBILE_SDK_APPLE_ARTIFACT_DIR:-$ROOT_DIR/dist}"
 if [[ "$APPLE_ARTIFACT_DIR" != /* ]]; then
   APPLE_ARTIFACT_DIR="$ROOT_DIR/$APPLE_ARTIFACT_DIR"
@@ -2789,7 +2795,7 @@ PY
     fi
 
     local bridge_source="$ROOT_DIR/crates/connect_norito_bridge/src/lib.rs"
-    if [[ -f "$bridge_source" && -d "$ROOT_DIR/.git" ]]; then
+    if [[ -f "$bridge_source" ]] && has_local_git_metadata; then
       local source_abi manifest_abi manifest_commit source_relationship source_dirty source_fingerprint manifest_fingerprint
       source_abi="$(run_isolated_checker_python - \
         "$ROOT_DIR/crates/connect_norito_bridge/include/connect_norito_bridge.h" \
@@ -3104,7 +3110,7 @@ check_android_native_provenance() {
   local source_seal_rustdoc=""
   local source_seal_cargo_target_dir=""
 
-  if [[ -d "$ROOT_DIR/.git" ]]; then
+  if has_local_git_metadata; then
     initialize_source_seal_tools
     source_seal_python="$CHECK_PYTHON_BINARY"
     source_seal_home="$CHECK_USER_HOME_DIR"
