@@ -80,6 +80,11 @@ public final class KeystoreKeyProviderTests {
     attestationFailureTelemetryEmitsSignal();
     challengeUnsupportedBackendFails();
     strongBoxRequiredRejectsNonStrongBoxBackend();
+    requiredPoliciesRejectWeakerExistingAlias();
+    generatedRouteUsesPerKeyMetadata();
+    verifiedStrongBoxExistingAliasRemainsAccepted();
+    genericProviderCapabilityIsNotPerKeyProof();
+    withPreferenceRetainsHardwareRequired();
     strongBoxPreferredChoosesStrongBoxWhenAvailable();
     strongBoxPreferredDowngradeEmitsTelemetry();
     System.out.println("[IrohaAndroid] Keystore provider scaffolding tests passed.");
@@ -483,6 +488,115 @@ public final class KeystoreKeyProviderTests {
         : "Key generation should not proceed on non-StrongBox backend";
   }
 
+  private static void requiredPoliciesRejectWeakerExistingAlias() throws Exception {
+    final KeyProviderMetadata capability =
+        KeyProviderMetadata.strongBox("mixed-keystore", false);
+    final FakeBackend backend =
+        new FakeBackend(capability, KeyProviderMetadata.software("mixed-keystore"));
+    backend.generate("weak-existing", KeyGenParameters.builder().build());
+    final IrohaKeyManager manager =
+        IrohaKeyManager.fromProviders(
+            List.of(new KeystoreKeyProvider(backend, KeyGenParameters.builder().build())));
+
+    boolean hardwareThrew = false;
+    try {
+      manager.generateOrLoad(
+          "weak-existing", IrohaKeyManager.KeySecurityPreference.HARDWARE_REQUIRED);
+    } catch (final KeyManagementException expected) {
+      hardwareThrew = true;
+    }
+    assert hardwareThrew : "Hardware-required must reject a software existing alias";
+
+    boolean strongBoxThrew = false;
+    try {
+      manager.generateOrLoad(
+          "weak-existing", IrohaKeyManager.KeySecurityPreference.STRONGBOX_REQUIRED);
+    } catch (final KeyManagementException expected) {
+      strongBoxThrew = true;
+    }
+    assert strongBoxThrew : "StrongBox-required must reject a software existing alias";
+  }
+
+  private static void generatedRouteUsesPerKeyMetadata() throws Exception {
+    final KeyProviderMetadata capability =
+        KeyProviderMetadata.strongBox("mixed-keystore", false);
+    final FakeBackend backend =
+        new FakeBackend(capability, KeyProviderMetadata.software("mixed-keystore"));
+    final KeystoreKeyProvider provider =
+        new KeystoreKeyProvider(backend, KeyGenParameters.builder().build());
+
+    boolean threw = false;
+    try {
+      provider.generateWithOutcome(
+          "strict-generated", IrohaKeyManager.KeySecurityPreference.STRONGBOX_REQUIRED);
+    } catch (final KeyManagementException expected) {
+      threw = true;
+    }
+    assert threw : "Requested StrongBox must not substitute for measured per-key provenance";
+
+    final org.hyperledger.iroha.android.crypto.KeyGenerationOutcome preferred =
+        provider.generateWithOutcome(
+            "preferred-generated", IrohaKeyManager.KeySecurityPreference.STRONGBOX_PREFERRED);
+    assert preferred.route()
+            == org.hyperledger.iroha.android.crypto.KeyGenerationOutcome.Route.SOFTWARE
+        : "Preferred generation must report the measured software route";
+  }
+
+  private static void verifiedStrongBoxExistingAliasRemainsAccepted() throws Exception {
+    final KeyProviderMetadata strongBox =
+        KeyProviderMetadata.strongBox("mixed-keystore", false);
+    final FakeBackend backend = new FakeBackend(strongBox, strongBox);
+    final KeyPair existing =
+        backend.generate("strongbox-existing", KeyGenParameters.builder().build()).keyPair();
+    final IrohaKeyManager manager =
+        IrohaKeyManager.fromProviders(
+            List.of(new KeystoreKeyProvider(backend, KeyGenParameters.builder().build())));
+
+    final KeyPair loaded =
+        manager.generateOrLoad(
+            "strongbox-existing", IrohaKeyManager.KeySecurityPreference.STRONGBOX_REQUIRED);
+
+    assert loaded == existing : "Verified per-key StrongBox provenance must remain accepted";
+  }
+
+  private static void genericProviderCapabilityIsNotPerKeyProof() throws Exception {
+    final KeyPair existing = new SoftwareKeyProvider().generateEphemeral();
+    final KeyProviderMetadata capability =
+        KeyProviderMetadata.strongBox("capability-only", false);
+
+    for (final boolean loadExisting : new boolean[] {true, false}) {
+      final IrohaKeyManager manager =
+          IrohaKeyManager.fromProviders(
+              List.of(new CapabilityOnlyProvider(capability, loadExisting ? existing : null)));
+      boolean threw = false;
+      try {
+        manager.generateOrLoad(
+            "capability-only", IrohaKeyManager.KeySecurityPreference.STRONGBOX_REQUIRED);
+      } catch (final KeyManagementException expected) {
+        threw = true;
+      }
+      assert threw : "Provider capability must not prove a loaded or generated key's route";
+    }
+  }
+
+  private static void withPreferenceRetainsHardwareRequired() throws Exception {
+    final FakeBackend backend =
+        new FakeBackend(
+            KeyProviderMetadata.strongBox("mixed-keystore", false),
+            KeyProviderMetadata.software("mixed-keystore"));
+    final KeystoreKeyProvider provider =
+        new KeystoreKeyProvider(backend, KeyGenParameters.builder().build())
+            .withPreference(IrohaKeyManager.KeySecurityPreference.HARDWARE_REQUIRED);
+
+    boolean threw = false;
+    try {
+      provider.generate("strict-default");
+    } catch (final KeyManagementException expected) {
+      threw = true;
+    }
+    assert threw : "withPreference(HARDWARE_REQUIRED) must govern plain generate calls";
+  }
+
   private static void strongBoxPreferredChoosesStrongBoxWhenAvailable() throws Exception {
     final FakeBackend teeBackend =
         new FakeBackend(KeyProviderMetadata.trustedEnvironment("fake-tee-backend"));
@@ -546,13 +660,20 @@ public final class KeystoreKeyProviderTests {
     private final ConcurrentMap<String, KeyPair> keys = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, KeyAttestation> attestations = new ConcurrentHashMap<>();
     private final KeyProviderMetadata metadata;
+    private final KeyProviderMetadata keyMetadata;
     private final SoftwareKeyProvider delegate = new SoftwareKeyProvider();
     private final AtomicInteger attestationReads = new AtomicInteger();
     private final AtomicInteger attestationGenerations = new AtomicInteger();
     private volatile KeyGenParameters lastParameters;
 
     private FakeBackend(final KeyProviderMetadata metadata) {
+      this(metadata, metadata);
+    }
+
+    private FakeBackend(
+        final KeyProviderMetadata metadata, final KeyProviderMetadata keyMetadata) {
       this.metadata = metadata;
+      this.keyMetadata = keyMetadata;
     }
 
     @Override
@@ -579,6 +700,11 @@ public final class KeystoreKeyProviderTests {
     @Override
     public KeyProviderMetadata metadata() {
       return metadata;
+    }
+
+    @Override
+    public KeyProviderMetadata keyMetadata(final String alias, final KeyPair keyPair) {
+      return keyMetadata;
     }
 
     @Override
@@ -626,6 +752,48 @@ public final class KeystoreKeyProviderTests {
 
     KeyGenParameters lastParameters() {
       return lastParameters;
+    }
+  }
+
+  private static final class CapabilityOnlyProvider implements IrohaKeyManager.KeyProvider {
+    private final KeyProviderMetadata capability;
+    private final KeyPair existing;
+    private final SoftwareKeyProvider software = new SoftwareKeyProvider();
+
+    private CapabilityOnlyProvider(
+        final KeyProviderMetadata capability, final KeyPair existing) {
+      this.capability = capability;
+      this.existing = existing;
+    }
+
+    @Override
+    public Optional<KeyPair> load(final String alias) {
+      return Optional.ofNullable(existing);
+    }
+
+    @Override
+    public KeyPair generate(final String alias) throws KeyManagementException {
+      return software.generateEphemeral();
+    }
+
+    @Override
+    public KeyPair generateEphemeral() throws KeyManagementException {
+      return software.generateEphemeral();
+    }
+
+    @Override
+    public boolean isHardwareBacked() {
+      return capability.hardwareBacked();
+    }
+
+    @Override
+    public KeyProviderMetadata metadata() {
+      return capability;
+    }
+
+    @Override
+    public String name() {
+      return capability.name();
     }
   }
 

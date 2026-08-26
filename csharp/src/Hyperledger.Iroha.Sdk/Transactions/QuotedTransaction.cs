@@ -7,7 +7,7 @@ public sealed record class QuotedSignedTransaction(
     SignedTransactionEnvelope Transaction,
     ToriiFeeQuoteResponse Quote);
 
-/// <summary>Quoted transaction plus its terminal pipeline result.</summary>
+/// <summary>Quoted transaction plus its authoritative pipeline result.</summary>
 public sealed record class QuotedTransactionSubmission(
     SignedTransactionEnvelope Transaction,
     ToriiFeeQuoteResponse Quote,

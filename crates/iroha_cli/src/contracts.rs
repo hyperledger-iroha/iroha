@@ -1,7 +1,8 @@
 //! Contracts helpers.
 mod local_debug_rendering;
 use crate::{
-    Run, RunContext, TransactionWaitArgs, apply_cli_gas_limit_override, wait_for_transaction_status,
+    Run, RunContext, TransactionWaitArgs, apply_cli_gas_limit_override,
+    wait_for_transaction_applied,
 };
 use base64::Engine as _;
 use eyre::{Result, WrapErr as _, eyre};
@@ -1145,7 +1146,7 @@ impl DevCallArgs {
         if self.wait.is_enabled() {
             let tx_hash = extract_submitted_transaction_hash(&value)
                 .wrap_err("contract call response missing canonical `tx_hash_hex`")?;
-            let status = wait_for_transaction_status(&client, tx_hash, &self.wait)?;
+            let status = wait_for_transaction_applied(&client, tx_hash, &self.wait)?;
             context.print_data(&ContractSubmissionWaitResponse {
                 submit: value,
                 trace: None,
@@ -1276,7 +1277,7 @@ impl DevSmokeArgs {
                     if self.wait.is_enabled() {
                         let tx_hash = extract_submitted_transaction_hash(&submit)
                             .wrap_err("contract call response missing canonical `tx_hash_hex`")?;
-                        let status = wait_for_transaction_status(&client, tx_hash, &self.wait)?;
+                        let status = wait_for_transaction_applied(&client, tx_hash, &self.wait)?;
                         norito::json!({
                             "submit": (submit),
                             "terminal_kind": (status.terminal_kind),
@@ -2136,7 +2137,6 @@ impl Run for DeriveAddressArgs {
         let authority = parse_account_address(&self.authority, Some(chain_discriminant))
             .map_err(|err| eyre!(err.to_string()))
             .wrap_err("failed to resolve --authority")?
-            .address
             .to_account_id()
             .map_err(|err| eyre!(err.to_string()))
             .wrap_err("failed to decode --authority")?;
@@ -2350,7 +2350,7 @@ impl Run for CallArgs {
         if self.wait.is_enabled() {
             let tx_hash = extract_submitted_transaction_hash(&value)
                 .wrap_err("contract call response missing canonical `tx_hash_hex`")?;
-            let status = wait_for_transaction_status(&client, tx_hash, &self.wait)?;
+            let status = wait_for_transaction_applied(&client, tx_hash, &self.wait)?;
             context.print_data(&ContractSubmissionWaitResponse {
                 submit: value,
                 trace,
@@ -3414,7 +3414,6 @@ fn parse_debug_account_list(raw: &str) -> Result<Vec<AccountId>> {
                 .as_str()
                 .ok_or_else(|| eyre!("account fixture entries must be strings"))?;
             AccountId::parse_encoded(literal)
-                .map(|parsed| parsed.into_account_id())
                 .map_err(|err| eyre!("invalid account fixture literal `{literal}`: {err}"))
         })
         .collect()

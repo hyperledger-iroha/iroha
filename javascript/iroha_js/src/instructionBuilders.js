@@ -23,6 +23,7 @@ import {
   ValidationErrorCode,
 } from "./validationError.js";
 import { normalizeSccpRouteGovernanceAction } from "./sccp.js";
+import { canonicalizeDomainIdLabel } from "./domainId.js";
 import { analyzeEntrypointValueTypeV1 } from "./entrypointSchema.js";
 import { parseCanonicalContractAddress } from "./contractAddress.js";
 import { networkIdBytes } from "./networkId.js";
@@ -801,12 +802,55 @@ function asNonNegativeInteger(value, name) {
   fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a non-negative integer`, name);
 }
 
+function asKaigiU64(value, name) {
+  const canonical = normalizeCanonicalU64(value, name);
+  const numeric = BigInt(canonical);
+  return numeric <= MAX_SAFE_INTEGER_BIGINT ? Number(numeric) : canonical;
+}
+
+function asPositiveKaigiU64(value, name) {
+  const normalized = asKaigiU64(value, name);
+  if (normalized === 0) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${name} must be greater than zero`,
+      name,
+    );
+  }
+  return normalized;
+}
+
+function asPositiveKaigiU32(value, name) {
+  const canonical = normalizeCanonicalU64(value, name);
+  const numeric = BigInt(canonical);
+  if (numeric === 0n || numeric > BigInt(UINT32_MAX)) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${name} must be an integer between 1 and ${UINT32_MAX}`,
+      name,
+    );
+  }
+  return Number(numeric);
+}
+
 function asByte(value, name) {
   const numeric = asNonNegativeInteger(value, name);
   if (numeric > 0xff) {
     fail(
       ValidationErrorCode.VALUE_OUT_OF_RANGE,
       `${name} must be an integer between 0 and 255`,
+      name,
+    );
+  }
+  return numeric;
+}
+
+function asNonZeroByte(value, name) {
+  const numeric = asByte(value, name);
+  if (numeric === 0) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${name} must be an integer between 1 and 255`,
       name,
     );
   }
@@ -1738,6 +1782,45 @@ function normalizeKaigiId(value, name) {
   };
 }
 
+function normalizeCanonicalKaigiId(value, name) {
+  const normalized = normalizeKaigiId(value, name);
+  const domainSegments = normalized.domain_id.split(".");
+  if (domainSegments.length !== 2 || domainSegments.some((segment) => segment.length === 0)) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name}.domain_id must use the exact domain.dataspace form`,
+      `${name}.domain_id`,
+    );
+  }
+  let domainId;
+  try {
+    domainId = domainSegments
+      .map((segment) => canonicalizeDomainIdLabel(segment, `${name}.domain_id label`))
+      .join(".");
+  } catch {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name}.domain_id must be a valid domain.dataspace identifier`,
+      `${name}.domain_id`,
+    );
+  }
+
+  assertWellFormedUtf16(normalized.call_name, `${name}.call_name`);
+  const callName = normalized.call_name.normalize("NFC");
+  if (
+    Buffer.byteLength(callName, "utf8") > 255 ||
+    /[\p{Cc}\p{White_Space}@#$]/u.test(callName) ||
+    /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u.test(callName)
+  ) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name}.call_name must be a canonical Iroha Name`,
+      `${name}.call_name`,
+    );
+  }
+  return { domain_id: domainId, call_name: callName };
+}
+
 function normalizeKaigiRelayHop(value, context) {
   const hop = assertPlainObject(value, context);
   const relayId = hop.relay_id ?? hop.relayId;
@@ -1748,7 +1831,7 @@ function normalizeKaigiRelayHop(value, context) {
       hpkeKey,
       `${context}.hpkePublicKey`,
     ),
-    weight: asByte(hop.weight ?? 1, `${context}.weight`),
+    weight: asNonZeroByte(hop.weight ?? 1, `${context}.weight`),
   };
 }
 
@@ -1758,27 +1841,64 @@ function normalizeKaigiRelayManifest(value, context) {
   }
   const manifest = assertPlainObject(value, context);
   const expiryMs = manifest.expiry_ms ?? manifest.expiryMs;
-  const hopsValue = manifest.hops ?? [];
+  const hopsValue = manifest.hops;
   if (!Array.isArray(hopsValue)) {
-    fail(ValidationErrorCode.INVALID_OBJECT, `${context}.hops must be an array`, context);
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.hops must be an array`,
+      `${context}.hops`,
+    );
+  }
+  if (hopsValue.length < 3) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${context}.hops must include at least three relay hops`,
+      `${context}.hops`,
+    );
+  }
+  for (let index = 0; index < hopsValue.length; index += 1) {
+    if (!Object.prototype.hasOwnProperty.call(hopsValue, index)) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.hops must be a dense array`,
+        `${context}.hops[${index}]`,
+      );
+    }
   }
   const hops = hopsValue.map((hop, index) =>
     normalizeKaigiRelayHop(hop, `${context}.hops[${index}]`),
   );
+  const seenRelayIds = new Set();
+  for (let index = 0; index < hops.length; index += 1) {
+    const relayId = hops[index].relay_id;
+    if (seenRelayIds.has(relayId)) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.hops must not contain duplicate relays`,
+        `${context}.hops[${index}].relayId`,
+      );
+    }
+    seenRelayIds.add(relayId);
+  }
   return {
     hops,
-    expiry_ms: asNonNegativeInteger(expiryMs, `${context}.expiryMs`),
+    expiry_ms: asKaigiU64(expiryMs, `${context}.expiryMs`),
   };
 }
 
 function normalizePrivacyMode(value) {
   if (value && typeof value === "object") {
     const modeValue = value.mode ?? value.Mode ?? value.privacyMode ?? value.state;
-    const stateValue =
-      value.state === undefined ? null : value.state === null ? null : value.state;
+    if (value.state !== undefined && value.state !== null) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        "privacyMode.state must be null because Kaigi privacy modes are unit variants",
+        "privacyMode.state",
+      );
+    }
     return {
       mode: normalizePrivacyModeTag(modeValue),
-      state: stateValue,
+      state: null,
     };
   }
   return {
@@ -1813,11 +1933,16 @@ function normalizeRoomPolicy(value) {
   if (value && typeof value === "object") {
     const policyValue =
       value.policy ?? value.Policy ?? value.roomPolicy ?? value.state;
-    const stateValue =
-      value.state === undefined ? null : value.state === null ? null : value.state;
+    if (value.state !== undefined && value.state !== null) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        "roomPolicy.state must be null because Kaigi room policies are unit variants",
+        "roomPolicy.state",
+      );
+    }
     return {
       policy: normalizeRoomPolicyTag(policyValue),
-      state: stateValue,
+      state: null,
     };
   }
   return {
@@ -1858,12 +1983,19 @@ function normalizeKaigiParticipantCommitment(value, context) {
   }
   const commitment = assertPlainObject(value, context);
   const alias = commitment.alias_tag ?? commitment.aliasTag ?? null;
+  if (alias !== null && alias !== undefined) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${context}.aliasTag is off-chain only and must be omitted`,
+      `${context}.aliasTag`,
+    );
+  }
   return {
     commitment: normalizeHash(
       commitment.commitment,
       `${context}.commitment`,
     ),
-    alias_tag: alias === null || alias === undefined ? null : assertString(alias, `${context}.aliasTag`),
+    alias_tag: null,
   };
 }
 
@@ -1873,12 +2005,36 @@ function normalizeKaigiParticipantNullifier(value, context) {
   }
   const nullifier = assertPlainObject(value, context);
   const digest = nullifier.digest ?? nullifier.hash ?? nullifier.value;
+  const timestampFields = ["issued_at_ms", "issuedAtMs", "issuedAt"];
+  let issuedAtMs;
+  for (const field of timestampFields) {
+    if (!Object.prototype.hasOwnProperty.call(nullifier, field)) {
+      continue;
+    }
+    const fieldValue = nullifier[field];
+    if (fieldValue === undefined || fieldValue === null) {
+      continue;
+    }
+    const normalized = asNonNegativeInteger(fieldValue, `${context}.${field}`);
+    if (normalized !== 0) {
+      fail(
+        ValidationErrorCode.VALUE_OUT_OF_RANGE,
+        `${context}.issuedAtMs is off-chain only and must be zero`,
+        `${context}.${field}`,
+      );
+    }
+    issuedAtMs = 0;
+  }
+  if (issuedAtMs === undefined) {
+    fail(
+      ValidationErrorCode.INVALID_NUMERIC,
+      `${context}.issuedAtMs must be zero`,
+      `${context}.issuedAtMs`,
+    );
+  }
   return {
     digest: normalizeHash(digest, `${context}.digest`),
-    issued_at_ms: asNonNegativeInteger(
-      nullifier.issued_at_ms ?? nullifier.issuedAtMs ?? nullifier.issuedAt,
-      `${context}.issuedAtMs`,
-    ),
+    issued_at_ms: issuedAtMs,
   };
 }
 
@@ -1916,8 +2072,8 @@ function normalizeNewKaigi(options) {
     max_participants:
       maxParticipantsValue === undefined || maxParticipantsValue === null
         ? null
-        : asPositiveInteger(maxParticipantsValue, "call.maxParticipants"),
-    gas_rate_per_minute: asNonNegativeInteger(
+        : asPositiveKaigiU32(maxParticipantsValue, "call.maxParticipants"),
+    gas_rate_per_minute: asKaigiU64(
       gasRateValue,
       "call.gasRatePerMinute",
     ),
@@ -1925,7 +2081,7 @@ function normalizeNewKaigi(options) {
     scheduled_start_ms:
       scheduledStartValue === undefined || scheduledStartValue === null
         ? null
-        : asNonNegativeInteger(
+        : asKaigiU64(
             scheduledStartValue,
             "call.scheduledStartMs",
           ),
@@ -1978,7 +2134,7 @@ function normalizeJoinOrLeaveInput(type, options) {
   const source = assertPlainObject(options, type);
   const callId = source.call_id ?? source.callId ?? source.id;
   const participant = source.participant ?? source.accountId;
-  return {
+  const normalized = {
     call_id: normalizeKaigiId(callId, `${type}.callId`),
     participant: normalizeAccountId(
       participant,
@@ -1998,6 +2154,22 @@ function normalizeJoinOrLeaveInput(type, options) {
     ),
     proof: normalizeOptionalBase64(source.proof, `${type}.proof`),
   };
+  if (
+    type === "leaveKaigi" &&
+    (
+      normalized.commitment !== null ||
+      normalized.nullifier !== null ||
+      normalized.roster_root !== null ||
+      normalized.proof !== null
+    )
+  ) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "leaveKaigi privacy artifacts are reserved and must be omitted in V1",
+      "leaveKaigi",
+    );
+  }
+  return normalized;
 }
 
 function normalizeEndKaigiInput(options) {
@@ -2010,7 +2182,7 @@ function normalizeEndKaigiInput(options) {
     ended_at_ms:
       endedValue === null || endedValue === undefined
         ? null
-        : asNonNegativeInteger(endedValue, "endKaigi.endedAtMs"),
+        : asKaigiU64(endedValue, "endKaigi.endedAtMs"),
     commitment: normalizeKaigiParticipantCommitment(
       source.commitment,
       "endKaigi.commitment",
@@ -2032,11 +2204,11 @@ function normalizeKaigiUsageInput(options) {
   const callId = source.call_id ?? source.callId ?? source.id;
   return {
     call_id: normalizeKaigiId(callId, "recordKaigiUsage.callId"),
-    duration_ms: asPositiveInteger(
+    duration_ms: asPositiveKaigiU64(
       source.duration_ms ?? source.durationMs ?? source.duration,
       "recordKaigiUsage.durationMs",
     ),
-    billed_gas: asNonNegativeInteger(
+    billed_gas: asKaigiU64(
       source.billed_gas ?? source.billedGas ?? source.gas ?? 0,
       "recordKaigiUsage.billedGas",
     ),
@@ -2084,11 +2256,70 @@ function normalizeRegisterRelayInput(options) {
         hpkeKey,
         "registerKaigiRelay.hpkePublicKey",
       ),
-      bandwidth_class: asByte(
-        bandwidthValue ?? 0,
+      bandwidth_class: asNonZeroByte(
+        bandwidthValue,
         "registerKaigiRelay.bandwidthClass",
       ),
     },
+  };
+}
+
+function normalizeKaigiRelayHealthStatus(value, name) {
+  if (value !== "Healthy" && value !== "Degraded" && value !== "Unavailable") {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must be exactly "Healthy", "Degraded", or "Unavailable"`,
+      name,
+    );
+  }
+  return { status: value, state: null };
+}
+
+function normalizeKaigiRelayHealthNotes(value, name) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (typeof value !== "string") {
+    fail(ValidationErrorCode.INVALID_STRING, `${name} must be a string`, name);
+  }
+  assertWellFormedUtf16(value, name);
+  let scalarCount = 0;
+  for (const _character of value) {
+    scalarCount += 1;
+    if (scalarCount > 512) {
+      fail(
+        ValidationErrorCode.VALUE_OUT_OF_RANGE,
+        `${name} must not exceed 512 Unicode scalar values`,
+        name,
+      );
+    }
+  }
+  return value;
+}
+
+function normalizeReportKaigiRelayHealthInput(options) {
+  const source = assertPlainObject(options, "reportKaigiRelayHealth");
+  return {
+    call_id: normalizeCanonicalKaigiId(
+      source.call_id ?? source.callId,
+      "reportKaigiRelayHealth.callId",
+    ),
+    relay_id: normalizeAccountId(
+      source.relay_id ?? source.relayId,
+      "reportKaigiRelayHealth.relayId",
+    ),
+    status: normalizeKaigiRelayHealthStatus(
+      source.status,
+      "reportKaigiRelayHealth.status",
+    ),
+    reported_at_ms: asKaigiU64(
+      source.reported_at_ms ?? source.reportedAtMs,
+      "reportKaigiRelayHealth.reportedAtMs",
+    ),
+    notes: normalizeKaigiRelayHealthNotes(
+      source.notes,
+      "reportKaigiRelayHealth.notes",
+    ),
   };
 }
 
@@ -4917,6 +5148,20 @@ export function buildRegisterKaigiRelayInstruction(options) {
   return {
     Kaigi: {
       RegisterKaigiRelay: normalized,
+    },
+  };
+}
+
+/**
+ * Build a `Kaigi::ReportKaigiRelayHealth` instruction payload.
+ * @param {object} options
+ * @returns {{Kaigi: {ReportKaigiRelayHealth: object}}}
+ */
+export function buildReportKaigiRelayHealthInstruction(options) {
+  const normalized = normalizeReportKaigiRelayHealthInput(options);
+  return {
+    Kaigi: {
+      ReportKaigiRelayHealth: normalized,
     },
   };
 }

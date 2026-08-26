@@ -8,16 +8,17 @@ class UaidPortfolioResponse(
     @JvmField val totals: UaidPortfolioTotals,
     dataspaces: List<UaidPortfolioDataspace>,
 ) {
+    init {
+        UaidLiteral.canonicalize(uaid, "uaid")
+    }
+
     @JvmField val dataspaces: List<UaidPortfolioDataspace> = dataspaces.toList()
 
     /** Aggregated account/position totals for a UAID. */
     class UaidPortfolioTotals(
-        accounts: Long,
-        positions: Long,
+        @JvmField val accounts: Long,
+        @JvmField val positions: Long,
     ) {
-        @JvmField val accounts: Long = accounts
-        @JvmField val positions: Long = positions
-
         init {
             require(accounts >= 0L) { "accounts must be non-negative" }
             require(positions >= 0L) { "positions must be non-negative" }

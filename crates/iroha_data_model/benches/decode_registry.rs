@@ -60,7 +60,7 @@ fn bench_decode(c: &mut Criterion) {
     let flags = view.flags();
     let payload = view.as_bytes().to_vec();
     let vec_registry = VecRegistry::new().register::<Log>();
-    let hash_registry = InstructionRegistry::new().register::<Log>();
+    let hash_registry = InstructionRegistry::new().register_with_id::<Log>(Log::WIRE_ID);
     let boxed = InstructionBox::from(instruction);
     let boxed_payload = norito::codec::encode_adaptive(&boxed);
     c.bench_function("decode_vec", |b| {
@@ -70,7 +70,10 @@ fn bench_decode(c: &mut Criterion) {
     });
     c.bench_function("decode_hashmap", |b| {
         b.iter(|| {
-            hash_registry.decode(name, &framed_bytes).unwrap().unwrap();
+            hash_registry
+                .decode(Log::WIRE_ID, &framed_bytes)
+                .unwrap()
+                .unwrap();
         })
     });
     c.bench_function("decode_instruction_box_pair_owned", |b| {

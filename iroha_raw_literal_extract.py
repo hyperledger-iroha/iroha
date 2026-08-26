@@ -113,7 +113,6 @@ xtask/src/sorafs.rs 9135-9155 4ee8a78c499d
 crates/iroha_data_model/tests/query_json_envelope.rs 25-41 5fabdb5f319f
 crates/build-support/src/bin/clippy_inventory.rs 260-275 31be0d72b1d4
 crates/norito/tests/cross_language.rs 88-101 0c4ea7eeb479
-xtask/src/address_manifest.rs 443-456 5cbde8c68329
 xtask/src/sm.rs 436-449 ff93d41dafd9
 tools/norito_codegen_exporter/src/main.rs 1038-1048 4347fd70fffb
 crates/iroha_kagami/src/swarm.rs 387-397 6b1299281ab8
@@ -163,7 +162,6 @@ META = {
     "crates/iroha_data_model/tests/query_json_envelope.rs": ("fixtures", "query-envelope", "json", "test-json-fixture"),
     "crates/build-support/src/bin/clippy_inventory.rs": ("fixtures", "clippy-inventory", "jsonl", "test-json-lines-fixture"),
     "crates/norito/tests/cross_language.rs": ("fixtures", "cross-language-schema", "json", "test-json-fixture"),
-    "xtask/src/address_manifest.rs": ("fixtures", "address-manifest", "json.in", "test-json-template"),
     "xtask/src/sm.rs": ("templates", "sm2-config", "toml.in", "generated-config-template"),
     "tools/norito_codegen_exporter/src/main.rs": ("fixtures", "rustdoc-index", "json", "test-json-fixture"),
     "crates/iroha_kagami/src/swarm.rs": ("fixtures", "swarm-peers", "toml", "test-toml-fixture"),

@@ -6,10 +6,10 @@ trustless CAR verification, GAR compliance exports, and hardening evidence.
 ## Steps
 - Generate the beta pack: `cargo xtask soranet-gateway-m2 --config configs/soranet/gateway_m2/beta_config.json --output-dir artifacts/soranet/gateway_m2/beta`
 - Confirm artefacts:
-  - `gateway_m2_summary.json` lists each PoP with the beta edge config, trustless verifier path, PQ readiness summary, hardening summary, and ops bundle.
+  - `gateway_m2_summary.json` lists each PoP with the beta edge config, trustless verifier path, hardening summary, and ops bundle.
   - Billing section carries `invoice`/`ledger_projection` and enforces `allow_hard_cap=true`.
   - Compliance export lives in `compliance_summary.{json,md}` built from GAR receipts/ACKs.
-- PQ readiness per PoP: provide `--srcv2`, `--tls-bundle`, and `--trustless-config` in the config to emit `pq/` summaries under each `pops/<pop>/beta/`.
+- PQ readiness is a separate mandatory qualification. Run `cargo xtask soranet-gateway-pq` with the independently trusted issuer keys, an explicit validation timestamp, the SRCv2 bundle, TLS/ECH bundle, and trustless verifier config. The M2 bundle never synthesizes or embeds a PQ-ready result.
 - Hardening: supplying `sbom`, `vuln_report`, `hsm_policy`, and `sandbox_profile` emits `gateway_hardening_summary.{json,md}` with retention signalling (warns if >30 days).
 
 ## Outputs

@@ -14,10 +14,10 @@ summary: Response plan for the unified settlement router buffer thresholds and c
 | Input | Source | Notes |
 |-------|--------|-------|
 | Telemetry metrics | Grafana `nexus_lanes` board (`dashboards/grafana/nexus_lanes.json`) + Prometheus (`iroha_settlement_buffer_*`, `iroha_oracle_*`, `iroha_settlement_pnl_xor`, `iroha_settlement_swapline_utilisation`, `iroha_settlement_schedule_lag_ms`). | Panels `Settlement Buffer Headroom`, `Oracle/Price`, `Swap-line Utilisation`, and `TWAMM Schedule Lag` back the SLOs. |
-| Alerting | Alertmanager templates `AddressLocal8Resurgence`, `AddressInvalidRatioSlo` (reuse channels) + forthcoming settlement router rules (track `NX-3` ticket). | Page on buffer status ≥2 or `CIRCUIT_BREAKER_ACTIVE`. |
+| Alerting | Alertmanager template `AddressInvalidRatioSlo` (reuse channels) + forthcoming settlement router rules (track `NX-3` ticket). | Page on buffer status ≥2 or `CIRCUIT_BREAKER_ACTIVE`. |
 | Torii status snapshots | `iroha_cli sumeragi status --format json` or `/v1/sumeragi/status`. | Provides `lane_governance[].settlement.buffer` and `lane_settlement_commitments`. |
 | Router spec | `docs/settlement-router.md`. | Authoritative description of buffer states, error codes, and telemetry. |
-| Automation | `iroha address normalize`, `iroha_cli transaction submit` (or equivalent SDK automation), swap-line tooling owned by Treasury. | Required when moving XOR into reserve accounts. |
+| Automation | `iroha tools address normalize`, `iroha_cli transaction submit` (or equivalent SDK automation), swap-line tooling owned by Treasury. | Required when moving XOR into reserve accounts. |
 | Evidence log | `ops/drill-log.md`. | Record every alert, refill, or circuit-breaker action. |
 
 ## 3. Monitoring Surfaces

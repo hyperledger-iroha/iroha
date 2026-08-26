@@ -10,16 +10,15 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use blake3::Hasher as Blake3Hasher;
 use ed25519_dalek::VerifyingKey as Ed25519VerifyingKey;
 use iroha_crypto::soranet::{
-    certificate::{CertificateError, CertificateValidationPhase, RelayCertificateBundleV2},
-    directory::{
-        GuardDirectoryIssuerV1, GuardDirectorySnapshotV2, compute_issuer_fingerprint,
-        decode_validation_phase,
-    },
+    certificate::{CertificateError, RelayCertificateBundleV2, SRC_V2_MAX_BUNDLE_BYTES},
+    directory::{GuardDirectoryIssuerV1, GuardDirectorySnapshotV2, compute_issuer_fingerprint},
     handshake::HandshakeSuite,
 };
 use iroha_data_model::soranet::prelude::{RelayBondLedgerEntryV1, RelayBondPolicyV1, RelayId};
 use iroha_logger::info;
-use norito::{NoritoDeserialize, NoritoSerialize, decode_from_bytes, to_bytes};
+use norito::{
+    DecodeLimits, NoritoDeserialize, NoritoSerialize, decode_from_bytes_with_limits, to_bytes,
+};
 use rand::{rand_core::TryCryptoRng, rngs::OsRng};
 use std::{
     cmp::Ordering,
@@ -30,8 +29,29 @@ use std::{
     time::Duration,
 };
 use thiserror::Error;
-const GUARD_SET_VERSION_MIN: u8 = 1;
-const GUARD_SET_VERSION: u8 = 7;
+const GUARD_SET_VERSION: u8 = 8;
+/// Maximum encoded size of one first-release authenticated guard cache.
+pub const GUARD_CACHE_MAX_BYTES_V1: usize = 2 * 1024 * 1024;
+/// Maximum number of sticky guards retained by a first-release cache.
+pub const GUARD_CACHE_MAX_GUARDS_V1: usize = 16;
+const GUARD_CACHE_MAX_ENDPOINT_BYTES_V1: usize = 4 * 1024;
+const GUARD_CACHE_MAX_ENDPOINT_TAGS_V1: usize = 16;
+const GUARD_CACHE_MAX_ENDPOINT_TAG_BYTES_V1: usize = 64;
+const GUARD_CACHE_MAX_REGION_BYTES_V1: usize = 256;
+const GUARD_CACHE_OUTER_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
+    GUARD_CACHE_MAX_BYTES_V1,
+    GUARD_CACHE_MAX_BYTES_V1,
+    GUARD_CACHE_MAX_BYTES_V1,
+    2 * GUARD_CACHE_MAX_BYTES_V1,
+    16,
+);
+const GUARD_CACHE_INNER_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
+    GUARD_CACHE_MAX_GUARDS_V1,
+    GUARD_CACHE_MAX_BYTES_V1,
+    GUARD_CACHE_MAX_GUARDS_V1 * (GUARD_CACHE_MAX_ENDPOINT_TAGS_V1 + 1),
+    2 * GUARD_CACHE_MAX_BYTES_V1,
+    16,
+);
 const DEFAULT_RETENTION_SECS: u64 = 30 * 24 * 60 * 60;
 const CACHE_TAG_LABEL: &[u8] = b"soranet.guard_cache.tag.v1";
 const CACHE_NONCE_LEN: usize = 16;
@@ -103,7 +123,7 @@ impl GuardCapabilityComponents {
     pub(crate) fn pq_rank(&self) -> u8 {
         self.pq_rank
     }
-    pub(crate) fn has_pq_certificate(&self) -> bool {
+    pub(crate) fn has_pq_handshake(&self) -> bool {
         self.pq_flag
     }
     pub(crate) fn guard_weight(&self) -> u32 {
@@ -243,8 +263,6 @@ pub struct RelayDescriptor {
     pub roles: RelayRoles,
     /// Transport endpoints suitable for establishing circuits.
     pub endpoints: Vec<Endpoint>,
-    /// Optional ML-KEM public key advertised by the relay (Kyber-768).
-    pub pq_kem_public: Option<Vec<u8>>,
     /// Relay certificate bundle (SRCv2) if supplied by the directory.
     pub certificate: Option<RelayCertificateBundleV2>,
     /// Optional topology metadata used to bias path selection.
@@ -369,41 +387,23 @@ impl RelayDescriptor {
     /// [`RelayDescriptor::is_pq_capable_at`] when time bounds matter.
     #[must_use]
     pub fn is_pq_capable(&self) -> bool {
-        self.pq_kem_public().is_some()
+        self.certificate
+            .as_ref()
+            .is_some_and(|bundle| bundle.certificate.supports_pq_handshake())
     }
     /// Returns true when the descriptor advertises PQ-capable handshakes and any
     /// embedded certificate is valid at `now_unix`.
     #[must_use]
     pub fn is_pq_capable_at(&self, now_unix: u64) -> bool {
-        self.pq_kem_public_at(now_unix).is_some()
+        self.certificate.as_ref().is_some_and(|bundle| {
+            is_certificate_valid_at(bundle, now_unix) && bundle.certificate.supports_pq_handshake()
+        })
     }
     /// Iterate over endpoints that advertise the provided tag.
     pub fn endpoints_with_tag(&self, tag: EndpointTag) -> impl Iterator<Item = &Endpoint> {
         self.endpoints
             .iter()
             .filter(move |endpoint| endpoint.has_tag(tag))
-    }
-    /// Returns the advertised ML-KEM public key, if present.
-    #[must_use]
-    pub fn pq_kem_public(&self) -> Option<&[u8]> {
-        if let Some(bundle) = self.certificate.as_ref()
-            && !bundle.certificate.pq_kem_public.is_empty()
-        {
-            return Some(bundle.certificate.pq_kem_public.as_slice());
-        }
-        self.pq_kem_public.as_deref()
-    }
-    fn pq_kem_public_at(&self, now_unix: u64) -> Option<&[u8]> {
-        if let Some(bundle) = self.certificate.as_ref() {
-            if !is_certificate_valid_at(bundle, now_unix) {
-                return None;
-            }
-            if !bundle.certificate.pq_kem_public.is_empty() {
-                return Some(bundle.certificate.pq_kem_public.as_slice());
-            }
-            return None;
-        }
-        self.pq_kem_public.as_deref()
     }
     /// Returns the relay certificate bundle, if supplied.
     #[must_use]
@@ -429,14 +429,57 @@ impl RelayDescriptor {
     }
 }
 /// Resolver-friendly view over the directory consensus.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct RelayDirectory {
     entries: Vec<RelayDescriptor>,
+    authenticated_snapshot: bool,
     directory_hash: Option<[u8; 32]>,
     published_at_unix: Option<i64>,
     valid_after_unix: Option<i64>,
     valid_until_unix: Option<i64>,
-    validation_phase: Option<CertificateValidationPhase>,
+}
+/// Errors raised when a relay directory is used outside its advertised validity window.
+#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
+pub enum RelayDirectoryValidityError {
+    /// The directory was decoded for diagnostics without an independent trust anchor.
+    #[error("relay directory was not authenticated against an independently trusted digest")]
+    Unauthenticated,
+    /// Only one validity boundary was present.
+    #[error(
+        "relay directory validity metadata is incomplete (valid_after={valid_after_unix:?}, valid_until={valid_until_unix:?})"
+    )]
+    Incomplete {
+        /// Inclusive validity boundary, when supplied.
+        valid_after_unix: Option<i64>,
+        /// Exclusive validity boundary, when supplied.
+        valid_until_unix: Option<i64>,
+    },
+    /// The advertised half-open interval was malformed.
+    #[error(
+        "relay directory validity window is invalid (valid_after={valid_after_unix}, valid_until={valid_until_unix})"
+    )]
+    InvalidWindow {
+        /// Inclusive validity boundary.
+        valid_after_unix: i64,
+        /// Exclusive validity boundary.
+        valid_until_unix: i64,
+    },
+    /// The directory is not active yet.
+    #[error("relay directory is not yet valid at {now_unix} (valid_after={valid_after_unix})")]
+    NotYetValid {
+        /// Selection time.
+        now_unix: u64,
+        /// Inclusive validity boundary.
+        valid_after_unix: u64,
+    },
+    /// The directory is no longer active.
+    #[error("relay directory expired at {now_unix} (valid_until={valid_until_unix})")]
+    Expired {
+        /// Selection time.
+        now_unix: u64,
+        /// Exclusive validity boundary.
+        valid_until_unix: u64,
+    },
 }
 /// Reason why an exit role was revoked while enforcing the bond policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -484,12 +527,6 @@ pub enum GuardDirectoryError {
     /// Snapshot contained no relay entries.
     #[error("guard directory did not advertise any relays")]
     EmptyDirectory,
-    /// Validation phase value was not recognised.
-    #[error("guard directory validation phase {phase} is not recognised")]
-    UnknownValidationPhase {
-        /// Raw validation phase value.
-        phase: u8,
-    },
     /// Issuer fingerprint could not be recomputed from the provided keys.
     #[error("issuer fingerprint mismatch (expected {expected}, computed {computed})")]
     IssuerFingerprintMismatch {
@@ -513,13 +550,11 @@ pub enum GuardDirectoryError {
         /// Fingerprint that was duplicated.
         fingerprint: String,
     },
-    /// Issuer omitted ML-DSA keys required for the current validation phase.
-    #[error("issuer {fingerprint} missing ML-DSA-65 public key for validation phase {phase:?}")]
+    /// Issuer omitted the ML-DSA key required by the first-release policy.
+    #[error("issuer {fingerprint} missing required ML-DSA-65 public key")]
     IssuerMissingMlDsa {
         /// Issuer fingerprint.
         fingerprint: String,
-        /// Phase that triggered the requirement.
-        phase: CertificateValidationPhase,
     },
     /// Certificate could not be decoded or verified.
     #[error("relay certificate decode or verification failed: {source}")]
@@ -570,10 +605,6 @@ pub enum GuardDirectoryError {
         reason: String,
     },
 }
-fn parse_validation_phase(value: u8) -> Result<CertificateValidationPhase, GuardDirectoryError> {
-    decode_validation_phase(value)
-        .ok_or(GuardDirectoryError::UnknownValidationPhase { phase: value })
-}
 struct VerifiedGuardDirectoryIssuer {
     issuer: GuardDirectoryIssuerV1,
     ed25519_key: Ed25519VerifyingKey,
@@ -610,16 +641,17 @@ fn parse_guard_directory_issuer_ed25519_key(
     })
 }
 impl RelayDirectory {
-    /// Build a directory from relay descriptors.
+    /// Build a trusted descriptor directory for crate-local tests.
     #[must_use]
-    pub fn new(entries: Vec<RelayDescriptor>) -> Self {
+    #[cfg(test)]
+    pub(crate) fn new(entries: Vec<RelayDescriptor>) -> Self {
         Self {
             entries,
+            authenticated_snapshot: true,
             directory_hash: None,
             published_at_unix: None,
             valid_after_unix: None,
             valid_until_unix: None,
-            validation_phase: None,
         }
     }
     /// Returns all relay descriptors.
@@ -647,10 +679,56 @@ impl RelayDirectory {
     pub fn valid_until(&self) -> Option<i64> {
         self.valid_until_unix
     }
-    /// Returns the certificate validation phase advertised by the snapshot.
-    #[must_use]
-    pub fn validation_phase(&self) -> Option<CertificateValidationPhase> {
-        self.validation_phase
+    /// Validate this directory at `now_unix` and return its exclusive expiry.
+    ///
+    /// Authenticated snapshot-backed directories always carry both boundaries
+    /// and are admitted only for the half-open interval
+    /// `valid_after <= now < valid_until`. Structural inspection output is
+    /// rejected even when its embedded signatures and validity fields are
+    /// self-consistent.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when snapshot validity metadata is incomplete,
+    /// malformed, not yet active, or expired.
+    pub fn active_valid_until_at(
+        &self,
+        now_unix: u64,
+    ) -> Result<Option<u64>, RelayDirectoryValidityError> {
+        if !self.authenticated_snapshot {
+            return Err(RelayDirectoryValidityError::Unauthenticated);
+        }
+        let (valid_after, valid_until) = match (self.valid_after_unix, self.valid_until_unix) {
+            (None, None) => return Ok(None),
+            (Some(valid_after), Some(valid_until)) => (valid_after, valid_until),
+            (valid_after_unix, valid_until_unix) => {
+                return Err(RelayDirectoryValidityError::Incomplete {
+                    valid_after_unix,
+                    valid_until_unix,
+                });
+            }
+        };
+        if valid_after < 0 || valid_until < 0 || valid_after >= valid_until {
+            return Err(RelayDirectoryValidityError::InvalidWindow {
+                valid_after_unix: valid_after,
+                valid_until_unix: valid_until,
+            });
+        }
+        let valid_after = u64::try_from(valid_after).expect("non-negative i64 fits u64");
+        let valid_until = u64::try_from(valid_until).expect("non-negative i64 fits u64");
+        if now_unix < valid_after {
+            return Err(RelayDirectoryValidityError::NotYetValid {
+                now_unix,
+                valid_after_unix: valid_after,
+            });
+        }
+        if now_unix >= valid_until {
+            return Err(RelayDirectoryValidityError::Expired {
+                now_unix,
+                valid_until_unix: valid_until,
+            });
+        }
+        Ok(Some(valid_until))
     }
     /// Apply supplemental path hints to the relay descriptors in the directory.
     ///
@@ -720,7 +798,6 @@ impl RelayDirectory {
         if snapshot.relays.is_empty() {
             return Err(GuardDirectoryError::EmptyDirectory);
         }
-        let validation_phase = parse_validation_phase(snapshot.validation_phase)?;
         let mut issuers: HashMap<[u8; 32], VerifiedGuardDirectoryIssuer> =
             HashMap::with_capacity(snapshot.issuers.len());
         for issuer in snapshot.issuers {
@@ -741,12 +818,9 @@ impl RelayDirectory {
                     computed: hex::encode(computed),
                 });
             }
-            if validation_phase != CertificateValidationPhase::Phase1AllowSingle
-                && issuer.mldsa65_public.is_empty()
-            {
+            if issuer.mldsa65_public.is_empty() {
                 return Err(GuardDirectoryError::IssuerMissingMlDsa {
                     fingerprint: hex::encode(issuer.fingerprint),
-                    phase: validation_phase,
                 });
             }
             let fingerprint = issuer.fingerprint;
@@ -782,18 +856,9 @@ impl RelayDirectory {
                 }
             })?;
             let verified = if let Some(at_unix) = at_unix {
-                bundle.verify_at(
-                    &issuer.ed25519_key,
-                    &issuer.issuer.mldsa65_public,
-                    validation_phase,
-                    at_unix,
-                )
+                bundle.verify_at(&issuer.ed25519_key, &issuer.issuer.mldsa65_public, at_unix)
             } else {
-                bundle.verify_signatures(
-                    &issuer.ed25519_key,
-                    &issuer.issuer.mldsa65_public,
-                    validation_phase,
-                )
+                bundle.verify_signatures(&issuer.ed25519_key, &issuer.issuer.mldsa65_public)
             };
             verified.map_err(|source| GuardDirectoryError::CertificateDecode { source })?;
             let mut endpoints = Vec::with_capacity(bundle.certificate.endpoints.len());
@@ -828,18 +893,17 @@ impl RelayDirectory {
                     exit: bundle.certificate.roles.exit,
                 },
                 endpoints,
-                pq_kem_public: None,
                 certificate: Some(bundle),
                 path_metadata: PathMetadata::default(),
             });
         }
         Ok(Self {
             entries,
+            authenticated_snapshot: at_unix.is_some(),
             directory_hash: Some(snapshot.directory_hash),
             published_at_unix: Some(snapshot.published_at_unix),
             valid_after_unix: Some(snapshot.valid_after_unix),
             valid_until_unix: Some(snapshot.valid_until_unix),
-            validation_phase: Some(validation_phase),
         })
     }
     #[cfg(test)]
@@ -916,8 +980,6 @@ pub struct GuardRecord {
     pub bandwidth_bytes_per_sec: u64,
     /// Reputation or staking weight advertised for the guard.
     pub reputation_weight: u32,
-    /// Cached ML-KEM public key advertised by the guard, if any.
-    pub pq_kem_public: Option<Vec<u8>>,
     /// Relay certificate bundle if supplied when the guard was pinned.
     pub certificate: Option<RelayCertificateBundleV2>,
     /// Topology metadata used for path selection and diversity.
@@ -932,24 +994,19 @@ pub struct GuardCertificateMetadata {
     pub valid_after: i64,
     /// Certificate validity window end (exclusive, Unix seconds).
     pub valid_until: i64,
-    /// Whether the bundle carries both Ed25519 and ML-DSA signatures.
-    pub has_dual_signatures: bool,
     /// Advertised handshake suites ordered by preference.
     pub handshake_suites: Vec<HandshakeSuite>,
-    /// Whether a PQ ML-KEM key was embedded in the certificate payload.
-    pub has_pq_key: bool,
+    /// Whether the authenticated certificate offers an NK2/NK3 PQ handshake suite.
+    pub supports_pq_handshake: bool,
 }
 impl GuardCertificateMetadata {
     fn from_bundle(bundle: &RelayCertificateBundleV2) -> Self {
-        let has_dual_signatures = bundle.signatures.mldsa65.is_some();
-        let has_pq_key = !bundle.certificate.pq_kem_public.is_empty();
         Self {
             published_at: bundle.certificate.published_at,
             valid_after: bundle.certificate.valid_after,
             valid_until: bundle.certificate.valid_until,
-            has_dual_signatures,
             handshake_suites: bundle.certificate.handshake_suites.clone(),
-            has_pq_key,
+            supports_pq_handshake: bundle.certificate.supports_pq_handshake(),
         }
     }
     fn handshake_labels(&self) -> Vec<&'static str> {
@@ -960,6 +1017,14 @@ impl GuardCertificateMetadata {
     }
 }
 impl GuardRecord {
+    /// Return whether the cached authenticated certificate offers a PQ handshake suite.
+    #[must_use]
+    pub fn is_pq_capable(&self) -> bool {
+        self.certificate
+            .as_ref()
+            .is_some_and(|bundle| bundle.certificate.supports_pq_handshake())
+    }
+
     /// Returns the certificate bundle if cached for this guard.
     #[must_use]
     pub fn certificate(&self) -> Option<&RelayCertificateBundleV2> {
@@ -974,52 +1039,71 @@ impl GuardRecord {
     }
 }
 /// Symmetric key used to authenticate persisted guard caches.
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GuardCacheKey([u8; 32]);
 impl GuardCacheKey {
     /// Length of guard cache keys in bytes.
     pub const LENGTH: usize = 32;
-    /// Construct a key from raw bytes.
-    #[must_use]
-    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
-        Self(bytes)
+    /// Construct a non-zero key from raw bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the key is all zero.
+    pub fn from_bytes(bytes: [u8; 32]) -> Result<Self, GuardCacheKeyError> {
+        if bytes.iter().all(|byte| *byte == 0) {
+            return Err(GuardCacheKeyError::AllZero);
+        }
+        Ok(Self(bytes))
     }
     /// Parse a guard cache key from a hex string.
     pub fn from_hex(hex: &str) -> Result<Self, GuardCacheKeyError> {
-        let trimmed = hex.trim();
-        if trimmed.len() != Self::LENGTH * 2 {
+        if hex.len() != Self::LENGTH * 2 {
             return Err(GuardCacheKeyError::InvalidLength {
                 expected: Self::LENGTH * 2,
-                actual: trimmed.len(),
+                actual: hex.len(),
             });
         }
         let mut bytes = [0u8; Self::LENGTH];
-        hex::decode_to_slice(trimmed, &mut bytes)
-            .map_err(|_| GuardCacheKeyError::InvalidHex(trimmed.to_string()))?;
+        hex::decode_to_slice(hex, &mut bytes).map_err(|_| GuardCacheKeyError::InvalidHex)?;
+        if bytes.iter().all(|byte| *byte == 0) {
+            return Err(GuardCacheKeyError::AllZero);
+        }
         Ok(Self(bytes))
     }
-    /// Return the underlying bytes.
+    /// Expose the key bytes to this crate's authentication primitives.
     #[must_use]
-    pub const fn as_bytes(&self) -> &[u8; 32] {
+    pub(crate) const fn expose_bytes_for_mac(&self) -> &[u8; 32] {
         &self.0
     }
-    /// Render the key as an uppercase hex string.
-    #[must_use]
-    pub fn to_hex(&self) -> String {
-        hex::encode_upper(self.0)
+}
+impl Clone for GuardCacheKey {
+    fn clone(&self) -> Self {
+        Self(self.0)
     }
 }
-impl fmt::Display for GuardCacheKey {
+impl fmt::Debug for GuardCacheKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.to_hex())
+        f.write_str("GuardCacheKey(<redacted>)")
+    }
+}
+impl Drop for GuardCacheKey {
+    fn drop(&mut self) {
+        self.0.fill(0);
+        std::hint::black_box(&mut self.0);
+    }
+}
+impl std::str::FromStr for GuardCacheKey {
+    type Err = GuardCacheKeyError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Self::from_hex(value)
     }
 }
 /// Errors encountered while parsing guard cache keys.
 #[derive(Debug, Error)]
 pub enum GuardCacheKeyError {
     /// The supplied key did not decode from hex.
-    #[error("guard cache key must be 64 hexadecimal characters; got `{0}`")]
-    InvalidHex(String),
+    #[error("guard cache key must contain exactly 64 hexadecimal characters")]
+    InvalidHex,
     /// The supplied key did not have the expected length.
     #[error("guard cache key must be {expected} characters; got {actual}")]
     InvalidLength {
@@ -1028,6 +1112,9 @@ pub enum GuardCacheKeyError {
         /// Actual number of characters observed.
         actual: usize,
     },
+    /// The supplied key contained no entropy.
+    #[error("guard cache key must not be all zero")]
+    AllZero,
 }
 /// Authentication tag persisted alongside guard caches.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1051,7 +1138,7 @@ impl GuardCacheTag {
                 operation: "generating guard cache tag nonce",
                 message: err.to_string(),
             })?;
-        let mut hasher = Blake3Hasher::new_keyed(key.as_bytes());
+        let mut hasher = Blake3Hasher::new_keyed(key.expose_bytes_for_mac());
         hasher.update(CACHE_TAG_LABEL);
         hasher.update(&nonce);
         hasher.update(payload);
@@ -1064,12 +1151,13 @@ impl GuardCacheTag {
         })
     }
     fn verify(&self, key: &GuardCacheKey, payload: &[u8]) -> bool {
-        let mut hasher = Blake3Hasher::new_keyed(key.as_bytes());
+        let mut hasher = Blake3Hasher::new_keyed(key.expose_bytes_for_mac());
         hasher.update(CACHE_TAG_LABEL);
         hasher.update(&self.nonce);
         hasher.update(payload);
         let mac = hasher.finalize();
-        mac.as_bytes() == &self.mac
+        // `blake3::Hash` implements constant-time equality for 32-byte arrays.
+        mac == self.mac
     }
     fn to_hex(&self) -> String {
         let mut buf = [0u8; CACHE_NONCE_LEN + CACHE_TAG_LEN];
@@ -1078,16 +1166,21 @@ impl GuardCacheTag {
         hex::encode_upper(buf)
     }
     fn from_hex(hex: &str) -> Result<Self, GuardSetPersistenceError> {
-        let trimmed = hex.trim();
-        if trimmed.len() != (CACHE_NONCE_LEN + CACHE_TAG_LEN) * 2 {
+        if hex.len() != (CACHE_NONCE_LEN + CACHE_TAG_LEN) * 2 {
             return Err(GuardSetPersistenceError::InvalidCacheTagLength {
                 expected: (CACHE_NONCE_LEN + CACHE_TAG_LEN) * 2,
-                actual: trimmed.len(),
+                actual: hex.len(),
             });
         }
-        let mut bytes = vec![0u8; CACHE_NONCE_LEN + CACHE_TAG_LEN];
-        hex::decode_to_slice(trimmed, &mut bytes)
-            .map_err(|_| GuardSetPersistenceError::InvalidCacheTagHex(trimmed.to_string()))?;
+        if !hex
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'A'..=b'F').contains(&byte))
+        {
+            return Err(GuardSetPersistenceError::InvalidCacheTagHex);
+        }
+        let mut bytes = [0u8; CACHE_NONCE_LEN + CACHE_TAG_LEN];
+        hex::decode_to_slice(hex, &mut bytes)
+            .map_err(|_| GuardSetPersistenceError::InvalidCacheTagHex)?;
         let mut nonce = [0u8; CACHE_NONCE_LEN];
         let mut mac = [0u8; CACHE_TAG_LEN];
         nonce.copy_from_slice(&bytes[..CACHE_NONCE_LEN]);
@@ -1125,56 +1218,116 @@ impl GuardSet {
     pub fn iter(&self) -> impl Iterator<Item = &GuardRecord> {
         self.guards.iter()
     }
-    /// Serialise the guard set to Norito bytes without authentication.
-    pub fn encode(&self) -> Result<Vec<u8>, GuardSetPersistenceError> {
-        self.encode_with_key(None)
-    }
-    /// Serialise the guard set to Norito bytes with an authentication tag.
-    pub fn encode_with_key(
+    /// Serialise the guard set into a mandatory authenticated V8 envelope.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the guard set exceeds first-release bounds,
+    /// contains an invalid persisted field, cannot be encoded, or entropy for
+    /// the authentication nonce is unavailable.
+    pub fn encode_authenticated(
         &self,
-        key: Option<&GuardCacheKey>,
+        key: &GuardCacheKey,
     ) -> Result<Vec<u8>, GuardSetPersistenceError> {
-        let mut persist = GuardSetPersist {
-            version: GUARD_SET_VERSION,
-            guards: self.guards.iter().map(GuardRecordPersist::from).collect(),
-            cache_tag_hex: None,
-        };
-        if let Some(key) = key {
-            let payload = to_bytes(&persist).map_err(GuardSetPersistenceError::Encode)?;
-            let tag = GuardCacheTag::generate(key, &payload)?;
-            persist.cache_tag_hex = Some(tag.to_hex());
+        validate_guard_count(self.guards.len())?;
+        let records: Vec<_> = self
+            .guards
+            .iter()
+            .map(GuardRecordPersist::try_from)
+            .collect::<Result<_, _>>()?;
+        let mut relay_ids = HashSet::with_capacity(records.len());
+        for record in records.iter().cloned() {
+            let guard = GuardRecord::try_from(record)?;
+            if !relay_ids.insert(guard.relay_id) {
+                return Err(GuardSetPersistenceError::DuplicateRelay {
+                    relay_id_hex: hex::encode(guard.relay_id),
+                });
+            }
         }
-        to_bytes(&persist).map_err(GuardSetPersistenceError::Encode)
-    }
-    /// Deserialise a guard set from Norito bytes without verifying an authentication tag.
-    pub fn decode(bytes: &[u8]) -> Result<Self, GuardSetPersistenceError> {
-        Self::decode_with_key(bytes, None)
-    }
-    /// Deserialise a guard set from Norito bytes, verifying the authentication tag when present.
-    pub fn decode_with_key(
-        bytes: &[u8],
-        key: Option<&GuardCacheKey>,
-    ) -> Result<Self, GuardSetPersistenceError> {
-        let payload: GuardSetPersist =
-            decode_from_bytes(bytes).map_err(GuardSetPersistenceError::Decode)?;
-        if payload.version < GUARD_SET_VERSION_MIN || payload.version > GUARD_SET_VERSION {
-            return Err(GuardSetPersistenceError::UnsupportedVersion {
-                version: payload.version,
+        let payload = GuardSetPayloadV8 { guards: records };
+        let payload_bytes = to_bytes(&payload).map_err(GuardSetPersistenceError::Encode)?;
+        if payload_bytes.len() > GUARD_CACHE_MAX_BYTES_V1 {
+            return Err(GuardSetPersistenceError::Oversized {
+                actual: payload_bytes.len(),
+                maximum: GUARD_CACHE_MAX_BYTES_V1,
             });
         }
-        if let Some(tag_hex) = payload.cache_tag_hex.as_deref() {
-            let key = key.ok_or(GuardSetPersistenceError::MissingCacheKey)?;
-            let tag = GuardCacheTag::from_hex(tag_hex)?;
-            let mut bare_payload = payload.clone();
-            bare_payload.cache_tag_hex = None;
-            let bare_bytes = to_bytes(&bare_payload).map_err(GuardSetPersistenceError::Encode)?;
-            if !tag.verify(key, &bare_bytes) {
-                return Err(GuardSetPersistenceError::InvalidCacheTag);
-            }
-        } else if key.is_some() && payload.version >= 3 {
-            return Err(GuardSetPersistenceError::MissingCacheTag);
+        let tag = GuardCacheTag::generate(key, &payload_bytes)?;
+        let envelope = GuardSetEnvelopeV8 {
+            version: GUARD_SET_VERSION,
+            payload: payload_bytes,
+            cache_tag_hex: tag.to_hex(),
+        };
+        let encoded = to_bytes(&envelope).map_err(GuardSetPersistenceError::Encode)?;
+        if encoded.len() > GUARD_CACHE_MAX_BYTES_V1 {
+            return Err(GuardSetPersistenceError::Oversized {
+                actual: encoded.len(),
+                maximum: GUARD_CACHE_MAX_BYTES_V1,
+            });
         }
-        let guards = payload.guards.into_iter().map(GuardRecord::from).collect();
+        Ok(encoded)
+    }
+    /// Authenticate and decode an exact V8 guard-cache envelope.
+    ///
+    /// The outer envelope is resource-bounded and canonicalised first. Its MAC
+    /// is then verified in constant time before the inner guard vector is
+    /// decoded or allocated.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an oversized, non-canonical, unauthenticated, or
+    /// malformed guard cache.
+    pub fn decode_authenticated(
+        bytes: &[u8],
+        key: &GuardCacheKey,
+    ) -> Result<Self, GuardSetPersistenceError> {
+        if bytes.len() > GUARD_CACHE_MAX_BYTES_V1 {
+            return Err(GuardSetPersistenceError::Oversized {
+                actual: bytes.len(),
+                maximum: GUARD_CACHE_MAX_BYTES_V1,
+            });
+        }
+        let envelope: GuardSetEnvelopeV8 =
+            decode_from_bytes_with_limits(bytes, GUARD_CACHE_OUTER_DECODE_LIMITS_V1)
+                .map_err(GuardSetPersistenceError::Decode)?;
+        if envelope.version != GUARD_SET_VERSION {
+            return Err(GuardSetPersistenceError::UnsupportedVersion {
+                version: envelope.version,
+            });
+        }
+        let canonical = to_bytes(&envelope).map_err(GuardSetPersistenceError::Encode)?;
+        if canonical != bytes {
+            return Err(GuardSetPersistenceError::NonCanonical);
+        }
+        if envelope.payload.len() > GUARD_CACHE_MAX_BYTES_V1 {
+            return Err(GuardSetPersistenceError::Oversized {
+                actual: envelope.payload.len(),
+                maximum: GUARD_CACHE_MAX_BYTES_V1,
+            });
+        }
+        let tag = GuardCacheTag::from_hex(&envelope.cache_tag_hex)?;
+        if !tag.verify(key, &envelope.payload) {
+            return Err(GuardSetPersistenceError::InvalidCacheTag);
+        }
+        let payload: GuardSetPayloadV8 =
+            decode_from_bytes_with_limits(&envelope.payload, GUARD_CACHE_INNER_DECODE_LIMITS_V1)
+                .map_err(GuardSetPersistenceError::Decode)?;
+        let canonical_payload = to_bytes(&payload).map_err(GuardSetPersistenceError::Encode)?;
+        if canonical_payload != envelope.payload {
+            return Err(GuardSetPersistenceError::NonCanonical);
+        }
+        validate_guard_count(payload.guards.len())?;
+        let mut guards = Vec::with_capacity(payload.guards.len());
+        let mut relay_ids = HashSet::with_capacity(payload.guards.len());
+        for record in payload.guards {
+            let guard = GuardRecord::try_from(record)?;
+            if !relay_ids.insert(guard.relay_id) {
+                return Err(GuardSetPersistenceError::DuplicateRelay {
+                    relay_id_hex: hex::encode(guard.relay_id),
+                });
+            }
+            guards.push(guard);
+        }
         Ok(Self { guards })
     }
 }
@@ -1251,14 +1404,20 @@ impl GuardSelector {
     pub fn desired_count(&self) -> NonZeroUsize {
         self.desired_count
     }
-    /// Selects guards based on the latest directory, preserving existing pins when possible.
+    /// Selects guards from an active directory, preserving existing pins when possible.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a snapshot-backed directory is outside its
+    /// advertised validity window.
     pub fn select(
         &self,
         directory: &RelayDirectory,
         existing: Option<&GuardSet>,
         now_unix: u64,
         policy: AnonymityPolicy,
-    ) -> GuardSet {
+    ) -> Result<GuardSet, RelayDirectoryValidityError> {
+        directory.active_valid_until_at(now_unix)?;
         let mut selected = Vec::new();
         let mut selected_ids = Vec::<[u8; 32]>::new();
         let retention_secs = self.retention.as_secs();
@@ -1298,6 +1457,9 @@ impl GuardSelector {
                 if !descriptor.is_entry_guard() {
                     continue;
                 }
+                if !descriptor_certificate_is_active(descriptor, now_unix) {
+                    continue;
+                }
                 let endpoint = match descriptor.primary_endpoint() {
                     Some(endpoint) => endpoint.clone(),
                     None => continue,
@@ -1305,27 +1467,8 @@ impl GuardSelector {
                 if selected_ids.contains(&record.relay_id) {
                     continue;
                 }
-                let certificate = descriptor
-                    .certificate()
-                    .cloned()
-                    .or_else(|| record.certificate().cloned());
-                let certificate_candidate = certificate.is_some();
-                let certificate =
-                    certificate.and_then(|bundle| enforce_certificate_validity(bundle, now_unix));
-                let pq_allowed = !certificate_candidate || certificate.is_some();
-                let descriptor_pq = if pq_allowed {
-                    descriptor.pq_kem_public_at(now_unix)
-                } else {
-                    None
-                };
-                let record_pq = if pq_allowed {
-                    record.pq_kem_public.as_deref()
-                } else {
-                    None
-                };
-                let pq_kem_public =
-                    preferred_pq_kem_public(certificate.as_ref(), descriptor_pq, record_pq);
-                let is_pq = pq_kem_public.is_some();
+                let certificate = descriptor.certificate().cloned();
+                let is_pq = descriptor.is_pq_capable_at(now_unix);
                 if !is_pq && selected_classical >= max_classical {
                     continue;
                 }
@@ -1341,7 +1484,6 @@ impl GuardSelector {
                     guard_weight: descriptor.guard_weight,
                     bandwidth_bytes_per_sec: descriptor.bandwidth_bytes_per_sec,
                     reputation_weight: descriptor.reputation_weight,
-                    pq_kem_public,
                     certificate,
                     path_metadata: path_metadata.clone(),
                 });
@@ -1353,13 +1495,14 @@ impl GuardSelector {
         }
         if selected.len() >= max_count {
             emit_guard_selection_telemetry(&selected);
-            return GuardSet::new(selected);
+            return Ok(GuardSet::new(selected));
         }
         let mut candidates: Vec<(PathSortKey, u128, &RelayDescriptor)> = directory
             .entries()
             .iter()
             .filter(|descriptor| descriptor.is_entry_guard())
             .filter(|descriptor| descriptor.primary_endpoint().is_some())
+            .filter(|descriptor| descriptor_certificate_is_active(descriptor, now_unix))
             .map(|descriptor| {
                 let pq_capable = descriptor.is_pq_capable_at(now_unix);
                 (
@@ -1392,18 +1535,7 @@ impl GuardSelector {
             }
             if let Some(endpoint) = descriptor.primary_endpoint() {
                 let certificate = descriptor.certificate().cloned();
-                let certificate_candidate = certificate.is_some();
-                let certificate =
-                    certificate.and_then(|bundle| enforce_certificate_validity(bundle, now_unix));
-                let pq_allowed = !certificate_candidate || certificate.is_some();
-                let descriptor_pq = if pq_allowed {
-                    descriptor.pq_kem_public_at(now_unix)
-                } else {
-                    None
-                };
-                let pq_kem_public =
-                    preferred_pq_kem_public(certificate.as_ref(), descriptor_pq, None);
-                let is_pq = pq_kem_public.is_some();
+                let is_pq = descriptor.is_pq_capable_at(now_unix);
                 if !is_pq && selected_classical >= max_classical {
                     continue;
                 }
@@ -1444,7 +1576,6 @@ impl GuardSelector {
                     guard_weight: descriptor.guard_weight,
                     bandwidth_bytes_per_sec: descriptor.bandwidth_bytes_per_sec,
                     reputation_weight: descriptor.reputation_weight,
-                    pq_kem_public,
                     certificate,
                     path_metadata: path_metadata.clone(),
                 });
@@ -1455,50 +1586,15 @@ impl GuardSelector {
             }
         }
         emit_guard_selection_telemetry(&selected);
-        GuardSet::new(selected)
+        Ok(GuardSet::new(selected))
     }
-}
-fn certificate_pq_kem_public(bundle: &RelayCertificateBundleV2) -> Option<Vec<u8>> {
-    if bundle.certificate.pq_kem_public.is_empty() {
-        None
-    } else {
-        Some(bundle.certificate.pq_kem_public.clone())
-    }
-}
-fn preferred_pq_kem_public(
-    certificate: Option<&RelayCertificateBundleV2>,
-    descriptor_pq: Option<&[u8]>,
-    record_pq: Option<&[u8]>,
-) -> Option<Vec<u8>> {
-    if let Some(bundle) = certificate
-        && let Some(bytes) = certificate_pq_kem_public(bundle)
-    {
-        return Some(bytes);
-    }
-    if let Some(bytes) = descriptor_pq {
-        return Some(bytes.to_vec());
-    }
-    record_pq.map(|value| value.to_vec())
 }
 fn is_certificate_valid_at(bundle: &RelayCertificateBundleV2, now_unix: u64) -> bool {
     let now_i64 = i64::try_from(now_unix).unwrap_or(i64::MAX);
-    if bundle.certificate.valid_after > now_i64 {
-        return false;
-    }
-    if bundle.certificate.valid_until > 0 && bundle.certificate.valid_until <= now_i64 {
-        return false;
-    }
-    true
-}
-fn enforce_certificate_validity(
-    bundle: RelayCertificateBundleV2,
-    now_unix: u64,
-) -> Option<RelayCertificateBundleV2> {
-    if is_certificate_valid_at(&bundle, now_unix) {
-        Some(bundle)
-    } else {
-        None
-    }
+    bundle.certificate.valid_after >= 0
+        && bundle.certificate.valid_after < bundle.certificate.valid_until
+        && bundle.certificate.valid_after <= now_i64
+        && now_i64 < bundle.certificate.valid_until
 }
 fn emit_guard_selection_telemetry(guards: &[GuardRecord]) {
     for guard in guards {
@@ -1514,8 +1610,7 @@ fn emit_guard_selection_telemetry(guards: &[GuardRecord]) {
                 published_at = metadata.published_at,
                 valid_after = metadata.valid_after,
                 valid_until = metadata.valid_until,
-                has_dual_signatures = metadata.has_dual_signatures,
-                has_pq_key = metadata.has_pq_key,
+                supports_pq_handshake = metadata.supports_pq_handshake,
                 handshake_suites = handshake_joined.as_str(),
                 path_avg_rtt_ms = ?path.avg_rtt_ms,
                 path_region = ?path.region,
@@ -1548,8 +1643,7 @@ fn emit_circuit_build_telemetry(guard: &GuardRecord) {
             published_at = metadata.published_at,
             valid_after = metadata.valid_after,
             valid_until = metadata.valid_until,
-            has_dual_signatures = metadata.has_dual_signatures,
-            has_pq_key = metadata.has_pq_key,
+            supports_pq_handshake = metadata.supports_pq_handshake,
             handshake_suites = handshake_joined.as_str(),
             path_avg_rtt_ms = ?guard.path_metadata.avg_rtt_ms,
             path_region = ?guard.path_metadata.region,
@@ -1706,18 +1800,47 @@ pub enum GuardSetPersistenceError {
     /// Guard set version is unsupported.
     #[error("unsupported guard set version {version}")]
     UnsupportedVersion { version: u8 },
-    /// Guard cache tag was present but no key was supplied.
-    #[error("guard cache key required to decode tagged cache")]
-    MissingCacheKey,
-    /// Guard cache key was supplied but the payload lacked a tag.
-    #[error("guard cache tag missing from payload")]
-    MissingCacheTag,
+    /// Cache bytes exceeded the first-release resource envelope.
+    #[error("guard cache is {actual} bytes; maximum is {maximum}")]
+    Oversized {
+        /// Observed encoded length.
+        actual: usize,
+        /// Maximum admitted encoded length.
+        maximum: usize,
+    },
+    /// Cache contained too many sticky guards.
+    #[error("guard cache contains {actual} guards; maximum is {maximum}")]
+    TooManyGuards {
+        /// Observed guard count.
+        actual: usize,
+        /// Maximum admitted guard count.
+        maximum: usize,
+    },
+    /// Cache contained the same relay more than once.
+    #[error("guard cache contains duplicate relay {relay_id_hex}")]
+    DuplicateRelay {
+        /// Duplicate relay identifier.
+        relay_id_hex: String,
+    },
+    /// One persisted guard field failed strict admission.
+    #[error("guard cache relay {relay_id_hex} has invalid {field}: {reason}")]
+    InvalidRecord {
+        /// Relay identifier for the malformed record.
+        relay_id_hex: String,
+        /// Field that failed validation.
+        field: &'static str,
+        /// Stable validation reason.
+        reason: String,
+    },
+    /// Envelope bytes were not the canonical encoding of their decoded value.
+    #[error("guard cache envelope is not canonically encoded")]
+    NonCanonical,
     /// Guard cache tag validation failed.
     #[error("guard cache tag did not match encoded payload")]
     InvalidCacheTag,
     /// Guard cache tag contained invalid hex.
-    #[error("guard cache tag must be hexadecimal; got `{0}`")]
-    InvalidCacheTagHex(String),
+    #[error("guard cache tag must use canonical uppercase hexadecimal")]
+    InvalidCacheTagHex,
     /// Guard cache tag length was unexpected.
     #[error("guard cache tag must be {expected} characters; got {actual}")]
     InvalidCacheTagLength {
@@ -1736,11 +1859,14 @@ pub enum GuardSetPersistenceError {
     },
 }
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
-struct GuardSetPersist {
+struct GuardSetEnvelopeV8 {
     version: u8,
+    payload: Vec<u8>,
+    cache_tag_hex: String,
+}
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
+struct GuardSetPayloadV8 {
     guards: Vec<GuardRecordPersist>,
-    #[norito(default)]
-    cache_tag_hex: Option<String>,
 }
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct GuardRecordPersist {
@@ -1753,7 +1879,6 @@ struct GuardRecordPersist {
     bandwidth_bytes_per_sec: u64,
     #[norito(default)]
     reputation_weight: u32,
-    pq_kem_public_hex: Option<String>,
     #[norito(default)]
     certificate_base64: Option<String>,
     #[norito(default)]
@@ -1772,9 +1897,24 @@ struct GuardEndpointPersistV1 {
     #[norito(default)]
     tags: Vec<String>,
 }
-impl From<&GuardRecord> for GuardRecordPersist {
-    fn from(record: &GuardRecord) -> Self {
-        Self {
+impl TryFrom<&GuardRecord> for GuardRecordPersist {
+    type Error = GuardSetPersistenceError;
+
+    fn try_from(record: &GuardRecord) -> Result<Self, Self::Error> {
+        let certificate_base64 = record
+            .certificate()
+            .map(|bundle| {
+                bundle
+                    .try_to_cbor()
+                    .map(|bytes| BASE64_STANDARD.encode(bytes))
+                    .map_err(|error| GuardSetPersistenceError::InvalidRecord {
+                        relay_id_hex: hex::encode(record.relay_id),
+                        field: "certificate_base64",
+                        reason: error.to_string(),
+                    })
+            })
+            .transpose()?;
+        Ok(Self {
             relay_id: record.relay_id,
             pinned_at_unix: record.pinned_at_unix,
             endpoint: GuardEndpointPersistV1 {
@@ -1791,19 +1931,18 @@ impl From<&GuardRecord> for GuardRecordPersist {
             guard_weight: record.guard_weight,
             bandwidth_bytes_per_sec: record.bandwidth_bytes_per_sec,
             reputation_weight: record.reputation_weight,
-            pq_kem_public_hex: record.pq_kem_public.as_ref().map(hex::encode),
-            certificate_base64: record
-                .certificate()
-                .map(|bundle| BASE64_STANDARD.encode(bundle.to_cbor())),
+            certificate_base64,
             path_avg_rtt_ms: record.path_metadata.avg_rtt_ms,
             path_region: record.path_metadata.region.clone(),
             path_asn: record.path_metadata.asn,
             path_validator_lane: record.path_metadata.validator_lane,
-        }
+        })
     }
 }
-impl From<GuardRecordPersist> for GuardRecord {
-    fn from(persist: GuardRecordPersist) -> Self {
+impl TryFrom<GuardRecordPersist> for GuardRecord {
+    type Error = GuardSetPersistenceError;
+
+    fn try_from(persist: GuardRecordPersist) -> Result<Self, Self::Error> {
         let GuardRecordPersist {
             relay_id,
             pinned_at_unix,
@@ -1811,26 +1950,136 @@ impl From<GuardRecordPersist> for GuardRecord {
             guard_weight,
             bandwidth_bytes_per_sec,
             reputation_weight,
-            pq_kem_public_hex,
             certificate_base64,
             path_avg_rtt_ms,
             path_region,
             path_asn,
             path_validator_lane,
         } = persist;
-        let pq_kem_public = pq_kem_public_hex.and_then(|hex| hex::decode(hex).ok());
-        let certificate = certificate_base64.and_then(|encoded| {
-            BASE64_STANDARD
-                .decode(encoded.as_bytes())
-                .ok()
-                .and_then(|bytes| RelayCertificateBundleV2::from_cbor(&bytes).ok())
-        });
-        let tags = endpoint
-            .tags
-            .iter()
-            .filter_map(|label| EndpointTag::from_label(label).ok())
-            .collect();
-        Self {
+        let relay_id_hex = hex::encode(relay_id);
+        let invalid =
+            |field: &'static str, reason: String| GuardSetPersistenceError::InvalidRecord {
+                relay_id_hex: relay_id_hex.clone(),
+                field,
+                reason,
+            };
+        if relay_id.iter().all(|byte| *byte == 0) {
+            return Err(invalid("relay_id", "must not be all zero".to_string()));
+        }
+        if endpoint.url.is_empty()
+            || endpoint.url.len() > GUARD_CACHE_MAX_ENDPOINT_BYTES_V1
+            || endpoint.url.trim() != endpoint.url
+            || endpoint.url.chars().any(char::is_control)
+        {
+            return Err(invalid(
+                "endpoint.url",
+                format!(
+                    "must be non-empty, canonical, control-free, and at most {GUARD_CACHE_MAX_ENDPOINT_BYTES_V1} bytes"
+                ),
+            ));
+        }
+        if endpoint.tags.len() > GUARD_CACHE_MAX_ENDPOINT_TAGS_V1 {
+            return Err(invalid(
+                "endpoint.tags",
+                format!("must contain at most {GUARD_CACHE_MAX_ENDPOINT_TAGS_V1} entries"),
+            ));
+        }
+        let mut tags = Vec::with_capacity(endpoint.tags.len());
+        for label in endpoint.tags {
+            if label.is_empty()
+                || label.len() > GUARD_CACHE_MAX_ENDPOINT_TAG_BYTES_V1
+                || label.trim() != label
+            {
+                return Err(invalid(
+                    "endpoint.tags",
+                    "labels must be non-empty, canonical, and within the first-release bound"
+                        .to_string(),
+                ));
+            }
+            let tag = EndpointTag::from_label(&label)
+                .map_err(|error| invalid("endpoint.tags", error.to_string()))?;
+            if tag.as_label() != label {
+                return Err(invalid(
+                    "endpoint.tags",
+                    format!("tag `{label}` is not canonically encoded"),
+                ));
+            }
+            if tags.contains(&tag) {
+                return Err(invalid("endpoint.tags", format!("duplicate tag `{label}`")));
+            }
+            tags.push(tag);
+        }
+        let certificate = match certificate_base64 {
+            Some(encoded) => {
+                let maximum_encoded_len = SRC_V2_MAX_BUNDLE_BYTES.div_ceil(3) * 4;
+                if encoded.is_empty() || encoded.len() > maximum_encoded_len {
+                    return Err(invalid(
+                        "certificate_base64",
+                        format!(
+                            "decoded certificate must not exceed {SRC_V2_MAX_BUNDLE_BYTES} bytes"
+                        ),
+                    ));
+                }
+                let bytes = BASE64_STANDARD
+                    .decode(encoded.as_bytes())
+                    .map_err(|error| invalid("certificate_base64", error.to_string()))?;
+                if bytes.len() > SRC_V2_MAX_BUNDLE_BYTES
+                    || BASE64_STANDARD.encode(&bytes) != encoded
+                {
+                    return Err(invalid(
+                        "certificate_base64",
+                        "must be a canonical bounded base64 bundle".to_string(),
+                    ));
+                }
+                let bundle = RelayCertificateBundleV2::from_cbor(&bytes)
+                    .map_err(|error| invalid("certificate_base64", error.to_string()))?;
+                if bundle.certificate.relay_id != relay_id {
+                    return Err(invalid(
+                        "certificate_base64",
+                        "certificate relay_id does not match the cache record".to_string(),
+                    ));
+                }
+                if bundle.certificate.valid_after < 0
+                    || bundle.certificate.valid_until <= bundle.certificate.valid_after
+                {
+                    return Err(invalid(
+                        "certificate_base64",
+                        "certificate validity window is malformed".to_string(),
+                    ));
+                }
+                if !bundle
+                    .certificate
+                    .endpoints
+                    .iter()
+                    .any(|candidate| candidate.quic_multiaddr == endpoint.url)
+                {
+                    return Err(invalid(
+                        "endpoint.url",
+                        "endpoint is absent from the persisted certificate".to_string(),
+                    ));
+                }
+                Some(bundle)
+            }
+            None => None,
+        };
+        let region = match path_region {
+            Some(region) => {
+                if region.is_empty()
+                    || region.len() > GUARD_CACHE_MAX_REGION_BYTES_V1
+                    || region.trim() != region
+                    || region.chars().any(char::is_control)
+                {
+                    return Err(invalid(
+                        "path_region",
+                        "must be non-empty, canonical, control-free, and within the first-release bound"
+                            .to_string(),
+                    ));
+                }
+                Some(region)
+            }
+            None => None,
+        };
+        Ok(Self {
             relay_id,
             pinned_at_unix,
             endpoint: Endpoint {
@@ -1841,16 +2090,24 @@ impl From<GuardRecordPersist> for GuardRecord {
             guard_weight,
             bandwidth_bytes_per_sec,
             reputation_weight,
-            pq_kem_public,
             certificate,
             path_metadata: PathMetadata {
                 avg_rtt_ms: path_avg_rtt_ms,
-                region: path_region.map(|region| region.trim().to_string()),
+                region,
                 asn: path_asn,
                 validator_lane: path_validator_lane,
             },
-        }
+        })
     }
+}
+fn validate_guard_count(count: usize) -> Result<(), GuardSetPersistenceError> {
+    if count > GUARD_CACHE_MAX_GUARDS_V1 {
+        return Err(GuardSetPersistenceError::TooManyGuards {
+            actual: count,
+            maximum: GUARD_CACHE_MAX_GUARDS_V1,
+        });
+    }
+    Ok(())
 }
 /// Stable identifier allocated to each circuit managed by [`CircuitManager`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1881,9 +2138,13 @@ pub struct CircuitRelay {
 struct Circuit {
     id: CircuitId,
     guard: GuardRecord,
+    entry_descriptor: RelayDescriptor,
+    middle_descriptor: RelayDescriptor,
+    exit_descriptor: RelayDescriptor,
     entry: CircuitRelay,
     middle: CircuitRelay,
     exit: CircuitRelay,
+    policy: AnonymityPolicy,
     built_at_unix: u64,
     expires_at_unix: u64,
     latency: LatencyWindow,
@@ -1930,6 +2191,12 @@ pub enum CircuitRetirementReason {
     ManualTeardown,
     /// Guard metadata changed and a new circuit replaced the previous one.
     MetadataChanged(CircuitRenewalReason),
+    /// The authenticated directory no longer authorises every circuit hop.
+    DirectoryChanged,
+    /// The directory is no longer active at the refresh timestamp.
+    DirectoryInvalid,
+    /// The caller changed the anonymity policy applied to the circuit.
+    PolicyChanged,
 }
 /// Reason why a circuit was renewed while the guard remained selected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1938,8 +2205,6 @@ pub enum CircuitRenewalReason {
     GuardRotation,
     /// Guard endpoint changed.
     EndpointUpdated,
-    /// Guard PQ material changed (e.g., new ML-KEM key).
-    PqKeyUpdated,
 }
 /// Aggregated latency data collected while the circuit was active.
 #[derive(Debug, Clone, PartialEq)]
@@ -2027,18 +2292,35 @@ impl LatencyWindow {
 /// Errors raised by [`CircuitManager::refresh`].
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum CircuitManagerError {
+    /// The relay directory is outside its advertised validity window.
+    #[error(transparent)]
+    DirectoryValidity(#[from] RelayDirectoryValidityError),
     /// Guard set was empty when attempting to refresh circuits.
     #[error("guard set is empty")]
     EmptyGuardSet,
     /// Guard entry did not contain a usable endpoint.
     #[error("guard {guard_id:?} missing endpoint")]
     MissingGuardEndpoint { guard_id: [u8; 32] },
+    /// The selected guard is absent from, or inconsistent with, the current directory.
+    #[error("guard {guard_id:?} is not authorised by the current relay directory")]
+    GuardDirectoryMismatch { guard_id: [u8; 32] },
+    /// The selected guard cannot satisfy the current anonymity policy.
+    #[error("guard {guard_id:?} cannot satisfy anonymity policy {policy:?}")]
+    AnonymityPolicyUnsatisfied {
+        /// Guard identifier.
+        guard_id: [u8; 32],
+        /// Policy that could not be satisfied.
+        policy: AnonymityPolicy,
+    },
     /// No viable middle relay was found for the provided guard.
     #[error("no viable middle relay found for guard {guard_id:?}")]
     NoMiddleRelay { guard_id: [u8; 32] },
     /// No viable exit relay was found for the provided guard.
     #[error("no viable exit relay found for guard {guard_id:?}")]
     NoExitRelay { guard_id: [u8; 32] },
+    /// No unused circuit identifier remains.
+    #[error("circuit identifier space exhausted")]
+    CircuitIdExhausted,
 }
 /// Event emitted while refreshing circuits.
 #[derive(Debug, Clone, PartialEq)]
@@ -2105,6 +2387,20 @@ impl CircuitManager {
         now_unix: u64,
         policy: AnonymityPolicy,
     ) -> Result<Vec<CircuitEvent>, CircuitManagerError> {
+        let directory_valid_until = match directory.active_valid_until_at(now_unix) {
+            Ok(valid_until) => valid_until,
+            Err(error) => {
+                let drained: Vec<_> = self.circuits.drain(..).collect();
+                for circuit in drained {
+                    self.record_retirement(
+                        circuit,
+                        now_unix,
+                        CircuitRetirementReason::DirectoryInvalid,
+                    );
+                }
+                return Err(error.into());
+            }
+        };
         if guard_set.is_empty() {
             return Err(CircuitManagerError::EmptyGuardSet);
         }
@@ -2116,6 +2412,9 @@ impl CircuitManager {
         let drained: Vec<_> = self.circuits.drain(..).collect();
         let mut retained = Vec::with_capacity(drained.len());
         for mut circuit in drained {
+            if let Some(valid_until) = directory_valid_until {
+                circuit.expires_at_unix = circuit.expires_at_unix.min(valid_until);
+            }
             let guard_id = circuit.guard.relay_id;
             let Some(updated_guard) = guard_map.get(&guard_id) else {
                 let record = self.record_retirement(
@@ -2132,14 +2431,34 @@ impl CircuitManager {
                 events.push(CircuitEvent::Retired { record });
                 continue;
             }
+            if circuit.policy != policy {
+                let record = self.record_retirement(
+                    circuit,
+                    now_unix,
+                    CircuitRetirementReason::PolicyChanged,
+                );
+                events.push(CircuitEvent::Retired { record });
+                continue;
+            }
+            if !circuit_is_authorised_by_directory(&circuit, directory, now_unix)
+                || !guard_matches_entry_descriptor(
+                    updated_guard,
+                    &circuit.entry_descriptor,
+                    now_unix,
+                )
+            {
+                let record = self.record_retirement(
+                    circuit,
+                    now_unix,
+                    CircuitRetirementReason::DirectoryChanged,
+                );
+                events.push(CircuitEvent::Retired { record });
+                continue;
+            }
             let endpoint_changed = updated_guard.endpoint != circuit.guard.endpoint;
-            let pq_changed =
-                updated_guard.pq_kem_public.as_deref() != circuit.guard.pq_kem_public.as_deref();
             let pinned_newer = updated_guard.pinned_at_unix > circuit.guard.pinned_at_unix;
             let renewal_reason = if endpoint_changed {
                 Some(CircuitRenewalReason::EndpointUpdated)
-            } else if pq_changed {
-                Some(CircuitRenewalReason::PqKeyUpdated)
             } else if pinned_newer {
                 Some(CircuitRenewalReason::GuardRotation)
             } else {
@@ -2156,7 +2475,7 @@ impl CircuitManager {
             }
             circuit.guard = (*updated_guard).clone();
             circuit.entry.endpoint = circuit.guard.endpoint.clone();
-            circuit.entry.pq_capable = circuit.guard.pq_kem_public.is_some();
+            circuit.entry.pq_capable = circuit.guard.is_pq_capable();
             retained.push(circuit);
         }
         self.circuits = retained;
@@ -2195,10 +2514,34 @@ impl CircuitManager {
         now_unix: u64,
         policy: AnonymityPolicy,
     ) -> Result<Circuit, CircuitManagerError> {
+        let directory_valid_until = directory.active_valid_until_at(now_unix)?;
         let endpoint = guard.endpoint.clone();
         if endpoint.url.is_empty() {
             return Err(CircuitManagerError::MissingGuardEndpoint {
                 guard_id: guard.relay_id,
+            });
+        }
+        let entry_descriptor = directory
+            .entries()
+            .iter()
+            .find(|descriptor| descriptor.relay_id == guard.relay_id)
+            .filter(|descriptor| descriptor.is_entry_guard())
+            .filter(|descriptor| descriptor.primary_endpoint().is_some())
+            .filter(|descriptor| descriptor_certificate_is_active(descriptor, now_unix))
+            .ok_or(CircuitManagerError::GuardDirectoryMismatch {
+                guard_id: guard.relay_id,
+            })?;
+        if !guard_matches_entry_descriptor(guard, entry_descriptor, now_unix) {
+            return Err(CircuitManagerError::GuardDirectoryMismatch {
+                guard_id: guard.relay_id,
+            });
+        }
+        if matches!(policy, AnonymityPolicy::StrictPq)
+            && !entry_descriptor.is_pq_capable_at(now_unix)
+        {
+            return Err(CircuitManagerError::AnonymityPolicyUnsatisfied {
+                guard_id: guard.relay_id,
+                policy,
             });
         }
         let mut avoid_asn: HashSet<u32> = HashSet::new();
@@ -2235,21 +2578,32 @@ impl CircuitManager {
         let entry = CircuitRelay {
             relay_id: guard.relay_id,
             endpoint,
-            pq_capable: guard.pq_kem_public.is_some(),
+            pq_capable: guard.is_pq_capable(),
         };
         let middle = descriptor_to_circuit_relay(middle_descriptor, None, now_unix);
         let exit =
             descriptor_to_circuit_relay(exit_descriptor, Some(EndpointTag::NoritoStream), now_unix);
+        let next_circuit_id = self
+            .next_circuit_id
+            .checked_add(1)
+            .ok_or(CircuitManagerError::CircuitIdExhausted)?;
         let id = CircuitId(self.next_circuit_id);
-        self.next_circuit_id = self.next_circuit_id.wrapping_add(1);
+        self.next_circuit_id = next_circuit_id;
         let ttl_secs = self.config.circuit_ttl.as_secs();
-        let expires_at_unix = now_unix.saturating_add(ttl_secs);
+        let mut expires_at_unix = now_unix.saturating_add(ttl_secs);
+        if let Some(valid_until) = directory_valid_until {
+            expires_at_unix = expires_at_unix.min(valid_until);
+        }
         let circuit = Circuit {
             id,
             guard: guard.clone(),
+            entry_descriptor: entry_descriptor.clone(),
+            middle_descriptor: middle_descriptor.clone(),
+            exit_descriptor: exit_descriptor.clone(),
             entry,
             middle,
             exit,
+            policy,
             built_at_unix: now_unix,
             expires_at_unix,
             latency: LatencyWindow::default(),
@@ -2275,6 +2629,75 @@ impl CircuitManager {
         record
     }
 }
+fn descriptor_certificate_is_active(descriptor: &RelayDescriptor, now_unix: u64) -> bool {
+    descriptor
+        .certificate()
+        .is_none_or(|bundle| is_certificate_valid_at(bundle, now_unix))
+}
+fn guard_matches_entry_descriptor(
+    guard: &GuardRecord,
+    descriptor: &RelayDescriptor,
+    now_unix: u64,
+) -> bool {
+    descriptor.relay_id == guard.relay_id
+        && descriptor.is_entry_guard()
+        && descriptor_certificate_is_active(descriptor, now_unix)
+        && descriptor.primary_endpoint() == Some(&guard.endpoint)
+        && descriptor.certificate() == guard.certificate()
+}
+fn circuit_is_authorised_by_directory(
+    circuit: &Circuit,
+    directory: &RelayDirectory,
+    now_unix: u64,
+) -> bool {
+    let descriptor = |relay_id| {
+        directory
+            .entries()
+            .iter()
+            .find(|descriptor| descriptor.relay_id == relay_id)
+    };
+    let Some(entry) = descriptor(circuit.entry.relay_id) else {
+        return false;
+    };
+    let Some(middle) = descriptor(circuit.middle.relay_id) else {
+        return false;
+    };
+    let Some(exit) = descriptor(circuit.exit.relay_id) else {
+        return false;
+    };
+    if entry != &circuit.entry_descriptor
+        || middle != &circuit.middle_descriptor
+        || exit != &circuit.exit_descriptor
+        || !entry.is_entry_guard()
+        || !middle.roles.middle
+        || !exit.roles.exit()
+        || !descriptor_certificate_is_active(entry, now_unix)
+        || !descriptor_certificate_is_active(middle, now_unix)
+        || !descriptor_certificate_is_active(exit, now_unix)
+    {
+        return false;
+    }
+    let Some(entry_endpoint) = entry.primary_endpoint() else {
+        return false;
+    };
+    let Some(middle_endpoint) = middle.preferred_endpoint(None) else {
+        return false;
+    };
+    let Some(exit_endpoint) = exit.preferred_endpoint(Some(EndpointTag::NoritoStream)) else {
+        return false;
+    };
+    if entry_endpoint != &circuit.entry.endpoint
+        || middle_endpoint != &circuit.middle.endpoint
+        || exit_endpoint != &circuit.exit.endpoint
+        || entry.is_pq_capable_at(now_unix) != circuit.entry.pq_capable
+        || middle.is_pq_capable_at(now_unix) != circuit.middle.pq_capable
+        || exit.is_pq_capable_at(now_unix) != circuit.exit.pq_capable
+    {
+        return false;
+    }
+    !matches!(circuit.policy, AnonymityPolicy::StrictPq)
+        || (circuit.entry.pq_capable && circuit.middle.pq_capable && circuit.exit.pq_capable)
+}
 fn descriptor_to_circuit_relay(
     descriptor: &RelayDescriptor,
     preferred_tag: Option<EndpointTag>,
@@ -2296,11 +2719,13 @@ fn select_relay<'a>(
     policy: AnonymityPolicy,
     avoid_asn: &HashSet<u32>,
 ) -> Option<&'a RelayDescriptor> {
+    directory.active_valid_until_at(now_unix).ok()?;
     let mut candidates: Vec<_> = directory
         .entries()
         .iter()
         .filter(|descriptor| predicate(descriptor))
         .filter(|descriptor| descriptor.primary_endpoint().is_some())
+        .filter(|descriptor| descriptor_certificate_is_active(descriptor, now_unix))
         .collect();
     if matches!(policy, AnonymityPolicy::StrictPq) {
         candidates.retain(|descriptor| descriptor.is_pq_capable_at(now_unix));
@@ -2338,10 +2763,10 @@ mod tests {
     use ed25519_dalek::SigningKey;
     use iroha_crypto::soranet::{
         certificate::{
-            CapabilityToggle, KemRotationModeV1, KemRotationPolicyV1, RelayCapabilityFlagsV1,
-            RelayCertificateV2, RelayEndpointV2, RelayRolesV2,
+            CapabilityToggle, RelayCapabilityFlagsV1, RelayCertificateBundleV2,
+            RelayCertificateSignaturesV2, RelayCertificateV2, RelayEndpointV2, RelayRolesV2,
         },
-        directory::{GuardDirectoryRelayEntryV2, compute_snapshot_digest, encode_validation_phase},
+        directory::{GuardDirectoryRelayEntryV2, compute_snapshot_digest},
         handshake::HandshakeSuite,
     };
     use iroha_data_model::{
@@ -2353,9 +2778,7 @@ mod tests {
     use iroha_primitives::numeric::Quantity;
     use rand::rand_core::TryRngCore;
     use rand::{RngCore, SeedableRng, rngs::StdRng};
-    use soranet_pq::{
-        MlDsaSuite, MlKemSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair,
-    };
+    use soranet_pq::{MlDsaSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair};
     use std::{
         collections::{BTreeMap, BTreeSet},
         str::FromStr,
@@ -2392,7 +2815,6 @@ mod tests {
     }
     impl TryCryptoRng for FailingTryRng {}
     fn build_directory_snapshot(
-        validation_phase: CertificateValidationPhase,
         directory_hash: [u8; 32],
     ) -> (GuardDirectorySnapshotV2, RelayCertificateBundleV2) {
         let mut rng = StdRng::seed_from_u64(0xC0FFEE);
@@ -2404,7 +2826,6 @@ mod tests {
             .expect("ML-DSA keypair generation should succeed");
         let fingerprint = compute_issuer_fingerprint(&ed_public, mldsa_keys.public_key())
             .expect("sample issuer fingerprint should compute");
-        let preferred_kem_suite = MlKemSuite::MlKem1024;
         let certificate = RelayCertificateV2 {
             relay_id: ed_public,
             identity_ed25519: ed_public,
@@ -2431,13 +2852,6 @@ mod tests {
                 CapabilityToggle::Enabled,
                 CapabilityToggle::Disabled,
             ),
-            kem_policy: KemRotationPolicyV1 {
-                mode: KemRotationModeV1::Static,
-                preferred_suite: preferred_kem_suite.kem_id(),
-                fallback_suite: None,
-                rotation_interval_hours: 0,
-                grace_period_hours: 0,
-            },
             handshake_suites: vec![
                 HandshakeSuite::Nk3PqForwardSecure,
                 HandshakeSuite::Nk2Hybrid,
@@ -2447,12 +2861,10 @@ mod tests {
             valid_until: 1_734_086_400,
             directory_hash,
             issuer_fingerprint: fingerprint,
-            pq_kem_public: vec![0x55; preferred_kem_suite.public_key_len()],
         };
         let published_at = certificate.published_at;
         let valid_after = certificate.valid_after;
         let valid_until = certificate.valid_until;
-        let validation_phase_raw = encode_validation_phase(validation_phase);
         let bundle = certificate
             .issue(&ed_signing_key, mldsa_keys.secret_key())
             .expect("certificate issuance");
@@ -2462,14 +2874,15 @@ mod tests {
             published_at_unix: published_at,
             valid_after_unix: valid_after,
             valid_until_unix: valid_until,
-            validation_phase: validation_phase_raw,
             issuers: vec![GuardDirectoryIssuerV1 {
                 fingerprint,
                 ed25519_public: ed_public,
                 mldsa65_public: mldsa_keys.public_key().to_vec(),
             }],
             relays: vec![GuardDirectoryRelayEntryV2 {
-                certificate: bundle.to_cbor(),
+                certificate: bundle
+                    .try_to_cbor()
+                    .expect("sample relay bundle should encode"),
             }],
         };
         (snapshot, bundle)
@@ -2477,18 +2890,11 @@ mod tests {
     #[test]
     fn guard_directory_decodes_snapshot_v2() {
         let directory_hash = [0xAB; 32];
-        let (snapshot, bundle) = build_directory_snapshot(
-            CertificateValidationPhase::Phase3RequireDual,
-            directory_hash,
-        );
+        let (snapshot, bundle) = build_directory_snapshot(directory_hash);
         let bytes = to_bytes(&snapshot).expect("encode snapshot");
         let directory =
             RelayDirectory::inspect_guard_directory_bytes(&bytes).expect("decode guard directory");
         assert_eq!(directory.directory_hash(), Some(directory_hash));
-        assert_eq!(
-            directory.validation_phase(),
-            Some(CertificateValidationPhase::Phase3RequireDual)
-        );
         assert_eq!(directory.published_at(), Some(snapshot.published_at_unix));
         assert_eq!(directory.valid_after(), Some(snapshot.valid_after_unix));
         assert_eq!(directory.valid_until(), Some(snapshot.valid_until_unix));
@@ -2505,14 +2911,21 @@ mod tests {
             ))
         );
         assert!(descriptor.certificate().is_some());
+        let selector = GuardSelector::new(NonZeroUsize::new(1).expect("non-zero"));
+        assert!(matches!(
+            selector.select(
+                &directory,
+                None,
+                u64::try_from(snapshot.valid_after_unix).expect("fixture timestamp fits u64"),
+                AnonymityPolicy::GuardPq,
+            ),
+            Err(RelayDirectoryValidityError::Unauthenticated)
+        ));
     }
     #[test]
     fn guard_directory_runtime_load_requires_exact_digest_and_current_window() {
         let directory_hash = [0xAB; 32];
-        let (snapshot, _) = build_directory_snapshot(
-            CertificateValidationPhase::Phase3RequireDual,
-            directory_hash,
-        );
+        let (snapshot, _) = build_directory_snapshot(directory_hash);
         let bytes = to_bytes(&snapshot).expect("encode snapshot");
         let digest = compute_snapshot_digest(&bytes);
         RelayDirectory::from_guard_directory_bytes_at(&bytes, digest, snapshot.valid_after_unix)
@@ -2534,8 +2947,7 @@ mod tests {
     }
     #[test]
     fn guard_directory_detects_hash_mismatch() {
-        let (mut snapshot, _) =
-            build_directory_snapshot(CertificateValidationPhase::Phase3RequireDual, [0xAA; 32]);
+        let (mut snapshot, _) = build_directory_snapshot([0xAA; 32]);
         snapshot.directory_hash = [0xBB; 32];
         let bytes = to_bytes(&snapshot).expect("encode snapshot");
         let err = RelayDirectory::inspect_guard_directory_bytes(&bytes)
@@ -2554,8 +2966,7 @@ mod tests {
     }
     #[test]
     fn guard_directory_rejects_all_zero_issuer_ed25519_key_material() {
-        let (mut snapshot, _) =
-            build_directory_snapshot(CertificateValidationPhase::Phase3RequireDual, [0xAA; 32]);
+        let (mut snapshot, _) = build_directory_snapshot([0xAA; 32]);
         snapshot.issuers[0].ed25519_public = [0u8; 32];
         snapshot.issuers[0].fingerprint = [0xEE; 32];
         let err = RelayDirectory::from_guard_directory_snapshot(snapshot, None)
@@ -2576,8 +2987,7 @@ mod tests {
             (ED25519_SMALL_ORDER_POINT, "small-order"),
             (ED25519_NONCANONICAL_IDENTITY, "canonical"),
         ] {
-            let (mut snapshot, _) =
-                build_directory_snapshot(CertificateValidationPhase::Phase3RequireDual, [0xAA; 32]);
+            let (mut snapshot, _) = build_directory_snapshot([0xAA; 32]);
             snapshot.issuers[0].ed25519_public = public_key;
             snapshot.issuers[0].fingerprint = [0xEE; 32];
             let err = RelayDirectory::from_guard_directory_snapshot(snapshot, None).expect_err(
@@ -2597,6 +3007,42 @@ mod tests {
     fn relay_id(byte: u8) -> [u8; 32] {
         [byte; 32]
     }
+    fn pq_test_bundle(relay_id: [u8; 32]) -> RelayCertificateBundleV2 {
+        RelayCertificateBundleV2 {
+            certificate: RelayCertificateV2 {
+                relay_id,
+                identity_ed25519: relay_id,
+                identity_mldsa65: vec![0x44; MlDsaSuite::MlDsa65.public_key_len()],
+                descriptor_commit: [0x22; 32],
+                roles: RelayRolesV2 {
+                    entry: true,
+                    middle: true,
+                    exit: true,
+                },
+                guard_weight: 100,
+                bandwidth_bytes_per_sec: 1_000_000,
+                reputation_weight: 100,
+                endpoints: vec![RelayEndpointV2 {
+                    quic_multiaddr: "/dns/test-relay.example/udp/443/quic".to_owned(),
+                    tls_server_name: "test-relay.example".to_owned(),
+                    tls_spki_sha256: [0xA5; 32],
+                    priority: 0,
+                    tags: Vec::new(),
+                }],
+                capability_flags: RelayCapabilityFlagsV1::default(),
+                handshake_suites: vec![HandshakeSuite::Nk3PqForwardSecure],
+                published_at: 0,
+                valid_after: 0,
+                valid_until: i64::MAX,
+                directory_hash: [0x55; 32],
+                issuer_fingerprint: [0x66; 32],
+            },
+            signatures: RelayCertificateSignaturesV2 {
+                ed25519: [0x77; 64],
+                mldsa65: vec![0x88; MlDsaSuite::MlDsa65.signature_len()],
+            },
+        }
+    }
     fn entry_descriptor(id_byte: u8, weight: u32, endpoints: Vec<Endpoint>) -> RelayDescriptor {
         RelayDescriptor {
             relay_id: relay_id(id_byte),
@@ -2605,14 +3051,13 @@ mod tests {
             reputation_weight: 0,
             roles: RelayRoles::new(true, true, true),
             endpoints,
-            pq_kem_public: None,
             certificate: None,
             path_metadata: PathMetadata::default(),
         }
     }
     fn pq_entry_descriptor(id_byte: u8, weight: u32, endpoints: Vec<Endpoint>) -> RelayDescriptor {
         let mut descriptor = entry_descriptor(id_byte, weight, endpoints);
-        descriptor.pq_kem_public = Some(vec![0xAB; 4]);
+        descriptor.certificate = Some(pq_test_bundle(descriptor.relay_id));
         descriptor
     }
     fn middle_descriptor(id_byte: u8, weight: u32, pq: bool, priority: u8) -> RelayDescriptor {
@@ -2626,12 +3071,11 @@ mod tests {
                 format!("soranet://middle-{id_byte:02x}"),
                 priority,
             )],
-            pq_kem_public: None,
             certificate: None,
             path_metadata: PathMetadata::default(),
         };
         if pq {
-            descriptor.pq_kem_public = Some(vec![0xBA; 4]);
+            descriptor.certificate = Some(pq_test_bundle(descriptor.relay_id));
         }
         descriptor
     }
@@ -2646,12 +3090,11 @@ mod tests {
                 format!("soranet://exit-{id_byte:02x}"),
                 priority,
             )],
-            pq_kem_public: None,
             certificate: None,
             path_metadata: PathMetadata::default(),
         };
         if pq {
-            descriptor.pq_kem_public = Some(vec![0xCD; 4]);
+            descriptor.certificate = Some(pq_test_bundle(descriptor.relay_id));
         }
         descriptor
     }
@@ -2691,17 +3134,11 @@ mod tests {
             guard_weight: 100,
             bandwidth_bytes_per_sec: 0,
             reputation_weight: 0,
-            pq_kem_public: None,
             certificate: None,
             path_metadata: PathMetadata::default(),
         }
     }
-    fn guard_record_with_pq(
-        id_byte: u8,
-        pinned_at_unix: u64,
-        endpoint: &str,
-        pq_bytes: Option<Vec<u8>>,
-    ) -> GuardRecord {
+    fn pq_guard_record(id_byte: u8, pinned_at_unix: u64, endpoint: &str) -> GuardRecord {
         GuardRecord {
             relay_id: relay_id(id_byte),
             pinned_at_unix,
@@ -2709,21 +3146,36 @@ mod tests {
             guard_weight: 100,
             bandwidth_bytes_per_sec: 0,
             reputation_weight: 0,
-            pq_kem_public: pq_bytes,
-            certificate: None,
+            certificate: Some(pq_test_bundle(relay_id(id_byte))),
             path_metadata: PathMetadata::default(),
+        }
+    }
+    fn descriptor_for_guard(guard: &GuardRecord) -> RelayDescriptor {
+        RelayDescriptor {
+            relay_id: guard.relay_id,
+            guard_weight: guard.guard_weight,
+            bandwidth_bytes_per_sec: guard.bandwidth_bytes_per_sec,
+            reputation_weight: guard.reputation_weight,
+            roles: RelayRoles::new(true, false, false),
+            endpoints: vec![guard.endpoint.clone()],
+            certificate: guard.certificate.clone(),
+            path_metadata: guard.path_metadata.clone(),
         }
     }
     #[test]
     fn guard_cache_key_roundtrip() {
+        let expected = [
+            0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF, 0x01, 0x23, 0x45, 0x67, 0x89, 0xAB,
+            0xCD, 0xEF, 0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF, 0x01, 0x23, 0x45, 0x67,
+            0x89, 0xAB, 0xCD, 0xEF,
+        ];
         let key = GuardCacheKey::from_hex(
             "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF",
         )
         .expect("parse key");
-        assert_eq!(
-            key.to_hex(),
-            "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
-        );
+        assert_eq!(key.expose_bytes_for_mac(), &expected);
+        assert_eq!(format!("{key:?}"), "GuardCacheKey(<redacted>)");
+        assert!(GuardCacheKey::from_hex(&"00".repeat(32)).is_err());
     }
     #[test]
     fn guard_set_roundtrip_with_key() {
@@ -2735,17 +3187,84 @@ mod tests {
         guard.bandwidth_bytes_per_sec = 4 * 1024 * 1024;
         guard.reputation_weight = 77;
         let set = GuardSet::new(vec![guard]);
-        let encoded = set.encode_with_key(Some(&key)).expect("encode guard set");
-        let decoded = GuardSet::decode_with_key(&encoded, Some(&key)).expect("decode guard set");
+        let encoded = set.encode_authenticated(&key).expect("encode guard set");
+        let decoded = GuardSet::decode_authenticated(&encoded, &key).expect("decode guard set");
         assert_eq!(decoded.guards().len(), 1);
         assert_eq!(decoded.guards()[0].relay_id, relay_id(0x01));
         assert_eq!(decoded.guards()[0].bandwidth_bytes_per_sec, 4 * 1024 * 1024);
         assert_eq!(decoded.guards()[0].reputation_weight, 77);
     }
     #[test]
-    fn guard_selector_filters_expired_certificates() {
-        let (_, mut bundle) =
-            build_directory_snapshot(CertificateValidationPhase::Phase3RequireDual, [0xDD; 32]);
+    fn guard_cache_enforces_guard_count_and_rejects_authenticated_malformed_fields() {
+        let key = GuardCacheKey::from_bytes([0x7B; 32]).expect("non-zero cache key");
+        let oversized = GuardSet::new(
+            (0..=GUARD_CACHE_MAX_GUARDS_V1)
+                .map(|index| {
+                    guard_record(
+                        u8::try_from(index + 1).expect("test guard id fits u8"),
+                        0,
+                        "soranet://bounded-guard",
+                    )
+                })
+                .collect(),
+        );
+        assert!(matches!(
+            oversized.encode_authenticated(&key),
+            Err(GuardSetPersistenceError::TooManyGuards { .. })
+        ));
+
+        let too_many_payload = to_bytes(&GuardSetPayloadV8 {
+            guards: (0..=GUARD_CACHE_MAX_GUARDS_V1)
+                .map(|index| {
+                    GuardRecordPersist::try_from(&guard_record(
+                        u8::try_from(index + 1).expect("test guard id fits u8"),
+                        0,
+                        "soranet://bounded-guard",
+                    ))
+                    .expect("test guard record should persist")
+                })
+                .collect(),
+        })
+        .expect("encode oversized guard vector without decode limits");
+        let too_many_tag =
+            GuardCacheTag::generate(&key, &too_many_payload).expect("authenticate guard vector");
+        let too_many_envelope = to_bytes(&GuardSetEnvelopeV8 {
+            version: GUARD_SET_VERSION,
+            payload: too_many_payload,
+            cache_tag_hex: too_many_tag.to_hex(),
+        })
+        .expect("encode guard envelope");
+        assert!(matches!(
+            GuardSet::decode_authenticated(&too_many_envelope, &key),
+            Err(GuardSetPersistenceError::Decode(_))
+        ));
+
+        let mut malformed =
+            GuardRecordPersist::try_from(&guard_record(0x44, 0, "soranet://malformed-guard"))
+                .expect("test guard record should persist");
+        malformed.endpoint.url.clear();
+        let payload = to_bytes(&GuardSetPayloadV8 {
+            guards: vec![malformed],
+        })
+        .expect("encode malformed inner payload");
+        let tag = GuardCacheTag::generate(&key, &payload).expect("authenticate malformed payload");
+        let envelope = to_bytes(&GuardSetEnvelopeV8 {
+            version: GUARD_SET_VERSION,
+            payload,
+            cache_tag_hex: tag.to_hex(),
+        })
+        .expect("encode authenticated envelope");
+        assert!(matches!(
+            GuardSet::decode_authenticated(&envelope, &key),
+            Err(GuardSetPersistenceError::InvalidRecord {
+                field: "endpoint.url",
+                ..
+            })
+        ));
+    }
+    #[test]
+    fn guard_selector_rejects_expired_certificate_descriptors() {
+        let (_, mut bundle) = build_directory_snapshot([0xDD; 32]);
         bundle.certificate.valid_after = 0;
         bundle.certificate.valid_until = 40;
         let directory = RelayDirectory::new(vec![RelayDescriptor {
@@ -2755,80 +3274,65 @@ mod tests {
             reputation_weight: bundle.certificate.reputation_weight,
             roles: RelayRoles::new(true, false, false),
             endpoints: vec![Endpoint::new("soranet://expired-cert", 0)],
-            pq_kem_public: None,
             certificate: Some(bundle),
             path_metadata: PathMetadata::default(),
         }]);
         let selector = GuardSelector::new(NonZeroUsize::new(1).expect("non-zero"));
-        let guards = selector.select(&directory, None, 100, AnonymityPolicy::GuardPq);
-        assert_eq!(guards.guards().len(), 1);
-        let guard = &guards.guards()[0];
-        assert!(guard.certificate().is_none());
-        assert!(guard.pq_kem_public.is_none());
-    }
-    #[test]
-    fn guard_selector_ignores_stale_record_pq_keys() {
-        let (_, mut bundle) =
-            build_directory_snapshot(CertificateValidationPhase::Phase3RequireDual, [0xAA; 32]);
-        bundle.certificate.valid_after = 0;
-        bundle.certificate.valid_until = 40;
-        let relay_id = bundle.certificate.relay_id;
-        let directory = RelayDirectory::new(vec![RelayDescriptor {
-            relay_id,
-            guard_weight: bundle.certificate.guard_weight,
-            bandwidth_bytes_per_sec: bundle.certificate.bandwidth_bytes_per_sec,
-            reputation_weight: bundle.certificate.reputation_weight,
-            roles: RelayRoles::new(true, false, false),
-            endpoints: vec![Endpoint::new("soranet://expired-cert", 0)],
-            pq_kem_public: None,
-            certificate: Some(bundle),
-            path_metadata: PathMetadata::default(),
-        }]);
-        let existing = GuardSet::new(vec![GuardRecord {
-            relay_id,
-            pinned_at_unix: 10,
-            endpoint: Endpoint::new("soranet://expired-cert", 0),
-            guard_weight: 100,
-            bandwidth_bytes_per_sec: 0,
-            reputation_weight: 0,
-            pq_kem_public: Some(vec![0xAB; 4]),
-            certificate: None,
-            path_metadata: PathMetadata::default(),
-        }]);
-        let selector = GuardSelector::new(NonZeroUsize::new(1).expect("non-zero"));
-        let guards = selector.select(&directory, Some(&existing), 100, AnonymityPolicy::GuardPq);
-        assert_eq!(guards.guards().len(), 1);
-        let guard = &guards.guards()[0];
-        assert!(guard.certificate().is_none());
-        assert!(guard.pq_kem_public.is_none());
+        let guards = selector
+            .select(&directory, None, 100, AnonymityPolicy::GuardPq)
+            .expect("active directory");
+        assert!(guards.is_empty());
     }
     #[test]
     fn guard_set_persists_certificate_bundle() {
-        let (_, bundle) =
-            build_directory_snapshot(CertificateValidationPhase::Phase3RequireDual, [0xCC; 32]);
+        let (_, bundle) = build_directory_snapshot([0xCC; 32]);
         let guard = GuardRecord {
             relay_id: bundle.certificate.relay_id,
             pinned_at_unix: 321,
-            endpoint: Endpoint::new("soranet://bundle-guard", 0),
+            endpoint: Endpoint::new(
+                bundle.certificate.endpoints[0].quic_multiaddr.clone(),
+                bundle.certificate.endpoints[0].priority,
+            ),
             guard_weight: bundle.certificate.guard_weight,
             bandwidth_bytes_per_sec: bundle.certificate.bandwidth_bytes_per_sec,
             reputation_weight: bundle.certificate.reputation_weight,
-            pq_kem_public: Some(bundle.certificate.pq_kem_public.clone()),
             certificate: Some(bundle.clone()),
             path_metadata: PathMetadata::default(),
         };
         let set = GuardSet::new(vec![guard]);
-        let encoded = set.encode().expect("encode guard set");
-        let decoded = GuardSet::decode(&encoded).expect("decode guard set");
+        let key = GuardCacheKey::from_bytes([0xC5; 32]).expect("non-zero cache key");
+        let encoded = set.encode_authenticated(&key).expect("encode guard set");
+        let decoded = GuardSet::decode_authenticated(&encoded, &key).expect("decode guard set");
         let decoded_guard = decoded.guards().first().expect("guard");
         assert!(decoded_guard.certificate().is_some());
         assert_eq!(decoded_guard.certificate().expect("bundle"), &bundle);
-        assert!(
-            decoded_guard
-                .pq_kem_public
-                .as_ref()
-                .is_some_and(|key| key == &bundle.certificate.pq_kem_public)
-        );
+        assert!(decoded_guard.is_pq_capable());
+    }
+    #[test]
+    fn guard_set_encode_propagates_certificate_serialization_failure() {
+        let (_, mut bundle) = build_directory_snapshot([0xCD; 32]);
+        bundle.certificate.identity_mldsa65.pop();
+        let guard = GuardRecord {
+            relay_id: bundle.certificate.relay_id,
+            pinned_at_unix: 321,
+            endpoint: Endpoint::new(
+                bundle.certificate.endpoints[0].quic_multiaddr.clone(),
+                bundle.certificate.endpoints[0].priority,
+            ),
+            guard_weight: bundle.certificate.guard_weight,
+            bandwidth_bytes_per_sec: bundle.certificate.bandwidth_bytes_per_sec,
+            reputation_weight: bundle.certificate.reputation_weight,
+            certificate: Some(bundle),
+            path_metadata: PathMetadata::default(),
+        };
+        let key = GuardCacheKey::from_bytes([0xC6; 32]).expect("non-zero cache key");
+        assert!(matches!(
+            GuardSet::new(vec![guard]).encode_authenticated(&key),
+            Err(GuardSetPersistenceError::InvalidRecord {
+                field: "certificate_base64",
+                ..
+            })
+        ));
     }
     #[test]
     fn guard_selector_prefers_validator_lane_with_path_hints() {
@@ -2856,25 +3360,25 @@ mod tests {
         assert_eq!(report.applied, 2);
         assert!(report.missing.is_empty());
         let selector = GuardSelector::new(NonZeroUsize::new(1).expect("non-zero"));
-        let guards = selector.select(&directory, None, 0, AnonymityPolicy::GuardPq);
+        let guards = selector
+            .select(&directory, None, 0, AnonymityPolicy::GuardPq)
+            .expect("active directory");
         let guard = guards.guards().first().expect("selected guard");
         assert_eq!(guard.relay_id, relay_id(0x01));
         assert_eq!(guard.path_metadata.avg_rtt_ms, Some(20));
         assert!(guard.path_metadata.validator_lane);
     }
     #[test]
-    fn guard_set_tag_verification_fails_without_key() {
+    fn guard_set_rejects_oversized_cache_before_decode() {
         let key = GuardCacheKey::from_hex(
             "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
         )
         .expect("parse key");
-        let set = GuardSet::new(vec![guard_record(0x02, 10, "soranet://relay-2")]);
-        let encoded = set.encode_with_key(Some(&key)).expect("encode guard set");
-        let err = GuardSet::decode(&encoded).expect_err("decode should fail");
-        match err {
-            GuardSetPersistenceError::MissingCacheKey => {}
-            other => panic!("unexpected error: {other:?}"),
-        }
+        let oversized = vec![0_u8; GUARD_CACHE_MAX_BYTES_V1 + 1];
+        assert!(matches!(
+            GuardSet::decode_authenticated(&oversized, &key),
+            Err(GuardSetPersistenceError::Oversized { .. })
+        ));
     }
     #[test]
     fn guard_set_tag_verification_detects_tampering() {
@@ -2883,7 +3387,7 @@ mod tests {
         )
         .expect("parse key");
         let set = GuardSet::new(vec![guard_record(0x03, 5, "soranet://relay-3")]);
-        let mut encoded = set.encode_with_key(Some(&key)).expect("encode guard set");
+        let mut encoded = set.encode_authenticated(&key).expect("encode guard set");
         // Flip one byte in the payload to trigger verification failure.
         if let Some(last_byte) = encoded.last_mut() {
             *last_byte ^= 0xFF;
@@ -2891,9 +3395,11 @@ mod tests {
             panic!("guard set encoding produced empty payload");
         }
         let err =
-            GuardSet::decode_with_key(&encoded, Some(&key)).expect_err("verification should fail");
+            GuardSet::decode_authenticated(&encoded, &key).expect_err("verification should fail");
         match err {
-            GuardSetPersistenceError::InvalidCacheTag | GuardSetPersistenceError::Decode(_) => {}
+            GuardSetPersistenceError::InvalidCacheTag
+            | GuardSetPersistenceError::Decode(_)
+            | GuardSetPersistenceError::NonCanonical => {}
             other => panic!("unexpected error: {other:?}"),
         }
     }
@@ -2908,7 +3414,6 @@ mod tests {
             reputation_weight: 0,
             roles: RelayRoles::new(true, true, true),
             endpoints: vec![Endpoint::new("soranet://exit", 0)],
-            pq_kem_public: None,
             certificate: None,
             path_metadata: PathMetadata::default(),
         }]);
@@ -2933,7 +3438,6 @@ mod tests {
             reputation_weight: 0,
             roles: RelayRoles::new(true, true, true),
             endpoints: vec![Endpoint::new("soranet://exit", 0)],
-            pq_kem_public: None,
             certificate: None,
             path_metadata: PathMetadata::default(),
         }]);
@@ -2959,7 +3463,6 @@ mod tests {
             reputation_weight: 0,
             roles: RelayRoles::new(true, true, true),
             endpoints: vec![Endpoint::new("soranet://exit", 0)],
-            pq_kem_public: None,
             certificate: None,
             path_metadata: PathMetadata::default(),
         }]);
@@ -2983,7 +3486,6 @@ mod tests {
             reputation_weight: 0,
             roles: RelayRoles::new(true, true, true),
             endpoints: vec![Endpoint::new("soranet://exit", 0)],
-            pq_kem_public: None,
             certificate: None,
             path_metadata: PathMetadata::default(),
         }]);
@@ -3006,7 +3508,6 @@ mod tests {
             reputation_weight: 0,
             roles: RelayRoles::new(true, true, true),
             endpoints: vec![Endpoint::new("soranet://exit", 0)],
-            pq_kem_public: None,
             certificate: None,
             path_metadata: PathMetadata::default(),
         }]);
@@ -3035,6 +3536,158 @@ mod tests {
         assert_eq!(manager.active_circuits().len(), 1);
     }
     #[test]
+    fn guard_and_circuit_selection_reject_inactive_directories() {
+        let mut directory = sample_directory();
+        directory.valid_after_unix = Some(10);
+        directory.valid_until_unix = Some(20);
+        let selector = GuardSelector::new(NonZeroUsize::new(1).expect("non-zero"));
+        assert!(matches!(
+            selector.select(&directory, None, 9, AnonymityPolicy::GuardPq),
+            Err(RelayDirectoryValidityError::NotYetValid { .. })
+        ));
+        let guard_set = GuardSet::new(vec![guard_record(0x01, 10, "soranet://relay-1")]);
+        let mut manager = CircuitManager::new(CircuitManagerConfig::default());
+        assert!(matches!(
+            manager.refresh(&directory, &guard_set, 20, AnonymityPolicy::GuardPq),
+            Err(CircuitManagerError::DirectoryValidity(
+                RelayDirectoryValidityError::Expired { .. }
+            ))
+        ));
+    }
+    #[test]
+    fn circuit_expiry_is_capped_for_new_and_continuing_paths() {
+        let guard_set = GuardSet::new(vec![guard_record(0x01, 10, "soranet://relay-1")]);
+        let mut directory = sample_directory();
+        let mut manager = CircuitManager::new(CircuitManagerConfig::new(Duration::from_secs(60)));
+        manager
+            .refresh(&directory, &guard_set, 10, AnonymityPolicy::GuardPq)
+            .expect("build unbounded direct-directory circuit");
+        assert_eq!(manager.active_circuits()[0].expires_at_unix, 70);
+
+        directory.valid_after_unix = Some(0);
+        directory.valid_until_unix = Some(20);
+        manager
+            .refresh(&directory, &guard_set, 11, AnonymityPolicy::GuardPq)
+            .expect("retain circuit under a newly bounded directory");
+        assert_eq!(manager.active_circuits()[0].expires_at_unix, 20);
+
+        let mut fresh_manager =
+            CircuitManager::new(CircuitManagerConfig::new(Duration::from_secs(60)));
+        fresh_manager
+            .refresh(&directory, &guard_set, 12, AnonymityPolicy::GuardPq)
+            .expect("build bounded circuit");
+        assert_eq!(fresh_manager.active_circuits()[0].expires_at_unix, 20);
+        assert!(matches!(
+            fresh_manager.refresh(&directory, &guard_set, 20, AnonymityPolicy::GuardPq),
+            Err(CircuitManagerError::DirectoryValidity(
+                RelayDirectoryValidityError::Expired { .. }
+            ))
+        ));
+        assert!(fresh_manager.active_circuits().is_empty());
+        assert_eq!(
+            fresh_manager.rotation_history()[0].reason,
+            CircuitRetirementReason::DirectoryInvalid
+        );
+    }
+    #[test]
+    fn circuit_refresh_rebuilds_on_every_middle_hop_trust_drift() {
+        #[derive(Clone, Copy)]
+        enum Drift {
+            Removal,
+            Role,
+            Endpoint,
+            Certificate,
+        }
+        let (_, certificate) = build_directory_snapshot([0x91; 32]);
+        let guard_set = GuardSet::new(vec![guard_record(0x01, 0, "soranet://relay-1")]);
+        for drift in [
+            Drift::Removal,
+            Drift::Role,
+            Drift::Endpoint,
+            Drift::Certificate,
+        ] {
+            let mut directory = sample_directory();
+            let mut manager = CircuitManager::new(CircuitManagerConfig::default());
+            manager
+                .refresh(&directory, &guard_set, 0, AnonymityPolicy::GuardPq)
+                .expect("build initial circuit");
+            let middle_id = manager.active_circuits()[0].middle.relay_id;
+            match drift {
+                Drift::Removal => directory
+                    .entries
+                    .retain(|descriptor| descriptor.relay_id != middle_id),
+                Drift::Role => {
+                    directory
+                        .entries
+                        .iter_mut()
+                        .find(|descriptor| descriptor.relay_id == middle_id)
+                        .expect("middle descriptor")
+                        .roles
+                        .middle = false
+                }
+                Drift::Endpoint => {
+                    directory
+                        .entries
+                        .iter_mut()
+                        .find(|descriptor| descriptor.relay_id == middle_id)
+                        .expect("middle descriptor")
+                        .endpoints = vec![Endpoint::new("soranet://replacement-middle", 0)]
+                }
+                Drift::Certificate => {
+                    directory
+                        .entries
+                        .iter_mut()
+                        .find(|descriptor| descriptor.relay_id == middle_id)
+                        .expect("middle descriptor")
+                        .certificate = Some(certificate.clone())
+                }
+            }
+            let events = manager
+                .refresh(&directory, &guard_set, 1, AnonymityPolicy::GuardPq)
+                .expect("rebuild after middle-hop drift");
+            assert!(events.iter().any(|event| matches!(
+                event,
+                CircuitEvent::Retired { record }
+                    if record.reason == CircuitRetirementReason::DirectoryChanged
+            )));
+        }
+    }
+    #[test]
+    fn circuit_refresh_rebuilds_when_anonymity_policy_changes() {
+        let mut directory = sample_directory();
+        for descriptor in &mut directory.entries {
+            descriptor.certificate = Some(pq_test_bundle(descriptor.relay_id));
+        }
+        let guard_set = GuardSet::new(vec![pq_guard_record(0x01, 0, "soranet://relay-1")]);
+        let mut manager = CircuitManager::new(CircuitManagerConfig::default());
+        manager
+            .refresh(&directory, &guard_set, 0, AnonymityPolicy::GuardPq)
+            .expect("build initial circuit");
+        let events = manager
+            .refresh(&directory, &guard_set, 1, AnonymityPolicy::StrictPq)
+            .expect("rebuild under strict policy");
+        assert!(events.iter().any(|event| matches!(
+            event,
+            CircuitEvent::Retired { record }
+                if record.reason == CircuitRetirementReason::PolicyChanged
+        )));
+        assert!(manager.active_circuits().iter().all(|circuit| {
+            circuit.entry.pq_capable && circuit.middle.pq_capable && circuit.exit.pq_capable
+        }));
+    }
+    #[test]
+    fn circuit_id_exhaustion_fails_closed() {
+        let directory = sample_directory();
+        let guard_set = GuardSet::new(vec![guard_record(0x01, 0, "soranet://relay-1")]);
+        let mut manager = CircuitManager::new(CircuitManagerConfig::default());
+        manager.next_circuit_id = u64::MAX;
+        assert_eq!(
+            manager.refresh(&directory, &guard_set, 0, AnonymityPolicy::GuardPq),
+            Err(CircuitManagerError::CircuitIdExhausted)
+        );
+        assert!(manager.active_circuits().is_empty());
+    }
+    #[test]
     fn circuit_manager_builds_validator_mesh_without_bypass() {
         let mut entry = entry_descriptor(0x01, 120, vec![Endpoint::new("soranet://entry", 0)]);
         entry.path_metadata.validator_lane = true;
@@ -3046,7 +3699,6 @@ mod tests {
             reputation_weight: 0,
             roles: RelayRoles::new(false, false, true),
             endpoints: vec![Endpoint::new("soranet://exit", 0)],
-            pq_kem_public: None,
             certificate: None,
             path_metadata: PathMetadata::default(),
         };
@@ -3107,7 +3759,7 @@ mod tests {
     }
     #[test]
     fn circuit_manager_rotates_when_endpoint_changes() {
-        let directory = sample_directory();
+        let mut directory = sample_directory();
         let mut manager = CircuitManager::new(CircuitManagerConfig::default());
         let initial_guard = guard_record(0x01, 0, "soranet://relay-1");
         manager
@@ -3118,6 +3770,7 @@ mod tests {
                 AnonymityPolicy::GuardPq,
             )
             .expect("initial refresh");
+        directory.entries[0].endpoints = vec![Endpoint::new("soranet://relay-1-alt", 0)];
         let updated_guard = guard_record(0x01, 0, "soranet://relay-1-alt");
         let events = manager
             .refresh(
@@ -3128,40 +3781,8 @@ mod tests {
             )
             .expect("refresh with endpoint change");
         assert!(events.iter().any(|event| match event {
-            CircuitEvent::Retired { record } => matches!(
-                record.reason,
-                CircuitRetirementReason::MetadataChanged(CircuitRenewalReason::EndpointUpdated)
-            ),
-            _ => false,
-        }));
-    }
-    #[test]
-    fn circuit_manager_rotates_when_pq_material_changes() {
-        let directory = sample_directory();
-        let mut manager = CircuitManager::new(CircuitManagerConfig::default());
-        let initial_guard = guard_record_with_pq(0x01, 0, "soranet://relay-1", Some(vec![0xAA; 4]));
-        manager
-            .refresh(
-                &directory,
-                &GuardSet::new(vec![initial_guard]),
-                0,
-                AnonymityPolicy::GuardPq,
-            )
-            .expect("initial refresh");
-        let updated_guard = guard_record_with_pq(0x01, 0, "soranet://relay-1", Some(vec![0xBB; 4]));
-        let events = manager
-            .refresh(
-                &directory,
-                &GuardSet::new(vec![updated_guard]),
-                20,
-                AnonymityPolicy::GuardPq,
-            )
-            .expect("refresh with pq change");
-        assert!(events.iter().any(|event| match event {
-            CircuitEvent::Retired { record } => matches!(
-                record.reason,
-                CircuitRetirementReason::MetadataChanged(CircuitRenewalReason::PqKeyUpdated)
-            ),
+            CircuitEvent::Retired { record } =>
+                matches!(record.reason, CircuitRetirementReason::DirectoryChanged),
             _ => false,
         }));
     }
@@ -3270,7 +3891,7 @@ mod tests {
     }
     #[test]
     fn selector_prefers_highest_weight_entry_guards() {
-        let mut directory = RelayDirectory::default();
+        let mut directory = RelayDirectory::new(Vec::new());
         directory.push(entry_descriptor(
             0x01,
             100,
@@ -3287,7 +3908,9 @@ mod tests {
             vec![Endpoint::new("soranet://relay-3", 0)],
         ));
         let selector = GuardSelector::new(NonZeroUsize::new(2).expect("non-zero"));
-        let guards = selector.select(&directory, None, 5, AnonymityPolicy::GuardPq);
+        let guards = selector
+            .select(&directory, None, 5, AnonymityPolicy::GuardPq)
+            .expect("active directory");
         assert_eq!(guards.len(), 2);
         assert_eq!(guards.guards()[0].relay_id, relay_id(0x02));
         assert_eq!(guards.guards()[1].relay_id, relay_id(0x03));
@@ -3307,7 +3930,9 @@ mod tests {
         low_bw.reputation_weight = 90;
         let directory = RelayDirectory::new(vec![high_bw.clone(), low_bw.clone()]);
         let selector = GuardSelector::new(NonZeroUsize::new(2).expect("non-zero"));
-        let guards = selector.select(&directory, None, 5, AnonymityPolicy::GuardPq);
+        let guards = selector
+            .select(&directory, None, 5, AnonymityPolicy::GuardPq)
+            .expect("active directory");
         assert_eq!(guards.len(), 2);
         assert_eq!(guards.guards()[0].relay_id, high_bw.relay_id);
         assert_eq!(guards.guards()[1].relay_id, low_bw.relay_id);
@@ -3324,7 +3949,9 @@ mod tests {
         second.reputation_weight = 90;
         let directory = RelayDirectory::new(vec![first.clone(), second.clone()]);
         let selector = GuardSelector::new(NonZeroUsize::new(2).expect("non-zero"));
-        let guards = selector.select(&directory, None, 42, AnonymityPolicy::GuardPq);
+        let guards = selector
+            .select(&directory, None, 42, AnonymityPolicy::GuardPq)
+            .expect("active directory");
         assert_eq!(guards.len(), 2);
         assert_eq!(guards.guards()[0].relay_id, second.relay_id);
         assert_eq!(guards.guards()[1].relay_id, first.relay_id);
@@ -3346,10 +3973,12 @@ mod tests {
         classical_guard.reputation_weight = 190;
         let directory = RelayDirectory::new(vec![classical_guard.clone(), pq_guard.clone()]);
         let selector = GuardSelector::new(NonZeroUsize::new(1).expect("non-zero"));
-        let guards = selector.select(&directory, None, 5, AnonymityPolicy::GuardPq);
+        let guards = selector
+            .select(&directory, None, 5, AnonymityPolicy::GuardPq)
+            .expect("active directory");
         assert_eq!(guards.len(), 1);
         assert_eq!(guards.guards()[0].relay_id, pq_guard.relay_id);
-        assert!(guards.guards()[0].pq_kem_public.is_some());
+        assert!(guards.guards()[0].is_pq_capable());
     }
     #[test]
     fn selector_is_deterministic_for_equivalent_descriptors() {
@@ -3359,7 +3988,9 @@ mod tests {
             entry_descriptor(0x20, 120, vec![Endpoint::new("soranet://relay-20", 0)]),
         ]);
         let selector = GuardSelector::new(NonZeroUsize::new(3).expect("non-zero"));
-        let guards = selector.select(&directory, None, 7, AnonymityPolicy::GuardPq);
+        let guards = selector
+            .select(&directory, None, 7, AnonymityPolicy::GuardPq)
+            .expect("active directory");
         let ordered: Vec<[u8; 32]> = guards.iter().map(|record| record.relay_id).collect();
         assert_eq!(
             ordered,
@@ -3379,14 +4010,15 @@ mod tests {
             guard_weight: 10,
             bandwidth_bytes_per_sec: 0,
             reputation_weight: 0,
-            pq_kem_public: None,
             certificate: None,
             path_metadata: PathMetadata::default(),
         }]);
         let retention = GuardRetention::new(NonZeroU64::new(100).expect("non-zero"));
         let selector =
             GuardSelector::new(NonZeroUsize::new(2).expect("non-zero")).with_retention(retention);
-        let guards = selector.select(&directory, Some(&existing), 50, AnonymityPolicy::GuardPq);
+        let guards = selector
+            .select(&directory, Some(&existing), 50, AnonymityPolicy::GuardPq)
+            .expect("active directory");
         assert_eq!(guards.len(), 2);
         assert_eq!(guards.guards()[0].relay_id, relay_id(0x01));
         assert_eq!(guards.guards()[0].pinned_at_unix, 10);
@@ -3408,7 +4040,6 @@ mod tests {
                 guard_weight: 5,
                 bandwidth_bytes_per_sec: 0,
                 reputation_weight: 0,
-                pq_kem_public: None,
                 certificate: None,
                 path_metadata: PathMetadata::default(),
             },
@@ -3419,7 +4050,6 @@ mod tests {
                 guard_weight: 5,
                 bandwidth_bytes_per_sec: 0,
                 reputation_weight: 0,
-                pq_kem_public: None,
                 certificate: None,
                 path_metadata: PathMetadata::default(),
             },
@@ -3427,7 +4057,9 @@ mod tests {
         let retention = GuardRetention::new(NonZeroU64::new(10).expect("non-zero"));
         let selector =
             GuardSelector::new(NonZeroUsize::new(2).expect("non-zero")).with_retention(retention);
-        let guards = selector.select(&directory, Some(&existing), 20, AnonymityPolicy::GuardPq);
+        let guards = selector
+            .select(&directory, Some(&existing), 20, AnonymityPolicy::GuardPq)
+            .expect("active directory");
         assert_eq!(guards.len(), 2);
         assert_eq!(guards.guards()[0].relay_id, relay_id(0x10));
         assert_eq!(guards.guards()[1].relay_id, relay_id(0x11));
@@ -3442,10 +4074,12 @@ mod tests {
             pq_entry_descriptor(0x03, 5, vec![Endpoint::new("soranet://pq-2", 0)]),
         ]);
         let selector = GuardSelector::new(NonZeroUsize::new(2).expect("non-zero"));
-        let guards = selector.select(&directory, None, 100, AnonymityPolicy::GuardPq);
+        let guards = selector
+            .select(&directory, None, 100, AnonymityPolicy::GuardPq)
+            .expect("active directory");
         assert_eq!(guards.len(), 2);
-        assert!(guards.guards()[0].pq_kem_public.is_some());
-        assert!(guards.guards()[1].pq_kem_public.is_some());
+        assert!(guards.guards()[0].is_pq_capable());
+        assert!(guards.guards()[1].is_pq_capable());
     }
     #[test]
     fn selector_replaces_classical_guard_when_pq_available() {
@@ -3464,15 +4098,16 @@ mod tests {
             guard_weight: 100,
             bandwidth_bytes_per_sec: 0,
             reputation_weight: 0,
-            pq_kem_public: None,
             certificate: None,
             path_metadata: PathMetadata::default(),
         }]);
         let selector = GuardSelector::new(NonZeroUsize::new(1).expect("non-zero"));
-        let guards = selector.select(&directory, Some(&existing), 10, AnonymityPolicy::GuardPq);
+        let guards = selector
+            .select(&directory, Some(&existing), 10, AnonymityPolicy::GuardPq)
+            .expect("active directory");
         assert_eq!(guards.len(), 1);
         assert_eq!(guards.guards()[0].relay_id, relay_id(0x01));
-        assert!(guards.guards()[0].pq_kem_public.is_some());
+        assert!(guards.guards()[0].is_pq_capable());
     }
     #[test]
     fn selector_ignores_classical_when_pq_supply_sufficient() {
@@ -3487,21 +4122,20 @@ mod tests {
             ),
         ]);
         let selector = GuardSelector::new(NonZeroUsize::new(2).expect("non-zero"));
-        let guard_set = selector.select(&directory, None, 5, AnonymityPolicy::GuardPq);
+        let guard_set = selector
+            .select(&directory, None, 5, AnonymityPolicy::GuardPq)
+            .expect("active directory");
         assert_eq!(guard_set.len(), 2);
-        assert!(
-            guard_set
-                .guards()
-                .iter()
-                .all(|record| record.pq_kem_public.is_some())
-        );
-        let guard_set_majority = selector.select(&directory, None, 5, AnonymityPolicy::MajorityPq);
+        assert!(guard_set.guards().iter().all(GuardRecord::is_pq_capable));
+        let guard_set_majority = selector
+            .select(&directory, None, 5, AnonymityPolicy::MajorityPq)
+            .expect("active directory");
         assert_eq!(guard_set_majority.len(), 2);
         assert!(
             guard_set_majority
                 .guards()
                 .iter()
-                .all(|record| record.pq_kem_public.is_some())
+                .all(GuardRecord::is_pq_capable)
         );
     }
     #[test]
@@ -3514,7 +4148,6 @@ mod tests {
                 guard_weight: 90,
                 bandwidth_bytes_per_sec: 0,
                 reputation_weight: 0,
-                pq_kem_public: Some(vec![0xAA, 0xBB, 0xCC]),
                 certificate: None,
                 path_metadata: PathMetadata::default(),
             },
@@ -3525,18 +4158,18 @@ mod tests {
                 guard_weight: 80,
                 bandwidth_bytes_per_sec: 0,
                 reputation_weight: 0,
-                pq_kem_public: None,
                 certificate: None,
                 path_metadata: PathMetadata::default(),
             },
         ]);
-        let bytes = guards.encode().expect("encode guard set");
-        let decoded = GuardSet::decode(&bytes).expect("decode guard set");
+        let key = GuardCacheKey::from_bytes([0x5A; 32]).expect("non-zero cache key");
+        let bytes = guards.encode_authenticated(&key).expect("encode guard set");
+        let decoded = GuardSet::decode_authenticated(&bytes, &key).expect("decode guard set");
         assert_eq!(decoded, guards);
     }
     #[test]
     fn guard_cache_tag_reports_rng_failure() {
-        let key = GuardCacheKey::from_bytes([0xA5; 32]);
+        let key = GuardCacheKey::from_bytes([0xA5; 32]).expect("non-zero cache key");
         let mut rng = FailingTryRng;
         match GuardCacheTag::generate_with_rng(&key, b"guard payload", &mut rng) {
             Err(GuardSetPersistenceError::RandomBytes { operation, message }) => {
@@ -3556,8 +4189,7 @@ mod tests {
             guard_weight: 120,
             bandwidth_bytes_per_sec: 0,
             reputation_weight: 0,
-            pq_kem_public: Some(vec![0xAA]),
-            certificate: None,
+            certificate: Some(pq_test_bundle(relay_id(0x01))),
             path_metadata: PathMetadata::default(),
         };
         let guard_b = GuardRecord {
@@ -3567,12 +4199,13 @@ mod tests {
             guard_weight: 110,
             bandwidth_bytes_per_sec: 0,
             reputation_weight: 0,
-            pq_kem_public: Some(vec![0xAA]),
-            certificate: None,
+            certificate: Some(pq_test_bundle(relay_id(0x02))),
             path_metadata: PathMetadata::default(),
         };
         let guard_set = GuardSet::new(vec![guard_a.clone(), guard_b.clone()]);
         let directory = RelayDirectory::new(vec![
+            descriptor_for_guard(&guard_a),
+            descriptor_for_guard(&guard_b),
             middle_descriptor(0x10, 50, true, 0),
             exit_descriptor(0x20, 60, true, 0),
             exit_descriptor(0x21, 55, true, 1),
@@ -3598,12 +4231,12 @@ mod tests {
             guard_weight: 115,
             bandwidth_bytes_per_sec: 0,
             reputation_weight: 0,
-            pq_kem_public: Some(vec![0xAA]),
-            certificate: None,
+            certificate: Some(pq_test_bundle(relay_id(0x03))),
             path_metadata: PathMetadata::default(),
         };
         let guard_set = GuardSet::new(vec![guard.clone()]);
         let directory = RelayDirectory::new(vec![
+            descriptor_for_guard(&guard),
             middle_descriptor(0x12, 45, true, 0),
             exit_descriptor(0x22, 70, true, 0),
         ]);
@@ -3657,8 +4290,7 @@ mod tests {
             guard_weight: 105,
             bandwidth_bytes_per_sec: 0,
             reputation_weight: 0,
-            pq_kem_public: Some(vec![0xAA]),
-            certificate: None,
+            certificate: Some(pq_test_bundle(relay_id(0x05))),
             path_metadata: PathMetadata::default(),
         };
         let guard_b = GuardRecord {
@@ -3668,12 +4300,13 @@ mod tests {
             guard_weight: 95,
             bandwidth_bytes_per_sec: 0,
             reputation_weight: 0,
-            pq_kem_public: None,
             certificate: None,
             path_metadata: PathMetadata::default(),
         };
         let guard_set = GuardSet::new(vec![guard_a.clone(), guard_b.clone()]);
         let directory = RelayDirectory::new(vec![
+            descriptor_for_guard(&guard_a),
+            descriptor_for_guard(&guard_b),
             middle_descriptor(0x30, 70, true, 0),
             exit_descriptor(0x40, 80, true, 0),
             exit_descriptor(0x41, 75, true, 1),
@@ -3731,12 +4364,12 @@ mod tests {
             guard_weight: 102,
             bandwidth_bytes_per_sec: 0,
             reputation_weight: 0,
-            pq_kem_public: Some(vec![0xAA]),
-            certificate: None,
+            certificate: Some(pq_test_bundle(relay_id(0x04))),
             path_metadata: PathMetadata::default(),
         };
         let guard_set = GuardSet::new(vec![guard.clone()]);
         let directory = RelayDirectory::new(vec![
+            descriptor_for_guard(&guard),
             middle_descriptor(0x13, 55, true, 0),
             exit_descriptor(0x23, 65, true, 0),
         ]);
@@ -3840,7 +4473,6 @@ mod tests {
                 Endpoint::new("soranet://exit-default", 0),
                 Endpoint::with_tags("soranet://exit-norito", 1, vec![EndpointTag::NoritoStream]),
             ],
-            pq_kem_public: None,
             certificate: None,
             path_metadata: PathMetadata::default(),
         };
@@ -3859,7 +4491,6 @@ mod tests {
             reputation_weight: 0,
             roles: RelayRoles::new(true, true, true),
             endpoints: vec![Endpoint::new("soranet://hinted", 0)],
-            pq_kem_public: None,
             certificate: None,
             path_metadata: PathMetadata::default(),
         }]);
@@ -3888,8 +4519,7 @@ mod tests {
             reputation_weight: 0,
             roles: RelayRoles::new(true, true, true),
             endpoints: vec![Endpoint::new("soranet://validator", 0)],
-            pq_kem_public: Some(vec![0xAA]),
-            certificate: None,
+            certificate: Some(pq_test_bundle(relay_id(0x01))),
             path_metadata: PathMetadata {
                 avg_rtt_ms: Some(25),
                 region: Some("us-east".to_string()),
@@ -3904,8 +4534,7 @@ mod tests {
             reputation_weight: 0,
             roles: RelayRoles::new(true, true, true),
             endpoints: vec![Endpoint::new("soranet://classic-fast", 0)],
-            pq_kem_public: Some(vec![0xBB]),
-            certificate: None,
+            certificate: Some(pq_test_bundle(relay_id(0x02))),
             path_metadata: PathMetadata {
                 avg_rtt_ms: Some(10),
                 region: Some("us-east".to_string()),
@@ -3920,8 +4549,7 @@ mod tests {
             reputation_weight: 0,
             roles: RelayRoles::new(true, true, true),
             endpoints: vec![Endpoint::new("soranet://diverse", 0)],
-            pq_kem_public: Some(vec![0xCC]),
-            certificate: None,
+            certificate: Some(pq_test_bundle(relay_id(0x03))),
             path_metadata: PathMetadata {
                 avg_rtt_ms: Some(12),
                 region: Some("us-west".to_string()),
@@ -3931,7 +4559,9 @@ mod tests {
         };
         let directory = RelayDirectory::new(vec![validator, same_asn, diverse_asn]);
         let selector = GuardSelector::new(NonZeroUsize::new(2).expect("non-zero"));
-        let guards = selector.select(&directory, None, 5, AnonymityPolicy::GuardPq);
+        let guards = selector
+            .select(&directory, None, 5, AnonymityPolicy::GuardPq)
+            .expect("active directory");
         assert_eq!(guards.len(), 2);
         assert_eq!(guards.guards()[0].relay_id, relay_id(0x01));
         assert!(guards.guards()[0].path_metadata.validator_lane);

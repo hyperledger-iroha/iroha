@@ -2,8 +2,8 @@
 //!
 //! [`Json::new`] serializes a [`norito::json::JsonSerialize`] value through its checked writer,
 //! parses it back into the bounded semantic value, and stores only the canonical compact rendering.
-//! Text constructors do the same; Norito decoding rejects alternate lexical spellings instead of
-//! normalizing a signed wire payload.
+//! Text constructors require that exact canonical rendering; JSON and Norito wire decoding reject
+//! alternate lexical spellings instead of normalizing a signed payload.
 use core::str::FromStr;
 use derive_more::Display;
 use iroha_schema::{IntoSchema, MetaMap, Metadata, TypeId, UnnamedFieldsMeta};
@@ -261,27 +261,27 @@ impl Json {
     }
     /// Fallible constructor from `&str` using Norito's JSON helper.
     ///
-    /// Like `FromStr`, this helper is strict and rejects non-JSON text. Valid
-    /// input is normalized into the single compact, key-ordered representation.
+    /// Like `FromStr`, this helper accepts only the single compact,
+    /// key-ordered lexical representation. It never rewrites caller text.
     ///
     /// # Errors
     /// Returns an error if the input string is not valid, is too deeply
     /// nested, or exceeds [`MAX_JSON_BYTES`].
     pub fn from_str_norito(s: &str) -> Result<Self, norito::Error> {
-        let canonical = Self::canonicalize_text(s)?;
+        let canonical = Self::require_canonical_text(s)?;
         Self::try_from_canonical_string(canonical)
     }
     /// Creates a [`Json`] value from an already serialized JSON document.
     ///
-    /// The supplied text is parsed as one bounded semantic value and stored in
-    /// canonical compact form. Insignificant whitespace, alternate escapes,
-    /// number spellings, and object insertion order are never retained.
+    /// The supplied text must already be one bounded canonical document.
+    /// Insignificant whitespace, alternate escapes, number spellings, and
+    /// object insertion order aliases are rejected rather than rewritten.
     ///
     /// # Errors
     /// Returns an error if `value` is not exactly one valid JSON document, is
     /// too deeply nested, or exceeds [`MAX_JSON_BYTES`].
     pub fn from_raw_json(value: String) -> Result<Self, norito::Error> {
-        let canonical = Self::canonicalize_text(&value)?;
+        let canonical = Self::require_canonical_text(&value)?;
         drop(value);
         Self::try_from_canonical_string(canonical)
     }
@@ -321,8 +321,19 @@ impl json::JsonSerialize for Json {
 }
 impl json::JsonDeserialize for Json {
     fn json_deserialize(p: &mut Parser<'_>) -> Result<Self, json::Error> {
+        let value_start = p.position();
         let slice = p.raw_value_slice()?;
-        let canonical = Json::canonicalize_text(slice)
+        let input = p.input();
+        let first_token = input
+            .bytes()
+            .position(|byte| !matches!(byte, b' ' | b'\n' | b'\r' | b'\t'))
+            .unwrap_or(input.len());
+        if value_start == first_token && input != slice {
+            return Err(json::Error::Message(
+                "Json payload is valid but not in canonical lexical form".to_owned(),
+            ));
+        }
+        let canonical = Json::require_canonical_text(slice)
             .map_err(|error| json::Error::Message(error.to_string()))?;
         Json::try_from_canonical_string(canonical).map_err(json::Error::from_decode_resource)
     }
@@ -431,6 +442,12 @@ mod tests {
     struct SerdeStruct {
         a: u32,
         b: String,
+    }
+    #[derive(
+        Debug, PartialEq, Eq, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize,
+    )]
+    struct JsonHolder {
+        payload: Json,
     }
     #[test]
     fn clones_share_immutable_backing() {
@@ -565,7 +582,7 @@ mod tests {
     }
     #[test]
     fn shared_clone_preserves_canonical_json_output() {
-        let raw = "{ \"order\": [3, 2, 1], \"escaped\": \"a\\nb\" }";
+        let raw = r#"{"escaped":"a\nb","order":[3,2,1]}"#;
         let json = Json::from_raw_json(raw.to_owned()).expect("valid raw JSON fixture");
         let cloned = json.clone();
         let mut serialized = String::new();
@@ -576,27 +593,48 @@ mod tests {
         assert_eq!(cloned.get(), canonical);
     }
     #[test]
-    fn text_boundaries_canonicalize_every_accepted_lexical_variant() {
-        for (raw, canonical) in [
-            ("1 ", "1"),
-            (r#"{"z":0,"a":1}"#, r#"{"a":1,"z":0}"#),
-            (r#""\u0061""#, r#""a""#),
-            ("1e0", "1.0"),
-            ("-0", "-0.0"),
-        ] {
-            let constructed =
-                Json::from_raw_json(raw.to_owned()).expect("valid JSON must canonicalize");
-            let parsed: Json = raw.parse().expect("FromStr must canonicalize valid JSON");
-            let decoded: Json =
-                norito::json::from_json(raw).expect("JSON decoding must canonicalize valid JSON");
-            assert_eq!(constructed.get(), canonical, "raw constructor: {raw}");
-            assert_eq!(parsed.get(), canonical, "FromStr: {raw}");
-            assert_eq!(decoded.get(), canonical, "JSON decoder: {raw}");
+    fn text_constructors_and_json_wire_reject_alternate_spellings() {
+        for raw in [" 1", "1 ", r#"{"z":0,"a":1}"#, r#""\u0061""#, "1e0", "-0"] {
+            Json::from_raw_json(raw.to_owned())
+                .expect_err("raw JSON constructor must reject lexical aliases");
+            raw.parse::<Json>()
+                .expect_err("FromStr must reject lexical aliases");
+            Json::from_str_norito(raw)
+                .expect_err("Norito text constructor must reject lexical aliases");
+            let error = norito::json::from_json::<Json>(raw)
+                .expect_err("JSON wire decoding must reject alternate lexical spelling");
+            assert!(
+                error.to_string().contains("canonical lexical form"),
+                "unexpected JSON wire error for {raw}: {error}",
+            );
         }
+        let canonical = r#"{"a":1,"z":0}"#;
+        assert_eq!(
+            Json::from_raw_json(canonical.to_owned())
+                .expect("canonical raw JSON spelling")
+                .get(),
+            canonical,
+        );
+        assert_eq!(
+            canonical
+                .parse::<Json>()
+                .expect("canonical FromStr spelling")
+                .get(),
+            canonical,
+        );
+        assert_eq!(
+            norito::json::from_json::<Json>(canonical)
+                .expect("canonical JSON wire spelling")
+                .get(),
+            canonical,
+        );
+        let nested = norito::json::from_json::<JsonHolder>(r#"{"payload":{"a":1}}"#)
+            .expect("canonical nested Json spelling");
+        assert_eq!(nested.payload.get(), r#"{"a":1}"#);
     }
     #[test]
     fn norito_decoders_reject_noncanonical_json_spellings() {
-        for raw in ["1 ", r#"{"z":0,"a":1}"#, r#""\u0061""#, "1e0", "-0"] {
+        for raw in [" 1", "1 ", r#"{"z":0,"a":1}"#, r#""\u0061""#, "1e0", "-0"] {
             let encoded = CanonicalJsonWire(raw.to_owned()).encode();
             let error = <Json as norito::core::DecodeFromSlice>::decode_from_slice(&encoded)
                 .expect_err("binary Json must have one lexical representation");
@@ -686,16 +724,20 @@ mod tests {
             err.to_string().contains("JSON error"),
             "unexpected parse error: {err}"
         );
-        // Proper JSON is canonicalized.
+        // An exact canonical JSON spelling is accepted unchanged.
         let j2 = Json::from_str_norito("{\"k\":1}").expect("json object");
         let v: norito::json::Value = norito::json::from_str(j2.get()).expect("parse value");
         assert_eq!(v, norito::json!({"k": 1}));
     }
     #[test]
     fn from_str_is_strict_and_from_string_value_wraps_plain_text() {
-        let structured: Json = r#" { "items": [1, true, null] } "#
+        assert!(
+            r#" { "items": [1, true, null] } "#.parse::<Json>().is_err(),
+            "FromStr must reject a non-canonical JSON spelling"
+        );
+        let structured: Json = r#"{"items":[1,true,null]}"#
             .parse()
-            .expect("parse structured JSON");
+            .expect("parse canonical structured JSON");
         assert_eq!(structured.get(), r#"{"items":[1,true,null]}"#);
         assert!(
             "plain text".parse::<Json>().is_err(),
@@ -785,17 +827,17 @@ mod tests {
         json::drop_json_value_iteratively(too_deep);
     }
     #[test]
-    fn json_validation_and_normalization_fit_a_128k_stack() {
+    fn json_validation_and_canonical_checks_fit_a_128k_stack() {
         let worker = std::thread::Builder::new()
             .name("iroha-json-iterative-boundary".into())
             .stack_size(128 * 1024)
             .spawn(|| -> Result<(), String> {
                 let wrappers = norito::core::MAX_OWNED_VALUE_DECODE_DEPTH - 1;
                 let at_255 = format!("{}null{}", "[".repeat(wrappers), "]".repeat(wrappers));
-                let normalized =
+                let validated =
                     Json::from_str_norito(&at_255).map_err(|error| error.to_string())?;
-                if normalized.get() != &at_255 {
-                    return Err("deep Json normalization changed canonical text".to_owned());
+                if validated.get() != &at_255 {
+                    return Err("deep Json validation changed canonical text".to_owned());
                 }
                 let direct =
                     norito::json::from_json::<Json>(&at_255).map_err(|error| error.to_string())?;

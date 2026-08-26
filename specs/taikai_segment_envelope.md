@@ -108,6 +108,9 @@ continues to track absolute magnitudes for latency bucketing.
 - Norito encoding is mandatory (`application/norito+v1`). JSON helpers are
   provided for SDKs via the `json` feature flag but must not be used for on-wire
   payloads.
+- Persisted and on-wire envelopes use the canonical `norito::to_bytes` framing,
+  including the Norito header that advertises decode flags. Bare
+  `Encode::encode` payload bytes are not a Taikai envelope artefact.
 - `SegmentTimestamp` and `SegmentDuration` are microseconds. Tooling must avoid
   floating-point conversions to preserve determinism.
 - `TaikaiTrackMetadata::average_bitrate_kbps` records the encoder target rate;
@@ -279,8 +282,9 @@ to the anchor endpoint.
 
 ## Consumer Expectations
 
-- Verify that `ingest.manifest_hash` and `ingest.car.car_digest` match the
-  advertised manifests and CAR archives before promoting a segment to viewers.
+- Canonically verify the CAR container and require its digest, size, CID, chunk
+  root, and chunk count to match the envelope before promoting a segment to
+  viewers. Also require `ingest.manifest_hash` to match the advertised manifest.
 - Use `segment_sequence` and timestamp fields to detect gaps. Missing sequence
   numbers MUST trigger repair logic before continuing playback.
 - Leverage `instrumentation` for observability dashboards (latency, ingest
@@ -425,7 +429,7 @@ and that Torii forwarded the lineage hint SoraNS used.
 #### Dashboards & alerts
 
 Alias rotation metrics now surface in Grafana via
-`dashboards/grafana/taikai_viewer.json`. Use the new **Alias rotations (5m)** panel
+`dashboards/grafana/taikai_viewer.json`. Use the new **Alias rotations (last 5m)** panel
 and the `event`/`alias` variables to watch for unexpected spikes or stale
 windows. The panel plots `increase(taikai_trm_alias_rotations_total[5m])`
 grouped by alias so operators can verify that new TRMs land at the cadence

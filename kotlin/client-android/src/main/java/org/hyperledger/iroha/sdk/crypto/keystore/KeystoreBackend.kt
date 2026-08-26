@@ -27,6 +27,17 @@ interface KeystoreBackend {
     /** Metadata describing the backing store/hardware. */
     fun metadata(): KeyProviderMetadata
 
+    /**
+     * Metadata describing the security level of this specific key.
+     *
+     * Backends whose keys can use different security levels must override this method. The
+     * conservative default treats unproven per-key provenance as software-backed so strict
+     * hardware policies fail closed.
+     */
+    @Throws(KeyManagementException::class)
+    fun keyMetadata(alias: String, keyPair: KeyPair): KeyProviderMetadata =
+        KeyProviderMetadata.software(name())
+
     /** Human readable backend name (e.g., `android-keystore`). */
     fun name(): String
 

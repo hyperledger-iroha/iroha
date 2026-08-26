@@ -1,7 +1,7 @@
 extends = ["minimal_with_trusted_peers.toml"]
 
 [streaming.soranet]
-enabled = true
+enabled = false
 exit_multiaddr = "/dns/test-exit/quic"
 padding_budget_ms = 42
 access_kind = "read-only"

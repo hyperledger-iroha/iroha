@@ -357,8 +357,9 @@ internal sealed class FeePaymentIntentJsonConverter : JsonConverter<FeePaymentIn
             .Select((element, index) => ReadLimit(element, options, $"fee payment.value.charge_limits[{index}]"))
             .ToArray();
         ulong? gasLimit = value.TryGetValue("gas_limit", out var gasElement)
-            ? RequirePositiveUInt64(gasElement, "fee payment.value.gas_limit")
-            : null;
+            && gasElement.ValueKind != JsonValueKind.Null
+                ? RequirePositiveUInt64(gasElement, "fee payment.value.gas_limit")
+                : null;
 
         if (payer == "authority")
         {
@@ -396,6 +397,10 @@ internal sealed class FeePaymentIntentJsonConverter : JsonConverter<FeePaymentIn
         if (value.GasLimit.HasValue)
         {
             writer.WriteNumber("gas_limit", value.GasLimit.Value);
+        }
+        else
+        {
+            writer.WriteNull("gas_limit");
         }
         writer.WriteEndObject();
         writer.WriteEndObject();

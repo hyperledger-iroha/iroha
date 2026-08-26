@@ -21,21 +21,33 @@ summary: Final specification for SNNet-3 covering directory committee processes,
 
 ## Descriptor Format
 - Microdescriptor `RelayDescriptorV1` includes:
-  - Identity keys (Ed25519), PQ keys (Kyber), capabilities, guard flags, bandwidth weights.
+  - Identity keys (Ed25519), capabilities, guard flags, bandwidth weights.
   - Contact info (optional), policy (allowed ports), region metadata.
   - Salt epoch info (current salt ID, valid range).
 - Directory snapshots embed each SRCv2 bundle as `certificate_base64`
-  (standard Base64 encoding of `RelayCertificateBundleV2::to_cbor()`). Builders
+  (standard Base64 encoding of `RelayCertificateBundleV2::try_to_cbor()`). Builders
   must ensure the bundle metadata (`relay_id`, `guard_weight`, bandwidth,
   reputation) matches the descriptor fields and that the declared
   `valid_after`/`valid_until` range covers the consensus window. Clients treat
-  the certificate as the authoritative source for PQ material and handshake
-  suite ordering; expired bundles are ignored in favour of fresh descriptors.
+  the certificate as the authoritative source for signed relay metadata and
+  handshake suite ordering; expired bundles are ignored in favour of fresh
+  descriptors. SRCv2 carries no static relay KEM key or KEM-rotation policy:
+  PQ capability comes from the authenticated NK2/NK3 suite list, and each
+  handshake encapsulates only to the client's ephemeral KEM share.
 - Each relay receives a private `RelayDescriptorManifestV1` (not published in
-  consensus) bundling the Ed25519 identity seed as
-  `identity.ed25519_private_key_hex`. The runtime consumes it through
-  `handshake.descriptor_manifest_path`; the relay configuration has no inline
-  identity-private-key field.
+  consensus) with exactly `version = 1` and an `identity` object containing the
+  Ed25519 seed as `identity.ed25519_private_key_hex` (64 lowercase hex
+  characters), the raw ML-DSA-65 private key as
+  `identity.mldsa65_private_key_hex` (8064 lowercase hex characters). Both
+  fields are mandatory, and each derived signing identity must equal the
+  corresponding value in the relay's SRCv2 certificate. The runtime consumes
+  the exact document through `handshake.descriptor_manifest_path`; aliases,
+  extra fields (including static ML-KEM private or public fields), omitted
+  keys, and inline configuration secrets are rejected. NK2 and NK3 encapsulate
+  only to the public KEM shares carried in the client handshake, so the relay
+  manifest contains no persistent KEM key pair.
+  Operators inject the owner-private manifest at runtime and never publish or
+  commit its private values.
 - Relays publish descriptors via `POST /soranet/descriptor` with signatures; descriptors stored in builder DB.
 
 ## Consensus Artifact
@@ -84,7 +96,7 @@ summary: Final specification for SNNet-3 covering directory committee processes,
 2. Generate replacement Ed25519 witness keypairs inside the hardware vault, export public keys as Norito manifests, and store sealed private material under the custody log entry.
 3. Update the publisher manifest (`configs/soranet/directory_publisher.toml`) with the new witness key IDs and validity window; submit for Salt Council review.
 4. Rebuild the directory metallib via `soranet-directory build` to ensure the upcoming consensus bundles include the new witness key fingerprint.
-5. Run `soranet-directory rotate --witness-key <manifest>` in staging, verifying signatures with `soranet-directory verify --snapshot`, and archive the verification bundle at `fixtures/soranet_directory/witness_rotation/<date>/`.
+5. Run `soranet-directory rotate --snapshot <active-snapshot> --expected-snapshot-digest <independently-approved-digest> --out <rotated-snapshot> --keys-out <private-output-directory>` in staging. Rotation authenticates the exact source bytes and their current validity before issuing replacement material; archive the command evidence at `fixtures/soranet_directory/witness_rotation/<date>/`.
 6. Apply the rotation in production during the scheduled window, publish the updated manifest hash via Torii, and confirm clients validate the witness signature chain.
 7. Close out the governance ticket with telemetry screenshots (`soranet_consensus_signature_verification_total{result="ok"}`) and attach the verification bundle checksum to the custody log.
 
@@ -99,9 +111,9 @@ summary: Final specification for SNNet-3 covering directory committee processes,
       --out artifacts/soranet_directory/snapshots/consensus-2026-03-21.norito
   cargo run -p soranet-directory -- rotate \
       --snapshot artifacts/soranet_directory/snapshots/consensus-2026-03-21.norito \
+      --expected-snapshot-digest <independently-approved-source-digest> \
+      --out artifacts/soranet_directory/snapshots/consensus-2026-03-21-rotated.norito \
       --keys-out artifacts/soranet_directory/witness_keys/2026-03-21/
-  cargo run -p soranet-directory -- verify \
-      --snapshot artifacts/soranet_directory/snapshots/consensus-2026-03-21.norito
   ```
 - Archived verification artefacts in `artifacts/soranet_directory/witness_rotation/2026-03-21/` (snapshot, manifests, checksums) and linked the checksum manifest to governance ticket `GOV-412`.
 - Scheduled production activation for 2026-03-24 02:00 UTC with back-out plan documented alongside the ticket; monitoring runbook updated to watch the new witness fingerprint gauge (`soranet_consensus_witness_fingerprint`).
@@ -152,7 +164,7 @@ publication and issuer rotation:
   enforces directory hash/validity invariants, and emits a Norito-encoded
   `GuardDirectorySnapshotV2`. The JSON config requires both Ed25519 and
   ML-DSA-65 issuer keys and bundle paths. The builder always emits the
-  first-release Phase 3 policy and rejects any certificate missing either
+  first-release mandatory-dual policy and rejects any certificate missing either
   signature; there is no configuration downgrade. The builder prints the
   domain-separated BLAKE3 digest of the exact snapshot bytes alongside
   fingerprint metadata.
@@ -172,16 +184,24 @@ publication and issuer rotation:
   }
   ```
   Each proof is verified against the snapshot being built, and the CLI renders a
-  summary (relay id, descriptor commit, PQ key, validity window, and recorded
+  summary (relay id, descriptor commit, weights, validity window, and recorded
   timestamp) so publishers can staple the evidence bundle directly into
   governance packets.
-- `soranet-directory rotate --snapshot guard_snapshot.norito --out rotated.norito --keys-out rotated_keys`
+- `soranet-directory rotate --snapshot guard_snapshot.norito --expected-snapshot-digest <independently-approved-source-digest> --out rotated.norito --keys-out rotated_keys`
   reissues certificates with freshly generated issuer keys, updating the
-  fingerprint, signatures, and optional key material stored on disk. The command
-  writes Ed25519/ML-DSA secrets to `--keys-out` so the governance committee can
-  enrol the new issuer in hardware security modules before activation.
-  Rotation rejects snapshots carrying a pre-release single/prefer-dual policy
-  instead of preserving a weaker validation phase.
+  fingerprint, signatures, and issuer signing material stored on disk. The command
+  requires a new `--keys-out` directory and durably publishes its complete
+  owner-private Ed25519/ML-DSA key bundle before atomically publishing the
+  snapshot, so the governance committee can enrol the new issuer in hardware
+  security modules before activation. A key-bundle failure leaves the snapshot
+  unpublished; a rejected snapshot rename rolls the newly created bundle back.
+  Once the snapshot rename succeeds, any subsequent durability error retains
+  both artefacts so a visible snapshot is never left without its issuer keys.
+  Before generating anything, it authenticates the exact source bytes against
+  the supplied digest and enforces `valid_after <= now < valid_until`; an
+  explicit ceremony time may be supplied with `--at-unix`.
+  Rotation accepts only snapshots whose relay certificates carry valid
+  Ed25519 and ML-DSA-65 signatures.
 - `soranet-directory inspect --snapshot guard_snapshot.norito` renders snapshot
   metadata (exact snapshot digest, fingerprints, validity windows, relay stats)
   to simplify guard directory audits. This is structural inspection against
@@ -190,9 +210,9 @@ publication and issuer rotation:
   the artefact.
 - `soranet-directory verify-proof --proof /var/lib/soranet/relay/guard_pinning_proof.json
   --snapshot snapshots/mainnet.norito` loads the persisted JSON proof emitted by
-  a relay, recomputes the directory hash, validation phase, relay entry fields,
-  and ML-KEM public key inside the supplied snapshot, and fails fast whenever a
-  mismatch occurs. Provide `--snapshot` when the publisher stores snapshots in a
+  a relay, recomputes the directory hash, relay entry fields, weights, and
+  validity window inside the supplied snapshot, and fails fast
+  whenever a mismatch occurs. Provide `--snapshot` when the publisher stores snapshots in a
   different path than the relay’s recorded `snapshot_path` so auditors can still
   validate remote submissions.
 - `soranet-directory collect-proofs --snapshot snapshots/mainnet.norito --proofs-dir evidence/guard-proofs
@@ -201,7 +221,7 @@ publication and issuer rotation:
   table, and optionally emits a JSON array of the verified summaries. Directory publishers
   can now ingest `guard_directory.pinning_proof_path` outputs directly rather than rewriting
   ad-hoc scripts for every governance cycle, ensuring that the evidence bundle stapled to the
-  guard snapshot always lists the relay id, descriptor commit, PQ key, weight, and validity
+  guard snapshot always lists the relay id, descriptor commit, weights, and validity
   window recorded at the relay.
 
 The CLI shares the new directory primitives with the orchestrator so guard caches
@@ -209,8 +229,9 @@ consume the same Norito structures that the publisher emits. See
 `tools/soranet-relay/src/directory.rs` for the builder/rotator implementation.
 Relays that set `guard_directory.pinning_proof_path` write a JSON artefact
 containing the validated directory hash, relay identifier, descriptor commit,
-and ML-KEM key every time the snapshot check succeeds. Directory publishers
-ingest these files alongside operator evidence to prove that every guard pinned
-the committee-issued descriptor before activation.
+certificate validity window, and weights every time the snapshot check
+succeeds. Static KEM metadata is deliberately absent. Directory publishers ingest these files alongside
+operator evidence to prove that every guard pinned the committee-issued
+descriptor before activation.
 
 With this specification, core protocol teams can implement the directory publisher tooling required for SoraNet operations, ensuring clients receive authenticated, fresh relay information and salt schedules.

@@ -2,13 +2,14 @@
 set -euo pipefail
 
 ROOT="$(cd -- "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd -- "$ROOT"
 TORII_URL="${TORII_URL:-http://127.0.0.1:8080}"
+TORII_STATUS_URL="${TORII_URL%/}/status"
 RUN_DIR="${RUN_DIR:-$ROOT/target/kaigi-demo}"
 GENESIS_CLEAN="$RUN_DIR/genesis.cleaned.json"
 GENESIS_NRT="$RUN_DIR/genesis.nrt"
 SUMMARY_JSON="$RUN_DIR/kaigi_summary.json"
 NODE_LOG="$RUN_DIR/iroha3d.log"
-SPOOL_DIR="$ROOT/storage/streaming/soranet_routes"
 
 log() {
   printf '[kaigi-demo] %s\n' "$*" >&2
@@ -91,13 +92,13 @@ IROHA_GENESIS__FILE="$GENESIS_NRT" \
   >"$NODE_LOG" 2>&1 &
 NODE_PID=$!
 
-log "waiting for Torii at $TORII_URL/status"
+log "waiting for Torii at $TORII_STATUS_URL"
 for _ in $(seq 1 120); do
   if ! pid_is_own_background_job "$NODE_PID" || ! pid_is_running "$NODE_PID"; then
     log "iroha3d exited before Torii became ready (see $NODE_LOG)"
     exit 1
   fi
-  if curl -sf "$TORII_URL/status" >/dev/null 2>&1; then
+  if curl -sf "$TORII_STATUS_URL" >/dev/null 2>&1; then
     READY=1
     break
   fi
@@ -113,12 +114,11 @@ log "Torii is online"
 log "creating Kaigi quickstart summary -> $SUMMARY_JSON"
 cargo run -q -p iroha_cli -- \
   --config defaults/client.toml \
+  --torii-url "$TORII_URL" \
   kaigi quickstart \
-  --auto-join-host \
   --summary-out "$SUMMARY_JSON"
 
 log "summary written to $SUMMARY_JSON"
-log "Kaigi demo ready. Share the summary file and, if needed, spool contents under:"
-log "  $SPOOL_DIR/exit-<relay-id>/kaigi-stream/"
+log "Kaigi demo ready. Share the summary file; V1 does not publish SoraNet exit-token spools."
 log "Press Ctrl+C to stop the node when finished. Logs remain in $NODE_LOG."
 wait "$NODE_PID"

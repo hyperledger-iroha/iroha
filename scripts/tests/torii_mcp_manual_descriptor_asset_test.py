@@ -13,23 +13,23 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = ROOT / "crates/iroha_torii/src/mcp.rs"
 ASSET_PATH = ROOT / "crates/iroha_torii/src/mcp/manual_tool_descriptors_v1.json"
-EXPECTED_ASSET_LENGTH = 86_670
-EXPECTED_ASSET_SHA256 = "b903e0bb980a04db30a59615212c3cc677b596ecb0517e4da831da432e03435b"
-EXPECTED_SEMANTIC_SHA256 = "63b0d8b3f56a27663096948f0b7f3976ce6b9272f38a2c1dbee31c6fcf5efbd2"
+EXPECTED_ASSET_LENGTH = 90_497
+EXPECTED_ASSET_SHA256 = "3824da4db1b62ec71699a848af56799973ea34b39b02946d5dd966133a980360"
+EXPECTED_SEMANTIC_SHA256 = "15b25b1dd0c32f8ef3344156ce4e277a5ffaeaf37727d0dc59571d08515251eb"
 EXPECTED_HISTORICAL_RUST_PREIMAGE_SHA256 = (
     "1273686f98de21c686573d399d511be7606155b9d09de21869a8c060436242b4"
 )
 EXPECTED_RETAINED_DIRECT_SHA256 = (
-    "ddba529084533521983fb54e3fe96e182d35e27af54b3e20a8b625ab5cc037c4"
+    "bbdf826ac238ed1424403f2719ff8407b3e0f4de282131c7eb83876293ff58d8"
 )
 EXPECTED_LOADER_SOURCE_SHA256 = (
-    "ba2abb0410e37bc3fa1049c4312e29137193c77e28a0e16236f45acc758a4ca0"
+    "3daf953f0a00cb40e58246b5318973baa79ba6057ff962636867622c41c6a618"
 )
 EXPECTED_BLAKE3_BYTES = (
-    0x96, 0x9B, 0xC1, 0x7F, 0xAB, 0xE5, 0xEE, 0xF4,
-    0x13, 0xA8, 0xF2, 0x0F, 0x59, 0x2A, 0x66, 0xEA,
-    0x15, 0x74, 0x3C, 0x1C, 0xD0, 0xF7, 0x9B, 0xD4,
-    0xB6, 0x56, 0xE0, 0xE6, 0xB0, 0xD1, 0x47, 0x9D,
+    0x25, 0x2D, 0x29, 0xCD, 0x02, 0xE7, 0x48, 0x41,
+    0x25, 0x87, 0xFC, 0x2B, 0x39, 0x43, 0x62, 0x94,
+    0x94, 0x89, 0x2A, 0x39, 0x11, 0x3F, 0xC6, 0xF6,
+    0x8B, 0x16, 0x96, 0xAB, 0x1F, 0x87, 0x8E, 0x52,
 )
 EXPECTED_WRAPPERS = (
     ('connect_ws_ticket_tool', 'connect.ws.ticket'),
@@ -68,8 +68,10 @@ EXPECTED_WRAPPERS = (
     ('iroha_accounts_qr_tool', 'iroha.accounts.qr'),
     ('iroha_accounts_query_tool', 'iroha.accounts.query'),
     ('iroha_accounts_onboard_plan_tool', 'iroha.accounts.onboard.plan'),
-    ('iroha_accounts_onboard_tool', 'iroha.accounts.onboard'),
-    ('iroha_accounts_faucet_tool', 'iroha.accounts.faucet'),
+    ('iroha_accounts_onboard_prepare_tool', 'iroha.accounts.onboard.prepare'),
+    ('iroha_accounts_onboard_submit_tool', 'iroha.accounts.onboard.submit'),
+    ('iroha_accounts_faucet_prepare_tool', 'iroha.accounts.faucet.prepare'),
+    ('iroha_accounts_faucet_submit_tool', 'iroha.accounts.faucet.submit'),
     ('iroha_account_transactions_tool', 'iroha.accounts.transactions'),
     ('iroha_account_history_tool', 'iroha.accounts.history'),
     ('iroha_account_transactions_query_tool', 'iroha.accounts.transactions.query'),

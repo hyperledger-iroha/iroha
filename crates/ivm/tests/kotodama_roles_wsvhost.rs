@@ -12,8 +12,7 @@ const TEST_ASSET_LITERAL: &str = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 fn make_vm_with_wsv() -> (IVM, AccountId) {
     let alice: AccountId =
         iroha_data_model::account::AccountId::parse_encoded(TEST_ACCOUNT_LITERAL)
-            .expect("parse test account literal")
-            .into_account_id();
+            .expect("parse test account literal");
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
     wsv.grant_permission(&alice, PermissionToken::ManageRoles);

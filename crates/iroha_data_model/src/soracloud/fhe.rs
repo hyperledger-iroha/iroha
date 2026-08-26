@@ -23,8 +23,6 @@ pub enum FheParamLifecycleV1 {
     Proposed,
     /// Parameter set is active and may be used for job admission.
     Active,
-    /// Parameter set is still valid but scheduled for migration/retirement.
-    Deprecated,
     /// Parameter set is withdrawn and must be rejected for new jobs.
     Withdrawn,
 }
@@ -60,9 +58,6 @@ pub struct FheParamSetV1 {
     /// First block where this set can be admitted.
     #[norito(required)]
     pub activation_height: Option<u64>,
-    /// Optional block where this set enters deprecation.
-    #[norito(required)]
-    pub deprecation_height: Option<u64>,
     /// Optional block where this set is fully withdrawn.
     #[norito(required)]
     pub withdraw_height: Option<u64>,
@@ -198,22 +193,6 @@ impl FheParamSetV1 {
                 ),
             });
         }
-        if let Some(deprecation_height) = self.deprecation_height {
-            let Some(activation_height) = self.activation_height else {
-                return Err(SoracloudManifestError::InvalidField {
-                    manifest: "fhe parameter set",
-                    field: "deprecation_height",
-                    reason: "requires activation_height".to_string(),
-                });
-            };
-            if deprecation_height <= activation_height {
-                return Err(SoracloudManifestError::InvalidField {
-                    manifest: "fhe parameter set",
-                    field: "deprecation_height",
-                    reason: "must be strictly greater than activation_height".to_string(),
-                });
-            }
-        }
         if let Some(withdraw_height) = self.withdraw_height {
             let Some(activation_height) = self.activation_height else {
                 return Err(SoracloudManifestError::InvalidField {
@@ -230,24 +209,13 @@ impl FheParamSetV1 {
                 });
             }
         }
-        if let (Some(deprecation_height), Some(withdraw_height)) =
-            (self.deprecation_height, self.withdraw_height)
-            && withdraw_height <= deprecation_height
-        {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "fhe parameter set",
-                field: "withdraw_height",
-                reason: "must be strictly greater than deprecation_height".to_string(),
-            });
-        }
         match self.lifecycle {
             FheParamLifecycleV1::Proposed => {
-                if self.deprecation_height.is_some() || self.withdraw_height.is_some() {
+                if self.withdraw_height.is_some() {
                     return Err(SoracloudManifestError::InvalidField {
                         manifest: "fhe parameter set",
                         field: "lifecycle",
-                        reason: "proposed sets cannot define deprecation/withdraw heights"
-                            .to_string(),
+                        reason: "proposed sets cannot define a withdraw height".to_string(),
                     });
                 }
             }
@@ -257,16 +225,6 @@ impl FheParamSetV1 {
                         manifest: "fhe parameter set",
                         field: "lifecycle",
                         reason: "active sets require activation_height".to_string(),
-                    });
-                }
-            }
-            FheParamLifecycleV1::Deprecated => {
-                if self.activation_height.is_none() || self.deprecation_height.is_none() {
-                    return Err(SoracloudManifestError::InvalidField {
-                        manifest: "fhe parameter set",
-                        field: "lifecycle",
-                        reason: "deprecated sets require activation_height and deprecation_height"
-                            .to_string(),
                     });
                 }
             }
@@ -1133,7 +1091,7 @@ impl FheExecutionPolicyV1 {
                 field: "param_set.lifecycle",
                 reason: "parameter set is not active yet".to_string(),
             }),
-            FheParamLifecycleV1::Active | FheParamLifecycleV1::Deprecated => Ok(()),
+            FheParamLifecycleV1::Active => Ok(()),
             FheParamLifecycleV1::Withdrawn => Err(SoracloudManifestError::InvalidField {
                 manifest: "fhe execution policy",
                 field: "param_set.lifecycle",
@@ -2862,12 +2820,7 @@ impl SecretEnvelopeV1 {
                 found: self.schema_version,
             });
         }
-        if self.key_id.trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "secret envelope",
-                field: "key_id",
-            });
-        }
+        validate_nonblank_field("secret envelope", "key_id", &self.key_id)?;
         if self.nonce.is_empty() {
             return Err(SoracloudManifestError::EmptyField {
                 manifest: "secret envelope",
@@ -2933,37 +2886,23 @@ impl CiphertextStateMetadataV1 {
     /// Returns [`SoracloudManifestError`] when metadata fields are empty or
     /// include duplicate tag entries.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        if self.content_type.trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "ciphertext state metadata",
-                field: "content_type",
-            });
-        }
+        validate_nonblank_field(
+            "ciphertext state metadata",
+            "content_type",
+            &self.content_type,
+        )?;
         validate_soracloud_digest_hash("ciphertext state metadata", "commitment", self.commitment)?;
-        if let Some(policy_tag) = self.policy_tag.as_ref()
-            && policy_tag.trim().is_empty()
-        {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "ciphertext state metadata",
-                field: "policy_tag",
-                reason: "must not be empty when provided".to_string(),
-            });
+        if let Some(policy_tag) = self.policy_tag.as_deref() {
+            validate_nonblank_field("ciphertext state metadata", "policy_tag", policy_tag)?;
         }
         let mut seen = BTreeSet::new();
         for tag in &self.tags {
-            let normalized = tag.trim();
-            if normalized.is_empty() {
+            validate_nonblank_field("ciphertext state metadata", "tags", tag)?;
+            if !seen.insert(tag.as_str()) {
                 return Err(SoracloudManifestError::InvalidField {
                     manifest: "ciphertext state metadata",
                     field: "tags",
-                    reason: "tag entries must be non-empty".to_string(),
-                });
-            }
-            if !seen.insert(normalized.to_owned()) {
-                return Err(SoracloudManifestError::InvalidField {
-                    manifest: "ciphertext state metadata",
-                    field: "tags",
-                    reason: format!("duplicate tag `{normalized}`"),
+                    reason: format!("duplicate tag `{tag}`"),
                 });
             }
         }
@@ -3000,19 +2939,7 @@ impl CiphertextStateRecordV1 {
                 found: self.schema_version,
             });
         }
-        if self.state_key.trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "ciphertext state record",
-                field: "state_key",
-            });
-        }
-        if !self.state_key.starts_with('/') {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "ciphertext state record",
-                field: "state_key",
-                reason: "must start with '/'".to_string(),
-            });
-        }
+        validate_absolute_path("ciphertext state record", "state_key", &self.state_key)?;
         self.metadata.validate()?;
         self.secret.validate()?;
         let ciphertext_len = u64::try_from(self.secret.ciphertext.len())
@@ -3075,19 +3002,7 @@ impl FheJobInputRefV1 {
     /// Returns [`SoracloudManifestError`] when state keys are empty or outside
     /// canonical path formatting rules.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        if self.state_key.trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "fhe job spec",
-                field: "inputs.state_key",
-            });
-        }
-        if !self.state_key.starts_with('/') {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "fhe job spec",
-                field: "inputs.state_key",
-                reason: "must start with '/'".to_string(),
-            });
-        }
+        validate_absolute_path("fhe job spec", "inputs.state_key", &self.state_key)?;
         validate_soracloud_fhe_digest_hash("fhe job spec", "inputs.commitment", self.commitment)?;
         Ok(())
     }
@@ -3135,25 +3050,8 @@ impl FheJobSpecV1 {
                 found: self.schema_version,
             });
         }
-        if self.job_id.trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "fhe job spec",
-                field: "job_id",
-            });
-        }
-        if self.output_state_key.trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "fhe job spec",
-                field: "output_state_key",
-            });
-        }
-        if !self.output_state_key.starts_with('/') {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "fhe job spec",
-                field: "output_state_key",
-                reason: "must start with '/'".to_string(),
-            });
-        }
+        validate_nonblank_field("fhe job spec", "job_id", &self.job_id)?;
+        validate_absolute_path("fhe job spec", "output_state_key", &self.output_state_key)?;
         if self.inputs.is_empty() {
             return Err(SoracloudManifestError::EmptyField {
                 manifest: "fhe job spec",
@@ -3587,32 +3485,12 @@ impl DecryptionAuthorityPolicyV1 {
                 }
             }
         }
-        if self.jurisdiction_tag.trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "decryption authority policy",
-                field: "jurisdiction_tag",
-            });
-        }
-        if self.jurisdiction_tag.chars().any(char::is_control) {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "decryption authority policy",
-                field: "jurisdiction_tag",
-                reason: "must not contain control characters".to_string(),
-            });
-        }
-        if self.audit_tag.trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "decryption authority policy",
-                field: "audit_tag",
-            });
-        }
-        if self.audit_tag.chars().any(char::is_control) {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "decryption authority policy",
-                field: "audit_tag",
-                reason: "must not contain control characters".to_string(),
-            });
-        }
+        validate_nonblank_field(
+            "decryption authority policy",
+            "jurisdiction_tag",
+            &self.jurisdiction_tag,
+        )?;
+        validate_nonblank_field("decryption authority policy", "audit_tag", &self.audit_tag)?;
         Ok(())
     }
 }
@@ -3664,25 +3542,8 @@ impl DecryptionRequestV1 {
                 found: self.schema_version,
             });
         }
-        if self.request_id.trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "decryption request",
-                field: "request_id",
-            });
-        }
-        if self.state_key.trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "decryption request",
-                field: "state_key",
-            });
-        }
-        if !self.state_key.starts_with('/') {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "decryption request",
-                field: "state_key",
-                reason: "must start with '/'".to_string(),
-            });
-        }
+        validate_nonblank_field("decryption request", "request_id", &self.request_id)?;
+        validate_absolute_path("decryption request", "state_key", &self.state_key)?;
         validate_soracloud_digest_hash(
             "decryption request",
             "ciphertext_commitment",
@@ -3694,19 +3555,11 @@ impl DecryptionRequestV1 {
                 field: "justification",
             });
         }
-        if self.jurisdiction_tag.trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "decryption request",
-                field: "jurisdiction_tag",
-            });
-        }
-        if self.jurisdiction_tag.chars().any(char::is_control) {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "decryption request",
-                field: "jurisdiction_tag",
-                reason: "must not contain control characters".to_string(),
-            });
-        }
+        validate_nonblank_field(
+            "decryption request",
+            "jurisdiction_tag",
+            &self.jurisdiction_tag,
+        )?;
         if let Some(consent_evidence_hash) = self.consent_evidence_hash {
             validate_soracloud_digest_hash(
                 "decryption request",
@@ -3847,19 +3700,11 @@ impl CiphertextQuerySpecV1 {
                 found: self.schema_version,
             });
         }
-        if self.state_key_prefix.trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "ciphertext query spec",
-                field: "state_key_prefix",
-            });
-        }
-        if !self.state_key_prefix.starts_with('/') {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "ciphertext query spec",
-                field: "state_key_prefix",
-                reason: "must start with '/'".to_string(),
-            });
-        }
+        validate_absolute_path(
+            "ciphertext query spec",
+            "state_key_prefix",
+            &self.state_key_prefix,
+        )?;
         if self.max_results.get() > Self::MAX_RESULTS_LIMIT {
             return Err(SoracloudManifestError::InvalidField {
                 manifest: "ciphertext query spec",
@@ -3906,12 +3751,11 @@ impl CiphertextInclusionProofV1 {
                 found: self.schema_version,
             });
         }
-        if self.proof_scheme.trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "ciphertext inclusion proof",
-                field: "proof_scheme",
-            });
-        }
+        validate_nonblank_field(
+            "ciphertext inclusion proof",
+            "proof_scheme",
+            &self.proof_scheme,
+        )?;
         validate_soracloud_digest_hash("ciphertext inclusion proof", "leaf_hash", self.leaf_hash)?;
         validate_soracloud_digest_hash(
             "ciphertext inclusion proof",
@@ -3972,20 +3816,7 @@ impl CiphertextQueryResultItemV1 {
             });
         }
         if let Some(state_key) = self.state_key.as_ref() {
-            if state_key.trim().is_empty() {
-                return Err(SoracloudManifestError::InvalidField {
-                    manifest: "ciphertext query result item",
-                    field: "state_key",
-                    reason: "must not be empty when provided".to_string(),
-                });
-            }
-            if !state_key.starts_with('/') {
-                return Err(SoracloudManifestError::InvalidField {
-                    manifest: "ciphertext query result item",
-                    field: "state_key",
-                    reason: "must start with '/'".to_string(),
-                });
-            }
+            validate_absolute_path("ciphertext query result item", "state_key", state_key)?;
         }
         validate_soracloud_digest_hash(
             "ciphertext query result item",
@@ -4124,10 +3955,36 @@ impl SoraDeploymentBundleV1 {
         self.container.validate()?;
         self.service.validate()?;
         self.validate_container_reference()?;
-        self.validate_state_write_requirements()?;
-        self.validate_runtime_requirements()?;
-        self.validate_public_route_healthcheck_requirement()?;
-        self.validate_http_service_quota_class()?;
+        Self::validate_source_compatibility(
+            self.container.runtime,
+            &self.container.capabilities,
+            self.container.resources,
+            &self.container.lifecycle,
+            &self.service,
+        )?;
+        Ok(())
+    }
+    /// Validate cross-manifest constraints that do not depend on a published
+    /// container artifact or its canonical manifest hash.
+    ///
+    /// This is the shared validation boundary for local deployment sources and
+    /// admitted bundles. Callers must separately validate the container and
+    /// service manifests themselves.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when runtime, capability, lifecycle,
+    /// lease-volume, or HTTP quota requirements are inconsistent.
+    pub fn validate_source_compatibility(
+        container_runtime: SoraContainerRuntimeV1,
+        container_capabilities: &SoraCapabilityPolicyV1,
+        container_resources: SoraResourceLimitsV1,
+        container_lifecycle: &SoraLifecycleHooksV1,
+        service: &SoraServiceManifestV1,
+    ) -> Result<(), SoracloudManifestError> {
+        Self::validate_state_write_requirements(container_capabilities, service)?;
+        Self::validate_runtime_requirements(container_runtime, container_lifecycle, service)?;
+        Self::validate_public_route_healthcheck_requirement(container_lifecycle, service)?;
+        Self::validate_http_service_quota_class(container_resources, service)?;
         Ok(())
     }
     fn validate_container_reference(&self) -> Result<(), SoracloudManifestError> {
@@ -4154,11 +4011,14 @@ impl SoraDeploymentBundleV1 {
         }
         Ok(())
     }
-    fn validate_state_write_requirements(&self) -> Result<(), SoracloudManifestError> {
-        if self.container.capabilities.allow_state_writes {
+    fn validate_state_write_requirements(
+        container_capabilities: &SoraCapabilityPolicyV1,
+        service: &SoraServiceManifestV1,
+    ) -> Result<(), SoracloudManifestError> {
+        if container_capabilities.allow_state_writes {
             return Ok(());
         }
-        for binding in &self.service.state_bindings {
+        for binding in &service.state_bindings {
             if binding.mutability != SoraStateMutabilityV1::ReadOnly {
                 return Err(SoracloudManifestError::InvalidField {
                     manifest: "sora deployment bundle",
@@ -4170,11 +4030,8 @@ impl SoraDeploymentBundleV1 {
                 });
             }
         }
-        for handler in &self.service.handlers {
-            if matches!(
-                handler.class,
-                SoraServiceHandlerClassV1::Update | SoraServiceHandlerClassV1::PrivateUpdate
-            ) {
+        for handler in &service.handlers {
+            if handler.class == SoraServiceHandlerClassV1::Update {
                 return Err(SoracloudManifestError::InvalidField {
                     manifest: "sora deployment bundle",
                     field: "container.capabilities.allow_state_writes",
@@ -4187,43 +4044,54 @@ impl SoraDeploymentBundleV1 {
         }
         Ok(())
     }
-    fn validate_runtime_requirements(&self) -> Result<(), SoracloudManifestError> {
-        match self.service.execution_plane {
+    fn validate_runtime_requirements(
+        container_runtime: SoraContainerRuntimeV1,
+        container_lifecycle: &SoraLifecycleHooksV1,
+        service: &SoraServiceManifestV1,
+    ) -> Result<(), SoracloudManifestError> {
+        match service.execution_plane {
             SoraServiceExecutionPlaneV1::DeterministicService => {
-                if !self.container.runtime.is_deterministic() {
+                if !container_runtime.is_deterministic() {
                     return Err(SoracloudManifestError::InvalidField {
                         manifest: "sora deployment bundle",
                         field: "container.runtime",
                         reason: format!(
                             "deterministic services require `Ivm`, found `{:?}`",
-                            self.container.runtime
+                            container_runtime
                         ),
                     });
                 }
             }
             SoraServiceExecutionPlaneV1::HttpService => {
-                if self.container.runtime != SoraContainerRuntimeV1::Inrou {
+                if container_runtime != SoraContainerRuntimeV1::Inrou {
                     return Err(SoracloudManifestError::InvalidField {
                         manifest: "sora deployment bundle",
                         field: "container.runtime",
                         reason: format!(
                             "http services require `Inrou`, found `{:?}`",
-                            self.container.runtime
+                            container_runtime
                         ),
                     });
                 }
-                if self.container.lifecycle.healthcheck_path.is_none() {
+                if container_lifecycle.healthcheck_path.is_none() {
                     return Err(SoracloudManifestError::InvalidField {
                         manifest: "sora deployment bundle",
                         field: "container.lifecycle.healthcheck_path",
                         reason: "http services require an explicit healthcheck path".to_string(),
                     });
                 }
-                let root_volume_count = self
-                    .service
+                if (1..100).contains(&service.rollout.canary_percent) {
+                    return Err(SoracloudManifestError::InvalidField {
+                        manifest: "sora deployment bundle",
+                        field: "service.rollout.canary_percent",
+                        reason: "first-release Inrou host-local lease disks require one active revision; use 0 or 100 until authenticated state migration and per-revision billing are implemented"
+                            .to_string(),
+                    });
+                }
+                let root_volume_count = service
                     .lease_volumes
                     .iter()
-                    .filter(|volume| volume.attaches_per_replica())
+                    .filter(|volume| volume.is_root_volume())
                     .count();
                 if root_volume_count != 1 {
                     return Err(SoracloudManifestError::InvalidField {
@@ -4234,17 +4102,16 @@ impl SoraDeploymentBundleV1 {
                                 .to_string(),
                     });
                 }
-                if !self
-                    .service
+                if !service
                     .lease_volumes
                     .iter()
-                    .any(SoraLeaseVolumeBindingV1::attaches_shared_across_replicas)
+                    .any(SoraLeaseVolumeBindingV1::is_data_volume)
                 {
                     return Err(SoracloudManifestError::InvalidField {
                         manifest: "sora deployment bundle",
                         field: "service.lease_volumes",
                         reason:
-                            "Inrou runtimes require at least one shared `ServiceLeaseVolume` or `ConfidentialLeaseVolume` binding"
+                            "Inrou runtimes require at least one replica-private `ServiceLeaseVolume` or `ConfidentialLeaseVolume` binding"
                                 .to_string(),
                     });
                 }
@@ -4252,11 +4119,14 @@ impl SoraDeploymentBundleV1 {
         }
         Ok(())
     }
-    fn validate_public_route_healthcheck_requirement(&self) -> Result<(), SoracloudManifestError> {
+    fn validate_public_route_healthcheck_requirement(
+        container_lifecycle: &SoraLifecycleHooksV1,
+        service: &SoraServiceManifestV1,
+    ) -> Result<(), SoracloudManifestError> {
         if matches!(
-            self.service.route.as_ref().map(|route| route.visibility),
+            service.route.as_ref().map(|route| route.visibility),
             Some(SoraRouteVisibilityV1::Public)
-        ) && self.container.lifecycle.healthcheck_path.is_none()
+        ) && container_lifecycle.healthcheck_path.is_none()
         {
             return Err(SoracloudManifestError::InvalidField {
                 manifest: "sora deployment bundle",
@@ -4266,11 +4136,15 @@ impl SoraDeploymentBundleV1 {
         }
         Ok(())
     }
-    fn validate_http_service_quota_class(&self) -> Result<(), SoracloudManifestError> {
-        if self.service.execution_plane != SoraServiceExecutionPlaneV1::HttpService {
+    fn validate_http_service_quota_class(
+        container_resources: SoraResourceLimitsV1,
+        service: &SoraServiceManifestV1,
+    ) -> Result<(), SoracloudManifestError> {
+        if service.execution_plane != SoraServiceExecutionPlaneV1::HttpService {
             return Ok(());
         }
-        let quota_class = self.service.economics.quota_class.as_str();
+        container_resources.validate_for_inrou()?;
+        let quota_class = service.economics.quota_class.as_str();
         let Some(policy) = http_service_quota_class_policy(quota_class) else {
             return Err(SoracloudManifestError::InvalidField {
                 manifest: "sora deployment bundle",
@@ -4280,7 +4154,7 @@ impl SoraDeploymentBundleV1 {
                 ),
             });
         };
-        if self.service.replicas.get() > policy.max_replicas {
+        if service.replicas.get() > policy.max_replicas {
             return Err(SoracloudManifestError::InvalidField {
                 manifest: "sora deployment bundle",
                 field: "service.replicas",
@@ -4290,7 +4164,7 @@ impl SoraDeploymentBundleV1 {
                 ),
             });
         }
-        let resources = self.container.resources;
+        let resources = container_resources;
         for (field, value, max_value) in [
             (
                 "container.resources.cpu_millis",
@@ -4308,9 +4182,9 @@ impl SoraDeploymentBundleV1 {
                 policy.max_ephemeral_storage_bytes,
             ),
             (
-                "container.resources.max_open_files",
-                u64::from(resources.max_open_files.get()),
-                u64::from(policy.max_open_files),
+                "container.resources.max_open_files_per_process",
+                u64::from(resources.max_open_files_per_process.get()),
+                u64::from(policy.max_open_files_per_process),
             ),
             (
                 "container.resources.max_tasks",
@@ -4328,20 +4202,31 @@ impl SoraDeploymentBundleV1 {
                 });
             }
         }
-        let total_lease_volume_bytes = self
-            .service
-            .lease_volumes
-            .iter()
-            .fold(0_u64, |acc, volume| {
-                acc.saturating_add(volume.max_total_bytes.get())
-            });
+        let replica_count = u64::from(service.replicas.get());
+        let total_lease_volume_bytes =
+            service
+                .lease_volumes
+                .iter()
+                .try_fold(0_u64, |acc, volume| {
+                    volume
+                        .max_total_bytes
+                        .get()
+                        .checked_mul(replica_count)
+                        .and_then(|replica_bytes| acc.checked_add(replica_bytes))
+                        .ok_or_else(|| SoracloudManifestError::InvalidField {
+                            manifest: "sora deployment bundle",
+                            field: "service.lease_volumes",
+                            reason: "replica-private lease-volume byte total overflows `u64`"
+                                .to_string(),
+                        })
+                })?;
         if total_lease_volume_bytes > policy.max_total_lease_volume_bytes {
             return Err(SoracloudManifestError::InvalidField {
                 manifest: "sora deployment bundle",
                 field: "service.lease_volumes",
                 reason: format!(
-                    "quota class `{quota_class}` allows at most {} total lease-backed bytes, found {total_lease_volume_bytes}",
-                    policy.max_total_lease_volume_bytes
+                    "quota class `{quota_class}` allows at most {} total lease-backed bytes across {replica_count} replicas, found {total_lease_volume_bytes}",
+                    policy.max_total_lease_volume_bytes,
                 ),
             });
         }

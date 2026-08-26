@@ -2,7 +2,8 @@
 # Network prefix: `taira`
 # This is a checked-in product-profile fixture consumed by Kagami and tests.
 # It is not an input to the disposable testnet workflow. Use
-# `python3 scripts/taira_devnet.py up` for a fresh loopback four-peer network.
+# `python3 scripts/taira_devnet.py up --inrou-canary-dir <owner-only-workspace>`
+# for a fresh, guest-qualified loopback four-peer network.
 # Runtime deployments must inject every private key through their own secret
 # store; never add those values to this file.
 
@@ -159,6 +160,14 @@ id = "REPLACE_WITH_TAIRA_DPN_ONBOARDING_CREDENTIAL_ID"
 scope = { dataspace = "dpn" }
 token_hash = "REPLACE_WITH_TAIRA_DPN_ONBOARDING_TOKEN_HASH"
 
+# Runtime operators must provision this dedicated token for the public-reset
+# canary alias under the canonical Taira `universal` dataspace. The token
+# itself remains in owner-only runtime custody and is never stored here.
+[[torii.account_onboarding.credentials]]
+id = "REPLACE_WITH_TAIRA_CANARY_ONBOARDING_CREDENTIAL_ID"
+scope = { dataspace = "universal" }
+token_hash = "REPLACE_WITH_TAIRA_CANARY_ONBOARDING_TOKEN_HASH"
+
 [torii.faucet]
 enabled = true
 authority = "REPLACE_WITH_TAIRA_FAUCET_AUTHORITY"
@@ -258,6 +267,13 @@ max_bytes_per_minute = 104857600
 enabled = true
 portable_vm_uid = 70000
 portable_vm_gid = 70000
+# Replace both values with the exact operator-preseeded canonical guest artifact
+# before validating or starting any public validator.
+trusted_guest_manifest_digest_hex = "REPLACE_WITH_INROU_TRUSTED_GUEST_MANIFEST_DIGEST_HEX"
+trusted_guest_content_cid = "REPLACE_WITH_INROU_TRUSTED_GUEST_CONTENT_CID"
+# Immutable guest-image materialization is bounded independently from hosted
+# workloads' aggregate writable-storage capacity.
+guest_image_max_bytes = 10737418240
 max_cpu_millis = 8000
 max_memory_bytes = 8589934592
 max_storage_bytes = 68719476736

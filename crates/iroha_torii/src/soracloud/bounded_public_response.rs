@@ -4,8 +4,6 @@ use axum::{
     http::{HeaderValue, StatusCode, header::CONTENT_TYPE},
     response::{IntoResponse as _, Response},
 };
-use iroha_core::soracloud_runtime::SoracloudUploadedModelEncryptionRecipient;
-use iroha_data_model::soracloud::SoraUploadedModelEncryptionRecipientV1;
 use norito::json::JsonSerialize;
 /// Maximum encoded JSON bytes returned by one public discovery read.
 pub(super) const MAX_JSON_BYTES: usize = 64 * 1024;
@@ -20,22 +18,6 @@ pub(super) fn json<T: JsonSerialize>(value: &T) -> Response {
         .headers_mut()
         .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     response
-}
-/// Convert and encode the current public uploaded-model encryption recipient.
-pub(super) fn encryption_recipient(
-    recipient: SoracloudUploadedModelEncryptionRecipient,
-) -> Response {
-    json(&super::UploadedModelEncryptionRecipientResponse {
-        recipient: SoraUploadedModelEncryptionRecipientV1 {
-            schema_version: recipient.schema_version,
-            key_id: recipient.key_id,
-            key_version: recipient.key_version,
-            kem: recipient.kem,
-            aead: recipient.aead,
-            public_key_bytes: recipient.public_key_bytes,
-            public_key_fingerprint: recipient.public_key_fingerprint,
-        },
-    })
 }
 #[cfg(test)]
 mod tests {

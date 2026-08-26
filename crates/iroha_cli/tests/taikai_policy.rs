@@ -6,9 +6,7 @@ use blake3::Hasher;
 use iroha_data_model::taikai::{CekRotationReceiptV1, ReplicationProofTokenV1};
 use norito::json::Value;
 use std::{
-    borrow::Cow,
-    fs::{self, File},
-    io::{self, Read},
+    fs, io,
     path::Path,
     process::{Command, ExitStatus, Stdio},
     thread,
@@ -149,11 +147,14 @@ fn taikai_cli_emits_cek_receipt_and_rpt() {
     assert_eq!(rpt.valid_from_unix, 1_700_000_100);
     assert_eq!(rpt.valid_until_unix, 1_700_000_200);
     assert_eq!(rpt.notes.as_deref(), Some("rollout-check"));
-    assert_eq!(rpt.gar_digest, digest_file_for_cli(&gar_path));
-    assert_eq!(rpt.cek_receipt_digest, digest_file_for_cli(&receipt_path));
+    assert_eq!(rpt.gar_digest, digest_policy_artifact(&gar_path));
+    assert_eq!(
+        rpt.cek_receipt_digest,
+        digest_policy_artifact(&receipt_path)
+    );
     assert_eq!(
         rpt.distribution_bundle_digest,
-        digest_file_for_cli(&bundle_path)
+        digest_bundle_file_for_cli(&bundle_path)
     );
     let rpt_json_value: Value =
         norito::json::from_slice(&fs::read(&rpt_json).expect("read rpt json"))
@@ -166,23 +167,29 @@ fn taikai_cli_emits_cek_receipt_and_rpt() {
         Some(2)
     );
 }
-fn digest_file_for_cli(path: &Path) -> [u8; 32] {
+fn digest_policy_artifact(path: &Path) -> [u8; 32] {
+    *blake3::hash(&fs::read(path).expect("read policy artifact for digest")).as_bytes()
+}
+fn digest_bundle_file_for_cli(path: &Path) -> [u8; 32] {
     let mut hasher = Hasher::new();
-    let label: Cow<'_, str> = path
+    hasher.update(b"iroha.taikai.bundle.v1");
+    let label = path
         .file_name()
         .and_then(|value| value.to_str())
-        .map(Cow::from)
-        .map_or_else(|| Cow::from("."), Cow::from);
+        .unwrap_or(".");
+    hasher.update(&[b'F']);
+    hasher.update(
+        &u64::try_from(label.len())
+            .expect("bundle label length")
+            .to_le_bytes(),
+    );
     hasher.update(label.as_bytes());
-    hasher.update(&[0xFF, b'F']);
-    let mut file = File::open(path).expect("open file for digest");
-    let mut buffer = [0u8; 8192];
-    loop {
-        let read = file.read(&mut buffer).expect("read file for digest");
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-    }
+    let bytes = fs::read(path).expect("read bundle file for digest");
+    hasher.update(
+        &u64::try_from(bytes.len())
+            .expect("bundle file length")
+            .to_le_bytes(),
+    );
+    hasher.update(&bytes);
     *hasher.finalize().as_bytes()
 }

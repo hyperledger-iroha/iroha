@@ -1872,13 +1872,13 @@ def static_errors(o: dict[str, str] | None = None) -> list[str]:
             r"loaded\.verified\.binding\(\)\.promotion_id,\s*"
             r"SUBMISSION_JOURNAL_FILE_NAME,\s*\)\?;\s*"
             r"let journal_observation = inspect_submission_journal\(&journal_path, &loaded\)\?;.*?"
-            r"get_transaction_status_response_auto\(hash\).*?"
+            r"get_transaction_status_response_global\(hash\).*?"
             r"decide_submission_journal\(journal_observation, initial_status\.is_some\(\)\).*?"
             r"if journal_action == SubmissionJournalAction::Publish\s*\{\s*"
             r"publish_submission_journal\(&journal_path, &loaded\)\?;\s*"
             r"if inspect_submission_journal\(&journal_path, &loaded\)\?\s*"
             r"!= SubmissionJournalObservation::Matching.*?"
-            r"get_transaction_status_response_auto\(hash\).*?"
+            r"get_transaction_status_response_global\(hash\).*?"
             r"stage: \"post-journal pre-POST reconciliation\".*?"
             r"\}\s*.*?submit_prepared_transaction_payload\(&prepared\)"
         ),
@@ -1892,12 +1892,19 @@ def static_errors(o: dict[str, str] | None = None) -> list[str]:
         KR,
         e,
         (
-            r'Some\("Applied"\) => ReconciledSubmissionStatus::Applied,\s*'
-            r'Some\("Rejected"\) => ReconciledSubmissionStatus::Rejected,\s*'
-            r'Some\("Expired"\) => ReconciledSubmissionStatus::Expired,\s*'
+            r'Some\(status\)\s*if status\.scope == "global"\s*'
+            r'&& status\.resolved_from == "state"\s*'
+            r'&& status\.status\.kind == "Applied"\s*=>\s*\{\s*'
+            r'ReconciledSubmissionStatus::Applied\s*\}\s*'
+            r'Some\(status\) if status\.scope == "global"\s*'
+            r'&& status\.status\.kind == "Rejected" => \{\s*'
+            r'ReconciledSubmissionStatus::Rejected\s*\}\s*'
+            r'Some\(status\) if status\.scope == "global"\s*'
+            r'&& status\.status\.kind == "Expired" => \{\s*'
+            r'ReconciledSubmissionStatus::Expired\s*\}\s*'
             r"Some\(_\) \| None => ReconciledSubmissionStatus::Unresolved,"
         ),
-        "closed terminal status classification",
+        "closed global/state finality classification",
     )
     status_identity = ro.split("fn require_status_response_hash(", 1)[-1].split(
         "fn applied_carrier_height(", 1
@@ -1914,7 +1921,7 @@ def static_errors(o: dict[str, str] | None = None) -> list[str]:
         "journal-bound status identity uncertainty")
     if submit_run.count("require_journal_bound_status_response(") != 3:
         e.append(f"{KAGEMUSHA_ROLLOUT_COMPONENT}: every submit status identity path must be journal-bound")
-    configured_wait = ro.split("fn wait_for_activation_terminal_status(", 1)[-1].split(
+    configured_wait = ro.split("fn wait_for_activation_applied(", 1)[-1].split(
         "fn finish_waited_submission", 1
     )[0]
     rp(
@@ -1922,28 +1929,29 @@ def static_errors(o: dict[str, str] | None = None) -> list[str]:
         KR,
         e,
         (
-            r"client\.wait_for_transaction_terminal_status\(\s*hash,\s*"
+            r"client\.wait_for_transaction_applied\(\s*hash,\s*"
             r"TransactionWaitOptions \{\s*timeout: client\.transaction_status_timeout,\s*"
-            r"terminal_statuses: vec!\[\s*"
-            r"TransactionWaitTerminalStatus::Applied,\s*"
-            r"TransactionWaitTerminalStatus::Rejected,\s*"
-            r"TransactionWaitTerminalStatus::Expired,"
+            r"\.\.TransactionWaitOptions::default\(\)\s*\}"
         ),
-        "configured status timeout and exact terminal status set",
+        "configured status timeout and fixed global state-resolved Applied wait",
     )
+    if "terminal_statuses" in ro or "TransactionWaitTerminalStatus" in ro:
+        e.append(
+            f"{KAGEMUSHA_ROLLOUT_COMPONENT}: configurable transaction wait terminal statuses must stay retired"
+        )
     if ro.count('stage: "proof-anchored Applied result reporting"') != 4:
         e.append(
             f"{KAGEMUSHA_ROLLOUT_COMPONENT}: every activation and canary Applied reporting path must be submission-uncertain"
         )
     ambiguous_post = submit_run.split(
         "else if let Err(post_error) = client.submit_prepared_transaction_payload(&prepared)", 1
-    )[-1].split("let outcome = match wait_for_activation_terminal_status(&client, hash)", 1)[0]
+    )[-1].split("let outcome = match wait_for_activation_applied(&client, hash)", 1)[0]
     rp(
         ambiguous_post,
         KR,
         e,
         (
-            r"get_transaction_status_response_auto\(hash\).*?"
+            r"get_transaction_status_response_global\(hash\).*?"
             r"ReconciledSubmissionStatus::Applied => \{\s*"
             r"let evidence = collect_finalized_activation_evidence\(.*?"
             r"stage: \"ambiguous POST proof reconciliation\".*?"
@@ -2042,7 +2050,7 @@ def static_errors(o: dict[str, str] | None = None) -> list[str]:
             r"stage: \"proof-anchored Applied result reporting\".*?"
             r"ReconciledSubmissionStatus::Rejected \| ReconciledSubmissionStatus::Expired.*?"
             r"ReconciledSubmissionStatus::Unresolved => Err\(eyre!\(SubmissionUncertain \{.*?"
-            r"stage: \"configured terminal wait\""
+            r"stage: \"configured Applied wait\""
         ),
         "explicit submission uncertainty after configured wait ambiguity",
     )
@@ -2085,7 +2093,7 @@ def static_errors(o: dict[str, str] | None = None) -> list[str]:
             r"&journal_path,\s*&loaded\s*\)\?\)\?;.*?"
             r"require_journal_bound_status_response\(\s*&status,\s*transaction,\s*"
             r"&journal_path,\s*\"finalize status identity reconciliation\",\s*\)\?;\s*"
-            r"match classify_reconciled_submission_status\(Some\(&status\.status\.kind\)\).*?"
+            r"match classify_reconciled_submission_status\(Some\(&status\)\).*?"
             r"ReconciledSubmissionStatus::Applied => \{\}.*?"
             r"ReconciledSubmissionStatus::Rejected \| ReconciledSubmissionStatus::Expired.*?"
             r"ReconciledSubmissionStatus::Unresolved => \{\s*"

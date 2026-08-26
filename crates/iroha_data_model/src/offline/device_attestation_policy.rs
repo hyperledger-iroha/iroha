@@ -123,6 +123,31 @@ mod device_attestation_policy_tests {
         assert_eq!(decoded, expected);
     }
 
+    #[test]
+    fn trusted_root_decodes_from_explicit_packed_field_layout() {
+        let expected = OfflineDeviceAttestationTrustedRoot {
+            platform: "ios-appattest".to_owned(),
+            der: vec![0x42, 0x01, 0x08],
+            not_before_ms: None,
+            not_after_ms: None,
+        };
+        let flags = norito::core::header_flags::PACKED_STRUCT
+            | norito::core::header_flags::COMPACT_LEN
+            | norito::core::header_flags::FIELD_BITSET;
+        let (payload, encoded_flags) = {
+            let _guard = norito::core::DecodeFlagsGuard::enter(flags);
+            norito::codec::encode_with_header_flags(&expected)
+        };
+        assert_eq!(encoded_flags & flags, flags);
+        let (decoded, used) = {
+            let _guard = norito::core::DecodeFlagsGuard::enter(encoded_flags);
+            norito::core::decode_field_canonical::<OfflineDeviceAttestationTrustedRoot>(&payload)
+                .expect("decode packed trusted-root field")
+        };
+        assert_eq!(used, payload.len());
+        assert_eq!(decoded, expected);
+    }
+
     #[cfg(feature = "json")]
     #[test]
     fn android_status_snapshot_json_shape_and_roundtrip() {

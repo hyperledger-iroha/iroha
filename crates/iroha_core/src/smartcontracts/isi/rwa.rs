@@ -1466,9 +1466,7 @@ pub mod query {
                     }
                 }
                 "owner" | "owned_by" | "account" | "account_id" => {
-                    if let Ok(account_id) = AccountId::parse_encoded(raw)
-                        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-                    {
+                    if let Ok(account_id) = AccountId::parse_encoded(raw) {
                         self.owners.insert(account_id.subject_id());
                     }
                 }

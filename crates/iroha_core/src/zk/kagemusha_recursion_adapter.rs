@@ -4244,13 +4244,8 @@ fn kagemusha_augmented_proof_size_bytes_v5<F>(
 where
     F: ff::Field,
 {
-    super::pasta_ipa_recursion::pasta_ipa_augmented_proof_shape_v1(
-        cs,
-        k,
-        super::pasta_ipa_recursion::PastaIpaInstanceQueryV1::Direct,
-    )
-    .map(|shape| shape.augmented_proof_bytes())
-    .map_err(|error| format!("Kagemusha V5 {error}"))
+    super::pasta_ipa_recursion::pasta_ipa_augmented_proof_bytes_v1(cs, k)
+        .map_err(|error| format!("Kagemusha V5 {error}"))
 }
 fn preflight_kagemusha_processed_vk_v4(
     scanner: &mut KagemushaWireScannerV4<'_>,

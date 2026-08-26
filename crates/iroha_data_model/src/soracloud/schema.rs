@@ -1,6 +1,35 @@
 const SORA_STORAGE_BYTES_PER_GIB: u64 = 1024 * 1024 * 1024;
 const SORA_NETWORK_BYTES_PER_MIB: u64 = 1024 * 1024;
 const SORA_HTTP_SERVICE_QUOTA_CLASS_TAIRA_OPEN: &str = "taira-open";
+/// Maximum hosted-HTTP replica count admitted by the first-release quota policy.
+pub const SORA_HTTP_SERVICE_REPLICA_MAX_V1: u16 = 4;
+/// Fixed host CPU reservation added for the VMM and device-emulation process.
+pub const SORA_INROU_VMM_CPU_OVERHEAD_MILLIS_V1: u64 = 250;
+/// Fixed host memory reservation added for the VMM and device-emulation process.
+pub const SORA_INROU_VMM_MEMORY_OVERHEAD_BYTES_V1: u64 = 256 * 1024 * 1024;
+/// Smallest workload CPU budget that maps exactly to the canonical 100 ms guest quota period.
+pub const SORA_INROU_MIN_CPU_MILLIS_V1: u32 = 10;
+/// CPU-budget granularity admitted by Inrou V1.
+pub const SORA_INROU_CPU_MILLIS_ALIGNMENT_V1: u32 = 10;
+/// Largest guest CPU budget admitted by Inrou V1.
+///
+/// This keeps the qualified four-vCPU QEMU envelope within the fixed finite
+/// host-side process limit used by every first-release Inrou worker.
+pub const SORA_INROU_MAX_CPU_MILLIS_V1: u32 = 4_000;
+/// Largest virtual-CPU count admitted and startup-qualified by Inrou V1.
+pub const SORA_INROU_MAX_VCPUS_V1: u32 = 4;
+/// Smallest guest-memory budget admitted by Inrou V1.
+pub const SORA_INROU_MIN_MEMORY_BYTES_V1: u64 = 128 * 1024 * 1024;
+/// Exact guest-memory alignment admitted by Inrou V1.
+pub const SORA_INROU_MEMORY_ALIGNMENT_BYTES_V1: u64 = 1024 * 1024;
+/// Smallest and exact alignment of the capped Inrou service tmpfs.
+pub const SORA_INROU_EPHEMERAL_STORAGE_ALIGNMENT_BYTES_V1: u64 = 4096;
+/// Smallest per-process descriptor limit admitted by Inrou V1.
+pub const SORA_INROU_MIN_OPEN_FILES_PER_PROCESS_V1: u32 = 64;
+/// Maximum startup or shutdown grace admitted for one Inrou V1 workload, in seconds.
+pub const SORA_INROU_LIFECYCLE_GRACE_MAX_SECS_V1: u32 = 600;
+/// Maximum exact member count of one immutable Inrou V1 guest-image artifact.
+pub const SORA_INROU_GUEST_IMAGE_MAX_MEMBERS_V1: u32 = 3;
 #[allow(clippy::struct_field_names)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SoraHttpServiceQuotaClassPolicy {
@@ -8,17 +37,17 @@ struct SoraHttpServiceQuotaClassPolicy {
     max_cpu_millis: u32,
     max_memory_bytes: u64,
     max_ephemeral_storage_bytes: u64,
-    max_open_files: u32,
+    max_open_files_per_process: u32,
     max_tasks: u16,
     max_total_lease_volume_bytes: u64,
 }
 const TAIRA_OPEN_HTTP_SERVICE_QUOTA_POLICY: SoraHttpServiceQuotaClassPolicy =
     SoraHttpServiceQuotaClassPolicy {
-        max_replicas: 4,
-        max_cpu_millis: 4_000,
+        max_replicas: SORA_HTTP_SERVICE_REPLICA_MAX_V1,
+        max_cpu_millis: SORA_INROU_MAX_CPU_MILLIS_V1,
         max_memory_bytes: 8 * SORA_STORAGE_BYTES_PER_GIB,
         max_ephemeral_storage_bytes: 16 * SORA_STORAGE_BYTES_PER_GIB,
-        max_open_files: 8_192,
+        max_open_files_per_process: 8_192,
         max_tasks: 1_024,
         max_total_lease_volume_bytes: 512 * SORA_STORAGE_BYTES_PER_GIB,
     };
@@ -124,6 +153,20 @@ fn validate_nonblank_field(
     if value.trim().is_empty() {
         return Err(SoracloudManifestError::EmptyField { manifest, field });
     }
+    if value.trim() != value {
+        return Err(invalid_field(
+            manifest,
+            field,
+            "must not include surrounding whitespace",
+        ));
+    }
+    if value.chars().any(char::is_control) {
+        return Err(invalid_field(
+            manifest,
+            field,
+            "must not contain control characters",
+        ));
+    }
     Ok(())
 }
 fn validate_peer_id_field(
@@ -169,16 +212,6 @@ fn validate_validator_account_peer_id(
     }
     Ok(())
 }
-fn validate_optional_nonempty(
-    manifest: &'static str,
-    field: &'static str,
-    value: Option<&str>,
-) -> Result<(), SoracloudManifestError> {
-    if let Some(value) = value {
-        validate_nonblank_field(manifest, field, value)?;
-    }
-    Ok(())
-}
 fn invalid_field(
     manifest: &'static str,
     field: &'static str,
@@ -214,16 +247,6 @@ impl SoraContainerRuntimeV1 {
         matches!(self, Self::Inrou)
     }
 }
-/// Guest userspace profile expected by an Inrou VM image.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "guest_os", content = "value"))]
-#[norito(deny_unknown_fields)]
-pub enum SoraInrouGuestOsV1 {
-    /// Debian slim guest userspace with `apt` package management.
-    #[default]
-    DebianSlim,
-}
 /// Guest ISA profile admitted for an Inrou VM image.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -256,76 +279,6 @@ impl SoraInrouGuestIsaV1 {
         }
     }
 }
-/// CDN-like distribution target for Soracloud-published artifacts.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "target", content = "value"))]
-#[norito(deny_unknown_fields)]
-pub enum SoraArtifactDistributionTargetV1 {
-    /// Replicate and hydrate from the globally best eligible hosts.
-    #[default]
-    Global,
-    /// Prefer hosts tagged with one of the requested geographies.
-    Geographies(BTreeSet<String>),
-}
-impl SoraArtifactDistributionTargetV1 {
-    /// Validate the distribution target labels.
-    ///
-    /// # Errors
-    /// Returns [`SoracloudManifestError`] when geography labels are malformed.
-    pub fn validate(&self, field: &'static str) -> Result<(), SoracloudManifestError> {
-        match self {
-            Self::Global => Ok(()),
-            Self::Geographies(tags) => {
-                if tags.is_empty() {
-                    return Err(invalid_field(
-                        "sora artifact distribution policy",
-                        field,
-                        "geography target must include at least one tag",
-                    ));
-                }
-                for tag in tags {
-                    validate_distribution_geography_tag(
-                        "sora artifact distribution policy",
-                        field,
-                        tag,
-                    )?;
-                }
-                Ok(())
-            }
-        }
-    }
-}
-/// Reusable policy for publishing artifacts to Soracloud host storage.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(deny_unknown_fields)]
-pub struct SoraArtifactDistributionPolicyV1 {
-    /// Operator target: global or a set of geography tags.
-    pub target: SoraArtifactDistributionTargetV1,
-    /// Prefer lower observed latency among otherwise eligible hosts.
-    pub prefer_low_latency: bool,
-    /// Fall back to latency when host geography is missing or unverifiable.
-    pub fallback_to_low_latency_when_geography_unknown: bool,
-}
-impl Default for SoraArtifactDistributionPolicyV1 {
-    fn default() -> Self {
-        Self {
-            target: SoraArtifactDistributionTargetV1::Global,
-            prefer_low_latency: true,
-            fallback_to_low_latency_when_geography_unknown: true,
-        }
-    }
-}
-impl SoraArtifactDistributionPolicyV1 {
-    /// Validate the distribution policy.
-    ///
-    /// # Errors
-    /// Returns [`SoracloudManifestError`] when target metadata is malformed.
-    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        self.target.validate("target")
-    }
-}
 /// Immutable `SoraFS` artifact reference used to hydrate Inrou guest images.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -335,14 +288,6 @@ pub struct SoraPublishedInrouGuestImageArtifactV1 {
     pub manifest_digest_hex: String,
     /// CID rendered for the uploaded guest-image artifact bundle.
     pub content_cid: String,
-    /// Optional storage manifest identifier returned by the storage pin endpoint.
-    ///
-    /// The JSON key is mandatory in V1; an unavailable identifier is encoded
-    /// explicitly as `null` rather than by omitting the field.
-    #[norito(required)]
-    pub manifest_id_hex: Option<String>,
-    /// Exact copy of the parent guest image's authoritative distribution policy.
-    pub distribution: SoraArtifactDistributionPolicyV1,
 }
 impl SoraPublishedInrouGuestImageArtifactV1 {
     /// Validate the immutable artifact reference.
@@ -350,7 +295,7 @@ impl SoraPublishedInrouGuestImageArtifactV1 {
     /// # Errors
     /// Returns [`SoracloudManifestError`] when the artifact reference is malformed.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        let manifest_digest = validate_canonical_lower_hex_32(
+        validate_canonical_lower_hex_32(
             "sora published inrou guest image artifact",
             "manifest_digest_hex",
             &self.manifest_digest_hex,
@@ -359,22 +304,7 @@ impl SoraPublishedInrouGuestImageArtifactV1 {
             "sora published inrou guest image artifact",
             "content_cid",
             &self.content_cid,
-        )?;
-        if let Some(manifest_id_hex) = self.manifest_id_hex.as_ref() {
-            let manifest_id = validate_canonical_lower_hex_32(
-                "sora published inrou guest image artifact",
-                "manifest_id_hex",
-                manifest_id_hex,
-            )?;
-            if manifest_id != manifest_digest {
-                return Err(invalid_field(
-                    "sora published inrou guest image artifact",
-                    "manifest_id_hex",
-                    "must exactly equal `manifest_digest_hex`",
-                ));
-            }
-        }
-        self.distribution.validate()
+        )
     }
 }
 /// Guest-image member paths for one admitted Inrou ISA profile.
@@ -387,10 +317,12 @@ pub struct SoraInrouGuestImageV1 {
     pub rootfs_image_path: String,
     /// Optional initrd image member path inside the signed Soracloud VM artifact bundle.
     pub initrd_image_path: Option<String>,
-    /// Authoritative distribution policy for the published guest-image artifact.
-    pub distribution: SoraArtifactDistributionPolicyV1,
-    /// Immutable `SoraFS` artifact that carries the guest image members after release.
-    pub published_artifact: Option<SoraPublishedInrouGuestImageArtifactV1>,
+    /// Immutable `SoraFS` artifact that carries the guest image members.
+    ///
+    /// Admitted Inrou V1 manifests always carry this concrete reference. Local
+    /// unpublished workspaces are a CLI concern and are not represented by the
+    /// admitted wire type.
+    pub published_artifact: SoraPublishedInrouGuestImageArtifactV1,
 }
 #[cfg(feature = "json")]
 impl JsonDeserialize for SoraInrouGuestImageV1 {
@@ -422,7 +354,6 @@ impl JsonDeserialize for SoraInrouGuestImageV1 {
         let kernel_image_path = take_required(&mut object, "kernel_image_path")?;
         let rootfs_image_path = take_required(&mut object, "rootfs_image_path")?;
         let initrd_image_path = take_required(&mut object, "initrd_image_path")?;
-        let distribution = take_required(&mut object, "distribution")?;
         let published_artifact = take_required(&mut object, "published_artifact")?;
         if let Some(extra) = object.keys().next().cloned() {
             return Err(json::Error::UnknownField { field: extra });
@@ -431,27 +362,34 @@ impl JsonDeserialize for SoraInrouGuestImageV1 {
             kernel_image_path,
             rootfs_image_path,
             initrd_image_path,
-            distribution,
             published_artifact,
         })
     }
 }
 impl SoraInrouGuestImageV1 {
-    /// Validate Inrou guest-image bundle member paths.
+    /// Validate the source-controlled guest-image fields before publication.
+    ///
+    /// This is used by CLI-only workspaces whose `published_artifact` is an
+    /// exact JSON `null`. It deliberately does not construct or accept an
+    /// admitted guest-image value.
     ///
     /// # Errors
-    /// Returns [`SoracloudManifestError`] when one or more image paths are invalid.
-    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        validate_inrou_image_member_path("kernel_image_path", &self.kernel_image_path)?;
-        validate_inrou_image_member_path("rootfs_image_path", &self.rootfs_image_path)?;
-        if let Some(initrd_image_path) = self.initrd_image_path.as_ref() {
+    /// Returns [`SoracloudManifestError`] when member paths are malformed.
+    pub fn validate_source_fields(
+        kernel_image_path: &str,
+        rootfs_image_path: &str,
+        initrd_image_path: Option<&str>,
+    ) -> Result<(), SoracloudManifestError> {
+        validate_inrou_image_member_path("kernel_image_path", kernel_image_path)?;
+        validate_inrou_image_member_path("rootfs_image_path", rootfs_image_path)?;
+        if let Some(initrd_image_path) = initrd_image_path {
             validate_inrou_image_member_path("initrd_image_path", initrd_image_path)?;
         }
         let mut case_folded_member_paths = BTreeSet::new();
         for (field, path) in [
-            ("kernel_image_path", Some(self.kernel_image_path.as_str())),
-            ("rootfs_image_path", Some(self.rootfs_image_path.as_str())),
-            ("initrd_image_path", self.initrd_image_path.as_deref()),
+            ("kernel_image_path", Some(kernel_image_path)),
+            ("rootfs_image_path", Some(rootfs_image_path)),
+            ("initrd_image_path", initrd_image_path),
         ] {
             let Some(path) = path else {
                 continue;
@@ -464,18 +402,20 @@ impl SoraInrouGuestImageV1 {
                 ));
             }
         }
-        self.distribution.validate()?;
-        if let Some(published_artifact) = self.published_artifact.as_ref() {
-            published_artifact.validate()?;
-            if published_artifact.distribution != self.distribution {
-                return Err(invalid_field(
-                    "sora inrou guest image",
-                    "published_artifact.distribution",
-                    "must exactly match the image distribution policy",
-                ));
-            }
-        }
         Ok(())
+    }
+
+    /// Validate Inrou guest-image bundle member paths and its immutable artifact.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when one or more image fields are invalid.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        Self::validate_source_fields(
+            &self.kernel_image_path,
+            &self.rootfs_image_path,
+            self.initrd_image_path.as_deref(),
+        )?;
+        self.published_artifact.validate()
     }
 }
 /// Explicit Inrou VM metadata carried by hosted HTTP container manifests.
@@ -483,18 +423,12 @@ impl SoraInrouGuestImageV1 {
 pub struct SoraInrouManifestV1 {
     /// Schema version; must equal [`SORA_INROU_MANIFEST_VERSION_V1`].
     pub schema_version: u16,
-    /// Guest userspace contract expected by the runtime.
-    pub guest_os: SoraInrouGuestOsV1,
     /// Admitted guest image assets keyed by guest ISA; at least one native profile is required.
     #[cfg_attr(
         feature = "json",
         norito(json = "crate::json_helpers::sora_inrou_guest_images_map")
     )]
     pub guest_images: BTreeMap<SoraInrouGuestIsaV1, SoraInrouGuestImageV1>,
-    /// Optional user-data overlay path copied into the bootstrap seed drive.
-    pub bootstrap_user_data_path: Option<String>,
-    /// SSH public keys injected for tenant administration.
-    pub ssh_authorized_keys: Vec<String>,
 }
 #[cfg(feature = "json")]
 impl norito::json::JsonSerialize for SoraInrouManifestV1 {
@@ -503,10 +437,6 @@ impl norito::json::JsonSerialize for SoraInrouManifestV1 {
         json::write_json_string("schema_version", out);
         out.push(':');
         self.schema_version.json_serialize(out);
-        out.push(',');
-        json::write_json_string("guest_os", out);
-        out.push(':');
-        self.guest_os.json_serialize(out);
         out.push(',');
         json::write_json_string("guest_images", out);
         out.push(':');
@@ -524,14 +454,6 @@ impl norito::json::JsonSerialize for SoraInrouManifestV1 {
             }
         }
         out.push('}');
-        out.push(',');
-        json::write_json_string("bootstrap_user_data_path", out);
-        out.push(':');
-        self.bootstrap_user_data_path.json_serialize(out);
-        out.push(',');
-        json::write_json_string("ssh_authorized_keys", out);
-        out.push(':');
-        self.ssh_authorized_keys.json_serialize(out);
         out.push('}');
     }
     fn json_serialize_to(
@@ -541,8 +463,6 @@ impl norito::json::JsonSerialize for SoraInrouManifestV1 {
         out.begin_container()?;
         out.push_str("{\"schema_version\":")?;
         self.schema_version.json_serialize_to(out)?;
-        out.push_str(",\"guest_os\":")?;
-        self.guest_os.json_serialize_to(out)?;
         out.push_str(",\"guest_images\":")?;
         out.begin_container()?;
         out.push('{')?;
@@ -560,10 +480,6 @@ impl norito::json::JsonSerialize for SoraInrouManifestV1 {
         }
         out.push('}')?;
         out.end_container();
-        out.push_str(",\"bootstrap_user_data_path\":")?;
-        self.bootstrap_user_data_path.json_serialize_to(out)?;
-        out.push_str(",\"ssh_authorized_keys\":")?;
-        self.ssh_authorized_keys.json_serialize_to(out)?;
         out.push('}')?;
         out.end_container();
         Ok(())
@@ -598,9 +514,6 @@ impl JsonDeserialize for SoraInrouManifestV1 {
             }
         };
         let schema_version = take_required(&mut object, "schema_version")?;
-        let guest_os = take_required(&mut object, "guest_os")?;
-        let bootstrap_user_data_path = take_required(&mut object, "bootstrap_user_data_path")?;
-        let ssh_authorized_keys = take_required(&mut object, "ssh_authorized_keys")?;
         let guest_images_value =
             object
                 .remove("guest_images")
@@ -631,10 +544,7 @@ impl JsonDeserialize for SoraInrouManifestV1 {
         }
         Ok(Self {
             schema_version,
-            guest_os,
             guest_images,
-            bootstrap_user_data_path,
-            ssh_authorized_keys,
         })
     }
 }
@@ -645,19 +555,20 @@ mod inrou_manifest_checked_json_tests {
     fn manifest_map_writer_matches_canonical_bytes_and_exact_bound() {
         let manifest = SoraInrouManifestV1 {
             schema_version: SORA_INROU_MANIFEST_VERSION_V1,
-            guest_os: SoraInrouGuestOsV1::DebianSlim,
             guest_images: BTreeMap::from([(
                 SoraInrouGuestIsaV1::X8664,
                 SoraInrouGuestImageV1 {
                     kernel_image_path: "/inrou/x86_64/vmlinux".to_owned(),
                     rootfs_image_path: "/inrou/x86_64/rootfs.ext4".to_owned(),
                     initrd_image_path: None,
-                    distribution: SoraArtifactDistributionPolicyV1::default(),
-                    published_artifact: None,
+                    published_artifact: SoraPublishedInrouGuestImageArtifactV1 {
+                        manifest_digest_hex: "11".repeat(32),
+                        content_cid: encode_lowercase_multibase_base32(
+                            &sorafs_manifest::canonical_manifest_root_cid([0x11; 32]),
+                        ),
+                    },
                 },
             )]),
-            bootstrap_user_data_path: Some("/bootstrap/user-data".to_owned()),
-            ssh_authorized_keys: vec!["ssh-ed25519 fixture".to_owned()],
         };
         let canonical = json::to_json(&manifest).expect("serialize manifest");
         assert_eq!(
@@ -671,11 +582,11 @@ mod inrou_manifest_checked_json_tests {
     }
 }
 impl SoraInrouManifestV1 {
-    /// Validate Inrou image paths and guest bootstrap metadata.
+    /// Validate the exact first-release Inrou image profiles.
     ///
     /// # Errors
     /// Returns [`SoracloudManifestError`] when schema versions mismatch, image
-    /// paths are invalid, or SSH authorized keys are malformed.
+    /// paths or immutable artifact references are invalid.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
         validate_schema_version(
             "sora inrou manifest",
@@ -689,38 +600,24 @@ impl SoraInrouManifestV1 {
                 reason: "must include at least one native guest image profile".to_owned(),
             });
         }
-        for guest_image in self.guest_images.values() {
+        for (guest_isa, guest_image) in &self.guest_images {
             guest_image.validate()?;
-        }
-        if let Some(bootstrap_user_data_path) = self.bootstrap_user_data_path.as_ref() {
-            validate_bundle_absolute_path(
-                "sora inrou manifest",
-                "bootstrap_user_data_path",
-                bootstrap_user_data_path,
-            )?;
-        }
-        let mut seen_ssh_authorized_keys = BTreeSet::new();
-        for key in &self.ssh_authorized_keys {
-            if key.trim().is_empty() {
+            let prefix = format!("/inrou/{}/", guest_isa.as_str());
+            let expected_kernel = format!("{prefix}vmlinux");
+            let expected_rootfs = format!("{prefix}rootfs.ext4");
+            let expected_initrd = format!("{prefix}initrd.img");
+            if guest_image.kernel_image_path != expected_kernel
+                || guest_image.rootfs_image_path != expected_rootfs
+                || guest_image
+                    .initrd_image_path
+                    .as_deref()
+                    .is_some_and(|path| path != expected_initrd)
+            {
                 return Err(invalid_field(
                     "sora inrou manifest",
-                    "ssh_authorized_keys",
-                    "must not contain empty SSH public keys",
+                    "guest_images",
+                    "each ISA must use its exact /inrou/<isa>/vmlinux, rootfs.ext4, and optional initrd.img member paths",
                 ));
-            }
-            if key.chars().any(char::is_control) {
-                return Err(invalid_field(
-                    "sora inrou manifest",
-                    "ssh_authorized_keys",
-                    "must not contain control characters",
-                ));
-            }
-            if !seen_ssh_authorized_keys.insert(key.clone()) {
-                return Err(SoracloudManifestError::InvalidField {
-                    manifest: "sora inrou manifest",
-                    field: "ssh_authorized_keys",
-                    reason: format!("duplicate SSH authorized key `{key}`"),
-                });
             }
         }
         Ok(())
@@ -761,7 +658,7 @@ impl SoraNetworkAllowlistEntryV1 {
     /// Return `true` when the rule matches the supplied hostname.
     #[must_use]
     pub fn matches_host(&self, host: &str) -> bool {
-        self.host.eq_ignore_ascii_case(host)
+        self.host == host
     }
     /// Return `true` when the rule admits the supplied TCP port.
     #[must_use]
@@ -791,79 +688,29 @@ impl SoraNetworkPolicyV1 {
         }
     }
 
-    fn validate_for_inrou(&self) -> Result<(), SoracloudManifestError> {
-        let Self::Allowlist(entries) = self else {
-            return if matches!(self, Self::Isolated) {
-                Ok(())
-            } else {
-                Err(invalid_field(
-                    "sora container manifest",
-                    "capabilities.network",
-                    "Inrou V1 forbids unrestricted network egress",
-                ))
-            };
-        };
-        if entries.is_empty() {
-            return Err(invalid_field(
+    /// Validate the mandatory first-release Inrou egress policy.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] unless the guest is network-isolated.
+    pub fn validate_for_inrou(&self) -> Result<(), SoracloudManifestError> {
+        if matches!(self, Self::Isolated) {
+            Ok(())
+        } else {
+            Err(invalid_field(
                 "sora container manifest",
                 "capabilities.network",
-                "Inrou allowlist egress requires at least one host",
-            ));
+                "Inrou V1 permits only isolated networking",
+            ))
         }
-        let mut seen_hosts = BTreeSet::new();
-        for entry in entries {
-            let host = entry.host.as_str();
-            if host.is_empty()
-                || host.trim() != host
-                || host.chars().any(char::is_control)
-                || host.chars().any(char::is_whitespace)
-            {
-                return Err(invalid_field(
-                    "sora container manifest",
-                    "capabilities.network",
-                    "Inrou allowlist hosts must be nonempty canonical hostnames or IP literals",
-                ));
-            }
-            if !seen_hosts.insert(host.to_ascii_lowercase()) {
-                return Err(invalid_field(
-                    "sora container manifest",
-                    "capabilities.network",
-                    format!("duplicate Inrou allowlist host `{host}`"),
-                ));
-            }
-            if entry.ports.is_empty() {
-                return Err(invalid_field(
-                    "sora container manifest",
-                    "capabilities.network",
-                    format!("Inrou allowlist host `{host}` must include at least one TCP port"),
-                ));
-            }
-            let mut seen_ports = BTreeSet::new();
-            for port in &entry.ports {
-                if *port == 0 || !seen_ports.insert(*port) {
-                    return Err(invalid_field(
-                        "sora container manifest",
-                        "capabilities.network",
-                        format!(
-                            "Inrou allowlist host `{host}` contains an invalid or duplicate TCP port `{port}`"
-                        ),
-                    ));
-                }
-            }
-        }
-        Ok(())
     }
 }
 /// Capability policy enforced by the Sora Container Runtime.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[allow(clippy::struct_excessive_bools)]
 #[norito(deny_unknown_fields)]
 pub struct SoraCapabilityPolicyV1 {
     /// Egress policy for outbound network access.
     pub network: SoraNetworkPolicyV1,
-    /// Whether wallet/key signing capabilities are exposed to the service.
-    pub allow_wallet_signing: bool,
     /// Whether deterministic key-value writes are allowed through bindings.
     pub allow_state_writes: bool,
     /// Whether read-only model inference adapters are exposed to the service.
@@ -882,12 +729,85 @@ pub struct SoraResourceLimitsV1 {
     pub memory_bytes: NonZeroU64,
     /// Maximum ephemeral storage in bytes.
     pub ephemeral_storage_bytes: NonZeroU64,
-    /// Maximum number of open file descriptors.
-    pub max_open_files: NonZeroU32,
+    /// Maximum number of open file descriptors for each tenant process.
+    pub max_open_files_per_process: NonZeroU32,
     /// Maximum number of cooperative tasks/threads.
     pub max_tasks: NonZeroU16,
 }
+impl SoraResourceLimitsV1 {
+    /// Validate resource values against the exact Inrou V1 enforcement units.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when a value cannot be enforced exactly by the
+    /// canonical guest and host controls.
+    pub fn validate_for_inrou(self) -> Result<(), SoracloudManifestError> {
+        let cpu_millis = self.cpu_millis.get();
+        if !(SORA_INROU_MIN_CPU_MILLIS_V1..=SORA_INROU_MAX_CPU_MILLIS_V1).contains(&cpu_millis)
+            || !cpu_millis.is_multiple_of(SORA_INROU_CPU_MILLIS_ALIGNMENT_V1)
+        {
+            return Err(invalid_field(
+                "sora deployment bundle",
+                "container.resources.cpu_millis",
+                "must be between 10 and 4000 millicores inclusive and a multiple of 10 millicores",
+            ));
+        }
+        let memory_bytes = self.memory_bytes.get();
+        if memory_bytes < SORA_INROU_MIN_MEMORY_BYTES_V1
+            || !memory_bytes.is_multiple_of(SORA_INROU_MEMORY_ALIGNMENT_BYTES_V1)
+        {
+            return Err(invalid_field(
+                "sora deployment bundle",
+                "container.resources.memory_bytes",
+                "must be at least 128 MiB and exactly MiB-aligned",
+            ));
+        }
+        if self.checked_inrou_host_memory_bytes().is_none() {
+            return Err(invalid_field(
+                "sora deployment bundle",
+                "container.resources.memory_bytes",
+                "must leave room for the fixed Inrou VMM memory overhead",
+            ));
+        }
+        if !self
+            .ephemeral_storage_bytes
+            .get()
+            .is_multiple_of(SORA_INROU_EPHEMERAL_STORAGE_ALIGNMENT_BYTES_V1)
+        {
+            return Err(invalid_field(
+                "sora deployment bundle",
+                "container.resources.ephemeral_storage_bytes",
+                "must be a positive multiple of 4096 bytes",
+            ));
+        }
+        if self.max_open_files_per_process.get() < SORA_INROU_MIN_OPEN_FILES_PER_PROCESS_V1 {
+            return Err(invalid_field(
+                "sora deployment bundle",
+                "container.resources.max_open_files_per_process",
+                "must be at least 64 descriptors per tenant process",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Return the checked physical host CPU reservation for one Inrou replica.
+    #[must_use]
+    pub fn checked_inrou_host_cpu_millis(self) -> Option<u64> {
+        u64::from(self.cpu_millis.get()).checked_add(SORA_INROU_VMM_CPU_OVERHEAD_MILLIS_V1)
+    }
+
+    /// Return the checked physical host memory reservation for one Inrou replica.
+    #[must_use]
+    pub fn checked_inrou_host_memory_bytes(self) -> Option<u64> {
+        self.memory_bytes
+            .get()
+            .checked_add(SORA_INROU_VMM_MEMORY_OVERHEAD_BYTES_V1)
+    }
+}
 /// Lifecycle hooks and probe settings used by SCR.
+///
+/// Inrou V1 admission caps both grace periods at
+/// [`SORA_INROU_LIFECYCLE_GRACE_MAX_SECS_V1`]. Other runtimes retain the full
+/// positive `u32` range represented by this shared record.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
@@ -934,6 +854,9 @@ pub enum SoraConfigExportTargetV1 {
     /// Export the canonical JSON payload into an environment variable.
     Env(String),
     /// Export the canonical JSON payload into a mounted relative file path.
+    ///
+    /// Every path segment uses only ASCII letters, digits, `.`, `_`, or `-`;
+    /// empty, `.` and `..` segments are invalid.
     File(String),
 }
 /// One verified signature entry in a multisig canonical request witness.
@@ -1062,6 +985,18 @@ impl JsonDeserialize for SoraContainerManifestV1 {
     }
 }
 impl SoraContainerManifestV1 {
+    /// Validate the canonical absolute bundle path required for an Inrou entrypoint.
+    ///
+    /// This is exposed separately so pre-publication tooling can reject an
+    /// inadmissible workspace before it uploads any service or guest artifacts.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when `entrypoint` is not a portable,
+    /// canonical absolute path admitted by the first-release Inrou contract.
+    pub fn validate_inrou_entrypoint(entrypoint: &str) -> Result<(), SoracloudManifestError> {
+        validate_bundle_absolute_path("sora container manifest", "entrypoint", entrypoint)
+    }
+
     /// Validate schema version and deterministic constraints.
     ///
     /// # Errors
@@ -1081,11 +1016,24 @@ impl SoraContainerManifestV1 {
             validate_environment_variable_name("env", name)?;
         }
         if self.runtime == SoraContainerRuntimeV1::Inrou {
-            validate_bundle_absolute_path(
-                "sora container manifest",
-                "entrypoint",
-                &self.entrypoint,
-            )?;
+            for (field, grace_secs) in [
+                (
+                    "lifecycle.start_grace_secs",
+                    self.lifecycle.start_grace_secs,
+                ),
+                ("lifecycle.stop_grace_secs", self.lifecycle.stop_grace_secs),
+            ] {
+                if grace_secs.get() > SORA_INROU_LIFECYCLE_GRACE_MAX_SECS_V1 {
+                    return Err(invalid_field(
+                        "sora container manifest",
+                        field,
+                        format!(
+                            "must not exceed {SORA_INROU_LIFECYCLE_GRACE_MAX_SECS_V1} seconds for Inrou V1"
+                        ),
+                    ));
+                }
+            }
+            Self::validate_inrou_entrypoint(&self.entrypoint)?;
             let Some(inrou) = self.inrou.as_ref() else {
                 return Err(invalid_field(
                     "sora container manifest",
@@ -1272,25 +1220,85 @@ pub enum SoraServiceExecutionPlaneV1 {
 #[norito(deny_unknown_fields)]
 pub enum SoraLeaseVolumeKindV1 {
     /// Rebuildable public-service state such as indexes and checkpoints,
-    /// shared across replicas of the same hosted-service revision.
+    /// materialized separately for every hosted-service replica.
     ServiceLeaseVolume,
     /// Confidential service state backed by encrypted or FHE payloads,
-    /// shared across replicas of the same hosted-service revision.
+    /// materialized separately for every hosted-service replica.
     ConfidentialLeaseVolume,
     /// Persistent mutable root disk for an Inrou VM guest, materialized
     /// separately for each replica.
     PersistentRootLeaseVolume,
 }
+/// Dedicated guest mount root for non-root Inrou lease volumes.
+///
+/// The root itself is never a valid volume mount. Each non-root volume is
+/// mounted at an exact child named by its canonical [`Name`].
+pub const SORA_INROU_DATA_VOLUME_MOUNT_ROOT_V1: &str = "/var/lib/soracloud/volumes";
+/// Maximum byte length of an Inrou lease-volume name.
+///
+/// The bound keeps the exact `sora-<volume_name>` virtio serial within its
+/// 20-byte V1 limit without truncation or collision.
+pub const SORA_INROU_DATA_VOLUME_NAME_MAX_BYTES_V1: usize = 15;
+/// Maximum number of non-root block volumes attached to one Inrou guest.
+///
+/// Admission enforces the launcher namespace's exact V1 device-slot budget so
+/// an oversized manifest fails before any host disk is materialized.
+pub const SORA_INROU_DATA_VOLUME_MAX_COUNT_V1: usize = 32;
+
+/// Return the canonical guest mount path for a non-root Inrou lease volume.
+///
+/// # Errors
+/// Returns [`SoracloudManifestError`] unless `volume_name` is one portable
+/// ASCII path component.
+pub fn sora_inrou_data_volume_mount_path_v1(
+    volume_name: &Name,
+) -> Result<String, SoracloudManifestError> {
+    validate_sora_lease_volume_name_v1(volume_name)?;
+    Ok(format!(
+        "{SORA_INROU_DATA_VOLUME_MOUNT_ROOT_V1}/{volume_name}"
+    ))
+}
+
+fn validate_sora_lease_volume_name_v1(volume_name: &Name) -> Result<(), SoracloudManifestError> {
+    if volume_name.as_ref().len() > SORA_INROU_DATA_VOLUME_NAME_MAX_BYTES_V1
+        || !is_portable_inrou_path_component(volume_name.as_ref())
+    {
+        return Err(invalid_field(
+            "sora lease volume binding",
+            "volume_name",
+            format!(
+                "must be one portable ASCII path component of at most {SORA_INROU_DATA_VOLUME_NAME_MAX_BYTES_V1} bytes"
+            ),
+        ));
+    }
+    Ok(())
+}
+
 impl SoraLeaseVolumeKindV1 {
-    /// Returns `true` when the volume is attached separately to each hosted-HTTP replica.
+    /// Returns `true` when storage capacity is reserved independently for each replica.
+    ///
+    /// Every first-release lease-volume kind is per-replica. Keeping the
+    /// classification on the closed enum makes admission and runtime capacity
+    /// accounting share one exhaustive authority.
     #[must_use]
     pub const fn is_per_replica(self) -> bool {
+        matches!(
+            self,
+            Self::ServiceLeaseVolume
+                | Self::ConfidentialLeaseVolume
+                | Self::PersistentRootLeaseVolume
+        )
+    }
+
+    /// Returns `true` when this is the guest's persistent root disk.
+    #[must_use]
+    pub const fn is_root_volume(self) -> bool {
         matches!(self, Self::PersistentRootLeaseVolume)
     }
-    /// Returns `true` when the volume is shared across replicas of the same revision.
+    /// Returns `true` when this is a non-root guest data disk.
     #[must_use]
-    pub const fn is_shared_across_replicas(self) -> bool {
-        !self.is_per_replica()
+    pub const fn is_data_volume(self) -> bool {
+        !self.is_root_volume()
     }
 }
 /// Lease-backed mutable storage binding for one hosted HTTP service.
@@ -1304,27 +1312,29 @@ pub struct SoraLeaseVolumeBindingV1 {
     pub kind: SoraLeaseVolumeKindV1,
     /// Storage class requested from the underlying Sorafs/Soranet stack.
     pub storage_class: StorageClass,
-    /// Declared in-runtime mount path for this volume.
+    /// Exact guest mount: `/` for the persistent root volume, otherwise
+    /// `/var/lib/soracloud/volumes/<volume_name>`.
     pub mount_path: String,
     /// Maximum logical bytes retained for this volume.
     pub max_total_bytes: NonZeroU64,
 }
 impl SoraLeaseVolumeBindingV1 {
-    /// Returns `true` when this binding is attached separately to each hosted-HTTP replica.
+    /// Returns `true` when this binding is the guest's persistent root disk.
     #[must_use]
-    pub const fn attaches_per_replica(&self) -> bool {
-        self.kind.is_per_replica()
+    pub const fn is_root_volume(&self) -> bool {
+        self.kind.is_root_volume()
     }
-    /// Returns `true` when this binding is shared across replicas of the same hosted-HTTP revision.
+    /// Returns `true` when this binding is a non-root guest data disk.
     #[must_use]
-    pub const fn attaches_shared_across_replicas(&self) -> bool {
-        self.kind.is_shared_across_replicas()
+    pub const fn is_data_volume(&self) -> bool {
+        self.kind.is_data_volume()
     }
     /// Validate lease-volume binding invariants.
     ///
     /// # Errors
     /// Returns [`SoracloudManifestError`] when the mount path is invalid.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        validate_sora_lease_volume_name_v1(&self.volume_name)?;
         validate_nonblank_field("sora lease volume binding", "mount_path", &self.mount_path)?;
         if !self.mount_path.starts_with('/') {
             return Err(invalid_field(
@@ -1340,12 +1350,29 @@ impl SoraLeaseVolumeBindingV1 {
                 "must not contain control characters",
             ));
         }
-        if self.kind == SoraLeaseVolumeKindV1::PersistentRootLeaseVolume && self.mount_path != "/" {
-            return Err(invalid_field(
-                "sora lease volume binding",
-                "mount_path",
-                "persistent Inrou root volumes must mount at `/`",
-            ));
+        match self.kind {
+            SoraLeaseVolumeKindV1::PersistentRootLeaseVolume => {
+                if self.mount_path != "/" {
+                    return Err(invalid_field(
+                        "sora lease volume binding",
+                        "mount_path",
+                        "persistent Inrou root volumes must mount at `/`",
+                    ));
+                }
+            }
+            SoraLeaseVolumeKindV1::ServiceLeaseVolume
+            | SoraLeaseVolumeKindV1::ConfidentialLeaseVolume => {
+                let expected = sora_inrou_data_volume_mount_path_v1(&self.volume_name)?;
+                if self.mount_path != expected {
+                    return Err(invalid_field(
+                        "sora lease volume binding",
+                        "mount_path",
+                        format!(
+                            "non-root Inrou lease volumes must mount at their exact canonical path `{expected}`"
+                        ),
+                    ));
+                }
+            }
         }
         Ok(())
     }
@@ -1363,7 +1390,7 @@ pub struct SoraHttpServiceEconomicsV1 {
     pub deployment_deposit: Quantity,
     /// Prepaid runtime balance used for fail-closed admission and routing.
     pub prepaid_runtime_balance: Quantity,
-    /// Lease duration, measured in consensus blocks.
+    /// Lease duration, measured in canonical block heights.
     pub lease_duration_blocks: NonZeroU64,
     /// Runtime charge applied per active block.
     pub runtime_price_per_block: Quantity,
@@ -1424,6 +1451,25 @@ impl SoraHttpServiceEconomicsV1 {
         Ok(())
     }
 }
+/// Clock domain used by every hosted-service economic lease field.
+///
+/// Keeping the domain in the encoded payload prevents pre-release audit-sequence
+/// layouts from being silently reinterpreted as canonical block heights.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(tag = "clock", content = "value"))]
+#[norito(deny_unknown_fields)]
+pub enum SoraServiceLeaseClockV1 {
+    /// Canonical committed block height.
+    ///
+    /// Wire index `4` is deliberate: the retired implicit-clock layout placed
+    /// [`SoraServiceLeaseStatusV1`] here, whose complete tag range is `0..=3`.
+    /// Keeping the domains disjoint makes every such binary payload fail
+    /// before any following field can be reinterpreted.
+    #[default]
+    #[codec(index = 4)]
+    CanonicalBlockHeight,
+}
 /// Authoritative hosted-service lease status projected by the control plane.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1433,7 +1479,7 @@ pub enum SoraServiceLeaseStatusV1 {
     /// Lease is active and the service may be routed/materialized.
     #[default]
     Active,
-    /// Lease expired at or before the observed consensus height.
+    /// Lease expired at or before the observed canonical block height.
     Expired,
     /// Prepaid runtime balance is exhausted.
     Exhausted,
@@ -1557,6 +1603,8 @@ pub struct SoraServiceLeaseReportingEpochRolloverV1 {
     /// Schema version; must equal
     /// [`SORA_SERVICE_LEASE_REPORTING_EPOCH_ROLLOVER_VERSION_V1`].
     pub schema_version: u16,
+    /// Explicit economic clock domain for the encoded lease incarnation.
+    pub economic_clock: SoraServiceLeaseClockV1,
     /// Immutable economic lease incarnation to which the rollover belongs.
     pub lease_started_height: u64,
     /// Epoch whose terminal counters were settled.
@@ -1569,6 +1617,8 @@ pub struct SoraServiceLeaseReportingEpochRolloverV1 {
     pub active_service_version: String,
     /// One-based replica slot assigned to the successor reporter.
     pub replica_slot: u16,
+    /// Exact host-assignment incarnation that opened the successor epoch.
+    pub placement_incarnation: Hash,
     /// Number of terminal prior-epoch checkpoints folded into settlement.
     pub finalized_checkpoint_count: u32,
     /// Exact prior-epoch bytes added to the settlement baseline.
@@ -1609,6 +1659,11 @@ impl SoraServiceLeaseReportingEpochRolloverV1 {
             "active_service_version",
             &self.active_service_version,
         )?;
+        validate_soracloud_digest_hash(
+            "sora service lease reporting epoch rollover",
+            "placement_incarnation",
+            self.placement_incarnation,
+        )?;
         if self.replica_slot == 0 {
             return Err(invalid_field(
                 "sora service lease reporting epoch rollover",
@@ -1646,10 +1701,14 @@ impl SoraServiceLeaseReportingEpochRolloverV1 {
 pub struct SoraServiceLeaseStateV1 {
     /// Schema version; must equal [`SORA_SERVICE_LEASE_STATE_VERSION_V1`].
     pub schema_version: u16,
+    /// Explicit clock domain for all lease start, expiry, and billing fields.
+    pub economic_clock: SoraServiceLeaseClockV1,
     /// Current fail-closed status.
     pub status: SoraServiceLeaseStatusV1,
     /// Scheduler/quota class assigned to the service.
     pub quota_class: String,
+    /// Replica count whose private lease disks are reserved and billed.
+    pub replica_count: NonZeroU16,
     /// Anti-spam deployment deposit locked for the service.
     pub deployment_deposit: Quantity,
     /// Prepaid runtime balance available to the service.
@@ -1660,9 +1719,9 @@ pub struct SoraServiceLeaseStateV1 {
     pub storage_price_per_gib_block: Quantity,
     /// Egress charge applied per MiB when usage is reported.
     pub egress_price_per_mib: Quantity,
-    /// Consensus block height when the lease became active.
+    /// Canonical block height when the lease became active.
     pub lease_started_height: u64,
-    /// Consensus block height at which the lease must fail closed.
+    /// Canonical block height at which the lease must fail closed.
     pub lease_expires_height: u64,
     /// Monotonic reporting epoch, independent of the economic lease clock.
     pub reporting_epoch: u64,
@@ -1716,6 +1775,15 @@ impl SoraServiceLeaseStateV1 {
             SORA_SERVICE_LEASE_STATE_VERSION_V1,
         )?;
         validate_nonblank_field("sora service lease state", "quota_class", &self.quota_class)?;
+        if self.replica_count.get() > SORA_HTTP_SERVICE_REPLICA_MAX_V1 {
+            return Err(invalid_field(
+                "sora service lease state",
+                "replica_count",
+                format!(
+                    "must not exceed the first-release limit of {SORA_HTTP_SERVICE_REPLICA_MAX_V1}"
+                ),
+            ));
+        }
         for (field, value) in [
             ("deployment_deposit", &self.deployment_deposit),
             ("runtime_price_per_block", &self.runtime_price_per_block),
@@ -1773,6 +1841,23 @@ impl SoraServiceLeaseStateV1 {
                 ));
             }
             checkpoint.assignment.validate()?;
+            let placement = &checkpoint.assignment.placement;
+            if placement.replica_slot > self.replica_count.get() {
+                return Err(invalid_field(
+                    "sora service lease state",
+                    "egress_reporter_checkpoints",
+                    "replica slots must be within the lease replica range",
+                ));
+            }
+            if placement.economic_clock != self.economic_clock
+                || placement.lease_started_height != self.lease_started_height
+            {
+                return Err(invalid_field(
+                    "sora service lease state",
+                    "egress_reporter_checkpoints",
+                    "reporter assignment must belong to the exact economic lease incarnation",
+                ));
+            }
             if checkpoint.last_updated_height == 0 {
                 return Err(invalid_field(
                     "sora service lease state",
@@ -1798,12 +1883,14 @@ impl SoraServiceLeaseStateV1 {
                     checkpoints[0].reporting_epoch,
                     checkpoints[0].assignment.service_version.as_str(),
                     checkpoints[0].assignment.placement.replica_slot,
+                    checkpoints[0].assignment.placement.placement_incarnation,
                     &checkpoints[0].assignment.placement.validator_account_id,
                 );
                 let right = (
                     checkpoints[1].reporting_epoch,
                     checkpoints[1].assignment.service_version.as_str(),
                     checkpoints[1].assignment.placement.replica_slot,
+                    checkpoints[1].assignment.placement.placement_incarnation,
                     &checkpoints[1].assignment.placement.validator_account_id,
                 );
                 left >= right
@@ -1812,7 +1899,7 @@ impl SoraServiceLeaseStateV1 {
             return Err(invalid_field(
                 "sora service lease state",
                 "egress_reporter_checkpoints",
-                "must be strictly sorted by reporting epoch, revision, slot, and validator",
+                "must be strictly sorted by reporting epoch, revision, slot, incarnation, and validator",
             ));
         }
         let recomputed_accounted_egress_bytes =
@@ -1832,14 +1919,14 @@ impl SoraServiceLeaseStateV1 {
         }
         Ok(())
     }
-    /// Estimated accounting blocks elapsed under the current lease.
+    /// Exact number of canonical blocks elapsed under the current lease.
     #[must_use]
     pub fn billed_blocks_at(&self, current_height: u64) -> u64 {
         current_height
             .min(self.lease_expires_height)
             .saturating_sub(self.lease_started_height)
     }
-    /// Estimated remaining nominal prepaid balance at the observed height.
+    /// Estimated remaining nominal prepaid balance at the observed block height.
     ///
     /// # Errors
     /// Returns a bounded-domain error if an exact accounting intermediate is unrepresentable.
@@ -1854,7 +1941,9 @@ impl SoraServiceLeaseStateV1 {
             .try_mul_decimal(&Numeric::from(billed_blocks))?;
         let storage_gib =
             u128::from(accounted_storage_bytes).div_ceil(u128::from(SORA_STORAGE_BYTES_PER_GIB));
-        let storage_units = u128::from(billed_blocks) * storage_gib;
+        let storage_units = u128::from(billed_blocks)
+            .checked_mul(storage_gib)
+            .ok_or(NumericOperationError::MantissaOverflow)?;
         let storage_cost = self
             .storage_price_per_gib_block
             .try_mul_decimal(&Numeric::new(storage_units, 0))?;
@@ -1872,7 +1961,7 @@ impl SoraServiceLeaseStateV1 {
             self.prepaid_runtime_balance.checked_sub(&total_cost)
         }
     }
-    /// Effective lease status at the observed height.
+    /// Effective lease status at the observed block height.
     ///
     /// # Errors
     /// Returns a bounded-domain accounting error.
@@ -1895,7 +1984,7 @@ impl SoraServiceLeaseStateV1 {
         }
         Ok(self.status)
     }
-    /// Returns `true` when the lease is still active at the observed height.
+    /// Returns `true` when the lease is still active at the observed block height.
     ///
     /// # Errors
     /// Returns a bounded-domain accounting error.
@@ -1922,6 +2011,8 @@ pub fn derive_soracloud_service_lease_commitment_v1(lease: &SoraServiceLeaseStat
 pub struct SoraServiceLeaseVolumeStateV1 {
     /// Schema version; must equal [`SORA_SERVICE_LEASE_VOLUME_STATE_VERSION_V1`].
     pub schema_version: u16,
+    /// Explicit clock domain for the volume's lease bounds.
+    pub economic_clock: SoraServiceLeaseClockV1,
     /// Logical volume identifier.
     pub volume_name: Name,
     /// Lease-backed volume kind.
@@ -1932,9 +2023,9 @@ pub struct SoraServiceLeaseVolumeStateV1 {
     pub mount_path: String,
     /// Maximum logical bytes retained for this volume.
     pub max_total_bytes: u64,
-    /// Consensus height when the binding lease became active.
+    /// Canonical block height when the binding lease became active.
     pub lease_started_height: u64,
-    /// Consensus height when the binding lease expires.
+    /// Canonical block height when the binding lease expires.
     pub lease_expires_height: u64,
     /// Monotonic platform-side generation for the authoritative binding.
     pub authoritative_generation: u64,
@@ -2111,8 +2202,6 @@ pub enum SoraServiceHandlerClassV1 {
     Query,
     /// Ordered replicated state mutation.
     Update,
-    /// Ordered replicated private/ciphertext/secret mutation.
-    PrivateUpdate,
 }
 /// Certification mode attached to local fast-path responses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
@@ -2243,13 +2332,7 @@ impl SoraServiceHandlerV1 {
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
         validate_nonblank_field("sora service handler", "entrypoint", &self.entrypoint)?;
         if let Some(route_path) = self.route_path.as_ref() {
-            if route_path.trim().is_empty() {
-                return Err(invalid_field(
-                    "sora service handler",
-                    "route_path",
-                    "must not be empty when provided",
-                ));
-            }
+            validate_nonblank_field("sora service handler", "route_path", route_path)?;
             if !route_path.starts_with('/') {
                 return Err(invalid_field(
                     "sora service handler",
@@ -2275,19 +2358,19 @@ impl SoraServiceHandlerV1 {
                     ));
                 }
             }
-            SoraServiceHandlerClassV1::Update | SoraServiceHandlerClassV1::PrivateUpdate => {
+            SoraServiceHandlerClassV1::Update => {
                 if self.certified_response != SoraCertifiedResponsePolicyV1::None {
                     return Err(invalid_field(
                         "sora service handler",
                         "certified_response",
-                        "update/private_update handlers must execute through the mailbox path",
+                        "update handlers must execute through the public replicated mailbox path",
                     ));
                 }
                 let Some(mailbox) = self.mailbox.as_ref() else {
                     return Err(invalid_field(
                         "sora service handler",
                         "mailbox",
-                        "update/private_update handlers require a mailbox contract",
+                        "update handlers require a mailbox contract",
                     ));
                 };
                 mailbox.validate()?;
@@ -2396,6 +2479,11 @@ impl SoraServiceManifestV1 {
     fn validate_route(&self) -> Result<(), SoracloudManifestError> {
         if let Some(route) = self.route.as_ref() {
             validate_nonblank_field("sora service manifest", "route.host", &route.host)?;
+            validate_nonblank_field(
+                "sora service manifest",
+                "route.path_prefix",
+                &route.path_prefix,
+            )?;
             if !route.path_prefix.starts_with('/') {
                 return Err(invalid_field(
                     "sora service manifest",
@@ -2407,6 +2495,20 @@ impl SoraServiceManifestV1 {
         Ok(())
     }
     fn validate_lease_volumes(&self) -> Result<(), SoracloudManifestError> {
+        let non_root_volume_count = self
+            .lease_volumes
+            .iter()
+            .filter(|volume| volume.kind != SoraLeaseVolumeKindV1::PersistentRootLeaseVolume)
+            .count();
+        if non_root_volume_count > SORA_INROU_DATA_VOLUME_MAX_COUNT_V1 {
+            return Err(invalid_field(
+                "sora service manifest",
+                "lease_volumes",
+                format!(
+                    "must declare at most {SORA_INROU_DATA_VOLUME_MAX_COUNT_V1} non-root Inrou volumes"
+                ),
+            ));
+        }
         let mut seen_lease_volumes = BTreeSet::new();
         for volume in &self.lease_volumes {
             volume.validate()?;
@@ -2502,11 +2604,17 @@ impl SoraServiceManifestV1 {
         Ok(())
     }
     fn minimum_hosted_runtime_prepaid(&self) -> Result<Quantity, NumericOperationError> {
-        let storage_bytes = self
-            .lease_volumes
-            .iter()
-            .map(|volume| u128::from(volume.max_total_bytes.get()))
-            .sum::<u128>();
+        let per_replica_storage_bytes =
+            self.lease_volumes
+                .iter()
+                .try_fold(0_u128, |total, volume| {
+                    total
+                        .checked_add(u128::from(volume.max_total_bytes.get()))
+                        .ok_or(NumericOperationError::MantissaOverflow)
+                })?;
+        let storage_bytes = per_replica_storage_bytes
+            .checked_mul(u128::from(self.replicas.get()))
+            .ok_or(NumericOperationError::MantissaOverflow)?;
         let storage_gib = if storage_bytes == 0 {
             0
         } else {
@@ -2620,8 +2728,12 @@ impl AgentApartmentManifestV1 {
         }
         let mut seen_tools = BTreeSet::new();
         for tool_capability in &self.tool_capabilities {
-            let tool = tool_capability.tool.trim();
-            validate_nonblank_field("agent apartment manifest", "tool_capabilities.tool", tool)?;
+            let tool = tool_capability.tool.as_str();
+            validate_nonempty_no_control(
+                "agent apartment manifest",
+                "tool_capabilities.tool",
+                tool,
+            )?;
             if !seen_tools.insert(tool.to_owned()) {
                 return Err(SoracloudManifestError::DuplicateToolCapability {
                     tool: tool.to_owned(),
@@ -2638,8 +2750,8 @@ impl AgentApartmentManifestV1 {
         }
         let mut seen_spend_assets = BTreeSet::new();
         for limit in &self.spend_limits {
-            let asset = limit.asset_definition.trim();
-            validate_nonblank_field(
+            let asset = limit.asset_definition.as_str();
+            validate_nonempty_no_control(
                 "agent apartment manifest",
                 "spend_limits.asset_definition",
                 asset,
@@ -2674,39 +2786,20 @@ impl AgentApartmentManifestV1 {
             }
             let mut seen_hosts = BTreeSet::new();
             for entry in entries {
-                let normalized = entry.host.trim();
-                if normalized.is_empty() {
-                    return Err(invalid_field(
-                        "agent apartment manifest",
-                        "network_egress",
-                        "allowlist host entries must be non-empty",
-                    ));
-                }
-                if normalized.chars().any(char::is_control)
-                    || normalized.chars().any(char::is_whitespace)
-                {
+                let host = entry.host.as_str();
+                validate_public_host("agent apartment manifest", "network_egress", host)?;
+                if !seen_hosts.insert(host) {
                     return Err(SoracloudManifestError::InvalidField {
                         manifest: "agent apartment manifest",
                         field: "network_egress",
-                        reason: format!(
-                            "allowlist host `{normalized}` contains invalid characters"
-                        ),
-                    });
-                }
-                if !seen_hosts.insert(normalized.to_ascii_lowercase()) {
-                    return Err(SoracloudManifestError::InvalidField {
-                        manifest: "agent apartment manifest",
-                        field: "network_egress",
-                        reason: format!("duplicate allowlist host `{normalized}`"),
+                        reason: format!("duplicate allowlist host `{host}`"),
                     });
                 }
                 if entry.ports.is_empty() {
                     return Err(SoracloudManifestError::InvalidField {
                         manifest: "agent apartment manifest",
                         field: "network_egress",
-                        reason: format!(
-                            "allowlist host `{normalized}` must include at least one port"
-                        ),
+                        reason: format!("allowlist host `{host}` must include at least one port"),
                     });
                 }
                 let mut seen_ports = BTreeSet::new();
@@ -2715,9 +2808,7 @@ impl AgentApartmentManifestV1 {
                         return Err(SoracloudManifestError::InvalidField {
                             manifest: "agent apartment manifest",
                             field: "network_egress",
-                            reason: format!(
-                                "allowlist host `{normalized}` contains invalid port `0`"
-                            ),
+                            reason: format!("allowlist host `{host}` contains invalid port `0`"),
                         });
                     }
                     if !seen_ports.insert(*port) {
@@ -2725,7 +2816,7 @@ impl AgentApartmentManifestV1 {
                             manifest: "agent apartment manifest",
                             field: "network_egress",
                             reason: format!(
-                                "allowlist host `{normalized}` contains duplicate port `{port}`"
+                                "allowlist host `{host}` contains duplicate port `{port}`"
                             ),
                         });
                     }

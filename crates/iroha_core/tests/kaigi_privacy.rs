@@ -112,11 +112,11 @@ fn build_roster_artifacts() -> RosterArtifacts {
         Hash::prehashed(compute_nullifier_bytes(account_idx, join_nullifier_seed));
     let join_commitment = KaigiParticipantCommitment {
         commitment: commitment_hash,
-        alias_tag: Some("participant".to_string()),
+        alias_tag: None,
     };
     let join_nullifier = KaigiParticipantNullifier {
         digest: join_nullifier_hash,
-        issued_at_ms: 1,
+        issued_at_ms: 0,
     };
     let initial_root = empty_roster_root_hash();
     let join_proof = build_roster_envelope(

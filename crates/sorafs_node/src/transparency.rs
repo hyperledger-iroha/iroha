@@ -5327,7 +5327,6 @@ mod tests {
         iroha_data_model::account::AccountId::parse_encoded(
             "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
         )
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .expect("account id")
     }
     #[derive(Clone, norito::derive::Encode)]

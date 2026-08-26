@@ -92,8 +92,6 @@ fn dispatch_server_operation_with_session(
         IrohaRuntimeProviderSlotV1::EvidenceViewerTransparencyPublisher.wire_id();
     let soracloud_runtime_signer_slot =
         IrohaRuntimeProviderSlotV1::SoracloudRuntimeMutationSigner.wire_id();
-    let soracloud_hf_credential_slot =
-        IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider.wire_id();
     let bootle_lantern_issuance_slot =
         IrohaRuntimeProviderSlotV1::BootleLanternIssuanceProviderRegistry.wire_id();
     let global_beacon_partial_signer_slot =
@@ -556,19 +554,6 @@ fn dispatch_server_operation_with_session(
                     policy_digest: qualification.policy_digest(),
                     active: qualification.active(),
                     test_only: qualification.test_only(),
-                },
-                MAX_OPERATION_FRAME_BYTES_V1,
-            )
-        }
-        (slot, OPERATION_QUALIFY_V1) if slot == soracloud_hf_credential_slot => {
-            let provider = qualified_soracloud_hf_credential_provider(state, &request.binding)?;
-            let qualification = provider
-                .qualification()
-                .map_err(|_| BrokerError::Unavailable)?;
-            encode_canonical(
-                &QualificationResultWireV1 {
-                    revision: qualification.revision(),
-                    policy_digest: qualification.policy_digest(),
                 },
                 MAX_OPERATION_FRAME_BYTES_V1,
             )
@@ -2761,39 +2746,6 @@ fn dispatch_server_operation_with_session(
                 .map_err(map_soracloud_runtime_signing_error)?;
             requalify().map_err(|_| BrokerError::Ambiguous)?;
             encode_canonical(&signature, MAX_NATIVE_TRANSACTION_FRAME_BYTES_V1)
-                .map_err(|_| BrokerError::Ambiguous)
-        }
-        (slot, OPERATION_SORACLOUD_HF_AUTHENTICATED_INFERENCE_V1)
-            if slot == soracloud_hf_credential_slot =>
-        {
-            let mut wire = decode_canonical::<SoracloudHfAuthenticatedInferenceRequestWireV1>(
-                &request.payload,
-                MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1,
-            )?;
-            let provider_request = crate::soracloud_hf_credential::
-                SoracloudHfAuthenticatedInferenceRequestV1::try_new(
-                    std::mem::take(&mut wire.repo_id),
-                    std::mem::take(&mut wire.resolved_revision),
-                    std::mem::take(&mut wire.url),
-                    std::mem::take(&mut wire.content_type),
-                    wire.accept.take(),
-                    std::mem::take(&mut wire.body),
-                    wire.maximum_response_bytes,
-                )
-                .map_err(|_| BrokerError::Rejected)?;
-            let provider = qualified_soracloud_hf_credential_provider(state, &request.binding)?;
-            let response = provider
-                .execute_authenticated(&provider_request)
-                .map_err(soracloud_hf_credential_operation_error)?;
-            let response_wire = SoracloudHfAuthenticatedInferenceResponseWireV1 {
-                served_repo_id: response.served_repo_id().to_owned(),
-                served_revision: response.served_revision().to_owned(),
-                status: response.status(),
-                content_type: response.content_type().map(ToOwned::to_owned),
-                content_encoding: response.content_encoding().map(ToOwned::to_owned),
-                body: response.into_body(),
-            };
-            encode_canonical(&response_wire, MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1)
                 .map_err(|_| BrokerError::Ambiguous)
         }
         (slot, OPERATION_SIGN_V1) if slot == governance_signer_slot => {

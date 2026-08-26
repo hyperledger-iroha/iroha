@@ -18,7 +18,12 @@ import org.hyperledger.iroha.android.alias.AliasPlanBodyNoritoEncoder;
 import org.hyperledger.iroha.android.alias.AliasTransactionPlanV1;
 import org.hyperledger.iroha.android.alias.AccountOnboardingPlanReceiptV1;
 import org.hyperledger.iroha.android.alias.AccountOnboardingPlanRequestV1;
-import org.hyperledger.iroha.android.alias.AccountOnboardingResponseV1;
+import org.hyperledger.iroha.android.alias.AccountOnboardingPrepareResponseV1;
+import org.hyperledger.iroha.android.alias.AccountOnboardingPreparedTransactionV1;
+import org.hyperledger.iroha.android.alias.AccountOnboardingProofRequiredPrepareResponseV1;
+import org.hyperledger.iroha.android.alias.AccountOnboardingCurrentStateV1;
+import org.hyperledger.iroha.android.alias.PreparedTransactionSubmitResponseV1;
+import org.hyperledger.iroha.android.alias.TairaPublicResetMutationBindingV1;
 import org.hyperledger.iroha.android.alias.AliasSetupModels;
 import org.hyperledger.iroha.android.SigningException;
 import org.hyperledger.iroha.android.crypto.Signer;
@@ -350,18 +355,6 @@ public interface IrohaClient {
     return future;
   }
 
-  /** Requests a stateless sponsored-onboarding receipt using a dedicated header token. */
-  default CompletableFuture<AccountOnboardingPlanReceiptV1> planSponsoredAccountOnboarding(
-      final AccountOnboardingPlanRequestV1 request,
-      final String onboardingToken,
-      final NetworkId expectedNetworkId) {
-    final CompletableFuture<AccountOnboardingPlanReceiptV1> future = new CompletableFuture<>();
-    future.completeExceptionally(
-        new IllegalStateException(
-            "planSponsoredAccountOnboarding requires a concrete IrohaClient implementation"));
-    return future;
-  }
-
   /** Requests a receipt and pins its signature to the configured onboarding authority. */
   default CompletableFuture<AccountOnboardingPlanReceiptV1> planSponsoredAccountOnboarding(
       final AccountOnboardingPlanRequestV1 request,
@@ -375,28 +368,43 @@ public interface IrohaClient {
     return future;
   }
 
-  /** Revalidates and applies a stateless sponsored-onboarding receipt. */
-  default CompletableFuture<AccountOnboardingResponseV1> applySponsoredAccountOnboarding(
+  /** Revalidates a receipt and returns an exact transaction or a nonterminal live-proof requirement. */
+  default CompletableFuture<AccountOnboardingPrepareResponseV1> prepareSponsoredAccountOnboarding(
+      final AccountOnboardingPlanRequestV1 request,
       final AccountOnboardingPlanReceiptV1 receipt,
-      final String onboardingToken,
-      final NetworkId expectedNetworkId) {
-    final CompletableFuture<AccountOnboardingResponseV1> future = new CompletableFuture<>();
-    future.completeExceptionally(
-        new IllegalStateException(
-            "applySponsoredAccountOnboarding requires a concrete IrohaClient implementation"));
-    return future;
-  }
-
-  /** Applies a receipt only when its signature matches the configured onboarding authority. */
-  default CompletableFuture<AccountOnboardingResponseV1> applySponsoredAccountOnboarding(
-      final AccountOnboardingPlanReceiptV1 receipt,
+      final TairaPublicResetMutationBindingV1 binding,
       final String onboardingToken,
       final String expectedAuthority,
       final NetworkId expectedNetworkId) {
-    final CompletableFuture<AccountOnboardingResponseV1> future = new CompletableFuture<>();
+    final CompletableFuture<AccountOnboardingPrepareResponseV1> future = new CompletableFuture<>();
     future.completeExceptionally(
         new IllegalStateException(
-            "pinned applySponsoredAccountOnboarding requires a concrete IrohaClient implementation"));
+            "pinned prepareSponsoredAccountOnboarding requires a concrete IrohaClient implementation"));
+    return future;
+  }
+
+  /** Reauthenticates ProofRequired and obtains one atomic committed account-and-alias state. */
+  CompletableFuture<AccountOnboardingCurrentStateV1>
+      verifyAccountOnboardingCurrentState(
+          final AccountOnboardingProofRequiredPrepareResponseV1 proofRequired,
+          final AccountOnboardingPlanRequestV1 request,
+          final AccountOnboardingPlanReceiptV1 receipt,
+          final TairaPublicResetMutationBindingV1 binding,
+          final String expectedAuthority,
+          final NetworkId expectedNetworkId,
+          final ToriiCanonicalRequestAuth canonicalAuth);
+
+  /** Submits only one already authenticated exact prepared onboarding envelope. */
+  default CompletableFuture<PreparedTransactionSubmitResponseV1> submitPreparedAccountOnboarding(
+      final AccountOnboardingPlanRequestV1 request,
+      final AccountOnboardingPreparedTransactionV1 prepared,
+      final String onboardingToken,
+      final String expectedAuthority,
+      final NetworkId expectedNetworkId) {
+    final CompletableFuture<PreparedTransactionSubmitResponseV1> future = new CompletableFuture<>();
+    future.completeExceptionally(
+        new IllegalStateException(
+            "pinned submitPreparedAccountOnboarding requires a concrete IrohaClient implementation"));
     return future;
   }
 

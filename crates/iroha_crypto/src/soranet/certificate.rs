@@ -10,7 +10,7 @@ use crate::soranet::handshake::HandshakeSuite;
 use blake3::Hasher as Blake3;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use sha2::{Digest as _, Sha256};
-use soranet_pq::{MlDsaSuite, MlKemSuite, sign_mldsa_from_os, verify_mldsa};
+use soranet_pq::{MlDsaSuite, sign_mldsa_from_os, verify_mldsa};
 use std::{
     convert::{TryFrom, TryInto},
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
@@ -39,11 +39,10 @@ pub const SRC_V2_MAX_ENDPOINT_TAGS: usize = 8;
 pub const SRC_V2_MAX_ENDPOINT_TAG_BYTES: usize = 64;
 /// Number of handshake suites defined by the v2 certificate schema.
 pub const SRC_V2_MAX_HANDSHAKE_SUITES: usize = 2;
-const SRC_V2_CERTIFICATE_FIELDS: u64 = 19;
+const SRC_V2_CERTIFICATE_FIELDS: u64 = 17;
 const SRC_V2_BUNDLE_FIELDS: u64 = 2;
 const SRC_V2_SIGNATURE_FIELDS: u64 = 2;
 const SRC_V2_ENDPOINT_FIELDS: u64 = 5;
-const SRC_V2_KEM_FIELDS: u64 = 5;
 /// `SRCv2` map field identifiers.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,14 +58,12 @@ enum Field {
     ReputationWeight = 8,
     Endpoints = 9,
     CapabilityFlags = 10,
-    KemPolicy = 11,
-    HandshakeSuites = 12,
-    PublishedAt = 13,
-    ValidAfter = 14,
-    ValidUntil = 15,
-    DirectoryHash = 16,
-    IssuerFingerprint = 17,
-    PqKemPublic = 18,
+    HandshakeSuites = 11,
+    PublishedAt = 12,
+    ValidAfter = 13,
+    ValidUntil = 14,
+    DirectoryHash = 15,
+    IssuerFingerprint = 16,
 }
 fn field_label(field: Field) -> &'static str {
     match field {
@@ -81,14 +78,12 @@ fn field_label(field: Field) -> &'static str {
         Field::ReputationWeight => "certificate.reputation_weight",
         Field::Endpoints => "certificate.endpoints",
         Field::CapabilityFlags => "certificate.capability_flags",
-        Field::KemPolicy => "certificate.kem_policy",
         Field::HandshakeSuites => "certificate.handshake_suites",
         Field::PublishedAt => "certificate.published_at",
         Field::ValidAfter => "certificate.valid_after",
         Field::ValidUntil => "certificate.valid_until",
         Field::DirectoryHash => "certificate.directory_hash",
         Field::IssuerFingerprint => "certificate.issuer_fingerprint",
-        Field::PqKemPublic => "certificate.pq_kem_public",
     }
 }
 /// `SRCv2` signature map field identifiers.
@@ -113,227 +108,8 @@ mod capability_bits {
     pub const NORITO_STREAM: u16 = 1 << 2;
     pub const KAIGI_BRIDGE: u16 = 1 << 3;
 }
-/// KEM rotation policy field identifiers.
-#[repr(u8)]
-enum KemField {
-    Mode = 0,
-    PreferredSuite = 1,
-    FallbackSuite = 2,
-    RotationIntervalHours = 3,
-    GracePeriodHours = 4,
-}
 /// Identifier for SRC schema version.
 pub const SRC_CERTIFICATE_VERSION: u8 = 2;
-/// Validation phases for SRC rollout.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CertificateValidationPhase {
-    /// Phase 1 — accept certificates that only contain an Ed25519 signature.
-    Phase1AllowSingle,
-    /// Phase 2 — prefer dual signatures but accept single signatures with a warning.
-    Phase2PreferDual,
-    /// Phase 3 — require both Ed25519 and ML-DSA-65 signatures.
-    Phase3RequireDual,
-}
-/// Rotation policy for ML-KEM keys advertised by the relay.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum KemRotationModeV1 {
-    /// Relay pins a single ML-KEM suite until the certificate is reissued.
-    Static = 0,
-    /// Relay stages the fallback suite and switches once directory consensus coordinates it.
-    Staged = 1,
-    /// Relay rotates ML-KEM material on a rolling schedule published in the directory.
-    Rolling = 2,
-}
-impl KemRotationModeV1 {
-    fn from_raw(raw: u64) -> Result<Self, CertificateError> {
-        match raw {
-            0 => Ok(Self::Static),
-            1 => Ok(Self::Staged),
-            2 => Ok(Self::Rolling),
-            other => Err(CertificateError::InvalidFieldValue {
-                field: "kem_policy.mode",
-                reason: format!("unsupported mode {other}"),
-            }),
-        }
-    }
-}
-/// Rotation policy structure embedded in the SRC.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct KemRotationPolicyV1 {
-    /// Rotation strategy for ML-KEM suites.
-    pub mode: KemRotationModeV1,
-    /// Preferred ML-KEM suite (`snnet.pqkem` identifier).
-    pub preferred_suite: u8,
-    /// Optional fallback suite advertised for staged upgrades.
-    pub fallback_suite: Option<u8>,
-    /// Rotation cadence in hours (0 for static policies).
-    pub rotation_interval_hours: u16,
-    /// Grace period in hours when switching suites.
-    pub grace_period_hours: u16,
-}
-impl KemRotationPolicyV1 {
-    fn encode(self, encoder: &mut CborEncoder) {
-        encoder.write_map_header(5);
-        encoder.write_unsigned(KemField::Mode as u64);
-        encoder.write_unsigned(self.mode as u64);
-        encoder.write_unsigned(KemField::PreferredSuite as u64);
-        encoder.write_unsigned(self.preferred_suite.into());
-        encoder.write_unsigned(KemField::FallbackSuite as u64);
-        match self.fallback_suite {
-            Some(value) => encoder.write_unsigned(value.into()),
-            None => encoder.write_null(),
-        }
-        encoder.write_unsigned(KemField::RotationIntervalHours as u64);
-        encoder.write_unsigned(self.rotation_interval_hours.into());
-        encoder.write_unsigned(KemField::GracePeriodHours as u64);
-        encoder.write_unsigned(self.grace_period_hours.into());
-    }
-    fn decode(decoder: &mut CborDecoder) -> Result<Self, CertificateError> {
-        let map_len = decoder.read_map_len()?;
-        validate_container_len(
-            map_len,
-            SRC_V2_KEM_FIELDS,
-            decoder.remaining_len(),
-            "kem_policy",
-        )?;
-        let mut mode = None;
-        let mut preferred_suite = None;
-        let mut fallback_suite = None;
-        let mut rotation_interval_hours = None;
-        let mut grace_period_hours = None;
-        for _ in 0..map_len {
-            let raw_key = decoder.read_unsigned()?;
-            let key: u8 = raw_key
-                .try_into()
-                .map_err(|_| CertificateError::InvalidFieldValue {
-                    field: "kem_policy",
-                    reason: format!("field key {raw_key} exceeds u8::MAX"),
-                })?;
-            match key {
-                x if x == KemField::Mode as u8 => {
-                    let raw = decoder.read_unsigned()?;
-                    set_decoded_once(
-                        &mut mode,
-                        KemRotationModeV1::from_raw(raw)?,
-                        "kem_policy.mode",
-                    )?;
-                }
-                x if x == KemField::PreferredSuite as u8 => {
-                    let raw = decoder.read_unsigned()?;
-                    let suite: u8 =
-                        raw.try_into()
-                            .map_err(|_| CertificateError::InvalidFieldValue {
-                                field: "kem_policy.preferred_suite",
-                                reason: format!("value {raw} exceeds u8::MAX"),
-                            })?;
-                    validate_kem_suite_id(suite, "kem_policy.preferred_suite")?;
-                    set_decoded_once(&mut preferred_suite, suite, "kem_policy.preferred_suite")?;
-                }
-                x if x == KemField::FallbackSuite as u8 => {
-                    let value = if decoder.peek_is_null()? {
-                        decoder.read_null()?;
-                        None
-                    } else {
-                        let raw = decoder.read_unsigned()?;
-                        let suite: u8 =
-                            raw.try_into()
-                                .map_err(|_| CertificateError::InvalidFieldValue {
-                                    field: "kem_policy.fallback_suite",
-                                    reason: format!("value {raw} exceeds u8::MAX"),
-                                })?;
-                        validate_kem_suite_id(suite, "kem_policy.fallback_suite")?;
-                        Some(suite)
-                    };
-                    set_decoded_once(&mut fallback_suite, value, "kem_policy.fallback_suite")?;
-                }
-                x if x == KemField::RotationIntervalHours as u8 => {
-                    set_decoded_once(
-                        &mut rotation_interval_hours,
-                        decoder.read_u16()?,
-                        "kem_policy.rotation_interval_hours",
-                    )?;
-                }
-                x if x == KemField::GracePeriodHours as u8 => {
-                    set_decoded_once(
-                        &mut grace_period_hours,
-                        decoder.read_u16()?,
-                        "kem_policy.grace_period_hours",
-                    )?;
-                }
-                other => {
-                    return Err(CertificateError::UnknownField {
-                        field: format!("kem_policy.{other}"),
-                    });
-                }
-            }
-        }
-        let policy = Self {
-            mode: mode.ok_or(CertificateError::MissingField {
-                field: "kem_policy.mode",
-            })?,
-            preferred_suite: preferred_suite.ok_or(CertificateError::MissingField {
-                field: "kem_policy.preferred_suite",
-            })?,
-            fallback_suite: fallback_suite.unwrap_or(None),
-            rotation_interval_hours: rotation_interval_hours.ok_or(
-                CertificateError::MissingField {
-                    field: "kem_policy.rotation_interval_hours",
-                },
-            )?,
-            grace_period_hours: grace_period_hours.ok_or(CertificateError::MissingField {
-                field: "kem_policy.grace_period_hours",
-            })?,
-        };
-        policy.validate_semantics()
-    }
-    fn validate_semantics(self) -> Result<Self, CertificateError> {
-        if self.fallback_suite == Some(self.preferred_suite) {
-            return Err(CertificateError::InvalidFieldValue {
-                field: "kem_policy.fallback_suite",
-                reason: "must differ from preferred suite".to_owned(),
-            });
-        }
-        match self.mode {
-            KemRotationModeV1::Static => {
-                if self.fallback_suite.is_some() {
-                    return Err(CertificateError::InvalidFieldValue {
-                        field: "kem_policy.fallback_suite",
-                        reason: "static policies must not advertise a fallback suite".to_owned(),
-                    });
-                }
-                if self.rotation_interval_hours != 0 {
-                    return Err(CertificateError::InvalidFieldValue {
-                        field: "kem_policy.rotation_interval_hours",
-                        reason: "static policies must use a zero rotation interval".to_owned(),
-                    });
-                }
-                if self.grace_period_hours != 0 {
-                    return Err(CertificateError::InvalidFieldValue {
-                        field: "kem_policy.grace_period_hours",
-                        reason: "static policies must use a zero grace period".to_owned(),
-                    });
-                }
-            }
-            KemRotationModeV1::Staged => {
-                if self.fallback_suite.is_none() {
-                    return Err(CertificateError::InvalidFieldValue {
-                        field: "kem_policy.fallback_suite",
-                        reason: "staged policies must advertise a fallback suite".to_owned(),
-                    });
-                }
-            }
-            KemRotationModeV1::Rolling => {
-                if self.rotation_interval_hours == 0 {
-                    return Err(CertificateError::InvalidFieldValue {
-                        field: "kem_policy.rotation_interval_hours",
-                        reason: "rolling policies must use a nonzero rotation interval".to_owned(),
-                    });
-                }
-            }
-        }
-        Ok(self)
-    }
-}
 /// Relay endpoint entry embedded in the SRC.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelayEndpointV2 {
@@ -571,6 +347,12 @@ pub fn validate_quic_multiaddr(addr: &str) -> Result<(), CertificateError> {
                     "IPv4 address is not canonical",
                 ));
             }
+            if !is_public_relay_ip(IpAddr::V4(parsed)) {
+                return Err(invalid_endpoint(
+                    "endpoint.quic_multiaddr",
+                    "IPv4 address is not globally routable",
+                ));
+            }
         }
         "ip6" => {
             let parsed = parts[2].parse::<Ipv6Addr>().map_err(|_| {
@@ -583,6 +365,12 @@ pub fn validate_quic_multiaddr(addr: &str) -> Result<(), CertificateError> {
                 return Err(invalid_endpoint(
                     "endpoint.quic_multiaddr",
                     "IPv6 address is not canonical",
+                ));
+            }
+            if !is_public_relay_ip(IpAddr::V6(parsed)) {
+                return Err(invalid_endpoint(
+                    "endpoint.quic_multiaddr",
+                    "IPv6 address is not globally routable",
                 ));
             }
         }
@@ -612,6 +400,52 @@ pub fn validate_quic_multiaddr(addr: &str) -> Result<(), CertificateError> {
         ));
     }
     Ok(())
+}
+/// Return whether an IP literal is suitable for a public SoraNet relay endpoint.
+///
+/// Loopback, private, link-local, shared, documentation, benchmarking,
+/// transition, multicast, unspecified, and otherwise reserved ranges are
+/// rejected. DNS consumers must apply this predicate to every answer before
+/// pinning one exact address for the connection.
+#[must_use]
+pub fn is_public_relay_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => {
+            let [first, second, third, _] = ip.octets();
+            !matches!(
+                (first, second, third),
+                (0, _, _)
+                    | (10, _, _)
+                    | (127, _, _)
+                    | (169, 254, _)
+                    | (192, 0, 0)
+                    | (192, 0, 2)
+                    | (192, 88, 99)
+                    | (192, 168, _)
+                    | (198, 18 | 19, _)
+                    | (198, 51, 100)
+                    | (203, 0, 113)
+                    | (224..=255, _, _)
+                    | (100, 64..=127, _)
+                    | (172, 16..=31, _)
+            )
+        }
+        IpAddr::V6(ip) => {
+            if let Some(mapped) = ip.to_ipv4_mapped() {
+                return is_public_relay_ip(IpAddr::V4(mapped));
+            }
+            let segments = ip.segments();
+            segments[0] & 0xe000 == 0x2000
+                && !ip.is_unspecified()
+                && !ip.is_loopback()
+                && !ip.is_multicast()
+                && segments[0] & 0xfe00 != 0xfc00
+                && segments[0] & 0xffc0 != 0xfe80
+                && segments[0] != 0x2002
+                && !(segments[0] == 0x2001 && (segments[1] <= 0x01ff || segments[1] == 0x0db8))
+                && !(segments[0] == 0x3fff && segments[1] & 0xf000 == 0)
+        }
+    }
 }
 /// Validate the canonical DNS name used for relay TLS authentication.
 ///
@@ -826,8 +660,6 @@ pub struct RelayCertificateV2 {
     pub endpoints: Vec<RelayEndpointV2>,
     /// Feature flags surfaced by the relay.
     pub capability_flags: RelayCapabilityFlagsV1,
-    /// ML-KEM rotation policy surfaced by the relay.
-    pub kem_policy: KemRotationPolicyV1,
     /// Supported handshake suites (preference order).
     pub handshake_suites: Vec<HandshakeSuite>,
     /// Publication timestamp (Unix seconds).
@@ -840,10 +672,19 @@ pub struct RelayCertificateV2 {
     pub directory_hash: [u8; 32],
     /// Issuer fingerprint (e.g. governance signer).
     pub issuer_fingerprint: [u8; 32],
-    /// ML-KEM public key advertised by the relay (Kyber-768).
-    pub pq_kem_public: Vec<u8>,
 }
 impl RelayCertificateV2 {
+    /// Return whether the authenticated suite list offers a post-quantum handshake.
+    #[must_use]
+    pub fn supports_pq_handshake(&self) -> bool {
+        self.handshake_suites.iter().any(|suite| {
+            matches!(
+                suite,
+                HandshakeSuite::Nk2Hybrid | HandshakeSuite::Nk3PqForwardSecure
+            )
+        })
+    }
+
     /// Serialize the certificate payload to canonical CBOR bytes.
     ///
     /// # Errors
@@ -860,18 +701,13 @@ impl RelayCertificateV2 {
             SRC_V2_MAX_HANDSHAKE_SUITES,
             "certificate.handshake_suites",
         )?;
-        validate_encoded_len(
+        validate_exact_len(
+            "certificate.identity_mldsa65",
             self.identity_mldsa65.len(),
             MlDsaSuite::MlDsa65.public_key_len(),
-            "certificate.identity_mldsa65",
-        )?;
-        validate_encoded_len(
-            self.pq_kem_public.len(),
-            MlKemSuite::MlKem1024.public_key_len(),
-            "certificate.pq_kem_public",
         )?;
         let mut encoder = CborEncoder::new();
-        encoder.write_map_header(19);
+        encoder.write_map_header(SRC_V2_CERTIFICATE_FIELDS);
         encoder.write_unsigned(Field::Version as u64);
         encoder.write_unsigned(SRC_CERTIFICATE_VERSION.into());
         encoder.write_unsigned(Field::RelayId as u64);
@@ -897,8 +733,6 @@ impl RelayCertificateV2 {
         }
         encoder.write_unsigned(Field::CapabilityFlags as u64);
         encoder.write_unsigned(self.capability_flags.to_bits().into());
-        encoder.write_unsigned(Field::KemPolicy as u64);
-        self.kem_policy.encode(&mut encoder);
         encoder.write_unsigned(Field::HandshakeSuites as u64);
         encoder.write_array_header(self.handshake_suites.len(), "certificate.handshake_suites")?;
         for suite in &self.handshake_suites {
@@ -914,16 +748,9 @@ impl RelayCertificateV2 {
         encoder.write_bytes(&self.directory_hash, "certificate.directory_hash")?;
         encoder.write_unsigned(Field::IssuerFingerprint as u64);
         encoder.write_bytes(&self.issuer_fingerprint, "certificate.issuer_fingerprint")?;
-        encoder.write_unsigned(Field::PqKemPublic as u64);
-        encoder.write_bytes(&self.pq_kem_public, "certificate.pq_kem_public")?;
         let bytes = encoder.finish();
         validate_encoded_len(bytes.len(), SRC_V2_MAX_CERTIFICATE_BYTES, "certificate")?;
         Ok(bytes)
-    }
-    /// Serialize the certificate payload to canonical CBOR bytes.
-    pub fn to_cbor(&self) -> Vec<u8> {
-        self.try_to_cbor()
-            .expect("SRCv2 generated certificate should encode")
     }
     /// Compute the BLAKE3 digest of the certificate payload.
     ///
@@ -934,11 +761,6 @@ impl RelayCertificateV2 {
         hasher.update(SRC_V2_DOMAIN);
         hasher.update(&self.try_to_cbor()?);
         Ok(hasher.finalize().into())
-    }
-    /// Compute the BLAKE3 digest of the certificate payload.
-    pub fn digest(&self) -> [u8; 32] {
-        self.try_digest()
-            .expect("SRCv2 generated certificate should encode")
     }
     /// Issue a signed certificate bundle using the provided identity keys.
     ///
@@ -967,7 +789,7 @@ impl RelayCertificateV2 {
             certificate: self,
             signatures: RelayCertificateSignaturesV2 {
                 ed25519: ed25519_signature.to_bytes(),
-                mldsa65: Some(mldsa_signature.as_bytes().to_vec()),
+                mldsa65: mldsa_signature.into_bytes(),
             },
         })
     }
@@ -978,12 +800,6 @@ impl RelayCertificateV2 {
         let seconds = self.valid_until.checked_sub(self.valid_after)?;
         let seconds = u64::try_from(seconds).ok()?;
         Some(Duration::from_secs(seconds))
-    }
-    /// Returns the length of the validity window.
-    ///
-    /// Invalid or unrepresentable ranges fail closed to `Duration::ZERO`.
-    pub fn validity_duration(&self) -> Duration {
-        self.checked_validity_duration().unwrap_or(Duration::ZERO)
     }
     /// Validate that the certificate is active at the supplied Unix second.
     ///
@@ -1003,26 +819,21 @@ impl RelayCertificateV2 {
 pub struct RelayCertificateSignaturesV2 {
     /// Ed25519 signature over the canonical certificate payload.
     pub ed25519: [u8; 64],
-    /// Optional ML-DSA-65 signature over the canonical payload.
-    pub mldsa65: Option<Vec<u8>>,
+    /// Mandatory ML-DSA-65 signature over the canonical payload.
+    pub mldsa65: Vec<u8>,
 }
 impl RelayCertificateSignaturesV2 {
     fn encode(&self, encoder: &mut CborEncoder) -> Result<(), CertificateError> {
-        if let Some(bytes) = &self.mldsa65 {
-            validate_encoded_len(
-                bytes.len(),
-                MlDsaSuite::MlDsa65.signature_len(),
-                "signatures.mldsa65",
-            )?;
-        }
+        validate_exact_len(
+            "signatures.mldsa65",
+            self.mldsa65.len(),
+            MlDsaSuite::MlDsa65.signature_len(),
+        )?;
         encoder.write_map_header(2);
         encoder.write_unsigned(SignatureField::Ed25519 as u64);
         encoder.write_bytes(&self.ed25519, "signatures.ed25519")?;
         encoder.write_unsigned(SignatureField::MlDsa65 as u64);
-        match &self.mldsa65 {
-            Some(bytes) => encoder.write_bytes(bytes, "signatures.mldsa65")?,
-            None => encoder.write_null(),
-        }
+        encoder.write_bytes(&self.mldsa65, "signatures.mldsa65")?;
         Ok(())
     }
     fn decode(decoder: &mut CborDecoder) -> Result<Self, CertificateError> {
@@ -1034,7 +845,7 @@ impl RelayCertificateSignaturesV2 {
             "signatures",
         )?;
         let mut ed25519: Option<[u8; 64]> = None;
-        let mut mldsa: Option<Option<Vec<u8>>> = None;
+        let mut mldsa: Option<Vec<u8>> = None;
         for _ in 0..map_len {
             let raw_key = decoder.read_unsigned()?;
             let key: u8 = raw_key
@@ -1058,23 +869,17 @@ impl RelayCertificateSignaturesV2 {
                     set_decoded_once(&mut ed25519, array, "signatures.ed25519")?;
                 }
                 x if x == SignatureField::MlDsa65 as u8 => {
-                    let value = if decoder.peek_is_null()? {
-                        decoder.read_null()?;
-                        None
-                    } else {
-                        let bytes = decoder.read_bytes_exact(
-                            MlDsaSuite::MlDsa65.signature_len(),
-                            "signatures.mldsa65",
-                        )?;
-                        validate_exact_len(
-                            "signatures.mldsa65",
-                            bytes.len(),
-                            MlDsaSuite::MlDsa65.signature_len(),
-                        )?;
-                        validate_decoded_signature_not_all_zero("signatures.mldsa65", &bytes)?;
-                        Some(bytes)
-                    };
-                    set_decoded_once(&mut mldsa, value, "signatures.mldsa65")?;
+                    let bytes = decoder.read_bytes_exact(
+                        MlDsaSuite::MlDsa65.signature_len(),
+                        "signatures.mldsa65",
+                    )?;
+                    validate_exact_len(
+                        "signatures.mldsa65",
+                        bytes.len(),
+                        MlDsaSuite::MlDsa65.signature_len(),
+                    )?;
+                    validate_decoded_signature_not_all_zero("signatures.mldsa65", &bytes)?;
+                    set_decoded_once(&mut mldsa, bytes, "signatures.mldsa65")?;
                 }
                 other => {
                     return Err(CertificateError::UnknownField {
@@ -1087,7 +892,9 @@ impl RelayCertificateSignaturesV2 {
             ed25519: ed25519.ok_or(CertificateError::MissingField {
                 field: "signatures.ed25519",
             })?,
-            mldsa65: mldsa.unwrap_or(None),
+            mldsa65: mldsa.ok_or(CertificateError::MissingField {
+                field: "signatures.mldsa65",
+            })?,
         })
     }
 }
@@ -1116,16 +923,11 @@ impl RelayCertificateBundleV2 {
         validate_encoded_len(bytes.len(), SRC_V2_MAX_BUNDLE_BYTES, "bundle")?;
         Ok(bytes)
     }
-    /// Serialize the bundle to CBOR.
-    pub fn to_cbor(&self) -> Vec<u8> {
-        self.try_to_cbor()
-            .expect("SRCv2 generated bundle should encode")
-    }
-    /// Deserialize a bundle from CBOR.
+    /// Deserialize a bundle from canonical `SRCv2` CBOR.
     ///
     /// # Errors
-    /// Returns an error when the CBOR payload is structurally invalid or references
-    /// unsupported certificate fields.
+    /// Returns an error when the payload is structurally invalid, references
+    /// unsupported certificate fields, or is not byte-for-byte canonical.
     pub fn from_cbor(bytes: &[u8]) -> Result<Self, CertificateError> {
         validate_encoded_len(bytes.len(), SRC_V2_MAX_BUNDLE_BYTES, "bundle")?;
         let mut decoder = CborDecoder::new(bytes);
@@ -1165,16 +967,22 @@ impl RelayCertificateBundleV2 {
             }
         }
         decoder.ensure_finished()?;
-        Ok(Self {
+        let bundle = Self {
             certificate: certificate.ok_or(CertificateError::MissingField {
                 field: "bundle.certificate",
             })?,
             signatures: signatures.ok_or(CertificateError::MissingField {
                 field: "bundle.signatures",
             })?,
-        })
+        };
+        if bundle.try_to_cbor()?.as_slice() != bytes {
+            return Err(CertificateError::InvalidCbor(
+                "non-canonical SRCv2 bundle encoding",
+            ));
+        }
+        Ok(bundle)
     }
-    /// Verify only the bundle signatures according to the supplied validation phase.
+    /// Verify both mandatory first-release bundle signatures.
     ///
     /// This method deliberately does not establish temporal validity. Trust
     /// boundaries accepting a certificate for use must call [`Self::verify_at`].
@@ -1186,7 +994,6 @@ impl RelayCertificateBundleV2 {
         &self,
         ed25519_public: &VerifyingKey,
         mldsa_public: &[u8],
-        phase: CertificateValidationPhase,
     ) -> Result<(), CertificateError> {
         let payload = self.certificate.try_to_cbor()?;
         parse_certificate_payload(&payload)?;
@@ -1203,27 +1010,18 @@ impl RelayCertificateBundleV2 {
             .map_err(|err| {
                 CertificateError::SignatureFailure(format!("Ed25519 verify failed: {err}"))
             })?;
-        match (&self.signatures.mldsa65, phase) {
-            (Some(bytes), _) => {
-                validate_mldsa_verify_material(mldsa_public, bytes)?;
-                let digest = compute_signing_digest(SRC_V2_MLDSA_DOMAIN, &payload);
-                verify_mldsa(MlDsaSuite::MlDsa65, mldsa_public, &[], &digest, bytes).map_err(
-                    |err| {
-                        CertificateError::SignatureFailure(format!("ML-DSA verify failed: {err}"))
-                    },
-                )?;
-            }
-            (
-                None,
-                CertificateValidationPhase::Phase1AllowSingle
-                | CertificateValidationPhase::Phase2PreferDual,
-            ) => {}
-            (None, CertificateValidationPhase::Phase3RequireDual) => {
-                return Err(CertificateError::MissingMldsaSignature {
-                    phase: "Phase3RequireDual",
-                });
-            }
-        }
+        validate_mldsa_verify_material(mldsa_public, &self.signatures.mldsa65)?;
+        let digest = compute_signing_digest(SRC_V2_MLDSA_DOMAIN, &payload);
+        verify_mldsa(
+            MlDsaSuite::MlDsa65,
+            mldsa_public,
+            &[],
+            &digest,
+            &self.signatures.mldsa65,
+        )
+        .map_err(|err| {
+            CertificateError::SignatureFailure(format!("ML-DSA verify failed: {err}"))
+        })?;
         Ok(())
     }
     /// Verify the bundle signatures and its validity at an explicit Unix second.
@@ -1235,11 +1033,10 @@ impl RelayCertificateBundleV2 {
         &self,
         ed25519_public: &VerifyingKey,
         mldsa_public: &[u8],
-        phase: CertificateValidationPhase,
         at_unix: i64,
     ) -> Result<(), CertificateError> {
         self.certificate.validate_at(at_unix)?;
-        self.verify_signatures(ed25519_public, mldsa_public, phase)
+        self.verify_signatures(ed25519_public, mldsa_public)
     }
 }
 fn validate_mldsa_verify_material(
@@ -1272,14 +1069,12 @@ struct CertificateFieldAccumulator {
     reputation_weight: Option<u32>,
     endpoints: Option<Vec<RelayEndpointV2>>,
     capability_flags: Option<RelayCapabilityFlagsV1>,
-    kem_policy: Option<KemRotationPolicyV1>,
     handshake_suites: Option<Vec<HandshakeSuite>>,
     published_at: Option<i64>,
     valid_after: Option<i64>,
     valid_until: Option<i64>,
     directory_hash: Option<[u8; 32]>,
     issuer_fingerprint: Option<[u8; 32]>,
-    pq_kem_public: Option<Vec<u8>>,
 }
 impl CertificateFieldAccumulator {
     fn set_once<T>(slot: &mut Option<T>, value: T, field: Field) -> Result<(), CertificateError> {
@@ -1363,13 +1158,6 @@ impl CertificateFieldAccumulator {
                     field,
                 )?;
             }
-            Field::KemPolicy => {
-                Self::set_once(
-                    &mut self.kem_policy,
-                    KemRotationPolicyV1::decode(decoder)?,
-                    field,
-                )?;
-            }
             Field::HandshakeSuites => {
                 Self::set_once(
                     &mut self.handshake_suites,
@@ -1392,16 +1180,6 @@ impl CertificateFieldAccumulator {
             Field::IssuerFingerprint => {
                 Self::set_once(&mut self.issuer_fingerprint, decoder.read_array32()?, field)?;
             }
-            Field::PqKemPublic => {
-                Self::set_once(
-                    &mut self.pq_kem_public,
-                    decoder.read_bytes_bounded(
-                        MlKemSuite::MlKem1024.public_key_len(),
-                        field_label(field),
-                    )?,
-                    field,
-                )?;
-            }
         }
         Ok(())
     }
@@ -1422,8 +1200,8 @@ impl CertificateFieldAccumulator {
         let reputation_weight =
             require_field(self.reputation_weight, "certificate.reputation_weight")?;
         let endpoints = require_field(self.endpoints, "certificate.endpoints")?;
-        let capability_flags = self.capability_flags.unwrap_or_default();
-        let kem_policy = require_field(self.kem_policy, "certificate.kem_policy")?;
+        let capability_flags =
+            require_field(self.capability_flags, "certificate.capability_flags")?;
         let handshake_suites =
             require_field(self.handshake_suites, "certificate.handshake_suites")?;
         let published_at = require_field(self.published_at, "certificate.published_at")?;
@@ -1432,7 +1210,6 @@ impl CertificateFieldAccumulator {
         let directory_hash = require_field(self.directory_hash, "certificate.directory_hash")?;
         let issuer_fingerprint =
             require_field(self.issuer_fingerprint, "certificate.issuer_fingerprint")?;
-        let pq_kem_public = require_field(self.pq_kem_public, "certificate.pq_kem_public")?;
         validate_exact_len(
             "certificate.identity_mldsa65",
             identity_mldsa65.len(),
@@ -1449,24 +1226,6 @@ impl CertificateFieldAccumulator {
                 reason: "must equal the raw Ed25519 identity public key".to_owned(),
             });
         }
-        let preferred_suite =
-            MlKemSuite::from_kem_id(kem_policy.preferred_suite).ok_or_else(|| {
-                CertificateError::InvalidFieldValue {
-                    field: "certificate.kem_policy.preferred_suite",
-                    reason: format!("unsupported suite {}", kem_policy.preferred_suite),
-                }
-            })?;
-        validate_exact_len(
-            "certificate.pq_kem_public",
-            pq_kem_public.len(),
-            preferred_suite.public_key_len(),
-        )?;
-        preferred_suite
-            .validate_public_key(&pq_kem_public)
-            .map_err(|err| CertificateError::InvalidFieldValue {
-                field: "certificate.pq_kem_public",
-                reason: format!("invalid ML-KEM public key: {err}"),
-            })?;
         validate_certificate_time_bounds(published_at, valid_after, valid_until)?;
         Ok(RelayCertificateV2 {
             relay_id,
@@ -1479,25 +1238,14 @@ impl CertificateFieldAccumulator {
             reputation_weight,
             endpoints,
             capability_flags,
-            kem_policy,
             handshake_suites,
             published_at,
             valid_after,
             valid_until,
             directory_hash,
             issuer_fingerprint,
-            pq_kem_public,
         })
     }
-}
-fn validate_kem_suite_id(suite: u8, field: &'static str) -> Result<(), CertificateError> {
-    if MlKemSuite::from_kem_id(suite).is_none() {
-        return Err(CertificateError::InvalidFieldValue {
-            field,
-            reason: format!("unsupported suite {suite}"),
-        });
-    }
-    Ok(())
 }
 fn validate_exact_len(
     field: &'static str,
@@ -1617,14 +1365,12 @@ fn read_certificate_field_key(decoder: &mut CborDecoder<'_>) -> Result<Field, Ce
         x if x == Field::ReputationWeight as u8 => Ok(Field::ReputationWeight),
         x if x == Field::Endpoints as u8 => Ok(Field::Endpoints),
         x if x == Field::CapabilityFlags as u8 => Ok(Field::CapabilityFlags),
-        x if x == Field::KemPolicy as u8 => Ok(Field::KemPolicy),
         x if x == Field::HandshakeSuites as u8 => Ok(Field::HandshakeSuites),
         x if x == Field::PublishedAt as u8 => Ok(Field::PublishedAt),
         x if x == Field::ValidAfter as u8 => Ok(Field::ValidAfter),
         x if x == Field::ValidUntil as u8 => Ok(Field::ValidUntil),
         x if x == Field::DirectoryHash as u8 => Ok(Field::DirectoryHash),
         x if x == Field::IssuerFingerprint as u8 => Ok(Field::IssuerFingerprint),
-        x if x == Field::PqKemPublic as u8 => Ok(Field::PqKemPublic),
         other => Err(CertificateError::UnknownField {
             field: format!("certificate.{other}"),
         }),
@@ -1755,7 +1501,13 @@ fn parse_certificate_payload(bytes: &[u8]) -> Result<RelayCertificateV2, Certifi
     )?;
     let fields = CertificateFieldAccumulator::default().decode(&mut decoder, map_len)?;
     decoder.ensure_finished()?;
-    fields.into_certificate()
+    let certificate = fields.into_certificate()?;
+    if certificate.try_to_cbor()?.as_slice() != bytes {
+        return Err(CertificateError::InvalidCbor(
+            "non-canonical SRCv2 certificate encoding",
+        ));
+    }
+    Ok(certificate)
 }
 fn compute_signing_digest(domain: &[u8], payload: &[u8]) -> [u8; 32] {
     let mut hasher = Blake3::new();
@@ -1940,12 +1692,6 @@ pub enum CertificateError {
     /// Signature verification or creation failed.
     #[error("{0}")]
     SignatureFailure(String),
-    /// The validation phase required a ML-DSA signature that was absent.
-    #[error("ML-DSA signature missing ({phase})")]
-    MissingMldsaSignature {
-        /// Handshake phase for which the ML-DSA signature was expected.
-        phase: &'static str,
-    },
 }
 fn bounded_array_capacity(
     len: u64,
@@ -2098,9 +1844,6 @@ impl CborEncoder {
     }
     fn write_map_header(&mut self, len: u64) {
         encode_major(&mut self.buffer, 5, len);
-    }
-    fn write_null(&mut self) {
-        self.buffer.push(0xf6);
     }
 }
 fn encode_major(buf: &mut Vec<u8>, major: u8, value: u64) {
@@ -2294,20 +2037,6 @@ impl<'a> CborDecoder<'a> {
                 reason: "expected 32 bytes".to_owned(),
             })
     }
-    fn peek_is_null(&self) -> Result<bool, CertificateError> {
-        let byte = self
-            .data
-            .get(self.pos)
-            .ok_or(CertificateError::InvalidCbor("unexpected end of input"))?;
-        Ok(*byte == 0xf6)
-    }
-    fn read_null(&mut self) -> Result<(), CertificateError> {
-        if !self.peek_is_null()? {
-            return Err(CertificateError::InvalidCbor("expected null"));
-        }
-        self.pos += 1;
-        Ok(())
-    }
     fn read_major(&mut self) -> Result<(u8, u64), CertificateError> {
         let byte = self.read_u8()?;
         let major = byte >> 5;
@@ -2394,7 +2123,7 @@ mod tests {
     use super::*;
     use ed25519_dalek::{SECRET_KEY_LENGTH, SigningKey};
     use rand::{RngCore, SeedableRng, rngs::StdRng};
-    use soranet_pq::{MlDsaSuite, MlKemSuite, generate_mldsa_keypair_from_os};
+    use soranet_pq::{MlDsaSuite, generate_mldsa_keypair_from_os};
     const ED25519_SMALL_ORDER_POINT: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
@@ -2434,13 +2163,6 @@ mod tests {
                 CapabilityToggle::Enabled,
                 CapabilityToggle::Disabled,
             ),
-            kem_policy: KemRotationPolicyV1 {
-                mode: KemRotationModeV1::Static,
-                preferred_suite: 1,
-                fallback_suite: None,
-                rotation_interval_hours: 0,
-                grace_period_hours: 0,
-            },
             handshake_suites: vec![
                 HandshakeSuite::Nk3PqForwardSecure,
                 HandshakeSuite::Nk2Hybrid,
@@ -2450,12 +2172,129 @@ mod tests {
             valid_until: 1_734_086_400,
             directory_hash: [0x55; 32],
             issuer_fingerprint: [0x66; 32],
-            pq_kem_public: vec![0x77; MlKemSuite::MlKem768.public_key_len()],
         }
     }
-    fn set_first_mlkem_12_bit_coefficient_noncanonical(bytes: &mut [u8]) {
-        bytes[0] = 0xFF;
-        bytes[1] = (bytes[1] & 0xF0) | 0x0F;
+    fn sample_bundle() -> RelayCertificateBundleV2 {
+        RelayCertificateBundleV2 {
+            certificate: sample_certificate(),
+            signatures: RelayCertificateSignaturesV2 {
+                ed25519: [0xA5; 64],
+                mldsa65: vec![0x5A; MlDsaSuite::MlDsa65.signature_len()],
+            },
+        }
+    }
+    fn certificate_with_first_two_fields_reversed() -> Vec<u8> {
+        let canonical = sample_certificate()
+            .try_to_cbor()
+            .expect("sample certificate should encode");
+        let mut decoder = CborDecoder::new(&canonical);
+        assert_eq!(
+            decoder.read_map_len().expect("certificate map header"),
+            SRC_V2_CERTIFICATE_FIELDS
+        );
+        let map_header_end = decoder.pos;
+
+        let first_start = decoder.pos;
+        assert_eq!(
+            decoder.read_unsigned().expect("version key"),
+            Field::Version as u64
+        );
+        assert_eq!(
+            decoder.read_unsigned().expect("version value"),
+            u64::from(SRC_CERTIFICATE_VERSION)
+        );
+        let first_end = decoder.pos;
+
+        let second_start = decoder.pos;
+        assert_eq!(
+            decoder.read_unsigned().expect("relay id key"),
+            Field::RelayId as u64
+        );
+        decoder
+            .read_bytes_exact(32, "certificate.relay_id")
+            .expect("relay id value");
+        let second_end = decoder.pos;
+
+        let mut reordered = Vec::with_capacity(canonical.len());
+        reordered.extend_from_slice(&canonical[..map_header_end]);
+        reordered.extend_from_slice(&canonical[second_start..second_end]);
+        reordered.extend_from_slice(&canonical[first_start..first_end]);
+        reordered.extend_from_slice(&canonical[second_end..]);
+        reordered
+    }
+    fn certificate_with_first_two_endpoint_fields_reversed() -> Vec<u8> {
+        let canonical = sample_certificate()
+            .try_to_cbor()
+            .expect("sample certificate should encode");
+        let mut certificate_decoder = CborDecoder::new(&canonical);
+        let map_len = certificate_decoder
+            .read_map_len()
+            .expect("certificate map header");
+        let mut accumulator = CertificateFieldAccumulator::default();
+        let mut endpoint_span = None;
+        for _ in 0..map_len {
+            let field = read_certificate_field_key(&mut certificate_decoder)
+                .expect("canonical certificate field key");
+            if field == Field::Endpoints {
+                assert_eq!(
+                    certificate_decoder
+                        .read_array_len()
+                        .expect("endpoint array header"),
+                    1
+                );
+                let start = certificate_decoder.pos;
+                RelayEndpointV2::decode(&mut certificate_decoder)
+                    .expect("canonical endpoint must decode");
+                endpoint_span = Some((start, certificate_decoder.pos));
+                break;
+            }
+            accumulator
+                .decode_field(&mut certificate_decoder, field)
+                .expect("canonical certificate field must decode");
+        }
+        let (endpoint_start, endpoint_end) = endpoint_span.expect("certificate endpoint span");
+        let canonical_endpoint = &canonical[endpoint_start..endpoint_end];
+        let mut endpoint_decoder = CborDecoder::new(canonical_endpoint);
+        assert_eq!(
+            endpoint_decoder
+                .read_map_len()
+                .expect("endpoint map header"),
+            SRC_V2_ENDPOINT_FIELDS
+        );
+        let map_header_end = endpoint_decoder.pos;
+
+        let first_start = endpoint_decoder.pos;
+        assert_eq!(
+            endpoint_decoder.read_unsigned().expect("multiaddr key"),
+            EndpointField::QuicMultiaddr as u64
+        );
+        endpoint_decoder
+            .read_text_bounded(
+                SRC_V2_MAX_ENDPOINT_MULTIADDR_BYTES,
+                "endpoint.quic_multiaddr",
+            )
+            .expect("multiaddr value");
+        let first_end = endpoint_decoder.pos;
+
+        let second_start = endpoint_decoder.pos;
+        assert_eq!(
+            endpoint_decoder.read_unsigned().expect("priority key"),
+            EndpointField::Priority as u64
+        );
+        endpoint_decoder.read_unsigned().expect("priority value");
+        let second_end = endpoint_decoder.pos;
+
+        let mut reordered_endpoint = Vec::with_capacity(canonical_endpoint.len());
+        reordered_endpoint.extend_from_slice(&canonical_endpoint[..map_header_end]);
+        reordered_endpoint.extend_from_slice(&canonical_endpoint[second_start..second_end]);
+        reordered_endpoint.extend_from_slice(&canonical_endpoint[first_start..first_end]);
+        reordered_endpoint.extend_from_slice(&canonical_endpoint[second_end..]);
+
+        let mut reordered = Vec::with_capacity(canonical.len());
+        reordered.extend_from_slice(&canonical[..endpoint_start]);
+        reordered.extend_from_slice(&reordered_endpoint);
+        reordered.extend_from_slice(&canonical[endpoint_end..]);
+        reordered
     }
     #[test]
     fn cbor_decoder_reads_byte_text_and_exact_slices() {
@@ -2519,7 +2358,7 @@ mod tests {
         assert_eq!(decoder.pos, usize::MAX);
     }
     #[test]
-    fn validity_duration_handles_invalid_and_extreme_windows() {
+    fn checked_validity_duration_handles_invalid_and_extreme_windows() {
         let mut certificate = sample_certificate();
         certificate.valid_after = 10;
         certificate.valid_until = 15;
@@ -2527,15 +2366,12 @@ mod tests {
             certificate.checked_validity_duration(),
             Some(Duration::from_secs(5))
         );
-        assert_eq!(certificate.validity_duration(), Duration::from_secs(5));
         certificate.valid_after = 15;
         certificate.valid_until = 10;
         assert_eq!(certificate.checked_validity_duration(), None);
-        assert_eq!(certificate.validity_duration(), Duration::ZERO);
         certificate.valid_after = i64::MIN;
         certificate.valid_until = i64::MAX;
         assert_eq!(certificate.checked_validity_duration(), None);
-        assert_eq!(certificate.validity_duration(), Duration::ZERO);
     }
     #[test]
     fn certificate_validity_is_half_open_and_explicit() {
@@ -2567,6 +2403,13 @@ mod tests {
         assert!(flags.supports_norito_stream());
         assert!(!flags.supports_kaigi_bridge());
         assert_eq!(flags, RelayCapabilityFlagsV1::from_bits(flags.to_bits()));
+    }
+    #[test]
+    fn pq_capability_is_derived_only_from_handshake_suites() {
+        let mut certificate = sample_certificate();
+        assert!(certificate.supports_pq_handshake());
+        certificate.handshake_suites.clear();
+        assert!(!certificate.supports_pq_handshake());
     }
     #[test]
     fn bounded_array_capacity_rejects_schema_and_input_overclaims() {
@@ -2673,32 +2516,106 @@ mod tests {
         }
     }
     #[test]
-    fn checked_cbor_serialization_matches_compatibility_wrappers() {
-        let certificate = sample_certificate();
-        let checked_certificate = certificate
-            .try_to_cbor()
-            .expect("sample certificate should encode");
-        assert_eq!(checked_certificate, certificate.to_cbor());
-        assert_eq!(
-            certificate.try_digest().expect("sample digest"),
-            certificate.digest()
-        );
-        let bundle = RelayCertificateBundleV2 {
-            certificate,
-            signatures: RelayCertificateSignaturesV2 {
-                ed25519: [0xA5; 64],
-                mldsa65: Some(vec![0x5A; MlDsaSuite::MlDsa65.signature_len()]),
-            },
-        };
-        let checked_bundle = bundle.try_to_cbor().expect("sample bundle should encode");
-        assert_eq!(checked_bundle, bundle.to_cbor());
-    }
-    #[test]
     fn encode_decode_roundtrip() {
         let certificate = sample_certificate();
-        let bytes = certificate.to_cbor();
+        let bytes = certificate
+            .try_to_cbor()
+            .expect("sample certificate should encode");
         let decoded = parse_certificate_payload(&bytes).expect("decode");
         assert_eq!(certificate, decoded);
+    }
+    #[test]
+    fn parse_certificate_payload_rejects_noncanonical_certificate_map_order() {
+        let reordered = certificate_with_first_two_fields_reversed();
+        assert_ne!(
+            reordered,
+            sample_certificate()
+                .try_to_cbor()
+                .expect("sample certificate should encode")
+        );
+        let error = parse_certificate_payload(&reordered)
+            .expect_err("permuted certificate fields must not decode");
+        assert!(matches!(
+            error,
+            CertificateError::InvalidCbor("non-canonical SRCv2 certificate encoding")
+        ));
+    }
+    #[test]
+    fn bundle_from_cbor_rejects_noncanonical_bundle_map_order() {
+        let bundle = sample_bundle();
+        let certificate = bundle
+            .certificate
+            .try_to_cbor()
+            .expect("sample certificate should encode");
+        let mut encoder = CborEncoder::new();
+        encoder.write_map_header(SRC_V2_BUNDLE_FIELDS);
+        encoder.write_unsigned(1);
+        bundle
+            .signatures
+            .encode(&mut encoder)
+            .expect("test signatures encode");
+        encoder.write_unsigned(0);
+        encoder
+            .write_bytes(&certificate, "bundle.certificate")
+            .expect("test certificate encodes");
+        let error = RelayCertificateBundleV2::from_cbor(&encoder.finish())
+            .expect_err("permuted bundle fields must not decode");
+        assert!(matches!(
+            error,
+            CertificateError::InvalidCbor("non-canonical SRCv2 bundle encoding")
+        ));
+    }
+    #[test]
+    fn bundle_from_cbor_rejects_noncanonical_signature_map_order() {
+        let bundle = sample_bundle();
+        let certificate = bundle
+            .certificate
+            .try_to_cbor()
+            .expect("sample certificate should encode");
+        let mut encoder = CborEncoder::new();
+        encoder.write_map_header(SRC_V2_BUNDLE_FIELDS);
+        encoder.write_unsigned(0);
+        encoder
+            .write_bytes(&certificate, "bundle.certificate")
+            .expect("test certificate encodes");
+        encoder.write_unsigned(1);
+        encoder.write_map_header(SRC_V2_SIGNATURE_FIELDS);
+        encoder.write_unsigned(SignatureField::MlDsa65 as u64);
+        encoder
+            .write_bytes(&bundle.signatures.mldsa65, "signatures.mldsa65")
+            .expect("test ML-DSA signature encodes");
+        encoder.write_unsigned(SignatureField::Ed25519 as u64);
+        encoder
+            .write_bytes(&bundle.signatures.ed25519, "signatures.ed25519")
+            .expect("test Ed25519 signature encodes");
+        let error = RelayCertificateBundleV2::from_cbor(&encoder.finish())
+            .expect_err("permuted signature fields must not decode");
+        assert!(matches!(
+            error,
+            CertificateError::InvalidCbor("non-canonical SRCv2 bundle encoding")
+        ));
+    }
+    #[test]
+    fn bundle_from_cbor_rejects_noncanonical_endpoint_map_order() {
+        let bundle = sample_bundle();
+        let certificate = certificate_with_first_two_endpoint_fields_reversed();
+        let mut encoder = CborEncoder::new();
+        encoder.write_map_header(SRC_V2_BUNDLE_FIELDS);
+        encoder.write_unsigned(0);
+        encoder
+            .write_bytes(&certificate, "bundle.certificate")
+            .expect("test certificate encodes");
+        encoder.write_unsigned(1);
+        bundle
+            .signatures
+            .encode(&mut encoder)
+            .expect("test signatures encode");
+        let error = RelayCertificateBundleV2::from_cbor(&encoder.finish())
+            .expect_err("permuted endpoint fields must not decode");
+        assert!(matches!(
+            error,
+            CertificateError::InvalidCbor("non-canonical SRCv2 certificate encoding")
+        ));
     }
     #[test]
     fn parse_certificate_payload_rejects_wrong_version() {
@@ -2748,6 +2665,36 @@ mod tests {
         }
     }
     #[test]
+    fn parse_certificate_payload_rejects_retired_static_kem_fields() {
+        let mut encoder = CborEncoder::new();
+        encoder.write_map_header(2);
+        encoder.write_unsigned(Field::Version as u64);
+        encoder.write_unsigned(SRC_CERTIFICATE_VERSION.into());
+        encoder.write_unsigned(11);
+        encoder.write_map_header(0);
+        let err = parse_certificate_payload(&encoder.finish())
+            .expect_err("the retired KEM policy map must not decode as a suite list");
+        assert!(matches!(
+            err,
+            CertificateError::InvalidCbor("expected array major type")
+        ));
+
+        let mut encoder = CborEncoder::new();
+        encoder.write_map_header(2);
+        encoder.write_unsigned(Field::Version as u64);
+        encoder.write_unsigned(SRC_CERTIFICATE_VERSION.into());
+        encoder.write_unsigned(18);
+        encoder
+            .write_bytes(&[0xA5], "retired.pq_kem_public")
+            .expect("test field encodes");
+        let err = parse_certificate_payload(&encoder.finish())
+            .expect_err("the retired static relay KEM key must be rejected");
+        assert!(matches!(
+            err,
+            CertificateError::UnknownField { field } if field == "certificate.18"
+        ));
+    }
+    #[test]
     fn parse_certificate_payload_rejects_unknown_role_and_capability_bits() {
         let mut encoder = CborEncoder::new();
         encoder.write_map_header(2);
@@ -2780,22 +2727,6 @@ mod tests {
     }
     #[test]
     fn nested_decoders_reject_duplicate_fields() {
-        let mut encoder = CborEncoder::new();
-        encoder.write_map_header(2);
-        encoder.write_unsigned(KemField::Mode as u64);
-        encoder.write_unsigned(KemRotationModeV1::Static as u64);
-        encoder.write_unsigned(KemField::Mode as u64);
-        encoder.write_unsigned(KemRotationModeV1::Rolling as u64);
-        let bytes = encoder.finish();
-        let mut decoder = CborDecoder::new(&bytes);
-        let err = KemRotationPolicyV1::decode(&mut decoder)
-            .expect_err("duplicate KEM policy fields must fail");
-        match err {
-            CertificateError::DuplicateField { field } => {
-                assert_eq!(field, "kem_policy.mode");
-            }
-            other => panic!("unexpected error: {other:?}"),
-        }
         let mut encoder = CborEncoder::new();
         encoder.write_map_header(2);
         encoder.write_unsigned(EndpointField::QuicMultiaddr as u64);
@@ -2839,7 +2770,9 @@ mod tests {
             }
             other => panic!("unexpected error: {other:?}"),
         }
-        let certificate = sample_certificate().to_cbor();
+        let certificate = sample_certificate()
+            .try_to_cbor()
+            .expect("sample certificate should encode");
         let mut encoder = CborEncoder::new();
         encoder.write_map_header(2);
         encoder.write_unsigned(0);
@@ -2862,7 +2795,9 @@ mod tests {
     }
     #[test]
     fn parse_certificate_payload_rejects_trailing_bytes() {
-        let mut bytes = sample_certificate().to_cbor();
+        let mut bytes = sample_certificate()
+            .try_to_cbor()
+            .expect("sample certificate should encode");
         bytes.push(0x00);
         let err = parse_certificate_payload(&bytes).expect_err("trailing payload bytes must fail");
         match err {
@@ -2878,10 +2813,10 @@ mod tests {
             certificate: sample_certificate(),
             signatures: RelayCertificateSignaturesV2 {
                 ed25519: [2; 64],
-                mldsa65: None,
+                mldsa65: vec![2; MlDsaSuite::MlDsa65.signature_len()],
             },
         };
-        let mut bytes = bundle.to_cbor();
+        let mut bytes = bundle.try_to_cbor().expect("sample bundle should encode");
         bytes.push(0x00);
         let err = RelayCertificateBundleV2::from_cbor(&bytes)
             .expect_err("trailing bundle bytes must fail");
@@ -2894,9 +2829,11 @@ mod tests {
     }
     #[test]
     fn parse_certificate_payload_rejects_non_shortest_cbor_encodings() {
-        let canonical = sample_certificate().to_cbor();
-        assert_eq!(canonical[0], 0xB3, "sample certificate uses a 19-field map");
-        let mut non_shortest_map_len = vec![0xB8, 0x13];
+        let canonical = sample_certificate()
+            .try_to_cbor()
+            .expect("sample certificate should encode");
+        assert_eq!(canonical[0], 0xB1, "sample certificate uses a 17-field map");
+        let mut non_shortest_map_len = vec![0xB8, 0x11];
         non_shortest_map_len.extend_from_slice(&canonical[1..]);
         let err = parse_certificate_payload(&non_shortest_map_len)
             .expect_err("non-shortest map length must fail");
@@ -2982,8 +2919,10 @@ mod tests {
     fn parse_certificate_payload_rejects_empty_or_duplicate_endpoints() {
         let mut certificate = sample_certificate();
         certificate.endpoints.clear();
-        let err = parse_certificate_payload(&certificate.to_cbor())
-            .expect_err("empty endpoint lists must fail");
+        let bytes = certificate
+            .try_to_cbor()
+            .expect("empty-endpoint certificate fixture should encode");
+        let err = parse_certificate_payload(&bytes).expect_err("empty endpoint lists must fail");
         match err {
             CertificateError::InvalidFieldValue { field, .. } => {
                 assert_eq!(field, "certificate.endpoints");
@@ -2992,8 +2931,11 @@ mod tests {
         }
         let mut certificate = sample_certificate();
         certificate.endpoints.push(certificate.endpoints[0].clone());
-        let err = parse_certificate_payload(&certificate.to_cbor())
-            .expect_err("duplicate endpoint multiaddrs must fail");
+        let bytes = certificate
+            .try_to_cbor()
+            .expect("duplicate-endpoint certificate fixture should encode");
+        let err =
+            parse_certificate_payload(&bytes).expect_err("duplicate endpoint multiaddrs must fail");
         match err {
             CertificateError::InvalidFieldValue { field, .. } => {
                 assert_eq!(field, "certificate.endpoints");
@@ -3009,6 +2951,21 @@ mod tests {
             "/dns/Relay.example/udp/443/quic",
             "/dns/relay.example/udp/0443/quic",
             "/dns/relay.example/udp/443/quic-v1",
+            "/ip4/0.0.0.0/udp/443/quic",
+            "/ip4/10.0.0.1/udp/443/quic",
+            "/ip4/100.64.0.1/udp/443/quic",
+            "/ip4/127.0.0.1/udp/443/quic",
+            "/ip4/169.254.1.1/udp/443/quic",
+            "/ip4/192.168.1.1/udp/443/quic",
+            "/ip4/198.18.0.1/udp/443/quic",
+            "/ip4/203.0.113.1/udp/443/quic",
+            "/ip4/224.0.0.1/udp/443/quic",
+            "/ip6/::/udp/443/quic",
+            "/ip6/::1/udp/443/quic",
+            "/ip6/fd00::1/udp/443/quic",
+            "/ip6/fe80::1/udp/443/quic",
+            "/ip6/2001:db8::1/udp/443/quic",
+            "/ip6/ff02::1/udp/443/quic",
         ] {
             let mut certificate = sample_certificate();
             certificate.endpoints[0].quic_multiaddr = multiaddr.to_owned();
@@ -3022,6 +2979,10 @@ mod tests {
                 other => panic!("unexpected error: {other:?}"),
             }
         }
+        validate_quic_multiaddr("/ip4/93.184.216.34/udp/443/quic")
+            .expect("globally routable IPv4 relay endpoint");
+        validate_quic_multiaddr("/ip6/2606:4700:4700::1111/udp/443/quic")
+            .expect("globally routable IPv6 relay endpoint");
     }
     #[test]
     fn certificate_encoding_rejects_invalid_tls_endpoint_identity() {
@@ -3114,78 +3075,15 @@ mod tests {
         }
     }
     #[test]
-    fn parse_certificate_payload_rejects_unknown_kem_suites() {
-        let mut certificate = sample_certificate();
-        certificate.kem_policy.preferred_suite = 0xFF;
-        let err = parse_certificate_payload(&certificate.to_cbor()).expect_err("unknown KEM suite");
-        match err {
-            CertificateError::InvalidFieldValue { field, .. } => {
-                assert_eq!(field, "kem_policy.preferred_suite");
-            }
-            other => panic!("unexpected error: {other:?}"),
-        }
-        let mut certificate = sample_certificate();
-        certificate.kem_policy.fallback_suite = Some(0xFE);
-        let err =
-            parse_certificate_payload(&certificate.to_cbor()).expect_err("unknown fallback suite");
-        match err {
-            CertificateError::InvalidFieldValue { field, .. } => {
-                assert_eq!(field, "kem_policy.fallback_suite");
-            }
-            other => panic!("unexpected error: {other:?}"),
-        }
-    }
-    #[test]
-    fn parse_certificate_payload_rejects_inconsistent_kem_policies() {
-        let mut certificate = sample_certificate();
-        certificate.kem_policy.fallback_suite = Some(MlKemSuite::MlKem512.kem_id());
-        assert_kem_policy_error(&certificate, "kem_policy.fallback_suite");
-        let mut certificate = sample_certificate();
-        certificate.kem_policy.rotation_interval_hours = 1;
-        assert_kem_policy_error(&certificate, "kem_policy.rotation_interval_hours");
-        let mut certificate = sample_certificate();
-        certificate.kem_policy.grace_period_hours = 1;
-        assert_kem_policy_error(&certificate, "kem_policy.grace_period_hours");
-        let mut certificate = sample_certificate();
-        certificate.kem_policy.mode = KemRotationModeV1::Staged;
-        assert_kem_policy_error(&certificate, "kem_policy.fallback_suite");
-        let mut certificate = sample_certificate();
-        certificate.kem_policy.mode = KemRotationModeV1::Staged;
-        certificate.kem_policy.fallback_suite = Some(certificate.kem_policy.preferred_suite);
-        assert_kem_policy_error(&certificate, "kem_policy.fallback_suite");
-        let mut certificate = sample_certificate();
-        certificate.kem_policy.mode = KemRotationModeV1::Rolling;
-        assert_kem_policy_error(&certificate, "kem_policy.rotation_interval_hours");
-    }
-    fn assert_kem_policy_error(certificate: &RelayCertificateV2, expected_field: &'static str) {
-        let err = parse_certificate_payload(&certificate.to_cbor())
-            .expect_err("inconsistent KEM policy must fail");
-        match err {
-            CertificateError::InvalidFieldValue { field, .. } => {
-                assert_eq!(field, expected_field);
-            }
-            other => panic!("unexpected error: {other:?}"),
-        }
-    }
-    #[test]
-    fn parse_certificate_payload_rejects_invalid_key_lengths() {
+    fn certificate_encoding_rejects_invalid_key_lengths() {
         let mut certificate = sample_certificate();
         certificate.identity_mldsa65.pop();
-        let err = parse_certificate_payload(&certificate.to_cbor())
-            .expect_err("invalid ML-DSA key length");
+        let err = certificate
+            .try_to_cbor()
+            .expect_err("invalid ML-DSA key length must not encode");
         match err {
             CertificateError::InvalidFieldValue { field, .. } => {
                 assert_eq!(field, "certificate.identity_mldsa65");
-            }
-            other => panic!("unexpected error: {other:?}"),
-        }
-        let mut certificate = sample_certificate();
-        certificate.pq_kem_public.push(0x88);
-        let err = parse_certificate_payload(&certificate.to_cbor())
-            .expect_err("invalid ML-KEM key length");
-        match err {
-            CertificateError::InvalidFieldValue { field, .. } => {
-                assert_eq!(field, "certificate.pq_kem_public");
             }
             other => panic!("unexpected error: {other:?}"),
         }
@@ -3194,7 +3092,10 @@ mod tests {
     fn parse_certificate_payload_rejects_all_zero_public_key_material() {
         let mut certificate = sample_certificate();
         certificate.identity_mldsa65 = vec![0u8; MlDsaSuite::MlDsa65.public_key_len()];
-        let err = parse_certificate_payload(&certificate.to_cbor())
+        let bytes = certificate
+            .try_to_cbor()
+            .expect("all-zero ML-DSA identity fixture should encode structurally");
+        let err = parse_certificate_payload(&bytes)
             .expect_err("all-zero ML-DSA identity key material should fail");
         match err {
             CertificateError::InvalidFieldValue { field, reason } => {
@@ -3203,38 +3104,12 @@ mod tests {
             }
             other => panic!("unexpected error: {other:?}"),
         }
-        let mut certificate = sample_certificate();
-        certificate.pq_kem_public = vec![0u8; MlKemSuite::MlKem768.public_key_len()];
-        let err = parse_certificate_payload(&certificate.to_cbor())
-            .expect_err("all-zero ML-KEM relay key material should fail");
-        match err {
-            CertificateError::InvalidFieldValue { field, reason } => {
-                assert_eq!(field, "certificate.pq_kem_public");
-                assert!(reason.contains("all zero"));
-            }
-            other => panic!("unexpected error: {other:?}"),
-        }
-    }
-    #[test]
-    fn parse_certificate_payload_rejects_noncanonical_mlkem_public_key() {
-        let mut certificate = sample_certificate();
-        set_first_mlkem_12_bit_coefficient_noncanonical(&mut certificate.pq_kem_public);
-        let err = parse_certificate_payload(&certificate.to_cbor())
-            .expect_err("noncanonical ML-KEM relay public key material should fail");
-        match err {
-            CertificateError::InvalidFieldValue { field, reason } => {
-                assert_eq!(field, "certificate.pq_kem_public");
-                assert!(
-                    reason.contains("not canonical"),
-                    "unexpected reason: {reason}"
-                );
-            }
-            other => panic!("unexpected error: {other:?}"),
-        }
     }
     #[test]
     fn bundle_decode_rejects_invalid_mldsa65_signature_length() {
-        let certificate = sample_certificate().to_cbor();
+        let certificate = sample_certificate()
+            .try_to_cbor()
+            .expect("sample certificate should encode");
         let mut encoder = CborEncoder::new();
         encoder.write_map_header(2);
         encoder.write_unsigned(0);
@@ -3269,11 +3144,14 @@ mod tests {
             certificate: sample_certificate(),
             signatures: RelayCertificateSignaturesV2 {
                 ed25519: [0xAA; 64],
-                mldsa65: Some(vec![0xBB; MlDsaSuite::MlDsa65.signature_len()]),
+                mldsa65: vec![0xBB; MlDsaSuite::MlDsa65.signature_len()],
             },
         };
         bundle.signatures.ed25519 = [0u8; 64];
-        let err = RelayCertificateBundleV2::from_cbor(&bundle.to_cbor())
+        let bytes = bundle
+            .try_to_cbor()
+            .expect("all-zero Ed25519 signature fixture should encode structurally");
+        let err = RelayCertificateBundleV2::from_cbor(&bytes)
             .expect_err("all-zero Ed25519 signature should fail");
         match err {
             CertificateError::InvalidFieldValue { field, reason } => {
@@ -3283,8 +3161,11 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
         bundle.signatures.ed25519 = [0xAA; 64];
-        bundle.signatures.mldsa65 = Some(vec![0u8; MlDsaSuite::MlDsa65.signature_len()]);
-        let err = RelayCertificateBundleV2::from_cbor(&bundle.to_cbor())
+        bundle.signatures.mldsa65 = vec![0u8; MlDsaSuite::MlDsa65.signature_len()];
+        let bytes = bundle
+            .try_to_cbor()
+            .expect("all-zero ML-DSA signature fixture should encode structurally");
+        let err = RelayCertificateBundleV2::from_cbor(&bytes)
             .expect_err("all-zero ML-DSA signature should fail");
         match err {
             CertificateError::InvalidFieldValue { field, reason } => {
@@ -3298,8 +3179,11 @@ mod tests {
     fn parse_certificate_payload_rejects_weak_ed25519_identity_key() {
         let mut certificate = sample_certificate();
         certificate.identity_ed25519 = ED25519_SMALL_ORDER_POINT;
-        let err = parse_certificate_payload(&certificate.to_cbor())
-            .expect_err("weak Ed25519 identity keys must fail");
+        let bytes = certificate
+            .try_to_cbor()
+            .expect("weak Ed25519 identity fixture should encode structurally");
+        let err =
+            parse_certificate_payload(&bytes).expect_err("weak Ed25519 identity keys must fail");
         match err {
             CertificateError::InvalidFieldValue { field, .. } => {
                 assert_eq!(field, "certificate.identity_ed25519");
@@ -3311,7 +3195,10 @@ mod tests {
     fn parse_certificate_payload_rejects_relay_id_aliasing() {
         let mut certificate = sample_certificate();
         certificate.relay_id[0] ^= 0x01;
-        let error = parse_certificate_payload(&certificate.to_cbor())
+        let bytes = certificate
+            .try_to_cbor()
+            .expect("relay-id alias fixture should encode structurally");
+        let error = parse_certificate_payload(&bytes)
             .expect_err("relay id must be the exact Ed25519 identity");
         assert!(matches!(
             error,
@@ -3325,7 +3212,10 @@ mod tests {
     fn parse_certificate_payload_rejects_invalid_validity_windows() {
         let mut certificate = sample_certificate();
         certificate.published_at = -1;
-        let err = parse_certificate_payload(&certificate.to_cbor())
+        let bytes = certificate
+            .try_to_cbor()
+            .expect("negative publication fixture should encode structurally");
+        let err = parse_certificate_payload(&bytes)
             .expect_err("negative publication timestamps must fail");
         match err {
             CertificateError::InvalidFieldValue { field, reason } => {
@@ -3336,7 +3226,10 @@ mod tests {
         }
         let mut certificate = sample_certificate();
         certificate.valid_after = -1;
-        let err = parse_certificate_payload(&certificate.to_cbor())
+        let bytes = certificate
+            .try_to_cbor()
+            .expect("negative valid-after fixture should encode structurally");
+        let err = parse_certificate_payload(&bytes)
             .expect_err("negative valid_after timestamps must fail");
         match err {
             CertificateError::InvalidFieldValue { field, reason } => {
@@ -3349,7 +3242,10 @@ mod tests {
         certificate.published_at = 0;
         certificate.valid_after = 0;
         certificate.valid_until = -1;
-        let err = parse_certificate_payload(&certificate.to_cbor())
+        let bytes = certificate
+            .try_to_cbor()
+            .expect("negative valid-until fixture should encode structurally");
+        let err = parse_certificate_payload(&bytes)
             .expect_err("negative valid_until timestamps must fail");
         match err {
             CertificateError::InvalidFieldValue { field, reason } => {
@@ -3360,8 +3256,11 @@ mod tests {
         }
         let mut certificate = sample_certificate();
         certificate.valid_until = certificate.valid_after;
-        let err = parse_certificate_payload(&certificate.to_cbor())
-            .expect_err("zero-length validity windows must fail");
+        let bytes = certificate
+            .try_to_cbor()
+            .expect("zero-length validity fixture should encode structurally");
+        let err =
+            parse_certificate_payload(&bytes).expect_err("zero-length validity windows must fail");
         match err {
             CertificateError::InvalidFieldValue { field, .. } => {
                 assert_eq!(field, "certificate.valid_until");
@@ -3370,8 +3269,11 @@ mod tests {
         }
         let mut certificate = sample_certificate();
         certificate.valid_until = certificate.valid_after.saturating_sub(1);
-        let err = parse_certificate_payload(&certificate.to_cbor())
-            .expect_err("inverted validity windows must fail");
+        let bytes = certificate
+            .try_to_cbor()
+            .expect("inverted validity fixture should encode structurally");
+        let err =
+            parse_certificate_payload(&bytes).expect_err("inverted validity windows must fail");
         match err {
             CertificateError::InvalidFieldValue { field, .. } => {
                 assert_eq!(field, "certificate.valid_until");
@@ -3380,7 +3282,10 @@ mod tests {
         }
         let mut certificate = sample_certificate();
         certificate.published_at = certificate.valid_after.saturating_add(1);
-        let err = parse_certificate_payload(&certificate.to_cbor())
+        let bytes = certificate
+            .try_to_cbor()
+            .expect("late publication fixture should encode structurally");
+        let err = parse_certificate_payload(&bytes)
             .expect_err("certificates published after their validity starts must fail");
         match err {
             CertificateError::InvalidFieldValue { field, reason } => {
@@ -3421,15 +3326,17 @@ mod tests {
             .issue(&signing_key, mldsa_keys.secret_key())
             .expect("issue certificate");
         bundle
-            .verify_signatures(
-                &verifying_key,
-                mldsa_keys.public_key(),
-                CertificateValidationPhase::Phase3RequireDual,
-            )
+            .verify_signatures(&verifying_key, mldsa_keys.public_key())
             .expect("verify");
         // Ensure digest is stable.
-        let digest_a = bundle.certificate.digest();
-        let digest_b = bundle.certificate.digest();
+        let digest_a = bundle
+            .certificate
+            .try_digest()
+            .expect("issued certificate digest should compute");
+        let digest_b = bundle
+            .certificate
+            .try_digest()
+            .expect("issued certificate digest should compute");
         assert_eq!(digest_a, digest_b);
     }
     #[test]
@@ -3461,11 +3368,7 @@ mod tests {
             .expect("issue valid certificate");
         bundle.certificate.endpoints.clear();
         let err = bundle
-            .verify_signatures(
-                &verifying_key,
-                mldsa_keys.public_key(),
-                CertificateValidationPhase::Phase3RequireDual,
-            )
+            .verify_signatures(&verifying_key, mldsa_keys.public_key())
             .expect_err("invalid certificate payload must fail before signature math");
         match err {
             CertificateError::InvalidFieldValue { field, .. } => {
@@ -3496,7 +3399,7 @@ mod tests {
         }
     }
     #[test]
-    fn verification_fails_without_mldsa_in_phase3() {
+    fn verification_fails_without_mldsa_in_first_release() {
         let certificate = sample_certificate();
         let mut rng = StdRng::seed_from_u64(4242);
         let mut seed = [0u8; SECRET_KEY_LENGTH];
@@ -3508,30 +3411,14 @@ mod tests {
         let mut bundle = certificate
             .issue(&signing_key, mldsa_keys.secret_key())
             .expect("issue");
-        bundle.signatures.mldsa65 = None;
+        bundle.signatures.mldsa65.clear();
         let err = bundle
-            .verify_signatures(
-                &verifying_key,
-                mldsa_keys.public_key(),
-                CertificateValidationPhase::Phase3RequireDual,
-            )
-            .expect_err("phase 3 requires ML-DSA signature");
-        matches!(err, CertificateError::MissingMldsaSignature { .. });
-        // Phase 1 and Phase 2 should allow it during the staged rollout.
-        bundle
-            .verify_signatures(
-                &verifying_key,
-                mldsa_keys.public_key(),
-                CertificateValidationPhase::Phase1AllowSingle,
-            )
-            .expect("phase 1 accepts single signature");
-        bundle
-            .verify_signatures(
-                &verifying_key,
-                mldsa_keys.public_key(),
-                CertificateValidationPhase::Phase2PreferDual,
-            )
-            .expect("phase 2 accepts single signature");
+            .verify_signatures(&verifying_key, mldsa_keys.public_key())
+            .expect_err("the first release requires an ML-DSA signature");
+        assert!(
+            matches!(err, CertificateError::SignatureFailure(ref message) if message.contains("ML-DSA signature")),
+            "unexpected error: {err:?}"
+        );
     }
     #[test]
     fn verification_rejects_weak_ed25519_public_key() {
@@ -3548,11 +3435,7 @@ mod tests {
         let weak_key = VerifyingKey::from_bytes(&ED25519_SMALL_ORDER_POINT)
             .expect("small-order point should parse as a dalek verifying key");
         let err = bundle
-            .verify_signatures(
-                &weak_key,
-                mldsa_keys.public_key(),
-                CertificateValidationPhase::Phase3RequireDual,
-            )
+            .verify_signatures(&weak_key, mldsa_keys.public_key())
             .expect_err("weak Ed25519 verifier key must fail before signature math");
         match err {
             CertificateError::SignatureFailure(message) => {
@@ -3580,11 +3463,7 @@ mod tests {
         let mut short_public_key = mldsa_keys.public_key().to_vec();
         short_public_key.pop();
         let err = bundle
-            .verify_signatures(
-                &verifying_key,
-                &short_public_key,
-                CertificateValidationPhase::Phase3RequireDual,
-            )
+            .verify_signatures(&verifying_key, &short_public_key)
             .expect_err("invalid ML-DSA public key length must fail before backend verify");
         match err {
             CertificateError::SignatureFailure(message) => {
@@ -3596,13 +3475,9 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
         let mut bundle = bundle;
-        bundle.signatures.mldsa65 = Some(vec![0x99; MlDsaSuite::MlDsa65.signature_len() - 1]);
+        bundle.signatures.mldsa65 = vec![0x99; MlDsaSuite::MlDsa65.signature_len() - 1];
         let err = bundle
-            .verify_signatures(
-                &verifying_key,
-                mldsa_keys.public_key(),
-                CertificateValidationPhase::Phase3RequireDual,
-            )
+            .verify_signatures(&verifying_key, mldsa_keys.public_key())
             .expect_err("invalid ML-DSA signature length must fail before backend verify");
         match err {
             CertificateError::SignatureFailure(message) => {
@@ -3627,11 +3502,7 @@ mod tests {
         let mut ed25519_zero = bundle.clone();
         ed25519_zero.signatures.ed25519 = [0u8; 64];
         let err = ed25519_zero
-            .verify_signatures(
-                &verifying_key,
-                mldsa_keys.public_key(),
-                CertificateValidationPhase::Phase3RequireDual,
-            )
+            .verify_signatures(&verifying_key, mldsa_keys.public_key())
             .expect_err("all-zero Ed25519 signature must fail before backend verify");
         match err {
             CertificateError::SignatureFailure(message) => {
@@ -3641,13 +3512,9 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
         let mut mldsa_zero = bundle;
-        mldsa_zero.signatures.mldsa65 = Some(vec![0u8; MlDsaSuite::MlDsa65.signature_len()]);
+        mldsa_zero.signatures.mldsa65 = vec![0u8; MlDsaSuite::MlDsa65.signature_len()];
         let err = mldsa_zero
-            .verify_signatures(
-                &verifying_key,
-                mldsa_keys.public_key(),
-                CertificateValidationPhase::Phase3RequireDual,
-            )
+            .verify_signatures(&verifying_key, mldsa_keys.public_key())
             .expect_err("all-zero ML-DSA signature must fail before backend verify");
         match err {
             CertificateError::SignatureFailure(message) => {
@@ -3674,11 +3541,7 @@ mod tests {
         small_order_r.signatures.ed25519[..ed25519_dalek::PUBLIC_KEY_LENGTH]
             .copy_from_slice(&ED25519_SMALL_ORDER_POINT);
         let err = small_order_r
-            .verify_signatures(
-                &verifying_key,
-                mldsa_keys.public_key(),
-                CertificateValidationPhase::Phase3RequireDual,
-            )
+            .verify_signatures(&verifying_key, mldsa_keys.public_key())
             .expect_err("small-order Ed25519 signature R must fail before backend verify");
         match err {
             CertificateError::SignatureFailure(message) => {
@@ -3691,11 +3554,7 @@ mod tests {
         noncanonical_r.signatures.ed25519[..ed25519_dalek::PUBLIC_KEY_LENGTH]
             .copy_from_slice(&ED25519_NONCANONICAL_IDENTITY);
         let err = noncanonical_r
-            .verify_signatures(
-                &verifying_key,
-                mldsa_keys.public_key(),
-                CertificateValidationPhase::Phase3RequireDual,
-            )
+            .verify_signatures(&verifying_key, mldsa_keys.public_key())
             .expect_err("noncanonical Ed25519 signature R must fail before backend verify");
         match err {
             CertificateError::SignatureFailure(message) => {

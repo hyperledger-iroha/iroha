@@ -2,7 +2,7 @@
 use super::DataSpaceId;
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
-use crate::{asset::AssetDefinitionId, name::Name};
+use crate::{asset::AssetDefinitionId, error::ParseError, name::Name};
 use iroha_crypto::Hash;
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
@@ -54,14 +54,29 @@ impl From<UniversalAccountId> for Hash {
     }
 }
 impl FromStr for UniversalAccountId {
-    type Err = iroha_crypto::error::ParseError;
+    type Err = ParseError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let trimmed = s.trim();
-        let hex_literal = match trimmed.get(..5) {
-            Some(prefix) if prefix.eq_ignore_ascii_case("uaid:") => trimmed[5..].trim(),
-            _ => trimmed,
-        };
-        Hash::from_str(hex_literal).map(Self::from_hash)
+        let hex_literal = s.strip_prefix("uaid:").ok_or_else(|| {
+            ParseError::new("UAID must use the canonical `uaid:<lowercase-hex>` form")
+        })?;
+        if hex_literal.len() != Hash::LENGTH * 2
+            || !hex_literal
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(ParseError::new(
+                "UAID must use the canonical `uaid:<lowercase-hex>` form",
+            ));
+        }
+        let uaid = Hash::from_str(hex_literal)
+            .map(Self::from_hash)
+            .map_err(|_| ParseError::new("UAID hash is invalid"))?;
+        if uaid.to_string() != s {
+            return Err(ParseError::new(
+                "UAID must use the canonical `uaid:<lowercase-hex>` form",
+            ));
+        }
+        Ok(uaid)
     }
 }
 /// Canonical smart-contract identifier scoped to a dataspace.
@@ -159,10 +174,8 @@ pub struct AssetPermissionManifest {
     /// Epoch (inclusive) when the manifest becomes active.
     pub activation_epoch: u64,
     /// Epoch (inclusive) when the manifest expires, if scheduled.
-    #[norito(default)]
     pub expiry_epoch: Option<u64>,
     /// Ordered manifest entries evaluated against incoming requests.
-    #[norito(default)]
     pub entries: Vec<ManifestEntry>,
 }
 impl AssetPermissionManifest {
@@ -946,7 +959,6 @@ pub struct ManifestEntry {
     /// Allow/deny decision applied when the scope matches the request.
     pub effect: ManifestEffect,
     /// Optional operator-facing notes for logging/auditing.
-    #[norito(default)]
     pub notes: Option<String>,
 }
 /// AMX role enforced by a manifest entry.
@@ -994,19 +1006,14 @@ pub enum AmxRole {
 )]
 pub struct CapabilityScope {
     /// Optional dataspace selector (defaults to manifest dataspace when omitted).
-    #[norito(default)]
     pub dataspace: Option<DataSpaceId>,
     /// Optional smart-contract identifier constraint.
-    #[norito(default)]
     pub program: Option<SmartContractId>,
     /// Optional method/entry-point constraint.
-    #[norito(default)]
     pub method: Option<Name>,
     /// Optional asset definition constraint.
-    #[norito(default)]
     pub asset: Option<AssetDefinitionId>,
     /// Optional AMX role requirement.
-    #[norito(default)]
     pub role: Option<AmxRole>,
 }
 impl CapabilityScope {
@@ -1075,7 +1082,6 @@ pub enum ManifestEffect {
 )]
 pub struct Allowance {
     /// Optional deterministic amount cap enforced by the host.
-    #[norito(default)]
     pub max_amount: Option<Quantity>,
     /// Accounting window applied to the allowance.
     pub window: AllowanceWindow,
@@ -1125,7 +1131,6 @@ impl AllowanceWindow {
 )]
 pub struct DenyDirective {
     /// Optional reason recorded for the deny rule.
-    #[norito(default)]
     pub reason: Option<String>,
 }
 /// Capability request evaluated against a manifest.
@@ -1241,6 +1246,27 @@ mod tests {
             "manifest allowance decoding must enforce the Quantity sign invariant"
         );
     }
+    #[test]
+    fn first_release_manifest_binary_roundtrip_keeps_all_fields() {
+        let manifest = AssetPermissionManifest {
+            version: ManifestVersion::V1,
+            uaid: sample_uaid(),
+            dataspace: DataSpaceId::new(7),
+            issued_ms: 11,
+            activation_epoch: 13,
+            expiry_epoch: None,
+            entries: Vec::new(),
+        };
+        let encoded = manifest.encode();
+        let mut input = encoded.as_slice();
+        let decoded = AssetPermissionManifest::decode(&mut input)
+            .expect("complete first-release manifest must decode");
+        assert_eq!(decoded, manifest);
+        assert!(
+            input.is_empty(),
+            "manifest decoder must consume the exact payload"
+        );
+    }
     fn sample_uaid() -> UniversalAccountId {
         UniversalAccountId::from_hash(Hash::new(b"uaid::sample"))
     }
@@ -1248,30 +1274,34 @@ mod tests {
         value.parse().expect("valid name")
     }
     #[test]
-    fn uaid_from_str_accepts_literal_and_hex() {
+    fn uaid_from_str_accepts_only_canonical_literal() {
         let uaid = sample_uaid();
         let hex = uaid.as_hash().to_string();
-        let parsed_hex = UniversalAccountId::from_str(&hex).expect("hex uaid must parse");
         let parsed_literal =
             UniversalAccountId::from_str(&format!("uaid:{hex}")).expect("uaid literal must parse");
-        let parsed_upper =
-            UniversalAccountId::from_str(&format!("UAID:{hex}")).expect("upper literal must parse");
         let parsed_display = uaid
             .to_string()
             .parse::<UniversalAccountId>()
             .expect("display uaid must parse");
-        assert_eq!(parsed_hex, uaid);
         assert_eq!(parsed_literal, uaid);
-        assert_eq!(parsed_upper, uaid);
         assert_eq!(parsed_display, uaid);
     }
     #[test]
-    fn uaid_from_str_trims_after_prefix() {
+    fn uaid_from_str_rejects_noncanonical_spellings() {
         let uaid = sample_uaid();
         let hex = uaid.as_hash().to_string();
-        let literal = format!("  uaid:  {hex}  ");
-        let parsed = UniversalAccountId::from_str(&literal).expect("uaid literal must parse");
-        assert_eq!(parsed, uaid);
+        for literal in [
+            hex.clone(),
+            format!("UAID:{hex}"),
+            format!("uaid:{}", hex.to_uppercase()),
+            format!(" uaid:{hex}"),
+            format!("uaid:{hex} "),
+        ] {
+            assert!(
+                UniversalAccountId::from_str(&literal).is_err(),
+                "noncanonical UAID must reject: {literal:?}"
+            );
+        }
     }
     #[cfg(feature = "json")]
     #[test]

@@ -330,11 +330,9 @@ fn parse_entry(entry: &Value) -> Result<SigningAuthority, SignerVaultError> {
         "signer account",
         SIGNER_VAULT_MAX_ACCOUNT_BYTES_V1,
     )?;
-    let account = AccountId::parse_encoded(&account_str)
-        .map(|parsed| parsed.into_account_id())
-        .map_err(|err| {
-            SignerVaultError::InvalidEntry(format!("invalid account id `{account_str}`: {err}"))
-        })?;
+    let account = AccountId::parse_encoded(&account_str).map_err(|err| {
+        SignerVaultError::InvalidEntry(format!("invalid account id `{account_str}`: {err}"))
+    })?;
     let key_field = object
         .get("private_key")
         .or_else(|| object.get("privateKey"))

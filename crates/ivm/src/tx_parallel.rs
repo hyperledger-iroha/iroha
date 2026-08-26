@@ -23,9 +23,24 @@ pub struct Transaction {
 // `Transaction` inherits `Send` from its fields but intentionally remains `!Sync`
 // because it owns an `IVM`, which relies on interior mutability that is not
 // thread-safe when shared.
+/// Execute public transactions concurrently and commit their writes in transaction-id order.
+///
+/// ZK mode and any retained private register or memory state are rejected before the executor
+/// clones a base memory or starts speculative execution. Private transactions require a
+/// tag-preserving sequential execution path.
+///
+/// # Errors
+///
+/// Returns [`VMError::PrivacyViolation`] when either a transaction VM or its base snapshot carries
+/// private execution state, in addition to errors raised by public transaction execution.
 pub fn execute_transactions_parallel(transactions: &mut [Transaction]) -> Result<Memory, VMError> {
     if transactions.is_empty() {
         return Ok(Memory::new(0));
+    }
+    if transactions.iter().any(|tx| {
+        tx.ivm.carries_private_execution_state() || tx.base.carries_private_execution_state()
+    }) {
+        return Err(VMError::PrivacyViolation);
     }
     let mut global_mem = transactions[0].base.memory.clone();
     std::thread::scope(|s| {

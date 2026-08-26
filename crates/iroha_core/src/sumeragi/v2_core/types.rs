@@ -1198,6 +1198,9 @@ impl TimeoutCertificate {
         let mut all_signers = BTreeSet::new();
         let mut highest_at_view: Option<(u64, Subject)> = None;
         for group in &self.groups {
+            if group.signatures.is_empty() {
+                return Err(QuorumError::EmptyTimeoutGroup);
+            }
             let group_ref = group.highest_prepare_ref();
             if previous_group.is_some_and(|previous| previous >= group_ref) {
                 return Err(QuorumError::TimeoutGroupsNotStrictlyOrdered);

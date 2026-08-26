@@ -25,7 +25,7 @@
     }
   },
   "rollout": {
-    "canary_percent": 20,
+    "canary_percent": 0,
     "max_unavailable_replicas": 1,
     "health_window_secs": 45,
     "automatic_rollback_failures": 3
@@ -130,19 +130,19 @@
       }
     },
     {
-      "handler_name": "private_update",
+      "handler_name": "ciphertext_update",
       "class": {
-        "class": "PrivateUpdate",
+        "class": "Update",
         "value": null
       },
-      "entrypoint": "apply_private_update",
-      "route_path": "/private/update",
+      "entrypoint": "apply_ciphertext_update",
+      "route_path": "/ciphertext/update",
       "certified_response": {
         "certified_response": "None",
         "value": null
       },
       "mailbox": {
-        "queue_name": "private_updates",
+        "queue_name": "ciphertext_updates",
         "max_pending_messages": 256,
         "max_message_bytes": 131072,
         "retention_blocks": 2880
@@ -175,7 +175,7 @@
       },
       "artifact_hash": "hash:1112131415161718191A1B1C1D1E1F202122232425262728292A2B2C2D2E2F31#011A",
       "artifact_path": "/checkpoints/portal.chk",
-      "handler_name": "private_update"
+      "handler_name": "ciphertext_update"
     }
   ]
 }

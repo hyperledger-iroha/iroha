@@ -272,6 +272,41 @@ impl PersistentReplayLedger {
         self.persist()?;
         Ok(ReplayInsertStatus::Accepted)
     }
+    /// Check whether an identifier is eligible for an in-process reservation
+    /// without consuming or persisting it.
+    ///
+    /// This is intended for callers that install their own bounded pending set
+    /// before expensive work and later call [`Self::insert`] only at the
+    /// durable commit point. `Accepted` means eligible, not consumed.
+    #[must_use]
+    pub fn preflight(&self, id: &[u8; 32], expires_at_ms: u64, now_ms: u64) -> ReplayInsertStatus {
+        let effective_now_ms = self.effective_now(now_ms);
+        if expires_at_ms <= effective_now_ms {
+            return ReplayInsertStatus::Expired;
+        }
+        if expires_at_ms.saturating_sub(effective_now_ms) > self.limits.max_ttl_ms {
+            return ReplayInsertStatus::TtlExceeded;
+        }
+        if self.contains_active(id, effective_now_ms) {
+            return ReplayInsertStatus::Duplicate;
+        }
+        if self.active_len(effective_now_ms) >= self.limits.max_entries {
+            return ReplayInsertStatus::Capacity;
+        }
+        ReplayInsertStatus::Accepted
+    }
+
+    /// Number of durable records active at the monotonic effective timestamp.
+    #[must_use]
+    pub fn active_len_at(&self, now_ms: u64) -> usize {
+        self.active_len(now_ms)
+    }
+
+    /// Configured maximum number of active records.
+    #[must_use]
+    pub const fn capacity(&self) -> usize {
+        self.limits.max_entries
+    }
     fn contains_active(&self, id: &[u8; 32], now_ms: u64) -> bool {
         let effective_now_ms = self.effective_now(now_ms);
         self.records
@@ -560,6 +595,39 @@ mod tests {
         assert_eq!(
             ledger.insert(second, 2_100, 1_100).expect("reclaimed slot"),
             ReplayInsertStatus::Accepted
+        );
+    }
+    #[test]
+    fn preflight_is_non_consuming_and_reflects_durable_state() {
+        let mut ledger = PersistentReplayLedger::in_memory(NAMESPACE, limits(2)).expect("ledger");
+        let first = [0xA1; 32];
+        let second = [0xA2; 32];
+        assert_eq!(
+            ledger.preflight(&first, 500, 100),
+            ReplayInsertStatus::Accepted
+        );
+        assert_eq!(
+            ledger.preflight(&first, 500, 100),
+            ReplayInsertStatus::Accepted,
+            "preflight must not consume the identifier"
+        );
+        assert_eq!(ledger.capacity(), 2);
+        assert_eq!(ledger.active_len_at(100), 0);
+        assert_eq!(
+            ledger.insert(first, 500, 100).expect("consume first"),
+            ReplayInsertStatus::Accepted
+        );
+        assert_eq!(
+            ledger.preflight(&first, 500, 100),
+            ReplayInsertStatus::Duplicate
+        );
+        assert_eq!(
+            ledger.preflight(&second, 100, 100),
+            ReplayInsertStatus::Expired
+        );
+        assert_eq!(
+            ledger.preflight(&second, 1_101, 100),
+            ReplayInsertStatus::TtlExceeded
         );
     }
     #[test]

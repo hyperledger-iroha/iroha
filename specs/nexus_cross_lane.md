@@ -64,7 +64,7 @@ global state order.
 ## Durable ingress and proxy admission
 
 The first-release Torii proxy request carries one explicit transaction-admission
-mode: `QueuePlanSynced`. The mode and exact `QueuePlanAdmissionBindingV2`
+mode: `QueuePlanSynced`. The mode and exact `QueuePlanAdmissionBindingV1`
 participate in request identity and survive forwarding unchanged. An
 authoritative coordinator acknowledges only with an exact `f + 1` certificate
 over the accepted transaction, routing plan, admission context, enqueue time,

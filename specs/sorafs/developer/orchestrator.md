@@ -144,9 +144,22 @@ new flags control the workflow:
 | Flag | Purpose |
 |------|---------|
 | `--guard-directory <PATH>` / `--guard-directory-digest <HEX>` | Points to the Norito snapshot and supplies the independently distributed, domain-separated BLAKE3 digest of those exact bytes. Both are required before the directory may refresh the guard cache. |
-| `--guard-cache <PATH>` | Persists the Norito-encoded `GuardSet`. Subsequent runs reuse the cache even when no new directory is supplied. |
+| `--guard-cache <PATH>` | Persists the authenticated Norito-encoded `GuardSet`. It is accepted only together with `--guard-cache-key-file` and a current `--guard-directory` plus independently trusted digest. Cached state is never a directory freshness or membership trust anchor. |
 | `--guard-target <COUNT>` / `--guard-retention-days <DAYS>` | Optional overrides for the number of entry guards to pin (default 3) and the retention window (default 30 days). |
-| `--guard-cache-key <HEX>` | Optional 32-byte key used to tag guard caches with a Blake3 MAC so the file can be verified before reuse. |
+| `--guard-cache-key-file <PATH>` | Owner-private file containing exactly 32 raw non-zero bytes used to authenticate every persisted guard cache with a keyed BLAKE3 tag. It is accepted only together with `--guard-cache`; raw key material is never accepted on argv. |
+
+The first-release cache is a version-8 authenticated envelope. The loader caps
+the file at 2 MiB, authenticates the opaque inner payload before decoding guard
+records, permits at most 16 unique guards, and rejects non-canonical or invalid
+persisted relay identity, endpoint, tag, weight, region, and certificate fields. There is no
+unsigned persistence mode. On Unix, cache admission additionally requires an
+owner-private single-link regular file under an invoking-user-owned directory
+that is not group/world writable. Persistence uses a mode-0600 staging file and
+same-directory atomic rename. Symlink, hard-link, permissive-file, and writable
+parent paths fail closed; platforms without equivalent owner/mode/link custody
+checks do not expose persistent guard caches. The key file is subject to the
+same direct-file custody rules and must contain raw bytes, not hexadecimal text
+or a newline-terminated value.
 
 Guard directory payloads use a compact schema:
 
@@ -156,18 +169,14 @@ The `--guard-directory` flag now expects a Norito-encoded
 - `version` — schema version (currently `2`).
 - `directory_hash`, `published_at_unix`, `valid_after_unix`, `valid_until_unix` — consensus
   metadata that must match every embedded certificate.
-- `validation_phase` — signed certificate-policy metadata. The first release
-  accepts only `3` (require both Ed25519 and ML-DSA-65); values `1` and `2` may
-  be decoded by inspection tools but are rejected at runtime trust boundaries.
 - `issuers` — governance issuers with `fingerprint`, `ed25519_public`, and `mldsa65_public`.
   Fingerprints are computed as
   `BLAKE3("soranet.src.v2.issuer" || ed25519 || u32(len(ml-dsa)) || ml-dsa)`.
-- `relays` — a list of SRCv2 bundles (`RelayCertificateBundleV2::to_cbor()` output). Each bundle
-  carries the relay descriptor, capability flags, ML-KEM policy, and dual Ed25519/ML-DSA-65
-  signatures.
-Snapshots are rejected if the version is unknown, if the authenticated
-validation phase is not `3`, or if the validity window is inconsistent
-(`valid_after_unix > valid_until_unix` or
+- `relays` — a list of SRCv2 bundles (`RelayCertificateBundleV2::try_to_cbor()` output). Each bundle
+  carries the relay descriptor, capability flags, authenticated NK2/NK3 suite ordering, and dual
+  Ed25519/ML-DSA-65 signatures. Static relay KEM keys and KEM-rotation policies are not part of SRCv2.
+Snapshots are rejected if the version is unknown or if the validity window is
+inconsistent (`valid_after_unix > valid_until_unix` or
 `published_at_unix > valid_until_unix`). Runtime authentication also requires
 `valid_after_unix <= now < valid_until_unix`.
 Embedded issuer keys prove only signature self-consistency; the independently
@@ -189,13 +198,17 @@ Invoke the CLI with `--guard-directory` to merge the latest consensus with the
 existing cache. The selector preserves pinned guards that are still within the
 retention window and eligible in the directory; new relays replace expired
 entries. After a successful fetch the updated cache is written back to the path
-supplied via `--guard-cache`, keeping subsequent sessions deterministic. SDKs
-can reproduce the same behaviour by calling
+supplied via `--guard-cache`, keeping subsequent sessions deterministic while
+each run reconciles it against a current authenticated directory. SDKs can
+reproduce the same behaviour by calling
 `GuardSelector::select(&RelayDirectory, existing_guard_set, now_unix_secs)` and
-threading the resulting `GuardSet` through `SorafsGatewayFetchOptions`.
+threading the resulting `GuardSet` and the same authenticated `RelayDirectory`
+through `SorafsGatewayFetchOptions`. Programmatic fetches fail closed when a
+guard set has no directory or the directory is unauthenticated, not yet valid,
+or expired, even when circuit lifecycle management is disabled.
 
-`ml_kem_public_hex` enables the selector to prioritise PQ-capable guards during
-the SNNet-5 rollout. Stage toggles (`anon-guard-pq`, `anon-majority-pq`,
+The authenticated NK2/NK3 suite list enables the selector to identify
+PQ-capable guards. Stage policies (`anon-guard-pq`, `anon-majority-pq`,
 `anon-strict-pq`) now demote classical relays automatically: when a PQ guard is
 available the selector drops excess classical pins so subsequent sessions favour
 hybrid handshakes. CLI/SDK summaries surface the resulting mix via
@@ -209,9 +222,9 @@ Guard directories may now embed a complete SRCv2 bundle via
 `certificate_base64`. The orchestrator decodes every bundle, re-validates the
 Ed25519/ML-DSA signatures, and retains the parsed certificate alongside the
 guard cache. When a certificate is present it becomes the canonical source for
-PQ keys, handshake suite preferences, and weighting; expired certificates are
-ignored for PQ selection and any stale PQ keys are dropped before circuit
-lifecycle management. `telemetry::sorafs.guard` and
+PQ handshake capability, handshake suite preferences, and weighting; expired
+certificates are ignored for PQ selection. Guard caches never persist static
+relay KEM material. `telemetry::sorafs.guard` and
 `telemetry::sorafs.circuit` record the validity window, handshake suites, and
 whether dual signatures were observed for each guard.
 
@@ -265,8 +278,11 @@ SDKs forward directory data through
 (`crates/iroha/src/client.rs:320`), and the CLI wires it automatically whenever
 `--guard-directory` is supplied (`crates/iroha_cli/src/commands/sorafs.rs:365`).
 
-The manager renews circuits whenever guard metadata changes (endpoint, PQ key,
-or pinned timestamp) or the TTL elapses. The helper `refresh_circuits`
+The manager accepts only a directory whose half-open validity window contains
+the selection time, and every circuit expiry is capped at the directory's
+`valid_until`. It renews circuits whenever the active anonymity policy changes,
+the TTL elapses, or any entry, middle, or exit descriptor is removed or changes
+role, endpoints, authenticated handshake suites, or certificate validity. The helper `refresh_circuits`
 invoked ahead of each fetch (`crates/sorafs_orchestrator/src/lib.rs:1346`)
 emits `CircuitEvent` logs so operators can trace lifecycle decisions. The soak
 test `circuit_manager_latency_soak_remains_stable_across_rotations`
@@ -292,9 +308,13 @@ client.
 
 The orchestrator can optionally spawn a local QUIC proxy so browser extensions
 and SDK adapters do not have to manage certificates or guard cache keys. The
-proxy binds to a loopback address, terminates QUIC connections, and returns a
-Norito manifest describing the certificate and optional guard cache key to the
-client. Transport events emitted by the proxy are counted via
+proxy binds to a loopback address and generates a fresh 256-bit client
+capability on every start. Possession of that capability, not loopback location,
+authorises use of the proxy. Callers obtain it from
+`LocalQuicProxyHandle::export_client_capability()` or the handle's out-of-band
+bootstrap manifest. Guard cache keys remain proxy-local and are never included
+in either manifest.
+Transport events emitted by the proxy are counted via
 `sorafs_orchestrator_transport_events_total`.
 
 Enable the proxy through the new `local_proxy` block in the orchestrator JSON:
@@ -327,8 +347,9 @@ Enable the proxy through the new `local_proxy` block in the orchestrator JSON:
   bridge.
 - `telemetry_label` propagates into metrics so dashboards can distinguish
   proxies from fetch sessions.
-- `guard_cache_key_hex` (optional) lets the proxy surface the same keyed guard
-  cache that the CLI/SDKs rely on, keeping browser extensions in sync.
+- `guard_cache_key_hex` (optional) supplies proxy-local key material for
+  session cache-tag HMACs. It is redacted from diagnostics and is never exposed
+  through the browser manifest.
 - `emit_browser_manifest` toggles whether the handshake returns a manifest that
   extensions can store and validate.
 - `proxy_mode` selects whether the proxy bridges traffic locally (`bridge`) or
@@ -374,12 +395,19 @@ When the proxy runs in bridge mode it serves four application services:
 - **`kaigi`** – streams an authenticated/public room spool using the same
   filesystem rules as `norito` while reporting the configured room policy.
 
-All filesystem services canonicalise a non-symlink root at startup, reject
-symlink components and non-regular files, cap payloads at 1 GiB, and stream
-exactly the opened file length with backpressure. Inode, length, and timestamp
-identity is checked before and after transfer so replacement or truncation
-closes the stream. Client errors never disclose the resolved host filesystem
-path.
+All filesystem services canonicalise a non-symlink root at startup and fail
+closed on platforms that cannot enforce Unix custody. Every root and descendant
+must be owned by the proxy's effective UID and not be group/world writable;
+root-owned read-only ancestors and a root-owned sticky boundary with an
+owner-held protected child are permitted. Served files must also have exactly
+one hard link. The proxy rejects symlink components and non-regular files, caps
+payloads at 1 GiB, and streams exactly the opened file length with backpressure.
+Inode, length, and timestamp identity is checked before and after transfer so
+replacement or truncation closes the stream. Client errors never disclose the
+resolved host filesystem path. This custody model treats other processes under
+the same UID and the system administrator as trusted; do not configure a bridge
+root governed by a writable ACL that grants either authority to a less-trusted
+principal.
 
 Protocol guardrails for the first release:
 
@@ -388,22 +416,33 @@ Protocol guardrails for the first release:
 - Control fields are capped at 1024 bytes, 0-RTT is disabled, at most 128
   connections are serviced concurrently, connects time out after 10 seconds,
   and a stream is terminated after the five-minute transfer ceiling.
-- Handshake frames must set `version = 1`; mismatches return a rejected ack.
+- Handshake frames must set `version = 1` and carry the 32-byte
+  `client_capability` decoded from the out-of-band bootstrap value. Capability
+  comparison is constant-time. Missing or incorrect credentials receive only a
+  generic rejected acknowledgement with no manifest, and no application stream
+  is accepted before authentication. TLS 0-RTT is disabled, so an encrypted
+  handshake frame cannot be replayed as early data on a new connection.
 - Stream-open frames must set `version = 1`; mismatches return
   `STREAM_ACK_UNSUPPORTED_VERSION`.
 
-In both cases the proxy supplies the cache-tag HMAC (when a guard cache key was
-present during the handshake) and records `norito_*` / `car_*` telemetry reason
+In both cases the proxy computes and supplies the cache-tag HMAC when a
+proxy-local guard cache key is configured; the key itself is never sent during
+the handshake. It records `norito_*` / `car_*` telemetry reason
 codes so dashboards can differentiate successes, missing files, and sanitisation
 failures at a glance.
 
 `Orchestrator::local_proxy().await` exposes the running handle so callers can
-read the certificate PEM, fetch the browser manifest, or request a graceful
-shutdown when the application exits.
+read the certificate PEM, export the client capability, fetch the out-of-band
+browser bootstrap manifest, or request a graceful shutdown when the application
+exits. The capability is a bearer secret for the lifetime of that proxy start;
+do not log it or pass it to another local user. Restart the proxy to rotate it.
 
 When enabled, the proxy now serves **manifest v2** records. Besides the existing
-certificate and guard cache key, v2 adds:
+certificate, v2 adds:
 
+- `client_capability_hex`, a 64-character lowercase bootstrap secret. It is
+  present only in the handle/out-of-band manifest and is always absent from the
+  in-band handshake acknowledgement.
 - `alpn` (`"sorafs-proxy/1"`) and a `capabilities` array so clients can confirm
   the stream protocol they should speak.
 - A per-handshake `session_id` and cache-tagging salt (`cache_tagging` block) to
@@ -618,9 +657,10 @@ path back to direct mode.
    in CI as an `actual` layer override. Confirm the orchestrator pod / binary
    logs the new configuration hash on startup.
 2. **Prime guard caches.** Refresh the relay directory via `--guard-directory`
-   and persist the Norito guard cache with `--guard-cache`. Verify the cache is
-   signed (if `--guard-cache-key` is configured) and stored under versioned
-   change control.
+   and persist the Norito guard cache with `--guard-cache` plus its required
+   `--guard-cache-key-file`. Verify the authenticated version-8 envelope and
+   store it under versioned change control without logging or archiving the
+   owner-private key file.
 3. **Enable telemetry dashboards.** Before serving user traffic, ensure the
    environment publishes `sorafs.fetch.*`, `sorafs_orchestrator_policy_events_total`, and
    the proxy metrics (when using the local QUIC proxy). Alarms should be tied to

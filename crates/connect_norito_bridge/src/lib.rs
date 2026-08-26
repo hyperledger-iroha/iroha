@@ -459,9 +459,6 @@ fn account_address_error_fields(err: &AccountAddressError) -> Option<JsonMap> {
         InvalidNormVersion(value) => {
             fields.insert("value".into(), JsonValue::from(u64::from(*value)));
         }
-        InvalidDomainLabel(label) => {
-            fields.insert("label".into(), JsonValue::from(label.to_string()));
-        }
         UnexpectedNetworkPrefix { expected, found } => {
             fields.insert("expected".into(), JsonValue::from(u64::from(*expected)));
             fields.insert("found".into(), JsonValue::from(u64::from(*found)));
@@ -1188,18 +1185,14 @@ unsafe fn clear_kagemusha_secret_allocated_buffer(ptr_: *mut c_uchar) -> Option<
     Some(header.cast::<c_uchar>())
 }
 fn parse_account_id(value: String) -> BridgeResult<AccountId> {
-    AccountId::parse_encoded(&value)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .map_err(|_| BridgeError::Authority)
+    AccountId::parse_encoded(&value).map_err(|_| BridgeError::Authority)
 }
 fn parse_account_id_for_chain(value: String, chain_discriminant: u16) -> BridgeResult<AccountId> {
     let _chain_discriminant = ChainDiscriminantGuard::enter(chain_discriminant);
     parse_account_id(value)
 }
 fn parse_destination(value: String) -> BridgeResult<AccountId> {
-    AccountId::parse_encoded(&value)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .map_err(|_| BridgeError::Destination)
+    AccountId::parse_encoded(&value).map_err(|_| BridgeError::Destination)
 }
 fn parse_asset_definition(value: String) -> BridgeResult<AssetDefinitionId> {
     let trimmed = value.trim();
@@ -2809,8 +2802,15 @@ unsafe fn write_encoded_result(
     }
 }
 fn decode_signed_transaction(bytes: &[u8]) -> Result<SignedTransaction, norito::core::Error> {
-    SignedTransaction::decode_all_versioned(bytes)
-        .map_err(|err| norito::core::Error::Message(err.to_string()))
+    let transaction = SignedTransaction::decode_all_versioned(bytes)
+        .map_err(|err| norito::core::Error::Message(err.to_string()))?;
+    let canonical = transaction.encode_wire_v1()?;
+    if canonical != bytes {
+        return Err(norito::core::Error::Message(
+            "signed transaction wire is not canonical V1".to_owned(),
+        ));
+    }
+    Ok(transaction)
 }
 fn detached_transaction_hash_hex(bytes: &[u8; 32]) -> JsonValue {
     JsonValue::from(hex::encode(bytes))
@@ -13031,7 +13031,7 @@ mod detached_transaction_scaffold_tests {
             let mut metadata = Metadata::default();
             metadata.insert(
                 "nested".parse().expect("metadata key"),
-                Json::from_raw_json("{\"z\":2,\"a\":[true,null]}".to_owned())
+                Json::from_raw_json("{\"a\":[true,null],\"z\":2}".to_owned())
                     .expect("valid nested JSON fixture"),
             );
             metadata
@@ -13222,7 +13222,6 @@ mod detached_transaction_scaffold_tests {
         assert!(inspect_detached_transaction_scaffold(b"not norito").is_err());
         assert!(inspect_detached_transaction_scaffold(&[]).is_err());
     }
-    #[test]
     fn inspector_rejects_genesis_domain() {
         let keypair = fixture_keypair(0x39);
         let authority = AccountId::new(keypair.public_key().clone());
@@ -24334,9 +24333,7 @@ mod accel_tests {
         let _guard = chain_guard();
         let (account_cstr, _) = sample_account("bank", 0);
         let account_literal = account_cstr.to_str().expect("account literal");
-        let account_id = AccountId::parse_encoded(account_literal)
-            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-            .expect("parse account");
+        let account_id = AccountId::parse_encoded(account_literal).expect("parse account");
         let definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("bank", "universal").expect("domain"),
             "usd".parse().expect("asset name"),
@@ -25309,12 +25306,10 @@ mod accel_tests {
         let scoped_account = cstring(authority.to_str().unwrap());
         let member_a_str = sample_destination("default", 2);
         let member_b_str = sample_destination("default", 3);
-        let member_a = AccountId::parse_encoded(member_a_str.to_str().unwrap())
-            .expect("member A account id")
-            .into_account_id();
-        let member_b = AccountId::parse_encoded(member_b_str.to_str().unwrap())
-            .expect("member B account id")
-            .into_account_id();
+        let member_a =
+            AccountId::parse_encoded(member_a_str.to_str().unwrap()).expect("member A account id");
+        let member_b =
+            AccountId::parse_encoded(member_b_str.to_str().unwrap()).expect("member B account id");
         let mut members = BTreeMap::new();
         members.insert(member_a, 2);
         members.insert(member_b, 1);

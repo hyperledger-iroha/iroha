@@ -14,7 +14,8 @@ SOURCE = ROOT / "crates/iroha_data_model/src/isi/mod.rs"
 PREIMAGE_BLOB = "20d76d60119fc6fdf216fd073760935d98dae984"
 PREIMAGE_LINES = 4_094
 POSTIMAGE_REGION_LINES = 397
-EXPECTED_DIRECT_SITES = 270
+PREIMAGE_REGULAR_DIRECT_SITES = 269
+EXPECTED_DIRECT_SITES = 272
 
 REGION_START = "impl crate::seal::Instruction for InstructionBox {}"
 REGION_END = "/// Object-safe cloning support for [`Instruction`] trait objects."
@@ -28,17 +29,22 @@ DIRECT_IMPL = re.compile(
     r"\}"
 )
 
-SPECIAL_IMPL = """impl From<crate::isi::soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt>
-    for InstructionBox
-{
-    fn from(i: crate::isi::soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}"""
-
-SPECIAL_CALL = """impl_direct_instruction_box!(
-    crate::isi::soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt
-);"""
+RETIRED_DIRECT_CALLS = (
+    "impl_direct_instruction_box!(crate::isi::account_alias_lease::AcquireAccountAliasLease);",
+    "impl_direct_instruction_box!(crate::isi::domain_link::SetAccountAliasBinding);",
+)
+OFFLINE_LIFECYCLE_ANCHOR = (
+    "impl_direct_instruction_box!(crate::isi::offline::ActivateKagemushaRecursiveReleaseV4);"
+)
+OFFLINE_LIFECYCLE_CALLS = """impl_direct_instruction_box!(crate::isi::offline::EnableKagemushaRecursiveIssuanceV4);
+impl_direct_instruction_box!(crate::isi::offline::CancelKagemushaRecursiveReleaseV4);
+impl_direct_instruction_box!(crate::isi::offline::DeactivateKagemushaRecursiveIssuanceV4);
+impl_direct_instruction_box!(crate::isi::offline::RecordKagemushaTairaCanaryV4);
+impl_direct_instruction_box!(crate::isi::offline::AuthorizeKagemushaTairaCanaryV4);"""
+RETIRED_SPECIAL_GAP_START = (
+    "impl_direct_instruction_box!(crate::isi::soracloud::RecordSoracloudRuntimeReceipt);"
+)
+RETIRED_SPECIAL_GAP_END = "// Allow direct boxing of runtime upgrade instructions"
 
 MACRO_AND_MARKER = """impl crate::seal::Instruction for InstructionBox {}
 
@@ -92,11 +98,25 @@ def _compact(preimage: str) -> str:
         )
 
     region = DIRECT_IMPL.sub(replace_direct, region)
-    if replaced != EXPECTED_DIRECT_SITES - 1:
-        raise AssertionError(f"expected 269 regular sites, found {replaced}")
-    if region.count(SPECIAL_IMPL) != 1:
-        raise AssertionError("private uploaded-model receipt impl changed")
-    region = region.replace(SPECIAL_IMPL, SPECIAL_CALL)
+    if replaced != PREIMAGE_REGULAR_DIRECT_SITES:
+        raise AssertionError(
+            f"expected {PREIMAGE_REGULAR_DIRECT_SITES} regular sites, found {replaced}"
+        )
+    for retired in RETIRED_DIRECT_CALLS:
+        if region.count(retired) != 1:
+            raise AssertionError(f"retired direct conversion changed: {retired}")
+        region = region.replace(retired, "")
+    if region.count(OFFLINE_LIFECYCLE_ANCHOR) != 1:
+        raise AssertionError("offline lifecycle insertion anchor changed")
+    region = region.replace(
+        OFFLINE_LIFECYCLE_ANCHOR,
+        OFFLINE_LIFECYCLE_ANCHOR + "\n" + OFFLINE_LIFECYCLE_CALLS,
+    )
+    gap_start = region.index(RETIRED_SPECIAL_GAP_START) + len(RETIRED_SPECIAL_GAP_START)
+    gap_end = region.index(RETIRED_SPECIAL_GAP_END, gap_start)
+    if "impl From<" not in region[gap_start:gap_end]:
+        raise AssertionError("retired special direct conversion changed")
+    region = region[:gap_start] + "\n" + region[gap_end:]
     if region.count("impl_direct_instruction_box!(") != EXPECTED_DIRECT_SITES:
         raise AssertionError("typed invocation count drifted")
     return preimage[:start] + region + preimage[end:]

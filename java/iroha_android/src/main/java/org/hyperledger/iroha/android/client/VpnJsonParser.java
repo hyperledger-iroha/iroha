@@ -18,6 +18,7 @@ import org.hyperledger.iroha.android.numeric.NumericV1;
 public final class VpnJsonParser {
 
   private static final int VPN_HELPER_TICKET_HEX_LENGTH = 1576;
+  private static final int RELAY_MLDSA65_PUBLIC_KEY_HEX_LENGTH = 3904;
   private static final long U32_MAX = 4_294_967_295L;
   private static final Set<String> EXIT_CLASSES =
       fields("standard", "low-latency", "high-security");
@@ -31,7 +32,7 @@ public final class VpnJsonParser {
           "excluded_routes", "dns_servers", "tunnel_addresses", "mtu_bytes",
           "display_billing_label", "operator_account_id",
           "lease_fee", "settlement_grace_secs", "flow_label_bits", "padding_budget_ms",
-          "relay_id_hex", "descriptor_commit_hex", "tls_server_name",
+          "relay_id_hex", "relay_mldsa65_public_key_hex", "descriptor_commit_hex", "tls_server_name",
           "relay_tls_spki_sha256_hex", "relay_certificate_sha256_hex",
           "directory_snapshot_digest_hex");
   private static final Set<String> QUOTE_FIELDS =
@@ -40,7 +41,8 @@ public final class VpnJsonParser {
           "exit_class", "relay_endpoint", "lease_secs", "quote_expires_at_ms", "fee_asset_id",
           "escrow_account_id", "operator_account_id", "lease_fee", "route_pushes",
           "excluded_routes", "dns_servers", "tunnel_addresses", "mtu_bytes", "meter_family",
-          "flow_label_bits", "padding_budget_ms", "relay_id_hex", "descriptor_commit_hex",
+          "flow_label_bits", "padding_budget_ms", "relay_id_hex",
+          "relay_mldsa65_public_key_hex", "descriptor_commit_hex",
           "tls_server_name", "relay_tls_spki_sha256_hex", "relay_certificate_sha256_hex",
           "directory_snapshot_digest_hex",
           "metering_public_key_hex", "open_lease_instruction");
@@ -50,7 +52,8 @@ public final class VpnJsonParser {
           "expires_at_ms", "connected_at_ms", "meter_family", "quote_id", "payment_reference",
           "payment_tx_hash", "fee_asset_id", "escrow_account_id", "operator_account_id",
           "lease_fee", "flow_label_bits", "padding_budget_ms", "relay_id_hex",
-          "descriptor_commit_hex", "tls_server_name", "relay_tls_spki_sha256_hex",
+          "relay_mldsa65_public_key_hex", "descriptor_commit_hex", "tls_server_name",
+          "relay_tls_spki_sha256_hex",
           "relay_certificate_sha256_hex", "directory_snapshot_digest_hex",
           "route_pushes", "excluded_routes", "dns_servers", "tunnel_addresses", "mtu_bytes",
           "helper_ticket_hex", "bytes_in", "bytes_out", "status");
@@ -97,6 +100,7 @@ public final class VpnJsonParser {
         exactInt(root.get("flow_label_bits"), "vpn profile response.flow_label_bits", 24),
         boundedInt(root.get("padding_budget_ms"), "vpn profile response.padding_budget_ms", 1, 65535),
         trust.relayIdHex,
+        trust.relayMldsa65PublicKeyHex,
         trust.descriptorCommitHex,
         trust.tlsServerName,
         trust.relayTlsSpkiSha256Hex,
@@ -132,6 +136,7 @@ public final class VpnJsonParser {
         exactInt(root.get("flow_label_bits"), "vpn quote response.flow_label_bits", 24),
         boundedInt(root.get("padding_budget_ms"), "vpn quote response.padding_budget_ms", 1, 65535),
         trust.relayIdHex,
+        trust.relayMldsa65PublicKeyHex,
         trust.descriptorCommitHex,
         trust.tlsServerName,
         trust.relayTlsSpkiSha256Hex,
@@ -168,6 +173,7 @@ public final class VpnJsonParser {
         exactInt(root.get("flow_label_bits"), "vpn session response.flow_label_bits", 24),
         boundedInt(root.get("padding_budget_ms"), "vpn session response.padding_budget_ms", 1, 65535),
         trust.relayIdHex,
+        trust.relayMldsa65PublicKeyHex,
         trust.descriptorCommitHex,
         trust.tlsServerName,
         trust.relayTlsSpkiSha256Hex,
@@ -470,6 +476,7 @@ public final class VpnJsonParser {
 
   private static final class VpnTrustTuple {
     private final String relayIdHex;
+    private final String relayMldsa65PublicKeyHex;
     private final String descriptorCommitHex;
     private final String tlsServerName;
     private final String relayTlsSpkiSha256Hex;
@@ -478,12 +485,14 @@ public final class VpnJsonParser {
 
     private VpnTrustTuple(
         final String relayIdHex,
+        final String relayMldsa65PublicKeyHex,
         final String descriptorCommitHex,
         final String tlsServerName,
         final String relayTlsSpkiSha256Hex,
         final String relayCertificateSha256Hex,
         final String directorySnapshotDigestHex) {
       this.relayIdHex = relayIdHex;
+      this.relayMldsa65PublicKeyHex = relayMldsa65PublicKeyHex;
       this.descriptorCommitHex = descriptorCommitHex;
       this.tlsServerName = tlsServerName;
       this.relayTlsSpkiSha256Hex = relayTlsSpkiSha256Hex;
@@ -496,6 +505,10 @@ public final class VpnJsonParser {
       final Map<String, Object> root, final String context, final boolean allowEmpty) {
     return new VpnTrustTuple(
         trustRelayId(root.get("relay_id_hex"), context + ".relay_id_hex", allowEmpty),
+        trustMlDsa65PublicKey(
+            root.get("relay_mldsa65_public_key_hex"),
+            context + ".relay_mldsa65_public_key_hex",
+            allowEmpty),
         trustDigest(
             root.get("descriptor_commit_hex"), context + ".descriptor_commit_hex", allowEmpty),
         tlsServerName(root.get("tls_server_name"), context + ".tls_server_name", allowEmpty),
@@ -519,6 +532,21 @@ public final class VpnJsonParser {
       return "";
     }
     return ed25519PublicKeyHex(value, field);
+  }
+
+  private static String trustMlDsa65PublicKey(
+      final Object value, final String field, final boolean allowEmpty) {
+    if (allowEmpty && "".equals(value)) {
+      return "";
+    }
+    final String canonical =
+        canonicalHex(value, field, RELAY_MLDSA65_PUBLIC_KEY_HEX_LENGTH);
+    for (int index = 0; index < canonical.length(); index++) {
+      if (canonical.charAt(index) != '0') {
+        return canonical;
+      }
+    }
+    throw new IllegalStateException(field + " must not be the all-zero ML-DSA-65 public key");
   }
 
   private static String trustDigest(

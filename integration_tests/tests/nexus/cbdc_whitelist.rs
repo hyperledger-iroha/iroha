@@ -49,19 +49,26 @@ fn load_cbdc_profile() -> Result<(Value, PathBuf)> {
 }
 fn parse_uaid(value: &str) -> Result<UniversalAccountId> {
     UniversalAccountId::from_str(value).wrap_err_with(|| {
-        format!("invalid UAID literal {value} (expected `uaid:<hex>` or 64-hex digest)")
+        format!("invalid UAID literal {value} (expected exact `uaid:<64-lowercase-hex>`)")
     })
 }
 #[test]
-fn parse_uaid_accepts_raw_or_prefixed() {
+fn parse_uaid_accepts_only_exact_canonical_literal() {
     let hash = Hash::new(b"cbdc-whitelist-uaid");
     let hex = hash.to_string();
     let prefixed = format!("uaid:{hex}");
     let expected = UniversalAccountId::from_hash(hash);
-    let parsed_raw = parse_uaid(&hex).expect("parse raw UAID");
     let parsed_prefixed = parse_uaid(&prefixed).expect("parse prefixed UAID");
-    assert_eq!(parsed_raw, expected);
     assert_eq!(parsed_prefixed, expected);
+    for retired in [
+        hex.clone(),
+        format!("UAID:{hex}"),
+        format!("uaid:{}", hex.to_uppercase()),
+        format!(" {prefixed}"),
+        format!("{prefixed} "),
+    ] {
+        parse_uaid(&retired).expect_err("noncanonical UAID spelling must fail");
+    }
 }
 fn parse_numeric(value: &Value, context: &str) -> Result<Quantity> {
     let raw = match value {
@@ -278,8 +285,11 @@ fn cbdc_whitelist_entries_match_capability_manifests() -> Result<()> {
             .strip_prefix("uaid:")
             .ok_or_else(|| eyre!("UAID {uaid} must start with 'uaid:'"))?;
         ensure!(
-            uaid_hex.len() == 64 && uaid_hex.chars().all(|c| c.is_ascii_hexdigit()),
-            "UAID {uaid} must contain a 64-character hex suffix"
+            uaid_hex.len() == 64
+                && uaid_hex
+                    .chars()
+                    .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
+            "UAID {uaid} must contain an exact 64-character lowercase-hex suffix"
         );
         ensure!(
             seen_uaids.insert(uaid.clone()),

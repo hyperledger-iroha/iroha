@@ -42,7 +42,7 @@ This initial slice provides the foundation needed for a usable managed SDK:
   signature, and public-key copies after use or failure
 - a `LedgerClient` plus `TransactionBuilder` that can build, sign, and submit canonical asset/domain/asset-definition/NFT transfer transactions, asset mint/burn transactions, `SetAssetKeyValue`, `RemoveAssetKeyValue`, `SetDomainKeyValue`, `RemoveDomainKeyValue`, `SetAccountKeyValue`, `RemoveAccountKeyValue`, `SetAssetDefinitionKeyValue`, `RemoveAssetDefinitionKeyValue`, `SetNftKeyValue`, `RemoveNftKeyValue`, `SetTriggerKeyValue`, `RemoveTriggerKeyValue`, `MintTriggerRepetitions`, `BurnTriggerRepetitions`, and `ExecuteTrigger` transactions with deterministic hashes and pipeline-status polling
 - managed transaction builders and Norito encoders validate exact chain/account/asset/domain/NFT/trigger/metadata/numeric/hash boundary fields before signing, including canonical I105 transaction authorities and account-bearing instruction fields, noncanonical numeric aliases such as signed positives, exponent notation, missing integer/fraction digits, leading integer zeros, trailing fractional zeros, negative values, scale overflow, and 512-bit mantissa overflow; asset transfer/mint/burn inputs are stored as nominal `NumericV1.QuantityValue` instances and accept only canonical non-negative V1 quantity strings or the validated lossless type, transaction creation times must be positive Unix milliseconds, and trigger repetition mints/burns must be positive before signing; JSON metadata values remain free-form but are defensively snapshotted by transaction builders and JSON-bearing instruction records so later caller mutation cannot alter signed payloads, public transaction-builder instruction/metadata accessors return detached snapshots, and signed transaction/query envelopes defensively copy all exposed byte arrays while rejecting empty, mismatched, malformed encoded-body, or wrong-size direct constructor byte fields before callers submit or trust them
-- typed Torii runtime and account-query models for capabilities, ABI, account pages, explorer inventory, contract reads and writes, identifier and alias resolution, sponsored account-onboarding plan/receipt apply, faucet flows, multisig transaction proposals, UAID portfolios, and space-directory inventory. Sponsored onboarding accepts only a versioned secret-free alias/account intent, requires explicit authority and chain pins plus a canonical Norito body encoder, recomputes the receipt hash before validating the authority signature, and applies the exact receipt through the ordinary onboarding endpoint; there is no direct-request or multisig-specific onboarding route. Faucet, account-query, contract, multisig, explorer, and UAID models retain their strict canonical identifiers, hashes, quantities, duplicate-field rejection, and pagination consistency checks before callers submit or trust data.
+- typed Torii runtime and account-query models for capabilities, ABI, account pages, explorer inventory, contract reads and writes, identifier and alias resolution, sponsored account-onboarding preparation, faucet preparation, multisig transaction proposals, UAID portfolios, and space-directory inventory. Sponsored onboarding is a closed plan → prepare → persist → submit protocol: the SDK verifies the pinned plan receipt, reset binding, exact signed transaction wire, fee intent, metadata, transaction signature, and server-authenticated V1 transcript before returning a persistable prepared envelope. A signed `ProofRequired` result is nonterminal: `ProveAccountOnboardingCurrentStateAsync` must re-authenticate it and POST one closed request to `/v1/accounts/onboarding/current-state`; the returned single-snapshot anchor classifies the alias as `Applied`, `AliasAbsent`, or `AliasConflict`. Faucet mutation follows the same one-envelope prepare/persist/submit rule after solving PoW. The submit APIs accept only the exact prepared envelopes; there are no direct registration, direct faucet-claim, or multisig-specific onboarding routes.
 - direct generic and contract-call multisig response DTO construction rejects
   false `ok`, malformed resolved account ids, proposal/instruction hashes,
   transaction hashes, creation times, and signing-message base64 before callers
@@ -94,11 +94,23 @@ This initial slice provides the foundation needed for a usable managed SDK:
   aggregate resources, projection metadata keys, and export resources while
   preserving malformed null/missing list rejection in raw converters
 - raw contract instance inventory DTO deserialization shares the same fail-closed checks as `ToriiClient`, rejecting null, duplicate, or type-confused list/item fields, duplicate keys inside ignored instance/response extension JSON, missing or malformed unsigned counters, missing or non-exact namespace/contract-id/code-hash text, and inconsistent pagination counters before callers trust instance listings
-- sponsored onboarding uses only the secret-free
-  `ToriiAccountOnboardingPlanRequest` followed by receipt-only apply; both
-  calls require explicit authority and chain pins plus a canonical Norito body
-  encoder, recompute the signed receipt hash before dispatch, and reject request
-  substitution. The
+- sponsored onboarding starts with the secret-free
+  `ToriiAccountOnboardingPlanRequest`, then passes the signed receipt and an
+  exact `ToriiTairaPublicResetMutationBindingV1` to
+  `PrepareAccountOnboardingAsync`. Persist either the returned
+  `ToriiAccountOnboardingPreparedTransactionV1` or authenticated nonterminal
+  `ToriiAccountOnboardingProofRequiredPrepareResponseV1`. A proof-required
+  result cannot be submitted or treated as applied; call
+  `ProveAccountOnboardingCurrentStateAsync` on every open/reopen. It performs
+  exactly one atomic current-state POST, verifies the network and committed
+  block anchor, and classifies the exact alias as applied, absent, or conflicting.
+  Preparation, proof, and submission all require
+  the original `ToriiAccountOnboardingPlanRequest` as an independent intent
+  pin, including its exact ordered permission set. Only the prepared
+  transaction may be passed to `SubmitPreparedAccountOnboardingAsync`. Planning and preparation
+  require explicit authority and chain pins plus a canonical Norito body
+  encoder, recompute the signed receipt hash, and reject request substitution.
+  The
   dedicated `X-Iroha-Onboarding-Token` argument remains 32–256 printable ASCII
   bytes, stays separate from global API authentication, is emitted exactly
   once outside the JSON body, and is never replayed across redirects. There is
@@ -109,14 +121,29 @@ identity, one-shot transport for signed, nonce-bearing, and credential-bearing
 requests: set `HttpClientHandler.AllowAutoRedirect` to `false` and do not attach
 automatic retry/resilience handlers. Redirect and retry policy belongs to the
 injected transport and cannot be inspected or changed after `HttpClient`
-construction. `ToriiClient` dispatches these bodies once and surfaces 3xx,
+construction. `ToriiClient` invokes the handler chain once and surfaces 3xx,
 non-success, and network failures. For an ambiguous transaction outcome, query
 the pipeline status by transaction hash instead of replaying the body; a
 deliberate signed-query retry must use a freshly signed envelope and nonce.
 
-The public pipeline-status response is metadata-only: canonical hash, closed status kind,
+`SubmitTransactionAsync(...)` posts only to the first-release
+`/v1/pipeline/transactions` route after an exact V1 data-model and signed-schema
+contract check. Its body is exactly the V1 version byte followed by the canonical
+`SignedTransaction`, and HTTP 202 is the sole successful admission acknowledgement;
+there is no unversioned body, legacy endpoint, or fallback selector. Public
+transaction submission also rejects a caller-injected `HttpClient` before network
+dispatch because its redirect/retry behavior cannot be proven; use the internally
+managed one-shot transport.
+`LedgerClient.WaitForAsync(...)` succeeds only for a global, state-resolved
+`Applied` status with a positive block height. State-resolved `Rejected` and
+`Expired` fail, while every queue- or cache-resolved status remains pending.
+
+The public pipeline-status response is metadata-only: an exact prefixless 64-character
+lowercase hexadecimal hash, closed status kind,
 optional committed height, scope, and resolution source. Retired rejection, diagnostic,
-trigger, and batch fields are rejected. For details, build an exact-entrypoint predicate with
+trigger, and batch fields are rejected. Status lookup defaults to the exact `global` scope;
+callers may request exact `local`, while retired `auto` and case-normalized spellings are
+rejected in requests and responses. For details, build an exact-entrypoint predicate with
 `SignedIterableQueryBuilder.FindTransactionDetails(...)` and pass the resulting envelope to
 `GetPipelineTransactionDetailsAsync(...)`. The signature is bound to the deployment's exact
 genesis-derived `NetworkId`; Torii admits only an involved account or operator, and the SDK
@@ -213,11 +240,14 @@ sends the nonce-bearing body once without redirects or retries.
   revocation `epoch` counters to be present instead of defaulting absent
   counters to trusted zero values
 - UAID portfolio/bindings/manifest response DTO deserialization requires
-  returned UAID literals, portfolio asset/account/quantity strings, manifest
-  hashes/status text, and account-list entries to be present, non-null, and
-  canonical I105
-  before exact validation runs; aliases, labels, revocation reasons, and
-  preserved manifest JSON remain nullable where modeled optional
+  returned UAID literals, full portfolio asset ids bound to their exact
+  definition/account/dataspace, canonical quantities, manifest hashes/status,
+  and canonical I105 account-list entries to use the exact current fields.
+  Manifest pages require `uaid`, `total`, `has_more`, `count_mode`, and
+  `manifests`; the embedded manifest is numeric V1 with required `issued_ms`,
+  `activation_epoch`, and `entries`, and optional fields must be omitted rather
+  than encoded as null. Required nullable aliases, labels, and revocation reasons
+  are preserved byte-for-byte instead of trimmed or defaulted
 - UAID portfolio, bindings, and manifest inventory list DTOs snapshot assigned
   arrays and return detached arrays on access while preserving malformed
   null/missing list rejection in the raw converters
@@ -337,9 +367,9 @@ sends the nonce-bearing body once without redirects or retries.
   encoding or signing while preserving accepted proof-hash casing/`0x`
   canonicalization, and iterable continue gas budgets must be positive when
   supplied; pipeline
-  transaction-status reads validate exact
-  hash/scope request text before dispatch while retaining explicit 32-byte hash
-  casing/`0x` canonicalization and empty-scope defaulting, and reject malformed
+  transaction-status reads accept only prefixless 64-character lowercase
+  hexadecimal hashes and exact `local`/`global` scope text before dispatch, with
+  omission selecting `global`; they perform no hash/scope coercion and reject malformed
   status envelopes, unknown status kinds, non-exact returned hash/scope/resolution
   text, non-positive heights, and retired rejection/diagnostic/trigger/batch fields
   before returning status objects; `ToriiClient` construction validates absolute
@@ -366,9 +396,9 @@ sends the nonce-bearing body once without redirects or retries.
   event-filter query preflight separately rejects malformed
   percent escapes, invalid percent-encoded UTF-8, percent-decoded control bytes,
   malformed JSON-shaped filter payloads, padded JSON filter payloads, and
-  duplicate-key JSON filters before production filter validation; raw
-  signed-query/transaction submissions reject empty Norito payloads before
-  binary content is created
+  duplicate-key JSON filters before production filter validation; raw signed-query
+  submissions reject empty Norito payloads, while raw transaction submissions
+  require a non-empty canonical V1 versioned wire before binary content is created
 - `SignedIterableQueryBuilderTests` pin non-zero cursor, continue gas-budget,
   limit, and fetch-size preflight, the 10,000-row fetch-size ceiling, nullable pagination
   clearing, explicit sort clearing, and stale selector/parameter reset before
@@ -378,7 +408,7 @@ sends the nonce-bearing body once without redirects or retries.
   collection mutations cannot drift the effective client serializer
 - faucet PoW solving validates `StartNonce`/`MaxAttempts` ranges before scrypt
   derivation so nonce enumeration cannot overflow mid-search
-- a managed faucet PoW solver for `scrypt-leading-zero-bits-v2`, plus `ToriiClient` helpers that can fetch the current puzzle and prepare or submit a faucet claim for a canonical I105 account id; puzzles carry the exact checksummed `NetworkId` and I105 chain discriminant, and the challenge binds the raw 32-byte network identity before the account and anchor; difficulty is mandatory and positive, while account ids, puzzle algorithm labels, anchor/salt/nonce hex, positive anchor-age bounds, bounded scrypt work factors including parallelization and ROMix memory, and mandatory claim PoW fields are validated before hashing or HTTP dispatch
+- a managed faucet PoW solver for the first-release `scrypt-leading-zero-bits-v1` algorithm and `iroha:accounts:faucet:pow:v1` challenge domain. `PrepareAccountFaucetAsync` accepts one solved `ToriiAccountFaucetClaimV1`, reset binding, and pinned network, then returns one authenticated exact envelope for durable persistence; `SubmitPreparedAccountFaucetAsync` submits only that envelope. Puzzles carry the exact checksummed `NetworkId` and I105 chain discriminant, and the challenge binds the raw 32-byte network identity before the account and anchor; difficulty is mandatory and positive, while account ids, puzzle algorithm labels, anchor/salt/nonce hex, positive anchor-age bounds, bounded scrypt work factors including parallelization and ROMix memory, and mandatory claim PoW fields are validated before hashing or HTTP dispatch; pre-release labels are rejected
 - `ToriiApiException` for non-success HTTP responses, preserving status code, request URI, and valid UTF-8 response bodies while redacting malformed UTF-8 bodies
 - native Ethereum and BSC mainnet SCCP helpers for execution-provider chain-id
   validation, inbound receipt/source-event evidence, outbound Groth16 calldata,

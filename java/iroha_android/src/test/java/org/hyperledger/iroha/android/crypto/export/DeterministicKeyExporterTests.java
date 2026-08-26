@@ -317,7 +317,6 @@ public final class DeterministicKeyExporterTests {
   private static int readU16(final byte[] raw, final int offset) {
     return ((raw[offset] & 0xFF) << 8) | (raw[offset + 1] & 0xFF);
   }
-
   private static void rejectsUnsupportedVersion() throws Exception {
     final SoftwareKeyProvider provider = new SoftwareKeyProvider();
     final KeyPair keyPair = provider.generate("version-reject");

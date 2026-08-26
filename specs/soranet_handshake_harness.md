@@ -2,8 +2,9 @@
 
 This note tracks the `soranet-handshake-harness` crate used to validate the
 handshake RFC (SNNet-1e deliverable). The harness now ships TLV parsing,
-transcript hashing, deterministic Noise XX simulation (ML-KEM material +
-directory-bound Ed25519 relay authentication), salt/telemetry helpers (including
+transcript hashing, deterministic Noise XX simulation (client ML-KEM public
+shares, ciphertext-only relay responses, and
+directory-bound Ed25519 and ML-DSA-65 relay authentication), salt/telemetry helpers (including
 dual-signed SoraNetTelemetryV1 builders),
 and CLI entry points wired into `cargo xtask soranet-fixtures`.
 
@@ -21,7 +22,8 @@ and CLI entry points wired into `cargo xtask soranet-fixtures`.
 
 1. **Harness binary** (`soranet-handshake-harness`): orchestrates capability TLV
    parsing, transcript hashing, deterministic Noise XX frame synthesis (with
-   ML-KEM shares, Ed25519 relay authentication, and 1024-byte padding), telemetry
+   client ML-KEM shares, ciphertext-only relay KEM fields, fixed dual relay
+   authentication, and 1024-byte padding), telemetry
    scaffolding, and fixture regeneration plus JSON export helpers (`--json-out`,
    `--telemetry-out`). The crate lives under
    `tools/soranet-handshake-harness`; the current CLI (`inspect`, `summary`,
@@ -45,7 +47,7 @@ and CLI entry points wired into `cargo xtask soranet-fixtures`.
 - Salt recovery — client missing two epochs fetches announcements and resumes.
 - Emergency rotation — validates incident logging and telemetry fields.
 - NK2/NK3 KATs — cross-language handshake vectors consumed by Rust/Go/C++ SDK test suites.
-- Noise XX state machine fuzz target — exercises relay-side parsing against adversarial payloads (`cargo fuzz run handshake_state_machine`).
+- Noise XX state machine fuzz target — exercises both client-hello and relay-response parsing against adversarial payloads (`cargo fuzz run handshake_state_machine`).
 - Performance gate — ensures NK2/NK3 simulations stay under the 900 ms P99 ceiling and within 15% mean latency variance in release builds (`tools/soranet-handshake-harness/tests/perf_gate.rs`). Debug builds retain the same P99 ceiling but allow a 35% mean envelope to account for instrumentation overhead; CI release runs continue to enforce the 15% gate.
 
 ## Deliverables
@@ -57,7 +59,7 @@ and CLI entry points wired into `cargo xtask soranet-fixtures`.
 - `fixtures/soranet_handshake/telemetry/*.norito.json` — DowngradeAlarmReportV1 and
   SoraNetTelemetryV1 payloads emitted by the CLI with deterministic Dilithium3 + Ed25519
   signatures (derived from the fixture signing key).
-- `fixtures/soranet_handshake/interop/{rust,go,cpp}/snnet-interop-nk{2,3}-v1.json` — deterministic NK2/NK3 handshake vectors shared with Rust/Go/C++ SDKs (session keys, transcript hashes, confirmation tags, and relay responses carrying the tagged V1 identity key).
+- `fixtures/soranet_handshake/interop/{rust,go,cpp}/snnet-interop-nk{2,3}-v1.json` — deterministic NK2/NK3 handshake vectors shared with Rust/Go/C++ SDKs (session keys, transcript hashes, confirmation tags, and ciphertext-only relay responses carrying the fixed V1 authentication tail).
 - CI job invoking the harness via `cargo xtask soranet-fixtures --verify` to
   compare hashes against expected values (to be wired in once signing is ready).
 
@@ -100,4 +102,4 @@ The harness binary can also be executed directly:
   `--only-capability <type>` (repeatable) to filter warnings/output to specific
   capability IDs. The Dilithium3 telemetry envelope is not an online handshake
   signature slot.
-- `cargo fuzz run handshake_state_machine` — exercises the relay-side parser and Noise XX state machine against adversarial payloads with deterministic RNG seeding.
+- `cargo fuzz run handshake_state_machine` — exercises the client-hello and relay-response parsers against adversarial payloads with deterministic RNG seeding.

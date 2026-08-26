@@ -26,7 +26,6 @@ final class CanonicalRequestSigningTestSupport {
   static String canonicalAccountHeader(final String accountId) {
     try {
       return AccountAddress.parseEncodedIgnoringCurveSupport(accountId, null)
-          .address
           .canonicalHex();
     } catch (final AccountAddress.AccountAddressException error) {
       throw new IllegalArgumentException("invalid canonical I105 test account", error);

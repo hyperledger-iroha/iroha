@@ -120,9 +120,7 @@ const DOCUMENTATION_CALLER_PUBLIC_KEY: &str =
     "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774";
 const TEST_ASSET_DEFINITION_LITERAL: &str = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 fn parse_account_literal(raw: &str) -> AccountId {
-    AccountId::parse_encoded(raw)
-        .expect("valid encoded account literal")
-        .into_account_id()
+    AccountId::parse_encoded(raw).expect("valid encoded account literal")
 }
 fn parse_asset_definition_literal(raw: &str) -> AssetDefinitionId {
     AssetDefinitionId::parse_address_literal(raw).expect("valid asset definition literal")

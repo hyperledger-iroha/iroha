@@ -9,7 +9,7 @@ use eyre::{Result, WrapErr, ensure, eyre};
 use futures_util::future::try_join_all;
 use integration_tests::sandbox;
 use iroha::{
-    client::{Client, TransactionWaitOptions, TransactionWaitTerminalStatus},
+    client::{Client, TransactionWaitOptions},
     crypto::{Algorithm, Hash, HashOf, KeyPair},
     data_model::{
         Level, NetworkId,
@@ -928,7 +928,7 @@ fn validate_exact_applied_payload_carrier(
         .ok_or_else(|| eyre!("peer omitted exact local DA transaction status"))?;
     ensure!(
         pipeline_status.hash == submitted_hash.to_string()
-            && pipeline_status.status.kind == TransactionWaitTerminalStatus::Applied.as_str()
+            && pipeline_status.status.kind == "Applied"
             && pipeline_status.status.block_height == Some(expected_height),
         "peer did not locally resolve the exact submitted hash as Applied at height {expected_height}: {pipeline_status:?}"
     );
@@ -1306,8 +1306,7 @@ async fn wait_for_exact_local_queue_replication(
                         Some(status)
                             if status.hash == expected_hash
                                 && status.scope == "local"
-                                && status.status.kind
-                                    == TransactionWaitTerminalStatus::Queued.as_str()
+                                && status.status.kind == "Queued"
                                 && status.status.block_height.is_none() =>
                         {
                             witnessed[peer_index] = true;
@@ -2012,19 +2011,20 @@ async fn authenticated_payload_chunk_hold_heals_and_converges_four_peers() -> Re
         let wait_client = network.client();
         let wait_hash = submitted_hash;
         let applied = tokio::task::spawn_blocking(move || {
-            wait_client.wait_for_transaction_terminal_status(
+            wait_client.wait_for_transaction_applied(
                 wait_hash,
                 TransactionWaitOptions {
                     timeout: COMMIT_WAIT_BUDGET,
                     poll_interval: Duration::from_millis(100),
-                    terminal_statuses: vec![TransactionWaitTerminalStatus::Applied],
                 },
             )
         })
         .await
         .wrap_err("join exact DA payload Applied wait")??;
         ensure!(
-            applied.terminal_kind == TransactionWaitTerminalStatus::Applied.as_str()
+            applied.terminal_kind == "Applied"
+                && applied.scope == "global"
+                && applied.resolved_from == "state"
                 && applied.block_height == Some(expected_height),
             "submitted DA payload did not reach Applied at exact height {expected_height}: {applied:?}"
         );

@@ -10,7 +10,6 @@ import {
 } from "./commonLiterals.js";
 import { blake2b256 } from "./blake2b.js";
 import { assertValidEd25519PublicKey } from "./ed25519Strict.js";
-import { satisfiesIdnaBidiRule } from "./idnaBidi.js";
 import {
   canonicalCurveAlgorithm,
   CURVE_PUBLIC_KEY_LENGTH,
@@ -30,13 +29,8 @@ const I105_SENTINEL_NUMERIC_PREFIX = "n";
 const I105_CHECKSUM_LEN = 6;
 const INVALID_ADDRESS_LENGTH_MESSAGE = "invalid length for address payload";
 const CANONICAL_I105_REQUIRED_MESSAGE = "account address literals must use canonical I105 form";
-const DOMAIN_WHITESPACE_MESSAGE = "domain label must not contain surrounding whitespace";
-const DOMAIN_UTS46_MESSAGE = "domain label failed UTS-46 ASCII canonicalization";
-const DOMAIN_NON_EMPTY_MESSAGE = "domain label must be a non-empty string";
 const EMPTY_MULTISIG_POLICY_MESSAGE = "invalid multisig policy: EmptyMembers";
 const I105_STRING_MESSAGE = "i105 address must be a string";
-const DOMAIN_STRING_MESSAGE = "domain label must be a string";
-const PUNYCODE_OVERFLOW_MESSAGE = "punycode label overflow";
 const BECH32M_CONST = 0x2bc830a3;
 const encoder = new TextEncoder();
 const I105_WARNING =
@@ -66,16 +60,10 @@ export const AccountAddressErrorCode = Object.freeze({
   INVALID_HEADER_VERSION: "ERR_INVALID_HEADER_VERSION",
   INVALID_NORM_VERSION: "ERR_INVALID_NORM_VERSION",
   INVALID_I105_DISCRIMINANT: "ERR_INVALID_I105_DISCRIMINANT",
-  CANONICAL_HASH_FAILURE: "ERR_CANONICAL_HASH_FAILURE",
   INVALID_LENGTH: "ERR_INVALID_LENGTH",
   CHECKSUM_MISMATCH: "ERR_CHECKSUM_MISMATCH",
-  INVALID_HEX_ADDRESS: "ERR_INVALID_HEX_ADDRESS",
-  DOMAIN_MISMATCH: "ERR_DOMAIN_MISMATCH",
-  INVALID_DOMAIN_LABEL: "ERR_INVALID_DOMAIN_LABEL",
-  INVALID_REGISTRY_ID: "ERR_INVALID_REGISTRY_ID",
   UNEXPECTED_NETWORK_PREFIX: "ERR_UNEXPECTED_NETWORK_PREFIX",
   UNKNOWN_ADDRESS_CLASS: "ERR_UNKNOWN_ADDRESS_CLASS",
-  UNKNOWN_DOMAIN_TAG: "ERR_UNKNOWN_DOMAIN_TAG",
   UNEXPECTED_EXTENSION_FLAG: "ERR_UNEXPECTED_EXTENSION_FLAG",
   UNKNOWN_CONTROLLER_TAG: "ERR_UNKNOWN_CONTROLLER_TAG",
   INVALID_PUBLIC_KEY: "ERR_INVALID_PUBLIC_KEY",
@@ -86,7 +74,6 @@ export const AccountAddressErrorCode = Object.freeze({
   INVALID_I105_CHAR: "ERR_INVALID_I105_CHAR",
   INVALID_I105_BASE: "ERR_INVALID_I105_BASE",
   INVALID_I105_DIGIT: "ERR_INVALID_I105_DIGIT",
-  LOCAL_DIGEST_TOO_SHORT: "ERR_LOCAL8_DEPRECATED",
   UNSUPPORTED_ADDRESS_FORMAT: "ERR_UNSUPPORTED_ADDRESS_FORMAT",
   MULTISIG_MEMBER_OVERFLOW: "ERR_MULTISIG_MEMBER_OVERFLOW",
   INVALID_MULTISIG_POLICY: "ERR_INVALID_MULTISIG_POLICY",
@@ -860,235 +847,6 @@ function computeMultisigPolicyDigest(bytes) {
   return blake2b256Personalized(bytes, MULTISIG_DIGEST_PERSONALIZATION, true);
 }
 
-function decodePunycodeLabel(input) {
-  const output = [];
-  const delimiter = input.lastIndexOf("-");
-  let cursor = 0;
-  if (delimiter >= 0) {
-    for (const character of input.slice(0, delimiter)) {
-      if (character.codePointAt(0) >= 0x80) {
-        throw new Error("punycode basic segment is not ASCII");
-      }
-      output.push(character.codePointAt(0));
-    }
-    cursor = delimiter + 1;
-  }
-  let codePoint = 128;
-  let bias = 72;
-  let accumulator = 0;
-  const adapt = (delta, length, first) => {
-    let value = first ? Math.floor(delta / 700) : Math.floor(delta / 2);
-    value += Math.floor(value / length);
-    let scale = 0;
-    while (value > 455) {
-      value = Math.floor(value / 35);
-      scale += 36;
-    }
-    return scale + Math.floor((36 * value) / (value + 38));
-  };
-  const digit = (character) => {
-    const value = character.codePointAt(0);
-    if (value >= 0x30 && value <= 0x39) return value - 0x30 + 26;
-    if (value >= 0x41 && value <= 0x5a) return value - 0x41;
-    if (value >= 0x61 && value <= 0x7a) return value - 0x61;
-    throw new Error("invalid punycode digit");
-  };
-  while (cursor < input.length) {
-    const previous = accumulator;
-    let weight = 1;
-    for (let thresholdIndex = 36; ; thresholdIndex += 36) {
-      if (cursor >= input.length) throw new Error("truncated punycode label");
-      const value = digit(input[cursor]);
-      cursor += 1;
-      if (value > Math.floor((Number.MAX_SAFE_INTEGER - accumulator) / weight)) {
-        throw new Error(PUNYCODE_OVERFLOW_MESSAGE);
-      }
-      accumulator += value * weight;
-      const threshold =
-        thresholdIndex <= bias + 1 ? 1 : thresholdIndex >= bias + 26 ? 26 : thresholdIndex - bias;
-      if (value < threshold) break;
-      const factor = 36 - threshold;
-      if (weight > Math.floor(Number.MAX_SAFE_INTEGER / factor)) {
-        throw new Error(PUNYCODE_OVERFLOW_MESSAGE);
-      }
-      weight *= factor;
-    }
-    const length = output.length + 1;
-    bias = adapt(accumulator - previous, length, previous === 0);
-    const increment = Math.floor(accumulator / length);
-    if (increment > 0x10ffff - codePoint) throw new Error("punycode code point overflow");
-    codePoint += increment;
-    const insertion = accumulator % length;
-    if (codePoint >= 0xd800 && codePoint <= 0xdfff) {
-      throw new Error("punycode decoded a surrogate");
-    }
-    output.splice(insertion, 0, codePoint);
-    accumulator = insertion + 1;
-  }
-  return String.fromCodePoint(...output);
-}
-
-function requireExactDomainString(domain) {
-  if (typeof domain !== JS_TYPE_STRING) {
-    throw new AccountAddressError(
-      AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
-      DOMAIN_STRING_MESSAGE,
-    );
-  }
-  const trimmed = domain.trim();
-  if (trimmed !== domain) {
-    throw new AccountAddressError(
-      AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
-      DOMAIN_WHITESPACE_MESSAGE,
-    );
-  }
-  if (trimmed.length === 0) {
-    throw new AccountAddressError(
-      AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
-      DOMAIN_NON_EMPTY_MESSAGE,
-    );
-  }
-  return trimmed;
-}
-
-export function canonicalizeDomainLabel(domain) {
-  const trimmed = requireExactDomainString(domain);
-  if (/\s/.test(trimmed)) {
-    throw new AccountAddressError(
-      AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
-      "domain label must not contain whitespace",
-    );
-  }
-  if (/[@#$]/.test(trimmed)) {
-    throw new AccountAddressError(
-      AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
-      "domain label must not contain reserved address characters",
-    );
-  }
-
-  let normalized;
-  try {
-    normalized = trimmed.normalize("NFC");
-  } catch (error) {
-    throw new AccountAddressError(
-      AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
-      "domain label normalization failed",
-      { cause: error },
-    );
-  }
-  if (/[\u1E00-\u1EFF]/u.test(normalized)) {
-    throw new AccountAddressError(
-      AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
-      "domain label contains an extended Latin character rejected by the Rust policy",
-    );
-  }
-  for (const character of normalized) {
-    const code = character.charCodeAt(0);
-    const isAsciiDigit = code >= 0x30 && code <= 0x39;
-    const isAsciiUpper = code >= 0x41 && code <= 0x5a;
-    const isAsciiLower = code >= 0x61 && code <= 0x7a;
-    if (
-      code <= 0x7f &&
-      !isAsciiDigit &&
-      !isAsciiUpper &&
-      !isAsciiLower &&
-      character !== "." &&
-      character !== "_" &&
-      character !== "-"
-    ) {
-      throw new AccountAddressError(
-        AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
-        "domain label contains ASCII delimiters rejected by the Rust policy",
-      );
-    }
-  }
-
-  let ascii;
-  try {
-    ascii = new URL(`http://${normalized}/`).hostname;
-  } catch (error) {
-    throw new AccountAddressError(
-      AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
-      DOMAIN_UTS46_MESSAGE,
-      { cause: error },
-    );
-  }
-  if (typeof ascii !== JS_TYPE_STRING || ascii.length === 0) {
-    throw new AccountAddressError(
-      AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
-      DOMAIN_UTS46_MESSAGE,
-    );
-  }
-
-  const canonical = ascii.toLowerCase();
-  if (canonical.length === 0 || canonical.length > 63) {
-    throw new AccountAddressError(
-      AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
-      "domain label length must be between 1 and 63 characters",
-    );
-  }
-  if (canonical.startsWith("-") || canonical.endsWith("-")) {
-    throw new AccountAddressError(
-      AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
-      "domain label must not start or end with a hyphen",
-    );
-  }
-  if (
-    canonical.length >= 4 &&
-    canonical[2] === "-" &&
-    canonical[3] === "-" &&
-    !canonical.startsWith("xn--")
-  ) {
-    throw new AccountAddressError(
-      AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
-      "domain label must not contain a double hyphen in the third and fourth position",
-    );
-  }
-  if (canonical.startsWith("xn--")) {
-    try {
-      const decoded = decodePunycodeLabel(canonical.slice(4));
-      if (!satisfiesIdnaBidiRule(decoded)) {
-        throw new Error("punycode label violates the UTS-46 Bidi rule");
-      }
-      if (new URL(`http://${decoded}/`).hostname.toLowerCase() !== canonical) {
-        throw new Error("punycode label does not round-trip through UTS-46");
-      }
-    } catch (error) {
-      throw new AccountAddressError(
-        AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
-        "domain label contains invalid ACE punycode",
-        { cause: error },
-      );
-    }
-  }
-  for (let index = 0; index < canonical.length; index += 1) {
-    const code = canonical.charCodeAt(index);
-    const isDigit = code >= 0x30 && code <= 0x39;
-    const isLower = code >= 0x61 && code <= 0x7a;
-    const isAllowed =
-      isDigit || isLower || canonical[index] === "-" || canonical[index] === "_";
-    if (!isAllowed) {
-      throw new AccountAddressError(
-        AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
-        "domain label contains unsupported characters",
-      );
-    }
-  }
-  return canonical;
-}
-
-function canonicalizeDomainName(domain) {
-  const trimmed = requireExactDomainString(domain);
-  const labels = trimmed.split(".");
-  if (labels.some((label) => label.length === 0)) {
-    throw new AccountAddressError(
-      AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
-      "domain label must not contain empty segments",
-    );
-  }
-  return labels.map((label) => canonicalizeDomainLabel(label)).join(".");
-}
-
 export class AccountAddress {
   constructor(header, controller) {
     this._header = header;
@@ -1386,32 +1144,15 @@ function isCanonicalHexLiteral(literal) {
   return body.length > 0 && body.length % 2 === 0 && HEX_BODY_RE.test(body);
 }
 
-function classifyDetectedFormat(literal, inputKind, chainDiscriminant) {
-  switch (inputKind) {
-    case "i105":
-      return {
-        kind: "i105",
-        chainDiscriminant:
-          typeof chainDiscriminant === JS_TYPE_NUMBER
-            ? chainDiscriminant
-            : tryExtractI105Discriminant(literal),
-      };
-    default:
-      return { kind: "unknown" };
-  }
-}
-
 /**
  * Inspect an account-id literal (canonical I105) and emit canonical encodings.
  *
  * @param {string} literal - Account literal (canonical I105)
  * @param {{ chainDiscriminant?: number, expectDiscriminant?: number }} [options]
  * @returns {{
- *   detectedFormat: { kind: string, chainDiscriminant?: number },
  *   canonicalHex: string,
  *   i105: { value: string, chainDiscriminant: number },
- *   i105Warning: string,
- *   warnings: string[]
+ *   i105Warning: string
  * }}
  */
 export function inspectAccountId(literal, options = {}) {
@@ -1432,16 +1173,13 @@ export function inspectAccountId(literal, options = {}) {
     trimmed,
     normalizedOptions.expectDiscriminant,
   );
-  const inputKind = "i105";
   const chainDiscriminant =
     normalizedOptions.chainDiscriminant ?? detectedDiscriminant ?? DEFAULT_I105_DISCRIMINANT;
 
   return Object.freeze({
-    detectedFormat: classifyDetectedFormat(trimmed, inputKind, detectedDiscriminant),
     canonicalHex: address.canonicalHex(),
     i105: { value: address.toI105(chainDiscriminant), chainDiscriminant },
     i105Warning: I105_WARNING,
-    warnings: Object.freeze([]),
   });
 }
 

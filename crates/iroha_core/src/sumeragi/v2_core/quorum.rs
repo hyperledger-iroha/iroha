@@ -98,6 +98,8 @@ pub enum QuorumError {
     InvalidProposalRound,
     /// Two timeout groups contain the same signer.
     OverlappingTimeoutSigner(ValidatorId),
+    /// A timeout group does not contain any signer.
+    EmptyTimeoutGroup,
     /// Timeout groups are not ordered by their stable high-QC reference.
     TimeoutGroupsNotStrictlyOrdered,
     /// Two highest `PrepareQC`s at the same view certify different subjects.
@@ -145,6 +147,9 @@ impl fmt::Display for QuorumError {
                     formatter,
                     "timeout signer {validator} appears in multiple groups"
                 )
+            }
+            Self::EmptyTimeoutGroup => {
+                formatter.write_str("timeout group does not contain any signer")
             }
             Self::TimeoutGroupsNotStrictlyOrdered => {
                 formatter.write_str("timeout groups are not strictly ordered")

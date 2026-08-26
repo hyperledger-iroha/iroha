@@ -830,7 +830,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RecordSccpMessage {
 mod tests {
     use super::*;
     use crate::isi::test_support::{
-        assert_registry_decodes_type_name as assert_registry_decodes, assert_slice_roundtrip,
+        assert_registry_decodes_registered_type as assert_registry_decodes, assert_slice_roundtrip,
     };
     use crate::{
         bridge::{
@@ -895,12 +895,20 @@ mod tests {
         assert_slice_roundtrip(RecordSccpMessage::new(outbound_context(), vec![0xCA, 0xFE]));
     }
     #[test]
-    fn bridge_registry_decodes_type_names() {
+    fn bridge_registry_decodes_canonical_wire_ids() {
         let registry = crate::isi::InstructionRegistry::new()
-            .register_slice::<SubmitBridgeProof>()
-            .register_slice::<RecordBridgeReceipt>()
-            .register_slice::<ApplySccpRouteGovernance>()
-            .register_slice::<RecordSccpMessage>();
+            .register_with_id_slice::<SubmitBridgeProof>(
+                "iroha.instruction.v1::bridge::SubmitBridgeProof",
+            )
+            .register_with_id_slice::<RecordBridgeReceipt>(
+                "iroha.instruction.v1::bridge::RecordBridgeReceipt",
+            )
+            .register_with_id_slice::<ApplySccpRouteGovernance>(
+                "iroha.instruction.v1::bridge::ApplySccpRouteGovernance",
+            )
+            .register_with_id_slice::<RecordSccpMessage>(
+                "iroha.instruction.v1::bridge::RecordSccpMessage",
+            );
         assert_registry_decodes(&registry, SubmitBridgeProof::new(proof()));
         assert_registry_decodes(&registry, RecordBridgeReceipt::new(receipt()));
         assert_registry_decodes(

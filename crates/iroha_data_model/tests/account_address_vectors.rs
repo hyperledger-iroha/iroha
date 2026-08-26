@@ -24,29 +24,16 @@ struct PositiveCase {
     category: String,
     note: Option<String>,
     input: PositiveInput,
-    selector: Selector,
     controller: Controller,
     encodings: Encodings,
 }
 #[allow(dead_code)]
 #[derive(Debug, JsonDeserialize)]
 struct PositiveInput {
-    raw_domain: Option<String>,
-    normalized_domain: Option<String>,
     seed_byte: Option<u8>,
-    registry_id: Option<u32>,
-    equivalent_domain: Option<String>,
     member_keys_hex: Option<Vec<String>>,
     member_weights: Option<Vec<u16>>,
     threshold: Option<u16>,
-}
-#[allow(dead_code)]
-#[derive(Debug, JsonDeserialize)]
-struct Selector {
-    kind: String,
-    digest_hex: Option<String>,
-    registry_id: Option<u32>,
-    domain_equivalents: Option<Vec<String>>,
 }
 #[allow(dead_code)]
 #[derive(Debug, JsonDeserialize)]
@@ -135,7 +122,7 @@ fn validate_positive_case(case: &PositiveCase, default_prefix: u16) {
     let canonical_bytes = decode_canonical(&case.encodings.canonical_hex);
     let canonical_address =
         AccountAddress::from_canonical_bytes(&canonical_bytes).expect("canonical decode");
-    // I105 decoding (legacy fixture key: `i105`)
+    // I105 decoding.
     let i105_addr = AccountAddress::from_i105_for_discriminant(
         &case.encodings.i105.string,
         Some(case.encodings.i105.prefix),
@@ -171,9 +158,6 @@ fn validate_positive_case(case: &PositiveCase, default_prefix: u16) {
             .expect("default-prefix i105 encode"),
         case.encodings.i105.string
     );
-    if let Some(domain) = case.input.normalized_domain.as_deref() {
-        iroha_data_model::domain::DomainId::try_new(domain, "universal").expect("valid domain");
-    }
     // Strict parser must reject canonical hex literals.
     let err = AccountAddress::parse_encoded(&case.encodings.canonical_hex, None)
         .expect_err("canonical hex must be rejected by strict parser");
@@ -197,44 +181,22 @@ fn validate_positive_case(case: &PositiveCase, default_prefix: u16) {
         "multisig" => validate_multisig_case(case, &canonical_address),
         other => panic!("unknown positive category {other}"),
     }
-    assert_eq!(
-        case.selector.kind, "default",
-        "{} selector kind mismatch",
-        case.case_id
-    );
-    assert!(
-        case.selector.digest_hex.is_none(),
-        "{} selector digest should be absent for selector-free canonical payloads",
-        case.case_id
-    );
-    assert!(
-        case.selector.registry_id.is_none(),
-        "{} selector registry should be absent for selector-free canonical payloads",
-        case.case_id
-    );
-    assert!(
-        case.selector.domain_equivalents.is_none(),
-        "{} selector equivalents should be absent for selector-free canonical payloads",
-        case.case_id
-    );
 }
 fn validate_single_case(case: &PositiveCase, address: &AccountAddress) {
-    if let Some(_raw_domain) = case.input.raw_domain.as_deref() {
-        let public_key_hex = case
-            .controller
-            .public_key_hex
-            .as_ref()
-            .expect("single controllers provide public key");
-        let public_key = ed25519_public_key(public_key_hex);
-        let account_id = AccountId::new(public_key.clone());
-        let rebuilt =
-            AccountAddress::from_account_id(&account_id).expect("rebuild single address succeeds");
-        assert_eq!(
-            rebuilt, *address,
-            "{} single-key canonical mismatch",
-            case.case_id
-        );
-    }
+    let public_key_hex = case
+        .controller
+        .public_key_hex
+        .as_ref()
+        .expect("single controllers provide public key");
+    let public_key = ed25519_public_key(public_key_hex);
+    let account_id = AccountId::new(public_key);
+    let rebuilt =
+        AccountAddress::from_account_id(&account_id).expect("rebuild single address succeeds");
+    assert_eq!(
+        rebuilt, *address,
+        "{} single-key canonical mismatch",
+        case.case_id
+    );
 }
 fn validate_multisig_case(case: &PositiveCase, address: &AccountAddress) {
     let members_hex = case

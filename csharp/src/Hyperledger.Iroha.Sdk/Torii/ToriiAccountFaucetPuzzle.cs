@@ -23,7 +23,7 @@ public sealed record class ToriiAccountFaucetPuzzle
     public string Algorithm
     {
         get => algorithm;
-        init => algorithm = ToriiOnboardingDirectMetadata.RequireFaucetAlgorithm(value, nameof(Algorithm));
+        init => algorithm = ToriiAccountFaucetMetadata.RequireFaucetAlgorithm(value, nameof(Algorithm));
     }
 
     [JsonPropertyName("network_id")]
@@ -51,7 +51,7 @@ public sealed record class ToriiAccountFaucetPuzzle
     public ulong AnchorHeight
     {
         get => anchorHeight;
-        init => anchorHeight = ToriiOnboardingDirectMetadata.RequirePositive(value, nameof(AnchorHeight));
+        init => anchorHeight = ToriiAccountFaucetMetadata.RequirePositive(value, nameof(AnchorHeight));
     }
 
     [JsonPropertyName("anchor_block_hash_hex")]
@@ -114,7 +114,7 @@ public sealed record class ToriiAccountFaucetPuzzle
     public ulong MaxAnchorAgeBlocks
     {
         get => maxAnchorAgeBlocks;
-        init => maxAnchorAgeBlocks = ToriiOnboardingDirectMetadata.RequirePositive(
+        init => maxAnchorAgeBlocks = ToriiAccountFaucetMetadata.RequirePositive(
             value,
             nameof(MaxAnchorAgeBlocks));
     }
@@ -123,7 +123,7 @@ public sealed record class ToriiAccountFaucetPuzzle
     {
         if (scryptLogNSet && scryptRSet && scryptPSet)
         {
-            ToriiOnboardingDirectMetadata.RequireCheckedScryptParameters(
+            ToriiAccountFaucetMetadata.RequireCheckedScryptParameters(
                 scryptLogN,
                 scryptR,
                 scryptP,

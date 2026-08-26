@@ -6500,7 +6500,7 @@ seiyaku ProtectedProvedOverlay {
             .expect("fixture provides vk hash");
         let mut vk_record = VerifyingKeyRecord::new(
             1,
-            "halo2/ipa:ivm-execution-v1",
+            crate::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
             BackendTag::Halo2IpaPasta,
             "pasta",
             vk_fixture.schema_hash,
@@ -7072,7 +7072,7 @@ seiyaku ProtectedProvedOverlay {
             .expect("fixture provides vk hash");
         let mut vk_record = VerifyingKeyRecord::new(
             1,
-            "halo2/ipa:ivm-execution-v1",
+            crate::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
             BackendTag::Halo2IpaPasta,
             "pasta",
             fixture.schema_hash,
@@ -7445,7 +7445,7 @@ seiyaku ProtectedProvedOverlay {
             .expect("fixture provides vk hash");
         let mut vk_record = VerifyingKeyRecord::new(
             1,
-            "halo2/ipa:ivm-execution-v1",
+            crate::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
             BackendTag::Halo2IpaPasta,
             "pasta",
             vk_fixture.schema_hash,
@@ -7684,7 +7684,7 @@ seiyaku ProtectedProvedOverlay {
             .expect("fixture provides vk hash");
         let mut vk_record = VerifyingKeyRecord::new(
             1,
-            "halo2/ipa:ivm-execution-v1",
+            crate::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
             BackendTag::Halo2IpaPasta,
             "pasta",
             fixture.schema_hash,
@@ -7779,7 +7779,7 @@ seiyaku ProtectedProvedOverlay {
             .expect("fixture provides vk hash");
         let mut vk_record = VerifyingKeyRecord::new(
             1,
-            "halo2/ipa:ivm-execution-v1",
+            crate::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
             BackendTag::Halo2IpaPasta,
             "pasta",
             *Hash::new(b"wrong-schema").as_ref(),
@@ -7878,7 +7878,7 @@ seiyaku ProtectedProvedOverlay {
             .expect("fixture provides vk hash");
         let mut vk_record = VerifyingKeyRecord::new(
             1,
-            "halo2/ipa:ivm-execution-v1",
+            crate::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
             BackendTag::Halo2IpaPasta,
             "pasta",
             vk_fixture.schema_hash,
@@ -8005,7 +8005,7 @@ seiyaku ProtectedProvedOverlay {
             .sign(kp.private_key());
         let mut vk_record = VerifyingKeyRecord::new(
             1,
-            "halo2/ipa:ivm-execution-v1",
+            crate::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
             BackendTag::Halo2IpaPasta,
             "pasta",
             crate::zk::ivm_execution_public_inputs_schema_hash(),
@@ -8165,7 +8165,7 @@ seiyaku DeriveDispatch {
             .sign(kp.private_key());
         let mut vk_record = VerifyingKeyRecord::new(
             1,
-            "halo2/ipa:ivm-execution-v1",
+            crate::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
             BackendTag::Halo2IpaPasta,
             "pasta",
             crate::zk::ivm_execution_public_inputs_schema_hash(),
@@ -10420,15 +10420,6 @@ where
             }
         }
     }
-    if !circuit_id_matches(
-        attachment.backend.as_str(),
-        &vk_record.circuit_id,
-        &env.circuit_id,
-    ) {
-        return Err(OverlayBuildError::ZkProof(
-            "verifying key circuit mismatch".to_owned(),
-        ));
-    }
     if is_legacy_ivm_overlay_bind_circuit(attachment.backend.as_str(), &vk_record.circuit_id)
         || is_legacy_ivm_overlay_bind_circuit(attachment.backend.as_str(), &env.circuit_id)
     {
@@ -10440,10 +10431,10 @@ where
     if !circuit_id_matches(
         attachment.backend.as_str(),
         &vk_record.circuit_id,
-        crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID,
+        &env.circuit_id,
     ) {
         return Err(OverlayBuildError::ZkProof(
-            "active verifying key is not governed for the canonical ivm-execution-v1 circuit"
+            "verifying key and proof must use the exact canonical ivm-execution-v1 circuit id"
                 .to_owned(),
         ));
     }

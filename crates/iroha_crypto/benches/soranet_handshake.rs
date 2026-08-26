@@ -3,15 +3,21 @@ use criterion::Criterion;
 use iroha_crypto::{
     Algorithm, KeyPair,
     soranet::handshake::{
-        DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_TLS_SERVER_NAME, HandshakeSuite, RuntimeParams,
-        SORANET_QUIC_ALPN, build_client_hello, client_handle_relay_hello,
+        DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_TLS_SERVER_NAME, HandshakeSuite,
+        RelayAuthenticationSignerV1, RuntimeParams, SORANET_QUIC_ALPN, build_client_hello,
+        client_handle_relay_hello,
     },
 };
 use rand::SeedableRng as _;
 use rand_chacha::ChaCha20Rng;
-fn checked_seeded_keypair(seed: u8) -> KeyPair {
-    KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
-        .expect("bench SoraNet seeded keypair should be valid")
+use std::sync::Arc;
+fn checked_seeded_keypair(seed: u8) -> RelayAuthenticationSignerV1 {
+    let ed25519 = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+        .expect("bench SoraNet seeded Ed25519 keypair should be valid");
+    let mldsa65 = KeyPair::try_from_seed(vec![seed ^ 0xA5; 32], Algorithm::MlDsa)
+        .expect("bench SoraNet seeded ML-DSA-65 keypair should be valid");
+    RelayAuthenticationSignerV1::try_new(Arc::new(ed25519), Arc::new(mldsa65), [0xB7; 32])
+        .expect("bench relay authentication should be valid")
 }
 struct HandshakeScenario {
     client_caps: Vec<u8>,
@@ -59,7 +65,7 @@ fn run_handshake(preferred: HandshakeSuite) {
     client_handle_relay_hello(
         client_state,
         &relay_message,
-        relay_keys.public_key(),
+        &relay_keys.verifier(),
         &params,
     )
     .expect("client session");

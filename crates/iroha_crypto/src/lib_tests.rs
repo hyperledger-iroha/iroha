@@ -613,6 +613,21 @@ mod tests {
         assert_eq!(key.strong_count(), 1, "dropping clone decrements count");
     }
     #[test]
+    fn ml_dsa_secret_key_zeroizer_overwrites_the_full_backend_payload() {
+        use pqcrypto_traits::sign::SecretKey as _;
+
+        let (_, private) =
+            mldsa_seed::mldsa65::keypair_from_seed(b"iroha:ml-dsa:volatile-secret-zeroization")
+                .expect("seeded ML-DSA keypair");
+        let mut raw_secret = pqcrypto_mldsa::mldsa65::SecretKey::from_bytes(&private.to_bytes().1)
+            .expect("valid ML-DSA secret bytes");
+        assert!(raw_secret.as_bytes().iter().any(|byte| *byte != 0));
+
+        zeroize_mldsa_secret_key(&mut raw_secret);
+
+        assert!(raw_secret.as_bytes().iter().all(|byte| *byte == 0));
+    }
+    #[test]
     fn ml_dsa_try_sign_with_rng_reports_rng_failure() {
         let (_, key) = seeded_ml_dsa_secret(b"iroha:ml-dsa:signing-rng-failure");
         let mut rng = FailingTryRng;

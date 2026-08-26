@@ -1398,6 +1398,20 @@ public final class SccpClientExactTests {
     assert !parsed.submitted && parsed.payloadKind == SccpModels.PayloadKindV1.TRANSFER;
     assert parsed.routeConfigurationHashHex.equals(hash(0x41));
 
+    response.put("submitted", true);
+    response.put("tx_hash_hex", "ab".repeat(32));
+    response.put("transaction_payload_b64", null);
+    response.put("signing_message_b64", null);
+    assert SccpBridgeSubmitResponse.parse(jsonBytes(response)).submitted;
+    response.put("tx_hash_hex", "aa".repeat(32));
+    expectFailure(() -> SccpBridgeSubmitResponse.parse(jsonBytes(response)));
+    response.put("submitted", false);
+    response.put("tx_hash_hex", null);
+    response.put("transaction_payload_b64", Base64.getEncoder().encodeToString(transactionBytes));
+    response.put(
+        "signing_message_b64",
+        Base64.getEncoder().encodeToString(IrohaHash.prehash(transactionBytes)));
+
     final byte[] ordinaryTransactionBytes =
         new NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
             .encodeTransaction(

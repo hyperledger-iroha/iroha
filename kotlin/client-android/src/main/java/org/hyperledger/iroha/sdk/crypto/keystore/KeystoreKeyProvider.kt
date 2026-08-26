@@ -19,9 +19,10 @@ import org.hyperledger.iroha.sdk.crypto.keystore.attestation.AttestationVerifier
  * and discrete secure elements will land by swapping the backend at runtime depending on device
  * capabilities.
  */
-class KeystoreKeyProvider(
+class KeystoreKeyProvider @JvmOverloads constructor(
     private val backend: KeystoreBackend,
     private val parameters: KeyGenParameters,
+    private val defaultPreference: KeySecurityPreference? = null,
 ) : KeyProvider {
 
     private val attestationCache = ConcurrentHashMap<CacheKey, KeyAttestation>()
@@ -31,31 +32,26 @@ class KeystoreKeyProvider(
 
     @Throws(KeyManagementException::class)
     override fun generate(alias: String): KeyPair {
+        if (defaultPreference != null) {
+            return generateWithOutcome(alias, defaultPreference).keyPair
+        }
         evictAttestations(alias)
-        val result = backend.generate(alias, parameters)
-        if (parameters.requireStrongBox
-            && !result.strongBoxBacked
-            && !backend.metadata().strongBoxBacked
-        ) {
+        if (parameters.requireStrongBox && !backend.metadata().strongBoxBacked) {
             throw KeyManagementException("StrongBox required but backend is not StrongBox-capable")
         }
-        return result.keyPair
+        val result = backend.generate(alias, parameters)
+        val outcome = outcomeFor(alias, result.keyPair)
+        if (parameters.requireStrongBox && outcome.route != KeyGenerationOutcome.Route.STRONGBOX) {
+            throw KeyManagementException(
+                "StrongBox required but backend produced a weaker security level"
+            )
+        }
+        return outcome.keyPair
     }
 
     @Throws(KeyManagementException::class)
     fun generate(alias: String, preference: KeySecurityPreference): KeyPair {
-        evictAttestations(alias)
-        val effective = parametersFor(preference)
-        if (effective.requireStrongBox && !backend.metadata().strongBoxBacked) {
-            throw KeyManagementException("StrongBox required but backend is not StrongBox-capable")
-        }
-        val result = backend.generate(alias, effective)
-        if (preference == KeySecurityPreference.STRONGBOX_REQUIRED && !result.strongBoxBacked) {
-            throw KeyManagementException(
-                "StrongBox required but backend fell back to a weaker security level"
-            )
-        }
-        return result.keyPair
+        return generateWithOutcome(alias, preference).keyPair
     }
 
     @Throws(KeyManagementException::class)
@@ -65,20 +61,25 @@ class KeystoreKeyProvider(
     ): KeyGenerationOutcome {
         evictAttestations(alias)
         val effective = parametersFor(preference)
+        if (effective.requireStrongBox && !backend.metadata().strongBoxBacked) {
+            throw KeyManagementException("StrongBox required but backend is not StrongBox-capable")
+        }
         val result = backend.generate(alias, effective)
+        val outcome = outcomeFor(alias, result.keyPair)
+        enforcePreference(preference, outcome)
+        return outcome
+    }
+
+    /** Returns the measured security route for an existing or newly generated key. */
+    @Throws(KeyManagementException::class)
+    override fun outcomeFor(alias: String, keyPair: KeyPair): KeyGenerationOutcome {
+        val metadata = backend.keyMetadata(alias, keyPair)
         val route = when {
-            result.strongBoxBacked -> KeyGenerationOutcome.Route.STRONGBOX
-            backend.metadata().hardwareBacked -> KeyGenerationOutcome.Route.HARDWARE
+            metadata.strongBoxBacked -> KeyGenerationOutcome.Route.STRONGBOX
+            metadata.hardwareBacked -> KeyGenerationOutcome.Route.HARDWARE
             else -> KeyGenerationOutcome.Route.SOFTWARE
         }
-        if (preference == KeySecurityPreference.STRONGBOX_REQUIRED
-            && route != KeyGenerationOutcome.Route.STRONGBOX
-        ) {
-            throw KeyManagementException(
-                "StrongBox required but backend fell back to a weaker security level"
-            )
-        }
-        return KeyGenerationOutcome(result.keyPair, route)
+        return KeyGenerationOutcome(keyPair, route)
     }
 
     @Throws(KeyManagementException::class)
@@ -89,6 +90,26 @@ class KeystoreKeyProvider(
     override fun metadata(): KeyProviderMetadata = backend.metadata()
 
     override fun name(): String = backend.name()
+
+    private fun enforcePreference(
+        preference: KeySecurityPreference,
+        outcome: KeyGenerationOutcome,
+    ) {
+        if (preference == KeySecurityPreference.STRONGBOX_REQUIRED &&
+            outcome.route != KeyGenerationOutcome.Route.STRONGBOX
+        ) {
+            throw KeyManagementException(
+                "StrongBox required but backend produced a weaker security level"
+            )
+        }
+        if (preference == KeySecurityPreference.HARDWARE_REQUIRED &&
+            outcome.route == KeyGenerationOutcome.Route.SOFTWARE
+        ) {
+            throw KeyManagementException(
+                "Hardware-backed key required but backend produced a software key"
+            )
+        }
+    }
 
     /** Returns attestation material recorded for `alias`, when available. */
     fun attestation(alias: String): KeyAttestation? =
@@ -160,11 +181,11 @@ class KeystoreKeyProvider(
 
     /** Returns a copy of this provider with adjusted generation parameters. */
     fun withParameters(parameters: KeyGenParameters): KeystoreKeyProvider =
-        KeystoreKeyProvider(backend, parameters)
+        KeystoreKeyProvider(backend, parameters, defaultPreference)
 
     /** Returns a copy of this provider tuned for the requested security preference. */
     fun withPreference(preference: KeySecurityPreference): KeystoreKeyProvider =
-        KeystoreKeyProvider(backend, parametersFor(preference))
+        KeystoreKeyProvider(backend, parametersFor(preference), preference)
 
     private fun parametersFor(preference: KeySecurityPreference?): KeyGenParameters {
         if (preference == null) return parameters

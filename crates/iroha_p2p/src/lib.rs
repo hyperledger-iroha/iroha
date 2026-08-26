@@ -53,10 +53,17 @@ pub type NetworkHandle<T> = network::NetworkBaseHandle<T, ChaCha20Poly1305>;
 ///
 /// The node identity is the BLS-normal consensus identity advertised as the
 /// [`iroha_data_model::peer::PeerId`]. The `SoraNet` transport identity is an
-/// independently rotatable Ed25519 key used only by the post-quantum transport
-/// handshake. A fresh-challenge- and chain-bound BLS delegation authenticates
-/// the latter before any admission puzzle or KEM work begins.
-#[derive(Clone, Debug)]
+/// independently scoped Ed25519 key used only by the post-quantum transport
+/// handshake. Network startup consumes that configured identity unchanged,
+/// creates a process-lifetime ML-DSA-65 online-authentication key, and authorizes
+/// both once with a cached chain-bound BLS certificate. Cheap per-connection
+/// Ed25519 proofs then bind each fresh challenge and the mandatory TLS/QUIC
+/// channel before any admission puzzle or KEM work begins; the online relay
+/// response requires both authorized identities.
+///
+/// This owner is deliberately not [`Clone`]: callers explicitly transfer it to
+/// network startup rather than duplicating its secret material through the P2P API.
+#[derive(Debug)]
 pub struct P2pIdentityKeys {
     pub(crate) node: KeyPair,
     pub(crate) soranet_transport: KeyPair,

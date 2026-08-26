@@ -5,15 +5,19 @@ use std::any::type_name;
 #[test]
 fn default_registry_includes_signatory_quorum_instructions() {
     let registry = registry::default();
-    let names = [
+    let type_names = [
         type_name::<AddSignatory>(),
         type_name::<RemoveSignatory>(),
         type_name::<SetAccountQuorum>(),
     ];
-    for name in names {
+    for type_name in type_names {
+        let wire_id = registry
+            .wire_id(type_name)
+            .expect("default registry has an explicit wire identifier");
         assert!(
-            registry.decode(name, &[]).is_some(),
-            "default registry should include {name}"
+            registry.decode(wire_id, &[]).is_some(),
+            "default registry should include {type_name}"
         );
+        assert!(registry.decode(type_name, &[]).is_none());
     }
 }

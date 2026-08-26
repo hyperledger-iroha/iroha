@@ -6,13 +6,9 @@ use crate::{
 };
 use hex::{FromHexError, encode as hex_encode};
 use iroha_crypto::soranet::{
-    certificate::{
-        CertificateError, CertificateValidationPhase, RelayCertificateBundleV2,
-        SRC_V2_MAX_BUNDLE_BYTES,
-    },
+    certificate::{CertificateError, RelayCertificateBundleV2, SRC_V2_MAX_BUNDLE_BYTES},
     directory::{
-        GuardDirectoryRelayEntryV2, GuardDirectorySnapshotV2, decode_validation_phase,
-        read_guard_directory_snapshot_file,
+        GuardDirectoryRelayEntryV2, GuardDirectorySnapshotV2, read_guard_directory_snapshot_file,
     },
 };
 use norito::{
@@ -41,8 +37,6 @@ pub struct GuardDirectoryEntry {
     pub snapshot_valid_until_unix: i64,
     /// Directory hash advertised in the snapshot.
     pub directory_hash: [u8; 32],
-    /// Validation phase encoded in the snapshot metadata.
-    pub validation_phase: CertificateValidationPhase,
 }
 /// Errors raised when resolving or validating guard directory metadata.
 #[derive(Debug, Error)]
@@ -59,8 +53,6 @@ pub enum GuardDirectoryError {
         #[source]
         source: norito::Error,
     },
-    #[error("guard snapshot `{path}` advertises unknown validation phase `{raw}`")]
-    UnknownValidationPhase { path: PathBuf, raw: u8 },
     #[error("guard snapshot `{path}` failed exact digest authentication: {source}")]
     SnapshotAuthentication {
         path: PathBuf,
@@ -173,18 +165,12 @@ pub enum GuardPinningProofValidationError {
         expected: String,
         found: String,
     },
-    #[error("validation phase `{found}` is not recognised")]
-    InvalidValidationPhase { found: String },
-    #[error("validation phase mismatch: proof `{found}`, snapshot `{expected}`")]
-    ValidationPhaseMismatch { expected: String, found: String },
     #[error("{field} mismatch: proof `{found}`, snapshot `{expected}`")]
     FieldMismatch {
         field: &'static str,
         expected: String,
         found: String,
     },
-    #[error("PQ KEM public key mismatch for relay `{relay_hex}`")]
-    PqKemMismatch { relay_hex: String },
 }
 /// Resolve and verify the relay entry referenced by the supplied configuration.
 pub fn load_guard_entry_at(
@@ -210,12 +196,6 @@ pub fn load_guard_entry_at(
             path: path.clone(),
             source,
         })?;
-    let validation_phase = decode_validation_phase(snapshot.validation_phase).ok_or(
-        GuardDirectoryError::UnknownValidationPhase {
-            path: path.clone(),
-            raw: snapshot.validation_phase,
-        },
-    )?;
     let bundle = find_relay_entry(&snapshot.relays, identity_ed25519).ok_or_else(|| {
         GuardDirectoryError::RelayEntryMissing {
             path: path.clone(),
@@ -243,12 +223,11 @@ pub fn load_guard_entry_at(
                 reason,
             }
         })?;
-    bundle.verify_at(&ed25519, &issuer.mldsa65_public, validation_phase, at_unix)?;
+    bundle.verify_at(&ed25519, &issuer.mldsa65_public, at_unix)?;
     Ok(GuardDirectoryEntry {
         bundle,
         snapshot_valid_until_unix: snapshot.valid_until_unix,
         directory_hash: snapshot.directory_hash,
-        validation_phase,
     })
 }
 fn find_relay_entry(
@@ -277,19 +256,10 @@ pub fn persist_guard_pinning_proof(
         i64::try_from(recorded_secs).map_err(|_| GuardPinningProofError::Clock)?;
     let certificate = &entry.bundle.certificate;
     let snapshot_path = bounded_snapshot_path(snapshot_path)?;
-    let pq_kem_public_hex_len = certificate.pq_kem_public.len().checked_mul(2).ok_or(
-        GuardPinningProofError::FieldTooLarge {
-            field: "pq_kem_public_hex",
-            found: usize::MAX,
-            maximum: GUARD_PINNING_PROOF_JSON_MAX_FIELD_BYTES_V1,
-        },
-    )?;
-    ensure_guard_pinning_proof_field_len("pq_kem_public_hex", pq_kem_public_hex_len)?;
     let proof = GuardPinningProof {
         version: 1,
         recorded_at_unix,
         snapshot_path,
-        validation_phase: validation_phase_label(entry.validation_phase).to_string(),
         relay_id_hex: hex_encode(relay_id),
         directory_hash_hex: hex_encode(entry.directory_hash),
         descriptor_commit_hex: hex_encode(certificate.descriptor_commit),
@@ -299,7 +269,6 @@ pub fn persist_guard_pinning_proof(
         guard_weight: certificate.guard_weight,
         bandwidth_bytes_per_sec: certificate.bandwidth_bytes_per_sec,
         reputation_weight: certificate.reputation_weight,
-        pq_kem_public_hex: hex_encode(&certificate.pq_kem_public),
     };
     persist_guard_pinning_proof_value(path, &proof)
 }
@@ -332,7 +301,6 @@ fn validate_guard_pinning_proof_fields(
 ) -> Result<(), GuardPinningProofError> {
     for (field, value) in [
         ("snapshot_path", proof.snapshot_path.as_str()),
-        ("validation_phase", proof.validation_phase.as_str()),
         ("relay_id_hex", proof.relay_id_hex.as_str()),
         ("directory_hash_hex", proof.directory_hash_hex.as_str()),
         (
@@ -343,7 +311,6 @@ fn validate_guard_pinning_proof_fields(
             "issuer_fingerprint_hex",
             proof.issuer_fingerprint_hex.as_str(),
         ),
-        ("pq_kem_public_hex", proof.pq_kem_public_hex.as_str()),
     ] {
         ensure_guard_pinning_proof_field_len(field, value.len())?;
     }
@@ -427,29 +394,6 @@ pub fn verify_guard_pinning_proof(
         hex_array_from_str::<32>(&proof.descriptor_commit_hex, "descriptor_commit_hex")?;
     let fingerprint =
         hex_array_from_str::<32>(&proof.issuer_fingerprint_hex, "issuer_fingerprint_hex")?;
-    let pq_kem_public = hex::decode(&proof.pq_kem_public_hex).map_err(|source| {
-        GuardPinningProofValidationError::Hex {
-            field: "pq_kem_public_hex",
-            source,
-        }
-    })?;
-    let proof_phase = parse_validation_phase_label(&proof.validation_phase).ok_or_else(|| {
-        GuardPinningProofValidationError::InvalidValidationPhase {
-            found: proof.validation_phase.clone(),
-        }
-    })?;
-    let snapshot_phase = decode_validation_phase(snapshot.validation_phase).ok_or_else(|| {
-        GuardPinningProofValidationError::ValidationPhaseMismatch {
-            expected: format!("raw({})", snapshot.validation_phase),
-            found: proof.validation_phase.clone(),
-        }
-    })?;
-    if snapshot_phase != proof_phase {
-        return Err(GuardPinningProofValidationError::ValidationPhaseMismatch {
-            expected: validation_phase_label(snapshot_phase).to_string(),
-            found: proof.validation_phase.clone(),
-        });
-    }
     let bundle = find_relay_entry(&snapshot.relays, &relay_id).ok_or_else(|| {
         GuardPinningProofValidationError::RelayMissing {
             relay_hex: proof.relay_id_hex.clone(),
@@ -507,27 +451,7 @@ pub fn verify_guard_pinning_proof(
             found: proof.reputation_weight.to_string(),
         });
     }
-    if certificate.pq_kem_public.as_slice() != pq_kem_public.as_slice() {
-        return Err(GuardPinningProofValidationError::PqKemMismatch {
-            relay_hex: proof.relay_id_hex.clone(),
-        });
-    }
     Ok(())
-}
-fn validation_phase_label(phase: CertificateValidationPhase) -> &'static str {
-    match phase {
-        CertificateValidationPhase::Phase1AllowSingle => "phase1_allow_single",
-        CertificateValidationPhase::Phase2PreferDual => "phase2_prefer_dual",
-        CertificateValidationPhase::Phase3RequireDual => "phase3_require_dual",
-    }
-}
-fn parse_validation_phase_label(label: &str) -> Option<CertificateValidationPhase> {
-    match label {
-        "phase1_allow_single" => Some(CertificateValidationPhase::Phase1AllowSingle),
-        "phase2_prefer_dual" => Some(CertificateValidationPhase::Phase2PreferDual),
-        "phase3_require_dual" => Some(CertificateValidationPhase::Phase3RequireDual),
-        _ => None,
-    }
 }
 fn hex_array_from_str<const N: usize>(
     hex_value: &str,
@@ -548,6 +472,7 @@ fn hex_array_from_str<const N: usize>(
 }
 /// Guard pinning proof persisted by relays for directory publisher ingestion.
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub struct GuardPinningProof {
     /// Schema version of the proof.
     version: u8,
@@ -555,8 +480,6 @@ pub struct GuardPinningProof {
     recorded_at_unix: i64,
     /// Path to the guard directory snapshot this proof references.
     snapshot_path: String,
-    /// Validation phase label used during verification.
-    validation_phase: String,
     /// Relay identifier (hex).
     relay_id_hex: String,
     /// Directory hash (hex) advertised in the snapshot.
@@ -575,8 +498,6 @@ pub struct GuardPinningProof {
     bandwidth_bytes_per_sec: u64,
     /// Reputation weight advertised in the certificate.
     reputation_weight: u32,
-    /// ML-KEM public key (hex) advertised by the relay certificate.
-    pq_kem_public_hex: String,
 }
 impl GuardPinningProof {
     /// Returns the on-disk path to the snapshot this proof references.
@@ -595,10 +516,6 @@ impl GuardPinningProof {
     pub fn recorded_at_unix(&self) -> i64 {
         self.recorded_at_unix
     }
-    /// Validation phase recorded by the relay when the proof was created.
-    pub fn validation_phase(&self) -> &str {
-        &self.validation_phase
-    }
     /// Descriptor commit hex encoded string.
     pub fn descriptor_commit_hex(&self) -> &str {
         &self.descriptor_commit_hex
@@ -606,10 +523,6 @@ impl GuardPinningProof {
     /// Issuer fingerprint hex encoded string.
     pub fn issuer_fingerprint_hex(&self) -> &str {
         &self.issuer_fingerprint_hex
-    }
-    /// Relay PQ KEM public key recorded by the proof.
-    pub fn pq_kem_public_hex(&self) -> &str {
-        &self.pq_kem_public_hex
     }
     /// Valid-after timestamp advertised by the certificate.
     pub fn valid_after_unix(&self) -> i64 {
@@ -650,7 +563,7 @@ mod tests {
         directory::{
             GUARD_DIRECTORY_SNAPSHOT_MAX_BYTES_V1, GUARD_DIRECTORY_VERSION_V2,
             GuardDirectoryIssuerV1, GuardDirectoryRelayEntryV2, compute_issuer_fingerprint,
-            compute_snapshot_digest, encode_validation_phase,
+            compute_snapshot_digest,
         },
         handshake::HandshakeSuite,
     };
@@ -772,30 +685,6 @@ mod tests {
         assert!(err.to_string().contains("expired"));
     }
     #[test]
-    fn load_guard_entry_rejects_pre_release_validation_phase() {
-        let mut fixture = snapshot_fixture();
-        let bytes = fs::read(fixture.config.snapshot_path()).expect("snapshot contents");
-        let mut snapshot =
-            GuardDirectorySnapshotV2::inspect_bytes(&bytes).expect("snapshot decodes");
-        snapshot.validation_phase =
-            encode_validation_phase(CertificateValidationPhase::Phase2PreferDual);
-        let bytes = snapshot.to_bytes().expect("snapshot encodes");
-        fs::write(fixture.config.snapshot_path(), &bytes).expect("rewrite snapshot");
-        fixture.config.expected_snapshot_digest_hex = hex_encode(compute_snapshot_digest(&bytes));
-        let err = load_guard_entry_at(
-            &fixture.config,
-            &fixture.relay_id,
-            &fixture.descriptor_commit,
-            fixture.at_unix,
-        )
-        .expect_err("authenticated guard loading must require phase 3 dual signatures");
-        assert!(
-            matches!(&err, GuardDirectoryError::SnapshotAuthentication { .. }),
-            "unexpected guard loading error: {err:?}"
-        );
-        assert!(err.to_string().contains("phase 3 dual signatures"));
-    }
-    #[test]
     fn persist_guard_pinning_proof_serializes_metadata() {
         use std::{fs, time::Duration};
         let fixture = snapshot_fixture();
@@ -844,10 +733,21 @@ mod tests {
         assert!(contents.len() <= GUARD_PINNING_PROOF_JSON_MAX_BYTES_V1);
     }
     #[test]
+    fn guard_pinning_proof_rejects_retired_static_kem_field() {
+        let rendered = json::to_json(&empty_guard_pinning_proof()).expect("proof serializes");
+        let with_retired_field = rendered.replacen('{', r#"{"pq_kem_public_hex":"00","#, 1);
+        let error = json::from_str::<GuardPinningProof>(&with_retired_field)
+            .expect_err("retired static KEM metadata must fail closed");
+        assert!(
+            error.to_string().contains("pq_kem_public_hex"),
+            "unexpected error: {error}"
+        );
+    }
+    #[test]
     fn guard_pinning_proof_field_limits_accept_exact_and_reject_oversize_before_io() {
         use std::time::Duration;
         let fixture = snapshot_fixture();
-        let mut entry = load_guard_entry_at(
+        let entry = load_guard_entry_at(
             &fixture.config,
             &fixture.relay_id,
             &fixture.descriptor_commit,
@@ -889,49 +789,6 @@ mod tests {
                 found,
                 maximum: GUARD_PINNING_PROOF_JSON_MAX_FIELD_BYTES_V1,
             }) if found == GUARD_PINNING_PROOF_JSON_MAX_FIELD_BYTES_V1 + 1
-        ));
-        assert!(!rejected_parent.exists());
-        entry.bundle.certificate.pq_kem_public =
-            vec![0; GUARD_PINNING_PROOF_JSON_MAX_FIELD_BYTES_V1 / 2];
-        let exact_path = dir.path().join("exact-pq.json");
-        persist_guard_pinning_proof(
-            &exact_path,
-            fixture.config.snapshot_path(),
-            &entry,
-            &fixture.relay_id,
-            SystemTime::UNIX_EPOCH + Duration::from_secs(42),
-        )
-        .expect("exact PQ hex field limit must persist");
-        let mut proof = crate::directory::read_guard_pinning_proof_file(&exact_path)
-            .expect("consumer must admit exact PQ hex field limit");
-        assert_eq!(
-            proof.pq_kem_public_hex().len(),
-            GUARD_PINNING_PROOF_JSON_MAX_FIELD_BYTES_V1
-        );
-        proof.pq_kem_public_hex.push('a');
-        assert!(matches!(
-            render_guard_pinning_proof(&proof),
-            Err(GuardPinningProofError::FieldTooLarge {
-                field: "pq_kem_public_hex",
-                found,
-                maximum: GUARD_PINNING_PROOF_JSON_MAX_FIELD_BYTES_V1,
-            }) if found == GUARD_PINNING_PROOF_JSON_MAX_FIELD_BYTES_V1 + 1
-        ));
-        entry.bundle.certificate.pq_kem_public.push(0);
-        let oversized_path = rejected_parent.join("oversized-pq.json");
-        assert!(matches!(
-            persist_guard_pinning_proof(
-                &oversized_path,
-                fixture.config.snapshot_path(),
-                &entry,
-                &fixture.relay_id,
-                SystemTime::UNIX_EPOCH + Duration::from_secs(42),
-            ),
-            Err(GuardPinningProofError::FieldTooLarge {
-                field: "pq_kem_public_hex",
-                found,
-                maximum: GUARD_PINNING_PROOF_JSON_MAX_FIELD_BYTES_V1,
-            }) if found == GUARD_PINNING_PROOF_JSON_MAX_FIELD_BYTES_V1 + 2
         ));
         assert!(!rejected_parent.exists());
     }
@@ -1064,7 +921,6 @@ mod tests {
             version: 1,
             recorded_at_unix: 0,
             snapshot_path: String::new(),
-            validation_phase: String::new(),
             relay_id_hex: String::new(),
             directory_hash_hex: String::new(),
             descriptor_commit_hex: String::new(),
@@ -1074,7 +930,6 @@ mod tests {
             guard_weight: 0,
             bandwidth_bytes_per_sec: 0,
             reputation_weight: 0,
-            pq_kem_public_hex: String::new(),
         }
     }
     fn guard_pinning_proof_with_json_len(target: usize) -> GuardPinningProof {
@@ -1086,12 +941,10 @@ mod tests {
         let max_escaped_field_len = GUARD_PINNING_PROOF_JSON_MAX_FIELD_BYTES_V1 * 6;
         for field in [
             &mut proof.snapshot_path,
-            &mut proof.validation_phase,
             &mut proof.relay_id_hex,
             &mut proof.directory_hash_hex,
             &mut proof.descriptor_commit_hex,
             &mut proof.issuer_fingerprint_hex,
-            &mut proof.pq_kem_public_hex,
         ] {
             let contribution = remaining.min(max_escaped_field_len);
             *field = json_string_with_encoded_body_len(contribution);
@@ -1142,16 +995,15 @@ mod tests {
             published_at_unix: 1_734_000_000,
             valid_after_unix: 1_734_000_000,
             valid_until_unix: 1_734_086_400,
-            validation_phase: encode_validation_phase(
-                CertificateValidationPhase::Phase3RequireDual,
-            ),
             issuers: vec![GuardDirectoryIssuerV1 {
                 fingerprint: issuer_fingerprint,
                 ed25519_public: issuer_public,
                 mldsa65_public: issuer_mldsa.public_key().to_vec(),
             }],
             relays: vec![GuardDirectoryRelayEntryV2 {
-                certificate: bundle.to_cbor(),
+                certificate: bundle
+                    .try_to_cbor()
+                    .expect("sample relay bundle should encode"),
             }],
         };
         let bytes = snapshot
@@ -1162,7 +1014,6 @@ mod tests {
         let config = GuardDirectoryConfig {
             snapshot_path: temp.path().to_path_buf(),
             expected_snapshot_digest_hex: hex_encode(compute_snapshot_digest(&bytes)),
-            allow_missing_entry: false,
             pinning_proof_path: None,
         };
         SnapshotFixture {
@@ -1208,13 +1059,6 @@ mod tests {
                 CapabilityToggle::Enabled,
                 CapabilityToggle::Disabled,
             ),
-            kem_policy: iroha_crypto::soranet::certificate::KemRotationPolicyV1 {
-                mode: iroha_crypto::soranet::certificate::KemRotationModeV1::Static,
-                preferred_suite: 1,
-                fallback_suite: None,
-                rotation_interval_hours: 0,
-                grace_period_hours: 0,
-            },
             handshake_suites: vec![
                 HandshakeSuite::Nk3PqForwardSecure,
                 HandshakeSuite::Nk2Hybrid,
@@ -1224,7 +1068,6 @@ mod tests {
             valid_until: 1_734_086_400,
             directory_hash: [0x44; 32],
             issuer_fingerprint,
-            pq_kem_public: vec![0x55; 1_184],
         };
         certificate
             .issue(issuer_signing, issuer_mldsa_secret)

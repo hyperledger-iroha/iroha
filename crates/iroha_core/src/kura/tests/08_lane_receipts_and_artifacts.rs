@@ -846,7 +846,7 @@ fn autonomous_execution_input_uses_one_exact_typed_source_binding() {
     );
     let mut unsupported_reservation_version = input;
     unsupported_reservation_version.reservation_keys[0].version =
-        LaneQueueReservationKeyV2::VERSION + 1;
+        LaneQueueReservationKeyV1::VERSION + 1;
     assert_eq!(
         Kura::validate_lane_block_execution_input_artifact(&unsupported_reservation_version),
         Err("autonomous execution input reservation key is invalid")
@@ -1052,7 +1052,7 @@ fn lane_block_execution_input_reader_rejects_pre_release_correlated_source_layou
         autonomous_payload_hash: Option<Hash>,
         entrypoint_hashes: Vec<Hash>,
         entrypoints: Vec<TransactionEntrypoint>,
-        reservation_keys: Vec<LaneQueueReservationKeyV2>,
+        reservation_keys: Vec<LaneQueueReservationKeyV1>,
         routing_plans: Vec<RoutingPlan>,
         native_amx_receipts: Vec<Option<NativeAmxReceipt>>,
     }

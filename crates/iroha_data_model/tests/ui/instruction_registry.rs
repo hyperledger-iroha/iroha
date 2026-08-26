@@ -1,14 +1,13 @@
-use iroha_data_model::{instruction_registry, isi::InstructionRegistry, prelude::*};
+use iroha_data_model::{isi::InstructionRegistry, prelude::*};
 fn main() {
-    let _registry: InstructionRegistry = instruction_registry!(
-        Log,
-        Register<Domain>,
-        Unregister<Domain>,
-        Mint<Quantity, Asset>,
-        Burn<Quantity, Asset>,
-        SetParameter,
-        SetKeyValue<Domain>,
-        RemoveKeyValue<Domain>,
-        Transfer<Asset, Quantity, Account>,
-    );
+    let _registry: InstructionRegistry = InstructionRegistry::new()
+        .register_with_id::<Log>("test.log.v1")
+        .register_with_id::<Register<Domain>>("test.domain.register.v1")
+        .register_with_id::<Unregister<Domain>>("test.domain.unregister.v1")
+        .register_with_id::<Mint<Quantity, Asset>>("test.asset.mint.v1")
+        .register_with_id::<Burn<Quantity, Asset>>("test.asset.burn.v1")
+        .register_with_id::<SetParameter>("test.parameter.set.v1")
+        .register_with_id::<SetKeyValue<Domain>>("test.domain.metadata.set.v1")
+        .register_with_id::<RemoveKeyValue<Domain>>("test.domain.metadata.remove.v1")
+        .register_with_id::<Transfer<Asset, Quantity, Account>>("test.asset.transfer.v1");
 }

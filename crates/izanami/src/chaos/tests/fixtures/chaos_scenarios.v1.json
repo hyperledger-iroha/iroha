@@ -102,7 +102,7 @@
     {"ordinal":94,"name":"confirmation_audit_scheduler_counts_full_queue_as_drop","family":"audit","scenario":"confirmation_audit_scheduler_counts_full_queue_as_drop","checks":4,"outcome":"pass"},
     {"ordinal":95,"name":"confirmation_audit_scheduler_marks_early_channel_close_as_failure","family":"audit","scenario":"confirmation_audit_scheduler_marks_early_channel_close_as_failure","checks":4,"outcome":"pass"},
     {"ordinal":96,"name":"submission_audit_budget_caps_then_resets","family":"audit","scenario":"submission_audit_budget_caps_then_resets","checks":3,"outcome":"pass"},
-    {"ordinal":97,"name":"terminal_confirmation_wait_options_require_applied_terminal_status","family":"policy","scenario":"terminal_confirmation_wait_options_require_applied_terminal_status","checks":4,"outcome":"pass"},
+    {"ordinal":97,"name":"applied_confirmation_wait_options_use_fixed_finality_timing","family":"policy","scenario":"applied_confirmation_wait_options_use_fixed_finality_timing","checks":2,"outcome":"pass"},
     {"ordinal":98,"name":"throughput_confirmation_wait_options_use_extended_audit_timeout","family":"policy","scenario":"throughput_confirmation_wait_options_use_extended_audit_timeout","checks":3,"outcome":"pass"},
     {"ordinal":99,"name":"fault_window_uses_run_bounds_when_unset","family":"scalar","scenario":"fault_window_uses_run_bounds_when_unset","checks":2,"outcome":"pass"},
     {"ordinal":100,"name":"fault_window_resolves_paper_offsets","family":"scalar","scenario":"fault_window_resolves_paper_offsets","checks":2,"outcome":"pass"},

@@ -2,6 +2,7 @@ package org.hyperledger.iroha.android.crypto.keystore;
 
 import java.io.IOException;
 import java.security.GeneralSecurityException;
+import java.security.KeyFactory;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.KeyStore;
@@ -138,7 +139,7 @@ final class SystemAndroidKeystoreBackend implements AndroidKeystoreBackend {
     try {
       generator.initialize(spec);
       final KeyPair pair = generator.generateKeyPair();
-      return new KeyGenerationResult(pair, strongBoxRequested);
+      return new KeyGenerationResult(pair, keyMetadata(alias, pair).strongBoxBacked());
     } catch (final ProviderException ex) {
       throw new KeyManagementException("Android Keystore generation failed", ex);
     } catch (final GeneralSecurityException ex) {
@@ -161,6 +162,73 @@ final class SystemAndroidKeystoreBackend implements AndroidKeystoreBackend {
   @Override
   public KeyProviderMetadata metadata() {
     return metadata;
+  }
+
+  @Override
+  public KeyProviderMetadata keyMetadata(final String alias, final KeyPair keyPair) {
+    Objects.requireNonNull(alias, "alias");
+    Objects.requireNonNull(keyPair, "keyPair");
+    if (alias.trim().isEmpty()) {
+      throw new IllegalArgumentException("alias must not be blank");
+    }
+    final KeyProviderMetadata.HardwareSecurityLevel level = keySecurityLevel(keyPair);
+    final KeyProviderMetadata.Builder builder =
+        KeyProviderMetadata.builder(metadata.name())
+            .setSupportsAttestationCertificates(metadata.supportsAttestationCertificates());
+    switch (level) {
+      case STRONGBOX:
+        builder.setStrongBoxBacked(true);
+        break;
+      case TRUSTED_ENVIRONMENT:
+        builder
+            .setHardwareBacked(true)
+            .setSecurityLevel(KeyProviderMetadata.HardwareSecurityLevel.TRUSTED_ENVIRONMENT);
+        break;
+      case SECURE_ELEMENT:
+        builder.setSecureElementBacked(true);
+        break;
+      case NONE:
+      default:
+        builder.setSecurityLevel(KeyProviderMetadata.HardwareSecurityLevel.NONE);
+        break;
+    }
+    return builder.build();
+  }
+
+  @SuppressWarnings({"rawtypes", "unchecked"})
+  private static KeyProviderMetadata.HardwareSecurityLevel keySecurityLevel(
+      final KeyPair keyPair) {
+    try {
+      final Class keyInfoClass = Class.forName("android.security.keystore.KeyInfo");
+      final KeyFactory keyFactory =
+          KeyFactory.getInstance(keyPair.getPrivate().getAlgorithm(), ANDROID_KEYSTORE);
+      final Object keyInfo = keyFactory.getKeySpec(keyPair.getPrivate(), keyInfoClass);
+      try {
+        final int securityLevel =
+            ((Number) keyInfoClass.getMethod("getSecurityLevel").invoke(keyInfo)).intValue();
+        final Class<?> keyProperties = Class.forName(KEY_PROPERTIES_CLASS);
+        final int strongBox = keyProperties.getField("SECURITY_LEVEL_STRONGBOX").getInt(null);
+        final int trustedEnvironment =
+            keyProperties.getField("SECURITY_LEVEL_TRUSTED_ENVIRONMENT").getInt(null);
+        final int unknownSecure =
+            keyProperties.getField("SECURITY_LEVEL_UNKNOWN_SECURE").getInt(null);
+        if (securityLevel == strongBox) {
+          return KeyProviderMetadata.HardwareSecurityLevel.STRONGBOX;
+        }
+        if (securityLevel == trustedEnvironment || securityLevel == unknownSecure) {
+          return KeyProviderMetadata.HardwareSecurityLevel.TRUSTED_ENVIRONMENT;
+        }
+        return KeyProviderMetadata.HardwareSecurityLevel.NONE;
+      } catch (final NoSuchMethodException ignored) {
+        final boolean hardwareBacked =
+            (Boolean) keyInfoClass.getMethod("isInsideSecureHardware").invoke(keyInfo);
+        return hardwareBacked
+            ? KeyProviderMetadata.HardwareSecurityLevel.TRUSTED_ENVIRONMENT
+            : KeyProviderMetadata.HardwareSecurityLevel.NONE;
+      }
+    } catch (final GeneralSecurityException | ReflectiveOperationException | RuntimeException ex) {
+      return KeyProviderMetadata.HardwareSecurityLevel.NONE;
+    }
   }
 
   @Override

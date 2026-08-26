@@ -1612,15 +1612,20 @@ mod tests {
             .unwrap_or_else(|err| panic!("decode {name}: {err}"));
         assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
     }
-    fn assert_registry_decodes_type_name<T>(registry: &crate::isi::InstructionRegistry, value: T)
-    where
+    fn assert_registry_decodes_registered_type<T>(
+        registry: &crate::isi::InstructionRegistry,
+        value: T,
+    ) where
         T: crate::isi::Instruction
             + norito::codec::Encode
             + 'static
             + norito::core::NoritoSerialize,
         for<'de> T: norito::core::NoritoDeserialize<'de>,
     {
-        assert_registry_decodes_name(registry, std::any::type_name::<T>(), value);
+        let wire_id = registry
+            .wire_id(std::any::type_name::<T>())
+            .expect("instruction type has an explicit wire identifier");
+        assert_registry_decodes_name(registry, wire_id, value);
     }
     #[test]
     fn log_getters_expose_level_and_message() {
@@ -1697,19 +1702,19 @@ mod tests {
         assert_eq!(decoded, quorum);
     }
     #[test]
-    fn signatory_quorum_default_registry_decodes_type_names() {
+    fn signatory_quorum_default_registry_decodes_canonical_wire_ids() {
         let registry = crate::isi::registry::default();
         let account = account(0x59);
         let signatory = public_key(0x5a);
-        assert_registry_decodes_type_name(
+        assert_registry_decodes_registered_type(
             &registry,
             AddSignatory::new(account.clone(), signatory.clone()),
         );
-        assert_registry_decodes_type_name(
+        assert_registry_decodes_registered_type(
             &registry,
             RemoveSignatory::new(account.clone(), signatory),
         );
-        assert_registry_decodes_type_name(
+        assert_registry_decodes_registered_type(
             &registry,
             SetAccountQuorum::new(account, NonZeroU16::new(3).expect("nonzero quorum")),
         );

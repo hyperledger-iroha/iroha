@@ -1,19 +1,10 @@
 use assert_cmd::cargo::cargo_bin_cmd;
 use blake3::Hasher as Blake3;
-use ed25519_dalek::SigningKey;
-use iroha_crypto::soranet::{
-    certificate::{
-        CapabilityToggle, KemRotationModeV1, KemRotationPolicyV1, RelayCapabilityFlagsV1,
-        RelayCertificateV2, RelayEndpointV2, RelayRolesV2,
-    },
-    handshake::HandshakeSuite,
-};
 use iroha_data_model::{
     account::AccountId,
     sorafs::gar::{GarEnforcementActionV1, GarEnforcementReceiptV1},
 };
 use norito::json::{self, Value};
-use soranet_pq::{HedgedRngSeed, MlDsaSuite, generate_mldsa_keypair_from_seed};
 use std::{fs, path::Path};
 use tempfile::tempdir;
 #[test]
@@ -23,17 +14,6 @@ fn soranet_gateway_m2_pipeline_emits_beta_and_ga() {
     let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("workspace root");
-    let pq_bundle = temp.path().join("sample_srcv2.cbor");
-    write_sample_srcv2(&pq_bundle);
-    let tls_dir = temp.path().join("tls");
-    fs::create_dir_all(&tls_dir).expect("tls dir");
-    fs::write(tls_dir.join("fullchain.pem"), "CERT").expect("fullchain");
-    fs::write(tls_dir.join("privkey.pem"), "KEY").expect("privkey");
-    fs::write(
-        tls_dir.join("ech.json"),
-        r#"{"ech_config_b64":"ZWNobWFyay1zYW1wbGU="}"#,
-    )
-    .expect("ech");
     let receipts_dir = temp.path().join("receipts");
     fs::create_dir_all(&receipts_dir).expect("receipts dir");
     let receipt = GarEnforcementReceiptV1 {
@@ -106,8 +86,6 @@ fn soranet_gateway_m2_pipeline_emits_beta_and_ga() {
             "name": "soranet-sjc01",
             "descriptor": descriptor,
             "trustless_config": trustless_config,
-            "pq_bundle": pq_bundle,
-            "tls_bundle_dir": tls_dir,
             "doq_listen": ["0.0.0.0:8853"],
             "odoh_relay": "https://odoh.sora.net/relay"
         }],
@@ -169,11 +147,10 @@ fn soranet_gateway_m2_pipeline_emits_beta_and_ga() {
         !beta_edge.contains("sora-denylist-version"),
         "retired local denylist header must not be required"
     );
-    let pq_summary = pop["pq_summary"].as_str().expect("pq summary");
     let hardening = pop["hardening_summary"]
         .as_str()
         .expect("hardening summary");
-    assert!(out_dir.join(pq_summary).is_file(), "pq summary missing");
+    assert!(pop.get("pq_summary").is_none());
     assert!(
         out_dir.join(hardening).is_file(),
         "hardening summary missing"
@@ -227,64 +204,6 @@ fn soranet_gateway_m2_pipeline_emits_beta_and_ga() {
         .expect("worker digest");
     assert_eq!(autoscale_hex, blake3_hex(&autoscale_plan));
     assert_eq!(worker_hex, blake3_hex(&worker_pack));
-}
-fn write_sample_srcv2(path: &Path) {
-    let signing_key = SigningKey::from_bytes(&[0x11; 32]);
-    let mldsa_keys = generate_mldsa_keypair_from_seed(
-        MlDsaSuite::MlDsa65,
-        HedgedRngSeed::from_entropy([0x65; 32]),
-        b"xtask:soranet-gateway-m2:srcv2",
-    )
-    .expect("mldsa keypair");
-    let certificate = RelayCertificateV2 {
-        relay_id: signing_key.verifying_key().to_bytes(),
-        identity_ed25519: signing_key.verifying_key().to_bytes(),
-        identity_mldsa65: mldsa_keys.public_key.clone(),
-        descriptor_commit: [0x22; 32],
-        roles: RelayRolesV2 {
-            entry: true,
-            middle: true,
-            exit: true,
-        },
-        guard_weight: 120,
-        bandwidth_bytes_per_sec: 5_000_000,
-        reputation_weight: 90,
-        endpoints: vec![RelayEndpointV2 {
-            quic_multiaddr: "/dns/relay.example/udp/443/quic".to_string(),
-            tls_server_name: "relay.example".to_string(),
-            tls_spki_sha256: [0xA5; 32],
-            priority: 1,
-            tags: vec!["doq".into(), "norito-stream".into()],
-        }],
-        capability_flags: RelayCapabilityFlagsV1::new(
-            CapabilityToggle::Enabled,
-            CapabilityToggle::Enabled,
-            CapabilityToggle::Enabled,
-            CapabilityToggle::Disabled,
-        ),
-        kem_policy: KemRotationPolicyV1 {
-            mode: KemRotationModeV1::Static,
-            preferred_suite: 1,
-            fallback_suite: None,
-            rotation_interval_hours: 0,
-            grace_period_hours: 0,
-        },
-        handshake_suites: vec![
-            HandshakeSuite::Nk3PqForwardSecure,
-            HandshakeSuite::Nk2Hybrid,
-        ],
-        published_at: 1_734_000_000,
-        valid_after: 1_734_000_000,
-        valid_until: 1_734_086_400,
-        directory_hash: [0x44; 32],
-        issuer_fingerprint: [0x55; 32],
-        pq_kem_public: vec![0x77; 1184],
-    };
-    let bundle = certificate
-        .issue(&signing_key, mldsa_keys.secret_key())
-        .expect("issue bundle");
-    let bytes = bundle.to_cbor();
-    fs::write(path, bytes).expect("write cbor");
 }
 fn blake3_hex(path: &Path) -> String {
     let mut hasher = Blake3::new();

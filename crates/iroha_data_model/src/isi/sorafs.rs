@@ -2075,7 +2075,7 @@ impl_sorafs_decode_from_slice!(FinalizeSorafsModerationCase {
 mod tests {
     use super::*;
     use crate::isi::test_support::{
-        assert_registry_decodes_type_name as assert_registry_decodes, assert_slice_roundtrip,
+        assert_registry_decodes_registered_type as assert_registry_decodes, assert_slice_roundtrip,
     };
     use crate::sorafs::{
         capacity::{CapacityDisputeEvidence, CapacityDisputeId},
@@ -2840,7 +2840,7 @@ mod tests {
         clippy::too_many_lines,
         reason = "one linear registry scenario verifies every SoraFS instruction type name"
     )]
-    fn sorafs_registry_decodes_type_names() {
+    fn sorafs_registry_decodes_canonical_wire_ids() {
         let registry = crate::isi::registry::default();
         assert_registry_decodes(
             &registry,

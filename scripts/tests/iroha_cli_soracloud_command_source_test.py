@@ -12,12 +12,11 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = REPO_ROOT / "integration_tests/tests/iroha_cli.rs"
 PREIMAGE_SHA256 = "aa1a2f2e6113915b33107d68d255f66194bd3813f853bd031125fe4459a57d43"
-EXPECTED_SOURCE_LINES = 4_573
+EXPECTED_SOURCE_LINES = 4_197
 
 HELPER_START = "struct SoracloudCli<'a>"
 HELPER_END = "async fn wait_for_soracloud_json_command"
 HELPER_HASH = "834a379d73e93b4efbe1d75c5899cf26e6064608a0cdd502b46f8fb9316577a9"
-ADVERTISE_HASH = "107212fbf26920091dee3580de1bbfb8bdf4e1b38bdcfbbcd7ddc8d1cfe84179"
 
 # Hash, bounded-success calls, bounded raw calls, shared success assertions, live network.
 FUNCTION_CONTRACTS = {
@@ -29,7 +28,7 @@ FUNCTION_CONTRACTS = {
         True,
     ),
     "soracloud_mutations_use_live_torii_control_plane": (
-        "a0670560be55d527ba48625a71f626c7bdf972c71e9dfb5810c1a93f225cd431",
+        "7d6b0a9c299aa6de7498285a5f0d61e9e261ecd7db830c9e6ca1d55a63a65d33",
         0,
         0,
         4,
@@ -50,77 +49,77 @@ FUNCTION_CONTRACTS = {
         True,
     ),
     "soracloud_hf_shared_lease_commands_use_live_torii_control_plane": (
-        "f0413f835f3772a28238c546fe57a63c5cc18cae896884506522e328ba0e0449",
+        "eac83f6fd3561444a674487ccc747ccb38ce57f658a44516d27d731690079f99",
         0,
         0,
-        8,
+        6,
         True,
     ),
     "soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window": (
-        "e4ae90ef3b1562f1c45444e7d1a1bc5efec1e8d71d035ecbfb18184eaecea765",
+        "3da039b3106d7d3c546b33edf20f521d81cca7ac492b792b82a784c307da1937",
         0,
         0,
         4,
         True,
     ),
     "soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts": (
-        "2de85b3b4a99b04aba23baec2eee7fb3e29864a42c388f9567e5ad41b2c86fb0",
+        "92d27a6805fc1cfa54b6d7bbc88d4c81993c75aab19ec36a8ef10b48a077fbd0",
         0,
         0,
         3,
         True,
     ),
     "soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback": (
-        "211dec6de4c6001170ada71c21a7c6d57090f8700f4407098d67ba64f489fec6",
+        "7b9123447ce7fd6ef9a7c928b5dd67ecad7fc3669b3e02bb624efc848aaff67d",
         8,
         0,
         0,
         True,
     ),
-    "soracloud_agent_autonomy_runtime_uses_live_torii_control_plane": (
-        "e7087d328fea5c9c7c2b6b8e2332c017354b5e2ed7c74711f0c218076ec389fc",
-        5,
-        1,
+    "soracloud_agent_autonomy_controls_use_live_torii_control_plane": (
+        "b3507daafe824b8de8b258a97bfc1d6ba223341b1486d670e4e29dee598c0210",
+        4,
+        0,
         0,
         True,
     ),
     "soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_control_plane": (
-        "dece98092d6dfa9b1ffa1e0128537529b23ba2f910853d6d7ca53d0d0d1c5e80",
+        "dfa5971bbf2b9b792f18fb06d586f1619362baf7bb86df18d82a1db5dfa1a179",
         11,
         1,
         0,
         True,
     ),
     "soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_control_plane": (
-        "90a624fe4509e4c0347e58150c548fed393f5ad8b610fb3eeae5d0fe61b0b5dd",
-        14,
+        "a5a0ed196719e8b85ddec35319e9fb1baf5aeb71168dc43d551b708791a4839f",
+        12,
         0,
         0,
         True,
     ),
-    "soracloud_agent_autonomy_commands_require_torii_url": (
-        "14b8f5fd34d5089c7b001fec32240be6544d9b5bf72852ba6e8cf9cdf2e817b6",
+    "soracloud_agent_autonomy_control_commands_require_torii_url": (
+        "e736344d9ff873cbe995bf8961c12354ca7c8a9655c86036097e4656b2be55a1",
         0,
         0,
         0,
         False,
     ),
     "soracloud_agent_wallet_and_mailbox_commands_require_torii_url": (
-        "e540179cdbd85d69b51d02136382235b5c01c449a4a7f6ee929b34ce0276eafe",
+        "6f386b0586e44e549556602b1bd96931c352d47b70d5ca3ffb11d25dba69fd4e",
         0,
         0,
         0,
         False,
     ),
     "soracloud_agent_lease_commands_require_torii_url": (
-        "1c6f334959aa2f0efe3eb1e369058c3fe35d44a4791b1b171e22a3bab4aa4edc",
+        "cb746d3974e64c092f0d62c7d22ec0bfdbe834ad83d77b1d33b6e051d0b70e1e",
         0,
         0,
         0,
         False,
     ),
     "soracloud_hf_shared_lease_commands_require_torii_url": (
-        "0e7aaa9d29b2045fc156f877f2c766f9a70ca27884219490de371f6e671ed4c4",
+        "b4c2e3ef4989e96fbaf6d643c3512e4d73ed23ff6ab2d8ced34cd597249fbcc1",
         0,
         0,
         0,
@@ -145,11 +144,11 @@ REQUIRED_HELPER_TOKENS = (
 REQUIRED_SECURITY_TOKENS = (
     "!over_cap_deploy.status.success()",
     "!no_write_deploy.status.success()",
-    "!revoked_run.status.success()",
+    '.get("revoked_policy_capability_count")',
     "!expired_wallet.status.success()",
     'contains("resources.cpu_millis exceeds SCR cap")',
     'contains("binding `session_store` requires mutable writes (`ReadWrite`)")',
-    'contains("agent.autonomy.run")',
+    '"agent.autonomy.run"',
     'contains("lease expired")',
 )
 
@@ -305,12 +304,6 @@ def validate_source(source: str) -> None:
         if live and len(context_pattern.findall(function)) != 1:
             raise GuardError(f"{name}: sandbox network context changed")
 
-    advertise, _start = _function(source, "advertise_soracloud_model_host")
-    if _normalized_hash(advertise) != ADVERTISE_HASH:
-        raise GuardError("model-host advertising command contract changed")
-    if advertise.count("assert_soracloud_success(") != 1:
-        raise GuardError("model-host advertising success diagnostic changed")
-
     protected = helper + "".join(protected_functions)
     for token in REQUIRED_SECURITY_TOKENS:
         if token not in protected:
@@ -384,8 +377,8 @@ class IrohaCliSoracloudCommandSourceTests(unittest.TestCase):
         self.assert_rejected(_replace_once(self.source, old, old.removeprefix("!")))
 
     def test_control_plane_diagnostic_mutation_is_rejected(self) -> None:
-        old = 'assert_soracloud_success(&deploy, "hf-deploy");'
-        self.assert_rejected(_replace_once(self.source, old, old.replace("hf-deploy", "hf-status")))
+        old = 'assert_soracloud_success(&deploy, "hf-join");'
+        self.assert_rejected(_replace_once(self.source, old, old.replace("hf-join", "hf-status")))
 
     def test_helper_argument_emission_mutation_is_rejected(self) -> None:
         old = "$(command.arg($arg);)+"

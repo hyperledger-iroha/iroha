@@ -36,7 +36,7 @@ use std::net::IpAddr;
 use std::os::unix::fs::MetadataExt;
 #[cfg(feature = "local-quic-proxy")]
 use std::path::{Component, Path, PathBuf};
-use std::{net::SocketAddr, str::FromStr, sync::Arc};
+use std::{fmt, net::SocketAddr, str::FromStr, sync::Arc};
 #[cfg(feature = "local-quic-proxy")]
 use std::{
     pin::Pin,
@@ -70,6 +70,7 @@ const PROXY_CAPABILITIES: &[&str] = &[
 ];
 const PROXY_SESSION_ID_LEN: usize = 16;
 const PROXY_CACHE_TAG_SALT_LEN: usize = 16;
+const PROXY_CLIENT_CAPABILITY_LEN: usize = 32;
 #[cfg(feature = "local-quic-proxy")]
 const PROXY_STREAM_VERSION: u8 = 1;
 #[cfg(feature = "local-quic-proxy")]
@@ -196,8 +197,153 @@ impl norito::json::JsonDeserialize for ProxyMode {
             .ok_or_else(|| norito::json::Error::Message(format!("invalid proxy_mode `{key}`")))
     }
 }
+/// Hex-encoded per-start capability used to authenticate to a local proxy.
+///
+/// This value is secret bootstrap material. It is exported only through a
+/// [`LocalQuicProxyHandle`] or an explicitly requested out-of-band manifest.
+#[derive(NoritoSerialize, NoritoDeserialize)]
+pub struct ProxyClientCapabilityHex([u8; PROXY_CLIENT_CAPABILITY_LEN]);
+impl ProxyClientCapabilityHex {
+    #[cfg(feature = "local-quic-proxy")]
+    fn from_bytes(bytes: &[u8; PROXY_CLIENT_CAPABILITY_LEN]) -> Self {
+        Self(*bytes)
+    }
+    fn parse(value: String) -> Result<Self, &'static str> {
+        if value.len() != PROXY_CLIENT_CAPABILITY_LEN * 2
+            || !value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            let mut raw = value.into_bytes();
+            raw.fill(0);
+            std::hint::black_box(raw.as_mut_slice());
+            return Err("proxy client capability must be exactly 64 lowercase hex characters");
+        }
+        let mut bytes = [0_u8; PROXY_CLIENT_CAPABILITY_LEN];
+        let decoded = hex::decode_to_slice(&value, &mut bytes);
+        let mut raw = value.into_bytes();
+        raw.fill(0);
+        std::hint::black_box(raw.as_mut_slice());
+        if decoded.is_err() {
+            bytes.fill(0);
+            std::hint::black_box(&mut bytes);
+            return Err("proxy client capability contains invalid hex");
+        }
+        if bytes.iter().all(|byte| *byte == 0) {
+            bytes.fill(0);
+            std::hint::black_box(&mut bytes);
+            return Err("proxy client capability must not be all zero");
+        }
+        Ok(Self(bytes))
+    }
+    /// Expose the raw bytes for the first authenticated handshake.
+    ///
+    /// This is the narrow secret handoff. The caller must avoid diagnostics and
+    /// scrub any copy after constructing its handshake frame.
+    #[must_use]
+    pub fn expose_bytes_for_handshake(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+impl Clone for ProxyClientCapabilityHex {
+    fn clone(&self) -> Self {
+        Self(self.0)
+    }
+}
+impl fmt::Debug for ProxyClientCapabilityHex {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ProxyClientCapabilityHex(<redacted>)")
+    }
+}
+impl PartialEq for ProxyClientCapabilityHex {
+    fn eq(&self, other: &Self) -> bool {
+        blake3::Hash::from_bytes(self.0) == other.0
+    }
+}
+impl Eq for ProxyClientCapabilityHex {}
+impl Drop for ProxyClientCapabilityHex {
+    fn drop(&mut self) {
+        self.0.fill(0);
+        std::hint::black_box(&mut self.0);
+    }
+}
+impl norito::json::FastJsonWrite for ProxyClientCapabilityHex {
+    fn write_json(&self, out: &mut String) {
+        const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
+        out.push('"');
+        for byte in self.0 {
+            out.push(char::from(LOWER_HEX[usize::from(byte >> 4)]));
+            out.push(char::from(LOWER_HEX[usize::from(byte & 0x0f)]));
+        }
+        out.push('"');
+    }
+}
+impl norito::json::JsonDeserialize for ProxyClientCapabilityHex {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        let value = parser.parse_string()?;
+        Self::parse(value).map_err(|message| norito::json::Error::Message(message.to_owned()))
+    }
+    fn json_from_value(value: &norito::json::Value) -> Result<Self, norito::json::Error> {
+        let value = value.as_str().ok_or_else(|| {
+            norito::json::Error::Message(
+                "proxy client capability must be a lowercase hex string".to_owned(),
+            )
+        })?;
+        Self::parse(value.to_owned())
+            .map_err(|message| norito::json::Error::Message(message.to_owned()))
+    }
+    fn json_from_map_key(key: &str) -> Result<Self, norito::json::Error> {
+        Self::parse(key.to_owned())
+            .map_err(|message| norito::json::Error::Message(message.to_owned()))
+    }
+}
+#[cfg(feature = "local-quic-proxy")]
+struct ProxyClientCapability([u8; PROXY_CLIENT_CAPABILITY_LEN]);
+#[cfg(feature = "local-quic-proxy")]
+impl ProxyClientCapability {
+    fn generate() -> Result<Self, ProxyError> {
+        Self::generate_with_rng(&mut OsRng)
+    }
+    fn generate_with_rng<R: TryCryptoRng + ?Sized>(rng: &mut R) -> Result<Self, ProxyError> {
+        let mut bytes = [0_u8; PROXY_CLIENT_CAPABILITY_LEN];
+        rng.try_fill_bytes(&mut bytes)
+            .map_err(|error| ProxyError::RandomBytes {
+                operation: "generating proxy client capability",
+                message: error.to_string(),
+            })?;
+        if bytes.iter().all(|byte| *byte == 0) {
+            bytes.fill(0);
+            std::hint::black_box(&mut bytes);
+            return Err(ProxyError::RandomBytes {
+                operation: "generating proxy client capability",
+                message: "entropy source returned all-zero capability material".to_owned(),
+            });
+        }
+        Ok(Self(bytes))
+    }
+    fn verify(&self, candidate: Option<&[u8; PROXY_CLIENT_CAPABILITY_LEN]>) -> bool {
+        candidate.is_some_and(|candidate| blake3::Hash::from_bytes(self.0) == *candidate)
+    }
+    fn export_hex(&self) -> ProxyClientCapabilityHex {
+        ProxyClientCapabilityHex::from_bytes(&self.0)
+    }
+}
+#[cfg(feature = "local-quic-proxy")]
+impl fmt::Debug for ProxyClientCapability {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ProxyClientCapability(<redacted>)")
+    }
+}
+#[cfg(feature = "local-quic-proxy")]
+impl Drop for ProxyClientCapability {
+    fn drop(&mut self) {
+        self.0.fill(0);
+        std::hint::black_box(&mut self.0);
+    }
+}
 #[derive(
-    Debug,
     Clone,
     NoritoSerialize,
     NoritoDeserialize,
@@ -212,7 +358,7 @@ pub struct LocalQuicProxyConfig {
     /// Optional telemetry label used in metrics (defaults to `proxy`).
     #[norito(default)]
     pub telemetry_label: Option<String>,
-    /// Optional guard cache key advertised to browser integrations.
+    /// Optional proxy-local key used for authenticated cache tagging.
     #[norito(default)]
     pub guard_cache_key_hex: Option<String>,
     /// Whether to emit a browser manifest payload in the handshake.
@@ -254,6 +400,36 @@ impl Default for LocalQuicProxyConfig {
             norito_bridge: None,
             car_bridge: None,
             kaigi_bridge: None,
+        }
+    }
+}
+impl fmt::Debug for LocalQuicProxyConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("LocalQuicProxyConfig")
+            .field("bind_addr", &self.bind_addr)
+            .field("telemetry_label", &self.telemetry_label)
+            .field(
+                "guard_cache_key_hex",
+                &self.guard_cache_key_hex.as_ref().map(|_| "<redacted>"),
+            )
+            .field("emit_browser_manifest", &self.emit_browser_manifest)
+            .field("proxy_mode", &self.proxy_mode)
+            .field("prewarm_circuits", &self.prewarm_circuits)
+            .field("max_streams_per_circuit", &self.max_streams_per_circuit)
+            .field("circuit_ttl_hint_secs", &self.circuit_ttl_hint_secs)
+            .field("norito_bridge", &self.norito_bridge)
+            .field("car_bridge", &self.car_bridge)
+            .field("kaigi_bridge", &self.kaigi_bridge)
+            .finish()
+    }
+}
+impl Drop for LocalQuicProxyConfig {
+    fn drop(&mut self) {
+        if let Some(secret) = self.guard_cache_key_hex.take() {
+            let mut bytes = secret.into_bytes();
+            bytes.fill(0);
+            std::hint::black_box(bytes.as_mut_slice());
         }
     }
 }
@@ -498,13 +674,88 @@ fn sanitize_extension(ext: &str) -> Result<String, String> {
 }
 #[cfg(feature = "local-quic-proxy")]
 fn canonical_bridge_root(path: &Path) -> Result<PathBuf, String> {
-    let metadata = std::fs::symlink_metadata(path)
-        .map_err(|error| format!("bridge root is unavailable: {error}"))?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Err("bridge root must be a non-symlink directory".into());
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        return Err(
+            "filesystem bridge roots require Unix owner and mode custody enforcement".into(),
+        );
     }
-    std::fs::canonicalize(path)
-        .map_err(|error| format!("failed to canonicalize bridge root: {error}"))
+    #[cfg(unix)]
+    {
+        let metadata = std::fs::symlink_metadata(path)
+            .map_err(|error| format!("bridge root is unavailable: {error}"))?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err("bridge root must be a non-symlink directory".into());
+        }
+        let canonical = std::fs::canonicalize(path)
+            .map_err(|error| format!("failed to canonicalize bridge root: {error}"))?;
+        validate_bridge_ancestor_chain_sync(&canonical)?;
+        Ok(canonical)
+    }
+}
+#[cfg(all(feature = "local-quic-proxy", unix))]
+#[allow(unsafe_code, reason = "geteuid has no safe standard-library wrapper")]
+fn proxy_effective_uid() -> u32 {
+    unsafe extern "C" {
+        fn geteuid() -> std::os::raw::c_uint;
+    }
+    // SAFETY: `geteuid` has no preconditions and does not retain pointers.
+    unsafe { geteuid() }
+}
+#[cfg(all(feature = "local-quic-proxy", unix))]
+fn validate_bridge_ancestor_chain_sync(root: &Path) -> Result<(), String> {
+    let effective_uid = proxy_effective_uid();
+    let mut ancestors = root.ancestors().map(Path::to_path_buf).collect::<Vec<_>>();
+    ancestors.reverse();
+    let mut metadata = Vec::with_capacity(ancestors.len());
+    for ancestor in &ancestors {
+        let observed = std::fs::symlink_metadata(ancestor).map_err(|error| {
+            format!(
+                "failed to inspect bridge-root ancestor `{}`: {error}",
+                ancestor.display()
+            )
+        })?;
+        if observed.file_type().is_symlink() || !observed.is_dir() {
+            return Err(format!(
+                "bridge-root ancestor `{}` must be a direct directory",
+                ancestor.display()
+            ));
+        }
+        if observed.uid() != 0 && observed.uid() != effective_uid {
+            return Err(format!(
+                "bridge-root ancestor `{}` must be owned by root or effective UID {effective_uid}",
+                ancestor.display()
+            ));
+        }
+        metadata.push(observed);
+    }
+    for (index, observed) in metadata.iter().enumerate() {
+        if observed.mode() & 0o022 == 0 {
+            continue;
+        }
+        let protected_sticky_boundary = observed.uid() == 0
+            && observed.mode() & 0o1000 != 0
+            && metadata
+                .get(index + 1)
+                .is_some_and(|child| child.uid() == effective_uid && child.mode() & 0o022 == 0);
+        if !protected_sticky_boundary {
+            return Err(format!(
+                "bridge-root ancestor `{}` is writable by another principal",
+                ancestors[index].display()
+            ));
+        }
+    }
+    let root_metadata = metadata
+        .last()
+        .ok_or_else(|| "bridge root has no filesystem metadata".to_owned())?;
+    if root_metadata.uid() != effective_uid || root_metadata.mode() & 0o022 != 0 {
+        return Err(format!(
+            "bridge root `{}` must be owned by effective UID {effective_uid} and not be group/world writable",
+            root.display()
+        ));
+    }
+    Ok(())
 }
 #[cfg(feature = "local-quic-proxy")]
 fn sanitize_relative_target(target: &str) -> Result<PathBuf, String> {
@@ -663,19 +914,33 @@ impl LocalQuicProxyHandle {
     /// Optional manifest payload for browser extensions.
     pub fn browser_manifest(&self) -> Result<Option<BrowserExtensionManifest>, ProxyError> {
         match self.inner.browser_manifest.as_ref() {
-            Some(template) => template.preview().map(Some),
+            Some(template) => {
+                let manifest = template.preview()?;
+                #[cfg(feature = "local-quic-proxy")]
+                let manifest = {
+                    let mut manifest = manifest;
+                    manifest.client_capability_hex =
+                        Some(self.inner.client_capability.export_hex());
+                    manifest
+                };
+                Ok(Some(manifest))
+            }
             None => Ok(None),
         }
+    }
+    /// Export the per-start client capability for an authenticated first handshake.
+    ///
+    /// Treat the returned value as secret bootstrap material and pass it only
+    /// to the local client that owns this handle.
+    #[cfg(feature = "local-quic-proxy")]
+    #[must_use]
+    pub fn export_client_capability(&self) -> ProxyClientCapabilityHex {
+        self.inner.client_capability.export_hex()
     }
     /// Runtime mode advertised by the proxy.
     #[must_use]
     pub fn mode(&self) -> ProxyMode {
         self.inner.mode.clone()
-    }
-    /// Guard cache key associated with the proxy (if configured).
-    #[must_use]
-    pub fn guard_cache_key(&self) -> Option<GuardCacheKey> {
-        self.inner.guard_cache_key.clone()
     }
     /// Gracefully shuts the proxy down.
     #[cfg(feature = "local-quic-proxy")]
@@ -698,7 +963,8 @@ struct LocalQuicProxyInner {
     certificate_pem: String,
     browser_manifest: Option<BrowserManifestTemplate>,
     mode: ProxyMode,
-    guard_cache_key: Option<GuardCacheKey>,
+    #[cfg(feature = "local-quic-proxy")]
+    client_capability: Arc<ProxyClientCapability>,
     #[cfg(feature = "local-quic-proxy")]
     shutdown_tx: watch::Sender<bool>,
     #[cfg(feature = "local-quic-proxy")]
@@ -731,7 +997,6 @@ fn build_manifest_template(
     local_addr: SocketAddr,
     certificate_pem: &str,
     certificate_der: &[u8],
-    guard_cache_key: Option<&GuardCacheKey>,
 ) -> Option<BrowserManifestTemplate> {
     if !config.emit_browser_manifest {
         return None;
@@ -739,7 +1004,6 @@ fn build_manifest_template(
     let mut hasher = Sha256::new();
     hasher.update(certificate_der);
     let fingerprint_hex = hex::encode(hasher.finalize());
-    let guard_cache_key_hex = guard_cache_key.map(GuardCacheKey::to_hex);
     let mut capabilities = Vec::with_capacity(PROXY_CAPABILITIES.len());
     capabilities.extend(PROXY_CAPABILITIES.iter().map(|cap| cap.to_string()));
     let circuit = ProxyCircuitHints {
@@ -790,7 +1054,7 @@ fn build_manifest_template(
         proxy_mode: config.proxy_mode.clone(),
         session_id: None,
         telemetry_label: config.telemetry_label.clone(),
-        guard_cache_key_hex,
+        client_capability_hex: None,
         circuit: Some(circuit),
         guard_selection: Some(guard_selection),
         route_hints,
@@ -835,9 +1099,11 @@ pub struct BrowserExtensionManifest {
     /// Optional telemetry label describing the proxy.
     #[norito(default)]
     pub telemetry_label: Option<String>,
-    /// Optional guard cache key delivered to the extension.
+    /// Per-start client capability, present only in out-of-band bootstrap manifests.
+    ///
+    /// The in-band handshake acknowledgement always omits this field.
     #[norito(default)]
-    pub guard_cache_key_hex: Option<String>,
+    pub client_capability_hex: Option<ProxyClientCapabilityHex>,
     /// Circuit tuning hints surfaced to clients.
     #[norito(default)]
     pub circuit: Option<ProxyCircuitHints>,
@@ -1097,7 +1363,7 @@ impl<'a> DecodeFromSlice<'a> for ProxyCacheTagging {
 struct ProxySession {
     telemetry_label: String,
     mode: ProxyMode,
-    guard_cache_key: Option<GuardCacheKey>,
+    guard_cache_key: Option<Arc<GuardCacheKey>>,
     session_id: Option<String>,
     cache_tags: Option<CacheTagContext>,
     bridge: Arc<ProxyBridgeConfig>,
@@ -1171,7 +1437,7 @@ impl ProxySession {
         append_tag_component(&mut message, open_frame.route_policy_id.as_deref());
         append_tag_component(&mut message, open_frame.exit_country.as_deref());
         append_tag_component(&mut message, self.session_id.as_deref());
-        let mac = hmac_sha256_128(guard_key.as_bytes(), &message);
+        let mac = hmac_sha256_128(guard_key.expose_bytes_for_mac(), &message);
         Some(hex::encode_upper(mac))
     }
 }
@@ -1272,7 +1538,8 @@ pub fn spawn_local_quic_proxy(
     config: LocalQuicProxyConfig,
 ) -> Result<LocalQuicProxyHandle, ProxyError> {
     let bind_addr = config.parsed_bind_addr()?;
-    let guard_cache_key = config.guard_cache_key()?;
+    let guard_cache_key = config.guard_cache_key()?.map(Arc::new);
+    let client_capability = Arc::new(ProxyClientCapability::generate()?);
     let stream_limit = config.validated_stream_limit()?;
     let bridge_config = Arc::new(ProxyBridgeConfig::from_config(&config)?);
     let sans = vec!["localhost".to_string(), bind_addr.ip().to_string()];
@@ -1303,13 +1570,8 @@ pub fn spawn_local_quic_proxy(
         .local_addr()
         .map_err(|err| ProxyError::QuinnEndpoint(err.to_string()))?;
     let certificate_pem = cert.pem().to_string();
-    let browser_manifest = build_manifest_template(
-        &config,
-        local_addr,
-        &certificate_pem,
-        cert_der.as_ref(),
-        guard_cache_key.as_ref(),
-    );
+    let browser_manifest =
+        build_manifest_template(&config, local_addr, &certificate_pem, cert_der.as_ref());
     let telemetry_label = config
         .telemetry_label
         .clone()
@@ -1317,6 +1579,7 @@ pub fn spawn_local_quic_proxy(
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let join_handle = tokio::spawn({
         let guard_cache_key = guard_cache_key.clone();
+        let client_capability = client_capability.clone();
         let bridge_config = bridge_config.clone();
         run_accept_loop(
             endpoint.clone(),
@@ -1325,6 +1588,7 @@ pub fn spawn_local_quic_proxy(
                 manifest_template: browser_manifest.clone(),
                 mode: config.proxy_mode.clone(),
                 guard_cache_key,
+                client_capability,
                 bridge_config,
                 connection_permits: Arc::new(Semaphore::new(PROXY_MAX_CONNECTIONS)),
             },
@@ -1338,7 +1602,7 @@ pub fn spawn_local_quic_proxy(
             certificate_pem,
             browser_manifest,
             mode: config.proxy_mode.clone(),
-            guard_cache_key,
+            client_capability,
             shutdown_tx,
             join_handle: Mutex::new(Some(join_handle)),
         }),
@@ -1358,7 +1622,8 @@ struct AcceptLoopContext {
     telemetry_label: String,
     manifest_template: Option<BrowserManifestTemplate>,
     mode: ProxyMode,
-    guard_cache_key: Option<GuardCacheKey>,
+    guard_cache_key: Option<Arc<GuardCacheKey>>,
+    client_capability: Arc<ProxyClientCapability>,
     bridge_config: Arc<ProxyBridgeConfig>,
     connection_permits: Arc<Semaphore>,
 }
@@ -1373,6 +1638,7 @@ async fn run_accept_loop(
         manifest_template,
         mode,
         guard_cache_key,
+        client_capability,
         bridge_config,
         connection_permits,
     } = context;
@@ -1403,6 +1669,7 @@ async fn run_accept_loop(
                 let manifest_template = manifest_template.clone();
                 let mode = mode.clone();
                 let guard_cache_key = guard_cache_key.clone();
+                let client_capability = client_capability.clone();
                 let label = telemetry_label.clone();
                 let bridge_config = bridge_config.clone();
                 tokio::spawn(async move {
@@ -1415,6 +1682,7 @@ async fn run_accept_loop(
                                 manifest_template,
                                 mode,
                                 guard_cache_key,
+                                client_capability,
                                 bridge_config,
                                 &label,
                             )
@@ -1443,7 +1711,8 @@ async fn handle_connection(
     connection: quinn::Connection,
     manifest_template: Option<BrowserManifestTemplate>,
     mode: ProxyMode,
-    guard_cache_key: Option<GuardCacheKey>,
+    guard_cache_key: Option<Arc<GuardCacheKey>>,
+    client_capability: Arc<ProxyClientCapability>,
     bridge_config: Arc<ProxyBridgeConfig>,
     telemetry_label: &str,
 ) -> Result<(), ProxyError> {
@@ -1452,12 +1721,15 @@ async fn handle_connection(
             .await
             .map_err(|_| ProxyError::Handshake("handshake stream timed out".into()))?
             .map_err(|err| ProxyError::Handshake(err.to_string()))?;
-    let handshake_bytes = timeout(PROXY_CONTROL_FRAME_TIMEOUT, read_frame(&mut recv_stream))
+    let mut handshake_bytes = timeout(PROXY_CONTROL_FRAME_TIMEOUT, read_frame(&mut recv_stream))
         .await
         .map_err(|_| ProxyError::Handshake("handshake frame timed out".into()))?
         .map_err(|err| ProxyError::Handshake(err.to_string()))?;
-    let handshake: ProxyHandshakeV1 = decode_from_bytes(&handshake_bytes)
-        .map_err(|err| ProxyError::Handshake(err.to_string()))?;
+    let decoded_handshake = decode_from_bytes(&handshake_bytes);
+    handshake_bytes.fill(0);
+    std::hint::black_box(handshake_bytes.as_mut_slice());
+    let mut handshake: ProxyHandshakeV1 =
+        decoded_handshake.map_err(|err| ProxyError::Handshake(err.to_string()))?;
     if handshake.version != PROXY_HANDSHAKE_VERSION {
         let ack = ProxyHandshakeAckV1 {
             version: PROXY_HANDSHAKE_VERSION,
@@ -1471,6 +1743,26 @@ async fn handle_connection(
         let _ = send_stream.finish();
         let _ = recv_stream.stop(VarInt::from_u32(0));
         record_transport_event(telemetry_label, "handshake_reject", "unsupported_version");
+        return Ok(());
+    }
+    let authenticated = client_capability.verify(handshake.client_capability.as_ref());
+    if let Some(mut candidate) = handshake.client_capability.take() {
+        candidate.fill(0);
+        std::hint::black_box(&mut candidate);
+    }
+    if !authenticated {
+        let ack = ProxyHandshakeAckV1 {
+            version: PROXY_HANDSHAKE_VERSION,
+            accepted: false,
+            message: Some("authentication failed".to_string()),
+            manifest: None,
+        };
+        write_frame(&mut send_stream, &ack)
+            .await
+            .map_err(|err| ProxyError::Handshake(err.to_string()))?;
+        let _ = send_stream.finish();
+        let _ = recv_stream.stop(VarInt::from_u32(0));
+        record_transport_event(telemetry_label, "handshake_reject", "authentication");
         return Ok(());
     }
     if [handshake.client.as_deref(), handshake.user_agent.as_deref()]
@@ -2044,6 +2336,13 @@ struct OpenBridgeFile {
 }
 #[cfg(feature = "local-quic-proxy")]
 async fn ensure_no_symlink_components(root: &Path, path: &Path) -> Result<(), BridgeFileError> {
+    #[cfg(not(unix))]
+    {
+        let _ = (root, path);
+        return Err(BridgeFileError::Unsafe);
+    }
+    #[cfg(unix)]
+    validate_bridge_ancestor_chain_sync(root).map_err(|_| BridgeFileError::Unsafe)?;
     let relative = path
         .strip_prefix(root)
         .map_err(|_| BridgeFileError::Unsafe)?;
@@ -2064,8 +2363,26 @@ async fn ensure_no_symlink_components(root: &Path, path: &Path) -> Result<(), Br
                 BridgeFileError::Io
             }
         })?;
-        if metadata.file_type().is_symlink() || (index + 1 < components.len() && !metadata.is_dir())
+        if metadata.file_type().is_symlink() {
+            return Err(BridgeFileError::Unsafe);
+        }
+        #[cfg(unix)]
+        if index + 1 < components.len() {
+            if !metadata.is_dir()
+                || metadata.uid() != proxy_effective_uid()
+                || metadata.mode() & 0o022 != 0
+            {
+                return Err(BridgeFileError::Unsafe);
+            }
+        } else if !metadata.is_file()
+            || metadata.uid() != proxy_effective_uid()
+            || metadata.mode() & 0o022 != 0
+            || metadata.nlink() != 1
         {
+            return Err(BridgeFileError::Unsafe);
+        }
+        #[cfg(not(unix))]
+        if index + 1 < components.len() && !metadata.is_dir() {
             return Err(BridgeFileError::Unsafe);
         }
     }
@@ -2110,9 +2427,18 @@ async fn open_bridge_file(
     let after = fs::symlink_metadata(&path)
         .await
         .map_err(|_| BridgeFileError::Changed)?;
+    #[cfg(unix)]
+    let custody_changed = [&before, &opened, &after].into_iter().any(|metadata| {
+        metadata.uid() != proxy_effective_uid()
+            || metadata.mode() & 0o022 != 0
+            || metadata.nlink() != 1
+    });
+    #[cfg(not(unix))]
+    let custody_changed = true;
     if !opened.is_file()
         || before.file_type().is_symlink()
         || after.file_type().is_symlink()
+        || custody_changed
         || BridgeFileIdentity::from_metadata(&before) != BridgeFileIdentity::from_metadata(&opened)
         || BridgeFileIdentity::from_metadata(&opened) != BridgeFileIdentity::from_metadata(&after)
     {
@@ -2522,13 +2848,39 @@ fn generate_cache_salt_with_rng<R: TryCryptoRng + ?Sized>(
 }
 /// Proxy handshake payload dispatched by clients.
 #[cfg(feature = "local-quic-proxy")]
-#[derive(Debug, NoritoSerialize, NoritoDeserialize)]
+#[derive(NoritoSerialize, NoritoDeserialize)]
 struct ProxyHandshakeV1 {
     version: u8,
+    #[norito(default)]
+    client_capability: Option<[u8; PROXY_CLIENT_CAPABILITY_LEN]>,
     #[norito(default)]
     client: Option<String>,
     #[norito(default)]
     user_agent: Option<String>,
+}
+#[cfg(feature = "local-quic-proxy")]
+impl fmt::Debug for ProxyHandshakeV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ProxyHandshakeV1")
+            .field("version", &self.version)
+            .field(
+                "client_capability",
+                &self.client_capability.as_ref().map(|_| "<redacted>"),
+            )
+            .field("client", &self.client)
+            .field("user_agent", &self.user_agent)
+            .finish()
+    }
+}
+#[cfg(feature = "local-quic-proxy")]
+impl Drop for ProxyHandshakeV1 {
+    fn drop(&mut self) {
+        if let Some(capability) = self.client_capability.as_mut() {
+            capability.fill(0);
+            std::hint::black_box(capability);
+        }
+    }
 }
 /// Acknowledgement returned to clients after the handshake completes.
 #[cfg(feature = "local-quic-proxy")]
@@ -2612,6 +2964,8 @@ mod tests {
     #[derive(Debug)]
     struct FailingProxyRng;
     #[derive(Debug)]
+    struct ZeroProxyRng;
+    #[derive(Debug)]
     struct FailingProxyRngError;
     impl std::fmt::Display for FailingProxyRngError {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -2629,6 +2983,19 @@ mod tests {
         }
         fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> Result<(), Self::Error> {
             Err(FailingProxyRngError)
+        }
+    }
+    impl TryRngCore for ZeroProxyRng {
+        type Error = std::convert::Infallible;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(0)
+        }
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(0)
+        }
+        fn try_fill_bytes(&mut self, dst: &mut [u8]) -> Result<(), Self::Error> {
+            dst.fill(0);
+            Ok(())
         }
     }
     #[test]
@@ -2680,6 +3047,16 @@ mod tests {
             Err(ProxyError::StreamLimit { .. })
         ));
     }
+    #[test]
+    fn proxy_config_debug_redacts_guard_cache_key() {
+        let config = LocalQuicProxyConfig {
+            guard_cache_key_hex: Some(TEST_GUARD_KEY.into()),
+            ..LocalQuicProxyConfig::default()
+        };
+        let rendered = format!("{config:?}");
+        assert!(rendered.contains("<redacted>"));
+        assert!(!rendered.contains(TEST_GUARD_KEY));
+    }
     #[tokio::test]
     async fn bridge_file_open_is_bounded_and_detects_mutation() {
         let root = TempDir::new().expect("tempdir");
@@ -2727,7 +3104,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn bridge_file_open_rejects_symlinks_and_symlink_roots() {
-        use std::os::unix::fs::symlink;
+        use std::os::unix::fs::{PermissionsExt as _, symlink};
         let root = TempDir::new().expect("tempdir");
         let real = root.path().join("real.norito");
         let link = root.path().join("link.norito");
@@ -2743,8 +3120,21 @@ mod tests {
         symlink(root.path(), &root_link).expect("create root symlink");
         assert!(canonical_bridge_root(&root_link).is_err());
         std::fs::remove_file(root_link).expect("remove root symlink");
+
+        let writable_root = TempDir::new().expect("writable tempdir");
+        std::fs::set_permissions(writable_root.path(), std::fs::Permissions::from_mode(0o777))
+            .expect("make root unsafe");
+        assert!(canonical_bridge_root(writable_root.path()).is_err());
+
+        std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o666))
+            .expect("make payload unsafe");
+        assert!(matches!(
+            open_bridge_file(root.path(), real, 64).await,
+            Err(BridgeFileError::Unsafe)
+        ));
     }
     impl TryCryptoRng for FailingProxyRng {}
+    impl TryCryptoRng for ZeroProxyRng {}
     use quinn::{
         ClientConfig, Endpoint, ServerConfig, VarInt,
         crypto::rustls::QuicClientConfig as QuinnRustlsClientConfig,
@@ -2820,15 +3210,14 @@ mod tests {
     fn manifest_template_populates_expected_fields() {
         let config = LocalQuicProxyConfig {
             telemetry_label: Some("dev-proxy".into()),
+            guard_cache_key_hex: Some(TEST_GUARD_KEY.into()),
             proxy_mode: ProxyMode::Bridge,
             ..LocalQuicProxyConfig::default()
         };
-        let guard_key = GuardCacheKey::from_bytes([0xAB; GuardCacheKey::LENGTH]);
         let (cert_pem, cert_der) = sample_certificate();
         let addr: SocketAddr = "127.0.0.1:4433".parse().expect("addr");
-        let template =
-            build_manifest_template(&config, addr, &cert_pem, &cert_der, Some(&guard_key))
-                .expect("manifest template");
+        let template = build_manifest_template(&config, addr, &cert_pem, &cert_der)
+            .expect("manifest template");
         let manifest = template.preview().expect("manifest preview");
         let expected_fingerprint = {
             let mut hasher = Sha256::new();
@@ -2844,10 +3233,6 @@ mod tests {
         assert_eq!(manifest.capabilities, expected_caps);
         assert_eq!(manifest.proxy_mode, ProxyMode::Bridge);
         assert_eq!(
-            manifest.guard_cache_key_hex.as_deref(),
-            Some(guard_key.to_hex().as_str())
-        );
-        assert_eq!(
             manifest.cert_fingerprint_hex.as_deref(),
             Some(expected_fingerprint.as_str())
         );
@@ -2857,6 +3242,10 @@ mod tests {
         let cache = manifest.cache_tagging.expect("cache tagging");
         let salt = cache.salt_hex.expect("salt");
         assert_eq!(salt.len(), PROXY_CACHE_TAG_SALT_LEN * 2);
+        let rendered = norito::json::to_json_pretty(&template.preview().expect("second preview"))
+            .expect("render browser manifest");
+        assert!(!rendered.contains(TEST_GUARD_KEY));
+        assert!(!rendered.contains("guard_cache_key"));
     }
     #[test]
     fn proxy_session_id_reports_rng_failure() {
@@ -2883,18 +3272,37 @@ mod tests {
         }
     }
     #[test]
+    fn proxy_client_capability_reports_rng_failure() {
+        let error = ProxyClientCapability::generate_with_rng(&mut FailingProxyRng)
+            .expect_err("client capability RNG failure");
+        match error {
+            ProxyError::RandomBytes { operation, message } => {
+                assert_eq!(operation, "generating proxy client capability");
+                assert!(message.contains("failing proxy session RNG"));
+            }
+            other => panic!("expected random bytes error, got {other}"),
+        }
+    }
+    #[test]
+    fn proxy_client_capability_rejects_all_zero_material() {
+        let error = ProxyClientCapability::generate_with_rng(&mut ZeroProxyRng)
+            .expect_err("all-zero client capability must fail closed");
+        assert!(error.to_string().contains("all-zero"));
+        assert!(ProxyClientCapabilityHex::parse("00".repeat(32)).is_err());
+    }
+    #[test]
     fn cache_tag_generation_matches_expected() {
         let config = LocalQuicProxyConfig {
             telemetry_label: Some("dev-proxy".into()),
             proxy_mode: ProxyMode::Bridge,
             ..LocalQuicProxyConfig::default()
         };
-        let guard_key = GuardCacheKey::from_bytes([0x11; GuardCacheKey::LENGTH]);
+        let guard_key = GuardCacheKey::from_bytes([0x11; GuardCacheKey::LENGTH])
+            .expect("non-zero guard cache key");
         let (cert_pem, cert_der) = sample_certificate();
         let addr: SocketAddr = "127.0.0.1:9443".parse().expect("addr");
-        let template =
-            build_manifest_template(&config, addr, &cert_pem, &cert_der, Some(&guard_key))
-                .expect("manifest template");
+        let template = build_manifest_template(&config, addr, &cert_pem, &cert_der)
+            .expect("manifest template");
         let manifest = template.preview().expect("manifest preview");
         let cache_context =
             CacheTagContext::from_manifest(&manifest).expect("cache context present");
@@ -2904,7 +3312,7 @@ mod tests {
         let session = ProxySession {
             telemetry_label: "test".into(),
             mode: ProxyMode::Bridge,
-            guard_cache_key: Some(guard_key.clone()),
+            guard_cache_key: Some(Arc::new(guard_key.clone())),
             session_id: manifest.session_id.clone(),
             cache_tags: Some(cache_context),
             bridge: bridge_config,
@@ -2930,7 +3338,10 @@ mod tests {
         append_tag_component(&mut expected_message, open_frame.route_policy_id.as_deref());
         append_tag_component(&mut expected_message, open_frame.exit_country.as_deref());
         append_tag_component(&mut expected_message, session.session_id.as_deref());
-        let expected = hex::encode_upper(hmac_sha256_128(guard_key.as_bytes(), &expected_message));
+        let expected = hex::encode_upper(hmac_sha256_128(
+            guard_key.expose_bytes_for_mac(),
+            &expected_message,
+        ));
         assert_eq!(actual, expected);
         let tcp_tag = session
             .cache_tag_for(ProxyStreamService::Tcp, &open_frame)
@@ -2944,7 +3355,10 @@ mod tests {
         append_tag_component(&mut tcp_message, open_frame.route_policy_id.as_deref());
         append_tag_component(&mut tcp_message, open_frame.exit_country.as_deref());
         append_tag_component(&mut tcp_message, session.session_id.as_deref());
-        let expected_tcp = hex::encode_upper(hmac_sha256_128(guard_key.as_bytes(), &tcp_message));
+        let expected_tcp = hex::encode_upper(hmac_sha256_128(
+            guard_key.expose_bytes_for_mac(),
+            &tcp_message,
+        ));
         assert_eq!(tcp_tag, expected_tcp);
     }
     #[test]
@@ -3056,11 +3470,15 @@ mod tests {
         };
         let proxy_addr = proxy.local_addr();
         let (endpoint, connection) = connect_proxy_client(proxy_addr).await;
-        let handshake_ack = perform_proxy_handshake(&connection).await;
+        let handshake_ack = perform_proxy_handshake(&connection, &proxy).await;
         assert!(handshake_ack.accepted);
         let manifest = handshake_ack
             .manifest
             .expect("handshake should include manifest");
+        assert!(
+            manifest.client_capability_hex.is_none(),
+            "the in-band manifest must not return its authentication capability"
+        );
         assert_eq!(manifest.telemetry_label, config.telemetry_label);
         assert_eq!(manifest.proxy_mode, config.proxy_mode);
         let cache = manifest.cache_tagging.expect("cache tagging present");
@@ -3088,7 +3506,7 @@ mod tests {
         };
         let proxy_addr = proxy.local_addr();
         let (endpoint, connection) = connect_proxy_client(proxy_addr).await;
-        let handshake_ack = perform_proxy_handshake(&connection).await;
+        let handshake_ack = perform_proxy_handshake(&connection, &proxy).await;
         assert!(handshake_ack.accepted);
         let open_frame = ProxyStreamOpenV1 {
             version: PROXY_STREAM_VERSION.saturating_add(1),
@@ -3125,6 +3543,7 @@ mod tests {
             connection.open_bi().await.expect("open handshake stream");
         let handshake = ProxyHandshakeV1 {
             version: PROXY_HANDSHAKE_VERSION.saturating_add(1),
+            client_capability: None,
             client: Some("test-client".into()),
             user_agent: Some("orchestrator-test".into()),
         };
@@ -3141,6 +3560,60 @@ mod tests {
         assert_eq!(ack.message.as_deref(), Some("unsupported version"));
         connection.close(VarInt::from_u32(0), b"done");
         endpoint.wait_idle().await;
+        proxy.shutdown().await;
+    }
+    #[tokio::test(flavor = "multi_thread")]
+    async fn handshake_requires_the_out_of_band_client_capability() {
+        let config = LocalQuicProxyConfig {
+            bind_addr: "127.0.0.1:0".into(),
+            emit_browser_manifest: true,
+            ..LocalQuicProxyConfig::default()
+        };
+        let Some(proxy) = spawn_proxy_or_skip(config) else {
+            return;
+        };
+        let bootstrap = proxy
+            .browser_manifest()
+            .expect("bootstrap manifest")
+            .expect("manifest enabled");
+        assert!(bootstrap.client_capability_hex.is_some());
+        let mut capability_hex = hex::encode(
+            bootstrap
+                .client_capability_hex
+                .as_ref()
+                .expect("bootstrap capability")
+                .expose_bytes_for_handshake(),
+        )
+        .into_bytes();
+        assert!(
+            !format!("{bootstrap:?}")
+                .as_bytes()
+                .windows(capability_hex.len())
+                .any(|window| window == capability_hex.as_slice())
+        );
+        capability_hex.fill(0);
+        std::hint::black_box(capability_hex.as_mut_slice());
+
+        let (missing_endpoint, missing_connection) = connect_proxy_client(proxy.local_addr()).await;
+        let missing = perform_proxy_handshake_with_capability(&missing_connection, None).await;
+        assert!(!missing.accepted);
+        assert_eq!(missing.message.as_deref(), Some("authentication failed"));
+        assert!(missing.manifest.is_none());
+        missing_connection.close(VarInt::from_u32(0), b"done");
+        missing_endpoint.wait_idle().await;
+
+        let mut wrong_capability = proxy_client_capability(&proxy);
+        wrong_capability[0] ^= 1;
+        let (wrong_endpoint, wrong_connection) = connect_proxy_client(proxy.local_addr()).await;
+        let wrong =
+            perform_proxy_handshake_with_capability(&wrong_connection, Some(wrong_capability))
+                .await;
+        assert!(!wrong.accepted);
+        assert_eq!(wrong.message.as_deref(), Some("authentication failed"));
+        assert!(wrong.manifest.is_none());
+        wrong_connection.close(VarInt::from_u32(0), b"done");
+        wrong_endpoint.wait_idle().await;
+
         proxy.shutdown().await;
     }
     #[tokio::test(flavor = "multi_thread")]
@@ -3169,7 +3642,7 @@ mod tests {
         };
         let proxy_addr = proxy.local_addr();
         let (endpoint, connection) = connect_proxy_client(proxy_addr).await;
-        let handshake_ack = perform_proxy_handshake(&connection).await;
+        let handshake_ack = perform_proxy_handshake(&connection, &proxy).await;
         assert!(handshake_ack.accepted);
         let open_frame = ProxyStreamOpenV1 {
             version: PROXY_STREAM_VERSION,
@@ -3221,7 +3694,7 @@ mod tests {
         };
         let proxy_addr = proxy.local_addr();
         let (endpoint, connection) = connect_proxy_client(proxy_addr).await;
-        let handshake_ack = perform_proxy_handshake(&connection).await;
+        let handshake_ack = perform_proxy_handshake(&connection, &proxy).await;
         assert!(handshake_ack.accepted);
         let open_frame = ProxyStreamOpenV1 {
             version: PROXY_STREAM_VERSION,
@@ -3274,7 +3747,7 @@ mod tests {
         };
         let proxy_addr = proxy.local_addr();
         let (endpoint, connection) = connect_proxy_client(proxy_addr).await;
-        let handshake_ack = perform_proxy_handshake(&connection).await;
+        let handshake_ack = perform_proxy_handshake(&connection, &proxy).await;
         assert!(handshake_ack.accepted);
         let open_frame = ProxyStreamOpenV1 {
             version: PROXY_STREAM_VERSION,
@@ -3322,7 +3795,7 @@ mod tests {
         };
         let proxy_addr = proxy.local_addr();
         let (endpoint, connection) = connect_proxy_client(proxy_addr).await;
-        let handshake_ack = perform_proxy_handshake(&connection).await;
+        let handshake_ack = perform_proxy_handshake(&connection, &proxy).await;
         assert!(handshake_ack.accepted);
         let open_frame = ProxyStreamOpenV1 {
             version: PROXY_STREAM_VERSION,
@@ -3363,11 +3836,28 @@ mod tests {
         let connection = connecting.await.expect("proxy handshake");
         (endpoint, connection)
     }
-    async fn perform_proxy_handshake(connection: &quinn::Connection) -> ProxyHandshakeAckV1 {
+    fn proxy_client_capability(proxy: &LocalQuicProxyHandle) -> [u8; PROXY_CLIENT_CAPABILITY_LEN] {
+        let exported = proxy.export_client_capability();
+        let mut capability = [0_u8; PROXY_CLIENT_CAPABILITY_LEN];
+        capability.copy_from_slice(exported.expose_bytes_for_handshake());
+        capability
+    }
+    async fn perform_proxy_handshake(
+        connection: &quinn::Connection,
+        proxy: &LocalQuicProxyHandle,
+    ) -> ProxyHandshakeAckV1 {
+        perform_proxy_handshake_with_capability(connection, Some(proxy_client_capability(proxy)))
+            .await
+    }
+    async fn perform_proxy_handshake_with_capability(
+        connection: &quinn::Connection,
+        client_capability: Option<[u8; PROXY_CLIENT_CAPABILITY_LEN]>,
+    ) -> ProxyHandshakeAckV1 {
         let (mut handshake_send, mut handshake_recv) =
             connection.open_bi().await.expect("open handshake stream");
         let handshake = ProxyHandshakeV1 {
             version: PROXY_HANDSHAKE_VERSION,
+            client_capability,
             client: Some("test-client".into()),
             user_agent: Some("orchestrator-test".into()),
         };

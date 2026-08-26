@@ -1552,8 +1552,8 @@ public final class MusubiInstructionsV1 {
 
   private static int compareAccountIds(final String left, final String right) {
     try {
-      final AccountAddress leftAddress = AccountAddress.parseAny(left, null).address;
-      final AccountAddress rightAddress = AccountAddress.parseAny(right, null).address;
+      final AccountAddress leftAddress = AccountAddress.parseEncoded(left, null);
+      final AccountAddress rightAddress = AccountAddress.parseEncoded(right, null);
       final AccountAddress.SingleKeyPayload leftSingle =
           leftAddress.singleKeyPayload().orElse(null);
       final AccountAddress.SingleKeyPayload rightSingle =

@@ -2063,23 +2063,23 @@ def test_inflight_layout_contract_rejects_weakened_execution_carrier_priority(
                 "formal/sumeragi_v2/"
                 "SumeragiV2InFlightFirstRelease.tla"
             ),
-            "SelectQueuePlanV4Conjunction ==\n",
-            "SelectQueuePlanV4Snapshot ==\n",
+            "SelectQueuePlanV1Conjunction ==\n",
+            "SelectQueuePlanV1Snapshot ==\n",
         ),
         (
             Path("crates/iroha_core/src/lane_consensus.rs"),
-            "LANE_EXECUTABLE_PAYLOAD_VERSION_V2: u8 = 2",
-            "LANE_EXECUTABLE_PAYLOAD_VERSION_V2: u8 = 3",
+            "LANE_EXECUTABLE_PAYLOAD_VERSION_V1: u8 = 1",
+            "LANE_EXECUTABLE_PAYLOAD_VERSION_V1: u8 = 2",
         ),
         (
             Path("crates/iroha_core/src/queue/journal.rs"),
-            "QUEUE_PLAN_JOURNAL_VERSION: u16 = 4",
-            "QUEUE_PLAN_JOURNAL_VERSION: u16 = 5",
+            "QUEUE_PLAN_JOURNAL_VERSION: u16 = 1",
+            "QUEUE_PLAN_JOURNAL_VERSION: u16 = 2",
         ),
         (
             Path("crates/iroha_core/src/queue/reservation_journal.rs"),
-            "LANE_QUEUE_RESERVATION_JOURNAL_VERSION: u16 = 5",
-            "LANE_QUEUE_RESERVATION_JOURNAL_VERSION: u16 = 9",
+            "LANE_QUEUE_RESERVATION_JOURNAL_VERSION: u16 = 1",
+            "LANE_QUEUE_RESERVATION_JOURNAL_VERSION: u16 = 2",
         ),
         (
             Path("crates/iroha_data_model/src/merge.rs"),
@@ -2095,12 +2095,12 @@ def test_inflight_layout_contract_rejects_weakened_execution_carrier_priority(
             "    /// Accepted entrypoints in lane descriptor order.\n"
             "    pub entrypoints: Vec<TransactionEntrypoint>,\n"
             "    /// Exact durable queue reservation identities in entrypoint order.\n"
-            "    pub reservation_keys: Vec<LaneQueueReservationKeyV2>",
+            "    pub reservation_keys: Vec<LaneQueueReservationKeyV1>",
             "pub entrypoint_hashes: Vec<Hash>,\n"
             "    /// Accepted entrypoints in lane descriptor order.\n"
             "    pub entrypoints: Vec<TransactionEntrypoint>,\n"
             "    /// Exact durable queue reservation identities in entrypoint order.\n"
-            "    pub reservation_tokens: Vec<LaneQueueReservationKeyV2>",
+            "    pub reservation_tokens: Vec<LaneQueueReservationKeyV1>",
         ),
         (
             Path("scripts/formal/run_sumeragi_v2_inflight_first_release.sh"),
@@ -2125,7 +2125,7 @@ def test_inflight_layout_contract_rejects_weakened_execution_carrier_priority(
         ),
         (
             Path("formal/sumeragi_v2/inflight_first_release_fixed.cfg"),
-            "INVARIANT MLQueuePlanV4SelectedConjunctionBound4096\n",
+            "INVARIANT MLQueuePlanV1SelectedConjunctionBound4096\n",
             "",
         ),
     ),

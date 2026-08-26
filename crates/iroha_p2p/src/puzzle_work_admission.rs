@@ -1,4 +1,4 @@
-//! Process-wide admission for memory-hard `SoraNet` handshake work.
+//! Process-wide admission for blocking `SoraNet` handshake cryptography.
 
 use std::{
     num::NonZeroUsize,
@@ -17,7 +17,7 @@ pub const DEFAULT_OUTBOUND_MINT_CAPACITY: NonZeroUsize =
 pub const DEFAULT_INBOUND_VERIFY_CAPACITY: NonZeroUsize =
     ActualSoranetPow::DEFAULT_PUZZLE_WORK_CAPACITY_PER_DIRECTION;
 
-/// Direction-aware process admission for Argon2 handshake jobs.
+/// Direction-aware process admission for blocking handshake jobs.
 #[derive(Debug)]
 pub struct SoranetPuzzleWorkAdmission {
     outbound_mint: Arc<Semaphore>,
@@ -85,15 +85,15 @@ pub fn process_wide_admission(
     Ok(admission)
 }
 
-/// Execute one blocking Argon2 job while retaining its permit even if the
+/// Execute one blocking admission job while retaining its permit even if the
 /// surrounding async handshake is cancelled.
-pub async fn run_soranet_puzzle_work<T, F>(gate: Arc<Semaphore>, work: F) -> Result<T, Error>
+pub async fn run_soranet_admission_work<T, F>(gate: Arc<Semaphore>, work: F) -> Result<T, Error>
 where
     T: Send + 'static,
     F: FnOnce() -> Result<T, Error> + Send + 'static,
 {
     let permit = gate.acquire_owned().await.map_err(|error| {
-        Error::HandshakeSoranet(format!("SoraNet puzzle work gate closed: {error}"))
+        Error::HandshakeSoranet(format!("SoraNet admission work gate closed: {error}"))
     })?;
     tokio::task::spawn_blocking(move || {
         // Tokio cannot cancel blocking work after a handshake timeout. Holding
@@ -102,5 +102,7 @@ where
         work()
     })
     .await
-    .map_err(|error| Error::HandshakeSoranet(format!("SoraNet puzzle work task failed: {error}")))?
+    .map_err(|error| {
+        Error::HandshakeSoranet(format!("SoraNet admission work task failed: {error}"))
+    })?
 }

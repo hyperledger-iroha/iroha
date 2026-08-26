@@ -314,7 +314,7 @@ fn validate_billing_publication_receipt_shape(
 }
 define_broker_wire_struct!(owned ProviderIngestSourceMusubiArchiveWireV1 { network_id: iroha_data_model::NetworkId, observed_finalized_cursor: sorafs_node::ProviderIngestFinalizedCursorV1, binding: iroha_data_model::musubi::MusubiReplicationOrderArchiveBindingV1, });
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-struct ProviderIngestSourceFetchRequestWireV2 {
+struct ProviderIngestSourceFetchRequestWireV1 {
     authorization: sorafs_node::FinalizedProviderIngestAuthorizationV1,
     source_provider_ids: Vec<[u8; 32]>,
     musubi_archive: Option<ProviderIngestSourceMusubiArchiveWireV1>,
@@ -806,7 +806,7 @@ fn decode_source_plan(bytes: &[u8]) -> Result<sorafs_car::CarBuildPlan, BrokerEr
     source_plan_from_wire(wire)
 }
 fn source_request_from_wire(
-    fetch: ProviderIngestSourceFetchRequestWireV2,
+    fetch: ProviderIngestSourceFetchRequestWireV1,
 ) -> Result<sorafs_node::ProviderIngestSourceRequestV1, BrokerError> {
     let musubi_archive = match fetch.musubi_archive {
         Some(musubi) => Some(
@@ -829,7 +829,7 @@ fn source_request_from_wire(
 }
 fn source_request_to_wire(
     request: sorafs_node::ProviderIngestSourceRequestV1,
-) -> Result<ProviderIngestSourceFetchRequestWireV2, BrokerError> {
+) -> Result<ProviderIngestSourceFetchRequestWireV1, BrokerError> {
     let (authorization, source_provider_ids, musubi_archive) = request.into_parts();
     let musubi_archive = match musubi_archive {
         Some(musubi) => {
@@ -844,7 +844,7 @@ fn source_request_to_wire(
         }
         None => None,
     };
-    let fetch = ProviderIngestSourceFetchRequestWireV2 {
+    let fetch = ProviderIngestSourceFetchRequestWireV1 {
         authorization,
         source_provider_ids,
         musubi_archive,
@@ -853,7 +853,7 @@ fn source_request_to_wire(
     Ok(fetch)
 }
 fn validate_source_fetch_request(
-    fetch: &ProviderIngestSourceFetchRequestWireV2,
+    fetch: &ProviderIngestSourceFetchRequestWireV1,
     binding: &ProviderBindingWireV1,
     admitted_provider_ids: Option<&[[u8; 32]]>,
     session_network_id: &NetworkId,
@@ -1520,8 +1520,6 @@ fn validate_observation(
             || slot == IrohaRuntimeProviderSlotV1::ModerationPublicationHandoff.wire_id()
             || slot == IrohaRuntimeProviderSlotV1::ModerationPanelNotification.wire_id()
             || slot
-                == IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider.wire_id()
-            || slot
                 == IrohaRuntimeProviderSlotV1::BootleLanternIssuanceProviderRegistry.wire_id() =>
         {
             if observed.signer_metadata.is_some()
@@ -1846,7 +1844,23 @@ fn make_operation_request(
     operation: u16,
     payload: Vec<u8>,
 ) -> Result<OperationRequestV1, BrokerError> {
-    let mut payload = ScrubbedBytes::new(payload);
+    make_operation_request_with_scrubbed_payload(
+        session_id,
+        request_id,
+        binding,
+        provider_metadata_digest,
+        operation,
+        ScrubbedBytes::new(payload),
+    )
+}
+fn make_operation_request_with_scrubbed_payload(
+    session_id: [u8; 32],
+    request_id: u64,
+    binding: ProviderBindingWireV1,
+    provider_metadata_digest: [u8; 32],
+    operation: u16,
+    mut payload: ScrubbedBytes,
+) -> Result<OperationRequestV1, BrokerError> {
     if session_id == [0; 32] || request_id == 0 || provider_metadata_digest == [0; 32] {
         return Err(BrokerError::Protocol);
     }

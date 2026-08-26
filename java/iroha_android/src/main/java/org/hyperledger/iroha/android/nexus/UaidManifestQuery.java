@@ -10,12 +10,14 @@ public final class UaidManifestQuery {
   private final UaidManifestStatusFilter status;
   private final Long limit;
   private final Long offset;
+  private final UaidManifestCountMode countMode;
 
   private UaidManifestQuery(final Builder builder) {
     this.dataspaceId = builder.dataspaceId;
     this.status = builder.status;
     this.limit = builder.limit;
     this.offset = builder.offset;
+    this.countMode = builder.countMode;
   }
 
   public static Builder builder() {
@@ -38,6 +40,10 @@ public final class UaidManifestQuery {
     return offset;
   }
 
+  public UaidManifestCountMode countMode() {
+    return countMode;
+  }
+
   /** Serialises the query into URL parameters suitable for Torii. */
   public Map<String, String> toQueryParameters() {
     final Map<String, String> params = new LinkedHashMap<>();
@@ -53,6 +59,9 @@ public final class UaidManifestQuery {
     if (offset != null) {
       params.put("offset", String.valueOf(offset));
     }
+    if (countMode != null) {
+      params.put("count_mode", countMode.parameterValue());
+    }
     return Collections.unmodifiableMap(params);
   }
 
@@ -62,6 +71,7 @@ public final class UaidManifestQuery {
     private UaidManifestStatusFilter status;
     private Long limit;
     private Long offset;
+    private UaidManifestCountMode countMode;
 
     private Builder() {}
 
@@ -79,8 +89,8 @@ public final class UaidManifestQuery {
     }
 
     public Builder setLimit(final Long limit) {
-      if (limit != null && limit < 0) {
-        throw new IllegalArgumentException("limit must be non-negative");
+      if (limit != null && limit <= 0) {
+        throw new IllegalArgumentException("limit must be positive");
       }
       this.limit = limit;
       return this;
@@ -91,6 +101,11 @@ public final class UaidManifestQuery {
         throw new IllegalArgumentException("offset must be non-negative");
       }
       this.offset = offset;
+      return this;
+    }
+
+    public Builder setCountMode(final UaidManifestCountMode countMode) {
+      this.countMode = countMode;
       return this;
     }
 

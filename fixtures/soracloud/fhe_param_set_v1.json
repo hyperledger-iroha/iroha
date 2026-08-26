@@ -21,7 +21,6 @@
     "value": null
   },
   "activation_height": 1,
-  "deprecation_height": null,
   "withdraw_height": null,
   "parameter_digest": "hash:ECA18E4232F9BE0B5020B1B4E647826425EC6666F81F24C784CA5A380BAEF789#FB6E",
   "rns_modulus_chain_digest": "hash:EEA5EF5503B1C9FEDB3CE920BE2D2E004CA07AD4139EF930ED7749666503A5A5#94FB",

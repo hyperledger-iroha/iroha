@@ -450,8 +450,9 @@ retry an `unknown` or `submitted` outcome. This cancellation behavior is scoped
 to status-waiting submissions; `wait: false` must omit `signal` and every other
 status-only polling option. See `recipes/nexus_app_transfer.mjs` for an offline,
 canonical end-to-end example.
-Custom success/failure status iterables are capped at 32 raw entries before
-duplicate removal.
+Finality policy is fixed; success, failure, and terminal status iterables are
+not accepted. Only global, state-resolved `Applied` succeeds; `Rejected` and
+`Expired` fail, while all other status observations remain pending.
 
 When supplying a custom `transactionCodec` to `NexusAppClient`, payload hash
 aliases must be exact lowercase 64-character hex and must match the returned
@@ -952,6 +953,8 @@ import {
   noritoEncodeInstruction,
   noritoDecodeInstruction,
   buildRegisterDomainTransaction,
+  buildCreateKaigiTransaction,
+  buildJoinKaigiTransaction,
   buildTransaction,
   buildMintAssetInstruction,
   buildMintAssetTransaction,
@@ -1047,7 +1050,7 @@ const { signedTransaction } = buildTransaction({
 });
 const receipt = await torii.submitTransaction(signedTransaction);
 const sampleHashHex =
-  receipt?.payload?.tx_hash ?? "ab".repeat(32); // 32-byte transaction hash as lowercase hex
+  receipt?.payload?.tx_hash ?? "ab".repeat(32); // marked 32-byte Iroha hash as lowercase hex
 const status = await torii.getTransactionStatus(sampleHashHex);
 console.log(status?.status.kind); // e.g. "Applied"
 
@@ -1062,16 +1065,18 @@ console.log(typedStatus?.status?.kind); // e.g. "Applied"
 // The wait helpers also ship normalised variants if you prefer structured DTOs
 await torii.waitForTransactionStatusTyped(sampleHashHex, { intervalMs: 500 });
 await torii.submitTransactionAndWaitTyped(encoded, { hashHex: sampleHashHex });
-// Note: raw `getTransactionStatus` options support only
-// { allowShortHash, signal, scope }, where scope is the explicit read
+// Note: raw `getTransactionStatus` requires an exact lowercase 64-hex hash
+// whose final nibble is odd (the canonical Iroha hash marker);
+// its options support only { signal, scope }, where scope is the explicit read
 // choice "local" or "global" and defaults to "global". An "auto" mode and
 // cross-endpoint status fallback lists are not part of the API.
 // Polling helper options support only { signal, intervalMs, timeoutMs, maxAttempts,
-// failureStatuses, onStatus }. Success is fixed to exact canonical `Applied`;
-// every finality wait is global-only. State-resolved Applied succeeds,
-// state-resolved Rejected or Expired always fails, and `failureStatuses` can
-// add other state-resolved failure labels. Cache-resolved terminal hints remain
-// progress observations and are retried.
+// onStatus }. Finality policy is not caller-selectable: every wait is global-only,
+// exact state-resolved Applied succeeds, and Rejected or Expired always fails.
+// Queued, Approved, Committed, and queue/cache Applied observations remain pending.
+// Status HTTP responses are closed too: only `200` with the exact typed payload
+// or `404` (not found yet) are valid. Empty `200`, `202`, `204`, and every other
+// status fail rather than selecting a retired pending representation.
 // intervalMs/timeoutMs must be non-negative integers (use timeoutMs: null to disable
 // the deadline), maxAttempts must be a positive integer when provided, and onStatus
 // must be a function.
@@ -1145,8 +1150,8 @@ for await (const holding of torii.iterateAccountAssetsQuery("sorauﾛ1PｸCｶr�
 }
 ```
 
-Public status parsing accepts only the canonical hash, closed status kind, optional committed
-height, scope, and resolution source. Rejection text, diagnostics, trigger completions, and
+Public status parsing accepts only the canonical hash, closed status kind, optional applied
+block height, scope, and resolution source. Rejection text, diagnostics, trigger completions, and
 batch outcomes are rejected. Authenticated transaction details require a one-shot canonical
 signed `FindTransactions` query bound to the deployment's exact genesis-derived `NetworkId`;
 the JavaScript package does not expose a details helper until that signed-query generator is
@@ -1471,20 +1476,10 @@ const kaigiCreateTx = buildCreateKaigiTransaction({
   authority,
   feePayment,
   call: {
-    id: { domainId: "wonderland", callName: "weekly-sync" },
+    id: { domainId: "wonderland.universal", callName: "weekly-sync" },
     host: authority,
     gasRatePerMinute: 120,
     metadata: { topic: "roadmap" },
-    relayManifest: {
-      expiryMs: 1700111000000,
-      hops: [
-        {
-          relayId: authority,
-          hpkePublicKey: Buffer.from([1, 2, 3, 4]),
-          weight: 3,
-        },
-      ],
-    },
   },
   privateKey,
 });
@@ -1494,16 +1489,8 @@ const kaigiJoinTx = buildJoinKaigiTransaction({
   authority,
   feePayment,
   join: {
-    callId: "wonderland:weekly-sync",
-    participant: authority,
-    commitment: {
-      commitment: Buffer.alloc(32, 0x11),
-      aliasTag: "host",
-    },
-    nullifier: {
-      digest: Buffer.alloc(32, 0x22),
-      issuedAtMs: 42,
-    },
+    callId: "wonderland.universal:weekly-sync",
+    participant: newAccountId,
   },
   privateKey,
 });
@@ -1823,7 +1810,7 @@ console.log(
 evidence, queue pressure, governance readiness, and Native AMX participant
 applications live on `GET /v1/sumeragi/diagnostics`; they are parsed by the
 separate `getSumeragiDiagnosticsTyped()` helper and are not consensus
-authority. The general `GET /v1/status` API remains another distinct
+authority. The general `GET /status` API remains another distinct
 operational-health snapshot.
 
 All Sumeragi status helpers accept the standard `{signal}` option:
@@ -1928,7 +1915,7 @@ for (const peer of peers) {
 }
 ```
 
-Torii status snapshots extend the base `/v1/status` payload with derived metrics:
+Torii status snapshots extend the base `/status` payload with derived metrics:
 
 ```js
 const snapshot = await torii.getStatusSnapshot();
@@ -2404,7 +2391,16 @@ bindings.dataspaces.forEach((entry) => {
   console.log(`${entry.dataspace_alias ?? entry.dataspace_id}: ${entry.accounts.join(", ")}`);
 });
 
-const manifests = await torii.getUaidManifests(uaidLiteral, { dataspaceId: 11 });
+const manifests = await torii.getUaidManifests(uaidLiteral, {
+  dataspaceId: 11,
+  status: "active",
+  limit: 50,
+  offset: 0,
+  countMode: "exact",
+});
+console.log(
+  `matched=${manifests.total} more=${manifests.has_more} count=${manifests.count_mode}`,
+);
 manifests.manifests.forEach((manifest) => {
   console.log(
     `manifest ${manifest.manifest_hash} status=${manifest.status} entries=${manifest.manifest.entries.length}`,
@@ -2412,20 +2408,21 @@ manifests.manifests.forEach((manifest) => {
 });
 ```
 
-Each helper normalises/validates the response payloads:
+Each helper validates the response payloads:
 
 - `getUaidPortfolio` enforces numeric totals and returns the deterministically
   sorted dataspace/account tree.
 - `getUaidBindings` mirrors the Space Directory bindings map so tooling can
   confirm which Torii account IDs are active per dataspace.
-- `getUaidManifests` validates lifecycle metadata, manifest hashes, allow/deny
-  entries, and optional dataspace filters (set `dataspaceId` to restrict the
-  snapshot).
+- `getUaidManifests` requires the exact paginated response envelope, numeric
+  manifest version `1`, lifecycle metadata, lower-case hashes, canonical
+  accounts, and exact allow/deny entry shapes. Filters use `dataspaceId`,
+  `status`, `limit`, `offset`, and `countMode`; values are never trimmed,
+  case-folded, or numerically coerced.
 
-The helpers automatically canonicalise UAID literals (`uaid:<hex>` or raw
-64-character hex digests with LSB=1) and throw when the supplied identifier is
-malformed, ensuring automation scripts surface clear diagnostics long before the
-request reaches Torii.
+The helpers require exact lower-case `uaid:<64-hex>` literals with LSB=1 and
+throw on whitespace, raw hashes, or case variants, ensuring automation scripts
+surface clear diagnostics before the request reaches Torii.
 
 ### Publishing & revoking manifests
 
@@ -3709,6 +3706,10 @@ for (const sample of status.samples) {
 }
 console.log("histogram", status.rtt.buckets);
 ```
+
+`getPipelinePreflight()` exposes both `ivm_max_cycles_upper_bound` and
+`ivm_admission_cycle_limit`. Its fee-account fields contain exact canonical I105
+account ids; alias-shaped `name@domain` values are rejected as protocol drift.
 ```
 
 ```js
@@ -3812,7 +3813,7 @@ file; selecting the live suite without `IROHA_TORII_INTEGRATION_URL` fails.
 - `IROHA_TORII_INTEGRATION_ISO_ALIAS_INDEX` — optional deterministic index (integer) for exercising `resolveAliasByIndex`. Provide this when the target node exposes indexed alias metadata so the integration suite can cover both alias endpoints.
 - `IROHA_TORII_INTEGRATION_SORAFS_ENABLED` — set to `1` to run the SoraFS registry/storage, payload-range, and PoR tests. An enabled SoraFS lane fails unless the payload manifest, positive range length, and PoR week inputs are all supplied and the endpoints respond.
 - `IROHA_TORII_INTEGRATION_SORAFS_POR_WEEK` — ISO week label such as `2026-W05`, required when `IROHA_TORII_INTEGRATION_SORAFS_ENABLED=1`.
-- `IROHA_TORII_INTEGRATION_UAID` — optional UAID literal (`uaid:<hex>` or raw 64-hex digest, LSB=1). When provided, the integration suite exercises the UAID portfolio/bindings/manifests endpoints so cross-dataspace APIs stay covered.
+- `IROHA_TORII_INTEGRATION_UAID` — optional exact lower-case UAID literal (`uaid:<64-hex>`, LSB=1). When provided, the integration suite exercises the UAID portfolio/bindings/manifests endpoints so cross-dataspace APIs stay covered.
 - `IROHA_TORII_INTEGRATION_UAID_DATASPACE` — optional dataspace id (non-negative integer) used to scope the UAID manifest request when `IROHA_TORII_INTEGRATION_UAID` is set. Leave unset to fetch manifests across every dataspace.
 - `IROHA_TORII_INTEGRATION_SNS_SUFFIX` — optional SNS suffix id (u16) used to fetch the suffix policy snapshot. Supply alongside `IROHA_TORII_INTEGRATION_URL` to exercise the SNS policy smoke test.
 - `IROHA_TORII_INTEGRATION_SNS_SELECTOR` — optional canonical name selector (for example `wonderland.sora`) used to fetch an SNS registration record.
@@ -3894,15 +3895,16 @@ recreating the Docker stack.
 
 With `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite now:
 
-1. Registers a disposable domain, account, and asset definition.
+1. Registers disposable domains, universal domainless accounts, and asset
+   definitions independently; account registration never carries a domain id.
 2. Mints and re-mints the asset, transfers balances via the iterator helpers,
    and queries the relevant lists through both `/list` and `/query` endpoints.
 3. Optionally submits a `pacs.008` message (when `IROHA_TORII_INTEGRATION_ISO_ENABLED=1`)
    to verify the bridge pipeline end-to-end.
 4. Optionally inspects the SoraFS pin registry (when `IROHA_TORII_INTEGRATION_SORAFS_ENABLED=1`),
-   using canonical account signatures for the alias and replication inventory
-   routes. Operator-only storage-state and payload-fetch diagnostics are
-   intentionally excluded from the public integration client.
+   using canonical account signatures for the alias/replication inventory
+   projections. Operator-only storage-state and payload-fetch
+   diagnostics are intentionally excluded from the public integration client.
 5. Optionally submits a DA ingest payload and polls the manifest endpoint (when
    `IROHA_TORII_INTEGRATION_DA_ENABLED=1`), and can stream multi-source fetch
    evidence when `IROHA_TORII_INTEGRATION_DA_GATEWAYS`/`IROHA_TORII_INTEGRATION_DA_TICKET`

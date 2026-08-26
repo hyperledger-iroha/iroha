@@ -103,16 +103,21 @@ normative sequence.
      current salt epoch pointer.
    - Operators publish a companion `RelayDescriptorManifestV1` JSON document
      alongside the descriptor. It carries the private Ed25519 identity seed as
-     `identity.ed25519_private_key_hex`; relays reference it via
+     `identity.ed25519_private_key_hex` and the raw ML-DSA-65 private key as
+     `identity.mldsa65_private_key_hex`; relays reference it via
      `handshake.descriptor_manifest_path`. The handshake configuration schema
      contains no inline identity-private-key field, so private material cannot
-     enter distributed relay configuration. The manifest must
-     be a direct regular file with no group or other Unix permissions. Startup
-     fails if it is unsafe, omits the key, or provides a value that does not
-     decode to 32 bytes.
+     enter distributed relay configuration. Operators inject the manifest only
+     as a runtime secret. The manifest must be a direct regular file with no
+     group or other Unix permissions. Startup fails if it is unsafe, departs
+     from the exact version-1 schema, or contains an aliased, uppercase,
+     all-zero, malformed, or certificate-mismatched signing identity. Static
+     ML-KEM private or public fields are rejected as unknown: NK2 and NK3
+     encapsulate only to the KEM public shares supplied by the client for that
+     handshake, so the relay has no persistent handshake KEM key pair.
 2. **ClientHello / Noise Initiate**
    - Client sends a random nonce, supported capability TLVs, and padded
-     extensions. If PQ KEM support exists it includes a Kyber public share.
+     extensions, including the mandatory ML-KEM-768 public share.
 3. **ServerHello / Noise Respond**
    - Relay responds with its own nonce, selected capabilities, certificate or
      static Noise key, and PQ confirmation. Transcript binding includes all
@@ -128,11 +133,15 @@ normative sequence.
      `K`. HKDF separates client-to-relay from relay-to-client keys and separates
      every QUIC stream by initiator, directionality, and stream index. A stream
      context may be derived only once per session; first-release implementations
-     fail closed after 65,536 distinct contexts so nonce-reuse tracking is bounded.
+     transfer the non-clone negotiated session key into exactly one record-layer
+     root and fail closed after 65,536 distinct contexts so nonce-reuse tracking
+     is bounded.
    - The authenticated 16-byte header is
      `"SNR1" || sequence:u64be || plaintext_len:u32be`. Sequences are contiguous
-     from zero, plaintext is limited to 64 KiB per record, and receivers fail
+     from zero, plaintext is limited to 1..=64 KiB per record, and receivers fail
      closed before releasing plaintext on any framing, order, or tag error.
+     Zero-length records are invalid because they make no application progress
+     and could otherwise monopolize an async reader with authenticated work.
      The 32-byte key is
      `HKDF-SHA-256(salt="iroha.soranet.record.hkdf-sha256.v1", IKM=K)`
      expanded with
@@ -185,15 +194,13 @@ have the required number of leading zero bits. Tickets must not be excessively
 far in the future and must remain valid for the configured TTL window; relays
 abort with a downgrade alert if the ticket is missing or invalid.
 
-Relay admission now layers adaptive defenses on top of the base PoW check:
+Relay admission layers bounded defenses on top of the mandatory PoW check:
 
-- **Adaptive difficulty.** Each entry relay tracks PoW failures and clean handshakes in
-  a sliding window. Repeated invalid tickets automatically raise the difficulty (up
-  to `pow.adaptive.max_difficulty`), while healthy traffic allows the relay to relax
-  back toward the configured minimum. Both adaptive bounds must remain inside the
-  first-release `1..=32` corridor; a zero floor or oversized ceiling is rejected at
-  startup. Operators can monitor the live requirement via
-  the `soranet_handshake_pow_difficulty{mode=…}` Prometheus gauge.
+- **Static difficulty.** The issuer and verifier use the same configured
+  `pow.difficulty` for the lifetime of the process. The first-release schema has
+  no adaptive controller; an `adaptive` key is rejected as unknown so stale
+  configurations cannot cause issuer/verifier drift. Operators can monitor the
+  requirement via the `soranet_handshake_pow_difficulty{mode=…}` Prometheus gauge.
 - **Per-hop quotas.** Handshake bursts per remote IP and per descriptor commit are capped
   (`pow.quotas`), with optional hop-specific overrides exposed via `pow.quotas_per_mode` so
   entry, middle, and exit relays can enforce independent ceilings. Exhausting a quota now
@@ -216,9 +223,9 @@ Relay admission now layers adaptive defenses on top of the base PoW check:
   the same throttle path so padding/congestion resources are not tied up by intentionally
   slow peers.
 
-All thresholds are configurable in the relay JSON (`pow.adaptive`, `pow.quotas`,
-`pow.quotas_per_mode`, `pow.slowloris`) so deployments can tune the policy to their client
-population.
+The bounded thresholds are configurable in the relay JSON (`pow.quotas`,
+`pow.quotas_per_mode`, `pow.slowloris`) so deployments can tune the policy to
+their client population without changing ticket difficulty at runtime.
 
 ### Argon2 Puzzle Service (SNNet-6a)
 
@@ -236,8 +243,8 @@ of which policy a relay enforces.
 
 - **Parameters.** Operators control the Argon2 cost factors via
   `pow.puzzle.memory_kib` (RAM in KiB), `pow.puzzle.time_cost` (iterations), and
-  `pow.puzzle.lanes` (parallelism). The adaptive difficulty controller drives the
-  continue to operate without special cases.
+  `pow.puzzle.lanes` (parallelism). `pow.difficulty` is the single static work
+  factor shared by the issuer and every verifier.
 - **TTL enforcement.** Puzzle tickets reuse the existing `pow` `min_ticket_ttl_secs`
   and `max_future_skew_secs` bounds. Verification rejects expired tickets, TTLs that
   fall below the policy minimum, or expiry windows that exceed the allowed skew.
@@ -248,11 +255,10 @@ of which policy a relay enforces.
 - **Issuance service.** The `tools/soranet-puzzle-service` daemon exposes Norito JSON
   endpoints at `/v1/puzzle/config` and `/v1/puzzle/mint`, allowing edge relays to delegate
   ticket minting. Config responses surface the active difficulty and TTL bounds, while
-  mint requests accept an optional `ttl_secs` override and return a base64-encoded ticket
-  with expiry metadata. A `/healthz` endpoint publishes readiness for relay supervisors.
-  to the adaptive pipeline, so brownout telemetry and quota throttles require no
-  and is only executed when the puzzle gate is explicitly disabled for brownout or
-  debugging scenarios.
+  protected mint requests accept an optional `ttl_secs` override and return exactly one
+  base64-encoded Argon2 credential with expiry metadata. When an ML-DSA verifier key is
+  configured, the response is the canonical signed envelope and raw tickets are rejected.
+  A `/healthz` endpoint publishes readiness for relay supervisors.
 - **Telemetry.** The relay exports Prometheus counters for negotiated handshakes
   (`sn16_handshake_mode_total`), downgrade reasons (`sn16_handshake_downgrade_total` –
   reported as deterministic snake-case slugs such as `suite_no_overlap` or
@@ -310,7 +316,8 @@ exact bytes after the ticket. It derives the puzzle parameters from
 
 - `GET /v1/puzzle/config` — returns the active difficulty, timing bounds, puzzle cost
   factors, and a public token-policy summary so clients can size their workloads.
-  The public summary never includes active token revocation identifiers.
+  The public summary never includes active token revocation identifiers and never
+  reads or refreshes the privileged revocation file.
 - `POST /v1/puzzle/mint` — mints a fresh ticket and returns a base64 payload.
   Callers must supply the 32-byte admission commitment as
   `transcript_hash_hex`; they may also provide `{ "ttl_secs": <override> }`.
@@ -334,8 +341,10 @@ regular files and rejects symbolic links, replacement/growth races, and bytes
 beyond their first-release corridors before decoding. Descriptor JSON is
 lexically preflighted and decoded under explicit allocation limits. Revocation
 reloads retain at most 8,192 unique 32-byte identifiers from a file no larger
-than 4 MiB; ML-DSA key files admit exactly the configured suite width plus at
-most 256 bytes of surrounding UTF-8 whitespace.
+than 4 MiB; ML-DSA secret-key files admit exactly the lowercase hexadecimal
+encoding of the configured suite width with no whitespace. Public keys reject
+inert material, and both admission-token and signed-ticket public/secret pairs
+must match cryptographically at startup.
 
 The issuance service is optional—clients can still mint locally—but it provides a
 deterministic way to pre-authorise uploads or seed tickets into orchestration pipelines.
@@ -435,7 +444,9 @@ retain a full audit trail.
   handshake engine or performing any relay-side ML-KEM operation.
 - The relay/node loads a bounded Norito revocation store on startup using
   `pow.revocation_store_capacity`, `pow.revocation_store_ttl_secs`, and
-  `pow.revocation_store_path`. Each verified PoW or puzzle ticket is inserted
+  `pow.revocation_store_path`. The revocation TTL must be at least
+  `pow.max_future_skew_secs` so every ticket admitted by the verifier can remain
+  consumed through its expiry. Each verified PoW or puzzle ticket is inserted
   into the store; replays return `pow::Error::Replay` and the handshake fails.
 - The store is pruned on load and can be purged in-process via the
   `purge_expired_revocations` helper. Active records are never evicted to make
@@ -455,50 +466,65 @@ retain a full audit trail.
 Relays expect a private manifest emitted by the directory tooling containing
 the secret material required for the handshake. The daemon consumes the file
 via `handshake.descriptor_manifest_path` and rejects startup if any key material
-is malformed. The manifest now carries both the Ed25519 identity seed and the
-ML-KEM-768 key pair used for SoraNet transport negotiation. Minimal manifest
-example (replace the placeholders with real 32-byte and 2400/1184-byte hex
-strings respectively):
+is malformed. The only accepted first-release document is the exact object
+below: root fields are `version` and `identity`, while `identity` contains only
+the two mandatory signing-key fields shown. The placeholders are deliberately
+invalid; replace them at deployment time without committing real key material:
 
 ```json
 {
   "version": 1,
   "identity": {
-    "ed25519_private_key_hex": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
-    "ml_kem_private_key_hex": "aa...aa",
-    "ml_kem_public_hex": "bb...bb"
+    "ed25519_private_key_hex": "REPLACE_WITH_EXACTLY_64_LOWERCASE_HEX_CHARACTERS",
+    "mldsa65_private_key_hex": "REPLACE_WITH_EXACTLY_8064_LOWERCASE_HEX_CHARACTERS"
   }
 }
 ```
 
-`ml_kem_private_key_hex` MUST decode to 2400 bytes (Kyber-768 secret key) and
-`ml_kem_public_hex` MUST decode to 1184 bytes (Kyber-768 public key). Future
-revisions may extend the manifest with signed operator metadata or rotation
-hints, but the identity section above is required. The relay configuration has
-no inline identity-private-key alternative.
+`ed25519_private_key_hex` MUST contain exactly 64 lowercase hex characters and
+must not decode to the all-zero seed. `mldsa65_private_key_hex` MUST contain
+exactly 8064 lowercase hex characters, must not be all zero, and must decode as
+an internally valid raw ML-DSA-65 private key. The derived Ed25519 and
+ML-DSA-65 identities MUST equal `identity_ed25519` and `identity_mldsa65` in the
+authenticated SRCv2 certificate. Unknown fields—including
+`ml_kem_private_key_hex` and `ml_kem_public_hex`—aliases, recursive wrappers,
+arrays, alternate types, omitted signing-key fields, and any version other than
+integer `1` are errors. The relay configuration has no inline
+identity-private-key alternative: operators MUST inject the complete manifest
+from a runtime-only secret source. NK2 and NK3 encapsulate only to client
+public shares, so no static relay KEM secret or public-key mirror belongs in
+this manifest.
 
-First-release relay admission limits this JSON manifest to 64 KiB, one decoded
-string to 8 KiB, one collection to 1,024 entries, the whole document to 4,096
-entries, and nesting to 16 levels. The loader performs an allocation-free JSON
-preflight before constructing an owned value. It opens only a direct regular
-file without following a final symbolic link or Windows reparse point, reads
-the opened file's reported length plus a one-byte growth probe, and rejects an
-identity, length, or metadata change during the read.
+First-release relay admission limits this JSON manifest to 16 KiB, one decoded
+string to 8 KiB, all decoded strings to 12 KiB, one collection to 8 entries,
+the whole document to 16 entries, nesting to 4 levels, and owned allocation to
+128 KiB. The loader performs an allocation-free JSON preflight before
+constructing an owned value. It opens only a direct regular file without
+following a final symbolic link or Windows reparse point, reads the opened
+file's reported length plus a one-byte growth probe, and rejects an identity,
+length, or metadata change during the read.
 
 Relays can also ingest the signed directory artefacts directly via the
 `handshake.certificate` section. Supplying a CBOR-encoded
 `RelayCertificateBundleV2` (`bundle_path`) alongside the governance issuer
 keys (`issuer_ed25519_hex`, `issuer_mldsa_hex`) causes the daemon to verify the
 dual signatures, adopt the certified descriptor commitment, and cache the
-handshake suite/KEM policy advertised in the bundle. The first release has no
-certificate rollout-phase setting: both the Ed25519 witness signature and the
-ML-DSA-65 signature are mandatory, and omitting the ML-DSA issuer key fails
-configuration validation. Startup also fails if the local Ed25519 identity or
-ML-KEM public key diverge from the certificate, ensuring the manifest secrets,
-relay identity, and certificate snapshot remain in lock step.
+authenticated handshake suite ordering advertised in the bundle. Both the
+Ed25519 witness signature and the ML-DSA-65 signature are mandatory, and
+omitting the ML-DSA issuer key fails
+configuration validation. Startup also fails if either local signing identity
+(Ed25519 or ML-DSA-65) diverges from the certificate, ensuring both manifest
+secrets and the authenticated relay identity remain in lock step. The
+certificate contains no static relay KEM public key or KEM-rotation metadata;
+NK2 and NK3 authenticate their negotiated suite and encapsulate only to the
+ephemeral client shares carried by that handshake.
 Certificate bundle files use the SRCv2 protocol maximum of 64 KiB and the same
 stable direct-file read rules; the bounded SRCv2 decoder then enforces its
-certificate, endpoint, tag, suite, and signature field limits.
+certificate, endpoint, tag, suite, and signature field limits. Accepted bundle
+bytes MUST equal `RelayCertificateBundleV2::try_to_cbor()` output byte for byte.
+That rule requires shortest integer and length encodings plus ascending integer
+map keys at the bundle, certificate, signature, and endpoint levels; a semantic
+equivalent with reordered fields is rejected as non-canonical.
 
 ## Salt Announcement Schema
 
@@ -706,16 +732,18 @@ sequenceDiagram
 
     C->>R: HybridClientInit<br/>nonce_c, suite_list,<br/>X25519 e_c and s_c,<br/>ML-KEM public,<br/>capability TLVs[, resume_hash]
     R->>R: Select mutually supported suite/KEM/sig<br/>Validate capabilities
-    R->>C: HybridRelayResponse<br/>nonce_r, X25519 e_r and s_r,<br/>ML-KEM public,<br/>ML-KEM ciphertext,<br/>confirmation tag,<br/>transcript_hash,<br/>directory Ed25519 identity + signature
+    R->>C: HybridRelayResponse<br/>nonce_r, X25519 e_r and s_r,<br/>ML-KEM ciphertext,<br/>confirmation tag,<br/>transcript_hash,<br/>fixed Ed25519 + ML-DSA-65 authentication tail
     Note over C,R: transcript_hash = SHA3-256("soranet.transcript.v1" || H(descriptor_commit) || nonce_c || nonce_r || len(capabilities) || capability bytes || kem_id || sig_id || suite_id || resume_hash?)
-    Note over C,R: relay_auth = Ed25519(SigningKey_directory, H(LP(domain) || LP(version) || LP(suite_id) || LP(client_frame) || LP(relay_body) || LP(transcript_hash) || LP(relay_identity) || LP(ALPN) || LP(TLS_name)))
+    Note over C,R: relay_auth_digest = H(LP(domain) || LP(version) || LP(scheme) || LP(suite_id) || LP(client_frame) || LP(relay_body) || LP(transcript_hash) || LP(ed25519_public) || LP(mldsa65_public) || LP(authenticated_binding_digest) || LP(ALPN) || LP(TLS_name)); both keys sign it
     Note over C,R: ee = DH(e_c,e_r), es = DH(e_c,s_r), se = DH(s_c,e_r); reject any all-zero output<br/>HKDF salt = transcript_hash<br/>session info = "soranet.handshake.nk2.session.v1"<br/>confirm info = "soranet.handshake.nk2.confirm.v1"<br/>IKM order = X25519 domain, ee, es, se, primary_shared, transcript_hash (all LP64)
 ```
 
 - Relay-only confirmation lets the client detect tampering and complete the
   session from the relay response. Runtime coverage compares the two peers'
   completed session material and ensures negotiated warnings stay empty when
-  suite lists align.
+  suite lists align. The client public key is the only ML-KEM encapsulation key:
+  the relay encapsulates directly to it and neither generates nor serializes an
+  unrelated relay ML-KEM key pair.
 
 ##### NK3 forward-secure (`nk3.pq_forward_secure.v1`) state machine
 
@@ -727,15 +755,17 @@ sequenceDiagram
 
     C->>R: PqfsClientCommit<br/>nonce_c, suite_list,<br/>X25519 e_c and s_c,<br/>primary & forward ML-KEM publics,<br/>forward commitment,<br/>capability TLVs[, resume_hash]
     R->>R: Verify commitment & capabilities<br/>Select suite/KEM/sig
-    R->>C: PqfsRelayResponse<br/>nonce_r, X25519 e_r and s_r,<br/>ML-KEM public,<br/>primary & forward ciphertexts,<br/>confirmation tags, dual_mix,<br/>transcript_hash,<br/>directory Ed25519 identity + signature
+    R->>C: PqfsRelayResponse<br/>nonce_r, X25519 e_r and s_r,<br/>primary & forward ML-KEM ciphertexts,<br/>confirmation tags, dual_mix,<br/>transcript_hash,<br/>fixed Ed25519 + ML-DSA-65 authentication tail
     Note over C,R: transcript_hash = SHA3-256("soranet.transcript.v1" || H(descriptor_commit) || nonce_c || nonce_r || len(capabilities) || capability bytes || kem_id || sig_id || suite_id || resume_hash?)
-    Note over C,R: relay_auth binds the exact client frame, exact relay body, transcript hash, directory identity, QUIC ALPN, and TLS server name with length prefixes
+    Note over C,R: relay_auth binds the exact client frame, relay body, transcript hash, both directory identities, authenticated binding digest, QUIC ALPN, and TLS server name with length prefixes
     Note over C,R: ee = DH(e_c,e_r), es = DH(e_c,s_r), se = DH(s_c,e_r); reject any all-zero output<br/>dual_mix = SHAKE256-expand("soranet.kem.dual.mix.v1", primary_shared, forward_shared, transcript_hash)<br/>HKDF salt = transcript_hash<br/>session info = "soranet.handshake.nk3.session.v1"<br/>IKM order = X25519 domain, ee, es, se, dual_mix, primary_shared, forward_shared, transcript_hash (all LP64)<br/>The transmitted primary/forward confirmations remain ML-KEM-secret + transcript checks
 ```
 
 - The client recomputes the forward commitment and dual-mix before accepting.
   Tests cover the validation path and the requirement that NK3 derives the key
-  without emitting an additional frame.
+  without emitting an additional frame. Each ciphertext encapsulates directly
+  to its corresponding client public key; the response contains no relay-side
+  ML-KEM public-key slot.
 
 ### Algorithm identifiers
 
@@ -751,13 +781,13 @@ sequenceDiagram
 | `0x01`                 | Dilithium3      | The only accepted first-release `pqsig` policy identifier. |
 | `0x02`                 | Falcon-512      | Not accepted in the first-release wire protocol. |
 
-The signature capability identifier remains transcript-bound certificate and
-descriptor PQ-policy metadata, not the online authentication algorithm. It does
-not create synthetic client or relay signature fields. In the first-release
-wire protocol, relay authentication is one real Ed25519 signature under the
-exact identity selected from the authenticated directory; the client verifies
-that identity before KEM decapsulation and session-key acceptance. There is no
-decorative ML-DSA payload or unauthenticated client-signature slot.
+The signature capability identifier is transcript-bound handshake policy and
+compatibility metadata, not certificate metadata or an algorithm-negotiation
+switch for online authentication. The first-release wire protocol
+unconditionally requires real Ed25519 and ML-DSA-65 signatures under the exact
+identities selected from the authenticated directory. The client verifies
+Ed25519 and then ML-DSA-65 before KEM decapsulation and session-key acceptance.
+There is no unauthenticated client-signature slot.
 
 Governance maintains the canonical registry in
 `specs/soranet/capability_registry.md` and the directory service publishes
@@ -809,9 +839,9 @@ Example relay echo for a PQ-capable guard:
 7F 12 00 04 12 34 56 78
 ```
 
-Classical-only relays omit `snnet.pqkem` entirely. Because the client marked the
-PQ KEM as `required`, the absence of the TLV triggers a downgrade alarm and the
-handshake aborts.
+Every first-release NK2/NK3 relay must echo the selected `snnet.pqkem` entry.
+Missing, unsupported, or mismatched required KEM metadata triggers a downgrade
+alarm and aborts the handshake; there is no classical-only fallback.
 
 ## Handshake suites
 
@@ -830,16 +860,20 @@ domains (`soranet.handshake.nk2.*.v1`, `soranet.handshake.nk3.*.v1`) so telemetr
 diverge across suites even when the same nonces circulate.
 
 `HybridClientInit` and `PqfsClientCommit` carry key agreement and negotiation
-material only; they contain no inert signature bytes. Each relay response ends
-with the exact directory Ed25519 identity and a 64-byte Ed25519 signature. The
-identity has one V1 encoding: `algorithm_tag:u8 || public_key_payload`. For
-Ed25519 this is `0x00 || 32-byte public key`; the untagged 32-byte form is
-rejected. The signature covers length-delimited domain, version, and suite
-identifiers; the complete client frame; the complete relay response body preceding
-authentication; the transcript hash; the relay identity; the QUIC ALPN; and the
-TLS server name. Clients compare the embedded identity with the
-directory-selected public key and verify the signature before accepting the
-response. Relay responses also surface the negotiated suite in telemetry JSON
+material only; they contain no inert signature bytes. Relay KEM fields are
+ciphertext-only: NK2 carries the primary ciphertext and NK3 carries the primary
+and forward ciphertexts. A relay ML-KEM public-key field is not part of either
+first-release response, and decoders reject frames that insert one. Each relay
+response ends with `scheme=0x01`, a 64-byte Ed25519 signature, and a 3,309-byte
+ML-DSA-65 signature, with no authentication public keys or length prefixes.
+Both signatures cover the same SHA3-256 digest of length-delimited domain,
+version, scheme, and suite;
+the complete client frame; the complete relay response body preceding
+authentication; the transcript hash; the exact directory Ed25519 and
+ML-DSA-65 public keys; the nonzero 32-byte authenticated binding digest; the
+QUIC ALPN; and the TLS server name. ML-DSA uses the fixed FIPS 204 context
+`soranet.handshake.relay-auth.v1`. Clients verify Ed25519 and then ML-DSA-65
+before KEM decapsulation. Relay responses also surface the negotiated suite in telemetry JSON
 (`handshake_suite` field) so downstream tooling can flag mixed-mode sessions.
 
 ### Parser sketch
@@ -961,33 +995,48 @@ record GAR policy categories.
 | Offset | Field        | Description |
 |--------|--------------|-------------|
 | `0`    | `tag`        | `0x01` designates a Norito streaming circuit (`norito-stream`); `0x02` designates a Kaigi conferencing circuit (`kaigi-stream`).|
-| `1`    | `flags`      | Bit 0 (`0x01`) set indicates the channel is authenticated; unset means anonymous/read-only. Remaining bits are reserved and must be zero. |
+| `1`    | `reserved`   | Must be zero. Non-zero values are rejected before route lookup. |
 | `2..34`| `channel_id` | 32-byte blinded channel identifier used for logging and policy. All-zero identifiers are rejected. |
 
 Exit relays translate the frame into the following GAR labels:
 
-- `stream.norito.read_only` — anonymous observers (flag bit clear)
-- `stream.norito.authenticated` — authenticated channels (flag bit set)
+- `stream.norito.read_only` — anonymous/read-only observers
 - `stream.norito.unsupported` — relay lacks a configured Norito route (diagnostic fallback)
-- `stream.kaigi.public` — Kaigi conferences bridged in public mode (flag bit clear)
-- `stream.kaigi.authenticated` — Kaigi conferences requiring authenticated viewers (flag bit set)
+- `stream.kaigi.public` — Kaigi conferences bridged in public mode
 - `stream.kaigi.unsupported` — relay lacks Kaigi routing configured (diagnostic fallback)
 
-Relays now use the frame to establish a WebSocket session with the configured
-exit adapter. Norito circuits send a Norito-encoded `NoritoStreamOpen`
-handshake containing the channel/route identifiers, access kind, optional
-padding budget, and HPKE-wrapped `exit_token`, then forward the QUIC stream
-bidirectionally. When a Norito stream is idle the relay emits zero-length
-padding frames on a deterministic cadence derived from the channel identifier
-(respecting the per-route padding budget or the relay default) so Torii
-maintains low-latency pacing while keeping schedules stable across restarts.
+The first-release frame does not carry a viewer credential, so a client cannot
+assert authenticated authority. Relays reject every non-zero reserved byte and
+reject catalog records whose access kind is `Authenticated`. Authenticated
+routing requires a future credential proof bound to the route-open transcript;
+there is no permissive compatibility path.
 
-Kaigi circuits emit a `KaigiStreamOpen` handshake that adds a blinded `room_id`
-derived from the channel/route identifiers as well as the original
-`exit_multiaddr`. Exits dial either the multiaddr-provided hub or the
-configured fallback `hub_ws_url`, authenticate the viewer if required, and then
-bridge Kaigi datagrams bidirectionally without injecting synthetic padding so
-interactive media latency remains minimal.
+Route validity uses stream segment numbers, but a standalone relay currently
+has no authoritative segment source. Filesystem publication also lacks a
+race-safe durable unpublish/tombstone lifecycle for replayable exit tokens.
+V1 therefore disables token-bearing filesystem exit routing at both ends:
+Core rejects every route before enqueue or filesystem I/O, relay configuration
+rejects every `spool_dir`, and catalog admission independently rejects every
+record. There is no static/read-only or compatibility exception.
+
+The dormant adapters retain a fail-closed endpoint design for re-enablement.
+Norito and Kaigi may dial only their operator-configured exact canonical
+queryless `wss://` endpoint. Userinfo, queries, fragments, authority escapes,
+non-canonical or ambiguous hosts/ports, zero ports, plaintext WebSockets,
+redirects, and fallback targets are rejected. Catalog `exit_multiaddr` remains
+diagnostic metadata only and can never choose a dial target. A future admitted
+route may attach its exit token only after the TLS WebSocket handshake succeeds
+to that exact validated origin.
+
+Re-enablement requires a replay-protected RouteOpen proof binding the selected
+route, a cryptographic viewer credential, an authoritative current segment,
+and durable revocation. The spool custody contract will additionally require a
+direct effective-UID-owned mode-`0700` directory chain with no named symlink
+component, one direct single-link mode-`0600`
+`channel-<64-lowercase-hex>.norito` token file per channel, and private
+write-sync-atomic-replace-directory-sync publication. Operators upgrading from
+an earlier preview must stop both processes and securely remove old token files
+from configured spool roots; the software intentionally does not delete them.
 
 ### Torii CLI helpers
 

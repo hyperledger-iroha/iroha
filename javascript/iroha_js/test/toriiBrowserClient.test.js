@@ -1399,6 +1399,46 @@ test("ToriiBrowserClient requires canonical raw lowercase receipt identities", a
   }
 });
 
+for (const status of [200, 201, 204]) {
+  test(`ToriiBrowserClient rejects noncanonical HTTP ${status} transaction admission`, async () => {
+    const signedTransaction = compactHashSignedTransactionFixture();
+    let attempts = 0;
+    const client = new ToriiBrowserClient("https://torii.example", {
+      fetchImpl: async () => {
+        attempts += 1;
+        return status === 204
+          ? new Response(null, { status })
+          : jsonResponse({ accepted: true }, { status });
+      },
+    });
+
+    await assert.rejects(
+      () => client.submitTransaction(signedTransaction),
+      (error) => error instanceof ToriiBrowserHttpError && error.status === status,
+    );
+    assert.equal(attempts, 1);
+  });
+}
+
+test("ToriiBrowserClient keeps transaction admission statuses immutable", () => {
+  const signedTransaction = compactHashSignedTransactionFixture();
+  let attempts = 0;
+  const client = new ToriiBrowserClient("https://torii.example", {
+    fetchImpl: async () => {
+      attempts += 1;
+      return jsonResponse({ accepted: true }, { status: 202 });
+    },
+  });
+
+  for (const successStatuses of [[200], [202], [200, 202]]) {
+    assert.throws(
+      () => client.submitTransaction(signedTransaction, { successStatuses }),
+      /submitTransaction options contains unsupported option successStatuses/u,
+    );
+  }
+  assert.equal(attempts, 0);
+});
+
 for (const redirectStatus of [307, 308]) {
   test(`ToriiBrowserClient rejects transaction ${redirectStatus} without redirecting`, async () => {
     const signedTransaction = compactHashSignedTransactionFixture();
@@ -1454,9 +1494,15 @@ test("ToriiBrowserClient rejects redirects for caller-supplied nonce headers", a
   assert.equal(attempts, 1);
 });
 
-test("ToriiBrowserClient waits for exact global persisted Applied finality", async () => {
+test("ToriiBrowserClient waits for exact global state-resolved Applied finality", async () => {
   const hash = "ab".repeat(32);
   const payloads = [
+    {
+      hash,
+      status: { kind: "Applied", block_height: 17 },
+      scope: "global",
+      resolved_from: "queue",
+    },
     {
       hash,
       status: { kind: "Applied", block_height: 17 },
@@ -1480,17 +1526,85 @@ test("ToriiBrowserClient waits for exact global persisted Applied finality", asy
 
   const status = await client.waitForTransactionStatus(hash, {
     intervalMs: 0,
-    maxAttempts: 2,
+    maxAttempts: 3,
   });
 
   assert.equal(status.status.kind, "Applied");
-  assert.equal(urls.length, 2);
+  assert.equal(status.scope, "global");
+  assert.equal(status.resolved_from, "state");
+  assert.equal(urls.length, 3);
   for (const url of urls) {
     assert.equal(
       url,
       `https://torii.example/v1/pipeline/transactions/status?hash=${hash}&scope=global`,
     );
   }
+});
+
+test("ToriiBrowserClient treats Rejected and Expired as fixed failures", async () => {
+  for (const kind of ["Rejected", "Expired"]) {
+    for (const resolvedFrom of ["queue", "cache", "state"]) {
+      const hash = kind === "Rejected" ? "ad".repeat(32) : "af".repeat(32);
+      const client = new ToriiBrowserClient("https://torii.example", {
+        fetchImpl: async () => jsonResponse({
+          hash,
+          status: { kind },
+          scope: "global",
+          resolved_from: resolvedFrom,
+        }),
+      });
+      await assert.rejects(
+        client.waitForTransactionStatus(hash, { intervalMs: 0, maxAttempts: 2 }),
+        new RegExp(`fixed failure status ${kind}`, "u"),
+      );
+    }
+  }
+});
+
+test("ToriiBrowserClient requires exact lowercase full transaction hashes", async () => {
+  let fetchCalls = 0;
+  const client = new ToriiBrowserClient("https://torii.example", {
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      return new Response("", { status: 404 });
+    },
+  });
+  for (const hash of [
+    "aa".repeat(32),
+    "AB".repeat(32),
+    `0x${"ab".repeat(32)}`,
+    `${"ab".repeat(32)} `,
+    "ab".repeat(31),
+    new Uint8Array(32),
+  ]) {
+    await assert.rejects(
+      client.getTransactionStatus(hash),
+      /exact canonical lowercase 32-byte Iroha hash/u,
+    );
+    await assert.rejects(
+      client.waitForTransactionStatus(hash, { intervalMs: 0, maxAttempts: 1 }),
+      /exact canonical lowercase 32-byte Iroha hash/u,
+    );
+  }
+  assert.equal(fetchCalls, 0);
+});
+
+test("ToriiBrowserClient rejects a noncanonical pipeline response hash", async () => {
+  const hash = "cd".repeat(32);
+  const client = new ToriiBrowserClient("https://torii.example", {
+    fetchImpl: async () =>
+      jsonResponse({
+        hash: hash.toUpperCase(),
+        status: { kind: "Applied", block_height: 1 },
+        scope: "global",
+        resolved_from: "state",
+      }),
+  });
+
+  await assert.rejects(
+    client.getTransactionStatus(hash),
+    /exact canonical lowercase 32-byte Iroha hash/u,
+  );
 });
 
 test("ToriiBrowserClient rejects malformed Applied envelopes", async () => {
@@ -1514,6 +1628,15 @@ test("ToriiBrowserClient rejects malformed Applied envelopes", async () => {
       },
       /block_height must be a positive safe integer/u,
     ],
+    [
+      {
+        hash,
+        status: { kind: "Applied", block_height: 1 },
+        scope: "auto",
+        resolved_from: "state",
+      },
+      /scope is not a current status scope/u,
+    ],
   ]) {
     const client = new ToriiBrowserClient("https://torii.example", {
       fetchImpl: async () => jsonResponse(payload),
@@ -1526,7 +1649,7 @@ test("ToriiBrowserClient rejects malformed Applied envelopes", async () => {
 });
 
 test("ToriiBrowserClient rejects retired nested status details", async () => {
-  const hash = "12".repeat(32);
+  const hash = "13".repeat(32);
   const client = new ToriiBrowserClient("https://torii.example", {
     fetchImpl: async () =>
       jsonResponse({
@@ -1544,7 +1667,7 @@ test("ToriiBrowserClient rejects retired nested status details", async () => {
 });
 
 test("ToriiBrowserClient keeps diagnostic scopes separate from global-only waits", async () => {
-  const hash = "56".repeat(32);
+  const hash = "57".repeat(32);
   const urls = [];
   const client = new ToriiBrowserClient("https://torii.example", {
     fetchImpl: async (url) => {
@@ -1593,6 +1716,60 @@ test("ToriiBrowserClient keeps diagnostic scopes separate from global-only waits
     );
   }
   assert.equal(submissions, 0);
+});
+
+test("ToriiBrowserClient transaction finality policy cannot be overridden", async () => {
+  const hash = "57".repeat(32);
+  let fetchCalls = 0;
+  const client = new ToriiBrowserClient("https://torii.example", {
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      return new Response(null, { status: 404 });
+    },
+  });
+
+  for (const field of ["successStatuses", "failureStatuses", "terminalStatuses"]) {
+    const options = { [field]: ["Committed"] };
+    await assert.rejects(
+      client.getTransactionStatus(hash, options),
+      new RegExp(`unsupported option ${field}`, "u"),
+    );
+    await assert.rejects(
+      client.waitForTransactionStatus(hash, options),
+      new RegExp(`unsupported option ${field}`, "u"),
+    );
+    await assert.rejects(
+      client.submitTransactionAndWait(Uint8Array.from([1, 2]), options),
+      new RegExp(`unsupported option ${field}`, "u"),
+    );
+  }
+  assert.equal(fetchCalls, 0);
+});
+
+test("ToriiBrowserClient status reads accept only exact HTTP 200 or 404", async () => {
+  const hash = "59".repeat(32);
+  for (const status of [202, 204]) {
+    const client = new ToriiBrowserClient("https://torii.example", {
+      fetchImpl: async () => new Response(null, { status }),
+    });
+    await assert.rejects(
+      client.getTransactionStatus(hash),
+      (error) => error instanceof ToriiBrowserHttpError && error.status === status,
+    );
+  }
+
+  const empty = new ToriiBrowserClient("https://torii.example", {
+    fetchImpl: async () => new Response("", {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
+  });
+  await assert.rejects(empty.getTransactionStatus(hash));
+
+  const missing = new ToriiBrowserClient("https://torii.example", {
+    fetchImpl: async () => new Response(null, { status: 404 }),
+  });
+  assert.equal(await missing.getTransactionStatus(hash), null);
 });
 
 const typedSumeragiBrowserClients = Object.freeze([

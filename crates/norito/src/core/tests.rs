@@ -54,6 +54,33 @@ fn fixed_array_decode_builds_in_place_without_heap_staging() {
     reset_decode_state();
 }
 #[test]
+fn fixed_byte_array_decode_reports_prefix_used() {
+    reset_decode_state();
+    let value = [3_u8, 5, 8, 13];
+    let mut encoded = Vec::new();
+    serialize_to_buffer(&value, &mut encoded).expect("encode fixed byte array");
+    let mut with_tail = encoded.clone();
+    with_tail.extend_from_slice(&[0xAA, 0xBB]);
+    let (decoded, used) = <[u8; 4] as DecodeFromSlice>::decode_from_slice(&with_tail)
+        .expect("decode fixed byte-array prefix");
+    assert_eq!(decoded, value);
+    assert_eq!(used, encoded.len());
+    assert!(matches!(
+        decode_field_canonical::<[u8; 4]>(&with_tail),
+        Err(Error::LengthMismatch)
+    ));
+    assert_eq!(
+        <[u8; 4] as DecodeFromSlice>::decode_from_slice(&value)
+            .expect("decode raw fixed byte-array field"),
+        (value, value.len())
+    );
+    assert!(matches!(
+        <[u8; 4] as DecodeFromSlice>::decode_from_slice(&value[..3]),
+        Err(Error::LengthMismatch)
+    ));
+    reset_decode_state();
+}
+#[test]
 fn fixed_array_initializer_drops_completed_elements_after_an_error() {
     static DROPS: AtomicUsize = AtomicUsize::new(0);
     #[derive(Debug)]
@@ -524,7 +551,23 @@ fn decode_vec_from_slice_serial_reports_prefix_used() {
     assert_eq!(used, bytes.len());
     reset_decode_state();
 }
-
+#[test]
+fn decode_vec_u8_from_slice_serial_reports_prefix_used() {
+    reset_decode_state();
+    let value = vec![3_u8, 5, 8, 13];
+    let bytes = encode_adaptive(&value);
+    let mut with_tail = bytes.clone();
+    with_tail.extend_from_slice(&[0xAA, 0xBB]);
+    let (decoded, used) =
+        decode_vec_from_slice_serial::<u8>(&with_tail).expect("decode byte sequence prefix");
+    assert_eq!(decoded, value);
+    assert_eq!(used, bytes.len());
+    assert!(matches!(
+        decode_field_canonical::<Vec<u8>>(&with_tail),
+        Err(Error::LengthMismatch)
+    ));
+    reset_decode_state();
+}
 #[test]
 fn decode_vec_u8_from_slice_reports_prefix_used() {
     reset_decode_state();
@@ -541,6 +584,26 @@ fn decode_vec_u8_from_slice_reports_prefix_used() {
         Err(Error::LengthMismatch)
     ));
     reset_decode_state();
+}
+#[cfg(feature = "parallel-decode")]
+#[test]
+fn sequence_parallel_decode_threshold_requires_large_plans() {
+    reset_decode_state();
+    let large_plan = SequencePlan {
+        spans: vec![SequenceSpan { start: 0, end: 8 }; PARALLEL_DECODE_MIN_ELEMENTS],
+        used: PARALLEL_DECODE_MIN_BYTES,
+    };
+    assert!(should_decode_sequence_parallel(&large_plan));
+    let small_bytes = SequencePlan {
+        used: PARALLEL_DECODE_MIN_BYTES - 1,
+        ..large_plan.clone()
+    };
+    assert!(!should_decode_sequence_parallel(&small_bytes));
+    let small_count = SequencePlan {
+        spans: vec![SequenceSpan { start: 0, end: 8 }; PARALLEL_DECODE_MIN_ELEMENTS - 1],
+        used: PARALLEL_DECODE_MIN_BYTES,
+    };
+    assert!(!should_decode_sequence_parallel(&small_count));
 }
 #[test]
 fn decode_field_canonical_propagates_access_to_parent_ctx() {

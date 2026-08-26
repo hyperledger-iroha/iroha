@@ -24,8 +24,8 @@ use std::{
     cmp::max,
     fmt,
     sync::{
-        Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
+        Arc, Mutex, MutexGuard,
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -44,7 +44,6 @@ fn unix_now_ms() -> u64 {
     unix_time_ms(SystemTime::now())
 }
 /// Padded cell with the computed payload length retained for accounting.
-#[derive(Clone)]
 pub struct PaddedCell {
     /// Fully padded fixed-length frame.
     pub frame: VpnPaddedCellV1,
@@ -91,9 +90,40 @@ pub enum VpnFrameIoError {
     /// Frame failed validation during parsing.
     #[error(transparent)]
     Parse(#[from] VpnCellError),
+    /// Per-session replay state is unavailable.
+    #[error(transparent)]
+    SessionState(#[from] VpnSessionStateError),
+    /// Cell routing metadata did not match the authenticated VPN session.
+    #[error("VPN cell does not match the authenticated session binding")]
+    SessionBindingMismatch,
     /// Frame length did not match the pinned cell size.
     #[error("padded frame length {actual}B does not match expected {expected}B")]
     FrameLength { expected: usize, actual: usize },
+}
+/// Errors surfaced by mutable per-session replay state.
+#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
+pub enum VpnSessionStateError {
+    /// Cell validation failed before its sequence could be committed.
+    #[error(transparent)]
+    Cell(#[from] VpnCellError),
+    /// Replay state was poisoned and the session is permanently unavailable.
+    #[error("VPN session replay state is unavailable")]
+    StateUnavailable,
+}
+/// Errors surfaced by prepaid VPN billing state.
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum VpnBillingError {
+    /// Replay or billing state was poisoned and the session is permanently unavailable.
+    #[error("VPN session billing state is unavailable")]
+    StateUnavailable,
+    /// Settlement inputs could not produce a valid receipt.
+    #[error("{0}")]
+    Settlement(String),
+}
+impl VpnBillingError {
+    fn settlement(message: impl Into<String>) -> Self {
+        Self::Settlement(message.into())
+    }
 }
 /// Cover frame metadata that stays constant across scheduled cover cells.
 #[derive(Debug, Clone, Copy)]
@@ -110,7 +140,6 @@ pub struct CoverFrameMeta {
     pub start_sequence: u64,
 }
 /// Frame scheduled for transmission at `deadline` relative to the start of the pump.
-#[derive(Clone)]
 pub struct ScheduledFrame {
     /// Deadline relative to the start of the schedule.
     pub deadline: Duration,
@@ -118,6 +147,8 @@ pub struct ScheduledFrame {
     pub frame: VpnPaddedCellV1,
     /// Payload length carried by the frame.
     pub payload_len: u16,
+    /// Direction-wide sequence reserved before the frame write begins.
+    pub sequence: u64,
     /// Whether the scheduled frame is a cover cell.
     pub is_cover: bool,
 }
@@ -128,6 +159,7 @@ impl fmt::Debug for ScheduledFrame {
             .field("deadline", &self.deadline)
             .field("frame", &"<redacted>")
             .field("payload_len", &self.payload_len)
+            .field("sequence", &self.sequence)
             .field("is_cover", &self.is_cover)
             .finish()
     }
@@ -163,8 +195,7 @@ impl Drop for VpnOverlay {
 }
 fn clear_vpn_overlay_secret(backend_bootstrap_secret: &mut Option<[u8; 32]>) {
     if let Some(secret) = backend_bootstrap_secret {
-        secret.fill(0);
-        std::hint::black_box(secret);
+        zeroize::Zeroize::zeroize(secret);
     }
 }
 impl VpnOverlay {
@@ -365,7 +396,7 @@ impl VpnOverlay {
     pub fn bind_helper_session(
         &self,
         session: VpnSession,
-        helper_ticket: VpnHelperTicketV1,
+        helper_ticket: &VpnHelperTicketV1,
         relay_identity_key: Arc<KeyPair>,
     ) -> Result<VpnSessionHandle, String> {
         VpnSessionHandle::from_helper_ticket(
@@ -455,11 +486,11 @@ pub async fn read_frame<R: AsyncRead + Unpin>(
     overlay: &VpnOverlay,
     reader: &mut R,
 ) -> Result<VpnCellV1, VpnFrameIoError> {
-    let mut frame = [0u8; VPN_CELL_LEN];
+    let mut frame = VpnPaddedCellV1::zeroed();
     let mut read = 0usize;
     while read < VPN_CELL_LEN {
         let n = reader
-            .read(&mut frame[read..])
+            .read(&mut frame.as_mut()[read..])
             .await
             .map_err(VpnFrameIoError::Io)?;
         if n == 0 {
@@ -470,7 +501,9 @@ pub async fn read_frame<R: AsyncRead + Unpin>(
         }
         read += n;
     }
-    overlay.parse_frame(&frame).map_err(VpnFrameIoError::from)
+    overlay
+        .parse_frame(frame.as_ref())
+        .map_err(VpnFrameIoError::from)
 }
 /// Write a padded VPN cell frame to the provided writer.
 pub async fn write_frame<W: AsyncWrite + Unpin>(
@@ -520,6 +553,9 @@ pub fn schedule_frames(
     cover_meta: CoverFrameMeta,
     seed: [u8; 32],
 ) -> Result<Vec<ScheduledFrame>, VpnFrameBuildError> {
+    if seed.iter().all(|byte| *byte == 0) {
+        return Err(VpnFrameBuildError::InvalidCoverSeed);
+    }
     let mut total_frames = data_cells.len();
     let mut plan = cover_plan_from_config(&overlay.config, total_frames, seed);
     while plan.iter().filter(|entry| !entry.is_cover).count() < data_cells.len() {
@@ -539,6 +575,7 @@ pub fn schedule_frames(
     let mut sequence = cover_meta.start_sequence;
     let mut last_deadline_ms: u64 = 0;
     for (idx, entry) in plan.into_iter().enumerate() {
+        let assigned_sequence = sequence;
         let scheduled_ms = entry.slot_ms;
         let deadline_ms = if idx == 0 {
             scheduled_ms
@@ -564,6 +601,7 @@ pub fn schedule_frames(
             deadline: Duration::from_millis(deadline_ms),
             payload_len: prepared.payload_len,
             frame: prepared.frame,
+            sequence: assigned_sequence,
             is_cover,
         });
     }
@@ -588,6 +626,16 @@ pub async fn send_scheduled_frames_with_adapter<W: AsyncWrite + Unpin>(
     for scheduled in schedule {
         let deadline = start + scheduled.deadline;
         sleep_until(deadline).await;
+        // Burn the sequence before attempting I/O. Reusing it after an
+        // ambiguous partial write would violate the direction-wide replay
+        // invariant; accounting is still committed only after a full write.
+        if let Some(adapter) = adapter {
+            adapter
+                .session()
+                .record_egress_sequence(scheduled.sequence)?;
+        } else if let Some(session) = session {
+            session.record_egress_sequence(scheduled.sequence)?;
+        }
         writer
             .write_all(scheduled.frame.as_ref())
             .await
@@ -616,6 +664,7 @@ struct VpnSessionState {
     cover_bytes: AtomicU64,
     last_ingress_sequence: Mutex<Option<u64>>,
     last_egress_sequence: Mutex<Option<u64>>,
+    unavailable: AtomicBool,
     started_at: Instant,
     started_at_ms: u64,
 }
@@ -631,6 +680,7 @@ impl VpnSession {
                 cover_bytes: AtomicU64::new(0),
                 last_ingress_sequence: Mutex::new(None),
                 last_egress_sequence: Mutex::new(None),
+                unavailable: AtomicBool::new(false),
                 started_at: Instant::now(),
                 started_at_ms: unix_now_ms(),
             }),
@@ -695,8 +745,10 @@ impl VpnSession {
         &self,
         overlay: &VpnOverlay,
         frame: &[u8],
-    ) -> Result<VpnCellV1, VpnCellError> {
-        let cell = overlay.parse_frame(frame)?;
+    ) -> Result<VpnCellV1, VpnSessionStateError> {
+        let cell = overlay
+            .parse_frame(frame)
+            .map_err(VpnSessionStateError::Cell)?;
         self.record_ingress_sequence(cell.header.sequence)?;
         self.record_parsed_ingress(&cell);
         Ok(cell)
@@ -708,17 +760,40 @@ impl VpnSession {
         &self,
         overlay: &VpnOverlay,
         frame: &[u8],
-    ) -> Result<VpnCellV1, VpnCellError> {
-        let cell = overlay.parse_frame(frame)?;
+    ) -> Result<VpnCellV1, VpnSessionStateError> {
+        let cell = overlay
+            .parse_frame(frame)
+            .map_err(VpnSessionStateError::Cell)?;
         self.record_egress_sequence(cell.header.sequence)?;
         self.record_parsed_egress(&cell);
         Ok(cell)
     }
-    pub(crate) fn record_ingress_sequence(&self, sequence: u64) -> Result<(), VpnCellError> {
-        record_monotonic_sequence(&self.state.last_ingress_sequence, sequence)
+    pub(crate) fn record_ingress_sequence(
+        &self,
+        sequence: u64,
+    ) -> Result<(), VpnSessionStateError> {
+        record_monotonic_sequence(
+            &self.state.last_ingress_sequence,
+            &self.state.unavailable,
+            sequence,
+        )
     }
-    pub(crate) fn record_egress_sequence(&self, sequence: u64) -> Result<(), VpnCellError> {
-        record_monotonic_sequence(&self.state.last_egress_sequence, sequence)
+    pub(crate) fn record_egress_sequence(&self, sequence: u64) -> Result<(), VpnSessionStateError> {
+        record_monotonic_sequence(
+            &self.state.last_egress_sequence,
+            &self.state.unavailable,
+            sequence,
+        )
+    }
+    pub(crate) fn ensure_state_available(&self) -> Result<(), VpnSessionStateError> {
+        if self.state.unavailable.load(Ordering::Acquire)
+            || self.state.last_ingress_sequence.is_poisoned()
+            || self.state.last_egress_sequence.is_poisoned()
+        {
+            self.state.unavailable.store(true, Ordering::Release);
+            return Err(VpnSessionStateError::StateUnavailable);
+        }
+        Ok(())
     }
     /// Account for a parsed ingress cell without re-validating the frame.
     pub(crate) fn record_parsed_ingress(&self, cell: &VpnCellV1) {
@@ -767,17 +842,33 @@ fn atomic_saturating_add(counter: &AtomicU64, value: u64) {
         Some(current.saturating_add(value))
     });
 }
-fn record_monotonic_sequence(last: &Mutex<Option<u64>>, sequence: u64) -> Result<(), VpnCellError> {
-    let mut guard = last
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+fn record_monotonic_sequence(
+    last: &Mutex<Option<u64>>,
+    unavailable: &AtomicBool,
+    sequence: u64,
+) -> Result<(), VpnSessionStateError> {
+    if unavailable.load(Ordering::Acquire) {
+        return Err(VpnSessionStateError::StateUnavailable);
+    }
+    let mut guard = match last.lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            unavailable.store(true, Ordering::Release);
+            return Err(VpnSessionStateError::StateUnavailable);
+        }
+    };
+    if unavailable.load(Ordering::Acquire) {
+        return Err(VpnSessionStateError::StateUnavailable);
+    }
     if let Some(previous) = *guard
         && sequence <= previous
     {
-        return Err(VpnCellError::NonMonotonicSequence {
-            last: previous,
-            actual: sequence,
-        });
+        return Err(VpnSessionStateError::Cell(
+            VpnCellError::NonMonotonicSequence {
+                last: previous,
+                actual: sequence,
+            },
+        ));
     }
     *guard = Some(sequence);
     Ok(())
@@ -794,6 +885,26 @@ struct VpnMeteredUsage {
     ingress_bytes: AtomicU64,
     egress_bytes: AtomicU64,
     service_window: Mutex<VpnMeteredServiceWindow>,
+    unavailable: AtomicBool,
+}
+fn lock_billing_state<'a, T>(
+    state: &'a Mutex<T>,
+    unavailable: &AtomicBool,
+) -> Result<MutexGuard<'a, T>, VpnBillingError> {
+    if unavailable.load(Ordering::Acquire) {
+        return Err(VpnBillingError::StateUnavailable);
+    }
+    let guard = match state.lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            unavailable.store(true, Ordering::Release);
+            return Err(VpnBillingError::StateUnavailable);
+        }
+    };
+    if unavailable.load(Ordering::Acquire) {
+        return Err(VpnBillingError::StateUnavailable);
+    }
+    Ok(guard)
 }
 #[derive(Clone)]
 pub struct VpnSessionHandle {
@@ -885,7 +996,7 @@ impl VpnSessionHandle {
     }
     pub fn from_helper_ticket(
         session: VpnSession,
-        helper_ticket: VpnHelperTicketV1,
+        helper_ticket: &VpnHelperTicketV1,
         exit_class: VpnExitClassV1,
         _meter_hash: [u8; 32],
         relay_identity_key: Arc<KeyPair>,
@@ -940,77 +1051,94 @@ impl VpnSessionHandle {
     pub(crate) fn tariff(&self) -> Option<&VpnTariffV1> {
         self.tariff.as_ref()
     }
+    /// Reject forwarding and settlement after any replay or billing lock is poisoned.
+    pub(crate) fn ensure_forwarding_available(&self) -> Result<(), VpnBillingError> {
+        if self.session.ensure_state_available().is_err()
+            || self.metered_usage.unavailable.load(Ordering::Acquire)
+            || self.highest_voucher.is_poisoned()
+            || self.metered_usage.service_window.is_poisoned()
+        {
+            self.metered_usage
+                .unavailable
+                .store(true, Ordering::Release);
+            return Err(VpnBillingError::StateUnavailable);
+        }
+        Ok(())
+    }
     /// Start the billable service interval after prepaid admission and backend readiness.
-    pub(crate) fn begin_metered_service(&self, started_at_ms: u64) {
-        let started_at_ms = self
-            .highest_voucher
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .as_ref()
-            .map_or(started_at_ms, |envelope| {
-                started_at_ms.max(envelope.voucher.body.issued_at_ms)
-            });
-        let mut window = self
-            .metered_usage
-            .service_window
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+    pub(crate) fn begin_metered_service(&self, started_at_ms: u64) -> Result<(), VpnBillingError> {
+        self.ensure_forwarding_available()?;
+        let started_at_ms =
+            lock_billing_state(&self.highest_voucher, &self.metered_usage.unavailable)?
+                .as_ref()
+                .map_or(started_at_ms, |envelope| {
+                    started_at_ms.max(envelope.voucher.body.issued_at_ms)
+                });
+        let mut window = lock_billing_state(
+            &self.metered_usage.service_window,
+            &self.metered_usage.unavailable,
+        )?;
         if window.started_at_ms.is_none() {
             window.started_at_ms = Some(started_at_ms);
             window.started_at = Some(Instant::now());
         }
+        Ok(())
     }
     /// Cancel a just-started service window when durable admission fails before forwarding.
-    pub(crate) fn cancel_metered_service_before_forwarding(&self) {
-        debug_assert_eq!(
-            self.metered_usage.ingress_bytes.load(Ordering::Relaxed),
-            0,
-            "ingress cannot be cancelled after forwarding"
-        );
-        debug_assert_eq!(
-            self.metered_usage.egress_bytes.load(Ordering::Relaxed),
-            0,
-            "egress cannot be cancelled after forwarding"
-        );
-        *self
-            .metered_usage
-            .service_window
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) =
-            VpnMeteredServiceWindow::default();
+    pub(crate) fn cancel_metered_service_before_forwarding(&self) -> Result<(), VpnBillingError> {
+        self.ensure_forwarding_available()?;
+        if self.metered_usage.ingress_bytes.load(Ordering::Relaxed) != 0
+            || self.metered_usage.egress_bytes.load(Ordering::Relaxed) != 0
+        {
+            return Err(VpnBillingError::settlement(
+                "vpn metered service cannot be cancelled after forwarding",
+            ));
+        }
+        *lock_billing_state(
+            &self.metered_usage.service_window,
+            &self.metered_usage.unavailable,
+        )? = VpnMeteredServiceWindow::default();
+        Ok(())
     }
     /// End the billable service interval as soon as forwarding stops.
     ///
     /// The wall-clock sample is intentionally ignored for billing duration;
     /// only monotonic elapsed time can survive a clock rollback without
     /// under-reporting service.
-    pub(crate) fn end_metered_service(&self, _ended_at_ms: u64) {
-        let mut window = self
-            .metered_usage
-            .service_window
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+    pub(crate) fn end_metered_service(&self, _ended_at_ms: u64) -> Result<(), VpnBillingError> {
+        self.ensure_forwarding_available()?;
+        let mut window = lock_billing_state(
+            &self.metered_usage.service_window,
+            &self.metered_usage.unavailable,
+        )?;
         if window.elapsed_ms.is_none()
             && let Some(started_at) = window.started_at
         {
             window.elapsed_ms =
                 Some(started_at.elapsed().as_millis().min(u128::from(u64::MAX)) as u64);
         }
+        Ok(())
     }
     /// Record one client-to-relay user packet after it was forwarded successfully.
-    pub(crate) fn record_metered_ingress(&self, bytes: u64) {
+    pub(crate) fn record_metered_ingress(&self, bytes: u64) -> Result<(), VpnBillingError> {
+        self.ensure_forwarding_available()?;
         atomic_saturating_add(&self.metered_usage.ingress_bytes, bytes);
+        Ok(())
     }
     /// Record one relay-to-client user packet after it was forwarded successfully.
-    pub(crate) fn record_metered_egress(&self, bytes: u64) {
+    pub(crate) fn record_metered_egress(&self, bytes: u64) -> Result<(), VpnBillingError> {
+        self.ensure_forwarding_available()?;
         atomic_saturating_add(&self.metered_usage.egress_bytes, bytes);
+        Ok(())
     }
     /// Record the highest client-signed usage voucher accepted by the relay.
-    pub fn record_usage_voucher(&self, envelope: VpnUsageVoucherEnvelopeV1) {
-        let mut highest = self
-            .highest_voucher
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+    pub fn record_usage_voucher(
+        &self,
+        envelope: VpnUsageVoucherEnvelopeV1,
+    ) -> Result<(), VpnBillingError> {
+        self.ensure_forwarding_available()?;
+        let mut highest =
+            lock_billing_state(&self.highest_voucher, &self.metered_usage.unavailable)?;
         let should_replace = highest
             .as_ref()
             .map(|current| envelope.voucher.body.sequence > current.voucher.body.sequence)
@@ -1018,8 +1146,13 @@ impl VpnSessionHandle {
         if should_replace {
             *highest = Some(envelope);
         }
+        Ok(())
     }
-    fn finalize_receipt(&self, voucher: Option<&VpnUsageVoucherEnvelopeV1>) -> VpnSessionReceiptV1 {
+    fn finalize_receipt(
+        &self,
+        voucher: Option<&VpnUsageVoucherEnvelopeV1>,
+    ) -> Result<VpnSessionReceiptV1, VpnBillingError> {
+        self.ensure_forwarding_available()?;
         let mut receipt =
             self.session
                 .finish_receipt(self.session_id, self.exit_class, self.meter_hash);
@@ -1035,11 +1168,10 @@ impl VpnSessionHandle {
         receipt.payment_tx_hash = self.payment_tx_hash;
         if let Some(envelope) = voucher {
             let body = &envelope.voucher.body;
-            let service_window = self
-                .metered_usage
-                .service_window
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let service_window = lock_billing_state(
+                &self.metered_usage.service_window,
+                &self.metered_usage.unavailable,
+            )?;
             let (started_at_ms, observed_active_ms) =
                 match (service_window.started_at_ms, service_window.started_at) {
                     (Some(started_at_ms), Some(started_at)) => (
@@ -1056,10 +1188,11 @@ impl VpnSessionHandle {
             let ended_at_ms = started_at_ms.saturating_add(active_ms);
             let ingress_bytes = self.metered_usage.ingress_bytes.load(Ordering::Relaxed);
             let egress_bytes = self.metered_usage.egress_bytes.load(Ordering::Relaxed);
-            assert!(
-                body.authorizes(ingress_bytes, egress_bytes, active_ms),
-                "relay-observed VPN usage must remain within the accepted prepaid voucher"
-            );
+            if !body.authorizes(ingress_bytes, egress_bytes, active_ms) {
+                return Err(VpnBillingError::settlement(
+                    "relay-observed VPN usage exceeds the accepted prepaid voucher",
+                ));
+            }
             // Settlement reports relay-observed payload and time, all bounded
             // by the highest client-signed prepaid voucher. Cover accounting
             // remains local telemetry and is not consensus evidence.
@@ -1069,107 +1202,94 @@ impl VpnSessionHandle {
             receipt.started_at_ms = started_at_ms;
             receipt.ended_at_ms = ended_at_ms;
             receipt.uptime_secs = u32::try_from(active_ms.div_ceil(1_000).min(u64::from(u32::MAX)))
-                .expect("capped VPN uptime fits u32");
-            receipt.meter_hash = self.meter_hash;
-            receipt.earned_fee = self.tariff.as_ref().map_or_else(Quantity::zero, |tariff| {
-                tariff
-                    .fee_for_usage(ingress_bytes, egress_bytes, active_ms)
-                    .expect(
-                        "actual VPN usage bounded by an accepted voucher must preserve tariff arithmetic",
+                .map_err(|_| {
+                    VpnBillingError::settlement(
+                        "vpn settlement active time exceeds the receipt range",
                     )
-            });
+                })?;
+            receipt.meter_hash = self.meter_hash;
+            receipt.earned_fee = match self.tariff.as_ref() {
+                Some(tariff) => tariff
+                    .fee_for_usage(ingress_bytes, egress_bytes, active_ms)
+                    .map_err(|error| {
+                        VpnBillingError::settlement(format!(
+                            "vpn settlement tariff arithmetic failed: {error}"
+                        ))
+                    })?,
+                None => Quantity::zero(),
+            };
             receipt.highest_voucher_sequence = body.sequence;
             receipt.client_voucher_hash = envelope.voucher.hash();
         }
-        receipt
+        Ok(receipt)
     }
     fn sign_settlement_receipt(
         &self,
         receipt: VpnSessionReceiptV1,
-    ) -> Result<VpnSignedSessionReceiptV1, String> {
+    ) -> Result<VpnSignedSessionReceiptV1, VpnBillingError> {
         let relay_identity_key = self.relay_identity_key.as_ref().ok_or_else(|| {
-            "vpn settlement receipt is missing the relay identity signer".to_owned()
+            VpnBillingError::settlement(
+                "vpn settlement receipt is missing the relay identity signer",
+            )
         })?;
-        VpnSignedSessionReceiptV1::try_sign(receipt, relay_identity_key.private_key())
-            .map_err(|error| format!("vpn settlement receipt signing failed: {error}"))
+        VpnSignedSessionReceiptV1::try_sign(receipt, relay_identity_key.private_key()).map_err(
+            |error| {
+                VpnBillingError::settlement(format!(
+                    "vpn settlement receipt signing failed: {error}"
+                ))
+            },
+        )
     }
     /// Finalize the handle into a billing/telemetry receipt.
-    pub fn receipt(&self) -> VpnSessionReceiptV1 {
-        let voucher = self
-            .highest_voucher
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
+    pub fn receipt(&self) -> Result<VpnSessionReceiptV1, VpnBillingError> {
+        self.ensure_forwarding_available()?;
+        let voucher =
+            lock_billing_state(&self.highest_voucher, &self.metered_usage.unavailable)?.clone();
         self.finalize_receipt(voucher.as_ref())
     }
-    /// Build the bounded receipt retained in the crash-recovery WAL.
+    /// Build the zero-usage receipt retained in the crash-recovery WAL.
     ///
-    /// Before backend readiness the reservation is deliberately zero usage.
-    /// Once service is admitted, it reserves the signed byte ceilings and the
-    /// relay-effective active-time ceiling. A graceful close replaces this
-    /// reservation with the lower relay-observed usage before promotion.
-    pub(crate) fn settlement_reservation_artifact(
+    /// The first release never reserves a client's prepaid ceilings as earned
+    /// service. A crash therefore recovers zero usage; only graceful
+    /// finalization may persist relay-observed bytes and elapsed service time.
+    pub(crate) fn pre_service_settlement_artifact(
         &self,
         envelope: &VpnUsageVoucherEnvelopeV1,
-        authorized_active_ms: u64,
-        service_admitted: bool,
-    ) -> Result<VpnSettlementArtifact, String> {
-        let tariff = self
-            .tariff
-            .as_ref()
-            .ok_or_else(|| "vpn settlement reservation is missing the signed tariff".to_owned())?;
+    ) -> Result<VpnSettlementArtifact, VpnBillingError> {
+        self.ensure_forwarding_available()?;
+        let tariff = self.tariff.as_ref().ok_or_else(|| {
+            VpnBillingError::settlement("vpn settlement reservation is missing the signed tariff")
+        })?;
         let body = &envelope.voucher.body;
-        let mut receipt = self.finalize_receipt(Some(envelope));
-        let (started_at_ms, ingress_bytes, egress_bytes, active_ms) = if service_admitted {
-            let started_at_ms = self
-                .metered_usage
-                .service_window
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .started_at_ms
-                .ok_or_else(|| {
-                    "vpn settlement reservation cannot admit service before its monotonic window starts"
-                        .to_owned()
-                })?;
-            let active_ms = authorized_active_ms
-                .min(body.active_ms)
-                .min(self.expires_at_ms.saturating_sub(started_at_ms));
-            (
-                started_at_ms,
-                body.ingress_bytes,
-                body.egress_bytes,
-                active_ms,
-            )
-        } else {
-            (body.issued_at_ms, 0, 0, 0)
-        };
-        let ended_at_ms = started_at_ms
-            .checked_add(active_ms)
-            .ok_or_else(|| "vpn settlement reservation timestamp overflowed".to_owned())?;
+        let mut receipt = self.finalize_receipt(Some(envelope))?;
+        let (started_at_ms, ingress_bytes, egress_bytes, active_ms) = (body.issued_at_ms, 0, 0, 0);
+        let ended_at_ms = started_at_ms.checked_add(active_ms).ok_or_else(|| {
+            VpnBillingError::settlement("vpn settlement reservation timestamp overflowed")
+        })?;
         if started_at_ms < self.valid_after_ms || ended_at_ms > self.expires_at_ms {
-            return Err(
-                "vpn settlement reservation falls outside the signed helper-ticket window"
-                    .to_owned(),
-            );
+            return Err(VpnBillingError::settlement(
+                "vpn settlement reservation falls outside the signed helper-ticket window",
+            ));
         }
         if body.issued_at_ms < self.valid_after_ms
             || body.issued_at_ms >= self.expires_at_ms
             || body.issued_at_ms > ended_at_ms
         {
-            return Err(
-                "vpn settlement reservation cannot project a consensus-valid voucher timestamp"
-                    .to_owned(),
-            );
+            return Err(VpnBillingError::settlement(
+                "vpn settlement reservation cannot project a consensus-valid voucher timestamp",
+            ));
         }
         if !body.authorizes(ingress_bytes, egress_bytes, active_ms) {
-            return Err(
-                "vpn settlement reservation exceeds the signed prepaid ceilings".to_owned(),
-            );
+            return Err(VpnBillingError::settlement(
+                "vpn settlement reservation exceeds the signed prepaid ceilings",
+            ));
         }
         let earned_fee = tariff
             .fee_for_usage(ingress_bytes, egress_bytes, active_ms)
             .map_err(|error| {
-                format!("vpn settlement reservation tariff arithmetic failed: {error}")
+                VpnBillingError::settlement(format!(
+                    "vpn settlement reservation tariff arithmetic failed: {error}"
+                ))
             })?;
         receipt.ingress_bytes = ingress_bytes;
         receipt.egress_bytes = egress_bytes;
@@ -1177,7 +1297,9 @@ impl VpnSessionHandle {
         receipt.started_at_ms = started_at_ms;
         receipt.ended_at_ms = ended_at_ms;
         receipt.uptime_secs = u32::try_from(active_ms.div_ceil(1_000)).map_err(|_| {
-            "vpn settlement reservation active time exceeds the receipt range".to_owned()
+            VpnBillingError::settlement(
+                "vpn settlement reservation active time exceeds the receipt range",
+            )
         })?;
         receipt.meter_hash = self.meter_hash;
         receipt.earned_fee = earned_fee.clone();
@@ -1192,16 +1314,14 @@ impl VpnSessionHandle {
         })
     }
     /// Finalize the handle into an operator settlement artifact if a voucher was accepted.
-    pub fn settlement_artifact(&self) -> Result<Option<VpnSettlementArtifact>, String> {
-        let voucher = self
-            .highest_voucher
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
+    pub fn settlement_artifact(&self) -> Result<Option<VpnSettlementArtifact>, VpnBillingError> {
+        self.ensure_forwarding_available()?;
+        let voucher =
+            lock_billing_state(&self.highest_voucher, &self.metered_usage.unavailable)?.clone();
         let Some(voucher) = voucher else {
             return Ok(None);
         };
-        let receipt = self.finalize_receipt(Some(&voucher));
+        let receipt = self.finalize_receipt(Some(&voucher))?;
         let earned_fee = receipt.earned_fee.clone();
         let receipt = self.sign_settlement_receipt(receipt)?;
         Ok(Some(VpnSettlementArtifact {
@@ -1219,9 +1339,69 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::soranet::vpn::VpnUsageVoucherBodyV1;
     use std::{
+        panic::{AssertUnwindSafe, catch_unwind},
         sync::Arc,
         time::{Duration, UNIX_EPOCH},
     };
+
+    fn poison<T>(mutex: &Mutex<T>) {
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let _guard = mutex.lock().expect("unpoisoned fixture mutex");
+            panic!("poison security-state fixture mutex");
+        }));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn poisoned_replay_state_permanently_rejects_the_session() {
+        let session = VpnSession::from_parts(Arc::new(Metrics::new()));
+        poison(&session.state.last_ingress_sequence);
+
+        assert_eq!(
+            session.record_ingress_sequence(1),
+            Err(VpnSessionStateError::StateUnavailable)
+        );
+        session.state.last_ingress_sequence.clear_poison();
+        assert_eq!(
+            session.record_egress_sequence(1),
+            Err(VpnSessionStateError::StateUnavailable),
+            "clearing the mutex poison must not reopen the session"
+        );
+    }
+
+    #[test]
+    fn poisoned_billing_state_permanently_blocks_forwarding_and_settlement() {
+        let handle = VpnSessionHandle::new(
+            VpnSession::from_parts(Arc::new(Metrics::new())),
+            [0x11; 16],
+            VpnExitClassV1::Standard,
+            [0x22; 32],
+        );
+        poison(&handle.highest_voucher);
+
+        assert_eq!(
+            handle.ensure_forwarding_available(),
+            Err(VpnBillingError::StateUnavailable)
+        );
+        handle.highest_voucher.clear_poison();
+        assert!(
+            matches!(handle.receipt(), Err(VpnBillingError::StateUnavailable)),
+            "clearing the mutex poison must not reopen settlement"
+        );
+
+        let window_handle = VpnSessionHandle::new(
+            VpnSession::from_parts(Arc::new(Metrics::new())),
+            [0x33; 16],
+            VpnExitClassV1::Standard,
+            [0x44; 32],
+        );
+        poison(&window_handle.metered_usage.service_window);
+        assert!(matches!(
+            window_handle.settlement_artifact(),
+            Err(VpnBillingError::StateUnavailable)
+        ));
+    }
+
     #[test]
     fn overlay_debug_redacts_and_drop_clears_backend_secret() {
         let issuer =
@@ -1266,10 +1446,12 @@ mod tests {
                     .expect("data cell"),
             )
             .expect("padded cell");
+        let padded_rendered = format!("{padded:?}");
         let scheduled = ScheduledFrame {
             deadline: Duration::ZERO,
-            frame: padded.frame.clone(),
+            frame: padded.frame,
             payload_len: padded.payload_len,
+            sequence: 1,
             is_cover: false,
         };
         let metrics = Arc::new(Metrics::new());
@@ -1280,7 +1462,7 @@ mod tests {
             [0xA5; 32],
         );
         for rendered in [
-            format!("{padded:?}"),
+            padded_rendered,
             format!("{scheduled:?}"),
             format!("{handle:?}"),
         ] {
@@ -1392,12 +1574,18 @@ mod tests {
             vpn_tariff_meter_hash_v1(&tariff),
         );
         handle.tariff = Some(tariff.clone());
-        handle.record_usage_voucher(envelope);
-        handle.begin_metered_service(body.issued_at_ms);
+        handle
+            .record_usage_voucher(envelope)
+            .expect("voucher state available");
+        handle
+            .begin_metered_service(body.issued_at_ms)
+            .expect("billing state available");
         std::thread::sleep(Duration::from_millis(5));
-        handle.end_metered_service(body.issued_at_ms.saturating_sub(1_000));
+        handle
+            .end_metered_service(body.issued_at_ms.saturating_sub(1_000))
+            .expect("billing state available");
 
-        let receipt = handle.receipt();
+        let receipt = handle.receipt().expect("receipt state available");
         let active_ms = receipt.ended_at_ms - receipt.started_at_ms;
         assert!((1..=body.active_ms).contains(&active_ms));
         assert_eq!(receipt.started_at_ms, body.issued_at_ms);
@@ -1459,10 +1647,16 @@ mod tests {
         handle.expires_at_ms = body.issued_at_ms + 30_000;
         handle.tariff = Some(tariff);
         handle.relay_identity_key = Some(relay_key);
-        handle.record_usage_voucher(envelope);
-        handle.begin_metered_service(body.issued_at_ms);
+        handle
+            .record_usage_voucher(envelope)
+            .expect("voucher state available");
+        handle
+            .begin_metered_service(body.issued_at_ms)
+            .expect("billing state available");
         std::thread::sleep(Duration::from_millis(2));
-        handle.cancel_metered_service_before_forwarding();
+        handle
+            .cancel_metered_service_before_forwarding()
+            .expect("unforwarded service remains cancellable");
 
         let artifact = handle
             .settlement_artifact()

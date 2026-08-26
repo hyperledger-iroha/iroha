@@ -3263,7 +3263,7 @@ mod tests {
                 7,
             )
             .expect("valid exact TRON route"),
-            hex32("d6e06a169ace343b7cd3a3bcd0b1188f7b98ff3abe7def64ca230333babc39c9")
+            hex32("0693ffd2ae1fb413a74672a892b28f931209795733aca8e522015431aa8e567f")
         );
     }
     #[test]

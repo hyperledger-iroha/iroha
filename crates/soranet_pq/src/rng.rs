@@ -158,7 +158,10 @@ fn build_rng(
     hasher.update(os_entropy);
     hasher.update(personalization);
     let mut derived = Zeroizing::new([0_u8; 32]);
-    derived.copy_from_slice(hasher.finalize().as_bytes());
+    let mut digest = hasher.finalize();
+    derived.copy_from_slice(digest.as_bytes());
+    digest.zeroize();
+    hasher.zeroize();
     HedgedChaCha20Rng {
         inner: ChaCha20Rng::from_seed(*derived),
         status,

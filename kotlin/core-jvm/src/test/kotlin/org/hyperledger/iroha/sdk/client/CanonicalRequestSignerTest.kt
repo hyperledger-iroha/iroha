@@ -311,7 +311,7 @@ class CanonicalRequestSignerTest {
             "0x02000120ce7fa46c9dce7ea4b125e2e36bdb63ea33073e7590ac92816ae1e861b7048b03"
         assertEquals(
             canonicalHex,
-            AccountAddress.parseEncodedIgnoringCurveSupport(i105, null).address.canonicalHex(),
+            AccountAddress.parseEncodedIgnoringCurveSupport(i105, null).canonicalHex(),
         )
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
         val uri = URI.create("https://torii.example/v1/accounts")

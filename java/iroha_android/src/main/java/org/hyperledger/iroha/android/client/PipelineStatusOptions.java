@@ -1,23 +1,15 @@
 package org.hyperledger.iroha.android.client;
 
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.HashSet;
-import java.util.List;
 import java.util.Map;
-import java.util.Objects;
-import java.util.Set;
 
 /**
  * Configuration for polling Torii pipeline status endpoints.
  *
  * <p>Success is deliberately not configurable: exact canonical {@code Applied} is the only status
- * that proves execution. {@code Approved} and {@code Committed} are progress.
+ * that proves execution. Exact canonical {@code Rejected} and {@code Expired} are the only
+ * terminal failures. Every other status remains progress.
  */
 public final class PipelineStatusOptions {
-
-  private static final List<String> DEFAULT_FAILURE =
-      Collections.unmodifiableList(Arrays.asList("Rejected", "Expired"));
 
   public interface StatusObserver {
     void onStatus(String statusKind, Map<String, Object> payload, int attempt);
@@ -26,14 +18,12 @@ public final class PipelineStatusOptions {
   private final long intervalMillis;
   private final Long timeoutMillis;
   private final Integer maxAttempts;
-  private final Set<String> failureStatuses;
   private final StatusObserver observer;
 
   private PipelineStatusOptions(final Builder builder) {
     this.intervalMillis = builder.intervalMillis;
     this.timeoutMillis = builder.timeoutMillis;
     this.maxAttempts = builder.maxAttempts;
-    this.failureStatuses = Collections.unmodifiableSet(new HashSet<>(builder.failureStatuses));
     this.observer = builder.observer;
   }
 
@@ -57,10 +47,6 @@ public final class PipelineStatusOptions {
     return maxAttempts;
   }
 
-  public Set<String> failureStatuses() {
-    return failureStatuses;
-  }
-
   public StatusObserver observer() {
     return observer;
   }
@@ -69,23 +55,25 @@ public final class PipelineStatusOptions {
     private long intervalMillis = 1_000L;
     private Long timeoutMillis = 30_000L;
     private Integer maxAttempts = null;
-    private final Set<String> failureStatuses = new HashSet<>();
     private StatusObserver observer = null;
 
-    private Builder() {
-      this.failureStatuses.addAll(DEFAULT_FAILURE);
-    }
+    private Builder() {}
 
     public Builder intervalMillis(final long intervalMillis) {
-      this.intervalMillis = Math.max(0L, intervalMillis);
+      if (intervalMillis < 0L) {
+        throw new IllegalArgumentException("intervalMillis must be non-negative");
+      }
+      this.intervalMillis = intervalMillis;
       return this;
     }
 
     public Builder timeoutMillis(final Long timeoutMillis) {
       if (timeoutMillis == null) {
         this.timeoutMillis = null;
+      } else if (timeoutMillis < 0L) {
+        throw new IllegalArgumentException("timeoutMillis must be non-negative");
       } else {
-        this.timeoutMillis = Math.max(0L, timeoutMillis);
+        this.timeoutMillis = timeoutMillis;
       }
       return this;
     }
@@ -101,27 +89,12 @@ public final class PipelineStatusOptions {
       return this;
     }
 
-    public Builder failureStatuses(final Iterable<String> statuses) {
-      this.failureStatuses.clear();
-      if (statuses != null) {
-        for (final String status : statuses) {
-          if (status != null) {
-            this.failureStatuses.add(status);
-          }
-        }
-      }
-      return this;
-    }
-
     public Builder observer(final StatusObserver observer) {
       this.observer = observer;
       return this;
     }
 
     public PipelineStatusOptions build() {
-      if (failureStatuses.isEmpty()) {
-        throw new IllegalStateException("failureStatuses must contain at least one entry");
-      }
       return new PipelineStatusOptions(this);
     }
   }

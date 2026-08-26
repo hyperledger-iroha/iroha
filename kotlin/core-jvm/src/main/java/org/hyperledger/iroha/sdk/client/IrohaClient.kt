@@ -17,7 +17,12 @@ import org.hyperledger.iroha.sdk.alias.AliasPlanBodyNoritoEncoder
 import org.hyperledger.iroha.sdk.alias.AliasTransactionPlanV1
 import org.hyperledger.iroha.sdk.alias.AccountOnboardingPlanReceiptV1
 import org.hyperledger.iroha.sdk.alias.AccountOnboardingPlanRequestV1
-import org.hyperledger.iroha.sdk.alias.AccountOnboardingResponseV1
+import org.hyperledger.iroha.sdk.alias.AccountOnboardingPrepareResponseV1
+import org.hyperledger.iroha.sdk.alias.AccountOnboardingPreparedTransactionV1
+import org.hyperledger.iroha.sdk.alias.AccountOnboardingProofRequiredPrepareResponseV1
+import org.hyperledger.iroha.sdk.alias.AccountOnboardingCurrentStateV1
+import org.hyperledger.iroha.sdk.alias.PreparedTransactionSubmitResponseV1
+import org.hyperledger.iroha.sdk.alias.TairaPublicResetMutationBindingV1
 import org.hyperledger.iroha.sdk.alias.AliasSetupReportV1
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.NetworkId
@@ -35,7 +40,8 @@ interface IrohaClient {
      *
      * The signed bytes are dispatched at most once. A transport or ambiguous HTTP failure completes
      * the future with [AmbiguousTransactionSubmissionException]; reconcile its transaction hash
-     * before constructing and signing any replacement.
+     * before constructing and signing any replacement. A non-canonical admission response completes
+     * the future with [TransactionSubmissionHttpException]; HTTP 202 is the sole success status.
      */
     fun submitTransaction(transaction: SignedTransaction): CompletableFuture<ClientResponse>
 
@@ -327,19 +333,6 @@ interface IrohaClient {
         return future
     }
 
-    /** Requests a stateless sponsored-onboarding receipt using a dedicated header token. */
-    fun planSponsoredAccountOnboarding(
-        request: AccountOnboardingPlanRequestV1,
-        onboardingToken: String,
-        expectedNetworkId: NetworkId,
-    ): CompletableFuture<AccountOnboardingPlanReceiptV1> {
-        val future = CompletableFuture<AccountOnboardingPlanReceiptV1>()
-        future.completeExceptionally(
-            IllegalStateException("planSponsoredAccountOnboarding requires a concrete IrohaClient implementation")
-        )
-        return future
-    }
-
     /** Requests a receipt and pins its signature to the configured onboarding authority. */
     fun planSponsoredAccountOnboarding(
         request: AccountOnboardingPlanRequestV1,
@@ -354,29 +347,44 @@ interface IrohaClient {
         return future
     }
 
-    /** Revalidates and applies a stateless sponsored-onboarding receipt. */
-    fun applySponsoredAccountOnboarding(
+    /** Revalidates a receipt and returns an exact transaction or a nonterminal live-proof requirement. */
+    fun prepareSponsoredAccountOnboarding(
+        request: AccountOnboardingPlanRequestV1,
         receipt: AccountOnboardingPlanReceiptV1,
+        binding: TairaPublicResetMutationBindingV1,
         onboardingToken: String,
+        expectedAuthority: String,
         expectedNetworkId: NetworkId,
-    ): CompletableFuture<AccountOnboardingResponseV1> {
-        val future = CompletableFuture<AccountOnboardingResponseV1>()
+    ): CompletableFuture<AccountOnboardingPrepareResponseV1> {
+        val future = CompletableFuture<AccountOnboardingPrepareResponseV1>()
         future.completeExceptionally(
-            IllegalStateException("applySponsoredAccountOnboarding requires a concrete IrohaClient implementation")
+            IllegalStateException("pinned prepareSponsoredAccountOnboarding requires a concrete IrohaClient implementation")
         )
         return future
     }
 
-    /** Applies a receipt only when its signature matches the configured onboarding authority. */
-    fun applySponsoredAccountOnboarding(
+    /** Reauthenticates ProofRequired and obtains one atomic committed account-and-alias state. */
+    fun verifyAccountOnboardingCurrentState(
+        proofRequired: AccountOnboardingProofRequiredPrepareResponseV1,
+        request: AccountOnboardingPlanRequestV1,
         receipt: AccountOnboardingPlanReceiptV1,
+        binding: TairaPublicResetMutationBindingV1,
+        expectedAuthority: String,
+        expectedNetworkId: NetworkId,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<AccountOnboardingCurrentStateV1>
+
+    /** Submits only one already authenticated exact prepared onboarding envelope. */
+    fun submitPreparedAccountOnboarding(
+        request: AccountOnboardingPlanRequestV1,
+        prepared: AccountOnboardingPreparedTransactionV1,
         onboardingToken: String,
         expectedAuthority: String,
         expectedNetworkId: NetworkId,
-    ): CompletableFuture<AccountOnboardingResponseV1> {
-        val future = CompletableFuture<AccountOnboardingResponseV1>()
+    ): CompletableFuture<PreparedTransactionSubmitResponseV1> {
+        val future = CompletableFuture<PreparedTransactionSubmitResponseV1>()
         future.completeExceptionally(
-            IllegalStateException("pinned applySponsoredAccountOnboarding requires a concrete IrohaClient implementation")
+            IllegalStateException("pinned submitPreparedAccountOnboarding requires a concrete IrohaClient implementation")
         )
         return future
     }

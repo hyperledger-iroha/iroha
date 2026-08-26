@@ -4,7 +4,7 @@
 //! the immutable Queue/Kura cut, completes every already-signed bootstrap, transfers stale local
 //! cursor ownership to the current process generation, and restores only body custody proven by
 //! the durable payload. The caller may publish the Queue startup gate only after this function
-//! returns its original combined V4/V6 receipt.
+//! returns its original combined V1 receipt.
 use super::v2_apply::{
     LaneReservationSnapshotPlannerEvidence, recover_pending_autonomous_lifecycle_terminal_outcome,
 };
@@ -20,9 +20,9 @@ use super::v2_core::{
 use crate::{
     kura::{
         AutonomousLifecycleAttemptBindingV1, AutonomousLifecycleBootstrapCompletionOutcome,
-        AutonomousLifecycleCursorPhaseKindV2, AutonomousLifecycleCursorPhaseV2,
-        AutonomousLifecycleCursorRead, AutonomousLifecycleCursorUnsignedV2,
-        AutonomousLifecycleCursorV2, AutonomousLifecyclePayloadCustodySourceV1,
+        AutonomousLifecycleCursorPhaseKindV1, AutonomousLifecycleCursorPhaseV1,
+        AutonomousLifecycleCursorRead, AutonomousLifecycleCursorUnsignedV1,
+        AutonomousLifecycleCursorV1, AutonomousLifecyclePayloadCustodySourceV1,
         AutonomousLifecyclePendingReservationGroupObservation,
         AutonomousLifecyclePendingTerminalOutcomeRecovery,
         AutonomousLifecycleProcessGenerationClaim, AutonomousLifecycleTerminalOutcomeDurableStage,
@@ -30,7 +30,7 @@ use crate::{
     },
     queue::{
         LaneQueueReservationGroupBindingV1, LaneQueueReservationGroupIdentityV1,
-        LaneQueueReservationKeyV2, LaneQueueReservationReconciliationSnapshotV1,
+        LaneQueueReservationKeyV1, LaneQueueReservationReconciliationSnapshotV1,
         LaneReservationSnapshotLifecycleProjectionV1, LaneReservationStartupReconciliationReceipt,
         Queue, lane_queue_reservation_group_binding_from_ordered_keys,
     },
@@ -44,7 +44,7 @@ std::thread_local! {
     static DEFERRED_TERMINAL_STAGE_PROOF_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         std::cell::RefCell::new(None);
     static POST_LIFECYCLE_CURSOR_CAS_HOOK: std::cell::RefCell<
-        Option<Box<dyn FnMut(&AutonomousLifecycleCursorV2)>>,
+        Option<Box<dyn FnMut(&AutonomousLifecycleCursorV1)>>,
     > = std::cell::RefCell::new(None);
 }
 #[cfg(test)]
@@ -66,7 +66,7 @@ fn run_deferred_terminal_stage_proof_hook_for_test() {
 }
 #[cfg(test)]
 pub(crate) fn install_post_lifecycle_cursor_cas_hook_for_test(
-    hook: impl FnMut(&AutonomousLifecycleCursorV2) + 'static,
+    hook: impl FnMut(&AutonomousLifecycleCursorV1) + 'static,
 ) {
     POST_LIFECYCLE_CURSOR_CAS_HOOK.with(|slot| {
         assert!(
@@ -81,7 +81,7 @@ pub(crate) fn clear_post_lifecycle_cursor_cas_hook_for_test() {
     POST_LIFECYCLE_CURSOR_CAS_HOOK.with(|slot| drop(slot.borrow_mut().take()));
 }
 #[cfg(test)]
-fn run_post_lifecycle_cursor_cas_hook_for_test(cursor: &AutonomousLifecycleCursorV2) {
+fn run_post_lifecycle_cursor_cas_hook_for_test(cursor: &AutonomousLifecycleCursorV1) {
     POST_LIFECYCLE_CURSOR_CAS_HOOK.with(|slot| {
         if let Some(hook) = slot.borrow_mut().as_mut() {
             hook(cursor);
@@ -259,9 +259,9 @@ pub(crate) fn sign_lifecycle_cursor(
     sequence: u64,
     previous_cursor_hash: Option<Hash>,
     binding: AutonomousLifecycleAttemptBindingV1,
-    phase: AutonomousLifecycleCursorPhaseV2,
-) -> Result<AutonomousLifecycleCursorV2, String> {
-    let unsigned = AutonomousLifecycleCursorUnsignedV2::new(
+    phase: AutonomousLifecycleCursorPhaseV1,
+) -> Result<AutonomousLifecycleCursorV1, String> {
+    let unsigned = AutonomousLifecycleCursorUnsignedV1::new(
         sequence,
         previous_cursor_hash,
         binding,
@@ -288,7 +288,7 @@ fn compare_and_swap_phase(
     local_peer: &PeerId,
     payload: &crate::lane_consensus::LaneExecutablePayloadV1,
     read: AutonomousLifecycleCursorRead,
-    phase: AutonomousLifecycleCursorPhaseV2,
+    phase: AutonomousLifecycleCursorPhaseV1,
 ) -> Result<AutonomousLifecycleCursorRead, String> {
     let (current, lease) = read.into_parts();
     let sequence = current
@@ -297,7 +297,7 @@ fn compare_and_swap_phase(
         .map_err(|()| "autonomous lifecycle startup cursor sequence is exhausted".to_owned())?;
     let previous_cursor_hash = current
         .as_ref()
-        .map(AutonomousLifecycleCursorV2::cursor_hash);
+        .map(AutonomousLifecycleCursorV1::cursor_hash);
     let binding = current
         .as_ref()
         .map(|cursor| cursor.binding().clone())
@@ -324,7 +324,7 @@ fn compare_and_swap_phase(
     Ok(read)
 }
 fn prepared_recovery_state(
-    cursor: &AutonomousLifecycleCursorV2,
+    cursor: &AutonomousLifecycleCursorV1,
 ) -> Result<ProductionInFlightFirstReleaseStateProjection, String> {
     let transition = cursor
         .prepared_transition_projection()
@@ -347,15 +347,15 @@ fn prepared_recovery_state(
     }
 }
 fn cursor_recovery_state(
-    cursor: &AutonomousLifecycleCursorV2,
+    cursor: &AutonomousLifecycleCursorV1,
 ) -> Result<ProductionInFlightFirstReleaseStateProjection, String> {
     match cursor.phase_kind() {
-        AutonomousLifecycleCursorPhaseKindV2::Prepared => prepared_recovery_state(cursor),
-        AutonomousLifecycleCursorPhaseKindV2::Live
-        | AutonomousLifecycleCursorPhaseKindV2::Terminal => cursor
+        AutonomousLifecycleCursorPhaseKindV1::Prepared => prepared_recovery_state(cursor),
+        AutonomousLifecycleCursorPhaseKindV1::Live
+        | AutonomousLifecycleCursorPhaseKindV1::Terminal => cursor
             .before_projection()
             .map_err(|reason| lifecycle_error("stable cursor projection failed", reason)),
-        AutonomousLifecycleCursorPhaseKindV2::Crashed => cursor
+        AutonomousLifecycleCursorPhaseKindV1::Crashed => cursor
             .after_projection()
             .map_err(|reason| lifecycle_error("crashed cursor projection failed", reason))?
             .ok_or_else(|| {
@@ -365,10 +365,10 @@ fn cursor_recovery_state(
 }
 fn exact_current_queue_group_matches(
     binding: &AutonomousLifecycleAttemptBindingV1,
-    ordered_keys: &[LaneQueueReservationKeyV2],
+    ordered_keys: &[LaneQueueReservationKeyV1],
     current_queue_groups: &BTreeMap<
         LaneQueueReservationGroupIdentityV1,
-        Vec<LaneQueueReservationKeyV2>,
+        Vec<LaneQueueReservationKeyV1>,
     >,
 ) -> bool {
     let expected = binding.reservation_group_binding();
@@ -385,13 +385,13 @@ fn exact_current_queue_group_matches(
 /// A producer cursor is signed against the Queue owner which selected the
 /// executable payload. Unlike an observer's replicated Kura custody, that
 /// local producer authority cannot be reconstructed from the payload alone.
-/// Require the complete current V6 owner set before any Crash/Recover CAS.
+/// Require the complete current V1 owner set before any Crash/Recover CAS.
 fn require_local_producer_queue_owner(
     payload: &crate::lane_consensus::LaneExecutablePayloadV1,
-    cursor: &AutonomousLifecycleCursorV2,
+    cursor: &AutonomousLifecycleCursorV1,
     current_queue_groups: &BTreeMap<
         LaneQueueReservationGroupIdentityV1,
-        Vec<LaneQueueReservationKeyV2>,
+        Vec<LaneQueueReservationKeyV1>,
     >,
 ) -> Result<(), String> {
     let binding = cursor.binding();
@@ -427,7 +427,7 @@ fn recover_one_attempt(
             "autonomous lifecycle startup inventory retained a cursorless payload after bootstrap completion"
                 .to_owned()
         })?;
-        if cursor.phase_kind() == AutonomousLifecycleCursorPhaseKindV2::Terminal {
+        if cursor.phase_kind() == AutonomousLifecycleCursorPhaseKindV1::Terminal {
             return Ok(changed);
         }
         let owner_generation = cursor.owner_generation();
@@ -440,7 +440,7 @@ fn recover_one_attempt(
         if owner_generation < current_generation {
             let before = cursor_recovery_state(&cursor)?;
             let phase = if before.session.crashed & local_actor != 0 {
-                AutonomousLifecycleCursorPhaseV2::observed_crashed(
+                AutonomousLifecycleCursorPhaseV1::observed_crashed(
                     owner_generation,
                     current_generation,
                     before,
@@ -455,7 +455,7 @@ fn recover_one_attempt(
                         .to_owned()
                 })?
                 .into_projection();
-                AutonomousLifecycleCursorPhaseV2::crashed(
+                AutonomousLifecycleCursorPhaseV1::crashed(
                     owner_generation,
                     current_generation,
                     crash.before,
@@ -468,7 +468,7 @@ fn recover_one_attempt(
             continue;
         }
         match cursor.phase_kind() {
-            AutonomousLifecycleCursorPhaseKindV2::Crashed => {
+            AutonomousLifecycleCursorPhaseKindV1::Crashed => {
                 let before = cursor_recovery_state(&cursor)?;
                 let recover = check_production_in_flight_first_release_recover_transition(
                     before,
@@ -479,12 +479,12 @@ fn recover_one_attempt(
                         .to_owned()
                 })?
                 .into_projection();
-                let phase = AutonomousLifecycleCursorPhaseV2::prepared(current_generation, recover)
+                let phase = AutonomousLifecycleCursorPhaseV1::prepared(current_generation, recover)
                     .map_err(|reason| lifecycle_error("Recover preparation failed", reason))?;
                 let _ = compare_and_swap_phase(kura, key_pair, local_peer, payload, read, phase)?;
                 changed = true;
             }
-            AutonomousLifecycleCursorPhaseKindV2::Prepared => {
+            AutonomousLifecycleCursorPhaseKindV1::Prepared => {
                 let transition = cursor
                     .prepared_transition_projection()
                     .map_err(|reason| lifecycle_error("prepared cursor validation failed", reason))?
@@ -504,14 +504,14 @@ fn recover_one_attempt(
                     ));
                 }
                 let phase =
-                    AutonomousLifecycleCursorPhaseV2::live(current_generation, transition.after)
+                    AutonomousLifecycleCursorPhaseV1::live(current_generation, transition.after)
                         .map_err(|reason| {
                             lifecycle_error("Live phase construction failed", reason)
                         })?;
                 let _ = compare_and_swap_phase(kura, key_pair, local_peer, payload, read, phase)?;
                 changed = true;
             }
-            AutonomousLifecycleCursorPhaseKindV2::Live => {
+            AutonomousLifecycleCursorPhaseKindV1::Live => {
                 let before = cursor_recovery_state(&cursor)?;
                 if before.session.bodies & local_actor != 0 {
                     return Ok(changed);
@@ -527,14 +527,14 @@ fn recover_one_attempt(
                     })?
                     .into_projection();
                 let phase =
-                    AutonomousLifecycleCursorPhaseV2::prepared(current_generation, rehydrate)
+                    AutonomousLifecycleCursorPhaseV1::prepared(current_generation, rehydrate)
                         .map_err(|reason| {
                             lifecycle_error("rehydration preparation failed", reason)
                         })?;
                 let _ = compare_and_swap_phase(kura, key_pair, local_peer, payload, read, phase)?;
                 changed = true;
             }
-            AutonomousLifecycleCursorPhaseKindV2::Terminal => return Ok(changed),
+            AutonomousLifecycleCursorPhaseKindV1::Terminal => return Ok(changed),
         }
     }
     Err("autonomous lifecycle startup exceeded its fixed eight-transition attempt bound".to_owned())
@@ -542,14 +542,14 @@ fn recover_one_attempt(
 fn lifecycle_projection_for_cursor(
     queue: &Queue,
     receipt: &LaneReservationStartupReconciliationReceipt,
-    cursor: &AutonomousLifecycleCursorV2,
-    ordered_keys: Vec<crate::queue::LaneQueueReservationKeyV2>,
+    cursor: &AutonomousLifecycleCursorV1,
+    ordered_keys: Vec<crate::queue::LaneQueueReservationKeyV1>,
 ) -> Result<LaneReservationSnapshotLifecycleProjectionV1, String> {
     let recovered_state = match cursor.phase_kind() {
-        AutonomousLifecycleCursorPhaseKindV2::Prepared => prepared_recovery_state(cursor)?,
-        AutonomousLifecycleCursorPhaseKindV2::Crashed => cursor_recovery_state(cursor)?,
-        AutonomousLifecycleCursorPhaseKindV2::Live
-        | AutonomousLifecycleCursorPhaseKindV2::Terminal => {
+        AutonomousLifecycleCursorPhaseKindV1::Prepared => prepared_recovery_state(cursor)?,
+        AutonomousLifecycleCursorPhaseKindV1::Crashed => cursor_recovery_state(cursor)?,
+        AutonomousLifecycleCursorPhaseKindV1::Live
+        | AutonomousLifecycleCursorPhaseKindV1::Terminal => {
             return queue
                 .select_lane_reservation_snapshot_lifecycle_projection(
                     receipt,
@@ -567,14 +567,14 @@ fn lifecycle_projection_for_cursor(
     .map_err(|error| lifecycle_error("Queue cursor projection failed", error))
 }
 fn lifecycle_identity_projection_for_cursor(
-    cursor: &AutonomousLifecycleCursorV2,
-    ordered_keys: Vec<crate::queue::LaneQueueReservationKeyV2>,
+    cursor: &AutonomousLifecycleCursorV1,
+    ordered_keys: Vec<crate::queue::LaneQueueReservationKeyV1>,
 ) -> Result<LaneReservationSnapshotLifecycleProjectionV1, String> {
     let recovered_state = match cursor.phase_kind() {
-        AutonomousLifecycleCursorPhaseKindV2::Prepared => prepared_recovery_state(cursor)?,
-        AutonomousLifecycleCursorPhaseKindV2::Crashed => cursor_recovery_state(cursor)?,
-        AutonomousLifecycleCursorPhaseKindV2::Live
-        | AutonomousLifecycleCursorPhaseKindV2::Terminal => cursor
+        AutonomousLifecycleCursorPhaseKindV1::Prepared => prepared_recovery_state(cursor)?,
+        AutonomousLifecycleCursorPhaseKindV1::Crashed => cursor_recovery_state(cursor)?,
+        AutonomousLifecycleCursorPhaseKindV1::Live
+        | AutonomousLifecycleCursorPhaseKindV1::Terminal => cursor
             .before_projection()
             .map_err(|reason| lifecycle_error("signed identity state is invalid", reason))?,
     };
@@ -1399,7 +1399,7 @@ pub(crate) fn reconcile_autonomous_lifecycle_startup(
     }
     let routes = active_lifecycle_routes(state, context)?;
     let mut current_queue_groups =
-        BTreeMap::<LaneQueueReservationGroupIdentityV1, Vec<LaneQueueReservationKeyV2>>::new();
+        BTreeMap::<LaneQueueReservationGroupIdentityV1, Vec<LaneQueueReservationKeyV1>>::new();
     for phase in &snapshot.ordered_owner_phases {
         current_queue_groups
             .entry(LaneQueueReservationGroupIdentityV1::from_key(&phase.key))

@@ -1,5 +1,5 @@
 fn autonomous_reservation_reconciliation_group(
-    ordered_keys: Vec<LaneQueueReservationKeyV2>,
+    ordered_keys: Vec<LaneQueueReservationKeyV1>,
 ) -> LaneQueueReservationReconciliationGroupV1 {
     let first = ordered_keys
         .first()
@@ -63,8 +63,8 @@ fn two_reservation_autonomous_lane_payload_for_kura(
         .zip(&routing_plans)
         .enumerate()
         .map(
-            |(index, (entrypoint, routing_plan))| LaneQueueReservationKeyV2 {
-                version: LaneQueueReservationKeyV2::VERSION,
+            |(index, (entrypoint, routing_plan))| LaneQueueReservationKeyV1 {
+                version: LaneQueueReservationKeyV1::VERSION,
                 entrypoint_hash: entrypoint.hash(),
                 queue_plan_admission_binding_hash: Hash::new_from_chunks(&[
                     b"two-reservation-strict-admission",
@@ -107,7 +107,7 @@ use crate::sumeragi::v2_core::{
 impl Kura {
     fn autonomous_lane_retirement_matching_reservation(
         &self,
-        reservation: &LaneQueueReservationKeyV2,
+        reservation: &LaneQueueReservationKeyV1,
         expected_network_id: iroha_data_model::NetworkId,
         expected_epoch: u64,
     ) -> Result<Option<AutonomousLaneSlotRetirementV1>> {
@@ -128,7 +128,7 @@ impl Kura {
     }
     fn autonomous_lane_payload_matches_reservation(
         &self,
-        reservation: &LaneQueueReservationKeyV2,
+        reservation: &LaneQueueReservationKeyV1,
         expected_network_id: iroha_data_model::NetworkId,
         expected_epoch: u64,
     ) -> bool {

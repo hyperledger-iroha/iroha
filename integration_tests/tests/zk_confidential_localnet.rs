@@ -65,7 +65,11 @@ fn confidential_surface_excludes_retired_wires() {
         std::any::type_name::<TopUpKagemushaRecursiveV4>(),
         std::any::type_name::<RedeemKagemushaRecursiveV4>(),
     ] {
-        assert!(registry.contains(specialized));
-        assert_eq!(registry.wire_id(specialized), Some(specialized));
+        let wire_id = registry
+            .wire_id(specialized)
+            .expect("specialized instruction has an explicit V1 wire identifier");
+        assert_ne!(wire_id, specialized);
+        assert!(registry.contains(wire_id));
+        assert!(!registry.contains(specialized));
     }
 }

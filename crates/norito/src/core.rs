@@ -2988,8 +2988,8 @@ impl<'a> DecodeFromSlice<'a> for &'a [u8] {
 impl<'a, T: DecodeFromSlice<'a> + 'static, const N: usize> DecodeFromSlice<'a> for [T; N] {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         if TypeId::of::<T>() == TypeId::of::<u8>() {
-            record_slice_access(bytes, bytes.len());
             if bytes.len() == N {
+                record_slice_access(bytes, N);
                 let mut buf = [0u8; N];
                 buf.copy_from_slice(bytes);
                 let mut arr = core::mem::MaybeUninit::<[T; N]>::uninit();
@@ -3016,9 +3016,7 @@ impl<'a, T: DecodeFromSlice<'a> + 'static, const N: usize> DecodeFromSlice<'a> f
                 let byte = *bytes.get(byte_pos).ok_or(Error::LengthMismatch)?;
                 *slot = byte;
             }
-            if offset != bytes.len() {
-                return Err(Error::LengthMismatch);
-            }
+            record_slice_access(bytes, offset);
             let mut arr = core::mem::MaybeUninit::<[T; N]>::uninit();
             unsafe {
                 core::ptr::copy_nonoverlapping(
@@ -3026,7 +3024,7 @@ impl<'a, T: DecodeFromSlice<'a> + 'static, const N: usize> DecodeFromSlice<'a> f
                     arr.as_mut_ptr() as *mut T,
                     N,
                 );
-                return Ok((arr.assume_init(), bytes.len()));
+                return Ok((arr.assume_init(), offset));
             }
         }
         let mut offset = 0usize;

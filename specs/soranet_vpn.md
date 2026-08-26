@@ -8,7 +8,11 @@ the same deterministic framing.
   (version, class, flags, circuit id, flow label, seq/ack, padding budget,
   payload length) and exposes helpers for padding (`VpnCellV1::into_padded_frame`)
   and control-plane/billing payloads. Payload capacity is `1024 - 42 = 982`
-  bytes; headers carry a padding budget in milliseconds.
+  bytes; headers carry a padding budget in milliseconds. Plaintext cell owners
+  and padded frames redact their debug output and scrub their complete owned
+  allocation on drop. Padded bytes remain available by guarded slice access;
+  `into_payload` and `into_bytes` are explicit ownership transfers whose callers
+  assume responsibility for clearing the returned storage.
 - **Control plane:** `crates/iroha_config/src/parameters/{defaults,user,actual}.rs`
   adds `network.soranet_vpn.*` knobs (cell size, flow label width, cover ratio,
   burst, heartbeat, jitter, padding budget, guard refresh, lease, DNS push
@@ -23,8 +27,9 @@ the same deterministic framing.
   independently provisioned exact snapshot digest. Torii authenticates those
   bytes once at startup, selects an exit-authorized VPN endpoint
   deterministically by priority and canonical multiaddr, and derives the TLS
-  server name, leaf SPKI SHA-256, descriptor commitment, relay-certificate
-  digest, and snapshot digest solely from that signed directory entry. There is
+  server name, leaf SPKI SHA-256, descriptor commitment, the paired ML-DSA-65
+  relay identity, relay-certificate digest, and snapshot digest solely from
+  that signed directory entry. There is
   no independent raw TLS-pin override. The first-release directory contract
   limits the encoded snapshot to 5 MiB, 16 issuers, 64 relays, 1,952 issuer
   ML-DSA-65 public-key bytes, and 64 KiB per embedded SRC bundle. Every local
@@ -40,15 +45,28 @@ the same deterministic framing.
   quote admission, the durable on-chain quote policy, relay helper-ticket
   admission, and restart reconstruction all reject trust that expires before
   the lease or differs from the currently authenticated entry.
+  Public relay IP literals must be globally routable; loopback, private,
+  link-local, shared, documentation, benchmarking, multicast, unspecified, and
+  reserved ranges are rejected by the SRCv2 validator. For a DNS multiaddr the
+  native helper performs exactly one lookup under a 10-second deadline, rejects the complete
+  answer set if any address is non-public or if more than 32 answers are
+  returned, enforces the signed `dns4`/`dns6` family, sorts and deduplicates the
+  public answers, and passes one exact socket address into QUIC. The connection
+  never re-resolves the hostname, closing DNS rebinding and local-network SSRF
+  paths. Loopback remains valid only for the separately authenticated local
+  developer proxy; it is not a relay-certificate endpoint.
 - **Cover scheduling:** `xtask/src/soranet_vpn.rs` builds deterministic cover/data
   plans from the config using a BLAKE3 XOF seeded by all 32 seed bytes, clamps
   bursts, frames payloads with the configured padding budget, and emits billing
   receipts keyed by the exit class.
 - **Cover ratio + seeding:** `cover_to_data_per_mille` accepts 0-1000; an explicit
   `0` disables cover even when `vpn.cover.enabled=true`, and burst caps insert
-  data slots while resetting the cover streak. `VpnBridge` derives a per-circuit
-  default cover seed from the circuit id + flow label (override with
-  `set_cover_seed`).【crates/iroha_config/src/parameters/user.rs:6380】【tools/soranet-relay/src/config.rs:740】【crates/iroha_data_model/src/soranet/vpn.rs:509】【tools/soranet-relay/src/vpn_adapter.rs:224】
+  data slots while resetting the cover streak. `VpnBridge` draws a non-zero
+  secret master seed from the operating system and derives a domain-separated
+  seed for every batch from that master, the circuit id, flow label, starting
+  sequence, and batch length. Equal-sized batches therefore do not repeat a
+  cover pattern. The public deterministic test hook rejects an all-zero seed,
+  and temporary batch seed owners are scrubbed after scheduling.【crates/iroha_config/src/parameters/user.rs:6380】【tools/soranet-relay/src/config.rs:740】【crates/iroha_data_model/src/soranet/vpn.rs:509】【tools/soranet-relay/src/vpn_adapter.rs:224】
 - **Flow-label enforcement:** `flow_label_bits` now clamps to 1–24 bits (default
   24) on config/client inputs. Frame builders validate the configured width and
   parsing helpers reject frames whose flow label exceeds the allowed width so
@@ -100,10 +118,16 @@ the same deterministic framing.
   normalized CIDRs and the exact same CIDR in both route lists are rejected;
   a more-specific exclusion beneath a pushed default route remains intentional
   and valid. All string/list/signature bounds precede allocation-free encoded-size
-  counting, and the same static validator runs during WSV reconstruction.
+  counting, and the same static validator runs during WSV reconstruction. Relay
+  configuration rejects route prefixes with host bits, duplicate normalized
+  routes or resolvers (including mapped/native IPv4 aliases), and non-unicast
+  resolvers before advertising the policy.
 - **Helper tickets:** Helper tickets are fixed 788-byte v1 capabilities. Each tariff
   component occupies a fixed slot containing a canonical exact `Quantity`
   frame, so no implicit integer nano-XOR unit crosses the helper boundary.
+  Rust producers retain the signed wire value in the redacted,
+  drop-scrubbed `VpnHelperTicketFrameV1`; extracting its raw array is an
+  explicit ownership transfer to the transport caller.
   Torii signs every capability with the dedicated Ed25519 VPN operator key
   configured under `network.soranet_vpn`, which is also the sole signer for
   canonical VPN quotes. Torii's common node and proxy-bridge keys never issue
@@ -117,21 +141,27 @@ the same deterministic framing.
   relay id, payment hash,
   authorized Ed25519 metering public key, full deterministic tariff, the exact
   session-derived client IPv4 and IPv6 addresses, and the domain-separated
-  canonical hash of the selected relay endpoint, identity,
+  canonical hash of the selected relay endpoint, both the Ed25519 and
+  ML-DSA-65 relay identities,
   descriptor commitment, TLS name and SPKI pin, relay certificate and directory
   digests, padding budget, ordered route pushes, excluded routes, DNS servers,
   the exact derived tunnel-address plan, and the fixed 1,280-byte V1 MTU.
   The client helper and relay independently verify the signature and the
-  half-open validity window. The helper also
-  recomputes the network-policy hash and rejects any mismatch before stopping
-  an existing worker, changing durable state, connecting to a relay, or
-  mutating host networking. During QUIC admission it compares the live leaf
+  half-open validity window. For a same-UID replacement, the helper first
+  quiesces the prior worker and completes its journalled cleanup while treating
+  the new stdin bytes as opaque. The isolated new worker and root supervisor
+  then independently authenticate the ticket and recompute the network-policy
+  hash before any new host-network mutation. Thus a malformed replacement can
+  interrupt its owner's prior session, but can neither replace another UID's
+  session nor reach privileged network preparation. During QUIC admission it compares the live leaf
   certificate's SPKI SHA-256 with the signed pin before normal name, validity,
   and signature verification. `relay_certificate_sha256` identifies the
   canonical signed relay-certificate bundle and is deliberately not
   reinterpreted as a leaf-DER hash. The relay-authenticated SoraNet handshake
-  binds that bundle digest, the rest of the exact transport trust tuple, and
-  the ticket before the helper prepares the tunnel, so a bundle mismatch fails
+  binds that bundle digest, both certified relay identities, the rest of the
+  exact transport trust tuple, and the ticket before the helper prepares the
+  tunnel. The live relay response must prove possession of both identity
+  secrets before ML-KEM decapsulation, so a bundle or identity mismatch fails
   post-TLS authentication. Relays reject old-length tickets and vouchers signed by any key other
   than the ticket metering key. A successful redemption is committed synchronously to
   the namespace- and relay-identity-bound ledger configured by
@@ -152,10 +182,12 @@ the same deterministic framing.
   decimal string. JSON numbers and the retired integer `*_nanos` aliases are
   rejected rather than rounded or reinterpreted.
   Profile, quote, and session payloads carry the same required trust tuple:
-  `relay_id_hex`, `descriptor_commit_hex`, `tls_server_name`,
+  `relay_id_hex`, `relay_mldsa65_public_key_hex`, `descriptor_commit_hex`, `tls_server_name`,
   `relay_tls_spki_sha256_hex`, `relay_certificate_sha256_hex`, and
   `directory_snapshot_digest_hex`. Trust keys and digests, quote ids, lease
-  ids, and payment hashes use exact lowercase 32-byte hex encodings. The
+  ids, and payment hashes use exact lowercase 32-byte hex encodings; the
+  ML-DSA-65 identity uses exactly 1,952 bytes (3,904 lowercase hexadecimal
+  characters). The
   canonical VPN session id is 16 bytes (32 lowercase hexadecimal characters),
   matching `VpnHelperTicketV1` and the consensus lease record. Clients must
   reject missing, null, malformed, or substituted fields.
@@ -190,21 +222,31 @@ the same deterministic framing.
   The helper records relay-to-client bytes only after Linux accepts the complete
   packet in one TUN write; a short write closes the tunnel without billing the
   unwritten packet.
+  Every client-originated cell must carry the authenticated helper session's
+  exact circuit id and derived flow label before sequence or accounting state
+  advances. V1 accepts client `Data` cells and exact signed-voucher `Control`
+  cells only: client-originated `Cover` and `KeepAlive`, empty data, non-voucher
+  control, and short non-completing packet fragments close the session. At most
+  256 valid vouchers are accepted per session. In addition to billable packet
+  ceilings, the relay caps cumulative client wire bytes at 64 times the signed
+  ingress-payload ceiling, which admits a minimum-sized IP packet in one fixed
+  1 KiB cell without offering unmetered padding/control traffic.
   Only the highest accepted voucher enters settlement receipts. Receipt counters
   and service time are the relay-observed values and must be no greater than the
   voucher ceilings. Service duration is measured on the monotonic clock and
   projected as `ended_at_ms = started_at_ms + elapsed_ms`, so a wall-clock
-  rollback cannot erase billable active time. Before durable helper-ticket
-  redemption, the relay fsyncs an owner-private, non-submit-ready per-session
-  WAL containing a zero-usage reservation. After backend readiness, it
-  atomically advances that WAL to the bounded prepaid byte/time ceilings before
-  forwarding any packet; every refresh is persisted before its credit becomes
-  usable. A graceful close replaces the reservation with actual observed usage.
+  rollback cannot erase billable active time. The helper ticket is consumed
+  durably immediately after the authenticated application handshake, before
+  circuit accounting or backend work. Before any backend protocol/service, the
+  relay fsyncs an owner-private, non-submit-ready per-session
+  WAL containing a zero-usage receipt. That zero-usage WAL remains unchanged
+  during live service; prepaid ceilings are authorization limits, never evidence
+  that service was delivered. A graceful close replaces it with exact observed usage.
   After process or host failure, the next exclusively locked relay instance
-  promotes the last signed reservation instead, so lost volatile counters can
-  never create free service; the maximum crash charge is the client's small,
-  explicitly signed prepaid window. An accepted initial voucher still produces
-  a zero-usage settlement artifact if backend setup fails.
+  promotes the zero-usage receipt. The relay absorbs uncheckpointed service so
+  a crash can undercharge but can never turn unused prepaid ceilings into an
+  overcharge. An accepted initial voucher still produces a zero-usage
+  settlement artifact if backend setup fails.
   `meter_hash` is the domain-separated hash of the signed tariff and
   `cover_bytes` is zero because cover accounting is relay-local telemetry, not
   authenticated consensus evidence. The earned fee is recomputed from actual
@@ -227,7 +269,10 @@ the same deterministic framing.
   before admitting service, revalidates custody at every transition, and uses
   owner-owned, single-link files with mode `0600`. Every create, replacement,
   promotion, or removal fsyncs both the file and directory; any failure poisons
-  VPN persistence and closes service. Live WAL JSON is deliberately a distinct
+  VPN persistence and closes service. The first-release spool admits at most
+  8,192 total directory entries, including final artifacts; operators must
+  submit and remove completed artifacts before reaching that ceiling because
+  the relay has no automatic retention/drain worker. Live WAL JSON is deliberately a distinct
   schema that `soranet-vpn-settlement` cannot submit. Only final promotion emits
   the exact
   `/v1/vpn/receipts` request body (`relay_receipt_hex`, `client_voucher_hex`,
@@ -287,11 +332,16 @@ the same deterministic framing.
   egress NIC. A disabled forwarding family remains drop-all even if the host
   sysctl was already enabled. MASQUERADE sources are limited to the assigned
   `/32` and `/128`.
-- **Local helper secrecy:** Hidden helper workers read their connect payloads
-  from stdin instead of argv, and that stdin payload is a magic-prefixed Norito
-  frame rather than JSON. The helper's private state file is also a
-  magic-prefixed Norito frame; only the CLI status output remains JSON for local
-  UX. The only ticket trust anchor is the fixed
+- **Local helper secrecy:** Connect secrets are never accepted through argv.
+  The public process authenticates the set-user-ID caller against the current
+  owner before reading at most 1 MiB of JSON from stdin under one absolute
+  deadline, then acquires the action lock and repeats that authorization against
+  freshly loaded state. It treats those bytes as opaque: a blocked root
+  supervisor receives an exact 64-byte launch frame followed by the bytes, and
+  forwards them only after its separate network child proves permanent
+  isolation. Only that unprivileged child parses JSON or secret-bearing fields.
+  The helper's private state file is a magic-prefixed Norito frame; only the CLI
+  status output remains JSON for local UX. The only ticket trust anchor is the fixed
   `/etc/sora-vpn-controller/helper-ticket-issuer-public-key.hex` path. The
   helper accepts an exact canonical Ed25519 public key only from a root-owned,
   single-link, owner-private direct regular file under trusted parent
@@ -335,26 +385,72 @@ the same deterministic framing.
   clears `PDEATHSIG` on both set-user-ID exec and later credential changes, the
   worker installs and parent-PID-checks its kill-on-supervisor-death binding
   both before and after the permanent drop.
-  The fixed 64-byte credential-bearing IPC sequence is `WORKER_READY`,
-  `TUN_READY(fd)`, `TUN_ACK`, `START`, `STARTED`, cumulative `TRAFFIC`, `STOP`,
-  and `WORKER_EXIT`. Every datagram carries kernel peer credentials and the
-  inherited token; phases, reserved fields, values, and the single-descriptor
-  transfer are exact. Launch authenticates the supervisor's effective root UID
-  with `SO_PEERCRED`; subsequent `SCM_CREDENTIALS` frames pin the same parent
-  PID and its real caller UID/GID, matching Linux credential semantics. The
-  worker validates that descriptor as the expected
+  Before parsing those bytes the child closes every inherited descriptor above
+  its fixed IPC fd with `close_range(..., CLOSE_RANGE_UNSHARE)`, disables
+  dumpability, installs a supported-architecture seccomp filter, and sends the
+  `ISOLATED` barrier. The root supervisor independently verifies the pidfd and
+  immutable start time, all four UID/GID slots, empty supplementary groups,
+  zero inheritable/permitted/effective/bounding/ambient capability sets,
+  `NoNewPrivs=1`, `Seccomp=2`, `TracerPid=0`, `Threads=1`, and root custody of
+  the child's `/proc` directory before releasing the payload. The child then
+  returns one exact 8 KiB plan containing the signed helper ticket and canonical
+  network fields. The supervisor reparses that ticket with the fixed issuer key,
+  recomputes its policy hash, and accepts no unused or nonzero padding bytes.
+  The subsequent fixed 64-byte credential-bearing IPC sequence is
+  `WORKER_READY`, `TUN_READY(fd)`, `TUN_ACK`, `START`, `STARTED`, cumulative
+  `TRAFFIC`, `STOP`, and `WORKER_EXIT`. Every datagram carries kernel peer
+  credentials and the inherited token; phases, reserved fields, values, and the
+  single-descriptor transfer are exact. Launch authenticates the supervisor's
+  effective root UID with `SO_PEERCRED`; subsequent `SCM_CREDENTIALS` frames pin
+  the same parent PID and its real caller UID/GID, matching Linux credential
+  semantics. The worker validates that descriptor as the expected
   read/write, nonblocking, close-on-exec `/dev/net/tun` device, with the exact
   interface name, `IFF_TUN|IFF_NO_PI`, and signed MTU. Connected state is not
   published until `STARTED` is received.
-  Before the first host mutation the supervisor fsyncs a complete
-  repair-required plan. Preparation advances that journal after TUN creation,
-  link/route configuration, each pre-recorded exclusion mutation, and DNS
-  intent. Teardown always stops and reaps the exact child, closes the final TUN
-  custody, then restores global state. Cleanup durably advances after DNS
-  revert, retains a `resolv.conf` backup through a persisted restored phase,
-  removes it durably, and restores/pops each excluded route one at a time.
+  Before the first host mutation the supervisor proves that every excluded exact
+  prefix is absent against the pre-VPN route table and fsyncs the complete
+  repair-required plan. A pre-existing exact route is a configuration conflict,
+  never state that the helper borrows or replaces. Pushed defaults therefore
+  cannot become the gateways used to construct their own bypass exclusions.
+  Each exclusion is installed with exclusive `ip route add`, carries the
+  helper's numeric route-protocol marker `186`, and has its exact numeric
+  `ip -o route` readback persisted immediately after installation. Cleanup
+  accepts only absence or that exact helper-installed readback and deletes only
+  the latter's complete attributes. Missing ownership proof or live drift fails
+  closed and retains the repair journal instead of overwriting another route
+  manager's state. Preparation advances that journal after TUN creation,
+  link/route configuration, each exact
+  exclusion readback, and DNS intent. One absolute preparation deadline applies
+  across the entire sequence: it is the earlier of 45 seconds and the signed
+  ticket's remaining lifetime, and is therefore shorter than the worker's
+  60-second TUN wait. The supervisor also checks the live signed-ticket expiry
+  and pidfd liveness between every network step; individual command counts never
+  multiply the budget. Each trusted
+  `ip`/`resolvectl` subprocess enters one fixed root-custodied cgroup-v2 unit in
+  addition to its private process group and kill-on-parent-death binding. The
+  leader remains unreaped while the recursive cgroup and its pinned process
+  group are killed; only then is the exact direct child reaped, the cgroup proven
+  empty, and each bounded output drain completed under the original absolute
+  deadline. Failed-connect, disconnect, repair, and cleanup paths quiesce that
+  same fixed unit after the supervisor exits; inability to prove it empty fails
+  closed before global restoration. The cgroup directory and every opened
+  control descriptor are independently checked for root UID/GID, owner access,
+  and non-writable group/other modes. Privileged execs mark every unintended
+  descriptor close-on-exec, and public/root-supervisor entries close all
+  non-stdio inherited descriptors; only the isolated worker's authenticated fd
+  3 crosses exec. Only root-owned, non-writable `ip` and
+  `resolvectl` executables under fully root-custodied paths are allowed; set-ID
+  bits and file capabilities are rejected so `exec` cannot clear the command
+  child's death signal. That fixed command contract does not invoke any tool
+  that migrates itself or a
+  descendant out of the inherited cgroup, so even `setsid` descendants remain
+  recursively killable. Teardown always stops and reaps the exact network child,
+  closes the final TUN custody, then restores global state. V1 requires a
+  trusted `resolvectl`; it never edits or backs up `/etc/resolv.conf` directly.
+  Cleanup durably advances after the per-link DNS revert and restores/pops each
+  ownership-checked excluded route one at a time.
   Every external cleanup unit is idempotent, so a failure or crash resumes from
-  the last durable phase without consuming the backup or skipping later routes.
+  the last durable phase without skipping later routes.
   If the outer connect path observes an early supervisor exit or readiness
   timeout, it retains the action lock, terminates and reaps that exact direct
   child, and only then resumes progressive cleanup and publishes a terminal or
@@ -371,9 +467,11 @@ the same deterministic framing.
   runtime.【tools/soranet-relay/tests/vpn_adapter.rs:1】
 - **Frame I/O + padding enforcement:** Relay builders rewrite padding budgets
   from config, enforce the pinned 1,024-byte frame size and flag allowlist, and
-  async read/write helpers drop truncated frames while counting ingress/egress
-  bytes. Overlay/adapter tests guard zero padding, payload-length limits, and
-  truncated stream rejection to keep framing deterministic.【tools/soranet-relay/src/vpn.rs:1】【tools/soranet-relay/tests/vpn_overlay.rs:1】【tools/soranet-relay/tests/vpn_adapter.rs:1】【xtask/src/soranet_vpn.rs:1】
+  async readers drop truncated frames. Egress encoding is side-effect free;
+  sequence and byte/frame accounting commit only after the complete padded
+  frame is written, so a failed or partial write cannot become billable.
+  Overlay/adapter tests guard zero padding, payload-length limits, truncated
+  stream rejection, and failed-write accounting to keep framing deterministic.【tools/soranet-relay/src/vpn.rs:1】【tools/soranet-relay/tests/vpn_overlay.rs:1】【tools/soranet-relay/tests/vpn_adapter.rs:1】【xtask/src/soranet_vpn.rs:1】
 - **Pacing + cover injection:** `schedule_frames` applies `pacing_millis` to
   interleave cover/data frames derived from the BLAKE3-seeded plan (burst/jitter
   caps) and `send_scheduled_frames` emits at the computed cadence with async

@@ -1,4 +1,4 @@
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 #[tokio::test]
 async fn signed_query_proxy_does_not_resend_after_complete_rejection() {
     let first_peer_id =
@@ -52,13 +52,13 @@ async fn signed_query_proxy_does_not_resend_after_complete_rejection() {
     let body = torii_body_bytes(response, "response body should be readable").await;
     assert_eq!(body.as_ref(), b"retry");
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 #[derive(Clone, Copy)]
 enum RouteUnavailableProxyCase {
     NoCandidates,
     TransportErrors,
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 async fn run_route_unavailable_proxy_case(case: RouteUnavailableProxyCase) {
     let (route, request_id, candidates, failure_message) = match case {
         RouteUnavailableProxyCase::NoCandidates => (
@@ -111,13 +111,13 @@ async fn run_route_unavailable_proxy_case(case: RouteUnavailableProxyCase) {
         &[request_id]
     );
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 #[tokio::test]
 async fn execute_torii_proxy_request_across_candidates_returns_route_unavailable_without_candidates()
  {
     run_route_unavailable_proxy_case(RouteUnavailableProxyCase::NoCandidates).await;
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 #[tokio::test]
 async fn execute_torii_proxy_request_across_candidates_returns_last_retryable_response() {
     let peer_id = checked_torii_test_peer_id(0x97, "derive last retryable proxy peer fixture key");
@@ -151,7 +151,7 @@ async fn execute_torii_proxy_request_across_candidates_returns_last_retryable_re
     let body = torii_body_bytes(response, "response body should be readable").await;
     assert_eq!(body.as_ref(), b"retry-later");
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 #[tokio::test]
 async fn queue_plan_outcome_unknown_survives_both_retryable_completion_orders() {
     let expected_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
@@ -197,7 +197,7 @@ async fn queue_plan_outcome_unknown_survives_both_retryable_completion_orders() 
         );
     }
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 #[tokio::test]
 async fn queue_plan_outcome_unknown_dominates_nonretryable_failure_in_both_completion_orders() {
     let expected_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
@@ -271,14 +271,14 @@ async fn queue_plan_outcome_unknown_dominates_nonretryable_failure_in_both_compl
         );
     }
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 #[tokio::test]
 async fn queue_plan_outcome_unknown_rejects_forged_reconciliation_hash() {
     let peer_id =
         checked_torii_test_peer_id(0xac, "derive forged outcome-unknown proxy peer fixture key");
     let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
     let (_app, request) =
-        incoming_proxy_submit_fixture(0xad, ToriiProxyTransactionAdmissionV2::QueuePlanSynced);
+        incoming_proxy_submit_fixture(0xad, ToriiProxyTransactionAdmissionV1::QueuePlanSynced);
     let expected_hash = super::queue_plan_synced_entrypoint_hash(&request.request)
         .expect("strict request exposes a typed reconciliation identity");
     let forged_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
@@ -326,12 +326,12 @@ async fn queue_plan_outcome_unknown_rejects_forged_reconciliation_hash() {
         "a forged authority hash must be replaced with the submitted transaction identity"
     );
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 #[tokio::test]
 async fn queue_plan_synced_accepts_a_reforwarded_certificate_from_an_authoritative_peer() {
     let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
     let (app, request) =
-        incoming_proxy_submit_fixture(0xee, ToriiProxyTransactionAdmissionV2::QueuePlanSynced);
+        incoming_proxy_submit_fixture(0xee, ToriiProxyTransactionAdmissionV1::QueuePlanSynced);
     let final_authority = PeerId::from(app.torii_proxy_bridge_signer.public_key().clone());
     let forwarding_authority = checked_torii_test_peer_id(
         0xef,
@@ -375,7 +375,7 @@ async fn queue_plan_synced_accepts_a_reforwarded_certificate_from_an_authoritati
         "a forwarding peer must not invalidate an exact receipt signed by another authoritative candidate"
     );
     let body = torii_body_bytes(response, "read reforwarded strict receipt").await;
-    let certificate: QueuePlanAdmissionCertificateV2 =
+    let certificate: QueuePlanAdmissionCertificateV1 =
         norito::decode_from_bytes(&body).expect("decode reforwarded strict certificate");
     let attestation = certificate
         .attestations
@@ -392,19 +392,19 @@ async fn queue_plan_synced_accepts_a_reforwarded_certificate_from_an_authoritati
         final_authority
     );
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 #[tokio::test]
 async fn proxied_transaction_submission_preserves_public_accept_and_prefer_contracts() {
     let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
     let (app, request) =
-        incoming_proxy_submit_fixture(0xec, ToriiProxyTransactionAdmissionV2::QueuePlanSynced);
-    let ToriiProxyRequestKindV4::SubmitTransaction { transaction, .. } = &request.request else {
+        incoming_proxy_submit_fixture(0xec, ToriiProxyTransactionAdmissionV1::QueuePlanSynced);
+    let ToriiProxyRequestKindV1::SubmitTransaction { transaction, .. } = &request.request else {
         panic!("strict proxy fixture must contain a transaction");
     };
     let entrypoint_hash = transaction.hash();
     let signed_transaction_hash = signed_transaction_hash_for_entrypoint(transaction);
     let mut private_snapshot = exact_queue_plan_synced_acceptance_snapshot(&app, &request).await;
-    let _: QueuePlanAdmissionCertificateV2 = norito::decode_from_bytes(&private_snapshot.body)
+    let _: QueuePlanAdmissionCertificateV1 = norito::decode_from_bytes(&private_snapshot.body)
         .expect("production authority response must contain the private strict certificate");
     private_snapshot
         .headers
@@ -501,12 +501,12 @@ async fn proxied_transaction_submission_preserves_public_accept_and_prefer_contr
         assert_eq!(proxied_receipt.payload.signer, local_receipt.payload.signer);
     }
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 #[tokio::test]
 async fn queue_plan_synced_accepts_only_exact_durable_acceptance_evidence() {
     let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
     let (app, request) =
-        incoming_proxy_submit_fixture(0xaf, ToriiProxyTransactionAdmissionV2::QueuePlanSynced);
+        incoming_proxy_submit_fixture(0xaf, ToriiProxyTransactionAdmissionV1::QueuePlanSynced);
     let peer_id = PeerId::from(app.torii_proxy_bridge_signer.public_key().clone());
     let expected_hash_literal = accepted_queue_hash_for_proxy_submit(&app, &request).to_string();
     let valid_snapshot = exact_queue_plan_synced_acceptance_snapshot(&app, &request).await;
@@ -542,10 +542,10 @@ async fn queue_plan_synced_accepts_only_exact_durable_acceptance_evidence() {
     let mut missing_evidence = valid_snapshot.clone();
     missing_evidence.body.clear();
     let valid_certificate =
-        norito::decode_from_bytes::<QueuePlanAdmissionCertificateV2>(&valid_snapshot.body)
+        norito::decode_from_bytes::<QueuePlanAdmissionCertificateV1>(&valid_snapshot.body)
             .expect("decode production strict acceptance certificate");
     let rewrite_certificate =
-        |mut snapshot: ToriiProxyHttpResponseV1, certificate: QueuePlanAdmissionCertificateV2| {
+        |mut snapshot: ToriiProxyHttpResponseV1, certificate: QueuePlanAdmissionCertificateV1| {
             snapshot.body = norito::to_bytes(&certificate)
                 .expect("encode mutated strict acceptance certificate");
             snapshot
@@ -594,8 +594,8 @@ async fn queue_plan_synced_accepts_only_exact_durable_acceptance_evidence() {
     );
     let outsider_receipt = rewrite_certificate(
         valid_snapshot,
-        QueuePlanAdmissionCertificateV2 {
-            version: QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V2,
+        QueuePlanAdmissionCertificateV1 {
+            version: QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V1,
             binding: valid_certificate.binding,
             attestations: vec![outsider_attestation],
         },
@@ -654,7 +654,7 @@ async fn queue_plan_synced_accepts_only_exact_durable_acceptance_evidence() {
         );
     }
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 #[tokio::test]
 async fn queue_plan_synced_post_admission_or_malformed_500_is_indeterminate() {
     let peer_id = checked_torii_test_peer_id(
@@ -663,7 +663,7 @@ async fn queue_plan_synced_post_admission_or_malformed_500_is_indeterminate() {
     );
     let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
     let (app, request) =
-        incoming_proxy_submit_fixture(0xb1, ToriiProxyTransactionAdmissionV2::QueuePlanSynced);
+        incoming_proxy_submit_fixture(0xb1, ToriiProxyTransactionAdmissionV1::QueuePlanSynced);
     let expected_hash_literal = accepted_queue_hash_for_proxy_submit(&app, &request).to_string();
     let receipt_signing_failure = super::response_to_torii_proxy_snapshot(
         super::torii_proxy_error_response(
@@ -725,7 +725,7 @@ async fn queue_plan_synced_post_admission_or_malformed_500_is_indeterminate() {
         );
     }
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 #[tokio::test]
 async fn queue_plan_synced_post_dispatch_loss_is_exactly_indeterminate_for_each_transport() {
     let p2p_peer_id =
@@ -745,7 +745,7 @@ async fn queue_plan_synced_post_dispatch_loss_is_exactly_indeterminate_for_each_
         ),
     ] {
         let (_app, request) =
-            incoming_proxy_submit_fixture(seed, ToriiProxyTransactionAdmissionV2::QueuePlanSynced);
+            incoming_proxy_submit_fixture(seed, ToriiProxyTransactionAdmissionV1::QueuePlanSynced);
         let expected_hash = accepted_queue_hash_for_proxy_submit(&_app, &request);
         let expected_hash_literal = expected_hash.to_string();
         let response = super::execute_torii_proxy_request_across_candidates(
@@ -787,11 +787,11 @@ async fn queue_plan_synced_post_dispatch_loss_is_exactly_indeterminate_for_each_
         );
     }
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 #[tokio::test]
 async fn queue_plan_synced_p2p_missing_network_is_pre_dispatch() {
     let (app, request) =
-        incoming_proxy_submit_fixture(0xc1, ToriiProxyTransactionAdmissionV2::QueuePlanSynced);
+        incoming_proxy_submit_fixture(0xc1, ToriiProxyTransactionAdmissionV1::QueuePlanSynced);
     let peer_id = checked_torii_test_peer_id(0xc2, "derive missing-network proxy peer fixture key");
     let error = super::execute_torii_proxy_request_via_peer(&app, peer_id, Arc::new(request))
         .await
@@ -802,11 +802,11 @@ async fn queue_plan_synced_p2p_missing_network_is_pre_dispatch() {
     ));
     assert!(!error.may_have_reached_authority());
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 #[tokio::test]
 async fn queue_plan_synced_p2p_closed_actor_is_pre_dispatch_and_cleans_pending() {
     let (mut app, request) =
-        incoming_proxy_submit_fixture(0xc3, ToriiProxyTransactionAdmissionV2::QueuePlanSynced);
+        incoming_proxy_submit_fixture(0xc3, ToriiProxyTransactionAdmissionV1::QueuePlanSynced);
     Arc::get_mut(&mut app)
         .expect("fixture app must be uniquely owned")
         .p2p = Some(iroha_core::IrohaNetwork::closed_for_tests());
@@ -828,7 +828,7 @@ async fn queue_plan_synced_p2p_closed_actor_is_pre_dispatch_and_cleans_pending()
         "failed exact admission must remove the response waiter"
     );
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 #[tokio::test]
 async fn backpressured_busy_rejection_cannot_block_proxy_response_dispatch() {
     let app = mk_app_state_for_tests();
@@ -887,7 +887,7 @@ async fn backpressured_busy_rejection_cannot_block_proxy_response_dispatch() {
         expected
     );
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 #[tokio::test]
 async fn backpressured_response_admission_obeys_local_egress_deadline() {
     let network = iroha_core::IrohaNetwork::actor_backpressured_for_tests();
@@ -927,12 +927,12 @@ async fn backpressured_response_admission_obeys_local_egress_deadline() {
         "the local monotonic owner, not the wider skew-tolerant wire horizon, must terminate admission"
     );
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 #[tokio::test]
 async fn queue_plan_synced_http_connect_loss_is_pre_dispatch_and_body_loss_is_post_dispatch() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let (app, send_request) =
-        incoming_proxy_submit_fixture(0xc5, ToriiProxyTransactionAdmissionV2::QueuePlanSynced);
+        incoming_proxy_submit_fixture(0xc5, ToriiProxyTransactionAdmissionV1::QueuePlanSynced);
     let peer_id = checked_torii_test_peer_id(0xc6, "derive HTTP-loss proxy peer fixture key");
     let send_error = super::execute_torii_proxy_request_via_http_bridge(
         &app,
@@ -965,7 +965,7 @@ async fn queue_plan_synced_http_connect_loss_is_pre_dispatch_and_body_loss_is_po
         socket.shutdown().await.expect("close truncated response");
     });
     let (_other_app, body_request) =
-        incoming_proxy_submit_fixture(0xc7, ToriiProxyTransactionAdmissionV2::QueuePlanSynced);
+        incoming_proxy_submit_fixture(0xc7, ToriiProxyTransactionAdmissionV1::QueuePlanSynced);
     let body_error = super::execute_torii_proxy_request_via_http_bridge(
         &app,
         peer_id,
@@ -981,7 +981,7 @@ async fn queue_plan_synced_http_connect_loss_is_pre_dispatch_and_body_loss_is_po
     ));
     assert!(body_error.may_have_reached_authority());
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 #[tokio::test]
 async fn queue_plan_synced_http_redirect_to_connect_loss_is_not_followed() {
     let reached_authority = Arc::new(AtomicUsize::new(0));
@@ -1015,7 +1015,7 @@ async fn queue_plan_synced_http_redirect_to_connect_loss_is_not_followed() {
             .expect("serve strict proxy redirect");
     });
     let (app, request) =
-        incoming_proxy_submit_fixture(0xc8, ToriiProxyTransactionAdmissionV2::QueuePlanSynced);
+        incoming_proxy_submit_fixture(0xc8, ToriiProxyTransactionAdmissionV1::QueuePlanSynced);
     let peer_id = checked_torii_test_peer_id(0xc9, "derive HTTP-redirect proxy peer fixture key");
     let snapshot = super::execute_torii_proxy_request_via_http_bridge(
         &app,
@@ -1037,14 +1037,14 @@ async fn queue_plan_synced_http_redirect_to_connect_loss_is_not_followed() {
             && header.value.as_slice() == b"http://127.0.0.1:0/redirect-connect-loss"
     }));
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 #[tokio::test]
 async fn queue_plan_synced_before_dispatch_failure_remains_definitely_unavailable() {
     let peer_id =
         checked_torii_test_peer_id(0xb5, "derive pre-dispatch strict proxy peer fixture key");
     let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
     let (_app, request) =
-        incoming_proxy_submit_fixture(0xb6, ToriiProxyTransactionAdmissionV2::QueuePlanSynced);
+        incoming_proxy_submit_fixture(0xb6, ToriiProxyTransactionAdmissionV1::QueuePlanSynced);
     let response = super::execute_torii_proxy_request_across_candidates(
         vec![ToriiProxyCandidate::P2p(peer_id)],
         route,
@@ -1073,7 +1073,7 @@ async fn queue_plan_synced_before_dispatch_failure_remains_definitely_unavailabl
         "definitely undispatched failures must not publish an indeterminate queue identity"
     );
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 #[tokio::test]
 async fn execute_torii_proxy_request_across_candidates_returns_route_unavailable_after_transport_errors()
  {
@@ -1122,6 +1122,29 @@ fn sample_privacy_share_dto(app: &SharedAppState) -> RecordSoranetPrivacyShareDt
         share,
         forwarded_by: None,
     }
+}
+#[test]
+#[cfg(feature = "telemetry")]
+fn privacy_event_dto_native_norito_roundtrip() {
+    let mut expected = sample_privacy_event_dto();
+    expected.source = Some("relay-a".to_owned());
+    let encoded = norito::to_bytes(&expected).expect("encode privacy event request as Norito");
+    let decoded: RecordSoranetPrivacyEventDto =
+        norito::decode_from_bytes(&encoded).expect("decode privacy event request from Norito");
+    assert_eq!(decoded.event, expected.event);
+    assert_eq!(decoded.source, expected.source);
+}
+#[test]
+#[cfg(feature = "telemetry")]
+fn privacy_share_dto_native_norito_roundtrip() {
+    let app = mk_app_state_for_tests();
+    let mut expected = sample_privacy_share_dto(&app);
+    expected.forwarded_by = Some("collector-a".to_owned());
+    let encoded = norito::to_bytes(&expected).expect("encode privacy share request as Norito");
+    let decoded: RecordSoranetPrivacyShareDto =
+        norito::decode_from_bytes(&encoded).expect("decode privacy share request from Norito");
+    assert_eq!(decoded.share, expected.share);
+    assert_eq!(decoded.forwarded_by, expected.forwarded_by);
 }
 #[cfg(feature = "telemetry")]
 fn privacy_operator(

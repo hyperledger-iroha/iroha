@@ -543,7 +543,7 @@ impl_escrow_decode_from_slice!(ExpireAssetLock {
 mod tests {
     use super::*;
     use crate::isi::test_support::{
-        assert_registry_decodes_type_name as assert_registry_decodes, assert_slice_roundtrip,
+        assert_registry_decodes_registered_type as assert_registry_decodes, assert_slice_roundtrip,
     };
     use crate::{domain::DomainId, name::Name};
     use core::num::{NonZeroU32, NonZeroU64};
@@ -868,7 +868,7 @@ mod tests {
     }
     #[test]
     #[allow(clippy::too_many_lines)]
-    fn escrow_default_registry_decodes_type_names() {
+    fn escrow_default_registry_decodes_canonical_wire_ids() {
         let registry = crate::isi::registry::default();
         let escrow_id = escrow_id();
         let asset_definition = asset_definition_id();

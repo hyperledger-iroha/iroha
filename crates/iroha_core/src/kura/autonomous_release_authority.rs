@@ -236,7 +236,7 @@ impl Kura {
     pub(crate) fn finalize_autonomous_lane_slot_release_with_authorization(
         &self,
         retirement: &AutonomousLaneSlotRetirementV1,
-        queue_barrier: &LaneQueueReservationReleaseBarrierV3,
+        queue_barrier: &LaneQueueReservationReleaseBarrierV1,
         expected_network_id: iroha_data_model::NetworkId,
         expected_epoch: u64,
         authorization: DurableLaneQueueReleaseBarrierAuthorization,
@@ -253,7 +253,7 @@ impl Kura {
     pub(crate) fn finalize_autonomous_lane_slot_release(
         &self,
         retirement: &AutonomousLaneSlotRetirementV1,
-        queue_barrier: &LaneQueueReservationReleaseBarrierV3,
+        queue_barrier: &LaneQueueReservationReleaseBarrierV1,
         expected_network_id: iroha_data_model::NetworkId,
         expected_epoch: u64,
     ) -> Result<()> {
@@ -269,7 +269,7 @@ impl Kura {
     fn finalize_autonomous_lane_slot_release_inner(
         &self,
         retirement: &AutonomousLaneSlotRetirementV1,
-        queue_barrier: &LaneQueueReservationReleaseBarrierV3,
+        queue_barrier: &LaneQueueReservationReleaseBarrierV1,
         expected_network_id: iroha_data_model::NetworkId,
         expected_epoch: u64,
         gate: AutonomousLaneQueueReleaseBarrierGate,

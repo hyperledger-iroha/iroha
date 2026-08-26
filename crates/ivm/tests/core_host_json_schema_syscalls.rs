@@ -168,7 +168,7 @@ fn contract_authority_fixture_uses_checked_ed25519_key_generation() {
 fn json_encode_decode_roundtrip() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
-    let json = br#"{"a":1, "b": [2,3]}"#;
+    let json = br#"{"a":1,"b":[2,3]}"#;
     let p_json = vm.alloc_input_tlv(&tlv(PointerType::Json, json)).unwrap();
     // ENCODE
     let enc_prog = common::assemble(
@@ -310,7 +310,7 @@ fn schema_encode_decode_roundtrip() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     let schema = b"Order";
-    let json = br#"{"qty":10, "side":"buy"}"#;
+    let json = br#"{"qty":10,"side":"buy"}"#;
     let p_schema = vm.alloc_input_tlv(&tlv(PointerType::Name, schema)).unwrap();
     let p_json = vm.alloc_input_tlv(&tlv(PointerType::Json, json)).unwrap();
     // ENCODE (inputs are already in INPUT via alloc_input_tlv)
@@ -351,7 +351,7 @@ fn schema_decode_rejects_blob() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     let schema = b"Order";
-    let json = br#"{"qty":10, "side":"buy"}"#;
+    let json = br#"{"qty":10,"side":"buy"}"#;
     let p_schema = vm.alloc_input_tlv(&tlv(PointerType::Name, schema)).unwrap();
     let p_json = vm.alloc_input_tlv(&tlv(PointerType::Json, json)).unwrap();
     let enc = common::assemble(
@@ -667,7 +667,6 @@ fn json_set_account_id_accepts_input_heap_and_literal_pointers() {
     let owner_literal = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
     let expected_owner = AccountId::parse_encoded(owner_literal)
         .expect("valid canonical account id")
-        .into_account_id()
         .to_string();
     let json_tlv = tlv(PointerType::Json, br#"{}"#);
     let key_tlv = tlv(PointerType::Name, b"owner");
@@ -833,9 +832,7 @@ fn json_object_builders_roundtrip_i64_and_account_id() {
     let owner: AccountId = norito::decode_from_bytes(tlv_out.payload).expect("decode account");
     assert_eq!(
         owner,
-        AccountId::parse_encoded(owner_literal)
-            .expect("valid canonical account id")
-            .into_account_id()
+        AccountId::parse_encoded(owner_literal).expect("valid canonical account id")
     );
 }
 #[test]

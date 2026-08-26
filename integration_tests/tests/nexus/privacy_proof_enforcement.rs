@@ -69,10 +69,7 @@ fn lane_privacy_proof_allows_compliance() -> Result<()> {
         deny: Vec::new(),
         allow: vec![LaneComplianceRule {
             selector: ParticipantSelector {
-                account: Some(
-                    AccountId::parse_encoded(&ALICE_ID.to_string())
-                        .map(|parsed| parsed.into_account_id())?,
-                ),
+                account: Some(AccountId::parse_encoded(&ALICE_ID.to_string())?),
                 privacy_commitments_any_of: vec![commitment_id],
                 ..ParticipantSelector::default()
             },

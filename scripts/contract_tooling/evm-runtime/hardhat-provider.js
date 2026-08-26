@@ -2,7 +2,6 @@
 
 const fs = require("fs");
 const net = require("net");
-const os = require("os");
 const path = require("path");
 const { spawn } = require("child_process");
 
@@ -27,14 +26,27 @@ function reserveLoopbackPort() {
   });
 }
 
-function hardhatCliPath() {
+function hardhatInstallation() {
   const entry = require.resolve("hardhat");
+  const packageRoot = path.resolve(path.dirname(entry), "..", "..");
+  const nodeModules = path.dirname(packageRoot);
+  if (
+    path.basename(packageRoot) !== "hardhat" ||
+    path.basename(nodeModules) !== "node_modules"
+  ) {
+    throw new Error("locked Hardhat package resolved outside a local dependency tree");
+  }
   const candidate = path.join(path.dirname(entry), "cli.js");
   const info = fs.lstatSync(candidate);
   if (!info.isFile() || info.isSymbolicLink()) {
     throw new Error("locked Hardhat package does not expose its direct CLI file");
   }
-  return candidate;
+  const runtimeRoot = path.dirname(nodeModules);
+  const runtimePackage = fs.lstatSync(path.join(runtimeRoot, "package.json"));
+  if (!runtimePackage.isFile() || runtimePackage.isSymbolicLink()) {
+    throw new Error("locked Hardhat dependency tree has no regular package manifest");
+  }
+  return { cliPath: candidate, runtimeRoot };
 }
 
 class HardhatEip1193Provider {
@@ -61,7 +73,12 @@ class HardhatEip1193Provider {
 
   async start() {
     const port = await reserveLoopbackPort();
-    this.workDir = fs.mkdtempSync(path.join(os.tmpdir(), "iroha-sccp-hardhat-"));
+    const installation = hardhatInstallation();
+    // Keep the ephemeral project beneath the resolved package root so
+    // Hardhat's local-installation check sees the exact audited dependency tree.
+    this.workDir = fs.mkdtempSync(
+      path.join(installation.runtimeRoot, ".iroha-sccp-hardhat-"),
+    );
     fs.writeFileSync(
       path.join(this.workDir, "package.json"),
       '{"name":"iroha-sccp-hardhat-runtime","private":true,"type":"module"}\n',
@@ -97,7 +114,7 @@ class HardhatEip1193Provider {
     this.child = spawn(
       process.execPath,
       [
-        hardhatCliPath(),
+        installation.cliPath,
         "--config",
         configPath,
         "--network",

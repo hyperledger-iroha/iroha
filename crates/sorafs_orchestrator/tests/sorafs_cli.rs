@@ -42,6 +42,8 @@ use sorafs_manifest::{
     StorageClass, StreamTokenBodyV1, StreamTokenV1, XorQuantity, build_reputation_snapshot,
     governance_dag_submission_account_digest_v1, validate_governance_dag_head_against_chain_v1,
 };
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt as _;
 use std::{
     fs,
     path::{Path, PathBuf},

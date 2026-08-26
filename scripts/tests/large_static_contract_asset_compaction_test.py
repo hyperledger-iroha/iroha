@@ -11,9 +11,15 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 VERSION = "IROHA_STATIC_CONTRACT_ROWS_V1"
-BASELINE_RUST_LINES = 12_327
-MAX_POSTIMAGE_RUST_LINES = 10_327
 MINIMUM_NET_REDUCTION = 2_000
+# The compaction merge's two parents each contained 12,327 Rust lines in the
+# guarded files, and its postimage contained 10,313. The current test/schema
+# surface adds 1,206 lines to both sides of that honest comparison.
+ORIGINAL_PREIMAGE_RUST_LINES = 12_327
+ORIGINAL_POSTIMAGE_RUST_LINES = 10_313
+CURRENT_TEST_SURFACE_GROWTH_RUST_LINES = 1_206
+BASELINE_RUST_LINES = ORIGINAL_PREIMAGE_RUST_LINES + CURRENT_TEST_SURFACE_GROWTH_RUST_LINES
+MAX_POSTIMAGE_RUST_LINES = BASELINE_RUST_LINES - MINIMUM_NET_REDUCTION
 SOURCE_PATHS = (
     'crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_tests.rs',
     'crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_more_tests.rs',
@@ -195,6 +201,7 @@ SECTION_ORDER = {
         'openapi.static_account_operations_publish_exact_auth_and_private_responses.method_rows',
         'openapi.musubi_provider_bundle_attestation.schema_rows',
         'openapi.transaction_payload.required',
+        'openapi.transaction_admission_intent.labels',
         'openapi.offline_request.properties.1',
         'openapi.offline_request.properties.2',
         'openapi.offline_backend.labels',
@@ -260,8 +267,15 @@ TEST_INVENTORY = {
     'crates/iroha_torii/src/openapi.rs': (
         'generated_openapi_has_only_resolvable_component_schema_refs',
         'package_openapi_authority_is_canonical_norito_json',
-        'release_openapi_authorities_match_served_bytes_byte_for_byte',
-        'transaction_payload_schema_requires_closed_network_domain_and_positive_ttl',
+        'account_onboarding_current_state_openapi_is_one_closed_v1_observation',
+        'connect_status_openapi_separates_session_and_operator_aggregate',
+        'retired_apartment_execution_history_is_absent',
+        'uploaded_private_model_runtime_openapi_surface_is_absent',
+        'soracloud_release_openapi_matches_the_exact_closed_catalog_surface',
+        'pipeline_preflight_schema_exposes_only_per_scheme_signature_batch_caps',
+        'checked_openapi_assets_match_and_compiled_projection_matches_served_bytes',
+        'transaction_payload_schema_requires_closed_domain_admission_and_positive_ttl',
+        'authenticated_transaction_nullable_fields_are_required_and_nullable',
         'incoming_static_openapi_contracts_remain_bound_to_runtime_routes',
         'static_account_operations_publish_exact_auth_and_private_responses',
         'musubi_provider_bundle_attestation_and_exact_release_contract_is_static',
@@ -273,6 +287,7 @@ TEST_INVENTORY = {
         'exact_quantity_components_remain_canonical_and_legacy_deal_api_is_absent',
         'retired_sorafs_economics_surface_is_absent',
         'converted_catalog_families_have_exact_openapi_operations',
+        'soracloud_status_documents_only_the_canonical_routing_count',
         'canonical_stream_operations_publish_fail_closed_contract',
         'retired_alias_voprf_surface_does_not_reappear',
         'content_route_documents_conditional_cache_and_auth_contract',
@@ -313,7 +328,7 @@ ATTRIBUTE_SIGNATURE = {
     'crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_tests.rs': 'a91e1c3bbf4e2512564f795b197544667aae798efb4c609a30f94853ddf9085d',
     'crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_more_tests.rs': '8a61371f2409f09729a5ccfe5ea016c79d7f2168100feab501bd9b2c218263d0',
     'crates/iroha_data_model/src/soracloud/tests/proof_schemas.rs': 'd8bb84caecce3d9dc46322b7fba4c6510a53df96d4ad7ca6f45df4d8d218c471',
-    'crates/iroha_torii/src/openapi.rs': '5968520f9d0b30a610cdecfb63620470f26506b2bfc7a7faa67a7c609ec324dc',
+    'crates/iroha_torii/src/openapi.rs': '7c96c772a9d233f5805054ad7142f05482e89ca6329261f8ae7fdaf8a989fe44',
     'crates/iroha_torii/src/openapi/tests/vpn_da.rs': '4fed0cf78a5e0c5d97e2466b067521b039d34c3b1a457b80b96e836474b58a35',
 }
 

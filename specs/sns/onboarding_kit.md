@@ -105,8 +105,8 @@ coverage required by SN-8.
 
 ### 2.1 Suffix wiring & DNS helpers
 
-- Registry schema and selector encoding live in
-  `specs/sns/registry_schema.md` and `specs/sns/local_to_global_toolkit.md`.
+- Registry schema and label normalization live in
+  `specs/sns/registry_schema.md` and `specs/references/address_norm_v1.md`.
 - DNS/gateway teams convert registrar manifests into resolver skeletons via
   `scripts/sns_zonefile_skeleton.py`; the workflow is documented in
   `specs/sorafs_gateway_dns_owner_runbook.md`.

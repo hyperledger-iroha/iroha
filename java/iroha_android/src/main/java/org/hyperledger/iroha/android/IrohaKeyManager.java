@@ -206,6 +206,9 @@ public final class IrohaKeyManager {
       if (existing.isPresent()) {
         ensureExpectedKeyPair(
             alias, preference, existing.get(), provider.metadata(), "load");
+        final org.hyperledger.iroha.android.crypto.KeyGenerationOutcome outcome =
+            outcomeFor(provider, alias, existing.get());
+        enforcePreference(preference, provider.metadata(), outcome);
         return existing.get();
       }
     }
@@ -240,6 +243,12 @@ public final class IrohaKeyManager {
       throw new KeyManagementException(
           "Hardware-backed key required but provider " + metadata.name() + " generated software key");
     }
+  }
+
+  private static org.hyperledger.iroha.android.crypto.KeyGenerationOutcome outcomeFor(
+      final KeyProvider provider, final String alias, final KeyPair keyPair)
+      throws KeyManagementException {
+    return provider.outcomeFor(alias, keyPair);
   }
 
   private void enforceAlgorithmPreference(final KeySecurityPreference preference)
@@ -754,16 +763,29 @@ public final class IrohaKeyManager {
     /**
      * Generates a key pair and reports the hardware route used.
      *
-     * <p>The default implementation derives the route from provider metadata; providers that can
-     * detect the selected StrongBox/TEE/software route should override this method.
+     * <p>The default implementation asks {@link #outcomeFor(String, KeyPair)} for per-key
+     * provenance. Providers that can detect the selected StrongBox/TEE/software route should
+     * override that method.
      *
      * @throws KeyManagementException if generation fails
      */
     default org.hyperledger.iroha.android.crypto.KeyGenerationOutcome generateWithOutcome(
         final String alias, final KeySecurityPreference preference) throws KeyManagementException {
       final KeyPair pair = generate(alias, preference);
+      return outcomeFor(alias, pair);
+    }
+
+    /**
+     * Reports the measured route for this specific key.
+     *
+     * <p>Provider metadata describes routing capability and is not proof of a selected key's
+     * provenance. Providers that can prove a hardware route must override this method; the
+     * conservative default keeps strict hardware policies fail closed.
+     */
+    default org.hyperledger.iroha.android.crypto.KeyGenerationOutcome outcomeFor(
+        final String alias, final KeyPair keyPair) throws KeyManagementException {
       return new org.hyperledger.iroha.android.crypto.KeyGenerationOutcome(
-          pair, routeFromMetadata(metadata()));
+          keyPair, org.hyperledger.iroha.android.crypto.KeyGenerationOutcome.Route.SOFTWARE);
     }
 
     /**
@@ -813,20 +835,6 @@ public final class IrohaKeyManager {
         final String alias, final AttestationVerifier verifier)
         throws AttestationVerificationException {
       return verifyAttestation(alias, verifier, null);
-    }
-
-    private static org.hyperledger.iroha.android.crypto.KeyGenerationOutcome.Route routeFromMetadata(
-        final KeyProviderMetadata metadata) {
-      if (metadata == null) {
-        return org.hyperledger.iroha.android.crypto.KeyGenerationOutcome.Route.SOFTWARE;
-      }
-      if (metadata.strongBoxBacked()) {
-        return org.hyperledger.iroha.android.crypto.KeyGenerationOutcome.Route.STRONGBOX;
-      }
-      if (metadata.hardwareBacked()) {
-        return org.hyperledger.iroha.android.crypto.KeyGenerationOutcome.Route.HARDWARE;
-      }
-      return org.hyperledger.iroha.android.crypto.KeyGenerationOutcome.Route.SOFTWARE;
     }
 
     /** Diagnostic string for logging / telemetry. */

@@ -66,11 +66,10 @@ fn recovered_torii_component_schemas_match_their_wire_fields() {
             ],
         ),
         (
-            "HfDeployPayload",
+            "HfSharedLeaseJoinPayload",
             &[
                 "repo_id",
                 "revision",
-                "model_name",
                 "service_name",
                 "apartment_name",
                 "storage_class",
@@ -95,7 +94,6 @@ fn recovered_torii_component_schemas_match_their_wire_fields() {
             &[
                 "repo_id",
                 "revision",
-                "model_name",
                 "service_name",
                 "apartment_name",
                 "storage_class",
@@ -109,17 +107,11 @@ fn recovered_torii_component_schemas_match_their_wire_fields() {
             &[
                 "schema_version",
                 "source",
-                "runtime_projection",
                 "pool",
                 "member",
-                "placement",
                 "latest_audit_event",
                 "audit_event_count",
                 "storage_base_fee",
-                "compute_reservation_fee",
-                "eligible_host_count",
-                "warm_host_count",
-                "importer_pending",
             ],
         ),
         ("LanePrivacyProof", &["commitment_id", "witness"]),
@@ -166,21 +158,6 @@ fn recovered_torii_component_schemas_match_their_wire_fields() {
                 "artifacts",
             ],
         ),
-        ("ModelHostAdvertisePayload", &["capability"]),
-        (
-            "ModelHostHeartbeatPayload",
-            &["validator_account_id", "heartbeat_expires_at_ms"],
-        ),
-        (
-            "ModelHostStatusResponse",
-            &[
-                "schema_version",
-                "validator_account_id",
-                "active_host_count",
-                "hosts",
-            ],
-        ),
-        ("ModelHostWithdrawPayload", &["validator_account_id"]),
         (
             "ModelWeightPromotePayload",
             &[

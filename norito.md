@@ -300,17 +300,18 @@ explicit, frozen identifiers: instruction IDs are inventoried in
 by `crates/iroha_data_model/tests/fixtures/query_wire_ids_v1.txt`. Encoders emit
 those identifiers rather than deriving new values from the current Rust module
 layout. The golden checks bind each built-in type label to its identifier, so
-swapping two otherwise valid identifiers is also a compatibility failure.
-Registries retain the concrete Rust type name as a decode lookup alias. For
-queries, the frozen built-in mapping takes precedence over an installed
-application registry for canonical encoding and decoding; the application
-registry is then used as a fallback for custom query types. Installation rejects
-a custom query type that claims a type-name or wire-ID key owned by a different
-built-in, while still allowing an alternate alias for the same concrete type.
-Internal refactors can therefore move an implementation without changing
-canonical bytes or breaking already encoded values. New built-ins must add a
-unique identifier and update the corresponding golden inventory; an existing
-V1 identifier must not be renamed or reused for a different layout.
+swapping two otherwise valid identifiers is also a wire-contract failure.
+Registries are direction-separated: concrete Rust type names are internal
+encoding keys, while decoders accept only the registered frozen wire IDs. There
+is no type-name decode alias and no unregistered type-name encoding fallback.
+Instruction framing helpers also accept only canonical wire IDs. Instruction
+registrations reject a wire ID equal to any concrete type name, a concrete type
+name equal to any registered wire ID, duplicate types, and duplicate wire IDs.
+For queries, the built-in inventory is complete; an application registry may
+add only new concrete types with unique explicit IDs and may not re-register a
+built-in type under an alternate ID. New built-ins must add a unique identifier
+and update the corresponding golden inventory; an existing V1 identifier must
+not be renamed or reused for a different layout.
 
 The only supported SDK/node compatibility handshake is
 `DATA_MODEL_VERSION = 4`. Validation-fee policy and payout-lifecycle proposal

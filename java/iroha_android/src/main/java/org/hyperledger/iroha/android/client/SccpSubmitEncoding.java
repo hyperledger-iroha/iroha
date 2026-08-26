@@ -184,9 +184,9 @@ final class SccpSubmitEncoding {
     try {
       // AccountId wire identity is domainless and excludes its I105 display discriminant.
       final byte[] leftBytes =
-          AccountAddress.parseEncodedIgnoringCurveSupport(left, null).address.canonicalBytes();
+          AccountAddress.parseEncodedIgnoringCurveSupport(left, null).canonicalBytes();
       final byte[] rightBytes =
-          AccountAddress.parseEncodedIgnoringCurveSupport(right, null).address.canonicalBytes();
+          AccountAddress.parseEncodedIgnoringCurveSupport(right, null).canonicalBytes();
       return Arrays.equals(leftBytes, rightBytes);
     } catch (final AccountAddress.AccountAddressException ex) {
       throw new IllegalArgumentException(

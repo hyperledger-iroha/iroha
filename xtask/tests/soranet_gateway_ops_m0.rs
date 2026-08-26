@@ -235,17 +235,7 @@ groups:\n\
         fs::read(out_dir.join("pq_readiness_checklist.json")).expect("pq checklist exists");
     let pq: Value = json::from_slice(&pq_bytes).expect("pq checklist parses");
     assert_eq!(pq["pop"], Value::from("qa-pop-01"));
-    assert_eq!(
-        pq["canary_hosts"],
-        norito::json!({
-            "status": "ready",
-            "hosts": [
-                "canary1.qa-pop-01.gw.sora.id",
-                "canary2.qa-pop-01.gw.sora.id"
-            ],
-            "notes": "Use canaries for PQ cipher rollout before flipping defaults."
-        })
-    );
+    assert!(pq.get("canary_hosts").is_none());
     let summary_bytes = fs::read(out_dir.join("ops_summary.json")).expect("summary exists");
     let summary: Value = json::from_slice(&summary_bytes).expect("summary parses");
     assert_eq!(summary["pop"], Value::from("qa-pop_01"));

@@ -107,7 +107,7 @@ fn serve_provider_ingest_source_fetch(
     apply_source_socket_deadline(&stream, deadline)?;
     let configured =
         qualify_server_binding(state, &request.binding, request.provider_metadata_digest)?;
-    let fetch = decode_canonical::<ProviderIngestSourceFetchRequestWireV2>(
+    let fetch = decode_canonical::<ProviderIngestSourceFetchRequestWireV1>(
         &request.payload,
         MAX_PROVIDER_INGEST_SOURCE_REQUEST_BYTES_V1,
     )?;
@@ -131,7 +131,7 @@ fn serve_provider_ingest_source_fetch(
     let frame_count = source_stream_frame_count(content_length)?;
     let mut transcript = {
         let initial_admission = DecodeResourceAdmissionV1::acquire_operation(
-            OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V2,
+            OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1,
         )?;
         let _initial_scope = initial_admission.enter();
         let manifest = fetched
@@ -383,7 +383,7 @@ fn serve_client(
         };
         if request.binding.slot
             == IrohaRuntimeProviderSlotV1::ProviderIngestAuthenticatedSource.wire_id()
-            && request.operation == OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V2
+            && request.operation == OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1
         {
             let Ok(source_stream_permit) = Arc::clone(&source_stream_permits).try_acquire_owned()
             else {
@@ -1167,16 +1167,32 @@ impl BrokerSession {
             self.poison();
         })
     }
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one request owns its full authenticated exchange"
-    )]
     fn call(
         &self,
         binding: &ProviderBindingWireV1,
         metadata_digest: [u8; 32],
         operation: u16,
         payload: Vec<u8>,
+        mutating: bool,
+    ) -> Result<ScrubbedBytes, BrokerError> {
+        self.call_with_scrubbed_payload(
+            binding,
+            metadata_digest,
+            operation,
+            ScrubbedBytes::new(payload),
+            mutating,
+        )
+    }
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one request owns its full authenticated exchange"
+    )]
+    fn call_with_scrubbed_payload(
+        &self,
+        binding: &ProviderBindingWireV1,
+        metadata_digest: [u8; 32],
+        operation: u16,
+        payload: ScrubbedBytes,
         mutating: bool,
     ) -> Result<ScrubbedBytes, BrokerError> {
         let frame_limit = operation_frame_limit(operation);
@@ -1199,7 +1215,7 @@ impl BrokerSession {
             .next_request_id
             .checked_add(1)
             .ok_or(BrokerError::Unavailable)?;
-        let request = make_operation_request(
+        let request = make_operation_request_with_scrubbed_payload(
             connection.session_id,
             request_id,
             binding.clone(),
@@ -1293,15 +1309,9 @@ impl BrokerSession {
         binding: &ProviderBindingWireV1,
         metadata_digest: [u8; 32],
         operation: u16,
-        mut payload: ScrubbedBytes,
+        payload: ScrubbedBytes,
         mutating: bool,
     ) -> Result<ScrubbedBytes, BrokerError> {
-        self.call(
-            binding,
-            metadata_digest,
-            operation,
-            payload.take(),
-            mutating,
-        )
+        self.call_with_scrubbed_payload(binding, metadata_digest, operation, payload, mutating)
     }
 }

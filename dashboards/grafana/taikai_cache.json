@@ -11,89 +11,19 @@
     "sn13"
   ],
   "templating": {
-    "list": [
-      {
-        "name": "dataspace",
-        "label": "Dataspace",
-        "type": "query",
-        "datasource": "Prometheus",
-        "query": "label_values(taikai_cache_hit_ratio, dataspace)",
-        "refresh": 1,
-        "includeAll": true,
-        "current": {
-          "text": "All",
-          "value": ""
-        }
-      },
-      {
-        "name": "pop",
-        "label": "PoP",
-        "type": "query",
-        "datasource": "Prometheus",
-        "query": "label_values(taikai_cache_hit_ratio{dataspace=~\"$dataspace\"}, pop)",
-        "refresh": 1,
-        "includeAll": true,
-        "current": {
-          "text": "All",
-          "value": ""
-        }
-      },
-      {
-        "name": "prefetch",
-        "label": "Prefetch class",
-        "type": "query",
-        "datasource": "Prometheus",
-        "query": "label_values(taikai_cache_prefetch_latency_ms_bucket{dataspace=~\"$dataspace\"}, class)",
-        "refresh": 1,
-        "includeAll": true,
-        "current": {
-          "text": "All",
-          "value": ""
-        }
-      },
-      {
-        "name": "provider",
-        "label": "SoraFS provider",
-        "type": "query",
-        "datasource": "Prometheus",
-        "query": "label_values(sorafs_pdp_challenges_total, provider_id)",
-        "refresh": 1,
-        "includeAll": true,
-        "multi": true,
-        "allValue": ".*",
-        "current": {
-          "text": "All",
-          "value": ".*"
-        }
-      },
-      {
-        "name": "tier",
-        "label": "PoTR tier",
-        "type": "query",
-        "datasource": "Prometheus",
-        "query": "label_values(sorafs_potr_latency_ms_bucket, tier)",
-        "refresh": 1,
-        "includeAll": true,
-        "multi": true,
-        "allValue": ".*",
-        "current": {
-          "text": "All",
-          "value": ".*"
-        }
-      }
-    ]
+    "list": []
   },
   "panels": [
     {
       "type": "timeseries",
-      "title": "Cache hit ratio",
-      "description": "Average taikai_cache_hit_ratio grouped by PoP.",
+      "title": "Cache hit ratio (5m)",
+      "description": "Share of Taikai cache queries served from any cache tier over the last five minutes.",
       "id": 1,
       "datasource": "Prometheus",
       "targets": [
         {
-          "expr": "avg by (pop) (taikai_cache_hit_ratio{dataspace=~\"$dataspace\", pop=~\"$pop\"})",
-          "legendFormat": "{{pop}} hit ratio",
+          "expr": "sum(rate(sorafs_taikai_cache_query_total{result=\"hit\"}[5m])) / clamp_min(sum(rate(sorafs_taikai_cache_query_total[5m])), 1e-9)",
+          "legendFormat": "hit ratio",
           "refId": "A"
         }
       ],
@@ -108,20 +38,20 @@
     },
     {
       "type": "timeseries",
-      "title": "Prefetch latency p95 (ms)",
-      "description": "Histogram quantile derived from taikai_cache_prefetch_latency_ms_bucket.",
+      "title": "Cache query outcomes (per minute)",
+      "description": "Five-minute query rate converted to outcomes per minute and grouped by result and serving tier.",
       "id": 2,
       "datasource": "Prometheus",
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum by (le, pop) (rate(taikai_cache_prefetch_latency_ms_bucket{dataspace=~\"$dataspace\", pop=~\"$pop\", class=~\"$prefetch\"}[5m])))",
-          "legendFormat": "{{pop}} p95",
+          "expr": "60 * sum by (result, tier) (rate(sorafs_taikai_cache_query_total[5m]))",
+          "legendFormat": "{{result}}/{{tier}}",
           "refId": "A"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "ms",
+          "unit": "1/min",
           "min": 0
         },
         "overrides": []
@@ -129,190 +59,107 @@
     },
     {
       "type": "timeseries",
-      "title": "CAA propagation delay (s)",
-      "description": "Tracks taikai_cache_caa_propagation_seconds from the time a routing update is published until all PoPs acknowledge it.",
+      "title": "Cache byte throughput",
+      "description": "Bytes inserted or served per second, grouped by cache event and tier.",
       "id": 3,
       "datasource": "Prometheus",
       "targets": [
         {
-          "expr": "avg by (pop) (taikai_cache_caa_propagation_seconds{dataspace=~\"$dataspace\", pop=~\"$pop\"})",
-          "legendFormat": "{{pop}}",
+          "expr": "sum by (event, tier) (rate(sorafs_taikai_cache_bytes_total[5m]))",
+          "legendFormat": "{{event}}/{{tier}}",
           "refId": "A"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "s",
+          "unit": "Bps",
           "min": 0
         },
         "overrides": []
       }
     },
     {
-      "type": "stat",
-      "title": "PDP success rate (24h)",
-      "description": "Ratio of verified PDP challenges for the selected providers.",
+      "type": "timeseries",
+      "title": "Cache inserts (per minute)",
+      "description": "Five-minute insert rate converted to events per minute and grouped by destination tier.",
       "id": 4,
       "datasource": "Prometheus",
       "targets": [
         {
-          "expr": "sum(rate(sorafs_pdp_challenges_total{result=\"verified\",provider_id=~\"$provider\"}[24h])) / clamp_min(sum(rate(sorafs_pdp_challenges_total{provider_id=~\"$provider\"}[24h])), 1e-6)",
+          "expr": "60 * sum by (tier) (rate(sorafs_taikai_cache_insert_total[5m]))",
+          "legendFormat": "{{tier}}",
           "refId": "A"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "percentunit",
-          "min": 0,
-          "max": 1,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "red",
-                "value": null
-              },
-              {
-                "color": "orange",
-                "value": 0.97
-              },
-              {
-                "color": "green",
-                "value": 0.995
-              }
-            ]
-          }
+          "unit": "1/min",
+          "min": 0
         },
         "overrides": []
       },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "values": false
-        },
-        "orientation": "horizontal",
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto"
-      }
+      "options": {}
     },
     {
-      "type": "stat",
-      "title": "PDP failures (24h)",
-      "description": "Cumulative PDP failures/timeouts recorded in the last 24 hours for the selected providers.",
+      "type": "timeseries",
+      "title": "Cache evictions (per minute)",
+      "description": "Five-minute eviction rate converted to events per minute and grouped by tier and reason.",
       "id": 5,
       "datasource": "Prometheus",
       "targets": [
         {
-          "expr": "sum(increase(sorafs_pdp_challenges_total{result=~\"failed|timeout\",provider_id=~\"$provider\"}[24h]))",
+          "expr": "60 * sum by (tier, reason) (rate(sorafs_taikai_cache_evictions_total[5m]))",
+          "legendFormat": "{{tier}}/{{reason}}",
           "refId": "A"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "short",
-          "min": 0,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "orange",
-                "value": 1
-              },
-              {
-                "color": "red",
-                "value": 3
-              }
-            ]
-          }
+          "unit": "1/min",
+          "min": 0
         },
         "overrides": []
       },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "values": false
-        },
-        "orientation": "horizontal",
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto"
-      }
+      "options": {}
     },
     {
-      "type": "stat",
-      "title": "PoTR success rate (24h)",
-      "description": "Share of PoTR windows that passed within the last 24 hours for the selected providers/tiers.",
+      "type": "timeseries",
+      "title": "Cache promotions (per minute)",
+      "description": "Five-minute promotion rate converted to events per minute and grouped by source and destination tier.",
       "id": 6,
       "datasource": "Prometheus",
       "targets": [
         {
-          "expr": "1 - clamp_max(sum(rate(sorafs_potr_failures_total{tier=~\"$tier\",provider_id=~\"$provider\"}[24h])) / clamp_min(sum(rate(sorafs_potr_latency_ms_bucket{le=\"+Inf\",tier=~\"$tier\",provider_id=~\"$provider\"}[24h])), 1e-6), 1)",
+          "expr": "60 * sum by (from_tier, to_tier) (rate(sorafs_taikai_cache_promotions_total[5m]))",
+          "legendFormat": "{{from_tier}} → {{to_tier}}",
           "refId": "A"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "percentunit",
-          "min": 0,
-          "max": 1,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "red",
-                "value": null
-              },
-              {
-                "color": "orange",
-                "value": 0.97
-              },
-              {
-                "color": "green",
-                "value": 0.995
-              }
-            ]
-          }
+          "unit": "1/min",
+          "min": 0
         },
         "overrides": []
       },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "values": false
-        },
-        "orientation": "horizontal",
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto"
-      }
+      "options": {}
     },
     {
       "type": "timeseries",
-      "title": "PoTR failure rate (per reason)",
-      "description": "Tracks PoTR failure rate over time grouped by reason for the selected providers and tiers.",
+      "title": "QoS denials (per minute)",
+      "description": "Five-minute Taikai QoS denial rate converted to events per minute and grouped by class.",
       "id": 7,
       "datasource": "Prometheus",
       "targets": [
         {
-          "expr": "sum by (reason)(rate(sorafs_potr_failures_total{tier=~\"$tier\",provider_id=~\"$provider\"}[5m]))",
-          "legendFormat": "{{reason}}",
+          "expr": "60 * sum by (class) (rate(sorafs_taikai_qos_denied_total[5m]))",
+          "legendFormat": "{{class}}",
           "refId": "A"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "ops",
+          "unit": "1/min",
           "min": 0
         },
         "overrides": []

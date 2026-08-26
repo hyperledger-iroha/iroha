@@ -498,7 +498,7 @@ fn every_decimal_rounding_mode_matches_between_folding_and_vm_execution() {
                  }}\n\
              }}"
         );
-        let payload = format!(r#"{{"value":"{dividend}","divisor":"8","scale":"2"}}"#);
+        let payload = format!(r#"{{"divisor":"8","scale":"2","value":"{dividend}"}}"#);
         assert_numeric_fold_runtime_parity(
             mode,
             &folded_source,
@@ -544,7 +544,7 @@ fn every_quantity_rounding_mode_matches_between_folding_and_vm_execution() {
             mode,
             &folded_source,
             &runtime_source,
-            r#"{"value":"1","divisor":"8","scale":"2"}"#,
+            r#"{"divisor":"8","scale":"2","value":"1"}"#,
             NumericReturnKind::Quantity,
             syscalls::SYSCALL_QUANTITY_DIV_DECIMAL_ROUND,
             FoldedSyscallExpectation::Omitted,

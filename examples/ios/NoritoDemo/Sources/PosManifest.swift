@@ -239,8 +239,14 @@ enum PosManifestLoader {
   }
 
   private static func decodeOperatorPublicKey(_ operatorId: String) throws -> Data {
-    let address = operatorId.split(separator: "@", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? operatorId
-    let normalized = address.trimmingCharacters(in: .whitespacesAndNewlines)
+    let normalized = operatorId.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !normalized.contains("@") else {
+      throw NSError(
+        domain: "PosManifestLoader",
+        code: 19,
+        userInfo: [NSLocalizedDescriptionKey: "domain-qualified operator account is not canonical"]
+      )
+    }
     if normalized.lowercased().hasPrefix("ed01") {
       guard let raw = Data(hexString: normalized) else {
         throw NSError(domain: "PosManifestLoader", code: 5, userInfo: [NSLocalizedDescriptionKey: "invalid operator key encoding"])
@@ -281,21 +287,6 @@ enum PosManifestLoader {
     }
     guard cursor < canonical.endIndex else {
       throw NSError(domain: "PosManifestLoader", code: 12, userInfo: [NSLocalizedDescriptionKey: "invalid canonical address length"])
-    }
-    let domainTag = canonical[cursor]
-    cursor += 1
-    switch domainTag {
-    case 0x00:
-      break
-    case 0x01:
-      cursor += 12
-    case 0x02:
-      cursor += 4
-    default:
-      throw NSError(domain: "PosManifestLoader", code: 13, userInfo: [NSLocalizedDescriptionKey: "unknown domain tag \(domainTag)"])
-    }
-    guard cursor < canonical.endIndex else {
-      throw NSError(domain: "PosManifestLoader", code: 14, userInfo: [NSLocalizedDescriptionKey: "invalid canonical address length"])
     }
     let controllerTag = canonical[cursor]
     cursor += 1

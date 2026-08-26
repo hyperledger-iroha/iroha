@@ -1142,11 +1142,13 @@ VPN_METERING_KEY = "33" * 32
 VPN_LEASE_ID = VPN_QUOTE_ID
 VPN_HELPER_TICKET_HEX = "5356504e48543100" + "00" * 780
 VPN_RELAY_ID_HEX = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
+VPN_RELAY_MLDSA65_PUBLIC_KEY_HEX = "55" * 1_952
 
 
 def _vpn_trust_fields(spki: str = "ab" * 32) -> Dict[str, str]:
     return {
         "relay_id_hex": VPN_RELAY_ID_HEX,
+        "relay_mldsa65_public_key_hex": VPN_RELAY_MLDSA65_PUBLIC_KEY_HEX,
         "descriptor_commit_hex": "cd" * 32,
         "tls_server_name": "relay.example",
         "relay_tls_spki_sha256_hex": spki,
@@ -1579,6 +1581,39 @@ def test_vpn_session_accepts_exact_lowercase_788_byte_helper_ticket() -> None:
 
     assert parsed.helper_ticket_hex == VPN_HELPER_TICKET_HEX
     assert len(parsed.helper_ticket_hex) == 1576
+    assert parsed.relay_mldsa65_public_key_hex == VPN_RELAY_MLDSA65_PUBLIC_KEY_HEX
+
+
+@pytest.mark.parametrize(
+    ("parser", "payload_factory", "context"),
+    [
+        (ToriiClient._parse_vpn_profile, _vpn_profile_payload, "vpn profile"),
+        (ToriiClient._parse_vpn_quote, _vpn_quote_payload, "vpn quote"),
+        (ToriiClient._parse_vpn_session, _vpn_session_payload, "vpn session"),
+    ],
+)
+@pytest.mark.parametrize(
+    "invalid_key",
+    [
+        "",
+        "55" * 1_951,
+        "AA" * 1_952,
+        "55" * 1_951 + "5\n",
+        "00" * 1_952,
+    ],
+    ids=["empty", "wrong-length", "uppercase", "trailing-newline", "all-zero"],
+)
+def test_vpn_trust_responses_reject_invalid_mldsa65_public_key(
+    parser: Callable[..., Any],
+    payload_factory: Callable[[], Dict[str, Any]],
+    context: str,
+    invalid_key: str,
+) -> None:
+    payload = payload_factory()
+    payload["relay_mldsa65_public_key_hex"] = invalid_key
+
+    with pytest.raises(RuntimeError, match=r"relay_mldsa65_public_key_hex"):
+        parser(payload, context=context)
 
 
 @pytest.mark.parametrize(
@@ -1628,6 +1663,24 @@ def test_vpn_response_parsers_reject_unknown_fields() -> None:
 
 def test_vpn_response_parsers_require_all_openapi_fields() -> None:
     cases = [
+        (
+            ToriiClient._parse_vpn_profile,
+            _vpn_profile_payload,
+            "relay_mldsa65_public_key_hex",
+            "vpn profile",
+        ),
+        (
+            ToriiClient._parse_vpn_quote,
+            _vpn_quote_payload,
+            "relay_mldsa65_public_key_hex",
+            "vpn quote",
+        ),
+        (
+            ToriiClient._parse_vpn_session,
+            _vpn_session_payload,
+            "relay_mldsa65_public_key_hex",
+            "vpn session",
+        ),
         (
             ToriiClient._parse_vpn_profile,
             _vpn_profile_payload,
@@ -2351,9 +2404,46 @@ def test_pipeline_status_parser_exposes_only_public_metadata() -> None:
     assert parsed.status.block_height == 7
     assert parsed.scope == "global"
     assert parsed.resolved_from == "state"
+    assert parsed.is_authoritatively_applied
+    assert not parsed.is_authoritative_failure
+    assert not hasattr(parsed, "is_terminal")
+    assert not hasattr(parsed, "is_committed")
     assert not hasattr(parsed, "diagnostics")
     assert not hasattr(parsed, "summary")
     assert not hasattr(parsed, "raw")
+
+
+@pytest.mark.parametrize(
+    ("kind", "scope", "resolved_from", "applied", "failure"),
+    [
+        ("Applied", "global", "state", True, False),
+        ("Committed", "global", "state", False, False),
+        ("Applied", "local", "state", False, False),
+        ("Applied", "global", "cache", False, False),
+        ("Rejected", "global", "state", False, True),
+        ("Expired", "global", "state", False, True),
+        ("Rejected", "global", "cache", False, False),
+    ],
+)
+def test_pipeline_status_finality_helpers_require_exact_authoritative_state(
+    kind: str,
+    scope: str,
+    resolved_from: str,
+    applied: bool,
+    failure: bool,
+) -> None:
+    parsed = ToriiClient._parse_pipeline_status_response(
+        {
+            "hash": "cd" * 32,
+            "status": {"kind": kind},
+            "scope": scope,
+            "resolved_from": resolved_from,
+        },
+        context="pipeline status",
+    )
+
+    assert parsed.is_authoritatively_applied is applied
+    assert parsed.is_authoritative_failure is failure
 
 
 @pytest.mark.parametrize(
@@ -2411,7 +2501,93 @@ def test_pipeline_status_parser_rejects_noncanonical_hash(transaction_hash: str)
         "resolved_from": "state",
     }
 
-    with pytest.raises(RuntimeError, match="exact lowercase 32-byte hex"):
+    with pytest.raises(RuntimeError, match="canonical Iroha HashOf marker"):
+        ToriiClient._parse_pipeline_status_response(
+            payload,
+            context="pipeline status",
+        )
+
+
+def test_pipeline_status_parser_rejects_hash_without_iroha_marker() -> None:
+    payload = {
+        "hash": "aa" * 32,
+        "status": {"kind": "Applied", "block_height": 1},
+        "scope": "global",
+        "resolved_from": "state",
+    }
+
+    with pytest.raises(RuntimeError, match="HashOf marker"):
+        ToriiClient._parse_pipeline_status_response(
+            payload,
+            context="pipeline status",
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("kind", "Applied "),
+        ("scope", " global"),
+        ("resolved_from", "state "),
+    ],
+)
+def test_pipeline_status_parser_rejects_padded_enum_values(
+    field: str,
+    value: str,
+) -> None:
+    payload = {
+        "hash": "cd" * 32,
+        "status": {"kind": "Applied", "block_height": 1},
+        "scope": "global",
+        "resolved_from": "state",
+    }
+    if field == "kind":
+        payload["status"]["kind"] = value
+    else:
+        payload[field] = value
+
+    with pytest.raises((RuntimeError, ValueError)):
+        ToriiClient._parse_pipeline_status_response(
+            payload,
+            context="pipeline status",
+        )
+
+
+@pytest.mark.parametrize("field", ["tx_hash_hex", "entrypoint_hash_hex"])
+def test_contract_receipt_rejects_transaction_hash_without_iroha_marker(
+    field: str,
+) -> None:
+    receipt = _contract_operation_receipt()
+    receipt[field] = "aa" * 32
+
+    with pytest.raises(RuntimeError, match="HashOf marker"):
+        ToriiClient._parse_contract_operation_receipt(
+            receipt,
+            context="contract receipt",
+        )
+
+
+def test_contract_response_rejects_entrypoint_hash_without_iroha_marker() -> None:
+    payload = _contract_call_draft()
+    payload["entrypoint_hash_hex"] = "aa" * 32
+
+    with pytest.raises(RuntimeError, match="HashOf marker"):
+        ToriiClient._parse_contract_call_response(
+            payload,
+            context="contract response",
+        )
+
+
+@pytest.mark.parametrize("scope", ["auto", "GLOBAL", " global ", ""])
+def test_pipeline_status_parser_rejects_noncanonical_scope(scope: str) -> None:
+    payload = {
+        "hash": "cd" * 32,
+        "status": {"kind": "Applied", "block_height": 1},
+        "scope": scope,
+        "resolved_from": "state",
+    }
+
+    with pytest.raises(RuntimeError, match="scope"):
         ToriiClient._parse_pipeline_status_response(
             payload,
             context="pipeline status",
@@ -2594,6 +2770,26 @@ def test_propose_multisig_posts_native_norito_instruction_payloads() -> None:
         "creation_time_ms": 123,
         "fee_payment": _sponsor_fee_payment(),
     }
+
+
+@pytest.mark.parametrize("field", ["tx_hash_hex", "executed_tx_hash_hex"])
+def test_multisig_transaction_hashes_require_iroha_marker(field: str) -> None:
+    payload = {
+        "ok": True,
+        "resolved_multisig_account_id": CANONICAL_OWNER,
+        "submitted": True,
+        "proposal_id": "aa" * 32,
+        "instructions_hash": "aa" * 32,
+        "tx_hash_hex": "ab" * 32,
+        "executed_tx_hash_hex": None,
+        "creation_time_ms": 123,
+        "transaction_payload_b64": None,
+        "signing_message_b64": None,
+    }
+    payload[field] = "aa" * 32
+
+    with pytest.raises(RuntimeError, match="HashOf marker"):
+        ToriiClient._parse_multisig_response(payload, context="multisig response")
 
 
 def test_multisig_instruction_b64_validates_inputs() -> None:
@@ -3106,7 +3302,7 @@ def test_propose_contract_deploy_uses_canonical_first_release_contract() -> None
                 "proposal_id": "11" * 32,
                 "tx_instructions": [
                     {
-                        "wire_id": "iroha_data_model::isi::governance::ProposeDeployContract",
+"wire_id": "iroha.instruction.v1::governance::ProposeDeployContract",
                         "payload_hex": "00ff",
                     }
                 ],
@@ -3196,7 +3392,7 @@ def test_propose_contract_deploy_rejects_noncanonical_instruction_payload(
                 "proposal_id": "11" * 32,
                 "tx_instructions": [
                     {
-                        "wire_id": "iroha_data_model::isi::governance::ProposeDeployContract",
+                        "wire_id": "iroha.instruction.v1::governance::ProposeDeployContract",
                         "payload_hex": payload_hex,
                     }
                 ],
@@ -4760,16 +4956,16 @@ def test_get_sumeragi_diagnostics_parses_npos_windows_and_byte_seed() -> None:
         "epoch_seed": [1] * 32,
         "prf_height": 10,
         "prf_view": 2,
-        "vrf_penalty_epoch": 1,
-        "vrf_committed_no_reveal_total": 0,
-        "vrf_no_participation_total": 0,
-        "vrf_late_reveals_total": 0,
     }
 
     npos = _get_sumeragi_diagnostics(payload).npos
 
     assert npos is not None
     assert npos.epoch_seed == (1,) * 32
+
+    payload["npos"]["vrf_penalty_epoch"] = 1
+    with pytest.raises(RuntimeError, match="contains unknown field vrf_penalty_epoch"):
+        _get_sumeragi_diagnostics(payload)
 
 
 def test_get_sumeragi_diagnostics_rejects_native_amx_participant_finality_tampering() -> None:
@@ -5480,7 +5676,7 @@ def test_cancel_runtime_upgrade_posts_identifier() -> None:
 
 
 def test_get_uaid_portfolio_parses_payload() -> None:
-    uaid_literal = "UAID:" + "AB" * 32
+    uaid_literal = "uaid:" + "ab" * 32
     session = RecordingSession()
     session.queue(
         StubResponse(
@@ -5513,24 +5709,27 @@ def test_get_uaid_portfolio_parses_payload() -> None:
 
     response = client.get_uaid_portfolio(uaid_literal)
 
-    assert response.uaid == "uaid:" + "ab" * 32
+    assert response.uaid == uaid_literal
     assert response.totals.accounts == 2
     assert response.dataspaces[0].accounts[0].assets[0].quantity == "42"
     expected_suffix = "/v1/accounts/uaid%3A" + "ab" * 32 + "/portfolio"
     assert session.calls[0]["url"].endswith(expected_suffix)
 
 
-def test_get_uaid_portfolio_rejects_padded_literal_before_dispatch() -> None:
+def test_get_uaid_portfolio_rejects_noncanonical_literal_before_dispatch() -> None:
     uaid_hex = "ab" * 32
     session = RecordingSession()
     client = ToriiClient("http://node.test", session=session)
 
     for literal in [
+        uaid_hex,
+        f"UAID:{uaid_hex}",
+        f"uaid:{uaid_hex.upper()}",
         f" uaid:{uaid_hex}",
         f"uaid:{uaid_hex} ",
         f"uaid: {uaid_hex}",
     ]:
-        with pytest.raises(ValueError, match="uaid must not contain surrounding whitespace"):
+        with pytest.raises(ValueError, match="exact canonical uaid"):
             client.get_uaid_portfolio(literal)
 
     assert session.calls == []
@@ -5578,6 +5777,7 @@ def test_get_uaid_portfolio_rejects_invalid_lsb() -> None:
 
 def test_get_uaid_bindings_fetches_dataspace_accounts() -> None:
     uaid_literal = "uaid:" + "bb" * 32
+    second_account = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"
     session = RecordingSession()
     session.queue(
         StubResponse(
@@ -5587,7 +5787,10 @@ def test_get_uaid_bindings_fetches_dataspace_accounts() -> None:
                     {
                         "dataspace_id": 9,
                         "dataspace_alias": "alpha",
-                        "accounts": [CANONICAL_OWNER, " sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE "],
+                        "accounts": [
+                            "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
+                            second_account,
+                        ],
                     }
                 ],
             }
@@ -5598,45 +5801,26 @@ def test_get_uaid_bindings_fetches_dataspace_accounts() -> None:
     bindings = client.get_uaid_bindings(uaid_literal)
 
     assert bindings.dataspaces[0].accounts == [
-        CANONICAL_OWNER,
-        "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
+        "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
+        second_account,
     ]
     assert session.calls[0]["params"] == {}
 
 
-def test_get_uaid_manifests_parses_payload_and_filters() -> None:
-    uaid_literal = "uaid:" + "cd" * 32
-    manifest_hash = "0x" + "dd" * 32
+def test_get_uaid_bindings_rejects_padded_account() -> None:
+    uaid_literal = "uaid:" + "bb" * 32
     session = RecordingSession()
     session.queue(
         StubResponse(
             payload={
                 "uaid": uaid_literal,
-                "manifests": [
+                "dataspaces": [
                     {
-                        "dataspace_id": 5,
-                        "dataspace_alias": "lane-5",
-                        "manifest_hash": manifest_hash,
-                        "status": "Active",
-                        "lifecycle": {
-                            "activated_epoch": 12,
-                            "revocation": {"epoch": 44, "reason": "duplicate"},
-                        },
-                        "accounts": [CANONICAL_OWNER],
-                        "manifest": {
-                            "version": "1.0",
-                            "uaid": uaid_literal,
-                            "dataspace": 5,
-                            "issued_ms": 123,
-                            "activation_epoch": 12,
-                            "entries": [
-                                {
-                                    "scope": {"accounts": [CANONICAL_OWNER]},
-                                    "effect": {"action": "allow"},
-                                    "notes": "demo",
-                                }
-                            ],
-                        },
+                        "dataspace_id": 9,
+                        "dataspace_alias": "alpha",
+                        "accounts": [
+                            " sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"
+                        ],
                     }
                 ],
             }
@@ -5644,17 +5828,141 @@ def test_get_uaid_manifests_parses_payload_and_filters() -> None:
     )
     client = ToriiClient("http://node.test", session=session)
 
+    with pytest.raises(ValueError, match="must not contain surrounding whitespace"):
+        client.get_uaid_bindings(uaid_literal)
+
+
+def _uaid_manifests_payload(uaid_literal: str) -> Dict[str, Any]:
+    return {
+        "uaid": uaid_literal,
+        "total": 1,
+        "has_more": False,
+        "count_mode": "exact",
+        "manifests": [
+            {
+                "dataspace_id": 5,
+                "dataspace_alias": "lane-5",
+                "manifest_hash": "dd" * 32,
+                "status": "Active",
+                "lifecycle": {
+                    "activated_epoch": 12,
+                    "expired_epoch": None,
+                    "revocation": {"epoch": 44, "reason": "duplicate"},
+                },
+                "accounts": [
+                    "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"
+                ],
+                "manifest": {
+                    "version": 1,
+                    "uaid": uaid_literal,
+                    "dataspace": 5,
+                    "issued_ms": 123,
+                    "activation_epoch": 12,
+                    "entries": [
+                        {
+                            "scope": {"dataspace": 5, "role": "Initiator"},
+                            "effect": {"Allow": {"window": "PerSlot"}},
+                            "notes": "demo",
+                        }
+                    ],
+                },
+            }
+        ],
+    }
+
+
+def test_get_uaid_manifests_parses_payload_and_filters() -> None:
+    uaid_literal = "uaid:" + "cd" * 32
+    manifest_hash = "dd" * 32
+    session = RecordingSession()
+    session.queue(StubResponse(payload=_uaid_manifests_payload(uaid_literal)))
+    client = ToriiClient("http://node.test", session=session)
+
     manifests = client.get_uaid_manifests(
         uaid_literal,
         dataspace_id=9,
+        status="active",
+        limit=25,
+        offset=2,
+        count_mode="exact",
     )
 
     assert len(manifests.manifests) == 1
+    assert manifests.total == 1
+    assert manifests.has_more is False
+    assert manifests.count_mode == "exact"
     record = manifests.manifests[0]
-    assert record.manifest_hash == manifest_hash.lower()
+    assert record.manifest_hash == manifest_hash
     assert record.lifecycle.revocation is not None
+    assert record.manifest.version == 1
+    assert record.manifest.expiry_epoch is None
     assert record.manifest.entries[0].notes == "demo"
-    assert session.calls[0]["params"] == {"dataspace": 9}
+    assert session.calls[0]["params"] == {
+        "dataspace": 9,
+        "status": "active",
+        "limit": 25,
+        "offset": 2,
+        "count_mode": "exact",
+    }
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"status": "Active"}, "status must be active"),
+        ({"status": " active"}, "surrounding whitespace"),
+        ({"count_mode": "Exact"}, "count_mode must be bounded"),
+        ({"count_mode": "exact "}, "surrounding whitespace"),
+        ({"limit": 0}, "limit must be positive"),
+        ({"offset": True}, "unsigned 64-bit integer"),
+    ],
+)
+def test_get_uaid_manifests_rejects_noncanonical_filters_before_dispatch(
+    kwargs: Dict[str, Any],
+    message: str,
+) -> None:
+    session = RecordingSession()
+    client = ToriiClient("http://node.test", session=session)
+
+    with pytest.raises((TypeError, ValueError), match=message):
+        client.get_uaid_manifests("uaid:" + "cd" * 32, **kwargs)
+
+    assert session.calls == []
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda payload: payload.pop("total"),
+        lambda payload: payload.__setitem__("legacy_total", 1),
+        lambda payload: payload["manifests"][0]["manifest"].__setitem__("version", "1"),
+        lambda payload: payload["manifests"][0]["manifest"].__setitem__(
+            "expiry_epoch", None
+        ),
+        lambda payload: payload["manifests"][0]["manifest"]["entries"][0].__setitem__(
+            "legacy_action", "allow"
+        ),
+    ],
+    ids=[
+        "missing-pagination-field",
+        "unknown-root-field",
+        "string-version",
+        "null-optional-field",
+        "unknown-entry-field",
+    ],
+)
+def test_get_uaid_manifests_rejects_noncanonical_response_shapes(
+    mutation: Callable[[Dict[str, Any]], Any],
+) -> None:
+    uaid_literal = "uaid:" + "cd" * 32
+    payload = _uaid_manifests_payload(uaid_literal)
+    mutation(payload)
+    session = RecordingSession()
+    session.queue(StubResponse(payload=payload))
+    client = ToriiClient("http://node.test", session=session)
+
+    with pytest.raises((TypeError, ValueError, RuntimeError)):
+        client.get_uaid_manifests(uaid_literal)
 
 
 def test_get_configuration_returns_snapshot() -> None:
@@ -5808,6 +6116,10 @@ def test_get_status_snapshot_parses_payload_and_computes_metrics() -> None:
     first = client.get_status_snapshot()
     second = client.get_status_snapshot()
 
+    assert [call["url"] for call in session.calls] == [
+        "http://node.test/status",
+        "http://node.test/status",
+    ]
     assert first.status.queue_size == 4
     assert first.status.queue_queued == 2
     assert first.status.queue_inflight == 2
@@ -5874,19 +6186,21 @@ def test_get_pipeline_preflight_parses_payload_and_liveness_helper() -> None:
                     "signature_batch_max_pqc": 8,
                     "signature_batch_max_bls": 16,
                     "overlay_max_instructions": 0,
+                    "ivm_max_cycles_upper_bound": 2_000_000,
+                    "ivm_admission_cycle_limit": 1_000_000,
                     "ivm_max_decoded_instructions": 1_048_576,
                 },
                 "queue": {"size": 2, "queued": 1, "inflight": 1},
                 "fees": {
                     "fee_asset_id": "xor#sora",
-                    "fee_sink_account_id": "fees@system",
+                    "fee_sink_account_id": CANONICAL_OWNER,
                     "base_fee": "0",
                     "per_byte_fee": "0",
                     "per_instruction_fee": "0",
                     "per_gas_unit_fee": "0",
-                    "sponsor_vault_custody_account_id": "vault@system",
+                    "sponsor_vault_custody_account_id": CANONICAL_OWNER,
                     "settlement_mode": "direct",
-                    "successful_claim_fee_exempt_authorities": ["authority@system"],
+                    "successful_claim_fee_exempt_authorities": [CANONICAL_OWNER],
                 },
             }
         )
@@ -5913,12 +6227,92 @@ def test_get_pipeline_preflight_parses_payload_and_liveness_helper() -> None:
     assert preflight.sumeragi.stall_threshold_ms == 6_000
     assert preflight.admission.max_tx_bytes == 1_048_576
     assert preflight.pipeline.signature_batch_max_ed25519 == 64
+    assert preflight.pipeline.ivm_max_cycles_upper_bound == 2_000_000
+    assert preflight.pipeline.ivm_admission_cycle_limit == 1_000_000
     assert preflight.queue.queued == 1
     assert preflight.fees.base_fee == "0"
-    assert preflight.fees.sponsor_vault_custody_account_id == "vault@system"
-    assert preflight.fees.successful_claim_fee_exempt_authorities == ["authority@system"]
+    assert preflight.fees.sponsor_vault_custody_account_id == CANONICAL_OWNER
+    assert preflight.fees.successful_claim_fee_exempt_authorities == [CANONICAL_OWNER]
     assert preflight.is_status_stalled(status) is True
     assert session.calls[0]["url"].endswith("/v1/pipeline/preflight")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("fee_sink_account_id", "fees@system"),
+        ("sponsor_vault_custody_account_id", "vault@system"),
+        ("successful_claim_fee_exempt_authorities", ["authority@system"]),
+    ],
+)
+def test_pipeline_preflight_rejects_alias_fee_accounts_and_invalid_cycle_limits(
+    field: str,
+    value: Any,
+) -> None:
+    payload = {
+        "schema_version": 1,
+        "chain_height": 42,
+        "sumeragi": {
+            "block_time_ms": 1_000,
+            "commit_time_ms": 2_000,
+            "stall_threshold_ms": 6_000,
+        },
+        "admission": {
+            "max_signatures": 32,
+            "max_instructions": 4096,
+            "max_tx_bytes": 1_048_576,
+            "max_decompressed_bytes": 1_048_576,
+            "max_metadata_depth": 16,
+        },
+        "block": {"max_transactions": 512},
+        "pipeline": {
+            "signature_batch_max_ed25519": 64,
+            "signature_batch_max_secp256k1": 16,
+            "signature_batch_max_pqc": 8,
+            "signature_batch_max_bls": 16,
+            "overlay_max_instructions": 0,
+            "ivm_max_cycles_upper_bound": 2_000_000,
+            "ivm_admission_cycle_limit": 1_000_000,
+            "ivm_max_decoded_instructions": 1_048_576,
+        },
+        "queue": {"size": 2, "queued": 1, "inflight": 1},
+        "fees": {
+            "fee_asset_id": "xor#sora",
+            "fee_sink_account_id": CANONICAL_OWNER,
+            "base_fee": "0",
+            "per_byte_fee": "0",
+            "per_instruction_fee": "0",
+            "per_gas_unit_fee": "0",
+            "sponsor_vault_custody_account_id": CANONICAL_OWNER,
+            "settlement_mode": "direct",
+            "successful_claim_fee_exempt_authorities": [CANONICAL_OWNER],
+        },
+    }
+    payload["fees"][field] = value
+    client = ToriiClient("http://node.test", session=RecordingSession())
+
+    with pytest.raises(ValueError, match="exact canonical I105 account id"):
+        client._parse_pipeline_preflight(payload, context="pipeline preflight")
+
+    payload["fees"][field] = (
+        [CANONICAL_OWNER]
+        if field == "successful_claim_fee_exempt_authorities"
+        else CANONICAL_OWNER
+    )
+    del payload["pipeline"]["ivm_max_cycles_upper_bound"]
+    with pytest.raises(
+        RuntimeError,
+        match=r"pipeline\.ivm_max_cycles_upper_bound must be an integer",
+    ):
+        client._parse_pipeline_preflight(payload, context="pipeline preflight")
+
+    payload["pipeline"]["ivm_max_cycles_upper_bound"] = 2_000_000
+    payload["pipeline"]["ivm_admission_cycle_limit"] = 0
+    with pytest.raises(
+        RuntimeError,
+        match=r"pipeline\.ivm_admission_cycle_limit must be positive",
+    ):
+        client._parse_pipeline_preflight(payload, context="pipeline preflight")
 
 
 def test_get_pipeline_preflight_rejects_retired_signature_batch_alias() -> None:
@@ -6941,6 +7335,14 @@ def test_offline_asset_definition_id_validation_matches_canonical_rust_codec() -
             )
 
 
+def test_offline_status_transaction_hash_requires_iroha_marker() -> None:
+    with pytest.raises(RuntimeError, match="canonical Iroha HashOf marker"):
+        client_module._offline_transaction_hash(
+            "22" * 32,
+            "offline operation status.transaction_hash",
+        )
+
+
 def test_submit_kagemusha_top_up_sends_exact_norito_and_idempotency_key() -> None:
     session = RecordingSession()
     session.queue(
@@ -7511,7 +7913,7 @@ def test_offline_top_up_anchor_rejects_malformed_and_cross_resource_conflicts() 
         _offline_top_up_anchor(shield_leaf_index=1 << 16),
         _offline_top_up_anchor(topup_operation_id=_offline_fixed_bytes(0x12)),
         _offline_top_up_anchor(finalized_height=11),
-        _offline_top_up_anchor(finalized_tx_hash=_offline_fixed_bytes(0x23)),
+        _offline_top_up_anchor(finalized_tx_hash=_offline_fixed_bytes(0x22)),
         _offline_top_up_anchor(anchor_digest=_offline_fixed_bytes(0)),
         _offline_top_up_anchor(
             shield_verifier_id={"backend": "", "name": "asset-topup-shield-v2"}

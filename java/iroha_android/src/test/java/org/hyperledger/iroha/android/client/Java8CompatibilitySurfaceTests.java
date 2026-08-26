@@ -32,10 +32,7 @@ import org.junit.Test;
 
 public final class Java8CompatibilitySurfaceTests {
   private static final String VPN_RELAY_ID_HEX = TestEd25519Keys.publicKeyHex(0x22);
-  private static final String CANONICAL_HASH =
-      "hash:4141414141414141414141414141414141414141414141414141414141414141#7023";
-  private static final String ZERO_X25519_FINGERPRINT =
-      "hash:89EB0D6A8A691DAE2CD15ED0369931CE0A949ECAFA5C3F93F8121833646E15C3#C95A";
+  private static final String VPN_RELAY_MLDSA65_PUBLIC_KEY_HEX = "ab".repeat(1_952);
 
   @Test
   public void clientResponseDropsWhitespaceRejectCode() {
@@ -253,14 +250,6 @@ public final class Java8CompatibilitySurfaceTests {
     } catch (final IllegalStateException expected) {
       assertTrue(expected.getMessage().contains("relay_endpoint"));
     }
-    try {
-      SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
-          bytes(soracloudExecuteResponseJsonWithBlankReceiptId()));
-      fail("Soracloud parser must reject blank required strings");
-    } catch (final IllegalStateException expected) {
-      assertTrue(expected.getMessage().contains("receipt_id"));
-    }
-
     final FakeHttpTransportExecutor executor = new FakeHttpTransportExecutor();
     final TransportRequest request =
         TransportRequest.builder()
@@ -397,6 +386,9 @@ public final class Java8CompatibilitySurfaceTests {
         + "\"relay_id_hex\":\""
         + VPN_RELAY_ID_HEX
         + "\","
+        + "\"relay_mldsa65_public_key_hex\":\""
+        + VPN_RELAY_MLDSA65_PUBLIC_KEY_HEX
+        + "\","
         + "\"descriptor_commit_hex\":\""
         + "cd".repeat(32)
         + "\","
@@ -413,97 +405,4 @@ public final class Java8CompatibilitySurfaceTests {
         + "}";
   }
 
-  private static String soracloudExecuteResponseJsonWithBlankReceiptId() {
-    final String rootCid =
-        "[1,113,31,32,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32]";
-    final String modelManifestDigest = fixedBytes32Json(0x11);
-    final String inputManifestDigest = fixedBytes32Json(0x22);
-    final String outputManifestDigest = fixedBytes32Json(0x33);
-    return "{"
-        + "\"schema_version\":1,"
-        + "\"status\":{\"schema_version\":1,\"bundle\":{},\"artifact\":null},"
-        + "\"submission_phase\":\"receipt_submitted\","
-        + "\"transaction_hash\":\"" + CANONICAL_HASH + "\","
-        + "\"receipt\":{"
-        + "\"schema_version\":1,"
-        + "\"network_id\":\"" + CANONICAL_HASH + "\","
-        + "\"receipt_id\":\"   \","
-        + "\"service_name\":\"portal\","
-        + "\"service_version\":\"2026.1\","
-        + "\"model_id\":\"upload-1\","
-        + "\"weight_version\":\"v1\","
-        + "\"runtime_version\":\"soracloud.quantized-cpu.v1\","
-        + "\"model_manifest_digest\":" + modelManifestDigest + ","
-        + "\"model_bundle_root\":\"" + CANONICAL_HASH + "\","
-        + "\"policy_id\":\"policy-1\","
-        + "\"decryption_request_id\":\"decrypt-upload-1\","
-        + "\"attesting_validator\":{"
-        + "\"lane_id\":0,"
-        + "\"validator_account_id\":\"validator@public\","
-        + "\"peer_id\":\"peer-1\""
-        + "},"
-        + "\"input_artifact\":{"
-        + "\"schema_version\":1,"
-        + "\"sorafs_manifest_digest\":" + inputManifestDigest + ","
-        + "\"sorafs_root_cid\":" + rootCid + ","
-        + "\"artifact_hash\":\"" + CANONICAL_HASH + "\","
-        + "\"ciphertext_bytes\":64,"
-        + "\"artifact_role\":\"input\""
-        + "},"
-        + "\"output_artifact\":{"
-        + "\"schema_version\":1,"
-        + "\"sorafs_manifest_digest\":" + outputManifestDigest + ","
-        + "\"sorafs_root_cid\":" + rootCid + ","
-        + "\"artifact_hash\":\"" + CANONICAL_HASH + "\","
-        + "\"ciphertext_bytes\":96,"
-        + "\"artifact_role\":\"output\""
-        + "},"
-        + "\"output_replication_order_id\":"
-        + outputReplicationOrderIdJson()
-        + ","
-        + "\"input_commitment\":\"" + CANONICAL_HASH + "\","
-        + "\"output_commitment\":\"" + CANONICAL_HASH + "\","
-        + "\"output_recipient\":{"
-        + "\"schema_version\":1,"
-        + "\"key_id\":\"recipient-key\","
-        + "\"key_version\":1,"
-        + "\"kem\":{\"kem\":\"X25519HkdfSha256\",\"value\":null},"
-        + "\"aead\":{\"aead\":\"Aes256Gcm\",\"value\":null},"
-        + "\"public_key_bytes\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\","
-        + "\"public_key_fingerprint\":\"" + ZERO_X25519_FINGERPRINT + "\""
-        + "},"
-        + "\"request_commitment\":\"" + CANONICAL_HASH + "\","
-        + "\"result_commitment\":\"" + CANONICAL_HASH + "\","
-        + "\"authorization_claim_block_height\":0,"
-        + "\"authorization_claim_epoch\":0,"
-        + "\"emitted_sequence\":0,"
-        + "\"emitted_block_height\":0,"
-        + "\"emitted_epoch\":0"
-        + "},"
-        + "\"output_artifact\":{"
-        + "\"schema_version\":1,"
-        + "\"sorafs_manifest_digest\":" + outputManifestDigest + ","
-        + "\"sorafs_root_cid\":" + rootCid + ","
-        + "\"artifact_hash\":\"" + CANONICAL_HASH + "\","
-        + "\"ciphertext_bytes\":96,"
-        + "\"artifact_role\":\"output\""
-        + "}"
-        + "}";
-  }
-
-  private static String fixedBytes32Json(final int value) {
-    final StringBuilder json = new StringBuilder(130).append('[');
-    for (int index = 0; index < 32; index++) {
-      if (index != 0) {
-        json.append(',');
-      }
-      json.append(value);
-    }
-    return json.append(']').toString();
-  }
-
-  private static String outputReplicationOrderIdJson() {
-    return "[223,84,153,93,189,208,15,57,18,144,6,143,35,114,49,183,"
-        + "235,169,151,26,48,191,231,173,2,235,241,47,189,13,37,69]";
-  }
 }

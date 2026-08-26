@@ -62,6 +62,18 @@ fn sample_route(seed: u8) -> StreamingPrivacyRoute {
         StreamingSoranetStreamTag::NoritoStream,
     ))
 }
+#[test]
+fn streaming_privacy_route_debug_redacts_bearer_material() {
+    let mut route = sample_route(0x31);
+    route.set_ticket(Some(sample_ticket_envelope()));
+    let rendered = format!("{route:?}");
+    assert!(rendered.contains("ticket_entry: <redacted:3 bytes>"));
+    assert!(rendered.contains("ticket_exit: <redacted:3 bytes>"));
+    assert!(rendered.contains("ticket: Some(\"<redacted attached ticket>\")"));
+    assert!(!rendered.contains("161, 162, 163"));
+    assert!(!rendered.contains("177, 178, 179"));
+    assert!(!rendered.contains("170, 170, 170"));
+}
 fn sample_ticket_envelope() -> TicketEnvelopeV1 {
     let body = TicketBodyV1 {
         blinded_cid: [0xAA; 32],

@@ -2,11 +2,45 @@
 
 use super::*;
 
+fn test_config(enabled: bool) -> StreamingSoranet {
+    StreamingSoranet {
+        enabled,
+        exit_multiaddr: WithOrigin::inline(
+            defaults::streaming::soranet::EXIT_MULTIADDR.to_string(),
+        ),
+        padding_budget_ms: WithOrigin::inline(defaults::streaming::soranet::padding_budget_ms()),
+        access_kind: WithOrigin::inline(defaults::streaming::soranet::ACCESS_KIND.to_string()),
+        channel_salt: None,
+        provision_spool_dir: WithOrigin::inline(PathBuf::from(
+            defaults::streaming::soranet::PROVISION_SPOOL_DIR,
+        )),
+        provision_spool_max_bytes: WithOrigin::inline(
+            defaults::streaming::soranet::PROVISION_SPOOL_MAX_BYTES,
+        ),
+        provision_window_segments: WithOrigin::inline(
+            defaults::streaming::soranet::PROVISION_WINDOW_SEGMENTS,
+        ),
+        provision_queue_capacity: WithOrigin::inline(
+            defaults::streaming::soranet::PROVISION_QUEUE_CAPACITY,
+        ),
+    }
+}
+
+#[test]
+fn streaming_soranet_rejects_enabling_filesystem_exit_publication() {
+    let mut emitter = Emitter::<ParseError>::new();
+    assert!(test_config(true).parse(&mut emitter).is_none());
+    let error = emitter
+        .into_result()
+        .expect_err("enabled filesystem exit publication must fail");
+    assert!(format!("{error:?}").contains("durable revocation tombstones"));
+}
+
 #[test]
 fn streaming_soranet_rejects_zero_window_segments() {
     let mut emitter = Emitter::<ParseError>::new();
     let config = StreamingSoranet {
-        enabled: true,
+        enabled: false,
         exit_multiaddr: WithOrigin::inline(
             defaults::streaming::soranet::EXIT_MULTIADDR.to_string(),
         ),
@@ -39,7 +73,7 @@ fn streaming_soranet_rejects_zero_window_segments() {
 fn streaming_soranet_rejects_zero_queue_capacity() {
     let mut emitter = Emitter::<ParseError>::new();
     let config = StreamingSoranet {
-        enabled: true,
+        enabled: false,
         exit_multiaddr: WithOrigin::inline(
             defaults::streaming::soranet::EXIT_MULTIADDR.to_string(),
         ),

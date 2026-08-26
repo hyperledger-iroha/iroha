@@ -3558,6 +3558,16 @@ fn native_instruction_ds_effect_disposition(
         iroha_data_model::isi::privacy::RegisterPrivacyZkAcePolicyV1,
         iroha_data_model::isi::privacy::RotatePrivacyZkAcePolicyV1,
         iroha_data_model::isi::privacy::RevokePrivacyZkAcePolicyV1,
+        // Kaigi only mutates domain metadata and emits diagnostic summaries;
+        // its billing fields do not move assets or change supply.
+        iroha_data_model::isi::kaigi::CreateKaigi,
+        iroha_data_model::isi::kaigi::JoinKaigi,
+        iroha_data_model::isi::kaigi::LeaveKaigi,
+        iroha_data_model::isi::kaigi::EndKaigi,
+        iroha_data_model::isi::kaigi::RecordKaigiUsage,
+        iroha_data_model::isi::kaigi::SetKaigiRelayManifest,
+        iroha_data_model::isi::kaigi::RegisterKaigiRelay,
+        iroha_data_model::isi::kaigi::ReportKaigiRelayHealth,
         SetKeyValueBox,
         RemoveKeyValueBox,
         iroha_data_model::isi::SetAssetKeyValue,
@@ -5237,6 +5247,103 @@ mod tests {
         let log: InstructionBox = Log::new(Level::INFO, "audit-only".to_owned()).into();
         enforce_policy(&tx(1, vec![log], Metadata::default()), &policy)
             .expect("audited no-DS-effect instruction should remain available");
+    }
+    #[test]
+    fn kaigi_instruction_surface_is_audited_as_no_ds_effect() {
+        use iroha_data_model::{
+            isi::kaigi::{
+                CreateKaigi, EndKaigi, JoinKaigi, LeaveKaigi, RecordKaigiUsage, RegisterKaigiRelay,
+                ReportKaigiRelayHealth, SetKaigiRelayManifest,
+            },
+            kaigi::{KaigiId, KaigiRelayHealthStatus, KaigiRelayRegistration, NewKaigi},
+        };
+
+        let treasury = account(3);
+        let policy = policy(&treasury);
+        let host = account(4);
+        let participant = account(5);
+        let relay = account(6);
+        let call_id = KaigiId::new(
+            DomainId::try_new("kaigi", "universal").expect("domain id"),
+            Name::from_str("validation-fee").expect("call name"),
+        );
+        let instructions: Vec<InstructionBox> = vec![
+            CreateKaigi {
+                call: NewKaigi::with_defaults(call_id.clone(), host),
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
+            }
+            .into(),
+            JoinKaigi {
+                call_id: call_id.clone(),
+                participant: participant.clone(),
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
+            }
+            .into(),
+            LeaveKaigi {
+                call_id: call_id.clone(),
+                participant,
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
+            }
+            .into(),
+            EndKaigi {
+                call_id: call_id.clone(),
+                ended_at_ms: None,
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
+            }
+            .into(),
+            RecordKaigiUsage {
+                call_id: call_id.clone(),
+                duration_ms: 1,
+                billed_gas: 0,
+                usage_commitment: None,
+                proof: None,
+            }
+            .into(),
+            SetKaigiRelayManifest {
+                call_id: call_id.clone(),
+                relay_manifest: None,
+            }
+            .into(),
+            RegisterKaigiRelay {
+                relay: KaigiRelayRegistration {
+                    relay_id: relay.clone(),
+                    hpke_public_key: vec![1],
+                    bandwidth_class: 1,
+                },
+            }
+            .into(),
+            ReportKaigiRelayHealth {
+                call_id,
+                relay_id: relay,
+                status: KaigiRelayHealthStatus::Healthy,
+                reported_at_ms: 0,
+                notes: None,
+            }
+            .into(),
+        ];
+
+        for instruction in &instructions {
+            assert_eq!(
+                native_instruction_ds_effect_disposition(instruction, &policy_fee_asset(&policy),),
+                NativeInstructionDsEffectDisposition::AuditedNoDsEffect,
+                "{} must remain classified while validation fees are active",
+                instruction.id()
+            );
+        }
+        enforce_policy(&tx(1, instructions, Metadata::default()), &policy)
+            .expect("Kaigi instructions must remain usable while validation fees are active");
     }
     #[test]
     fn active_policy_admits_publicly_bound_kagemusha_fee_asset_conversions() {

@@ -734,13 +734,29 @@ public struct PipelineStatusPollOptions: Sendable {
         self.maxAttempts = maxAttempts
     }
 
-    public var failureStates: Set<PipelineTransactionState> {
-        [.rejected, .expired]
+    func validate() throws {
+        guard pollInterval.isFinite, pollInterval >= 0 else {
+            throw ToriiClientError.invalidPayload(
+                "pipeline poll interval must be finite and non-negative."
+            )
+        }
+        guard timeout.isFinite, timeout >= 0 else {
+            throw ToriiClientError.invalidPayload(
+                "pipeline poll timeout must be finite and non-negative."
+            )
+        }
+        if let maxAttempts, maxAttempts <= 0 {
+            throw ToriiClientError.invalidPayload(
+                "pipeline poll maxAttempts must be positive when present."
+            )
+        }
     }
+}
 
-    public var failureStatuses: Set<String> {
-        [PipelineTransactionState.rejected.kind, PipelineTransactionState.expired.kind]
-    }
+enum PipelineStatusDisposition {
+    case pending
+    case applied
+    case failed(String)
 }
 
 public enum PipelineStatusError: Error, LocalizedError {
@@ -879,9 +895,6 @@ public final class IrohaSDK: @unchecked Sendable {
     /// Default polling behaviour for `submitAndWait` helpers (see `PipelineStatusPollOptions`).
     public var pipelinePollOptions: PipelineStatusPollOptions
 
-    /// Selects the Torii transaction submission/status endpoints (pipeline-only).
-    public var pipelineEndpointMode: PipelineEndpointMode
-
     /// Provides the creation time (ms since epoch) used when signing transactions.
     public var creationTimeProvider: @Sendable () -> UInt64
 
@@ -894,7 +907,6 @@ public final class IrohaSDK: @unchecked Sendable {
                 accelerationSettings: AccelerationSettings = AccelerationSettings(),
                 pipelineSubmitOptions: PipelineSubmitOptions = .default,
                 pipelinePollOptions: PipelineStatusPollOptions = .default,
-                pipelineEndpointMode: PipelineEndpointMode = .pipeline,
                 creationTimeProvider: (@Sendable () -> UInt64)? = nil) {
         self.baseURL = baseURL
         self.defaultSigningAlgorithm = defaultSigningAlgorithm
@@ -911,7 +923,6 @@ public final class IrohaSDK: @unchecked Sendable {
         self.accelerationSettings.apply()
         self.pipelineSubmitOptions = pipelineSubmitOptions
         self.pipelinePollOptions = pipelinePollOptions
-        self.pipelineEndpointMode = pipelineEndpointMode
         self.creationTimeProvider = creationTimeProvider ?? { client.recommendedCreationTimeMs() }
     }
 
@@ -921,7 +932,6 @@ public final class IrohaSDK: @unchecked Sendable {
                 accelerationSettings: AccelerationSettings = AccelerationSettings(),
                 pipelineSubmitOptions: PipelineSubmitOptions = .default,
                 pipelinePollOptions: PipelineStatusPollOptions = .default,
-                pipelineEndpointMode: PipelineEndpointMode = .pipeline,
                 creationTimeProvider: (@Sendable () -> UInt64)? = nil) {
         self.baseURL = baseURL
         self.defaultSigningAlgorithm = defaultSigningAlgorithm
@@ -931,7 +941,6 @@ public final class IrohaSDK: @unchecked Sendable {
         self.accelerationSettings.apply()
         self.pipelineSubmitOptions = pipelineSubmitOptions
         self.pipelinePollOptions = pipelinePollOptions
-        self.pipelineEndpointMode = pipelineEndpointMode
         if let creationTimeProvider {
             self.creationTimeProvider = creationTimeProvider
         } else if let restClient = toriiClient as? ToriiClient {
@@ -946,7 +955,6 @@ public final class IrohaSDK: @unchecked Sendable {
                              accelerationSettings: AccelerationSettings = AccelerationSettings(),
                              pipelineSubmitOptions: PipelineSubmitOptions = .default,
                              pipelinePollOptions: PipelineStatusPollOptions = .default,
-                             pipelineEndpointMode: PipelineEndpointMode = .pipeline,
                              creationTimeProvider: (@Sendable () -> UInt64)? = nil) {
         self.init(toriiClient: toriiClient,
                   baseURL: toriiClient.baseURL,
@@ -954,7 +962,6 @@ public final class IrohaSDK: @unchecked Sendable {
                   accelerationSettings: accelerationSettings,
                   pipelineSubmitOptions: pipelineSubmitOptions,
                   pipelinePollOptions: pipelinePollOptions,
-                  pipelineEndpointMode: pipelineEndpointMode,
                   creationTimeProvider: creationTimeProvider)
     }
 
@@ -1655,8 +1662,7 @@ public final class IrohaSDK: @unchecked Sendable {
         return Task {
             do {
                 _ = try await submitTransactionOnce(envelope: envelope,
-                                                     options: pipelineSubmitOptions,
-                                                     mode: pipelineEndpointMode)
+                                                     options: pipelineSubmitOptions)
                 guard !Task.isCancelled else { return }
                 completion(nil)
             } catch {
@@ -1669,8 +1675,7 @@ public final class IrohaSDK: @unchecked Sendable {
     @available(iOS 15.0, macOS 12.0, *)
     public func submit(envelope: SignedTransactionEnvelope) async throws {
         _ = try await submitTransactionOnce(envelope: envelope,
-                                             options: pipelineSubmitOptions,
-                                             mode: pipelineEndpointMode)
+                                             options: pipelineSubmitOptions)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -1683,8 +1688,7 @@ public final class IrohaSDK: @unchecked Sendable {
             do {
                 try await submit(envelope: envelope)
                 let status = try await awaitPipelineStatus(hashHex: envelope.hashHex,
-                                                           pollOptions: options,
-                                                           mode: pipelineEndpointMode)
+                                                           pollOptions: options)
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
                     completion(.success(status))
@@ -1703,8 +1707,7 @@ public final class IrohaSDK: @unchecked Sendable {
                                pollOptions: PipelineStatusPollOptions? = nil) async throws -> ToriiPipelineTransactionStatus {
         try await submit(envelope: envelope)
         return try await awaitPipelineStatus(hashHex: envelope.hashHex,
-                                             pollOptions: pollOptions ?? pipelinePollOptions,
-                                             mode: pipelineEndpointMode)
+                                             pollOptions: pollOptions ?? pipelinePollOptions)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -1716,8 +1719,7 @@ public final class IrohaSDK: @unchecked Sendable {
         return Task {
             do {
                 let status = try await awaitPipelineStatus(hashHex: hashHex,
-                                                           pollOptions: options,
-                                                           mode: pipelineEndpointMode)
+                                                           pollOptions: options)
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
                     completion(.success(status))
@@ -1735,8 +1737,7 @@ public final class IrohaSDK: @unchecked Sendable {
     public func pollPipelineStatus(hashHex: String,
                                    pollOptions: PipelineStatusPollOptions? = nil) async throws -> ToriiPipelineTransactionStatus {
         try await awaitPipelineStatus(hashHex: hashHex,
-                                      pollOptions: pollOptions ?? pipelinePollOptions,
-                                      mode: pipelineEndpointMode)
+                                      pollOptions: pollOptions ?? pipelinePollOptions)
     }
 
     public func getPipelineRecovery(height: UInt64, completion: @Sendable @escaping (Result<ToriiPipelineRecovery?, Error>) -> Void) {
@@ -2208,11 +2209,9 @@ public final class IrohaSDK: @unchecked Sendable {
     }
 
     private func submitTransactionOnce(envelope: SignedTransactionEnvelope,
-                                       options: PipelineSubmitOptions,
-                                       mode: PipelineEndpointMode) async throws -> ToriiSubmitTransactionResponse? {
+                                       options: PipelineSubmitOptions) async throws -> ToriiSubmitTransactionResponse? {
         let idempotencyKey = options.idempotencyKeyFactory?(envelope)
         return try await toriiClient.submitTransaction(data: envelope.norito,
-                                                       mode: mode,
                                                        idempotencyKey: idempotencyKey)
     }
 
@@ -2578,7 +2577,6 @@ public final class IrohaSDK: @unchecked Sendable {
             return
         }
         toriiRestClient.getTransactionStatus(hashHex: hashHex,
-                                             mode: pipelineEndpointMode,
                                              completion: completion)
     }
 
@@ -2601,35 +2599,40 @@ public final class IrohaSDK: @unchecked Sendable {
 
     @available(iOS 15.0, macOS 12.0, *)
     private func awaitPipelineStatus(hashHex: String,
-                                     pollOptions: PipelineStatusPollOptions,
-                                     mode: PipelineEndpointMode) async throws -> ToriiPipelineTransactionStatus {
+                                     pollOptions: PipelineStatusPollOptions) async throws -> ToriiPipelineTransactionStatus {
         guard let toriiRestClient else {
             throw Self.restUnavailableError()
         }
         return try await waitForPipelineStatus(hashHex: hashHex,
                                                options: pollOptions,
-                                               statusClient: toriiRestClient,
-                                               mode: mode)
+                                               statusClient: toriiRestClient)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
     private func waitForPipelineStatus(hashHex: String,
                                        options: PipelineStatusPollOptions,
-                                       statusClient: ToriiClient,
-                                       mode: PipelineEndpointMode) async throws -> ToriiPipelineTransactionStatus {
+                                       statusClient: ToriiClient) async throws -> ToriiPipelineTransactionStatus {
+        try options.validate()
+        let expectedHash = try ToriiRequestValidation.exactTransactionHashHex(
+            hashHex,
+            field: "hashHex"
+        )
         var attempts = 0
         let deadline = options.timeout > 0 ? Date().addingTimeInterval(options.timeout) : nil
         while true {
             try Task.checkCancellation()
             attempts += 1
-            if let status = try await statusClient.getTransactionStatus(hashHex: hashHex,
-                                                                         mode: mode) {
-                let kind = status.status.kind
-                if status.status.state == .applied {
+            if let status = try await statusClient.getTransactionStatus(hashHex: expectedHash) {
+                switch try statusClient.classifyAuthoritativePipelineStatus(
+                    status,
+                    expectedHash: expectedHash
+                ) {
+                case .applied:
                     return status
-                }
-                if options.failureStatuses.contains(kind) {
+                case .failed(let kind):
                     throw PipelineStatusError.failure(hash: hashHex, status: kind, payload: status)
+                case .pending:
+                    break
                 }
             }
             if let maxAttempts = options.maxAttempts, attempts >= maxAttempts {
@@ -2638,7 +2641,7 @@ public final class IrohaSDK: @unchecked Sendable {
             if let deadline, Date() >= deadline {
                 throw PipelineStatusError.timeout(hash: hashHex, attempts: attempts)
             }
-            let interval = max(options.pollInterval, 0)
+            let interval = options.pollInterval
             if interval > 0 {
                 try await Task.sleep(
                     nanoseconds: StrictJSONNumber.saturatingNanoseconds(from: interval)
@@ -2733,31 +2736,27 @@ public extension IrohaSDK {
 
     func reconcileDetachedAssetTransferSubmission(
         _ evidence: ToriiDetachedAssetTransferSubmissionEvidence,
-        pollOptions: PipelineStatusPollOptions? = nil,
-        mode: PipelineEndpointMode? = nil
+        pollOptions: PipelineStatusPollOptions? = nil
     ) async throws -> ToriiPipelineTransactionStatus {
         guard let toriiRestClient else {
             throw Self.restUnavailableError()
         }
         return try await toriiRestClient.reconcileDetachedAssetTransferSubmission(
             evidence,
-            pollOptions: pollOptions ?? pipelinePollOptions,
-            mode: mode ?? pipelineEndpointMode
+            pollOptions: pollOptions ?? pipelinePollOptions
         )
     }
 
     func recoverDetachedAssetTransferSubmission(
         _ evidence: ToriiDetachedAssetTransferSubmissionEvidence,
-        pollOptions: PipelineStatusPollOptions? = nil,
-        mode: PipelineEndpointMode? = nil
+        pollOptions: PipelineStatusPollOptions? = nil
     ) async throws -> ToriiPipelineTransactionStatus {
         guard let toriiRestClient else {
             throw Self.restUnavailableError()
         }
         return try await toriiRestClient.recoverDetachedAssetTransferSubmission(
             evidence,
-            pollOptions: pollOptions ?? pipelinePollOptions,
-            mode: mode ?? pipelineEndpointMode
+            pollOptions: pollOptions ?? pipelinePollOptions
         )
     }
 
@@ -2792,8 +2791,7 @@ public extension IrohaSDK {
     func waitForDetachedAssetTransferFinality(
         _ draft: ToriiAssetTransferDraft,
         submittedResponse: ToriiAssetTransferResponse,
-        pollOptions: PipelineStatusPollOptions? = nil,
-        mode: PipelineEndpointMode? = nil
+        pollOptions: PipelineStatusPollOptions? = nil
     ) async throws -> ToriiPipelineTransactionStatus {
         guard let toriiRestClient else {
             throw Self.restUnavailableError()
@@ -2801,8 +2799,7 @@ public extension IrohaSDK {
         return try await toriiRestClient.waitForDetachedAssetTransferFinality(
             draft,
             submittedResponse: submittedResponse,
-            pollOptions: pollOptions ?? pipelinePollOptions,
-            mode: mode ?? pipelineEndpointMode
+            pollOptions: pollOptions ?? pipelinePollOptions
         )
     }
 

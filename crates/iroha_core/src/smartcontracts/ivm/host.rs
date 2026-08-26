@@ -25,9 +25,7 @@ use crate::{
 };
 use iroha_crypto::{Hash, HashOf, PublicKey, streaming::TransportCapabilityResolutionSnapshot};
 #[cfg(test)]
-use iroha_data_model::soracloud::{
-    SORACLOUD_HOST_REQUEST_VERSION_V1, SoracloudEgressFetchRequestV1,
-};
+use iroha_data_model::soracloud::SORACLOUD_HOST_REQUEST_VERSION_V1;
 use iroha_data_model::{
     DataSpaceId, NetworkId, ValidationFail,
     account::rekey::AccountAlias,
@@ -2631,15 +2629,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             ivm::syscalls::SYSCALL_SORACLOUD_PUBLISH_CHECKPOINT => {
                 Some(SoracloudHostOperationV1::PublishCheckpoint)
             }
-            ivm::syscalls::SYSCALL_SORACLOUD_READ_SECRET => {
-                Some(SoracloudHostOperationV1::ReadSecret)
-            }
-            ivm::syscalls::SYSCALL_SORACLOUD_READ_CREDENTIAL => {
-                Some(SoracloudHostOperationV1::ReadCredential)
-            }
-            ivm::syscalls::SYSCALL_SORACLOUD_EGRESS_FETCH => {
-                Some(SoracloudHostOperationV1::EgressFetch)
-            }
             ivm::syscalls::SYSCALL_SORACLOUD_READ_CONFIG => {
                 Some(SoracloudHostOperationV1::ReadConfig)
             }
@@ -2676,15 +2665,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             ) | (
                 SoracloudHostOperationV1::ReadSecretEnvelope,
                 SoracloudHostRequestPayloadV1::ReadSecretEnvelope(_)
-            ) | (
-                SoracloudHostOperationV1::ReadSecret,
-                SoracloudHostRequestPayloadV1::ReadSecret(_)
-            ) | (
-                SoracloudHostOperationV1::ReadCredential,
-                SoracloudHostRequestPayloadV1::ReadCredential(_)
-            ) | (
-                SoracloudHostOperationV1::EgressFetch,
-                SoracloudHostRequestPayloadV1::EgressFetch(_)
             )
         )
     }
@@ -5038,10 +5018,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 .map(|queued| queued.instruction.clone())
                 .collect::<Vec<_>>(),
         )?;
-        let confidential_gas_delta = queued
-            .iter()
-            .map(|queued| crate::gas::confidential_gas_cost(&queued.instruction))
-            .sum::<u64>();
+        let confidential_gas_delta =
+            crate::gas::sum_confidential_gas_costs(queued.iter().map(|queued| &queued.instruction));
         let completed_axt = mem::take(&mut self.completed_axt);
         let durable_state_overlay = mem::take(&mut self.durable_state_overlay);
         let durable_state_authorizations = mem::take(&mut self.durable_state_authorizations);
@@ -5150,10 +5128,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             &self.durable_state_authorizations,
         )?;
         if !queued.is_empty() {
-            let delta = queued
-                .iter()
-                .map(|queued| crate::gas::confidential_gas_cost(&queued.instruction))
-                .sum::<u64>();
+            let delta = crate::gas::sum_confidential_gas_costs(
+                queued.iter().map(|queued| &queued.instruction),
+            );
             if delta > 0 {
                 tx.record_confidential_gas_delta(delta);
             }
@@ -10578,7 +10555,9 @@ impl<QS> CoreHostImpl<QS> {
             &state.nexus().dataspace_catalog,
             &alias_label,
             now_ms,
-        ) {
+        )
+        .map_err(|_| ivm::VMError::DecodeError)?
+        {
             return Ok(account_id);
         }
         Err(ivm::VMError::DecodeError)
@@ -10934,9 +10913,6 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             | ivm::syscalls::SYSCALL_SORACLOUD_EMIT_MAILBOX_MESSAGE
             | ivm::syscalls::SYSCALL_SORACLOUD_APPEND_JOURNAL
             | ivm::syscalls::SYSCALL_SORACLOUD_PUBLISH_CHECKPOINT
-            | ivm::syscalls::SYSCALL_SORACLOUD_READ_SECRET
-            | ivm::syscalls::SYSCALL_SORACLOUD_READ_CREDENTIAL
-            | ivm::syscalls::SYSCALL_SORACLOUD_EGRESS_FETCH
             | ivm::syscalls::SYSCALL_SORACLOUD_READ_CONFIG
             | ivm::syscalls::SYSCALL_SORACLOUD_READ_SECRET_ENVELOPE => {
                 let request_len =
@@ -12220,9 +12196,6 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 | ivm::syscalls::SYSCALL_SORACLOUD_EMIT_MAILBOX_MESSAGE
                 | ivm::syscalls::SYSCALL_SORACLOUD_APPEND_JOURNAL
                 | ivm::syscalls::SYSCALL_SORACLOUD_PUBLISH_CHECKPOINT
-                | ivm::syscalls::SYSCALL_SORACLOUD_READ_SECRET
-                | ivm::syscalls::SYSCALL_SORACLOUD_READ_CREDENTIAL
-                | ivm::syscalls::SYSCALL_SORACLOUD_EGRESS_FETCH
                 | ivm::syscalls::SYSCALL_SORACLOUD_READ_CONFIG
                 | ivm::syscalls::SYSCALL_SORACLOUD_READ_SECRET_ENVELOPE => {
                     Self::reject_soracloud_syscall(vm, number)
@@ -16218,35 +16191,25 @@ seiyaku PrivilegedBinding {
         );
         vm.set_register(10, request_ptr);
         let err = host
-            .syscall(ivm::syscalls::SYSCALL_SORACLOUD_READ_SECRET, &mut vm)
+            .syscall(
+                ivm::syscalls::SYSCALL_SORACLOUD_READ_SECRET_ENVELOPE,
+                &mut vm,
+            )
             .expect_err("operation mismatch must fail before runtime rejection");
         assert!(matches!(err, ivm::VMError::DecodeError));
         assert!(host.queued.is_empty());
     }
     #[test]
-    fn soracloud_syscalls_reject_zero_prehash_request_digest_before_runtime_fallback() {
-        let mut vm = ivm::IVM::new(1_000);
+    fn retired_soracloud_raw_material_syscall_holes_are_unknown() {
+        let mut vm = ivm::IVM::new(10_000);
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority);
-        let request = SoracloudHostRequestEnvelopeV1 {
-            schema_version: SORACLOUD_HOST_REQUEST_VERSION_V1,
-            operation: SoracloudHostOperationV1::EgressFetch,
-            payload: SoracloudHostRequestPayloadV1::EgressFetch(SoracloudEgressFetchRequestV1 {
-                url: "https://example.invalid/runtime.bin".to_owned(),
-                max_bytes: 1024,
-                expected_hash: Some(Hash::prehashed([0; Hash::LENGTH])),
-            }),
-        };
-        let request_ptr = store_tlv(
-            &mut vm,
-            PointerType::SoracloudRequest,
-            &norito_blob(&request),
-        );
-        vm.set_register(10, request_ptr);
-        let err = host
-            .syscall(ivm::syscalls::SYSCALL_SORACLOUD_EGRESS_FETCH, &mut vm)
-            .expect_err("placeholder digest must fail request validation before runtime fallback");
-        assert!(matches!(err, ivm::VMError::DecodeError));
+        for number in 0xC5..=0xC7 {
+            assert!(matches!(
+                host.syscall(number, &mut vm),
+                Err(ivm::VMError::UnknownSyscall(rejected)) if rejected == number
+            ));
+        }
         assert!(host.queued.is_empty());
     }
     fn assert_create_role_syscall_queues_instruction(authority: AccountId) {
@@ -17850,8 +17813,8 @@ seiyaku OuterCaller {
         grant_asset_ops_to_account(state, authority, outer_caller.subject_id());
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
         let pool_bind_payload = Json::from_str_norito(&format!(
-            r#"{{"bound_quote_asset":"{}","bound_pool_account":"{}"}}"#,
-            actual_asset, actual_account
+            r#"{{"bound_pool_account":"{}","bound_quote_asset":"{}"}}"#,
+            actual_account, actual_asset
         ))
         .expect("pool bind payload");
         execute_contract_call_transaction(
@@ -19105,7 +19068,7 @@ seiyaku BurnWithMemo {
         let settlement_asset_literal = settlement_asset_def.canonical_address();
         let memo_hex = format!("0x{}", hex::encode([1_u8, 2, 3, 4]));
         let args = Json::from_str_norito(&format!(
-            r#"{{"sender":"{authority_literal}","settlement_asset":"{settlement_asset_literal}","amount":"1","memo":"{memo_hex}"}}"#,
+            r#"{{"amount":"1","memo":"{memo_hex}","sender":"{authority_literal}","settlement_asset":"{settlement_asset_literal}"}}"#,
         ))
         .expect("memo payload JSON");
         let canonical = ivm::encode_argument_record_from_json(argument_schema, &args)
@@ -20424,11 +20387,10 @@ seiyaku OpaqueInstructionSubmission {
             [payment_asset],
             [],
         );
-        crate::sns::seed_default_namespace_policies(&mut world);
-        assert!(crate::sns::sync_default_namespace_policy_payment_asset(
+        crate::sns::seed_default_namespace_policies_for_payment_asset(
             &mut world,
             &payment_asset_definition_id.to_string(),
-        ));
+        );
         let state = State::new_for_testing(world, kura, query);
         let (paynet, catalog) = retail_dataspace_catalog();
         state.nexus.write().dataspace_catalog = catalog;
@@ -20530,11 +20492,10 @@ seiyaku OpaqueInstructionSubmission {
             [payment_asset],
             [],
         );
-        crate::sns::seed_default_namespace_policies(&mut world);
-        assert!(crate::sns::sync_default_namespace_policy_payment_asset(
+        crate::sns::seed_default_namespace_policies_for_payment_asset(
             &mut world,
             &payment_asset_definition_id.to_string(),
-        ));
+        );
         let state = State::new_for_testing(world, kura, query);
         let (paynet, catalog) = retail_dataspace_catalog();
         state.nexus.write().dataspace_catalog = catalog;
@@ -22548,7 +22509,7 @@ seiyaku Callee {
         fn is_current(self) -> bool {
             matches!(self, Self::DomainlessCurrent | Self::DomainCurrent)
         }
-        fn needs_policy_payment_sync(self) -> bool {
+        fn uses_configured_policy_payment_asset(self) -> bool {
             matches!(
                 self,
                 Self::DomainWithoutPermission | Self::DomainPermissionOnly
@@ -22677,7 +22638,7 @@ seiyaku Callee {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let (world, retail_domain_id) = if case.setup.uses_domain() {
-            let payment_asset_literal = if case.setup.needs_policy_payment_sync() {
+            let payment_asset_literal = if case.setup.uses_configured_policy_payment_asset() {
                 "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
             } else {
                 "61CtjvNd9T3THAR65GsMVHr82Bjc"
@@ -22709,7 +22670,7 @@ seiyaku Callee {
                 [source_asset, payment_asset],
                 [],
             );
-            if case.setup.needs_policy_payment_sync() {
+            if case.setup.uses_configured_policy_payment_asset() {
                 let mut permissions = Permissions::new();
                 assert!(
                     permissions.insert(
@@ -22725,12 +22686,13 @@ seiyaku Callee {
                     .account_permissions_mut_for_testing()
                     .insert(authority.clone(), permissions);
             }
-            crate::sns::seed_default_namespace_policies(&mut world);
-            if case.setup.needs_policy_payment_sync() {
-                assert!(crate::sns::sync_default_namespace_policy_payment_asset(
+            if case.setup.uses_configured_policy_payment_asset() {
+                crate::sns::seed_default_namespace_policies_for_payment_asset(
                     &mut world,
                     &payment_asset_definition_id.to_string(),
-                ));
+                );
+            } else {
+                crate::sns::seed_default_namespace_policies(&mut world);
             }
             (world, Some(retail_domain_id))
         } else {

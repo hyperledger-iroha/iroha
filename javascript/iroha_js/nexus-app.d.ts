@@ -162,26 +162,39 @@ export interface NexusFinalizeBaseOptions {
   toriiClient?: NexusToriiClient;
 }
 
-/** A non-string iterable of exact Torii pipeline status labels. */
-export type NexusStatusIterable = Iterable<string> & object;
+export interface NexusPipelineTransactionStatus {
+  hash: string;
+  status: {
+    kind: "Queued" | "Approved" | "Committed" | "Applied" | "Rejected" | "Expired";
+    block_height?: number;
+  };
+  scope: "local" | "global";
+  resolved_from: "queue" | "cache" | "state";
+}
 
-export interface NexusWaitFinalizeOptions extends NexusFinalizeBaseOptions {
-  wait?: true;
+/** Exact finality returned only after global state has applied the transaction. */
+export interface NexusAppliedTransactionStatus
+  extends NexusPipelineTransactionStatus {
+  status: { kind: "Applied"; block_height: number };
+  scope: "global";
+  resolved_from: "state";
+}
+
+export interface NexusTransactionStatusPollOptions {
   intervalMs?: number;
   timeoutMs?: number | null;
   maxAttempts?: number | null;
-  /**
-   * Additional state-resolved failure labels. State-resolved `Rejected` and
-   * `Expired` always fail. At most 32 raw entries are consumed before duplicate
-   * removal.
-   */
-  failureStatuses?: NexusStatusIterable;
   onStatus?: (
     status: string | null,
-    payload: unknown,
+    payload: NexusPipelineTransactionStatus | null,
     attempt: number,
   ) => void | Promise<void>;
   signal?: AbortSignal;
+}
+
+export interface NexusWaitFinalizeOptions
+  extends NexusFinalizeBaseOptions, NexusTransactionStatusPollOptions {
+  wait?: true;
 }
 
 export interface NexusNoWaitFinalizeOptions extends NexusFinalizeBaseOptions {
@@ -189,7 +202,6 @@ export interface NexusNoWaitFinalizeOptions extends NexusFinalizeBaseOptions {
   intervalMs?: never;
   timeoutMs?: never;
   maxAttempts?: never;
-  failureStatuses?: never;
   onStatus?: never;
   signal?: never;
 }
@@ -202,7 +214,7 @@ export interface NexusTransferReceipt {
   signedTransaction: Buffer;
   signedTransactionHashHex: string;
   submission: unknown;
-  status: unknown;
+  status: NexusAppliedTransactionStatus | null;
 }
 
 export interface NexusConnectTransport {
@@ -237,7 +249,10 @@ export interface NexusTransactionCodec {
 export interface NexusToriiClient {
   submitTransaction(payload: Buffer): Promise<unknown>;
   /** Required when finalize options omit `wait` or set it to `true`. */
-  waitForTransactionStatus?(hashHex: string, options?: Record<string, unknown>): Promise<unknown>;
+  waitForTransactionStatus?(
+    hashHex: string,
+    options?: NexusTransactionStatusPollOptions,
+  ): Promise<NexusAppliedTransactionStatus>;
 }
 
 export type NexusAppErrorPhase =

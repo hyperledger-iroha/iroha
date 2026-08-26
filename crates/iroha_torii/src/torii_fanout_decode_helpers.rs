@@ -1135,7 +1135,7 @@ fn try_acquire_new_query_fanout_memory(
             )
         })
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect", feature = "app_api"))]
+#[cfg(any(feature = "connect", feature = "app_api"))]
 fn hold_query_fanout_memory_in_response_body(
     response: Response,
     reservation: QueryFanoutMemoryReservation,
@@ -1174,7 +1174,7 @@ fn hold_ordinary_query_memory_in_response_body(
     });
     Response::from_parts(parts, Body::new(guarded_body))
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn take_ordinary_query_memory_reservation(
     response: &mut Response,
 ) -> Option<OrdinaryQueryResponseMemory> {
@@ -1182,7 +1182,7 @@ fn take_ordinary_query_memory_reservation(
         .extensions_mut()
         .remove::<OrdinaryQueryResponseMemory>()
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect", feature = "app_api"))]
+#[cfg(any(feature = "connect", feature = "app_api"))]
 fn hold_query_fanout_memory_reservation_in_response_body(
     mut response: Response,
     reservation: QueryFanoutMemoryReservation,
@@ -1196,7 +1196,7 @@ fn hold_query_fanout_memory_reservation_in_response_body(
     });
     Response::from_parts(parts, Body::new(guarded_body))
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn take_query_fanout_memory_reservation(
     response: &mut Response,
 ) -> Option<QueryFanoutMemoryReservation> {

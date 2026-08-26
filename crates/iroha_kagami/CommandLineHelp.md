@@ -104,8 +104,6 @@ Guided node/bootstrap flow for configuring a peer against an existing network pr
     Canonical local single-lane profile
   - `nexus`:
     Sora Nexus (mainnet)
-  - `taira`:
-    Sora Taira (testnet)
 
 * `--output-dir <PATH>` — Directory where generated config/genesis files will be written
 

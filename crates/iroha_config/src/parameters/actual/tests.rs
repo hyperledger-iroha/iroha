@@ -1438,23 +1438,10 @@ mod tests {
         );
     }
     #[test]
-    fn sorafs_telemetry_policy_default_survives_chain_override() {
+    fn sorafs_telemetry_policy_default_has_no_implicit_submitters() {
         let _chain = iroha_data_model::account::address::ChainDiscriminantGuard::enter(777);
         let defaults = SorafsTelemetryPolicy::default();
-        let expected: Vec<_> =
-            crate::parameters::defaults::governance::sorafs_telemetry::submitters()
-                .iter()
-                .map(|id| {
-                    let _fallback =
-                        iroha_data_model::account::address::ChainDiscriminantGuard::enter(
-                            crate::parameters::defaults::common::chain_discriminant(),
-                        );
-                    AccountId::parse_encoded(id)
-                        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-                        .expect("default SoraFS telemetry submitter account id")
-                })
-                .collect();
-        assert_eq!(defaults.submitters, expected);
+        assert!(defaults.submitters.is_empty());
     }
     #[test]
     fn sumeragi_v2_default_nexus_amx_hash_is_stable() {

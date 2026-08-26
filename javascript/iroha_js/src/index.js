@@ -227,14 +227,10 @@ export {
 } from "./bootleLanternIssuance.js";
 export {
   assembleSoracloudAppInfraRequest,
-  assembleSoracloudHfDeployRequest,
+  assembleSoracloudHfSharedLeaseJoinRequest,
   buildSoracloudAppInfraDraft,
-  buildSoracloudPrivateUploadedModelExecuteRequest,
-  buildSoracloudPrivateUploadedModelReceiptQuery,
-  buildSoracloudHfDeployDraft,
+  buildSoracloudHfSharedLeaseJoinDraft,
   deploySoracloudAppInfraInstruction,
-  normalizeSoracloudPrivateUploadedModelExecuteResponse,
-  normalizeSoracloudPrivateUploadedModelExecutionReceipt,
   upgradeSoracloudAppInfraInstruction,
 } from "./soracloud.js";
 export {
@@ -357,6 +353,7 @@ export {
   buildRecordKaigiUsageTransaction,
   buildSetKaigiRelayManifestTransaction,
   buildRegisterKaigiRelayTransaction,
+  buildReportKaigiRelayHealthTransaction,
   buildRegisterSmartContractCodeTransaction,
   buildRegisterSmartContractBytesTransaction,
   buildRemoveSmartContractBytesTransaction,
@@ -453,6 +450,7 @@ export {
   buildRecordKaigiUsageInstruction,
   buildSetKaigiRelayManifestInstruction,
   buildRegisterKaigiRelayInstruction,
+  buildReportKaigiRelayHealthInstruction,
   buildRegisterSmartContractCodeInstruction,
   buildRegisterSmartContractBytesInstruction,
   buildUploadSmartContractCodeChunkInstruction,

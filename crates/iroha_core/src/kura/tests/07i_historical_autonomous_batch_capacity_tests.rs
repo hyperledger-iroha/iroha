@@ -39,8 +39,8 @@ fn historical_capacity_payload_for_kura(
     let routing_plan =
         RoutingPlan::single(crate::queue::RoutingDecision::new(lane_id, dataspace_id));
 
-    let reservation = LaneQueueReservationKeyV2 {
-        version: LaneQueueReservationKeyV2::VERSION,
+    let reservation = LaneQueueReservationKeyV1 {
+        version: LaneQueueReservationKeyV1::VERSION,
         entrypoint_hash: entrypoint.hash(),
         queue_plan_admission_binding_hash: Hash::new_from_chunks(&[
             b"iroha:kura:test:historical-capacity-admission:v1\0",

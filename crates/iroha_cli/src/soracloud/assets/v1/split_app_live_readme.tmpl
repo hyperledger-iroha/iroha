@@ -14,6 +14,8 @@ The starter server owns:
 
 Mutable live-search state is written to lease-backed directories exposed through
 `SORACLOUD_LEASE_VOLUME_*`.
+Each root and non-root lease disk is materialized separately for this replica;
+the directories are not shared or multi-attached between replicas.
 
 ## Local dev
 
@@ -52,13 +54,10 @@ The live container manifest references these runtime member paths:
 
 `app release` publishes the staged guest-image directory into SoraFS, records
 immutable artifact refs in the submitted Inrou manifest, and hydrates hosts
-according to the guest-image distribution policy: global by default, or
-explicit geography tags with latency fallback when geography is unknown.
+from those exact authenticated SoraFS artifacts.
 
-SSH access is disabled by default with `ssh_authorized_keys: []`. Add a real,
-trusted public key only when SSH access is intentionally required. Outbound
-network access is isolated by default; use a nonempty public-endpoint allowlist
-when the live service intentionally needs egress.
+Inrou V1 exposes no SSH access field or login path. Its networking policy must
+be `Isolated`; first-release Inrou workloads cannot request outbound egress.
 
 The generated app manifest references that tarball through `bundle_file`, so:
 

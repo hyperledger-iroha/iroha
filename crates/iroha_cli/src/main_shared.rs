@@ -27,8 +27,9 @@ mod staking;
 mod subscriptions;
 mod sumeragi;
 mod taira;
+mod taira_public_reset;
 mod zk; // ZK helpers (app API convenience) // IVM/ABI helpers
-use clap::{ArgAction, CommandFactory, FromArgMatches, error::ErrorKind};
+use clap::{CommandFactory, FromArgMatches, error::ErrorKind};
 use error_stack::{IntoReportCompat, Report, ResultExt, fmt::ColorMode};
 use eyre::{Result, WrapErr, eyre};
 use futures::{TryStreamExt, stream::TryStream};
@@ -265,15 +266,6 @@ pub enum CliOutputFormat {
     /// Emit human-readable text when available.
     Text,
 }
-#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum TransactionWaitTerminalStatusArg {
-    Queued,
-    Approved,
-    Committed,
-    Applied,
-    Rejected,
-    Expired,
-}
 /// Signature-bound source selected for transaction fees.
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 enum FeePayerArg {
@@ -331,21 +323,9 @@ impl FeePaymentArgs {
         }
     }
 }
-impl From<TransactionWaitTerminalStatusArg> for iroha::client::TransactionWaitTerminalStatus {
-    fn from(value: TransactionWaitTerminalStatusArg) -> Self {
-        match value {
-            TransactionWaitTerminalStatusArg::Queued => Self::Queued,
-            TransactionWaitTerminalStatusArg::Approved => Self::Approved,
-            TransactionWaitTerminalStatusArg::Committed => Self::Committed,
-            TransactionWaitTerminalStatusArg::Applied => Self::Applied,
-            TransactionWaitTerminalStatusArg::Rejected => Self::Rejected,
-            TransactionWaitTerminalStatusArg::Expired => Self::Expired,
-        }
-    }
-}
 #[derive(clap::Args, Debug, Clone)]
 pub(crate) struct TransactionWaitArgs {
-    /// Poll `/v1/pipeline/transactions/status` until the transaction reaches Applied finality.
+    /// Poll exact global status until state-resolved Applied finality.
     #[arg(long)]
     pub wait: bool,
     /// Submit the transaction without waiting for finality.
@@ -357,13 +337,6 @@ pub(crate) struct TransactionWaitArgs {
     /// Poll interval used while waiting.
     #[arg(long, default_value_t = 500)]
     pub poll_interval_ms: u64,
-    /// Stop when the pipeline reaches any of these statuses instead of the default Applied finality.
-    #[arg(
-        long = "terminal-status",
-        value_enum,
-        action = ArgAction::Append
-    )]
-    pub terminal_statuses: Vec<TransactionWaitTerminalStatusArg>,
 }
 impl TransactionWaitArgs {
     pub(crate) fn is_enabled(&self) -> bool {
@@ -376,21 +349,15 @@ impl TransactionWaitArgs {
         Ok(iroha::client::TransactionWaitOptions {
             timeout: Duration::from_millis(self.timeout_ms),
             poll_interval: Duration::from_millis(self.poll_interval_ms),
-            terminal_statuses: self
-                .terminal_statuses
-                .iter()
-                .copied()
-                .map(Into::into)
-                .collect(),
         })
     }
 }
-pub(crate) fn wait_for_transaction_status(
+pub(crate) fn wait_for_transaction_applied(
     client: &Client,
     hash: HashOf<iroha::data_model::transaction::SignedTransaction>,
     wait: &TransactionWaitArgs,
 ) -> Result<iroha::client::TransactionWaitOutcome> {
-    client.wait_for_transaction_terminal_status(hash, wait.to_options()?)
+    client.wait_for_transaction_applied(hash, wait.to_options()?)
 }
 /// Iroha Client CLI provides a simple way to interact with the Iroha Web API.
 #[derive(clap::Parser, Debug)]
@@ -398,7 +365,9 @@ pub(crate) fn wait_for_transaction_status(
 struct Args {
     /// Path to the configuration file.
     ///
-    /// By default, `iroha` reads `client.toml`; runtime commands require it to be present and readable.
+    /// By default, `iroha` reads `client.toml`; runtime commands require it to be present and
+    /// readable. `taira doctor` and the runtime-authorized `taira public-reset` surface never read
+    /// client configuration or ledger signing material.
     #[arg(short, long, value_name("PATH"))]
     config: Option<PathBuf>,
     /// Absolute path to an owner-only operator private-key file for operator reads.
@@ -434,7 +403,7 @@ struct Args {
     /// Language code for messages, overrides system language
     #[arg(long, value_name("LANG"))]
     language: Option<String>,
-    /// Enable deterministic machine mode (no startup chatter, strict config loading).
+    /// Enable deterministic machine mode (no startup chatter; strict loading for commands that require client config).
     #[arg(long)]
     machine: bool,
     /// Required signature-bound fee source for transaction submissions.
@@ -1180,6 +1149,16 @@ fn run() -> ReportResult<(), MainError> {
         return Ok(());
     }
     error_stack::Report::set_color_mode(color_mode());
+    if let Command::Taira(taira::Command::Doctor(doctor)) = &args.command {
+        reject_irrelevant_taira_doctor_globals(&args)?;
+        return map_command_result(
+            doctor.run_without_client_config(effective_output_format(&args), io::stdout()),
+        );
+    }
+    if let Command::Taira(taira::Command::PublicReset(reset)) = &args.command {
+        reject_irrelevant_taira_public_reset_globals(&args)?;
+        return map_command_result(reset.run_without_client_config(io::stdout()));
+    }
     let (load_path, config_was_explicit) = args.config.as_ref().map_or_else(
         || (LoadPath::Default(PathBuf::from("client.toml")), false),
         |path| (LoadPath::Explicit(resolve_config_path(path)), true),
@@ -1271,14 +1250,88 @@ fn run() -> ReportResult<(), MainError> {
             .map_err(|report| report.change_context(MainError::TransactionMetadata))?;
         context.transaction_metadata = Some(metadata);
     }
-    args.command
-        .run(&mut context)
-        .into_report()
-        .map_err(|report| {
-            let message = format!("{:#}", report.current_context());
-            report.change_context(MainError::Command(message))
-        })?;
-    Ok(())
+    map_command_result(args.command.run(&mut context))
+}
+fn map_command_result(result: Result<()>) -> ReportResult<(), MainError> {
+    result.into_report().map_err(|report| {
+        let message = format!("{:#}", report.current_context());
+        report.change_context(MainError::Command(message))
+    })
+}
+fn reject_irrelevant_taira_doctor_globals(args: &Args) -> ReportResult<(), MainError> {
+    let mut flags = Vec::new();
+    if args.operator_private_key_file.is_some() {
+        flags.push("--operator-private-key-file");
+    }
+    if args.verbose {
+        flags.push("--verbose");
+    }
+    if args.metadata.is_some() {
+        flags.push("--metadata");
+    }
+    if args.input {
+        flags.push("--input");
+    }
+    if args.output {
+        flags.push("--output");
+    }
+    if args.fee_payment.fee_payer.is_some() {
+        flags.push("--fee-payer");
+    }
+    if args.fee_payment.fee_program.is_some() {
+        flags.push("--fee-program");
+    }
+    if args.fee_payment.fee_program_revision.is_some() {
+        flags.push("--fee-program-revision");
+    }
+    if flags.is_empty() {
+        return Ok(());
+    }
+    Err(Report::new(MainError::CliArgs(format!(
+        "`taira doctor` is read-only and does not accept these irrelevant global options: {}",
+        flags.join(", ")
+    ))))
+}
+
+fn reject_irrelevant_taira_public_reset_globals(args: &Args) -> ReportResult<(), MainError> {
+    let mut flags = Vec::new();
+    if args.config.is_some() {
+        flags.push("--config");
+    }
+    if args.operator_private_key_file.is_some() {
+        flags.push("--operator-private-key-file");
+    }
+    if args.verbose {
+        flags.push("--verbose");
+    }
+    if args.metadata.is_some() {
+        flags.push("--metadata");
+    }
+    if args.input {
+        flags.push("--input");
+    }
+    if args.output {
+        flags.push("--output");
+    }
+    if args.output_format != CliOutputFormat::Json {
+        flags.push("--output-format text");
+    }
+    if args.fee_payment.fee_payer.is_some() {
+        flags.push("--fee-payer");
+    }
+    if args.fee_payment.fee_program.is_some() {
+        flags.push("--fee-program");
+    }
+    if args.fee_payment.fee_program_revision.is_some() {
+        flags.push("--fee-program-revision");
+    }
+    if flags.is_empty() {
+        return Ok(());
+    }
+    Err(Report::new(MainError::CliArgs(format!(
+        "`taira public-reset` uses only its explicit runtime authorization and SSH inputs; these global options are forbidden: {}",
+        flags.join(", ")
+    ))))
 }
 const HELP_REPLACEMENTS: &[(&str, &str)] = &[
     ("Usage:", "help.heading.usage"),
@@ -4079,9 +4132,7 @@ mod multisig {
         if selector.is_empty() || selector.trim() != selector {
             eyre::bail!("multisig selectors must be exact non-empty literals");
         }
-        let parsed_account = AccountId::parse_encoded(selector)
-            .map(iroha::data_model::account::ParsedAccountId::into_account_id)
-            .ok();
+        let parsed_account = AccountId::parse_encoded(selector).ok();
         let (multisig_account_id, multisig_account_alias) = match parsed_account {
             Some(account_id) => (Some(account_id), None),
             None if selector.contains('@') => (None, Some(selector.to_owned())),
@@ -4567,8 +4618,8 @@ mod transaction {
         /// Hash of the signed transaction to inspect
         #[arg(short('H'), long)]
         pub hash: HashOf<iroha::data_model::transaction::SignedTransaction>,
-        /// Explicit status routing scope. Omit with `--wait`, which selects the safe scope for
-        /// the requested terminal states.
+        /// Explicit status routing scope for a one-shot read. `--wait` always uses exact global
+        /// status and succeeds only on state-resolved Applied.
         #[arg(long, value_enum, conflicts_with = "wait")]
         pub scope: Option<StatusScope>,
         #[command(flatten)]
@@ -4585,15 +4636,15 @@ mod transaction {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let client = context.client_from_config();
             if self.wait.wait {
-                let status = crate::wait_for_transaction_status(&client, self.hash, &self.wait)?;
+                let status = crate::wait_for_transaction_applied(&client, self.hash, &self.wait)?;
                 context.print_data(&status)
             } else {
-                let status = match self.scope.unwrap_or(StatusScope::Local) {
+                let status = match self.scope.unwrap_or(StatusScope::Global) {
                     StatusScope::Local => {
                         client.get_transaction_status_response_local(self.hash)?
                     }
                     StatusScope::Global => {
-                        client.get_transaction_status_response_auto(self.hash)?
+                        client.get_transaction_status_response_global(self.hash)?
                     }
                 }
                 .ok_or_else(|| eyre!("Transaction status not found"))?;
@@ -5412,7 +5463,7 @@ mod trigger {
                 ("trace_requested", json_utils::json_value(&self.trace)?),
             ];
             if self.wait.is_enabled() {
-                let status = wait_for_transaction_status(&client, hash, &self.wait)?;
+                let status = wait_for_transaction_applied(&client, hash, &self.wait)?;
                 pairs.push(("finalized", json_utils::json_value(&true)?));
                 pairs.push((
                     "terminal_kind",
@@ -7931,7 +7982,7 @@ fn resolve_account_id_with(literal: &str) -> Result<AccountId> {
     }
     let parsed = AccountId::parse_encoded(trimmed)
         .map_err(|err| eyre!("account literal must be canonical I105: {err}"))?;
-    Ok(parsed.into_account_id())
+    Ok(parsed)
 }
 pub(crate) fn resolve_account_id<C: RunContext>(_context: &C, literal: &str) -> Result<AccountId> {
     resolve_account_id_with(literal)
@@ -8012,7 +8063,7 @@ fn parse_register_account_id(literal: &str) -> Result<AccountId> {
     let parsed = AccountId::parse_encoded(trimmed).map_err(|err| {
         eyre!("`ledger account register --id` must be a canonical I105 account id: {err}")
     })?;
-    Ok(parsed.into_account_id())
+    Ok(parsed)
 }
 fn string_from_stdin() -> Result<String> {
     let bytes = read_cli_input_bounded(&mut io::stdin().lock(), MAX_CLI_STDIN_BYTES_V1, "stdin")?;
@@ -8180,7 +8231,6 @@ fn render_cli_error(
 mod tests;
 #[cfg(test)]
 mod multisig_json_tests {
-    use super::*;
     use iroha::crypto::{Algorithm, KeyPair};
     use iroha::data_model::{
         account::AccountId,

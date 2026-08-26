@@ -140,7 +140,7 @@ fn validate_canonical_executed_block_request(
     else {
         return Err("request is not canonical executed-block recovery".to_owned());
     };
-    if request.version != LANE_HISTORICAL_RECOVERY_VERSION_V4
+    if request.version != LANE_HISTORICAL_RECOVERY_VERSION_V1
         || &request.requester != sender
         || request.certificate.is_some()
         || !request.signer_pops.is_empty()
@@ -239,7 +239,7 @@ fn build_canonical_executed_block_response(
         .saturating_add(CANONICAL_EXECUTED_BLOCK_CHUNK_BYTES)
         .min(wire.len());
     let response = LaneHistoricalRecoveryResponseV1 {
-        version: LANE_HISTORICAL_RECOVERY_VERSION_V4,
+        version: LANE_HISTORICAL_RECOVERY_VERSION_V1,
         request_hash: HashOf::new(request),
         payload: LaneHistoricalRecoveryPayloadV1::CanonicalExecutedBlockChunk {
             finality_artifact: finality,
@@ -693,7 +693,7 @@ impl CanonicalExecutedBlockRecovery {
         };
         self.assembly_responder = Some(responder.clone());
         let request = LaneHistoricalRecoveryRequestV1 {
-            version: LANE_HISTORICAL_RECOVERY_VERSION_V4,
+            version: LANE_HISTORICAL_RECOVERY_VERSION_V1,
             requester: self.local_peer.clone(),
             certificate: None,
             signer_pops: BTreeMap::new(),
@@ -796,7 +796,7 @@ impl CanonicalExecutedBlockRecovery {
         response: LaneHistoricalRecoveryResponseV1,
         sender: &PeerId,
     ) -> Result<V2LaneIngressOutcome, V2LaneWorkError> {
-        if response.version != LANE_HISTORICAL_RECOVERY_VERSION_V4
+        if response.version != LANE_HISTORICAL_RECOVERY_VERSION_V1
             || !canonical_executed_block_response_fits_frame(self.limits, &response)
         {
             return Ok(V2LaneIngressOutcome::Rejected);

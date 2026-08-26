@@ -9,6 +9,7 @@ import org.hyperledger.iroha.sdk.norito.NoritoDecoder
 import org.hyperledger.iroha.sdk.norito.NoritoEncoder
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.TypeAdapter
+import org.hyperledger.iroha.sdk.nexus.UaidLiteral
 
 /** Canonical Norito encoder for identifier receipt payloads. */
 object IdentifierReceiptCanonicalEncoder {
@@ -25,7 +26,15 @@ object IdentifierReceiptCanonicalEncoder {
         encodeSizedField(writer, PassthroughBytesAdapter, encodeOutputOpening(payload.opening))
         encodeSizedField(writer, PassthroughBytesAdapter, encodeOpaqueHash(payload.opaqueId, "opaque:", "payload.opaque_id"))
         encodeSizedField(writer, PassthroughBytesAdapter, decodeHash(payload.receiptHash, "payload.receipt_hash"))
-        encodeSizedField(writer, PassthroughBytesAdapter, encodeOpaqueHash(payload.uaid, "uaid:", "payload.uaid"))
+        encodeSizedField(
+            writer,
+            PassthroughBytesAdapter,
+            encodeOpaqueHash(
+                UaidLiteral.canonicalize(payload.uaid, "payload.uaid"),
+                "uaid:",
+                "payload.uaid",
+            ),
+        )
         encodeSizedField(
             writer,
             PassthroughBytesAdapter,
@@ -51,9 +60,12 @@ object IdentifierReceiptCanonicalEncoder {
             "payload.opaque_id",
         )
         val receiptHash = hashHex(decodeSizedField(decoder, PassthroughBytesAdapter, "payload.receipt_hash"))
-        val uaid = decodeOpaqueHash(
-            decodeSizedField(decoder, PassthroughBytesAdapter, "payload.uaid"),
-            "uaid:",
+        val uaid = UaidLiteral.canonicalize(
+            decodeOpaqueHash(
+                decodeSizedField(decoder, PassthroughBytesAdapter, "payload.uaid"),
+                "uaid:",
+                "payload.uaid",
+            ),
             "payload.uaid",
         )
         val accountId = TransferWirePayloadEncoder.decodeAccountIdPayload(

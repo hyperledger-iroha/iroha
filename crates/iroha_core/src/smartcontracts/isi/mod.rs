@@ -352,14 +352,9 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::soracloud::JoinSoracloudHfSharedLease>,
     dispatch_instruction::<iroha_data_model::isi::soracloud::LeaveSoracloudHfSharedLease>,
     dispatch_instruction::<iroha_data_model::isi::soracloud::RenewSoracloudHfSharedLease>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::AdvertiseSoracloudModelHost>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::HeartbeatSoracloudModelHost>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::WithdrawSoracloudModelHost>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::ReconcileSoracloudModelHosts>,
     dispatch_instruction::<iroha_data_model::isi::soracloud::AdvertiseSoracloudInrouHost>,
     dispatch_instruction::<iroha_data_model::isi::soracloud::WithdrawSoracloudInrouHost>,
     dispatch_instruction::<iroha_data_model::isi::soracloud::ReconcileSoracloudInrouPlacements>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::ReportSoracloudModelHostViolation>,
     dispatch_instruction::<iroha_data_model::isi::soracloud::DeploySoracloudAgentApartment>,
     dispatch_instruction::<iroha_data_model::isi::soracloud::RenewSoracloudAgentLease>,
     dispatch_instruction::<iroha_data_model::isi::soracloud::RestartSoracloudAgentApartment>,
@@ -388,12 +383,6 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::soracloud::RecordSoracloudMailboxMessage>,
     dispatch_instruction::<iroha_data_model::isi::soracloud::RecordSoracloudRuntimeReceipt>,
     dispatch_instruction::<iroha_data_model::isi::soracloud::ApplySoracloudOrderedMailboxResult>,
-    dispatch_instruction::<
-        iroha_data_model::isi::soracloud::PrepareSoracloudPrivateUploadedModelExecution
-    >,
-    dispatch_instruction::<
-        iroha_data_model::isi::soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt
-    >,
     dispatch_instruction::<iroha_data_model::isi::oracle::RegisterOracleFeed>,
     dispatch_instruction::<iroha_data_model::isi::oracle::SubmitOracleObservation>,
     dispatch_instruction::<iroha_data_model::isi::oracle::AggregateOracleFeed>,

@@ -1,5 +1,7 @@
 using System.Globalization;
 using System.Net;
+using System.Text;
+using System.Text.Json;
 using Hyperledger.Iroha.Address;
 using Hyperledger.Iroha.Crypto;
 using Hyperledger.Iroha.Http;
@@ -86,6 +88,7 @@ public sealed class ToriiRuntimeGovernanceAuthenticationTests
             Assert.Equal("GET", request.Method);
             Assert.Equal(string.Empty, request.Query);
             Assert.Null(request.Body);
+            Assert.Equal("application/json", Header(request, "Accept"));
             Assert.Equal(
                 AccountAddress.Parse(AccountId, AccountAddress.DefaultChainDiscriminant).CanonicalHex,
                 Header(request, "X-Iroha-Account"));
@@ -140,7 +143,7 @@ public sealed class ToriiRuntimeGovernanceAuthenticationTests
     }
 
     [Fact]
-    public async Task TransactionCompatibilityProbeRequiresAuthenticationBeforeDispatch()
+    public async Task TransactionContractProbeRequiresAuthenticationBeforeDispatch()
     {
         using var handler = new RecordingHandler(ResponseForPath);
         using var client = new ToriiClient(
@@ -149,7 +152,7 @@ public sealed class ToriiRuntimeGovernanceAuthenticationTests
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             client.SubmitTransactionAsync(
-                new byte[] { 1 },
+                new byte[] { 1, 0 },
                 TestContext.Current.CancellationToken));
 
         Assert.Contains(nameof(ToriiClientOptions.CanonicalRequestCredentials), error.Message);
@@ -257,6 +260,30 @@ public sealed class ToriiRuntimeGovernanceAuthenticationTests
         Assert.Equal("/v1/runtime/metrics", handler.Requests[0].Path);
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData("text/plain")]
+    [InlineData("application/x-norito")]
+    public async Task AuthenticatedReadRejectsNonJsonContentType(string? mediaType)
+    {
+        using var handler = new RecordingHandler(request =>
+        {
+            Assert.Equal("application/json", Assert.Single(request.Headers.Accept).MediaType);
+            var body = ToriiClientTests.TransactionSubmissionCapabilitiesJson();
+            HttpContent content = mediaType is null
+                ? new ByteArrayContent(Encoding.UTF8.GetBytes(body))
+                : new StringContent(body, Encoding.UTF8, mediaType);
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
+        });
+        using var client = CreateAuthenticatedClient(handler);
+
+        var error = await Assert.ThrowsAsync<JsonException>(() =>
+            client.GetNodeCapabilitiesAsync(TestContext.Current.CancellationToken));
+
+        Assert.Contains("application/json media type", error.Message);
+        Assert.Single(handler.Requests);
+    }
+
     [Fact]
     public async Task RuntimeAbiHashRemainsPublic()
     {
@@ -320,7 +347,7 @@ public sealed class ToriiRuntimeGovernanceAuthenticationTests
         };
         return new HttpResponseMessage(HttpStatusCode.OK)
         {
-            Content = new StringContent(body),
+            Content = new StringContent(body, Encoding.UTF8, "application/json"),
         };
     }
 

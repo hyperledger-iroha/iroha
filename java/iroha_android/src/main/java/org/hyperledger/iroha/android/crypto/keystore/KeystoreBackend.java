@@ -27,6 +27,18 @@ public interface KeystoreBackend {
   /** Metadata describing the backing store/hardware. */
   KeyProviderMetadata metadata();
 
+  /**
+   * Metadata describing the security level of this specific key.
+   *
+   * <p>Backends whose keys can use different security levels must override this method. The
+   * conservative default treats unproven provenance as software-backed so strict hardware policies
+   * fail closed.
+   */
+  default KeyProviderMetadata keyMetadata(final String alias, final KeyPair keyPair)
+      throws KeyManagementException {
+    return KeyProviderMetadata.software(name());
+  }
+
   /** Human readable backend name (e.g., {@code android-keystore}). */
   String name();
 

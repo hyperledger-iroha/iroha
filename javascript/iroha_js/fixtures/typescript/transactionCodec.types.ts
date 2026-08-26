@@ -91,6 +91,16 @@ const invalidSuccessOverride: NexusWaitFinalizeOptions = {
   // @ts-expect-error the success state is immutable and exact Applied.
   successStatuses: new Set(["Committed"]),
 };
+const invalidFailureOverride: NexusWaitFinalizeOptions = {
+  wait: true,
+  // @ts-expect-error Rejected and Expired are the fixed failures.
+  failureStatuses: new Set(["Committed"]),
+};
+const invalidTerminalOverride: NexusWaitFinalizeOptions = {
+  wait: true,
+  // @ts-expect-error finality terminal policy is not caller-selectable.
+  terminalStatuses: new Set(["Committed"]),
+};
 const noWaitOptions: NexusNoWaitFinalizeOptions = { wait: false };
 const finalizeOptions: readonly NexusFinalizeOptions[] = [
   waitOptions,
@@ -116,5 +126,8 @@ void codecPayload;
 void validated;
 void finalizeOptions;
 void removedWaitScope;
+void invalidSuccessOverride;
+void invalidFailureOverride;
+void invalidTerminalOverride;
 void submittedErrorContext;
 void invalidNoWaitOptions;

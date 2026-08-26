@@ -1,5 +1,7 @@
 package org.hyperledger.iroha.sdk.core.model.instructions
 
+import org.hyperledger.iroha.sdk.nexus.UaidLiteral
+
 private const val ACTION = "RegisterAccount"
 
 /** Typed representation of the `RegisterAccount` instruction. */
@@ -21,6 +23,7 @@ class RegisterAccountInstruction(
 
     init {
         require(accountId.isNotBlank()) { "accountId must not be blank" }
+        uaid?.let { UaidLiteral.canonicalize(it, "uaid") }
     }
 
     override fun equals(other: Any?): Boolean {

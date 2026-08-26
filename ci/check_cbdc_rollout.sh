@@ -37,7 +37,6 @@ function validate_manifest() {
   local manifest_path="$1"
   python3 - "$manifest_path" <<'PY'
 import json
-import string
 import sys
 from pathlib import Path
 
@@ -150,16 +149,14 @@ for manifest in manifests:
     uaid_value = data.get("uaid")
     if not isinstance(uaid_value, str):
         raise SystemExit(f"[cbdc] capability {manifest} missing uaid")
-    uaid_literal = uaid_value.strip()
-    if not uaid_literal:
-        raise SystemExit(f"[cbdc] capability {manifest} missing uaid")
-    if uaid_literal.lower().startswith("uaid:"):
-        uaid_hex = uaid_literal[5:].strip()
-    else:
-        uaid_hex = uaid_literal
-    if len(uaid_hex) != 64 or any(ch not in string.hexdigits for ch in uaid_hex):
+    if not uaid_value.startswith("uaid:"):
         raise SystemExit(
-            f"[cbdc] capability {manifest} uaid must be `uaid:<hex>` or 64 hex characters"
+            f"[cbdc] capability {manifest} uaid must be exact `uaid:<64-lowercase-hex>`"
+        )
+    uaid_hex = uaid_value[5:]
+    if len(uaid_hex) != 64 or any(ch not in "0123456789abcdef" for ch in uaid_hex):
+        raise SystemExit(
+            f"[cbdc] capability {manifest} uaid must be exact `uaid:<64-lowercase-hex>`"
         )
     if int(uaid_hex[-1], 16) % 2 == 0:
         raise SystemExit(

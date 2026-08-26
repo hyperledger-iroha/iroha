@@ -18,12 +18,6 @@ pub enum SoracloudHostOperationV1 {
     ReadConfig,
     /// Read an authoritative service secret envelope for the active service revision.
     ReadSecretEnvelope,
-    /// Read node-local secret material exposed only through the runtime host.
-    ReadSecret,
-    /// Read node-local credential material exposed only through the runtime host.
-    ReadCredential,
-    /// Perform a bounded, policy-checked egress fetch.
-    EgressFetch,
 }
 /// Request envelope decoded from the Soracloud request pointer-ABI payload.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -79,12 +73,6 @@ pub enum SoracloudHostRequestPayloadV1 {
     ReadConfig(SoracloudReadConfigRequestV1),
     /// Request to read an authoritative service secret envelope.
     ReadSecretEnvelope(SoracloudReadSecretEnvelopeRequestV1),
-    /// Request to read a node-local secret.
-    ReadSecret(SoracloudReadSecretRequestV1),
-    /// Request to read a node-local credential.
-    ReadCredential(SoracloudReadCredentialRequestV1),
-    /// Request to perform a bounded egress fetch.
-    EgressFetch(SoracloudEgressFetchRequestV1),
 }
 impl SoracloudHostRequestPayloadV1 {
     /// Return the operation represented by this request payload.
@@ -98,9 +86,6 @@ impl SoracloudHostRequestPayloadV1 {
             Self::PublishCheckpoint(_) => SoracloudHostOperationV1::PublishCheckpoint,
             Self::ReadConfig(_) => SoracloudHostOperationV1::ReadConfig,
             Self::ReadSecretEnvelope(_) => SoracloudHostOperationV1::ReadSecretEnvelope,
-            Self::ReadSecret(_) => SoracloudHostOperationV1::ReadSecret,
-            Self::ReadCredential(_) => SoracloudHostOperationV1::ReadCredential,
-            Self::EgressFetch(_) => SoracloudHostOperationV1::EgressFetch,
         }
     }
     /// Validate operation-specific host request payload constraints.
@@ -117,14 +102,11 @@ impl SoracloudHostRequestPayloadV1 {
             Self::PublishCheckpoint(request) => request.validate(),
             Self::ReadConfig(request) => request.validate(),
             Self::ReadSecretEnvelope(request) => request.validate(),
-            Self::ReadSecret(request) => request.validate(),
-            Self::ReadCredential(request) => request.validate(),
-            Self::EgressFetch(request) => request.validate(),
         }
     }
 }
 /// Response envelope encoded into the Soracloud response pointer-ABI payload.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct SoracloudHostResponseEnvelopeV1 {
@@ -158,7 +140,7 @@ impl SoracloudHostResponseEnvelopeV1 {
     }
 }
 /// Operation-specific Soracloud host response payload.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "payload_type", content = "value"))]
 #[norito(deny_unknown_fields)]
@@ -177,12 +159,6 @@ pub enum SoracloudHostResponsePayloadV1 {
     ReadConfig(SoracloudReadConfigResponseV1),
     /// Response to secret-envelope lookups.
     ReadSecretEnvelope(SoracloudReadSecretEnvelopeResponseV1),
-    /// Response to secret lookups.
-    ReadSecret(SoracloudReadSecretResponseV1),
-    /// Response to credential lookups.
-    ReadCredential(SoracloudReadCredentialResponseV1),
-    /// Response to bounded egress fetches.
-    EgressFetch(SoracloudEgressFetchResponseV1),
 }
 impl SoracloudHostResponsePayloadV1 {
     /// Return the operation represented by this response payload.
@@ -196,9 +172,6 @@ impl SoracloudHostResponsePayloadV1 {
             Self::PublishCheckpoint(_) => SoracloudHostOperationV1::PublishCheckpoint,
             Self::ReadConfig(_) => SoracloudHostOperationV1::ReadConfig,
             Self::ReadSecretEnvelope(_) => SoracloudHostOperationV1::ReadSecretEnvelope,
-            Self::ReadSecret(_) => SoracloudHostOperationV1::ReadSecret,
-            Self::ReadCredential(_) => SoracloudHostOperationV1::ReadCredential,
-            Self::EgressFetch(_) => SoracloudHostOperationV1::EgressFetch,
         }
     }
     /// Validate operation-specific host response payload constraints.
@@ -214,9 +187,6 @@ impl SoracloudHostResponsePayloadV1 {
             Self::PublishCheckpoint(response) => response.validate(),
             Self::ReadConfig(response) => response.validate(),
             Self::ReadSecretEnvelope(response) => response.validate(),
-            Self::ReadSecret(response) => response.validate(),
-            Self::ReadCredential(response) => response.validate(),
-            Self::EgressFetch(response) => response.validate(),
         }
     }
 }
@@ -563,13 +533,28 @@ impl SoracloudReadSecretEnvelopeRequestV1 {
     }
 }
 /// Response to an authoritative service secret-envelope lookup.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct SoracloudReadSecretEnvelopeResponseV1 {
     /// Matching authoritative secret envelope when one exists.
     #[norito(required)]
     pub envelope: Option<SecretEnvelopeV1>,
+}
+impl std::fmt::Debug for SoracloudReadSecretEnvelopeResponseV1 {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SoracloudReadSecretEnvelopeResponseV1")
+            .field("envelope_present", &self.envelope.is_some())
+            .field(
+                "ciphertext_len",
+                &self
+                    .envelope
+                    .as_ref()
+                    .map(|envelope| envelope.ciphertext.len()),
+            )
+            .finish_non_exhaustive()
+    }
 }
 impl SoracloudReadSecretEnvelopeResponseV1 {
     /// Validate secret-envelope response fields.
@@ -583,203 +568,65 @@ impl SoracloudReadSecretEnvelopeResponseV1 {
         Ok(())
     }
 }
-/// Read node-local secret material for the active service revision.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(deny_unknown_fields)]
-pub struct SoracloudReadSecretRequestV1 {
-    /// Stable secret identifier relative to the node-local secret root.
-    pub secret_name: String,
-}
-impl SoracloudReadSecretRequestV1 {
-    /// Validate node-local secret request fields.
-    ///
-    /// # Errors
-    /// Returns [`SoracloudManifestError`] when the secret name is empty.
-    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        validate_nonblank_field(
-            "soracloud read secret request",
-            "secret_name",
-            &self.secret_name,
-        )
-    }
-}
-/// Response to a node-local secret lookup.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(deny_unknown_fields)]
-pub struct SoracloudReadSecretResponseV1 {
-    /// Whether the requested secret was found locally.
-    pub found: bool,
-    /// Secret payload bytes when the lookup succeeds.
-    pub payload_bytes: Vec<u8>,
-}
-impl SoracloudReadSecretResponseV1 {
-    /// Validate node-local secret response fields.
-    ///
-    /// # Errors
-    /// Returns [`SoracloudManifestError`] when found/payload flags are inconsistent.
-    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        validate_soracloud_host_found_payload(
-            "soracloud read secret response",
-            self.found,
-            &self.payload_bytes,
-        )
-    }
-}
-/// Read node-local credential material for the active service revision.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(deny_unknown_fields)]
-pub struct SoracloudReadCredentialRequestV1 {
-    /// Stable credential identifier relative to the node-local credential root.
-    pub credential_name: String,
-}
-impl SoracloudReadCredentialRequestV1 {
-    /// Validate node-local credential request fields.
-    ///
-    /// # Errors
-    /// Returns [`SoracloudManifestError`] when the credential name is empty.
-    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        validate_nonblank_field(
-            "soracloud read credential request",
-            "credential_name",
-            &self.credential_name,
-        )
-    }
-}
-/// Response to a node-local credential lookup.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(deny_unknown_fields)]
-pub struct SoracloudReadCredentialResponseV1 {
-    /// Whether the requested credential was found locally.
-    pub found: bool,
-    /// Credential payload bytes when the lookup succeeds.
-    pub payload_bytes: Vec<u8>,
-}
-impl SoracloudReadCredentialResponseV1 {
-    /// Validate node-local credential response fields.
-    ///
-    /// # Errors
-    /// Returns [`SoracloudManifestError`] when found/payload flags are inconsistent.
-    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        validate_soracloud_host_found_payload(
-            "soracloud read credential response",
-            self.found,
-            &self.payload_bytes,
-        )
-    }
-}
-/// Perform a bounded, policy-checked egress fetch from an allowlisted host.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(deny_unknown_fields)]
-pub struct SoracloudEgressFetchRequestV1 {
-    /// Absolute URL to fetch.
-    pub url: String,
-    /// Maximum number of response bytes the caller is willing to accept.
-    pub max_bytes: u64,
-    /// Optional expected digest for content-addressed verification.
-    #[norito(required)]
-    pub expected_hash: Option<Hash>,
-}
-impl SoracloudEgressFetchRequestV1 {
-    /// Validate egress fetch request fields.
-    ///
-    /// # Errors
-    /// Returns [`SoracloudManifestError`] when URL, byte cap, or expected hash
-    /// fields are malformed.
-    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        validate_public_url("soracloud egress fetch request", "url", &self.url)?;
-        if self.max_bytes == 0 {
-            return Err(invalid_field(
-                "soracloud egress fetch request",
-                "max_bytes",
-                "must be greater than zero",
-            ));
+#[cfg(test)]
+mod host_protocol_security_tests {
+    use super::*;
+
+    fn host_response_envelope(
+        operation: SoracloudHostOperationV1,
+        payload: SoracloudHostResponsePayloadV1,
+    ) -> SoracloudHostResponseEnvelopeV1 {
+        SoracloudHostResponseEnvelopeV1 {
+            schema_version: SORACLOUD_HOST_RESPONSE_VERSION_V1,
+            operation,
+            payload,
         }
-        if let Some(expected_hash) = self.expected_hash {
-            validate_soracloud_digest_hash(
-                "soracloud egress fetch request",
-                "expected_hash",
-                expected_hash,
-            )?;
-        }
-        Ok(())
     }
-}
-/// Response to a bounded egress fetch.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(deny_unknown_fields)]
-pub struct SoracloudEgressFetchResponseV1 {
-    /// HTTP status code returned by the fetch.
-    pub status_code: u16,
-    /// Content type reported by the source when present.
-    #[norito(required)]
-    pub content_type: Option<String>,
-    /// Response body bytes, truncated only by caller/configured ceilings.
-    pub body: Vec<u8>,
-    /// Content-addressed hash of `body`.
-    pub body_hash: Hash,
-}
-impl SoracloudEgressFetchResponseV1 {
-    /// Validate egress fetch response fields.
-    ///
-    /// # Errors
-    /// Returns [`SoracloudManifestError`] when response metadata is malformed or
-    /// `body_hash` does not match `body`.
-    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        validate_soracloud_digest_hash(
-            "soracloud egress fetch response",
-            "body_hash",
-            self.body_hash,
-        )?;
-        if self.body_hash != Hash::new(&self.body) {
-            return Err(invalid_field(
-                "soracloud egress fetch response",
-                "body_hash",
-                "must match the canonical response body hash",
-            ));
-        }
-        if self
-            .content_type
-            .as_ref()
-            .is_some_and(|content_type| content_type.trim().is_empty())
-        {
-            return Err(invalid_field(
-                "soracloud egress fetch response",
-                "content_type",
-                "must not be empty when provided",
-            ));
-        }
-        Ok(())
+
+    #[test]
+    fn secret_envelope_response_debug_redacts_direct_and_nested_payloads() {
+        let ciphertext = vec![0xA5, 0xB6, 0xC7, 0xD8, 0xE9];
+        let response = SoracloudReadSecretEnvelopeResponseV1 {
+            envelope: Some(SecretEnvelopeV1 {
+                schema_version: SECRET_ENVELOPE_VERSION_V1,
+                encryption: SecretEnvelopeEncryptionV1::ClientCiphertext,
+                key_id: "kms-secret-debug-marker".to_owned(),
+                key_version: NonZeroU32::new(1).expect("non-zero key version"),
+                nonce: vec![0x81, 0x92, 0xA3],
+                commitment: Hash::new(&ciphertext),
+                ciphertext: ciphertext.clone(),
+                aad_digest: None,
+            }),
+        };
+
+        let direct_debug = format!("{response:?}");
+        assert!(!direct_debug.contains("kms-secret-debug-marker"));
+        assert!(!direct_debug.contains(&format!("{ciphertext:?}")));
+        assert!(direct_debug.contains("ciphertext_len: Some(5)"));
+
+        let nested_debug = format!(
+            "{:?}",
+            host_response_envelope(
+                SoracloudHostOperationV1::ReadSecretEnvelope,
+                SoracloudHostResponsePayloadV1::ReadSecretEnvelope(response),
+            )
+        );
+        assert!(!nested_debug.contains("kms-secret-debug-marker"));
+        assert!(!nested_debug.contains(&format!("{ciphertext:?}")));
+        assert!(nested_debug.contains("ciphertext_len: Some(5)"));
     }
 }
 fn validate_soracloud_host_state_key(
     manifest: &'static str,
     state_key: &str,
 ) -> Result<(), SoracloudManifestError> {
-    validate_nonblank_field(manifest, "state_key", state_key)?;
-    if !state_key.starts_with('/') {
-        return Err(invalid_field(manifest, "state_key", "must start with '/'"));
-    }
-    Ok(())
+    validate_absolute_path(manifest, "state_key", state_key)
 }
 fn validate_soracloud_host_artifact_path(
     manifest: &'static str,
     artifact_path: &str,
 ) -> Result<(), SoracloudManifestError> {
-    validate_nonblank_field(manifest, "artifact_path", artifact_path)?;
-    if !artifact_path.starts_with('/') {
-        return Err(invalid_field(
-            manifest,
-            "artifact_path",
-            "must start with '/'",
-        ));
-    }
-    Ok(())
+    validate_absolute_path(manifest, "artifact_path", artifact_path)
 }
 fn validate_soracloud_host_found_payload(
     manifest: &'static str,
@@ -808,12 +655,10 @@ fn validate_soracloud_host_found_payload(
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u8)]
 pub enum SoracloudRuntimeProvenancePurposeV1 {
-    /// Sign a canonical model-host heartbeat.
-    ModelHostHeartbeat = 1,
     /// Sign a canonical Inrou host advertisement.
-    InrouHostAdvert = 2,
+    InrouHostAdvert = 1,
     /// Sign a canonical Inrou host withdrawal.
-    InrouHostWithdraw = 3,
+    InrouHostWithdraw = 2,
 }
 impl SoracloudRuntimeProvenancePurposeV1 {
     /// Return the immutable V1 wire identifier.
@@ -831,9 +676,8 @@ impl SoracloudRuntimeProvenancePurposeV1 {
         value: u8,
     ) -> Result<Self, SoracloudRuntimeProvenancePurposeErrorV1> {
         match value {
-            1 => Ok(Self::ModelHostHeartbeat),
-            2 => Ok(Self::InrouHostAdvert),
-            3 => Ok(Self::InrouHostWithdraw),
+            1 => Ok(Self::InrouHostAdvert),
+            2 => Ok(Self::InrouHostWithdraw),
             _ => Err(SoracloudRuntimeProvenancePurposeErrorV1),
         }
     }
@@ -1243,19 +1087,33 @@ pub fn encode_agent_policy_revoke_provenance_payload(
 ) -> Result<Vec<u8>, norito::Error> {
     norito::encode_canonical(&(apartment_name, capability, reason))
 }
+/// Maximum encoded byte length of a canonical V1 agent wallet request identifier.
+pub const SORA_AGENT_WALLET_REQUEST_ID_MAX_BYTES_V1: usize = 128;
+/// Return whether an agent wallet request identifier is canonical for V1.
+///
+/// Canonical identifiers are non-empty, contain no surrounding whitespace or
+/// control characters, and fit within the V1 byte bound.
+#[must_use]
+pub fn is_canonical_agent_wallet_request_id_v1(request_id: &str) -> bool {
+    !request_id.is_empty()
+        && request_id.len() <= SORA_AGENT_WALLET_REQUEST_ID_MAX_BYTES_V1
+        && request_id.trim() == request_id
+        && !request_id.chars().any(char::is_control)
+}
 /// Encode the canonical provenance signature payload for apartment wallet spend requests.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
-/// `(apartment_name, asset_definition, amount)`.
+/// `(apartment_name, request_id, asset_definition, amount)`.
 ///
 /// # Errors
 /// Returns an encoding error when Norito serialization fails.
 pub fn encode_agent_wallet_spend_provenance_payload(
     apartment_name: &str,
+    request_id: &str,
     asset_definition: &str,
     amount: &Quantity,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::encode_canonical(&(apartment_name, asset_definition, amount.clone()))
+    norito::encode_canonical(&(apartment_name, request_id, asset_definition, amount.clone()))
 }
 /// Encode the canonical provenance signature payload for apartment wallet approvals.
 ///
@@ -1314,8 +1172,9 @@ pub fn encode_agent_artifact_allow_provenance_payload(
 ///
 /// The payload layout is a Norito tuple in this exact field order:
 /// `(apartment_name, artifact_hash, provenance_hash, budget_units, run_label, workflow_input_json)`.
-/// When the `json` feature is enabled, `workflow_input_json` is canonicalized
-/// before encoding so client-side signing matches runtime verification.
+/// `workflow_input_json` is encoded byte-for-byte as supplied. Admission is
+/// responsible for rejecting a non-canonical JSON spelling before signature
+/// verification; the signing helper must never rewrite authenticated input.
 ///
 /// # Errors
 /// Returns an encoding error when Norito serialization fails.
@@ -1327,31 +1186,14 @@ pub fn encode_agent_autonomy_run_provenance_payload(
     run_label: &str,
     workflow_input_json: Option<&str>,
 ) -> Result<Vec<u8>, norito::Error> {
-    let canonical_workflow_input_json =
-        canonical_agent_workflow_input_json_for_payload(workflow_input_json);
     norito::encode_canonical(&(
         apartment_name,
         artifact_hash,
         provenance_hash,
         budget_units,
         run_label,
-        canonical_workflow_input_json.as_deref(),
+        workflow_input_json,
     ))
-}
-fn canonical_agent_workflow_input_json_for_payload(
-    workflow_input_json: Option<&str>,
-) -> Option<String> {
-    let workflow_input_json = workflow_input_json?;
-    let trimmed = workflow_input_json.trim();
-    #[cfg(feature = "json")]
-    {
-        if let Ok(parsed) = norito::json::from_str::<norito::json::Value>(trimmed)
-            && let Ok(canonical) = norito::json::to_json(&parsed)
-        {
-            return Some(canonical);
-        }
-    }
-    Some(trimmed.to_owned())
 }
 /// Derive the deterministic runtime request commitment for an approved Soracloud agent autonomy run.
 #[must_use]
@@ -1595,7 +1437,7 @@ pub fn encode_uploaded_model_finalize_provenance_payload(
 /// Encode the canonical provenance signature payload for HF shared-lease joins.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
-/// `(repo_id, resolved_revision, model_name, service_name, apartment_name, storage_class, lease_term_ms, lease_asset_definition_id, base_fee)`.
+/// `(repo_id, resolved_revision, service_name, apartment_name, storage_class, lease_term_ms, lease_asset_definition_id, base_fee)`.
 ///
 /// # Errors
 /// Returns an encoding error when Norito serialization fails.
@@ -1603,7 +1445,6 @@ pub fn encode_uploaded_model_finalize_provenance_payload(
 pub fn encode_hf_shared_lease_join_provenance_payload(
     repo_id: &str,
     resolved_revision: &str,
-    model_name: &str,
     service_name: &str,
     apartment_name: Option<&str>,
     storage_class: StorageClass,
@@ -1614,7 +1455,6 @@ pub fn encode_hf_shared_lease_join_provenance_payload(
     norito::encode_canonical(&(
         repo_id,
         resolved_revision,
-        model_name,
         service_name,
         apartment_name,
         storage_class,
@@ -1650,7 +1490,7 @@ pub fn encode_hf_shared_lease_leave_provenance_payload(
 /// Encode the canonical provenance signature payload for HF shared-lease renewals.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
-/// `(repo_id, resolved_revision, model_name, service_name, apartment_name, storage_class, lease_term_ms, lease_asset_definition_id, base_fee)`.
+/// `(repo_id, resolved_revision, service_name, apartment_name, storage_class, lease_term_ms, lease_asset_definition_id, base_fee)`.
 ///
 /// # Errors
 /// Returns an encoding error when Norito serialization fails.
@@ -1658,7 +1498,6 @@ pub fn encode_hf_shared_lease_leave_provenance_payload(
 pub fn encode_hf_shared_lease_renew_provenance_payload(
     repo_id: &str,
     resolved_revision: &str,
-    model_name: &str,
     service_name: &str,
     apartment_name: Option<&str>,
     storage_class: StorageClass,
@@ -1669,7 +1508,6 @@ pub fn encode_hf_shared_lease_renew_provenance_payload(
     norito::encode_canonical(&(
         repo_id,
         resolved_revision,
-        model_name,
         service_name,
         apartment_name,
         storage_class,
@@ -1677,48 +1515,6 @@ pub fn encode_hf_shared_lease_renew_provenance_payload(
         lease_asset_definition_id.clone(),
         base_fee.clone(),
     ))
-}
-/// Encode the canonical provenance signature payload for model-host adverts.
-///
-/// The payload layout is the canonical Norito encoding of [`SoraModelHostCapabilityRecordV1`].
-///
-/// # Errors
-/// Returns an encoding error when Norito serialization fails.
-pub fn encode_model_host_advertise_provenance_payload(
-    capability: &SoraModelHostCapabilityRecordV1,
-) -> Result<Vec<u8>, norito::Error> {
-    norito::encode_canonical(capability)
-}
-/// Encode the canonical provenance signature payload for model-host heartbeats.
-///
-/// The semantic payload is the canonical Norito tuple `(validator_account_id,
-/// heartbeat_expires_at_ms)`. The returned signature preimage wraps those bytes with
-/// [`SoracloudRuntimeProvenancePurposeV1::ModelHostHeartbeat`] through
-/// [`encode_soracloud_runtime_provenance_preimage_v1`].
-///
-/// # Errors
-/// Returns an encoding error when Norito serialization fails.
-pub fn encode_model_host_heartbeat_provenance_payload(
-    validator_account_id: &AccountId,
-    heartbeat_expires_at_ms: u64,
-) -> Result<Vec<u8>, norito::Error> {
-    let canonical_payload =
-        norito::encode_canonical(&(validator_account_id.clone(), heartbeat_expires_at_ms))?;
-    encode_soracloud_runtime_provenance_preimage_v1(
-        SoracloudRuntimeProvenancePurposeV1::ModelHostHeartbeat,
-        &canonical_payload,
-    )
-}
-/// Encode the canonical provenance signature payload for model-host withdrawals.
-///
-/// The payload layout is the canonical Norito encoding of `validator_account_id`.
-///
-/// # Errors
-/// Returns an encoding error when Norito serialization fails.
-pub fn encode_model_host_withdraw_provenance_payload(
-    validator_account_id: &AccountId,
-) -> Result<Vec<u8>, norito::Error> {
-    norito::encode_canonical(validator_account_id)
 }
 /// Encode the canonical provenance signature payload for Inrou host adverts.
 ///

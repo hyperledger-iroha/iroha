@@ -756,7 +756,7 @@ fn pending_certified_merge_sidecar_is_scoped_to_exact_carrier_round() {
         assert!(!temp_path.exists());
         assert!(target_path.is_file());
         assert!(Kura::sidecar_is_single_link(
-            &fs::symlink_metadata(&target_path)
+            &crate::secure_file_metadata::from_path(&target_path)
                 .expect("read recovered pending merge target metadata")
         ));
         let path_bytes = u64::try_from(recovery_bytes.len()).expect("fixture length fits u64");
@@ -1301,8 +1301,8 @@ fn locked_and_finalized_carrier_cleanup_preserves_only_authorized_sidecars() {
 #[test]
 fn pending_queue_plan_admission_store_is_exact_bounded_and_deterministic() {
     let kura = Kura::blank_kura_for_testing();
-    let first = b"queue-plan-admission-v2:first".to_vec();
-    let second = b"queue-plan-admission-v2:second".to_vec();
+    let first = b"queue-plan-admission-v1:first".to_vec();
+    let second = b"queue-plan-admission-v1:second".to_vec();
     let first_hash = kura
         .persist_pending_queue_plan_admission_certificate(&first)
         .expect("persist first admission certificate");
@@ -1388,7 +1388,7 @@ fn pending_queue_plan_admission_bytes_participate_in_exact_disk_accounting() {
     let baseline_total = kura
         .kura_total_disk_usage_bytes()
         .expect("measure baseline total bytes");
-    let bytes = b"queue-plan-admission-v2:disk-accounting".to_vec();
+    let bytes = b"queue-plan-admission-v1:disk-accounting".to_vec();
     let hash = kura
         .persist_pending_queue_plan_admission_certificate(&bytes)
         .expect("persist accounted admission certificate");
@@ -1423,7 +1423,7 @@ fn pending_queue_plan_admission_startup_recovers_unpublished_temporary() {
         use std::os::unix::fs::symlink;
         let symlinked = Kura::blank_kura_for_testing();
         let outside = TempDir::new().expect("create external admission directory");
-        let external_bytes = b"queue-plan-admission-v2:external-crash-temp";
+        let external_bytes = b"queue-plan-admission-v1:external-crash-temp";
         let external_hash = Hash::new(external_bytes);
         let external_temp = outside.path().join(format!(
             "{}.norito.tmp",
@@ -1444,7 +1444,7 @@ fn pending_queue_plan_admission_startup_recovers_unpublished_temporary() {
         );
     }
     let kura = Kura::blank_kura_for_testing();
-    let bytes = b"queue-plan-admission-v2:recover-unpublished".to_vec();
+    let bytes = b"queue-plan-admission-v1:recover-unpublished".to_vec();
     let hash = Hash::new(&bytes);
     let directory = kura.pending_queue_plan_admission_dir();
     fs::create_dir(&directory).expect("create admission recovery directory");
@@ -1481,7 +1481,7 @@ fn pending_queue_plan_admission_startup_recovers_unpublished_temporary() {
         simultaneous_entry.canonical_bytes(),
     )
     .expect("stage simultaneous pending merge temporary");
-    let simultaneous_admission_bytes = b"queue-plan-admission-v2:simultaneous-crash-temp".to_vec();
+    let simultaneous_admission_bytes = b"queue-plan-admission-v1:simultaneous-crash-temp".to_vec();
     let simultaneous_admission_hash = Hash::new(&simultaneous_admission_bytes);
     let simultaneous_admission_target =
         simultaneous.pending_queue_plan_admission_path(simultaneous_admission_hash);
@@ -1516,13 +1516,13 @@ fn pending_queue_plan_admission_startup_recovers_unpublished_temporary() {
         .pending_control_sidecar_limits
         .queue_plan_admissions
     {
-        let stable_bytes = format!("queue-plan-admission-v2:saturated:{index}").into_bytes();
+        let stable_bytes = format!("queue-plan-admission-v1:saturated:{index}").into_bytes();
         let stable_hash = Hash::new(&stable_bytes);
         let stable_path = saturated.pending_queue_plan_admission_path(stable_hash);
         fs::write(&stable_path, stable_bytes).expect("write saturated admission certificate");
         removable_path.get_or_insert(stable_path);
     }
-    let overflow_bytes = b"queue-plan-admission-v2:saturated:overflow".to_vec();
+    let overflow_bytes = b"queue-plan-admission-v1:saturated:overflow".to_vec();
     let overflow_hash = Hash::new(&overflow_bytes);
     let overflow_target = saturated.pending_queue_plan_admission_path(overflow_hash);
     let overflow_temp = overflow_target.with_extension("norito.tmp");
@@ -1579,7 +1579,7 @@ fn pending_queue_plan_admission_startup_recovers_unpublished_temporary() {
         file.set_len(merge_file_bytes)
             .expect("size sparse merge saturation file");
     }
-    let overflow_bytes = b"queue-plan-admission-v2:shared-cap-overflow".to_vec();
+    let overflow_bytes = b"queue-plan-admission-v1:shared-cap-overflow".to_vec();
     let overflow_hash = Hash::new(&overflow_bytes);
     let overflow_target = shared_saturated.pending_queue_plan_admission_path(overflow_hash);
     let overflow_temp = overflow_target.with_extension("norito.tmp");
@@ -1598,7 +1598,7 @@ fn pending_queue_plan_admission_startup_recovers_unpublished_temporary() {
 #[test]
 fn pending_queue_plan_admission_startup_completes_hard_link_publication() {
     let kura = Kura::blank_kura_for_testing();
-    let bytes = b"queue-plan-admission-v2:recover-linked".to_vec();
+    let bytes = b"queue-plan-admission-v1:recover-linked".to_vec();
     let hash = Hash::new(&bytes);
     let directory = kura.pending_queue_plan_admission_dir();
     fs::create_dir(&directory).expect("create admission recovery directory");
@@ -1627,7 +1627,8 @@ fn pending_queue_plan_admission_startup_completes_hard_link_publication() {
         Some(bytes)
     );
     assert!(Kura::sidecar_is_single_link(
-        &fs::symlink_metadata(&target_path).expect("read recovered target metadata")
+        &crate::secure_file_metadata::from_path(&target_path)
+            .expect("read recovered target metadata")
     ));
     let recovered_enforced = kura
         .kura_disk_usage_bytes()
@@ -1654,7 +1655,7 @@ fn pending_queue_plan_admission_survives_retired_purge_and_process_reopen() {
     let lane_config = RuntimeLaneConfig::default();
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("initialize Kura");
-    let bytes = b"queue-plan-admission-v2:survive-purge-and-reopen".to_vec();
+    let bytes = b"queue-plan-admission-v1:survive-purge-and-reopen".to_vec();
     let hash = kura
         .persist_pending_queue_plan_admission_certificate(&bytes)
         .expect("persist admission certificate before purge");
@@ -1685,8 +1686,8 @@ fn pending_queue_plan_admission_survives_retired_purge_and_process_reopen() {
 #[test]
 fn pending_queue_plan_admission_startup_rejects_conflicting_publication_without_deletion() {
     let kura = Kura::blank_kura_for_testing();
-    let temp_bytes = b"queue-plan-admission-v2:conflict-temp";
-    let target_bytes = b"queue-plan-admission-v2:conflict-target";
+    let temp_bytes = b"queue-plan-admission-v1:conflict-temp";
+    let target_bytes = b"queue-plan-admission-v1:conflict-target";
     let hash = Hash::new(temp_bytes);
     let directory = kura.pending_queue_plan_admission_dir();
     fs::create_dir(&directory).expect("create admission recovery directory");
@@ -1711,7 +1712,7 @@ fn pending_queue_plan_admission_startup_rejects_conflicting_publication_without_
 #[test]
 fn pending_queue_plan_admission_startup_rejects_oversized_artifact() {
     let kura = Kura::blank_kura_for_testing();
-    let bytes = b"queue-plan-admission-v2:oversized-path-identity";
+    let bytes = b"queue-plan-admission-v1:oversized-path-identity";
     let hash = Hash::new(bytes);
     let directory = kura.pending_queue_plan_admission_dir();
     fs::create_dir(&directory).expect("create oversized admission directory");
@@ -1748,7 +1749,7 @@ fn pending_queue_plan_admission_store_rejects_symlink_and_unexpected_artifacts()
         fs::create_dir(&directory).expect("create malformed admission directory");
         match unexpected {
             "symlink" => {
-                let bytes = b"queue-plan-admission-v2:symlink";
+                let bytes = b"queue-plan-admission-v1:symlink";
                 let target = kura.store_root().join("outside-admission.norito");
                 fs::write(&target, bytes).expect("write symlink target");
                 let hash = Hash::new(bytes);

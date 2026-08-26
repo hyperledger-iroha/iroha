@@ -6,9 +6,7 @@ use crate::{Run, RunContext, operator_key::load_operator_key_pair};
 use clap::{Args as ClapArgs, Subcommand};
 use eyre::{Result, WrapErr as _, bail, eyre};
 use iroha::{
-    client::{
-        Client, TransactionWaitOptions, TransactionWaitOutcome, TransactionWaitTerminalStatus,
-    },
+    client::{Client, TransactionWaitOptions, TransactionWaitOutcome},
     data_model::{
         block::{
             consensus_v2::ConsensusMode, decode_framed_signed_block,
@@ -434,11 +432,31 @@ enum ReconciledSubmissionStatus {
     Unresolved,
 }
 
-fn classify_reconciled_submission_status(kind: Option<&str>) -> ReconciledSubmissionStatus {
-    match kind {
-        Some("Applied") => ReconciledSubmissionStatus::Applied,
-        Some("Rejected") => ReconciledSubmissionStatus::Rejected,
-        Some("Expired") => ReconciledSubmissionStatus::Expired,
+fn classify_reconciled_submission_status(
+    status: Option<&PipelineTransactionStatusResponse>,
+) -> ReconciledSubmissionStatus {
+    match status {
+        Some(status)
+            if status.scope == "global"
+                && status.resolved_from == "state"
+                && status.status.kind == "Applied" =>
+        {
+            ReconciledSubmissionStatus::Applied
+        }
+        Some(status)
+            if status.scope == "global"
+                && status.resolved_from == "state"
+                && status.status.kind == "Rejected" =>
+        {
+            ReconciledSubmissionStatus::Rejected
+        }
+        Some(status)
+            if status.scope == "global"
+                && status.resolved_from == "state"
+                && status.status.kind == "Expired" =>
+        {
+            ReconciledSubmissionStatus::Expired
+        }
         Some(_) | None => ReconciledSubmissionStatus::Unresolved,
     }
 }
@@ -476,7 +494,7 @@ impl Submit {
                 )),
             );
         }
-        let mut initial_status = match client.get_transaction_status_response_auto(hash) {
+        let mut initial_status = match client.get_transaction_status_response_global(hash) {
             Ok(status) => status,
             Err(error) if journal_observation == SubmissionJournalObservation::Matching => {
                 return Err(eyre!(SubmissionUncertain {
@@ -517,17 +535,16 @@ impl Submit {
             {
                 bail!("durably published submission journal could not be reverified");
             }
-            initial_status =
-                client
-                    .get_transaction_status_response_auto(hash)
-                    .map_err(|error| {
-                        eyre!(SubmissionUncertain {
-                            transaction_hash: hash.to_string(),
-                            stage: "post-journal pre-POST reconciliation",
-                            journal: journal_path.clone(),
-                            detail: error.to_string(),
-                        })
-                    })?;
+            initial_status = client
+                .get_transaction_status_response_global(hash)
+                .map_err(|error| {
+                    eyre!(SubmissionUncertain {
+                        transaction_hash: hash.to_string(),
+                        stage: "post-journal pre-POST reconciliation",
+                        journal: journal_path.clone(),
+                        detail: error.to_string(),
+                    })
+                })?;
             if let Some(status) = initial_status.as_ref() {
                 require_journal_bound_status_response(
                     status,
@@ -539,7 +556,7 @@ impl Submit {
         }
 
         if let Some(status) = initial_status.as_ref() {
-            match classify_reconciled_submission_status(Some(&status.status.kind)) {
+            match classify_reconciled_submission_status(Some(status)) {
                 ReconciledSubmissionStatus::Rejected | ReconciledSubmissionStatus::Expired => {
                     bail!(
                         "governed activation reached terminal status {} instead of Applied",
@@ -550,7 +567,7 @@ impl Submit {
             }
         } else if let Err(post_error) = client.submit_prepared_transaction_payload(&prepared) {
             let mut detail = format!("POST failed or its result was ambiguous: {post_error}");
-            match client.get_transaction_status_response_auto(hash) {
+            match client.get_transaction_status_response_global(hash) {
                 Ok(Some(status)) => {
                     require_journal_bound_status_response(
                         &status,
@@ -558,7 +575,7 @@ impl Submit {
                         &journal_path,
                         "ambiguous POST immediate status identity reconciliation",
                     )?;
-                    match classify_reconciled_submission_status(Some(&status.status.kind)) {
+                    match classify_reconciled_submission_status(Some(&status)) {
                         ReconciledSubmissionStatus::Applied => {
                             let evidence = collect_finalized_activation_evidence(
                                 &client,
@@ -619,7 +636,7 @@ impl Submit {
                 )),
             }
 
-            let outcome = match wait_for_activation_terminal_status(&client, hash) {
+            let outcome = match wait_for_activation_applied(&client, hash) {
                 Ok(outcome) => outcome,
                 Err(error) => {
                     return reconcile_after_failed_wait(
@@ -629,7 +646,7 @@ impl Submit {
                         &exact,
                         &loaded.verified,
                         &journal_path,
-                        eyre!("{detail}; terminal wait failed: {error}"),
+                        eyre!("{detail}; Applied wait failed: {error}"),
                     );
                 }
             };
@@ -644,7 +661,7 @@ impl Submit {
             );
         }
 
-        let outcome = match wait_for_activation_terminal_status(&client, hash) {
+        let outcome = match wait_for_activation_applied(&client, hash) {
             Ok(outcome) => outcome,
             Err(wait_error) => {
                 return reconcile_after_failed_wait(
@@ -702,7 +719,7 @@ impl FinalizeReceipt {
         let transaction = &artifact.body.activation_transaction;
         let client = context.client_from_config();
         let status = client
-            .get_transaction_status_response_auto(transaction.hash())
+            .get_transaction_status_response_global(transaction.hash())
             .map_err(|error| {
                 eyre!(SubmissionUncertain {
                     transaction_hash: transaction.hash().to_string(),
@@ -725,7 +742,7 @@ impl FinalizeReceipt {
             &journal_path,
             "finalize status identity reconciliation",
         )?;
-        match classify_reconciled_submission_status(Some(&status.status.kind)) {
+        match classify_reconciled_submission_status(Some(&status)) {
             ReconciledSubmissionStatus::Applied => {}
             ReconciledSubmissionStatus::Rejected | ReconciledSubmissionStatus::Expired => {
                 bail!(
@@ -1164,7 +1181,7 @@ impl SubmitCanaryAuthorization {
                     require_canary_authorization_wall_margin(&authorization.verified, now)
                         .map_err(|error| error.to_string())?;
                     if client
-                        .get_transaction_status_response_auto(transaction.hash())
+                        .get_transaction_status_response_global(transaction.hash())
                         .map_err(|error| error.to_string())?
                         .is_some()
                     {
@@ -1201,7 +1218,7 @@ impl SubmitCanaryAuthorization {
             SubmissionJournalObservation::Matching => {}
             SubmissionJournalObservation::Absent => {
                 if client
-                    .get_transaction_status_response_auto(transaction.hash())
+                    .get_transaction_status_response_global(transaction.hash())
                     .wrap_err(
                         "failed to prove the reservation transaction absent before canary journal publication",
                     )?
@@ -1212,7 +1229,7 @@ impl SubmitCanaryAuthorization {
                     ));
                 }
                 if client
-                    .get_transaction_status_response_auto(
+                    .get_transaction_status_response_global(
                         authorization.verified.canary_transaction().hash(),
                     )
                     .wrap_err(
@@ -1253,7 +1270,7 @@ impl SubmitCanaryAuthorization {
         }
         let hash = prepared.hash();
         let mut status = client
-            .get_transaction_status_response_auto(hash)
+            .get_transaction_status_response_global(hash)
             .map_err(|error| {
                 eyre!(CanarySubmissionUncertain {
                     transaction_hash: hash.to_string(),
@@ -1282,7 +1299,7 @@ impl SubmitCanaryAuthorization {
             require_canary_authorization_wall_margin(&authorization.verified, now)?;
             if let Err(post_error) = client.submit_prepared_transaction_payload(&prepared) {
                 status = client
-                    .get_transaction_status_response_auto(hash)
+                    .get_transaction_status_response_global(hash)
                     .map_err(|error| {
                         eyre!(CanarySubmissionUncertain {
                             transaction_hash: hash.to_string(),
@@ -1308,7 +1325,7 @@ impl SubmitCanaryAuthorization {
                 &journal_path,
                 "canary reservation status identity reconciliation",
             )?;
-            match classify_reconciled_submission_status(Some(&observed.status.kind)) {
+            match classify_reconciled_submission_status(Some(observed)) {
                 ReconciledSubmissionStatus::Rejected | ReconciledSubmissionStatus::Expired => {
                     bail!(
                         "exact canary reservation reached terminal status {} instead of Applied",
@@ -1318,16 +1335,16 @@ impl SubmitCanaryAuthorization {
                 ReconciledSubmissionStatus::Applied | ReconciledSubmissionStatus::Unresolved => {}
             }
         }
-        let outcome = wait_for_activation_terminal_status(&client, hash).map_err(|error| {
+        let outcome = wait_for_activation_applied(&client, hash).map_err(|error| {
             eyre!(CanarySubmissionUncertain {
                 transaction_hash: hash.to_string(),
-                stage: "canary reservation terminal wait",
+                stage: "canary reservation Applied wait",
                 journal: journal_path.clone(),
                 detail: error.to_string(),
             })
         })?;
         require_journal_bound_wait_outcome(&outcome, &transaction, &journal_path)?;
-        if classify_reconciled_submission_status(Some(&outcome.terminal_kind))
+        if classify_reconciled_submission_status(Some(&outcome.r#final))
             != ReconciledSubmissionStatus::Applied
         {
             bail!(
@@ -1425,17 +1442,16 @@ impl SubmitCanary {
         }
         let mut authenticated_head = None;
 
-        let initial_status =
-            client
-                .get_transaction_status_response_auto(hash)
-                .map_err(|error| {
-                    eyre!(CanarySubmissionUncertain {
-                        transaction_hash: hash.to_string(),
-                        stage: "post-journal pre-POST status reconciliation",
-                        journal: journal_path.clone(),
-                        detail: error.to_string(),
-                    })
-                })?;
+        let initial_status = client
+            .get_transaction_status_response_global(hash)
+            .map_err(|error| {
+                eyre!(CanarySubmissionUncertain {
+                    transaction_hash: hash.to_string(),
+                    stage: "post-journal pre-POST status reconciliation",
+                    journal: journal_path.clone(),
+                    detail: error.to_string(),
+                })
+            })?;
         if let Some(status) = initial_status.as_ref()
             && finish_observed_canary_status(
                 context,
@@ -1477,7 +1493,7 @@ impl SubmitCanary {
                 .wrap_err("canary authorization expired before POST")?;
             if let Err(error) = client.submit_prepared_transaction_payload(&prepared) {
                 post_error = Some(error.to_string());
-                match client.get_transaction_status_response_auto(hash) {
+                match client.get_transaction_status_response_global(hash) {
                     Ok(Some(status)) => {
                         if finish_observed_canary_status(
                             context,
@@ -1504,10 +1520,10 @@ impl SubmitCanary {
             }
         }
 
-        let outcome = match wait_for_activation_terminal_status(&client, hash) {
+        let outcome = match wait_for_activation_applied(&client, hash) {
             Ok(outcome) => outcome,
             Err(wait_error) => {
-                match client.get_transaction_status_response_auto(hash) {
+                match client.get_transaction_status_response_global(hash) {
                     Ok(Some(status)) => {
                         if finish_observed_canary_status(
                             context,
@@ -1518,7 +1534,7 @@ impl SubmitCanary {
                             &journal_path,
                             &exact_wire,
                             &status,
-                            "proof-anchored after failed terminal wait",
+                            "proof-anchored after failed Applied wait",
                         )? {
                             return Ok(());
                         }
@@ -1530,7 +1546,7 @@ impl SubmitCanary {
                             stage: "failed wait transport reconciliation",
                             journal: journal_path,
                             detail: format!(
-                                "terminal wait failed: {wait_error}; final status query failed: {status_error}"
+                                "Applied wait failed: {wait_error}; final status query failed: {status_error}"
                             ),
                         }));
                     }
@@ -1540,7 +1556,7 @@ impl SubmitCanary {
                     stage: "failed wait status reconciliation",
                     journal: journal_path,
                     detail: format!(
-                        "{}terminal wait failed without a provable terminal result: {wait_error}",
+                        "{}Applied wait failed without provable global/state Applied evidence: {wait_error}",
                         post_error
                             .as_deref()
                             .map(|error| format!("ambiguous POST: {error}; "))
@@ -1559,16 +1575,16 @@ impl SubmitCanary {
             &journal_path,
             &exact_wire,
             &outcome.r#final,
-            "terminal wait",
+            "Applied wait",
         )? {
             return Ok(());
         }
         Err(eyre!(CanarySubmissionUncertain {
             transaction_hash: hash.to_string(),
-            stage: "configured terminal wait",
+            stage: "configured Applied wait",
             journal: journal_path,
             detail: format!(
-                "wait stopped without a supported terminal status: {}",
+                "Applied wait returned a non-authoritative status: {}",
                 outcome.terminal_kind
             ),
         }))
@@ -1590,9 +1606,9 @@ fn require_canary_wait_outcome(
     {
         return Err(eyre!(CanarySubmissionUncertain {
             transaction_hash: expected,
-            stage: "terminal wait identity reconciliation",
+            stage: "Applied wait identity reconciliation",
             journal: journal_path.to_path_buf(),
-            detail: "terminal wait summary differs from the authorized canary or final status"
+            detail: "Applied wait summary differs from the authorized canary or final status"
                 .to_owned(),
         }));
     }
@@ -1620,7 +1636,7 @@ fn finish_observed_canary_status<C: RunContext>(
             detail: error.to_string(),
         }));
     }
-    match classify_reconciled_submission_status(Some(&status.status.kind)) {
+    match classify_reconciled_submission_status(Some(status)) {
         ReconciledSubmissionStatus::Applied => {
             let carrier_height = applied_carrier_height(status).map_err(|error| {
                 eyre!(CanarySubmissionUncertain {
@@ -1749,7 +1765,7 @@ impl FinalizeCanaryEvidence {
             .get_status()
             .wrap_err("failed to capture pre-query Taira node status")?;
         let pipeline_status = client
-            .get_transaction_status_response_auto(transaction.hash())
+            .get_transaction_status_response_global(transaction.hash())
             .wrap_err("failed to query global canary pipeline status")?
             .ok_or_else(|| eyre!("canary transaction is absent from global pipeline status"))?;
         require_status_response_hash(&pipeline_status, transaction)?;
@@ -2175,7 +2191,7 @@ fn require_finalized_canary_authorization(
         eyre!("canary submission refused until the exact on-chain authorization journal exists")
     })?;
     let status = client
-        .get_transaction_status_response_auto(transaction.hash())
+        .get_transaction_status_response_global(transaction.hash())
         .wrap_err("failed to query exact on-chain canary authorization status")?
         .ok_or_else(|| eyre!("journaled on-chain canary authorization has no pipeline status"))?;
     require_journal_bound_status_response(
@@ -2184,9 +2200,7 @@ fn require_finalized_canary_authorization(
         &journal_path,
         "canary authorization prerequisite identity reconciliation",
     )?;
-    if classify_reconciled_submission_status(Some(&status.status.kind))
-        != ReconciledSubmissionStatus::Applied
-    {
+    if classify_reconciled_submission_status(Some(&status)) != ReconciledSubmissionStatus::Applied {
         bail!(
             "journaled on-chain canary authorization is not Applied: {}",
             status.status.kind
@@ -2304,7 +2318,7 @@ fn publish_canary_submission_journal(
         )
         .map_err(|error| error.to_string())?;
         if client
-            .get_transaction_status_response_auto(
+            .get_transaction_status_response_global(
                 authorization.verified.canary_transaction().hash(),
             )
             .map_err(|error| error.to_string())?
@@ -2424,13 +2438,13 @@ fn require_journal_bound_wait_outcome(
         &outcome.hash,
         transaction,
         journal_path,
-        "terminal wait outcome identity reconciliation",
+        "Applied wait outcome identity reconciliation",
     )?;
     require_journal_bound_status_response(
         &outcome.r#final,
         transaction,
         journal_path,
-        "terminal wait final status identity reconciliation",
+        "Applied wait final status identity reconciliation",
     )?;
     if outcome.terminal_kind != outcome.r#final.status.kind
         || outcome.block_height != outcome.r#final.status.block_height
@@ -2439,17 +2453,25 @@ fn require_journal_bound_wait_outcome(
     {
         return Err(eyre!(SubmissionUncertain {
             transaction_hash: transaction.hash().to_string(),
-            stage: "terminal wait outcome/final reconciliation",
+            stage: "Applied wait outcome/final reconciliation",
             journal: journal_path.to_path_buf(),
-            detail: "terminal wait summary differs from its final status response".to_owned(),
+            detail: "Applied wait summary differs from its final status response".to_owned(),
         }));
     }
     Ok(())
 }
 
 fn applied_carrier_height(status: &PipelineTransactionStatusResponse) -> Result<NonZeroU64> {
-    if status.status.kind != "Applied" {
-        bail!("pipeline status is not Applied: {}", status.status.kind);
+    if status.status.kind != "Applied"
+        || status.scope != "global"
+        || status.resolved_from != "state"
+    {
+        bail!(
+            "pipeline status is not exact global/state Applied: kind={}, scope={}, resolved_from={}",
+            status.status.kind,
+            status.scope,
+            status.resolved_from
+        );
     }
     NonZeroU64::new(
         status
@@ -2476,19 +2498,14 @@ fn applied_carrier_height_for_submission(
     })
 }
 
-fn wait_for_activation_terminal_status(
+fn wait_for_activation_applied(
     client: &Client,
     hash: HashOf<SignedTransaction>,
 ) -> Result<TransactionWaitOutcome> {
-    client.wait_for_transaction_terminal_status(
+    client.wait_for_transaction_applied(
         hash,
         TransactionWaitOptions {
             timeout: client.transaction_status_timeout,
-            terminal_statuses: vec![
-                TransactionWaitTerminalStatus::Applied,
-                TransactionWaitTerminalStatus::Rejected,
-                TransactionWaitTerminalStatus::Expired,
-            ],
             ..TransactionWaitOptions::default()
         },
     )
@@ -2504,7 +2521,7 @@ fn finish_waited_submission<C: RunContext>(
     outcome: TransactionWaitOutcome,
 ) -> Result<()> {
     require_journal_bound_wait_outcome(&outcome, transaction, journal_path)?;
-    match classify_reconciled_submission_status(Some(&outcome.terminal_kind)) {
+    match classify_reconciled_submission_status(Some(&outcome.r#final)) {
         ReconciledSubmissionStatus::Applied => {
             collect_finalized_activation_evidence(
                 client,
@@ -2545,10 +2562,10 @@ fn finish_waited_submission<C: RunContext>(
         }
         ReconciledSubmissionStatus::Unresolved => Err(eyre!(SubmissionUncertain {
             transaction_hash: transaction.hash().to_string(),
-            stage: "configured terminal wait",
+            stage: "configured Applied wait",
             journal: journal_path.to_path_buf(),
             detail: format!(
-                "wait stopped without a supported terminal status: {}",
+                "Applied wait returned a non-authoritative status: {}",
                 outcome.terminal_kind
             ),
         })),
@@ -2565,7 +2582,7 @@ fn reconcile_after_failed_wait<C: RunContext>(
     wait_error: eyre::Report,
 ) -> Result<()> {
     let hash = transaction.hash();
-    let status = client.get_transaction_status_response_auto(hash);
+    let status = client.get_transaction_status_response_global(hash);
     match status {
         Ok(Some(status)) => {
             require_journal_bound_status_response(
@@ -2574,7 +2591,7 @@ fn reconcile_after_failed_wait<C: RunContext>(
                 journal_path,
                 "failed wait status identity reconciliation",
             )?;
-            match classify_reconciled_submission_status(Some(&status.status.kind)) {
+            match classify_reconciled_submission_status(Some(&status)) {
                 ReconciledSubmissionStatus::Applied => {
                     let evidence = collect_finalized_activation_evidence(
                         client,
@@ -2594,7 +2611,7 @@ fn reconcile_after_failed_wait<C: RunContext>(
                             stage: "failed wait proof reconciliation",
                             journal: journal_path.to_path_buf(),
                             detail: format!(
-                                "terminal wait failed: {wait_error}; Applied evidence failed: {error}"
+                                "Applied wait failed: {wait_error}; Applied evidence failed: {error}"
                             ),
                         })
                     })?;
@@ -2602,7 +2619,7 @@ fn reconcile_after_failed_wait<C: RunContext>(
                         "status": "Applied",
                         "transaction_hash": (hash.to_string()),
                         "carrier_height": (evidence.carrier_height.get()),
-                        "reconciliation": "proof-anchored after failed terminal wait",
+                        "reconciliation": "proof-anchored after failed Applied wait",
                         "submission_journal": (journal_path.display().to_string()),
                     });
                     context.print_data(&report).map_err(|error| {
@@ -2627,7 +2644,7 @@ fn reconcile_after_failed_wait<C: RunContext>(
                     stage: "failed wait status reconciliation",
                     journal: journal_path.to_path_buf(),
                     detail: format!(
-                        "terminal wait failed: {wait_error}; latest status is {}",
+                        "Applied wait failed: {wait_error}; latest status is {}",
                         status.status.kind
                     ),
                 })),
@@ -2637,14 +2654,14 @@ fn reconcile_after_failed_wait<C: RunContext>(
             transaction_hash: hash.to_string(),
             stage: "failed wait status reconciliation",
             journal: journal_path.to_path_buf(),
-            detail: format!("terminal wait failed: {wait_error}; no status is currently visible"),
+            detail: format!("Applied wait failed: {wait_error}; no status is currently visible"),
         })),
         Err(status_error) => Err(eyre!(SubmissionUncertain {
             transaction_hash: hash.to_string(),
             stage: "failed wait transport reconciliation",
             journal: journal_path.to_path_buf(),
             detail: format!(
-                "terminal wait failed: {wait_error}; final status query failed: {status_error}"
+                "Applied wait failed: {wait_error}; final status query failed: {status_error}"
             ),
         })),
     }
@@ -4022,24 +4039,53 @@ mod tests {
 
     #[test]
     fn terminal_reconciliation_classifies_only_provable_or_final_states() {
+        let response = |kind: &str, scope: &str, resolved_from: &str| {
+            PipelineTransactionStatusResponse::new(
+                format!("{}b", "a".repeat(63)),
+                iroha_torii_shared::PipelineTransactionStatus {
+                    kind: kind.to_owned(),
+                    block_height: Some(7),
+                },
+                scope.to_owned(),
+                resolved_from.to_owned(),
+            )
+        };
+        let applied = response("Applied", "global", "state");
         assert_eq!(
-            classify_reconciled_submission_status(Some("Applied")),
+            classify_reconciled_submission_status(Some(&applied)),
             ReconciledSubmissionStatus::Applied
         );
-        assert_eq!(
-            classify_reconciled_submission_status(Some("Rejected")),
-            ReconciledSubmissionStatus::Rejected
-        );
-        assert_eq!(
-            classify_reconciled_submission_status(Some("Expired")),
-            ReconciledSubmissionStatus::Expired
-        );
-        for unresolved in [Some("Queued"), Some("Approved"), Some("Committed"), None] {
+        for failure in ["Rejected", "Expired"] {
+            let status = response(failure, "global", "state");
+            let expected = if failure == "Rejected" {
+                ReconciledSubmissionStatus::Rejected
+            } else {
+                ReconciledSubmissionStatus::Expired
+            };
             assert_eq!(
-                classify_reconciled_submission_status(unresolved),
+                classify_reconciled_submission_status(Some(&status)),
+                expected
+            );
+        }
+        let unresolved = [
+            response("Applied", "global", "cache"),
+            response("Rejected", "global", "cache"),
+            response("Expired", "global", "queue"),
+            response("Applied", "local", "state"),
+            response("Queued", "global", "queue"),
+            response("Approved", "global", "state"),
+            response("Committed", "global", "state"),
+        ];
+        for status in &unresolved {
+            assert_eq!(
+                classify_reconciled_submission_status(Some(status)),
                 ReconciledSubmissionStatus::Unresolved
             );
         }
+        assert_eq!(
+            classify_reconciled_submission_status(None),
+            ReconciledSubmissionStatus::Unresolved
+        );
     }
 
     #[test]
@@ -4104,7 +4150,7 @@ mod tests {
                 kind: "Applied".to_owned(),
                 block_height: Some(7),
             },
-            "auto".to_owned(),
+            "global".to_owned(),
             "state".to_owned(),
         );
         assert!(
@@ -4123,7 +4169,7 @@ mod tests {
             attempts: 1,
             elapsed_ms: 1,
             block_height: Some(7),
-            scope: "auto".to_owned(),
+            scope: "global".to_owned(),
             resolved_from: "state".to_owned(),
             r#final: status.clone(),
         };
@@ -4131,7 +4177,7 @@ mod tests {
             require_journal_bound_wait_outcome(&inconsistent, &transaction, journal).unwrap_err();
         let message = format!("{error:#}");
         assert!(message.contains("submission-uncertain for activation"));
-        assert!(message.contains("terminal wait outcome/final reconciliation"));
+        assert!(message.contains("Applied wait outcome/final reconciliation"));
         assert!(message.contains(&journal.display().to_string()));
 
         status.hash = "00".repeat(32);

@@ -16,10 +16,16 @@ import java.util.concurrent.CompletableFuture;
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters;
 import org.bouncycastle.crypto.signers.Ed25519Signer;
 import org.hyperledger.iroha.android.address.AccountAddress;
+import org.hyperledger.iroha.android.alias.AccountOnboardingCurrentStateV1;
+import org.hyperledger.iroha.android.alias.AccountOnboardingPlanReceiptV1;
+import org.hyperledger.iroha.android.alias.AccountOnboardingPlanRequestV1;
+import org.hyperledger.iroha.android.alias.AccountOnboardingProofRequiredPrepareResponseV1;
+import org.hyperledger.iroha.android.alias.TairaPublicResetMutationBindingV1;
 import org.hyperledger.iroha.android.client.ClientResponse;
 import org.hyperledger.iroha.android.client.IrohaClient;
 import org.hyperledger.iroha.android.client.JsonParser;
 import org.hyperledger.iroha.android.client.PipelineStatusOptions;
+import org.hyperledger.iroha.android.client.ToriiCanonicalRequestAuth;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
 import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.model.NetworkId;
@@ -109,6 +115,23 @@ public final class NexusAppClientTest {
     assertArrayEquals(connect.signature, receipt.signedTransaction().signature());
     assertNotNull(connect.lastSignable);
     assertTrue(connect.lastSignable.payloadBytes().length > 0);
+    expectIllegalArgument(
+        () ->
+            new NexusTransferReceipt(
+                "aa".repeat(32),
+                receipt.signedTransaction(),
+                receipt.submission(),
+                receipt.finalStatus()));
+    final String wrongMarkedHash =
+        (receipt.transactionHashHex().charAt(0) == '0' ? "1" : "0")
+            + receipt.transactionHashHex().substring(1);
+    expectIllegalArgument(
+        () ->
+            new NexusTransferReceipt(
+                wrongMarkedHash,
+                receipt.signedTransaction(),
+                receipt.submission(),
+                receipt.finalStatus()));
   }
 
   @Test
@@ -799,6 +822,15 @@ public final class NexusAppClientTest {
     throw new AssertionError("expected NexusAppError");
   }
 
+  private static void expectIllegalArgument(final ThrowingRunnable runnable) {
+    try {
+      runnable.run();
+    } catch (final IllegalArgumentException expected) {
+      return;
+    }
+    throw new AssertionError("expected IllegalArgumentException");
+  }
+
   private static byte[] filled(final int value, final int size) {
     final byte[] bytes = new byte[size];
     Arrays.fill(bytes, (byte) value);
@@ -939,6 +971,19 @@ public final class NexusAppClientTest {
       this.submitFailure = submitFailure;
       this.statusFailure = statusFailure;
       this.statusKind = statusKind;
+    }
+
+    @Override
+    public CompletableFuture<AccountOnboardingCurrentStateV1>
+        verifyAccountOnboardingCurrentState(
+            final AccountOnboardingProofRequiredPrepareResponseV1 proofRequired,
+            final AccountOnboardingPlanRequestV1 request,
+            final AccountOnboardingPlanReceiptV1 receipt,
+            final TairaPublicResetMutationBindingV1 binding,
+            final String expectedAuthority,
+            final NetworkId expectedNetworkId,
+            final ToriiCanonicalRequestAuth canonicalAuth) {
+      throw new AssertionError("account onboarding is not used by this test fake");
     }
 
     @Override

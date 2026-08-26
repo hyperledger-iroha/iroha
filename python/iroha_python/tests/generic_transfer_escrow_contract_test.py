@@ -256,6 +256,122 @@ def test_public_status_rejects_native_batch_outcomes() -> None:
         client_module._normalize_public_pipeline_status(payload, "ab" * 32)
 
 
+@pytest.mark.parametrize(
+    "embedded_hash",
+    [
+        "AB" * 32,
+        "0x" + "ab" * 32,
+        " " + "ab" * 32,
+        "ab" * 31,
+        "aa" * 32,
+        b"\xab" * 32,
+    ],
+)
+def test_contract_wait_rejects_noncanonical_embedded_transaction_hash(
+    embedded_hash: object,
+) -> None:
+    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
+    response = {
+        "tx_hash_hex": embedded_hash,
+        "pipeline_status": {
+            "hash": "ab" * 32,
+            "status": {"kind": "Applied", "block_height": 1},
+            "scope": "global",
+            "resolved_from": "state",
+        },
+    }
+
+    with pytest.raises(
+        (TypeError, ValueError),
+        match="(must be a string|exact lowercase marked)",
+    ):
+        client._wait_for_contract_response(
+            response,
+            timeout_ms=1_000,
+            interval=0,
+        )
+
+
+def test_contract_wait_requires_exact_hash_field_and_pipeline_binding() -> None:
+    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
+    tx_hash = "ab" * 32
+    exact_status = {
+        "hash": tx_hash,
+        "status": {"kind": "Applied", "block_height": 1},
+        "scope": "global",
+        "resolved_from": "state",
+    }
+    with pytest.raises(ValueError, match="canonical tx_hash_hex"):
+        client._wait_for_contract_response(
+            {"transaction_hash": tx_hash, "pipeline_status": exact_status},
+            timeout_ms=1_000,
+            interval=0,
+        )
+    with pytest.raises(ValueError, match="does not match tx_hash_hex"):
+        client._wait_for_contract_response(
+            {
+                "tx_hash_hex": tx_hash,
+                "pipeline_status": {**exact_status, "hash": "cd" * 32},
+            },
+            timeout_ms=1_000,
+            interval=0,
+        )
+
+
+def test_contract_wait_uses_only_exact_authoritative_applied_embedded_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
+    tx_hash = "ab" * 32
+    queued = {
+        "hash": tx_hash,
+        "status": {"kind": "Queued"},
+        "scope": "local",
+        "resolved_from": "queue",
+    }
+    applied = {
+        "hash": tx_hash,
+        "status": {"kind": "Applied", "block_height": 9},
+        "scope": "global",
+        "resolved_from": "state",
+    }
+    waits: list[tuple[str, dict[str, object]]] = []
+
+    def wait(hash_hex: str, **kwargs: object) -> dict[str, object]:
+        waits.append((hash_hex, kwargs))
+        return applied
+
+    monkeypatch.setattr(client, "wait_for_transaction_status", wait)
+    result = client._wait_for_contract_response(
+        {"tx_hash_hex": tx_hash, "pipeline_status": queued},
+        timeout_ms=1_000,
+        interval=0.25,
+    )
+
+    assert result["r#final"] == applied
+    assert waits == [
+        (
+            tx_hash,
+            {
+                "interval": 0.25,
+                "timeout": 1.0,
+            },
+        )
+    ]
+
+    monkeypatch.setattr(
+        client,
+        "wait_for_transaction_status",
+        lambda *_args, **_kwargs: pytest.fail("exact Applied status must not poll"),
+    )
+    embedded = client._wait_for_contract_response(
+        {"tx_hash_hex": tx_hash, "pipeline_status": applied},
+        timeout_ms=1_000,
+        interval=0.25,
+    )
+    assert embedded["r#final"] == applied
+
+
 def test_signed_role_scoped_escrow_queries_use_native_query_payloads(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

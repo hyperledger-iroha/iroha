@@ -125,16 +125,45 @@ async fn app_api_router_smoke() {
             "{path} must reject missing canonical account authentication"
         );
     }
-    assert_route_is_not_auth_denied(
-        app.clone(),
-        Request::builder()
-            .uri(Uri::from_static(
-                "/v1/soracloud/model/upload/encryption-recipient",
-            ))
-            .body(axum::body::Body::empty())
-            .expect("public Soracloud discovery GET"),
-    )
-    .await;
+    for retired_path in [
+        "/v1/soracloud/model/upload/encryption-recipient",
+        "/v1/soracloud/model/upload/private/receipts",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(retired_path)
+                    .body(axum::body::Body::empty())
+                    .expect("retired uploaded private-model GET"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(
+            response.status(),
+            StatusCode::NOT_FOUND,
+            "retired uploaded private-model route `{retired_path}` must remain unmatched"
+        );
+    }
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/soracloud/model/upload/private/execute")
+                .header(CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from(
+                    r#"{"model":{"weights_i8":[127]},"plaintext_input_i32":[2147483647]"#,
+                ))
+                .expect("retired uploaded private-model execute request"),
+        )
+        .await
+        .expect("router response");
+    assert_eq!(
+        response.status(),
+        StatusCode::NOT_FOUND,
+        "retired uploaded private-model execute route must reject before body deserialization"
+    );
     // The v1 alias VOPRF-shaped hash helper was retired before release because it was
     // neither keyed nor verifiable. Every legacy request shape must remain unroutable,
     // including malformed input, a replay, cross-domain material, and wrong-key/proof fields.

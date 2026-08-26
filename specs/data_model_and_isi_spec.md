@@ -76,7 +76,7 @@ Setting parameters (ISI): `SetParameter(Parameter)` updates the corresponding fi
 ## Instruction Serialization and Registry
 - Core trait: `Instruction: Send + Sync + 'static` with `dyn_encode()`, `as_any()`, stable `id()` (defaults to concrete type name).
 - `InstructionBox`: `Box<dyn Instruction>` wrapper. Clone/Eq/Ord operate on `(type_id, encoded_bytes)` so equality is by value.
-- Norito serde for `InstructionBox` serializes as `(String wire_id, Vec<u8> payload)` (falls back to `type_name` if no wire ID). Deserialization uses a global `InstructionRegistry` mapping identifiers to constructors. Default registry includes all built‑in ISI. Code: `crates/iroha_data_model/src/isi/{mod.rs,registry.rs}`.
+- Norito serde for `InstructionBox` serializes as `(String wire_id, Vec<u8> payload)`. Encoding fails when the concrete type has no registered wire ID; decoding accepts only registered wire IDs and never a Rust type-name alias. The default global `InstructionRegistry` includes all built-in ISI. Code: `crates/iroha_data_model/src/isi/{mod.rs,registry.rs}`.
 
 ---
 

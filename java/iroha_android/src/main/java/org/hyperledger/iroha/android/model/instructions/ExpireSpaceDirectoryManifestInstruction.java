@@ -4,6 +4,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
+import org.hyperledger.iroha.android.nexus.UaidLiteral;
 
 /** Typed builder for the {@code ExpireSpaceDirectoryManifest} instruction. */
 public final class ExpireSpaceDirectoryManifestInstruction implements InstructionTemplate {
@@ -109,7 +110,7 @@ public final class ExpireSpaceDirectoryManifestInstruction implements Instructio
     private Builder() {}
 
     public Builder setUaid(final String uaid) {
-      this.uaid = Objects.requireNonNull(uaid, "uaid");
+      this.uaid = UaidLiteral.canonicalize(uaid, "uaid");
       return this;
     }
 

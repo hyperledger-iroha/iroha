@@ -26,19 +26,6 @@ struct StoredDaReceipt {
     receipt: DaIngestReceipt,
 }
 const STORED_RECEIPT_VERSION: u16 = 1;
-/// Encode a DA receipt spool record using the production wrapper schema.
-#[cfg(all(test, feature = "sumeragi-main-loop-tests"))]
-pub(crate) fn encode_receipt_for_spool_test(
-    sequence: u64,
-    receipt: DaIngestReceipt,
-) -> Result<Vec<u8>, norito::core::Error> {
-    let stored = StoredDaReceipt {
-        version: STORED_RECEIPT_VERSION,
-        sequence,
-        receipt,
-    };
-    norito::to_bytes(&stored)
-}
 /// Receipt entry captured from the spool.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DaReceiptEntry {

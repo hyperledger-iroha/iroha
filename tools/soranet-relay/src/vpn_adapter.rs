@@ -5,8 +5,8 @@
 //! tested without a full tunnel implementation.
 use crate::vpn::{
     CoverFrameMeta, PaddedCell, VpnFrameBuildError, VpnFrameIoError, VpnOverlay, VpnSession,
-    read_frame as read_padded_frame, schedule_frames, send_scheduled_frames_with_adapter,
-    write_frame as write_padded_frame,
+    VpnSessionStateError, read_frame as read_padded_frame, schedule_frames,
+    send_scheduled_frames_with_adapter, write_frame as write_padded_frame,
 };
 use iroha_data_model::soranet::vpn::{VpnCellClassV1, VpnCellFlagsV1, VpnCellV1, VpnFlowLabelV1};
 use rand::{TryRngCore as _, rngs::OsRng};
@@ -85,13 +85,13 @@ impl VpnAdapter {
             .record_vpn_frame_egress_count(1, is_cover);
         self.session.record_egress(bytes, is_cover);
     }
-    /// Pad and account for an egress VPN cell, returning the fixed-length frame.
+    /// Pad an egress VPN cell without mutating sequence or accounting state.
+    ///
+    /// Callers must use [`Self::write_egress_frame`] when the frame is intended
+    /// for transmission. Encoding alone is deliberately side-effect free so a
+    /// failed or abandoned write cannot become billable usage.
     pub fn encode_egress_cell(&self, cell: VpnCellV1) -> Result<PaddedCell, VpnFrameBuildError> {
-        let class = cell.header.class;
-        let payload_len = cell.payload.len() as u64;
-        let frame = self.overlay.pad_cell(cell)?;
-        self.session.record_classified_egress(class, payload_len);
-        Ok(frame)
+        self.overlay.pad_cell(cell)
     }
     /// Finalize the session into a receipt for billing/telemetry.
     pub fn finish_receipt(
@@ -103,7 +103,7 @@ impl VpnAdapter {
         self.session
             .finish_receipt(session_id, exit_class, meter_hash)
     }
-    /// Build, pad, and account for a data cell in one step.
+    /// Build and pad a data cell without mutating sequence or accounting state.
     pub fn encapsulate_data_cell(
         &self,
         circuit_id: [u8; 16],
@@ -122,20 +122,14 @@ impl VpnAdapter {
     pub fn record_frame_ingress(
         &self,
         frame: &[u8],
-    ) -> Result<
-        iroha_data_model::soranet::vpn::VpnCellV1,
-        iroha_data_model::soranet::vpn::VpnCellError,
-    > {
+    ) -> Result<iroha_data_model::soranet::vpn::VpnCellV1, VpnSessionStateError> {
         self.session.record_frame_ingress(&self.overlay, frame)
     }
     /// Parse and account for an egress VPN frame, returning the parsed cell on success.
     pub fn record_frame_egress(
         &self,
         frame: &[u8],
-    ) -> Result<
-        iroha_data_model::soranet::vpn::VpnCellV1,
-        iroha_data_model::soranet::vpn::VpnCellError,
-    > {
+    ) -> Result<iroha_data_model::soranet::vpn::VpnCellV1, VpnSessionStateError> {
         self.session.record_frame_egress(&self.overlay, frame)
     }
     /// Read, parse, and account for an ingress VPN frame from an async reader.
@@ -144,9 +138,28 @@ impl VpnAdapter {
         reader: &mut R,
     ) -> Result<VpnCellV1, VpnFrameIoError> {
         let cell = read_padded_frame(&self.overlay, reader).await?;
-        self.session
-            .record_ingress_sequence(cell.header.sequence)
-            .map_err(VpnFrameIoError::Parse)?;
+        self.session.record_ingress_sequence(cell.header.sequence)?;
+        self.session.record_parsed_ingress(&cell);
+        Ok(cell)
+    }
+    /// Read an ingress frame and bind its routing metadata to the authenticated session.
+    ///
+    /// The circuit and flow label are checked before sequence or accounting
+    /// state is committed, so a confused-deputy frame cannot consume another
+    /// session's counters.
+    pub async fn read_bound_ingress_frame<R: AsyncRead + Unpin>(
+        &self,
+        reader: &mut R,
+        expected_circuit_id: [u8; 16],
+        expected_flow_label: VpnFlowLabelV1,
+    ) -> Result<VpnCellV1, VpnFrameIoError> {
+        let cell = read_padded_frame(&self.overlay, reader).await?;
+        if cell.header.circuit_id != expected_circuit_id
+            || cell.header.flow_label != expected_flow_label
+        {
+            return Err(VpnFrameIoError::SessionBindingMismatch);
+        }
+        self.session.record_ingress_sequence(cell.header.sequence)?;
         self.session.record_parsed_ingress(&cell);
         Ok(cell)
     }
@@ -156,8 +169,15 @@ impl VpnAdapter {
         writer: &mut W,
         cell: VpnCellV1,
     ) -> Result<(), VpnFrameIoError> {
+        let sequence = cell.header.sequence;
+        let class = cell.header.class;
+        let payload_len = cell.payload.len() as u64;
         let padded = self.encode_egress_cell(cell)?;
+        // Commit before I/O so an ambiguous partial write can never make the
+        // same direction-wide sequence reusable.
+        self.session.record_egress_sequence(sequence)?;
         write_padded_frame(writer, &padded).await?;
+        self.session.record_classified_egress(class, payload_len);
         Ok(())
     }
     /// Encode and send a sequence of data payloads as VPN data cells.
@@ -241,21 +261,44 @@ pub struct VpnBridge {
     cover_seed: [u8; 32],
 }
 fn random_cover_seed() -> Result<[u8; 32], VpnFrameBuildError> {
-    let mut seed = [0u8; 32];
+    let mut seed = zeroize::Zeroizing::new([0u8; 32]);
     OsRng
-        .try_fill_bytes(&mut seed)
+        .try_fill_bytes(seed.as_mut())
         .map_err(|_| VpnFrameBuildError::CoverRandomnessUnavailable)?;
     if seed.iter().all(|byte| *byte == 0) {
-        seed.fill(0);
-        std::hint::black_box(&mut seed);
+        return Err(VpnFrameBuildError::CoverRandomnessUnavailable);
+    }
+    Ok(*seed)
+}
+
+fn derive_cover_batch_seed(
+    master_seed: &[u8; 32],
+    circuit_id: &[u8; 16],
+    flow_label: VpnFlowLabelV1,
+    start_sequence: u64,
+    payload_count: usize,
+) -> Result<[u8; 32], VpnFrameBuildError> {
+    let payload_count =
+        u64::try_from(payload_count).map_err(|_| VpnFrameBuildError::SequenceExhausted)?;
+    let mut hasher = blake3::Hasher::new_keyed(master_seed);
+    hasher.update(b"iroha.soranet.vpn.cover-batch.v1\0");
+    hasher.update(circuit_id);
+    hasher.update(&flow_label.to_u32().to_be_bytes());
+    hasher.update(&start_sequence.to_be_bytes());
+    hasher.update(&payload_count.to_be_bytes());
+    let mut digest = hasher.finalize();
+    let mut seed = *digest.as_bytes();
+    zeroize::Zeroize::zeroize(&mut digest);
+    zeroize::Zeroize::zeroize(&mut hasher);
+    if seed.iter().all(|byte| *byte == 0) {
+        zeroize::Zeroize::zeroize(&mut seed);
         return Err(VpnFrameBuildError::CoverRandomnessUnavailable);
     }
     Ok(seed)
 }
 impl VpnBridge {
     fn clear_cover_seed(&mut self) {
-        self.cover_seed.fill(0);
-        std::hint::black_box(&mut self.cover_seed);
+        zeroize::Zeroize::zeroize(&mut self.cover_seed);
     }
 
     /// Construct a new bridge bound to a circuit and flow label.
@@ -347,14 +390,26 @@ impl VpnBridge {
             flags: cover_flags,
             start_sequence,
         };
-        let schedule = schedule_frames(overlay, data_cells, cover_meta, self.cover_seed)
-            .map_err(VpnFrameIoError::Build)?;
+        let mut batch_seed = derive_cover_batch_seed(
+            &self.cover_seed,
+            &self.circuit_id,
+            self.flow_label,
+            start_sequence,
+            payloads.len(),
+        )?;
+        let schedule_result = schedule_frames(overlay, data_cells, cover_meta, batch_seed);
+        zeroize::Zeroize::zeroize(&mut batch_seed);
+        let schedule = schedule_result.map_err(VpnFrameIoError::Build)?;
         let cover_frames = schedule.iter().filter(|frame| frame.is_cover).count();
         let frame_count =
             u64::try_from(schedule.len()).map_err(|_| VpnFrameBuildError::SequenceExhausted)?;
-        self.next_sequence = start_sequence
+        let next_sequence = start_sequence
             .checked_add(frame_count)
             .ok_or(VpnFrameBuildError::SequenceExhausted)?;
+        // Burn the whole batch before the first write. Any I/O error is
+        // ambiguous about how much reached the peer, so retrying from the old
+        // sequence would violate the direction-wide replay invariant.
+        self.next_sequence = next_sequence;
         send_scheduled_frames_with_adapter(
             &schedule,
             writer,
@@ -447,7 +502,44 @@ mod tests {
     use super::*;
     use crate::metrics::Metrics;
     use iroha_data_model::soranet::vpn::VpnCellHeaderV1;
-    use std::sync::Arc;
+    use std::{
+        io,
+        pin::Pin,
+        sync::Arc,
+        task::{Context, Poll},
+    };
+
+    struct PartialFailWriter {
+        prefix_bytes: usize,
+        written: usize,
+    }
+
+    impl AsyncWrite for PartialFailWriter {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            _context: &mut Context<'_>,
+            buffer: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            if self.written == 0 {
+                let written = self.prefix_bytes.min(buffer.len());
+                self.written = written;
+                return Poll::Ready(Ok(written));
+            }
+            Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "fixture write failure after a partial frame",
+            )))
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
     #[test]
     fn bridge_draws_nonzero_cover_seed_and_rejects_inert_override() {
         let metrics = Arc::new(Metrics::new());
@@ -465,6 +557,22 @@ mod tests {
         ));
         bridge.clear_cover_seed();
         assert_eq!([0u8; 32], bridge.cover_seed);
+    }
+
+    #[test]
+    fn cover_batch_seed_binds_sequence_and_session_metadata() {
+        let master = [0xA5; 32];
+        let circuit = [0x5A; 16];
+        let flow = VpnFlowLabelV1::from_u32(7).expect("flow label");
+        let first =
+            derive_cover_batch_seed(&master, &circuit, flow, 0, 1).expect("first cover batch seed");
+        let second = derive_cover_batch_seed(&master, &circuit, flow, 1, 1)
+            .expect("second cover batch seed");
+        let other_circuit = derive_cover_batch_seed(&master, &[0x5B; 16], flow, 0, 1)
+            .expect("other circuit cover seed");
+        assert_ne!(first, second);
+        assert_ne!(first, other_circuit);
+        assert_ne!(first, [0; 32]);
     }
 
     #[test]
@@ -509,8 +617,44 @@ mod tests {
         assert_eq!(u64::MAX, bridge.next_sequence);
     }
 
+    #[tokio::test]
+    async fn bridge_burns_batch_sequence_before_a_partial_write_failure() {
+        let metrics = Arc::new(Metrics::new());
+        let mut config = crate::config::VpnConfig::default();
+        config.cover.enabled = false;
+        let overlay = VpnOverlay::from_config(config);
+        let session = VpnSession::from_parts(Arc::clone(&metrics));
+        let adapter = VpnAdapter::new(session, overlay);
+        let mut bridge = VpnBridge::new(
+            adapter,
+            [0xA5; 16],
+            VpnFlowLabelV1::from_u32(1).expect("flow label"),
+        )
+        .expect("random cover seed");
+        let mut writer = PartialFailWriter {
+            prefix_bytes: 16,
+            written: 0,
+        };
+
+        bridge
+            .send_payloads(&mut writer, &[vec![0xAA]])
+            .await
+            .expect_err("fixture writer must fail after a partial frame");
+        assert_eq!(writer.written, 16);
+        assert_eq!(bridge.next_sequence, 1, "failed batch must stay burned");
+        assert_eq!(metrics.snapshot().vpn_egress_frames, 0);
+
+        let mut sink = tokio::io::sink();
+        bridge
+            .send_payloads(&mut sink, &[vec![0xBB]])
+            .await
+            .expect("the next fresh sequence remains usable");
+        assert_eq!(bridge.next_sequence, 2);
+        assert_eq!(metrics.snapshot().vpn_egress_frames, 1);
+    }
+
     #[test]
-    fn adapter_counts_cover_cells_on_encode() {
+    fn adapter_encoding_is_side_effect_free() {
         let metrics = Arc::new(Metrics::new());
         metrics.set_vpn_meter_labels("vpn.session", "vpn.egress.bytes");
         let overlay = VpnOverlay::from_config(Default::default());
@@ -536,12 +680,99 @@ mod tests {
             .encode_egress_cell(cell)
             .expect("encoded cover cell");
         let snapshot = metrics.snapshot();
-        assert_eq!(1, snapshot.vpn_frames);
-        assert_eq!(1, snapshot.vpn_egress_frames);
-        assert_eq!(1, snapshot.vpn_cover_frames);
-        assert_eq!(5, snapshot.vpn_cover_bytes);
-        assert_eq!(5, snapshot.vpn_cover_egress_bytes);
+        assert_eq!(0, snapshot.vpn_frames);
+        assert_eq!(0, snapshot.vpn_egress_frames);
+        assert_eq!(0, snapshot.vpn_cover_frames);
+        assert_eq!(0, snapshot.vpn_cover_bytes);
+        assert_eq!(0, snapshot.vpn_cover_egress_bytes);
         assert_eq!(0, snapshot.vpn_data_bytes);
         assert_eq!(0, snapshot.vpn_data_egress_bytes);
+    }
+
+    #[tokio::test]
+    async fn failed_frame_write_does_not_charge_but_burns_sequence() {
+        let metrics = Arc::new(Metrics::new());
+        metrics.set_vpn_meter_labels("vpn.session", "vpn.egress.bytes");
+        let overlay = VpnOverlay::from_config(Default::default());
+        let session = VpnSession::from_parts(Arc::clone(&metrics));
+        let adapter = VpnAdapter::new(session, overlay);
+        let cell = VpnCellV1 {
+            header: VpnCellHeaderV1 {
+                version: 1,
+                class: VpnCellClassV1::Data,
+                flags: VpnCellFlagsV1::new(false, false, false, false),
+                circuit_id: [0x33; 16],
+                flow_label: VpnFlowLabelV1::from_u32(1).expect("flow label"),
+                sequence: 7,
+                ack: 0,
+                padding_budget_ms: adapter.overlay().config().padding_budget_ms,
+                payload_len: 0,
+            },
+            payload: vec![0xAB; 5],
+        };
+        let (mut failed_writer, failed_reader) = tokio::io::duplex(1_024);
+        drop(failed_reader);
+        adapter
+            .write_egress_frame(&mut failed_writer, cell.clone())
+            .await
+            .expect_err("closed writer peer must fail");
+        let snapshot = metrics.snapshot();
+        assert_eq!(0, snapshot.vpn_egress_frames);
+        assert_eq!(0, snapshot.vpn_egress_bytes);
+
+        let (mut writer, _reader) = tokio::io::duplex(2_048);
+        adapter
+            .write_egress_frame(&mut writer, cell.clone())
+            .await
+            .expect_err("an ambiguously written sequence must not be reusable");
+        let mut next = cell;
+        next.header.sequence = 8;
+        adapter
+            .write_egress_frame(&mut writer, next)
+            .await
+            .expect("the next sequence remains usable");
+        let snapshot = metrics.snapshot();
+        assert_eq!(1, snapshot.vpn_egress_frames);
+        assert_eq!(5, snapshot.vpn_egress_bytes);
+    }
+
+    #[tokio::test]
+    async fn bound_ingress_rejects_foreign_session_before_accounting() {
+        let metrics = Arc::new(Metrics::new());
+        metrics.set_vpn_meter_labels("vpn.session", "vpn.egress.bytes");
+        let overlay = VpnOverlay::from_config(Default::default());
+        let session = VpnSession::from_parts(Arc::clone(&metrics));
+        let adapter = VpnAdapter::new(session, overlay);
+        let flow = VpnFlowLabelV1::from_u32(1).expect("flow label");
+        let cell = VpnCellV1 {
+            header: VpnCellHeaderV1 {
+                version: 1,
+                class: VpnCellClassV1::Data,
+                flags: VpnCellFlagsV1::new(false, false, false, false),
+                circuit_id: [0x44; 16],
+                flow_label: flow,
+                sequence: 3,
+                ack: 0,
+                padding_budget_ms: adapter.overlay().config().padding_budget_ms,
+                payload_len: 0,
+            },
+            payload: vec![0xCD; 8],
+        };
+        let padded = adapter
+            .encode_egress_cell(cell)
+            .expect("valid foreign frame");
+        let (mut writer, mut reader) = tokio::io::duplex(2_048);
+        write_padded_frame(&mut writer, &padded)
+            .await
+            .expect("write foreign frame");
+        let error = adapter
+            .read_bound_ingress_frame(&mut reader, [0x45; 16], flow)
+            .await
+            .expect_err("foreign circuit must fail closed");
+        assert!(matches!(&error, VpnFrameIoError::SessionBindingMismatch));
+        assert!(!error.to_string().contains("4444"));
+        let snapshot = metrics.snapshot();
+        assert_eq!(0, snapshot.vpn_ingress_frames);
+        assert_eq!(0, snapshot.vpn_ingress_bytes);
     }
 }

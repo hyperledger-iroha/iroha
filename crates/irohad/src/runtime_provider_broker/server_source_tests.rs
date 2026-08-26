@@ -997,7 +997,7 @@ fn stock_registry_projects_exact_streamed_provider_source_limits() {
     ));
 }
 #[test]
-fn musubi_source_fetch_v2_reconstructs_exact_private_binding() {
+fn musubi_source_fetch_v1_reconstructs_exact_private_binding() {
     let payload = vec![0xD7; 4 * 1024 + 19];
     let (generic_authorization, manifest, plan) = test_source_material(&payload);
     let (authorization, musubi) = test_source_musubi_fetch_binding(
@@ -1460,9 +1460,7 @@ fn send_handshake(stream: &mut UnixStream, response: &HandshakeResponseV1) {
 fn read_operation(stream: &mut UnixStream) -> OperationRequestV1 {
     // The fake broker represents a separate process, so its decode admission
     // must not compete with the in-process client for one process-local pool.
-    let decode_pool = Arc::new(DecodeResourcePoolV1::new(
-        MAX_BROKER_SHARED_DECODE_BYTES_V1,
-    ));
+    let decode_pool = Arc::new(DecodeResourcePoolV1::new(MAX_BROKER_SHARED_DECODE_BYTES_V1));
     let (announced_slot, announced_operation, frame, admission) =
         read_operation_request_frame_inner(stream, None, Some(decode_pool))
             .expect("read fake broker operation");
@@ -1770,7 +1768,7 @@ fn source_reader_drop_closes_unverified_connection() {
     }
 }
 #[test]
-fn source_fetch_v2_accepts_generic_and_rejects_musubi_substitution() {
+fn source_fetch_v1_accepts_generic_and_rejects_musubi_substitution() {
     let payload = vec![0xD1; 4096];
     let (authorization, manifest, plan) = test_source_material(&payload);
     let bindings = source_test_catalog(Duration::from_secs(5), 64 * 1024, 1);
@@ -1785,7 +1783,7 @@ fn source_fetch_v2_accepts_generic_and_rejects_musubi_substitution() {
         )
         .expect("construct generic source request"),
     )
-    .expect("project generic V2 source wire");
+    .expect("project generic V1 source wire");
     assert_eq!(
         validate_source_fetch_request(
             &generic,
@@ -1807,7 +1805,7 @@ fn source_fetch_v2_accepts_generic_and_rejects_musubi_substitution() {
         Some(musubi.clone()),
     )
     .expect("construct Musubi source request");
-    let exact = source_request_to_wire(request).expect("project exact Musubi V2 source wire");
+    let exact = source_request_to_wire(request).expect("project exact Musubi V1 source wire");
     assert_eq!(
         validate_source_fetch_request(
             &exact,
@@ -1836,7 +1834,7 @@ fn source_fetch_v2_accepts_generic_and_rejects_musubi_substitution() {
         Ok(()),
         "a current informational claim may be newer than its retained admission"
     );
-    let rejects = |candidate: &ProviderIngestSourceFetchRequestWireV2| {
+    let rejects = |candidate: &ProviderIngestSourceFetchRequestWireV1| {
         assert_eq!(
             validate_source_fetch_request(
                 candidate,
@@ -1960,9 +1958,9 @@ fn source_fetch_v2_accepts_generic_and_rejects_musubi_substitution() {
     );
 }
 #[test]
-fn source_fetch_v2_rejects_retired_operation_28_and_legacy_wire() {
+fn source_fetch_v1_rejects_an_incomplete_two_field_wire() {
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct LegacyProviderIngestSourceFetchRequestWireV1 {
+    struct IncompleteProviderIngestSourceFetchRequestWire {
         authorization: sorafs_node::FinalizedProviderIngestAuthorizationV1,
         source_provider_ids: Vec<[u8; 32]>,
     }
@@ -1970,30 +1968,40 @@ fn source_fetch_v2_rejects_retired_operation_28_and_legacy_wire() {
     let binding =
         ProviderBindingWireV1::try_from_binding(bindings.iter().next().expect("source binding"))
             .expect("project source binding");
-    let legacy = LegacyProviderIngestSourceFetchRequestWireV1 {
+    let incomplete = IncompleteProviderIngestSourceFetchRequestWire {
         authorization: test_source_authorization(16),
         source_provider_ids: SERVER_TEST_SOURCE_PROVIDER_IDS.to_vec(),
     };
-    let payload = encode_canonical(&legacy, MAX_PROVIDER_INGEST_SOURCE_REQUEST_BYTES_V1)
-        .expect("encode retired source request");
+    let payload = encode_canonical(&incomplete, MAX_PROVIDER_INGEST_SOURCE_REQUEST_BYTES_V1)
+        .expect("encode incomplete source request");
     assert!(
-        decode_canonical::<ProviderIngestSourceFetchRequestWireV2>(
+        decode_canonical::<ProviderIngestSourceFetchRequestWireV1>(
             &payload,
             MAX_PROVIDER_INGEST_SOURCE_REQUEST_BYTES_V1,
         )
         .is_err(),
-        "the retired two-field wire must not decode as V2"
+        "the exact V1 source request requires its explicit Musubi archive field"
     );
-    assert!(!operation_is_known(28));
-    let request = make_operation_request([0x91; 32], 1, binding, [0x92; 32], 28, payload)
-        .expect("construct retired operation request");
+    assert_eq!(OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1, 28);
+    assert!(operation_is_known(
+        OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1
+    ));
+    let request = make_operation_request(
+        [0x91; 32],
+        1,
+        binding,
+        [0x92; 32],
+        OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1,
+        payload,
+    )
+    .expect("construct exact V1 operation request with malformed payload");
     assert_eq!(
         validate_operation_request_for_session(
             &request,
             "server-test-chain",
             &server_test_network_id()
         ),
-        Err(BrokerError::BindingMismatch)
+        Err(BrokerError::Protocol)
     );
 }
 #[test]
@@ -2067,7 +2075,7 @@ fn source_protocol_rejects_oversize_metadata_frame_count_and_total_without_alloc
         evidence_viewer_archive_max_bytes: None,
         moderation_panel_notification_archive_binding: None,
     };
-    let fetch = ProviderIngestSourceFetchRequestWireV2 {
+    let fetch = ProviderIngestSourceFetchRequestWireV1 {
         authorization: test_source_authorization(17),
         source_provider_ids: vec![[1; 32], [2; 32]],
         musubi_archive: None,

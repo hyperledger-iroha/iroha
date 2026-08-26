@@ -142,32 +142,30 @@ pub enum IrohaRuntimeProviderSlotV1 {
     SoracloudRuntimeMutationSigner = 49,
     /// Reputation journal externally sealed monotonic checkpoint provider.
     ReputationJournalCheckpoint = 50,
-    /// Authenticated Hugging Face inference credential provider.
-    SoracloudHfInferenceCredentialProvider = 51,
     /// Moderation sealed predecessor-bound monotonic checkpoint store.
-    ModerationCheckpointStore = 52,
+    ModerationCheckpointStore = 51,
     /// Evidence-viewer signed monotonic transparency-head publisher.
-    EvidenceViewerTransparencyPublisher = 53,
+    EvidenceViewerTransparencyPublisher = 52,
     /// Stream-token quota, sealed-sequence, and ordered callback-outbox owner.
-    StreamTokenGatewayAdmission = 54,
+    StreamTokenGatewayAdmission = 53,
     /// Authenticated immutable moderation panel-notification receipt archive.
-    ModerationPanelNotificationArchive = 55,
+    ModerationPanelNotificationArchive = 54,
     /// Native Bootle/Lantern issuer and opaque-client authentication registry.
-    BootleLanternIssuanceProviderRegistry = 56,
+    BootleLanternIssuanceProviderRegistry = 55,
     /// Rollback-resistant monotonic clock seal for Musubi provider attestations.
-    MusubiProviderAttestationClockSeal = 57,
+    MusubiProviderAttestationClockSeal = 56,
     /// Approval-only HSM/KMS or threshold signer for Musubi provider attestations.
-    MusubiProviderAttestationApprovalSigner = 58,
+    MusubiProviderAttestationApprovalSigner = 57,
     /// Authenticated coordinator inventory for Musubi provider attestations.
-    MusubiProviderAttestationAuthenticatedInventory = 59,
+    MusubiProviderAttestationAuthenticatedInventory = 58,
     /// Runtime-only adaptive global threshold-beacon partial signer.
-    GlobalBeaconPartialSigner = 60,
+    GlobalBeaconPartialSigner = 59,
     /// Runtime-only adaptive Parliament TLE partial-release signer.
-    ParliamentTlePartialReleaseSigner = 61,
+    ParliamentTlePartialReleaseSigner = 60,
 }
 impl IrohaRuntimeProviderSlotV1 {
     /// Every first-release runtime-provider slot in wire-ID order.
-    pub const ALL: [Self; 61] = [
+    pub const ALL: [Self; 60] = [
         Self::ModerationQuarantineKeyWrapper,
         Self::PrivacyCyclePrfProvider,
         Self::PrivacyReleaseAnchor,
@@ -218,7 +216,6 @@ impl IrohaRuntimeProviderSlotV1 {
         Self::ReputationFinalizedArchiveRetentionAuthority,
         Self::SoracloudRuntimeMutationSigner,
         Self::ReputationJournalCheckpoint,
-        Self::SoracloudHfInferenceCredentialProvider,
         Self::ModerationCheckpointStore,
         Self::EvidenceViewerTransparencyPublisher,
         Self::StreamTokenGatewayAdmission,
@@ -289,17 +286,16 @@ impl IrohaRuntimeProviderSlotV1 {
             48 => Some(Self::ReputationFinalizedArchiveRetentionAuthority),
             49 => Some(Self::SoracloudRuntimeMutationSigner),
             50 => Some(Self::ReputationJournalCheckpoint),
-            51 => Some(Self::SoracloudHfInferenceCredentialProvider),
-            52 => Some(Self::ModerationCheckpointStore),
-            53 => Some(Self::EvidenceViewerTransparencyPublisher),
-            54 => Some(Self::StreamTokenGatewayAdmission),
-            55 => Some(Self::ModerationPanelNotificationArchive),
-            56 => Some(Self::BootleLanternIssuanceProviderRegistry),
-            57 => Some(Self::MusubiProviderAttestationClockSeal),
-            58 => Some(Self::MusubiProviderAttestationApprovalSigner),
-            59 => Some(Self::MusubiProviderAttestationAuthenticatedInventory),
-            60 => Some(Self::GlobalBeaconPartialSigner),
-            61 => Some(Self::ParliamentTlePartialReleaseSigner),
+            51 => Some(Self::ModerationCheckpointStore),
+            52 => Some(Self::EvidenceViewerTransparencyPublisher),
+            53 => Some(Self::StreamTokenGatewayAdmission),
+            54 => Some(Self::ModerationPanelNotificationArchive),
+            55 => Some(Self::BootleLanternIssuanceProviderRegistry),
+            56 => Some(Self::MusubiProviderAttestationClockSeal),
+            57 => Some(Self::MusubiProviderAttestationApprovalSigner),
+            58 => Some(Self::MusubiProviderAttestationAuthenticatedInventory),
+            59 => Some(Self::GlobalBeaconPartialSigner),
+            60 => Some(Self::ParliamentTlePartialReleaseSigner),
             _ => None,
         }
     }
@@ -1067,22 +1063,6 @@ impl IrohaRuntimeProviderBindingV1 {
         projected.soracloud_runtime_signer_binding = Some(exact);
         Ok(projected)
     }
-    fn try_new_soracloud_hf_credential_provider(
-        binding: &iroha_config::parameters::actual::SoracloudRuntimeHfCredentialProviderBinding,
-    ) -> Result<Self, IrohaRuntimeProviderRegistryErrorV1> {
-        let slot = IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider;
-        let exact =
-            crate::soracloud_hf_credential::SoracloudHfCredentialProviderBindingV1::try_from_config(
-                binding,
-            )
-            .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot))?;
-        Self::try_new(
-            slot,
-            exact.handle(),
-            Some(exact.qualification().revision()),
-            Some(exact.qualification().policy_digest()),
-        )
-    }
     fn try_new_provider_ingest_signer(
         slot: IrohaRuntimeProviderSlotV1,
         handle: impl Into<String>,
@@ -1550,7 +1530,7 @@ impl IrohaRuntimeProviderBindingsV1 {
     }
     /// Construct the exact one-slot catalog for a standalone Bootle/Lantern issuer broker.
     ///
-    /// This is the only standalone constructor for slot 56. It deliberately
+    /// This is the only standalone constructor for slot 55. It deliberately
     /// cannot attach another runtime role, so the broker server's exact-set
     /// check rejects accidental co-location or a partially provisioned node
     /// catalog.
@@ -2073,7 +2053,6 @@ pub(crate) fn resolve_runtime_deps_from_bindings(
     stream_token_gateway::qualify_dependency(bindings, &dependencies)?;
     qualify_native_transaction_signers(bindings, &mut dependencies)?;
     qualify_soracloud_runtime_signer(bindings, &mut dependencies)?;
-    qualify_soracloud_hf_credential_provider(bindings, &mut dependencies)?;
     qualify_moderation_checkpoint_dependency(bindings, &dependencies)?;
     qualify_provider_ingest_dependencies(bindings, &dependencies)?;
     qualify_reputation_journal_checkpoint_dependency(bindings, &dependencies)?;
@@ -2229,57 +2208,6 @@ fn qualify_soracloud_runtime_signer(
             provider,
         )
         .map_err(map_soracloud_runtime_signer_qualification_error)?,
-    );
-    Ok(())
-}
-fn map_soracloud_hf_credential_qualification_error(
-    error: crate::soracloud_hf_credential::SoracloudHfCredentialProviderQualificationErrorV1,
-) -> IrohaRuntimeProviderRegistryErrorV1 {
-    use crate::soracloud_hf_credential::SoracloudHfCredentialProviderQualificationErrorV1 as Error;
-    match error {
-        Error::ProviderUnavailable => IrohaRuntimeProviderRegistryErrorV1::Unavailable,
-        Error::InvalidProviderHandle | Error::TestProviderRejected => {
-            IrohaRuntimeProviderRegistryErrorV1::TestProviderRejected
-        }
-        Error::InvalidProviderQualification
-        | Error::ProviderInactive
-        | Error::RevisionMismatch
-        | Error::PolicyDigestMismatch
-        | Error::ProviderDrift => IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked,
-        Error::HandleMismatch => IrohaRuntimeProviderRegistryErrorV1::BindingMismatch,
-    }
-}
-fn qualify_soracloud_hf_credential_provider(
-    bindings: &IrohaRuntimeProviderBindingsV1,
-    dependencies: &mut IrohaRuntimeDeps,
-) -> Result<(), IrohaRuntimeProviderRegistryErrorV1> {
-    let slot = IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider;
-    let Some(binding) = bindings.iter().find(|binding| binding.slot() == slot) else {
-        return Ok(());
-    };
-    let exact = crate::soracloud_hf_credential::SoracloudHfCredentialProviderBindingV1::try_new(
-        binding.handle(),
-        crate::soracloud_hf_credential::SoracloudHfCredentialProviderQualificationV1::new(
-            binding
-                .revision()
-                .ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot))?,
-            binding
-                .policy_digest()
-                .ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot))?,
-            true,
-            false,
-        ),
-    )
-    .map_err(map_soracloud_hf_credential_qualification_error)?;
-    let provider = dependencies
-        .soracloud_hf_inference_credential_provider
-        .take()
-        .ok_or(IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution)?;
-    dependencies.soracloud_hf_inference_credential_provider = Some(
-        crate::soracloud_hf_credential::qualify_soracloud_hf_inference_credential_provider_v1(
-            exact, provider,
-        )
-        .map_err(map_soracloud_hf_credential_qualification_error)?,
     );
     Ok(())
 }
@@ -3768,7 +3696,7 @@ mod tests {
     }
     #[test]
     fn runtime_provider_slot_wire_ids_are_stable_and_ordered() {
-        let mut seen = [false; 62];
+        let mut seen = [false; 61];
         for (index, slot) in IrohaRuntimeProviderSlotV1::ALL.into_iter().enumerate() {
             let wire_id = slot.wire_id();
             assert_eq!(
@@ -3790,7 +3718,7 @@ mod tests {
             seen[1..].iter().all(|present| *present),
             "the V1 slot inventory must not omit a wire ID"
         );
-        for unknown in [0, 62, u16::MAX] {
+        for unknown in [0, 61, u16::MAX] {
             assert_eq!(
                 IrohaRuntimeProviderSlotV1::from_wire_id(unknown),
                 None,
@@ -3859,137 +3787,6 @@ mod tests {
                 IrohaRuntimeProviderSlotV1::SoracloudRuntimeMutationSigner,
             ))
         );
-    }
-    #[derive(Debug)]
-    struct HfCredentialProvider {
-        handle: &'static str,
-        qualification: crate::soracloud_hf_credential::SoracloudHfCredentialProviderQualificationV1,
-    }
-    impl crate::soracloud_hf_credential::SoracloudHfInferenceCredentialProviderV1
-        for HfCredentialProvider
-    {
-        fn handle(&self) -> &str {
-            self.handle
-        }
-        fn qualification(
-            &self,
-        ) -> Result<
-            crate::soracloud_hf_credential::SoracloudHfCredentialProviderQualificationV1,
-            crate::soracloud_hf_credential::SoracloudHfCredentialProviderProbeErrorV1,
-        > {
-            Ok(self.qualification)
-        }
-        fn check_readiness(
-            &self,
-        ) -> Result<(), crate::soracloud_hf_credential::SoracloudHfCredentialProviderProbeErrorV1>
-        {
-            Ok(())
-        }
-        fn execute_authenticated(
-            &self,
-            request: &crate::soracloud_hf_credential::SoracloudHfAuthenticatedInferenceRequestV1,
-        ) -> Result<
-            crate::soracloud_hf_credential::SoracloudHfAuthenticatedInferenceResponseV1,
-            crate::soracloud_hf_credential::SoracloudHfCredentialProviderOperationErrorV1,
-        > {
-            crate::soracloud_hf_credential::SoracloudHfAuthenticatedInferenceResponseV1::try_new(
-                request.repo_id(),
-                request.resolved_revision(),
-                200,
-                Some("application/json".to_owned()),
-                None,
-                request.body().to_vec(),
-                request.maximum_response_bytes(),
-            )
-        }
-    }
-    fn hf_credential_config()
-    -> iroha_config::parameters::actual::SoracloudRuntimeHfCredentialProviderBinding {
-        iroha_config::parameters::actual::SoracloudRuntimeHfCredentialProviderBinding {
-            handle: "kms://soracloud/hf-inference-primary".to_owned(),
-            revision: 7,
-            policy_digest: [0xA7; 32],
-        }
-    }
-    fn hf_credential_catalog(
-        configured: &iroha_config::parameters::actual::SoracloudRuntimeHfCredentialProviderBinding,
-    ) -> IrohaRuntimeProviderBindingsV1 {
-        IrohaRuntimeProviderBindingsV1 {
-            chain_id: "hf-credential-registry-test".to_owned(),
-            network_id: test_network_id(0xA5),
-            bindings: vec![
-                IrohaRuntimeProviderBindingV1::try_new_soracloud_hf_credential_provider(configured)
-                    .expect("valid HF credential-provider binding"),
-            ],
-        }
-    }
-    #[test]
-    fn hf_credential_provider_projects_only_public_identity() {
-        let configured = hf_credential_config();
-        let projected =
-            IrohaRuntimeProviderBindingV1::try_new_soracloud_hf_credential_provider(&configured)
-                .expect("valid HF credential-provider binding");
-        assert_eq!(
-            projected.slot(),
-            IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider
-        );
-        assert_eq!(projected.handle(), configured.handle);
-        assert_eq!(projected.revision(), Some(configured.revision));
-        assert_eq!(projected.policy_digest(), Some(configured.policy_digest));
-    }
-    #[test]
-    fn registry_rejects_missing_substituted_stale_and_test_hf_credential_providers() {
-        let configured = hf_credential_config();
-        let catalog = hf_credential_catalog(&configured);
-        assert!(matches!(
-            resolve_runtime_deps_from_bindings(&catalog, Some(&EmptyRegistry)),
-            Err(IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution)
-        ));
-        let provider = |handle, revision, test_only| {
-            Arc::new(HfCredentialProvider {
-                handle,
-                qualification: crate::soracloud_hf_credential::
-                    SoracloudHfCredentialProviderQualificationV1::new(
-                        revision,
-                        configured.policy_digest,
-                        true,
-                        test_only,
-                    ),
-            })
-        };
-        let substituted = FixedRegistry(
-            IrohaRuntimeDeps::default().with_soracloud_hf_inference_credential_provider(provider(
-                "kms://soracloud/hf-inference-secondary",
-                configured.revision,
-                false,
-            )),
-        );
-        assert!(matches!(
-            resolve_runtime_deps_from_bindings(&catalog, Some(&substituted)),
-            Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)
-        ));
-        let stale = FixedRegistry(
-            IrohaRuntimeDeps::default().with_soracloud_hf_inference_credential_provider(provider(
-                "kms://soracloud/hf-inference-primary",
-                configured.revision + 1,
-                false,
-            )),
-        );
-        assert!(matches!(
-            resolve_runtime_deps_from_bindings(&catalog, Some(&stale)),
-            Err(IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked)
-        ));
-        let test_marked = FixedRegistry(
-            IrohaRuntimeDeps::default().with_soracloud_hf_inference_credential_provider(provider(
-                "kms://soracloud/hf-inference-primary",
-                configured.revision,
-                true,
-            )),
-        );
-        assert!(matches!(
-            resolve_runtime_deps_from_bindings(&catalog, Some(&test_marked)),
-            Err(IrohaRuntimeProviderRegistryErrorV1::TestProviderRejected)
-        ));
     }
     fn pop_registry_config() -> iroha_config::parameters::actual::SorafsPopCredentialService {
         let issuer = KeyPair::try_from_seed(vec![0x91; 32], Algorithm::Ed25519)

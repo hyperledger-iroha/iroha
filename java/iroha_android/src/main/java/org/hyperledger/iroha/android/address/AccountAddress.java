@@ -1,7 +1,6 @@
 package org.hyperledger.iroha.android.address;
 
 import java.io.ByteArrayOutputStream;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -10,13 +9,11 @@ import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
 
-import org.hyperledger.iroha.android.crypto.Blake2s;
 import org.hyperledger.iroha.android.crypto.Ed25519PublicKeyAdmission;
 
 public final class AccountAddress {
   public static final int DEFAULT_I105_DISCRIMINANT = 753;
 
-  private static final byte[] LOCAL_DOMAIN_KEY = "SORA-LOCAL-K:v1".getBytes(StandardCharsets.UTF_8);
   private static final int I105_DISCRIMINANT_MAX = 0xFFFF;
   private static final int I105_CHECKSUM_LEN = 6;
   private static final int BECH32M_CONST = 0x2bc830a3;
@@ -241,14 +238,6 @@ public final class AccountAddress {
     return new AccountAddress(copy);
   }
 
-  public static AccountAddress fromCanonicalHex(final String encoded) throws AccountAddressException {
-    final String body = encoded.startsWith("0x") || encoded.startsWith("0X")
-        ? encoded.substring(2)
-        : encoded;
-    final byte[] bytes = hexToBytes(body);
-    return fromCanonicalBytes(bytes);
-  }
-
   public static AccountAddress fromI105(final String encoded, final Integer expectedDiscriminant)
       throws AccountAddressException {
     final byte[] canonical = decodeI105(encoded, expectedDiscriminant);
@@ -257,7 +246,7 @@ public final class AccountAddress {
     return address;
   }
 
-  public static ParseResult parseAny(final String input, final Integer expectedPrefix)
+  public static AccountAddress parseEncoded(final String input, final Integer expectedPrefix)
       throws AccountAddressException {
     final String trimmed = input.trim();
     if (trimmed.isEmpty()) {
@@ -273,7 +262,7 @@ public final class AccountAddress {
           AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
           "canonical hex account addresses are not accepted; use canonical I105 form");
     }
-    return new ParseResult(fromI105(trimmed, expectedPrefix), Format.I105);
+    return fromI105(trimmed, expectedPrefix);
   }
 
   public static Integer detectI105Discriminant(final String input) {
@@ -290,10 +279,10 @@ public final class AccountAddress {
   }
 
   /**
-   * Parses any supported encoded form while tolerating known curves that are currently disabled in
+   * Parses a canonical I105 address while tolerating known curves that are currently disabled in
    * the runtime configuration.
    */
-  public static ParseResult parseEncodedIgnoringCurveSupport(
+  public static AccountAddress parseEncodedIgnoringCurveSupport(
       final String input, final Integer expectedPrefix) throws AccountAddressException {
     final String trimmed = input.trim();
     if (trimmed.isEmpty()) {
@@ -314,12 +303,7 @@ public final class AccountAddress {
     parseCanonical(canonical, true);
     final AccountAddress address = new AccountAddress(canonical);
     ensureCanonicalI105Literal(trimmed, address);
-    return new ParseResult(address, Format.I105);
-  }
-
-  public enum Format {
-    I105,
-    CANONICAL_HEX
+    return address;
   }
 
   public enum AccountAddressErrorCode {
@@ -330,10 +314,8 @@ public final class AccountAddress {
     INVALID_I105_PREFIX("ERR_INVALID_I105_PREFIX"),
     INVALID_LENGTH("ERR_INVALID_LENGTH"),
     CHECKSUM_MISMATCH("ERR_CHECKSUM_MISMATCH"),
-    INVALID_HEX_ADDRESS("ERR_INVALID_HEX_ADDRESS"),
     UNEXPECTED_NETWORK_PREFIX("ERR_UNEXPECTED_NETWORK_PREFIX"),
     UNKNOWN_ADDRESS_CLASS("ERR_UNKNOWN_ADDRESS_CLASS"),
-    UNKNOWN_DOMAIN_TAG("ERR_UNKNOWN_DOMAIN_TAG"),
     UNEXPECTED_EXTENSION_FLAG("ERR_UNEXPECTED_EXTENSION_FLAG"),
     UNKNOWN_CONTROLLER_TAG("ERR_UNKNOWN_CONTROLLER_TAG"),
     INVALID_PUBLIC_KEY("ERR_INVALID_PUBLIC_KEY"),
@@ -356,16 +338,6 @@ public final class AccountAddress {
 
     public String value() {
       return code;
-    }
-  }
-
-  public static final class ParseResult {
-    public final AccountAddress address;
-    public final Format format;
-
-    private ParseResult(final AccountAddress address, final Format format) {
-      this.address = address;
-      this.format = format;
     }
   }
 
@@ -917,11 +889,6 @@ public final class AccountAddress {
     }
   }
 
-  private static byte[] computeLocalDigest(final String label) {
-    final byte[] digest = Blake2s.digest(label.getBytes(StandardCharsets.UTF_8), LOCAL_DOMAIN_KEY, 32);
-    return Arrays.copyOf(digest, 12);
-  }
-
   private static String encodeI105(final byte[] canonical, final int discriminant)
       throws AccountAddressException {
     final int normalizedDiscriminant = normalizeI105Discriminant(discriminant, "i105 discriminant");
@@ -1273,21 +1240,6 @@ public final class AccountAddress {
       sb.append(String.format("%02x", b & 0xFF));
     }
     return sb.toString();
-  }
-
-  private static byte[] hexToBytes(final String hex) throws AccountAddressException {
-    if ((hex.length() & 1) == 1) {
-      throw new AccountAddressException(AccountAddressErrorCode.INVALID_HEX_ADDRESS, "hex string must have even length");
-    }
-    final byte[] out = new byte[hex.length() / 2];
-    for (int i = 0; i < hex.length(); i += 2) {
-      try {
-        out[i / 2] = (byte) Integer.parseInt(hex.substring(i, i + 2), 16);
-      } catch (final NumberFormatException ex) {
-        throw new AccountAddressException(AccountAddressErrorCode.INVALID_HEX_ADDRESS, "invalid hex string");
-      }
-    }
-    return out;
   }
 
   public static final class CurveSupportConfig {

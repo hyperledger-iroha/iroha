@@ -20,6 +20,7 @@ public sealed record class ToriiVpnProfile
     private string operatorAccountId = string.Empty;
     private string leaseFee = string.Empty;
     private string relayIdHex = string.Empty;
+    private string relayMldsa65PublicKeyHex = string.Empty;
     private string descriptorCommitHex = string.Empty;
     private string tlsServerName = string.Empty;
     private string relayTlsSpkiSha256Hex = string.Empty;
@@ -148,6 +149,16 @@ public sealed record class ToriiVpnProfile
     {
         get => relayIdHex;
         init => relayIdHex = ToriiVpnDirectMetadata.RequireEmptyOrExactSizedHex(value, nameof(RelayIdHex), 32);
+    }
+
+    [JsonPropertyName("relay_mldsa65_public_key_hex")]
+    public string RelayMldsa65PublicKeyHex
+    {
+        get => relayMldsa65PublicKeyHex;
+        init => relayMldsa65PublicKeyHex = ToriiVpnDirectMetadata.RequireEmptyOrNonZeroExactSizedHex(
+            value,
+            nameof(RelayMldsa65PublicKeyHex),
+            ToriiVpnDirectMetadata.RelayMldsa65PublicKeyByteLength);
     }
 
     [JsonPropertyName("descriptor_commit_hex")]

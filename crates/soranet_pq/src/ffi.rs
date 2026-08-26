@@ -9,6 +9,7 @@ use core::{
     ffi::{c_int, c_uchar, c_uint},
     mem, slice,
 };
+use zeroize::Zeroize as _;
 const ERR_INVALID_SUITE: c_int = -1;
 const ERR_NULL_POINTER: c_int = -2;
 const ERR_LENGTH_MISMATCH: c_int = -3;
@@ -186,6 +187,11 @@ unsafe fn write_output_exact<'a>(
     // SAFETY: the caller ensures the pointer references `len` writable bytes.
     Ok(unsafe { slice::from_raw_parts_mut(ptr, len) })
 }
+
+fn clear_failed_output(output: &mut [u8]) {
+    output.zeroize();
+    core::hint::black_box(output);
+}
 /// Write one scalar length after pointer-range preflight.
 ///
 /// # Safety
@@ -243,6 +249,7 @@ pub unsafe extern "C" fn soranet_mlkem_parameters(
     0
 }
 /// Generate an ML-KEM keypair and write it into the provided buffers.
+/// Cryptographic failure after output preflight clears both exact output buffers.
 ///
 /// # Safety
 /// Each buffer must be valid for its declared length and occupy a non-wrapping
@@ -295,10 +302,15 @@ pub unsafe extern "C" fn soranet_mlkem_generate_keypair(
             secret_buf.copy_from_slice(pair.secret_key());
             0
         }
-        Err(err) => map_mlkem_error(&err),
+        Err(err) => {
+            clear_failed_output(public_buf);
+            clear_failed_output(secret_buf);
+            map_mlkem_error(&err)
+        }
     }
 }
 /// Encapsulate against an ML-KEM public key.
+/// Cryptographic failure after output preflight clears both exact output buffers.
 ///
 /// # Safety
 /// Each buffer must be valid for its declared length and occupy a non-wrapping
@@ -372,10 +384,15 @@ pub unsafe extern "C" fn soranet_mlkem_encapsulate(
             shared_buf.copy_from_slice(shared.as_bytes());
             0
         }
-        Err(err) => map_mlkem_error(&err),
+        Err(err) => {
+            clear_failed_output(ciphertext_buf);
+            clear_failed_output(shared_buf);
+            map_mlkem_error(&err)
+        }
     }
 }
 /// Decapsulate an ML-KEM ciphertext.
+/// Cryptographic failure after output preflight clears the exact shared-secret output buffer.
 ///
 /// # Safety
 /// Input pointers must reference valid encodings and output buffers must match
@@ -447,7 +464,10 @@ pub unsafe extern "C" fn soranet_mlkem_decapsulate(
             shared_buf.copy_from_slice(shared.as_bytes());
             0
         }
-        Err(err) => map_mlkem_error(&err),
+        Err(err) => {
+            clear_failed_output(shared_buf);
+            map_mlkem_error(&err)
+        }
     }
 }
 /// Return ML-DSA parameter lengths for the requested suite.
@@ -490,6 +510,7 @@ pub unsafe extern "C" fn soranet_mldsa_parameters(
     0
 }
 /// Generate an ML-DSA keypair and store it in the supplied buffers.
+/// Cryptographic failure after output preflight clears both exact output buffers.
 ///
 /// # Safety
 /// Each buffer must be valid for its declared length and occupy a non-wrapping
@@ -538,13 +559,18 @@ pub unsafe extern "C" fn soranet_mldsa_generate_keypair(
         };
     let pair = match generate_mldsa_keypair_from_os(suite) {
         Ok(kp) => kp,
-        Err(err) => return map_mldsa_error(&err),
+        Err(err) => {
+            clear_failed_output(public_buf);
+            clear_failed_output(secret_buf);
+            return map_mldsa_error(&err);
+        }
     };
     public_buf.copy_from_slice(pair.public_key());
     secret_buf.copy_from_slice(pair.secret_key());
     0
 }
 /// Produce an ML-DSA signature for the supplied message.
+/// Cryptographic failure after output preflight clears the exact signature output buffer.
 ///
 /// # Safety
 /// Input pointers must reference valid buffers and the signature buffer must
@@ -610,7 +636,10 @@ pub unsafe extern "C" fn soranet_mldsa_sign(
             signature_buf.copy_from_slice(signature.as_bytes());
             0
         }
-        Err(err) => map_mldsa_error(&err),
+        Err(err) => {
+            clear_failed_output(signature_buf);
+            map_mldsa_error(&err)
+        }
     }
 }
 /// Verify an ML-DSA signature.
@@ -1169,8 +1198,8 @@ mod tests {
         let suite_id = c_uint::from(suite.kem_id());
         let params = suite.parameters();
         let public_key = vec![0u8; params.public_key];
-        let mut ciphertext = vec![0u8; params.ciphertext];
-        let mut shared_secret = vec![0u8; params.shared_secret];
+        let mut ciphertext = vec![0xA5; params.ciphertext];
+        let mut shared_secret = vec![0x5A; params.shared_secret];
         let rc = unsafe {
             soranet_mlkem_encapsulate(
                 suite_id,
@@ -1183,6 +1212,8 @@ mod tests {
             )
         };
         assert_eq!(rc, ERR_ENCODING);
+        assert!(ciphertext.iter().all(|byte| *byte == 0));
+        assert!(shared_secret.iter().all(|byte| *byte == 0));
     }
     #[test]
     fn ffi_mlkem_decapsulate_rejects_noncanonical_secret_key_private_component() {
@@ -1214,7 +1245,7 @@ mod tests {
         let (public_key, _) = ffi_mlkem_keypair(suite);
         let (ciphertext, _) = ffi_mlkem_encapsulate(suite, &public_key);
         let secret_key = vec![0u8; params.secret_key];
-        let mut shared_secret = vec![0u8; params.shared_secret];
+        let mut shared_secret = vec![0xA5; params.shared_secret];
         let rc = unsafe {
             soranet_mlkem_decapsulate(
                 suite_id,
@@ -1227,6 +1258,7 @@ mod tests {
             )
         };
         assert_eq!(rc, ERR_ENCODING);
+        assert!(shared_secret.iter().all(|byte| *byte == 0));
     }
     #[test]
     fn ffi_mlkem_decapsulate_rejects_all_zero_embedded_public_key() {
@@ -1743,7 +1775,7 @@ mod tests {
     fn ffi_mldsa_sign_rejects_all_zero_secret_key() {
         let suite = MlDsaSuite::MlDsa44;
         let secret_key = vec![0u8; suite.secret_key_len()];
-        let mut signature = vec![0u8; suite.signature_len()];
+        let mut signature = vec![0xA5; suite.signature_len()];
         let message = b"inert secret";
         let rc = unsafe {
             soranet_mldsa_sign(
@@ -1757,6 +1789,7 @@ mod tests {
             )
         };
         assert_eq!(rc, ERR_ENCODING);
+        assert!(signature.iter().all(|byte| *byte == 0));
     }
     #[test]
     fn ffi_mldsa_verify_rejects_null_public_key_and_signature() {

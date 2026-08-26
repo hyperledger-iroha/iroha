@@ -843,11 +843,10 @@ fn compile_emits_core_query_get_helpers() {
 #[test]
 fn manifest_includes_exact_access_hints_for_static_typed_query_get_helpers() {
     use iroha_data_model::{
-        account::{AccountId, ParsedAccountId},
+        account::AccountId,
         asset::id::{AssetDefinitionId, AssetId},
     };
     let account = AccountId::parse_encoded("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
-        .map(ParsedAccountId::into_account_id)
         .expect("parse account literal");
     let asset_definition = AssetDefinitionId::parse_address_literal("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
         .expect("parse asset definition");
@@ -1076,7 +1075,7 @@ fn compile_and_run_add() {
 }
 #[test]
 fn compile_builtin_create_nfts_and_set_detail() {
-    let src = "seiyaku CanonicalHostCalls { kotoage fn main() authorize(\"Admin\") { ledger::nft::create_for_all_users(); ledger::account::set_detail(account: context::authority(), key: Name::parse(\"cursor\"), value: Json::parse(\"{\\\"query\\\":\\\"sc_dummy\\\",\\\"cursor\\\":1}\")); } }";
+    let src = "seiyaku CanonicalHostCalls { kotoage fn main() authorize(\"Admin\") { ledger::nft::create_for_all_users(); ledger::account::set_detail(account: context::authority(), key: Name::parse(\"cursor\"), value: Json::parse(\"{\\\"cursor\\\":1,\\\"query\\\":\\\"sc_dummy\\\"}\")); } }";
     let code = test_compiler().compile_source(src).expect("compile failed");
     // Sanity: code contains at least three syscalls (order preserved)
     // Byte-pattern search for SCALL encodings (LE): [imm8, 0x00, 0x00, 0x60]
@@ -1257,7 +1256,6 @@ fn manifest_includes_isi_access_hints_for_static_targets() {
         .expect("access_set_hints must be present");
     let account: AccountId =
         AccountId::parse_encoded("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
-            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
             .expect("parse encoded account literal");
     let asset_def =
         AssetDefinitionId::parse_address_literal(asset_literal).expect("parse canonical asset");

@@ -1,31 +1,25 @@
-IROHA_CARGO=(cargo)
-if [[ -n "${IROHA_CARGO_BIN:-}" ]]; then
-  IROHA_CARGO=("${IROHA_CARGO_BIN}")
-fi
+: "${IROHA_BIN:?Set IROHA_BIN to the absolute path of the qualified same-revision iroha binary}"
+: "${IROHA_BIN_SHA256:?Set IROHA_BIN_SHA256 to the lowercase SHA-256 of IROHA_BIN}"
 
-IROHA_CARGO_ENV=()
-if [[ -n "${IROHA_CARGO_HOME:-}" ]]; then
-  IROHA_CARGO_ENV+=("CARGO_HOME=${IROHA_CARGO_HOME}")
-fi
-if [[ -n "${IROHA_CARGO_TARGET_DIR:-}" ]]; then
-  IROHA_CARGO_ENV+=("CARGO_TARGET_DIR=${IROHA_CARGO_TARGET_DIR}")
-fi
-if [[ -n "${IROHA_CARGO_NET_OFFLINE:-}" ]]; then
-  IROHA_CARGO_ENV+=("CARGO_NET_OFFLINE=${IROHA_CARGO_NET_OFFLINE}")
-fi
-if [[ -n "${IROHA_CARGO_BUILD_JOBS:-}" ]]; then
-  IROHA_CARGO_ENV+=("CARGO_BUILD_JOBS=${IROHA_CARGO_BUILD_JOBS}")
-fi
-
-if [[ -n "${IROHA_BIN:-}" ]]; then
-  IROHA_CMD=("${IROHA_BIN}")
-elif command -v iroha >/dev/null 2>&1; then
-  IROHA_CMD=("$(command -v iroha)")
-elif [[ -n "${IROHA_SOURCE_DIR:-}" && -f "${IROHA_SOURCE_DIR}/Cargo.toml" ]]; then
-  IROHA_CMD=(env "${IROHA_CARGO_ENV[@]}" "${IROHA_CARGO[@]}" run --manifest-path "${IROHA_SOURCE_DIR}/Cargo.toml" -p iroha_cli --bin iroha --)
-elif [[ -n "${IROHA_MANIFEST_PATH:-}" && -f "${IROHA_MANIFEST_PATH}" ]]; then
-  IROHA_CMD=(env "${IROHA_CARGO_ENV[@]}" "${IROHA_CARGO[@]}" run --manifest-path "${IROHA_MANIFEST_PATH}" -p iroha_cli --bin iroha --)
-else
-  echo "Unable to locate iroha. Set IROHA_BIN to a packaged binary or IROHA_SOURCE_DIR to an Iroha checkout." >&2
+if [[ "$IROHA_BIN" != /* || ! -f "$IROHA_BIN" || ! -x "$IROHA_BIN" || -L "$IROHA_BIN" ]]; then
+  echo "IROHA_BIN must be an absolute, executable, non-symlinked regular file" >&2
   exit 1
 fi
+if [[ ! "$IROHA_BIN_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "IROHA_BIN_SHA256 must be exactly 64 lowercase hexadecimal characters" >&2
+  exit 1
+fi
+if command -v sha256sum >/dev/null 2>&1; then
+  IROHA_BIN_ACTUAL_SHA256="$(sha256sum "$IROHA_BIN" | awk '{print $1}')"
+elif command -v shasum >/dev/null 2>&1; then
+  IROHA_BIN_ACTUAL_SHA256="$(shasum -a 256 "$IROHA_BIN" | awk '{print $1}')"
+else
+  echo "A SHA-256 tool (sha256sum or shasum) is required to qualify IROHA_BIN" >&2
+  exit 1
+fi
+if [[ "$IROHA_BIN_ACTUAL_SHA256" != "$IROHA_BIN_SHA256" ]]; then
+  echo "IROHA_BIN does not match the operator-qualified same-revision SHA-256" >&2
+  exit 1
+fi
+
+IROHA_CMD=("$IROHA_BIN")

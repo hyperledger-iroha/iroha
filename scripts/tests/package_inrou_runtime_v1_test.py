@@ -22,6 +22,9 @@ SCRIPT = REPO_ROOT / "scripts" / "ci" / "package_inrou_runtime_v1.py"
 RUST_VERIFIER = (
     REPO_ROOT / "crates/irohad/src/soracloud_runtime/inrou_namespace.rs"
 ).read_text(encoding="utf-8")
+RUST_SCHEMA = (
+    REPO_ROOT / "crates/iroha_data_model/src/soracloud/schema.rs"
+).read_text(encoding="utf-8")
 SPEC = importlib.util.spec_from_file_location("package_inrou_runtime_v1", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 MODULE = importlib.util.module_from_spec(SPEC)
@@ -64,10 +67,15 @@ class InrouRuntimePackagerTests(unittest.TestCase):
             'const INROU_NAMESPACE_QEMU_PATH: &str = "/inrou/bin/qemu";',
             'const INROU_NAMESPACE_SETPRIV_PATH: &str = "/inrou/bin/setpriv";',
             "const INROU_RUNTIME_MAX_FILES: usize = 512;",
-            "const INROU_NAMESPACE_MAX_LEASE_DISKS: usize = 32;",
+            "pub(super) const INROU_NAMESPACE_MAX_LEASE_DISKS: usize = "
+            "SORA_INROU_DATA_VOLUME_MAX_COUNT_V1;",
         )
         for marker in fixed_markers:
             self.assertIn(marker, RUST_VERIFIER)
+        self.assertIn(
+            "pub const SORA_INROU_DATA_VOLUME_MAX_COUNT_V1: usize = 32;",
+            RUST_SCHEMA,
+        )
         self.assertEqual(MODULE.DESTINATION, Path("/opt/iroha/inrou-runtime-v1"))
         self.assertEqual(MODULE.MANIFEST_HEADER, "iroha-inrou-runtime-v1 sha256")
         self.assertEqual(MODULE.MAX_ENTRIES, 512)

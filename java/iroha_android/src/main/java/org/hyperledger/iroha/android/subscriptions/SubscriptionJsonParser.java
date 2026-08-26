@@ -16,7 +16,7 @@ public final class SubscriptionJsonParser {
     final Map<String, Object> object = expectObject(parse(payload), "root");
     final boolean ok = asBoolean(object.get("ok"), "ok");
     final String planId = asString(object.get("plan_id"), "plan_id");
-    final String txHashHex = asString(object.get("tx_hash_hex"), "tx_hash_hex");
+    final String txHashHex = transactionHash(object.get("tx_hash_hex"), "tx_hash_hex");
     return new SubscriptionPlanCreateResponse(ok, planId, txHashHex);
   }
 
@@ -46,7 +46,7 @@ public final class SubscriptionJsonParser {
         asOptionalString(object.get("usage_trigger_id"), "usage_trigger_id");
     final long firstChargeMs =
         asNonNegativeLong(object.get("first_charge_ms"), "first_charge_ms");
-    final String txHashHex = asString(object.get("tx_hash_hex"), "tx_hash_hex");
+    final String txHashHex = transactionHash(object.get("tx_hash_hex"), "tx_hash_hex");
     return new SubscriptionCreateResponse(
         ok, subscriptionId, billingTriggerId, usageTriggerId, firstChargeMs, txHashHex);
   }
@@ -72,7 +72,7 @@ public final class SubscriptionJsonParser {
     final Map<String, Object> object = expectObject(parse(payload), "root");
     final boolean ok = asBoolean(object.get("ok"), "ok");
     final String subscriptionId = asString(object.get("subscription_id"), "subscription_id");
-    final String txHashHex = asString(object.get("tx_hash_hex"), "tx_hash_hex");
+    final String txHashHex = transactionHash(object.get("tx_hash_hex"), "tx_hash_hex");
     return new SubscriptionActionResponse(ok, subscriptionId, txHashHex);
   }
 
@@ -112,6 +112,15 @@ public final class SubscriptionJsonParser {
       return string;
     }
     throw new IllegalStateException(path + " must be a string");
+  }
+
+  private static String transactionHash(final Object value, final String path) {
+    final String literal = asString(value, path);
+    if (!literal.matches("[0-9a-f]{63}[13579bdf]")) {
+      throw new IllegalStateException(
+          path + " must match [0-9a-f]{63}[13579bdf] with the Iroha HashOf marker");
+    }
+    return literal;
   }
 
   private static String asOptionalString(final Object value, final String path) {

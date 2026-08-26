@@ -401,7 +401,7 @@ final class ToriiContractAPITests: XCTestCase {
                 XCTAssertEqual(request.url?.path, "/v1/pipeline/transactions/status")
                 let items = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems
                 XCTAssertEqual(items?.first(where: { $0.name == "hash" })?.value, self.txHash)
-                XCTAssertEqual(items?.first(where: { $0.name == "scope" })?.value, "auto")
+                XCTAssertEqual(items?.first(where: { $0.name == "scope" })?.value, "global")
                 return try self.response(for: request, json: [
                     "hash": self.txHash,
                     "status": ["kind": "Applied", "block_height": 44],

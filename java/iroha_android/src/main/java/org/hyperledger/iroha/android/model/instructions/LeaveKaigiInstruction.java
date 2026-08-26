@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.android.model.instructions;
 
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -32,7 +33,7 @@ public final class LeaveKaigiInstruction implements InstructionTemplate {
     this.nullifierIssuedAtMs = builder.nullifierIssuedAtMs;
     this.rosterRoot = builder.rosterRoot;
     this.proofBase64 = builder.proofBase64;
-    this.arguments = Map.copyOf(argumentOrder);
+    this.arguments = Collections.unmodifiableMap(new LinkedHashMap<>(argumentOrder));
   }
 
   public KaigiInstructionUtils.CallId callId() {
@@ -78,30 +79,20 @@ public final class LeaveKaigiInstruction implements InstructionTemplate {
   }
 
   public static LeaveKaigiInstruction fromArguments(final Map<String, String> arguments) {
+    KaigiInstructionUtils.requireAction(arguments, ACTION);
     final Builder builder = builder();
     builder.setCallId(KaigiInstructionUtils.parseCallId(arguments, "call"));
     builder.setParticipant(KaigiInstructionUtils.require(arguments, "participant"));
 
-    final String commitmentValue = arguments.get("commitment.commitment");
-    if (commitmentValue != null) {
-      builder.setCommitmentLiteral(commitmentValue);
-      final String alias = arguments.get("commitment.alias_tag");
-      if (alias != null) {
-        builder.setCommitmentAliasTag(alias);
-      }
+    if (arguments.containsKey("commitment.commitment")
+        || arguments.containsKey("commitment.alias_tag")
+        || arguments.containsKey("nullifier.digest")
+        || arguments.containsKey("nullifier.issued_at_ms")
+        || arguments.containsKey("roster_root")
+        || arguments.containsKey("proof")) {
+      throw new IllegalArgumentException(
+          "LeaveKaigi privacy artifacts are reserved and must be omitted in V1");
     }
-
-    final String nullifier = arguments.get("nullifier.digest");
-    if (nullifier != null) {
-      builder.setNullifierDigest(nullifier);
-      final Long issuedAt =
-          KaigiInstructionUtils.parseOptionalUnsignedLong(
-              arguments.get("nullifier.issued_at_ms"), "nullifier.issued_at_ms");
-      builder.setNullifierIssuedAtMs(issuedAt);
-    }
-
-    builder.setRosterRootLiteral(arguments.get("roster_root"));
-    builder.setProofBase64(arguments.get("proof"));
 
     return new LeaveKaigiInstruction(builder, new LinkedHashMap<>(arguments));
   }
@@ -174,67 +165,86 @@ public final class LeaveKaigiInstruction implements InstructionTemplate {
     }
 
     public Builder setCommitment(final byte[] commitment) {
-      this.commitment = KaigiInstructionUtils.canonicalizeOptionalHash(commitment);
+      rejectReservedPrivacyArtifact(commitment, "commitment");
+      this.commitment = null;
       return this;
     }
 
     public Builder setCommitment(final String commitmentHexOrLiteral) {
-      this.commitment = KaigiInstructionUtils.canonicalizeOptionalHash(commitmentHexOrLiteral);
+      rejectReservedPrivacyArtifact(commitmentHexOrLiteral, "commitment");
+      this.commitment = null;
       return this;
     }
 
     Builder setCommitmentLiteral(final String literal) {
-      this.commitment = literal;
+      rejectReservedPrivacyArtifact(literal, "commitment");
+      this.commitment = null;
       return this;
     }
 
     public Builder setCommitmentAliasTag(final String aliasTag) {
-      this.commitmentAliasTag = aliasTag;
+      if (aliasTag != null) {
+        throw new IllegalArgumentException(
+            "commitment aliasTag is off-chain only and must be omitted");
+      }
+      this.commitmentAliasTag = null;
       return this;
     }
 
     public Builder setNullifierDigest(final byte[] digest) {
-      this.nullifierDigest = KaigiInstructionUtils.canonicalizeOptionalHash(digest);
+      rejectReservedPrivacyArtifact(digest, "nullifier");
+      this.nullifierDigest = null;
       return this;
     }
 
     public Builder setNullifierDigest(final String digestHexOrLiteral) {
-      this.nullifierDigest = KaigiInstructionUtils.canonicalizeOptionalHash(digestHexOrLiteral);
+      rejectReservedPrivacyArtifact(digestHexOrLiteral, "nullifier");
+      this.nullifierDigest = null;
       return this;
     }
 
     public Builder setNullifierIssuedAtMs(final Long issuedAtMs) {
-      if (issuedAtMs != null && issuedAtMs < 0) {
-        throw new IllegalArgumentException("nullifier issuedAtMs must be non-negative");
-      }
-      this.nullifierIssuedAtMs = issuedAtMs;
+      rejectReservedPrivacyArtifact(issuedAtMs, "nullifier issuedAtMs");
+      this.nullifierIssuedAtMs = null;
       return this;
     }
 
     public Builder setRosterRoot(final byte[] rosterRoot) {
-      this.rosterRoot = KaigiInstructionUtils.canonicalizeOptionalHash(rosterRoot);
+      rejectReservedPrivacyArtifact(rosterRoot, "roster root");
+      this.rosterRoot = null;
       return this;
     }
 
     public Builder setRosterRoot(final String rosterRootHexOrLiteral) {
-      this.rosterRoot = KaigiInstructionUtils.canonicalizeOptionalHash(rosterRootHexOrLiteral);
+      rejectReservedPrivacyArtifact(rosterRootHexOrLiteral, "roster root");
+      this.rosterRoot = null;
       return this;
     }
 
     Builder setRosterRootLiteral(final String literal) {
-      this.rosterRoot = literal;
+      rejectReservedPrivacyArtifact(literal, "roster root");
+      this.rosterRoot = null;
       return this;
     }
 
     public Builder setProof(final byte[] proofBytes) {
-      this.proofBase64 = proofBytes == null ? null : KaigiInstructionUtils.toBase64(proofBytes);
+      rejectReservedPrivacyArtifact(proofBytes, "proof");
+      this.proofBase64 = null;
       return this;
     }
 
     public Builder setProofBase64(final String proofBase64) {
-      this.proofBase64 =
-          proofBase64 == null ? null : KaigiInstructionUtils.requireBase64(proofBase64, "proof");
+      rejectReservedPrivacyArtifact(proofBase64, "proof");
+      this.proofBase64 = null;
       return this;
+    }
+
+    private static void rejectReservedPrivacyArtifact(
+        final Object value, final String fieldName) {
+      if (value != null) {
+        throw new IllegalArgumentException(
+            "LeaveKaigi " + fieldName + " is reserved and must be omitted in V1");
+      }
     }
 
     public LeaveKaigiInstruction build() {
@@ -254,9 +264,6 @@ public final class LeaveKaigiInstruction implements InstructionTemplate {
       args.put("participant", participant);
       if (commitment != null) {
         args.put("commitment.commitment", commitment);
-        if (commitmentAliasTag != null) {
-          args.put("commitment.alias_tag", commitmentAliasTag);
-        }
       }
       if (nullifierDigest != null) {
         args.put("nullifier.digest", nullifierDigest);

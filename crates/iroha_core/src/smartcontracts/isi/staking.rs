@@ -1104,6 +1104,7 @@ impl Execute for ClaimPublicLaneRewards {
             &state_transaction.nexus.fees.fee_sink_account_id,
             state_transaction.block_unix_timestamp_ms(),
         )
+        .map_err(|error| Error::InvariantViolation(error.to_string().into()))?
         .ok_or_else(|| {
             Error::InvariantViolation(
                 "invalid nexus.fees.fee_sink_account_id; expected canonical I105 account id or on-chain alias"
@@ -1400,6 +1401,7 @@ fn validate_reward_sink(
         &state_transaction.nexus.fees.fee_sink_account_id,
         state_transaction.block_unix_timestamp_ms(),
     )
+    .map_err(|error| Error::InvariantViolation(error.to_string().into()))?
     .ok_or_else(|| {
         Error::InvariantViolation(
             "invalid nexus.fees.fee_sink_account_id; expected canonical I105 account id or on-chain alias"
@@ -1909,6 +1911,7 @@ fn parse_staking_account_literal(
 ) -> Result<AccountId, Error> {
     if let Some(account) =
         crate::block::parse_account_literal_with_world(world, dataspace_catalog, literal, now_ms)
+            .map_err(|error| Error::InvariantViolation(error.to_string().into()))?
     {
         return Ok(account);
     }

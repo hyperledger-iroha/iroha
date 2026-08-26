@@ -617,13 +617,13 @@ mod tests {
             .expect("transaction signs");
         assert_eq!(transaction.payload(), &payload);
         let provenance_payload = encode_soracloud_runtime_provenance_preimage_v1(
-            SoracloudRuntimeProvenancePurposeV1::ModelHostHeartbeat,
+            SoracloudRuntimeProvenancePurposeV1::InrouHostAdvert,
             b"canonical provenance payload",
         )
         .expect("encode provenance preimage");
         let signature = signer
             .sign_provenance(
-                SoracloudRuntimeProvenancePurposeV1::ModelHostHeartbeat,
+                SoracloudRuntimeProvenancePurposeV1::InrouHostAdvert,
                 &provenance_payload,
             )
             .expect("provenance signs");
@@ -702,7 +702,7 @@ mod tests {
         .expect("encode provenance preimage");
         assert_eq!(
             signer.sign_provenance(
-                SoracloudRuntimeProvenancePurposeV1::ModelHostHeartbeat,
+                SoracloudRuntimeProvenancePurposeV1::InrouHostWithdraw,
                 &inrou_preimage,
             ),
             Err(SoracloudRuntimeSigningErrorV1::InvalidProvenancePreimage)

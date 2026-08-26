@@ -427,7 +427,6 @@ fn encode_account_id_payload(payload: &[u8]) -> Vec<u8> {
     }
     let raw = core::str::from_utf8(payload).expect("payload must be utf-8");
     let account = AccountId::parse_encoded(raw)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .unwrap_or_else(|err| panic!("AccountId literal `{raw}` failed to parse: {err}"));
     norito::to_bytes(&account).expect("encode payload")
 }

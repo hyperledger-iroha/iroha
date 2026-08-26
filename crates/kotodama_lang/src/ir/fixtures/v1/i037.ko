@@ -1,7 +1,7 @@
 
             fn main() {
                 let k = Name::parse("cursor");
-                let v = Json::parse("{}\n");
+                let v = Json::parse("{}");
                 let d = DomainId::parse("wonderland.universal");
             }
         

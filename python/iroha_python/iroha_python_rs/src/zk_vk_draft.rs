@@ -42,10 +42,10 @@ fn decode_bound_verifying_key_instruction(
 ) -> Result<DecodedVerifyingKeyInstruction, String> {
     let parsed_expected_authority = AccountId::parse_encoded(expected_authority)
         .map_err(|error| format!("invalid requested authority: {error}"))?;
-    if parsed_expected_authority.canonical() != expected_authority {
+    if parsed_expected_authority.to_string() != expected_authority {
         return Err("requested authority must be exact canonical I105".to_owned());
     }
-    let expected_authority = parsed_expected_authority.into_account_id();
+    let expected_authority = parsed_expected_authority;
     let builder = TransactionBuilder::decode_payload(payload)
         .map_err(|error| format!("invalid canonical transaction payload: {error}"))?;
     if builder.payload().network_id() != Some(expected_network) {

@@ -53,7 +53,7 @@ public final class HttpClientTransportSubmissionContractTests {
     final TransportRequest unsignedRead =
         TransportRequest.builder()
             .setMethod("GET")
-            .setUri(URI.create("https://127.0.0.1:8080/v1/status"))
+            .setUri(URI.create("https://127.0.0.1:8080/status"))
             .build();
     final TransportRequest signedQuery =
         TransportRequest.builder()

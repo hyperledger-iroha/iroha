@@ -20,6 +20,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 __all__ = ["ToriiMockServer", "main"]
 
 _CURRENT_DATA_MODEL_VERSION = 4
+_MOCK_ACCOUNT_ID = "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"
 
 
 def _default_governance_proposal_draft() -> Dict[str, Any]:
@@ -27,7 +28,7 @@ def _default_governance_proposal_draft() -> Dict[str, Any]:
         "proposal_id": "11" * 32,
         "tx_instructions": [
             {
-                "wire_id": "iroha_data_model::isi::governance::ProposeDeployContract",
+"wire_id": "iroha.instruction.v1::governance::ProposeDeployContract",
                 "payload_hex": "00ff",
             }
         ],
@@ -290,17 +291,19 @@ class _MockState:
                     "signature_batch_max_pqc": 8,
                     "signature_batch_max_bls": 16,
                     "overlay_max_instructions": 0,
+                    "ivm_max_cycles_upper_bound": 2_000_000,
+                    "ivm_admission_cycle_limit": 1_000_000,
                     "ivm_max_decoded_instructions": 1048576,
                 },
                 "queue": {"size": 0, "queued": 0, "inflight": 0},
                 "fees": {
                     "fee_asset_id": "xor#sora",
-                    "fee_sink_account_id": "fees@system",
+                    "fee_sink_account_id": _MOCK_ACCOUNT_ID,
                     "base_fee": "0",
                     "per_byte_fee": "0",
                     "per_instruction_fee": "0",
                     "per_gas_unit_fee": "0",
-                    "sponsor_vault_custody_account_id": "",
+                    "sponsor_vault_custody_account_id": _MOCK_ACCOUNT_ID,
                     "settlement_mode": "direct",
                     "successful_claim_fee_exempt_authorities": [],
                 },

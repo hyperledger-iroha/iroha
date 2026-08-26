@@ -4,8 +4,7 @@ use iroha_data_model::prelude::*;
 fn print_usd_asset_norito() {
     // User account — i105 literal (no @domain)
     let account = AccountId::parse_encoded("sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE")
-        .expect("parse account I105")
-        .into_account_id();
+        .expect("parse account I105");
     let def: AssetDefinitionId = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1"
         .parse()
         .expect("parse asset def");

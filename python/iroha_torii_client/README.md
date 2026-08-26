@@ -32,9 +32,20 @@ debt, the last tracked reducer transition, and any classified delay.
 pressure, governance readiness, and Native AMX participant-application
 records. Diagnostics are operational evidence and are not consensus authority.
 
-Use `get_status_snapshot()` for `/v1/status`. That route remains a distinct
+Use `get_status_snapshot()` for `/status`. That route remains a distinct
 operational-health surface; its queue and historical lane telemetry must not be
 treated as consensus-authoritative state.
+
+Typed public pipeline metadata keeps every lifecycle kind and both exact read
+scopes visible. `PipelineTransactionStatusResponse.is_authoritatively_applied`
+is the sole finality-success helper: it is true only for `Applied` with
+`scope == "global"` and `resolved_from == "state"`. `Committed`, local results,
+and queue/cache observations are not successful finality.
+Signed transaction hashes in this status surface use exact
+`[0-9a-f]{63}[13579bdf]` text; the final odd nibble is the Iroha `HashOf`
+marker, not a normalization option. Contract `tx_hash_hex` receipt fields use
+the same exact spelling, as do contract entrypoint hashes, multisig transaction
+hashes, and offline-operation status transaction hashes.
 
 ## Node-local core and pipeline reads
 
@@ -64,14 +75,21 @@ relay = operator_client.get_kaigi_relay(relays.items[0].relay_id) if relays.item
 health = operator_client.get_kaigi_relays_health()
 ```
 
+The preflight DTO exposes both current IVM cycle limits and validates every fee
+account field as an exact canonical I105 account id. Alias-shaped
+`name@domain` values are rejected instead of interpreted as account identity.
+
 Each helper generates a fresh signature over the exact `GET`, path, query, and
 empty body and dispatches once with redirects and retries disabled. Bearer/API
 tokens, canonical-account or witness headers, and precomputed operator headers
-are rejected rather than used as fallbacks. The lightweight client has no
-pipeline-recovery, policy, or proof-retention method; no replacement API is
-invented for those absent surfaces. Kaigi list and health also fail closed at
-Torii's hard relay diagnostic cap rather than materializing an unbounded
-registry; the relay SSE handshake remains a separate streaming protocol.
+are rejected rather than used as fallbacks; session authentication and cookies
+are rejected as ambient authority too. The lightweight client has no pipeline
+recovery, policy, or proof-retention method; no replacement API is invented for
+those absent surfaces. Typed Kaigi responses require Torii's exact fields and
+integer spellings, and relay details bind the decoded HPKE key to its advertised
+fingerprint. Kaigi list and health also fail closed at Torii's hard relay
+diagnostic cap rather than materializing an unbounded registry; the relay SSE
+handshake remains a separate streaming protocol.
 
 ## Tenant-scoped ZK attachments
 

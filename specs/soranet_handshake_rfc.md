@@ -29,9 +29,10 @@ rotation mechanisms required for anonymous circuit establishment.
    - Classical key exchange: X25519 is mixed with the ML-KEM contribution by
      the hybrid key schedule.
    - Signature capability: `snnet.pqsig` accepts only Dilithium3
-     (`sig_id = 0x01`) as transcript-bound certificate/descriptor policy.
-     Online relay authentication is a separate Ed25519 signature under the
-     exact directory-authenticated relay identity.
+     (`sig_id = 0x01`) as transcript-bound handshake policy and compatibility
+     metadata, not as certificate metadata or an online-auth selector.
+     Online relay authentication requires both Ed25519 and ML-DSA-65 under the
+     exact directory-authenticated identities and binding digest.
 3. **Failure policy:** Classical-only clients (missing ML-KEM-768 share) MUST be
    rejected prior to key derivation and logged via the downgrade telemetry path.
 
@@ -57,7 +58,13 @@ epoch pointer.
 | Step | Sender | Payload | Notes |
 |------|--------|---------|-------|
 | 1 | Client | NK2 `HybridClientInit` or NK3 `PqfsClientCommit` carrying the suite, Noise/X25519 material, ML-KEM public material, capability TLVs, and GREASE | Padded to a 1024-byte multiple. |
-| 2 | Relay | NK2 `HybridRelayResponse` or NK3 `PqfsRelayResponse` carrying Noise/X25519 material, ML-KEM ciphertext and confirmation data, capability echo, transcript hash `T`, and directory-bound Ed25519 authentication | Padded to a 1024-byte multiple. |
+| 2 | Relay | NK2 `HybridRelayResponse` or NK3 `PqfsRelayResponse` carrying Noise/X25519 material, ML-KEM ciphertext and confirmation data, capability echo, transcript hash `T`, and directory-bound dual authentication | Padded to a 1024-byte multiple. |
+
+The client public key is the sole ML-KEM encapsulation target. NK2 carries one
+relay-produced ciphertext and NK3 carries primary and forward ciphertexts;
+neither relay response contains a relay ML-KEM public key. Implementations MUST
+reject the obsolete extra-field shape instead of attempting to detect or skip
+such a field.
 
 Transcript hash `T` MUST be computed as described in `specs/soranet_handshake.md`
 and mixed into the dual HKDF. Both peers MUST compute the ordered X25519 Noise
@@ -108,10 +115,11 @@ in the GREASE range (`0x7F00–0x7FFF`) MUST be ignored for negotiation but MUST
 remain part of the transcript hash; every other unknown type is rejected. The
 complete encoded vector is limited to 4,096 bytes.
 
-The relay identity in each authenticated response has one V1 encoding:
-`algorithm_tag:u8 || public_key_payload`. Ed25519 is encoded as tag `0x00`
-followed by its 32-byte public key. Parsers MUST reject the retired untagged
-32-byte representation and unknown algorithm tags.
+The authenticated response tail has one V1 encoding with no embedded public
+keys or length prefixes: `scheme=0x01 || ed25519_signature[64] ||
+mldsa65_signature[3309]`. Both signatures are mandatory, exact-width, and
+nonzero. The client obtains the exact Ed25519 key, ML-DSA-65 key, and nonzero
+32-byte authenticated binding digest from authenticated directory state.
 
 ## 6. Salt Rotation
 

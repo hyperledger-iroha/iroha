@@ -165,7 +165,10 @@ pub enum KaigiRoomPolicy {
 pub struct KaigiParticipantCommitment {
     /// Hash commitment to the participant identity.
     pub commitment: Hash,
-    /// Optional alias tag surfaced to the host for diagnostics.
+    /// Reserved diagnostic field; native on-chain privacy execution requires `None`.
+    ///
+    /// Clear participant labels belong in the host's encrypted off-chain session
+    /// state, not in a ledger-visible commitment payload.
     pub alias_tag: Option<String>,
 }
 /// Nullifier entry ensuring joins/leaves occur only once.
@@ -195,7 +198,10 @@ pub struct KaigiParticipantCommitment {
 pub struct KaigiParticipantNullifier {
     /// Hash derived from the join/leave witness for uniqueness.
     pub digest: Hash,
-    /// Milliseconds since epoch when the nullifier was issued.
+    /// Reserved timing field; native on-chain privacy execution requires zero.
+    ///
+    /// Wall-clock issuance time would disclose a participant timing hint. Replay
+    /// protection uses [`Self::digest`] and does not depend on this value.
     pub issued_at_ms: u64,
 }
 /// Relay hop metadata.
@@ -257,6 +263,8 @@ pub struct KaigiRelayManifest {
     /// Relay hops to traverse for control/data packets.
     pub hops: Vec<KaigiRelayHop>,
     /// Timestamp after which the manifest must be refreshed.
+    ///
+    /// Admission requires this value to be strictly after the current block time.
     pub expiry_ms: u64,
 }
 /// Relay registration descriptor persisted in domain metadata.
@@ -283,7 +291,10 @@ pub struct KaigiRelayManifest {
 )]
 #[norito(reuse_archived)]
 pub struct KaigiRelayRegistration {
-    /// Account advertising relay capabilities.
+    /// Registered account advertising relay capabilities.
+    ///
+    /// Native execution requires its live domain-qualified primary alias to
+    /// select the relay governance domain.
     pub relay_id: AccountId,
     /// HPKE public key bytes advertised by the relay.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
@@ -410,12 +421,13 @@ pub struct KaigiRelayAllowlist {
     pub allowed_relays: BTreeSet<AccountId>,
 }
 impl KaigiRelayAllowlist {
-    /// Check whether the given relay subject is included in the allowlist.
+    /// Check whether the exact canonical relay id is included in the allowlist.
+    ///
+    /// Stateful account-ID rekey lineage handling belongs at the Core admission
+    /// boundary and is deliberately not inferred by this pure data-model helper.
     #[must_use]
     pub fn contains(&self, relay_id: &AccountId) -> bool {
-        self.allowed_relays
-            .iter()
-            .any(|allowed| allowed.subject_id() == relay_id.subject_id())
+        self.allowed_relays.contains(relay_id)
     }
 }
 /// Configuration submitted by the host when creating a call.
@@ -456,6 +468,8 @@ pub struct NewKaigi {
     #[getset(get = "pub")]
     pub description: Option<String>,
     /// Maximum number of concurrent participants (excluding the host).
+    ///
+    /// When present, native admission requires this value to be greater than zero.
     #[getset(get = "pub")]
     pub max_participants: Option<u32>,
     /// Gas rate charged per minute of call time (host provided).
@@ -468,13 +482,15 @@ pub struct NewKaigi {
     #[getset(get = "pub")]
     pub scheduled_start_ms: Option<u64>,
     /// Optional billing account used to settle call costs.
+    ///
+    /// First-release native admission requires this to identify the signed host;
+    /// delegated third-party billing is not yet supported.
     #[getset(get = "pub")]
     pub billing_account: Option<AccountId>,
     /// Privacy configuration requested by the host.
     #[getset(get = "pub")]
     pub privacy_mode: KaigiPrivacyMode,
     /// Viewer authentication policy enforced by the relays.
-    #[norito(default)]
     #[getset(get = "pub")]
     pub room_policy: KaigiRoomPolicy,
     /// Optional relay manifest snapshot carrying structured relay metadata.
@@ -566,7 +582,7 @@ pub struct KaigiRecord {
     pub title: Option<String>,
     /// Optional description provided by the host.
     pub description: Option<String>,
-    /// Maximum number of participants allowed (excluding host).
+    /// Maximum non-zero number of participants allowed (excluding host).
     pub max_participants: Option<u32>,
     /// Gas rate charged per minute of call time.
     pub gas_rate_per_minute: u64,
@@ -577,7 +593,6 @@ pub struct KaigiRecord {
     /// Privacy configuration applied to the session.
     pub privacy_mode: KaigiPrivacyMode,
     /// Viewer authentication policy enforced by the relays.
-    #[norito(default)]
     pub room_policy: KaigiRoomPolicy,
     /// Relay manifest snapshot carrying structured relay metadata.
     pub relay_manifest: Option<KaigiRelayManifest>,
@@ -644,12 +659,12 @@ impl KaigiRecord {
             participant_metadata: BTreeMap::new(),
         }
     }
-    /// Determine if the participant list already contains `account` by subject.
+    /// Determine if the participant list contains the exact canonical `account` id.
     #[must_use]
     pub fn has_participant(&self, account: &AccountId) -> bool {
         self.participants
             .iter()
-            .any(|participant| participant.subject_id() == account.subject_id())
+            .any(|participant| participant == account)
     }
     /// Determine if the roster already contains `commitment`.
     #[must_use]
@@ -710,12 +725,16 @@ impl KaigiRecord {
             self.participants.dedup();
         }
     }
-    /// Remove a participant if present.
+    /// Remove an exact participant and its associated metadata if present.
     pub fn remove_participant(&mut self, account: &AccountId) -> bool {
         let len_before = self.participants.len();
         self.participants
-            .retain(|participant| participant.subject_id() != account.subject_id());
-        len_before != self.participants.len()
+            .retain(|participant| participant != account);
+        let removed = len_before != self.participants.len();
+        if removed {
+            self.participant_metadata.remove(account);
+        }
+        removed
     }
     /// Replace the relay manifest snapshot associated with the call.
     pub fn set_relay_manifest(&mut self, manifest: Option<KaigiRelayManifest>) {
@@ -834,6 +853,8 @@ mod tests {
         }
         assert!(record.remove_participant(&bob));
         assert!(!record.has_participant(&bob));
+        assert!(!record.participant_metadata.contains_key(&bob));
+        assert!(record.participant_metadata.contains_key(&record.host));
         assert!(!record.remove_participant(&bob));
         assert!(record.participants.is_empty());
     }
@@ -921,6 +942,43 @@ mod tests {
         let bytes = encode_adaptive(&call);
         let decoded: NewKaigi = decode_adaptive(&bytes).expect("decode create kaigi payload");
         assert_eq!(decoded, call);
+    }
+    #[cfg(feature = "json")]
+    #[test]
+    fn kaigi_json_requires_explicit_room_policy() {
+        let domain = DomainId::try_new("kaigi", "universal").expect("domain");
+        let host = checked_account_id();
+        let id = KaigiId::new(domain, Name::from_str("strict-room").expect("call name"));
+        let call = NewKaigi::with_defaults(id, host);
+        let record = KaigiRecord::from_new(&call, 1);
+
+        for (label, mut value) in [
+            (
+                "NewKaigi",
+                norito::json::to_value(&call).expect("serialize NewKaigi"),
+            ),
+            (
+                "KaigiRecord",
+                norito::json::to_value(&record).expect("serialize KaigiRecord"),
+            ),
+        ] {
+            assert!(
+                value
+                    .as_object_mut()
+                    .expect("Kaigi JSON object")
+                    .remove("room_policy")
+                    .is_some(),
+                "{label} fixture must contain room_policy"
+            );
+            assert!(
+                match label {
+                    "NewKaigi" => norito::json::from_value::<NewKaigi>(value).is_err(),
+                    "KaigiRecord" => norito::json::from_value::<KaigiRecord>(value).is_err(),
+                    _ => unreachable!("fixed Kaigi type inventory"),
+                },
+                "{label} must reject a missing room_policy"
+            );
+        }
     }
     #[test]
     fn participant_commitment_norito_roundtrip() {

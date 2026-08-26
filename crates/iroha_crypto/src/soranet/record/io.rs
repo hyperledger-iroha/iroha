@@ -285,7 +285,9 @@ macro_rules! define_soranet_record_io_adapters {
                         this.ciphertext_offset = 0;
                         this.body_len = None;
                         this.plaintext_offset = 0;
-                        // Empty authenticated records are valid but must not masquerade as EOF.
+                        // Successful authentication always produces at least one
+                        // plaintext byte, so the next loop iteration must return
+                        // application progress.
                     }
                 }
             }
@@ -296,22 +298,25 @@ macro_rules! define_soranet_record_io_adapters {
                 use $crate::{
                     SessionKey,
                     soranet::record::{
-                        RecordEndpoint, RecordLayer, RecordStreamContext, RecordStreamKind,
+                        RECORD_MAGIC, RECORD_TAG_LEN, RecordEndpoint, RecordLayer,
+                        RecordStreamContext, RecordStreamKind,
                     },
                 };
+                fn session_key(byte: u8) -> SessionKey {
+                    SessionKey::new(vec![byte; 32])
+                }
                 #[tokio::test(flavor = "current_thread")]
                 async fn adapters_reconstruct_plaintext_across_record_and_read_boundaries() {
-                    let key = SessionKey::new(vec![0xA5; 32]);
                     let context = RecordStreamContext::new(
                         RecordEndpoint::Client,
                         RecordStreamKind::Bidirectional,
                         9,
                     );
-                    let client = RecordLayer::new(&key, RecordEndpoint::Client)
+                    let client = RecordLayer::new(session_key(0xA5), RecordEndpoint::Client)
                         .expect("client")
                         .stream(context)
                         .expect("client stream");
-                    let relay = RecordLayer::new(&key, RecordEndpoint::Relay)
+                    let relay = RecordLayer::new(session_key(0xA5), RecordEndpoint::Relay)
                         .expect("relay")
                         .stream(context)
                         .expect("relay stream");
@@ -333,17 +338,16 @@ macro_rules! define_soranet_record_io_adapters {
                 }
                 #[tokio::test(flavor = "current_thread")]
                 async fn reader_rejects_tampered_transport_bytes() {
-                    let key = SessionKey::new(vec![0x5A; 32]);
                     let context = RecordStreamContext::new(
                         RecordEndpoint::Client,
                         RecordStreamKind::Unidirectional,
                         2,
                     );
-                    let mut client = RecordLayer::new(&key, RecordEndpoint::Client)
+                    let mut client = RecordLayer::new(session_key(0x5A), RecordEndpoint::Client)
                         .expect("client")
                         .stream(context)
                         .expect("client stream");
-                    let relay = RecordLayer::new(&key, RecordEndpoint::Relay)
+                    let relay = RecordLayer::new(session_key(0x5A), RecordEndpoint::Relay)
                         .expect("relay")
                         .stream(context)
                         .expect("relay stream");
@@ -362,14 +366,49 @@ macro_rules! define_soranet_record_io_adapters {
                     assert!(output.is_empty());
                 }
                 #[tokio::test(flavor = "current_thread")]
+                async fn reader_rejects_empty_records_without_spinning() {
+                    let context = RecordStreamContext::new(
+                        RecordEndpoint::Client,
+                        RecordStreamKind::Bidirectional,
+                        3,
+                    );
+                    let relay = RecordLayer::new(session_key(0x6B), RecordEndpoint::Relay)
+                        .expect("relay")
+                        .stream(context)
+                        .expect("relay stream");
+                    let mut empty_record = Vec::with_capacity(RECORD_HEADER_LEN + RECORD_TAG_LEN);
+                    empty_record.extend_from_slice(&RECORD_MAGIC);
+                    empty_record.extend_from_slice(&0_u64.to_be_bytes());
+                    empty_record.extend_from_slice(&0_u32.to_be_bytes());
+                    empty_record.extend_from_slice(&[0_u8; RECORD_TAG_LEN]);
+                    let (mut transport_writer, transport_reader) =
+                        tokio::io::duplex(empty_record.len());
+                    transport_writer
+                        .write_all(&empty_record)
+                        .await
+                        .expect("write empty record");
+                    transport_writer.shutdown().await.expect("shutdown");
+                    let mut reader = RecordReader::new(transport_reader, relay.opener);
+                    let mut output = Vec::new();
+                    let error = tokio::time::timeout(
+                        ::std::time::Duration::from_secs(1),
+                        reader.read_to_end(&mut output),
+                    )
+                    .await
+                    .expect("empty record rejection must not spin")
+                    .expect_err("empty record must fail");
+                    assert_eq!(error.kind(), ErrorKind::InvalidData);
+                    assert!(error.to_string().contains("must not be empty"));
+                    assert!(output.is_empty());
+                }
+                #[tokio::test(flavor = "current_thread")]
                 async fn reader_rejects_unframed_plaintext_without_exposing_it() {
-                    let key = SessionKey::new(vec![0x3C; 32]);
                     let context = RecordStreamContext::new(
                         RecordEndpoint::Client,
                         RecordStreamKind::Bidirectional,
                         4,
                     );
-                    let relay = RecordLayer::new(&key, RecordEndpoint::Relay)
+                    let relay = RecordLayer::new(session_key(0x3C), RecordEndpoint::Relay)
                         .expect("relay")
                         .stream(context)
                         .expect("relay stream");

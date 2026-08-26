@@ -8,7 +8,6 @@ import java.nio.file.Path
 import java.security.MessageDigest
 import java.time.Duration
 import java.util.LinkedHashMap
-import java.util.Locale
 import java.util.Optional
 import java.util.Base64
 import java.util.concurrent.CompletableFuture
@@ -48,14 +47,20 @@ import org.hyperledger.iroha.sdk.alias.AliasAutoRenewPlanRequestV1
 import org.hyperledger.iroha.sdk.alias.AliasLeaseRenewPlanRequestV1
 import org.hyperledger.iroha.sdk.alias.AliasLifecycleTransactionPlanJsonParser
 import org.hyperledger.iroha.sdk.alias.AliasLifecycleTransactionPlanV1
-import org.hyperledger.iroha.sdk.alias.AccountOnboardingApplyRequestV1
 import org.hyperledger.iroha.sdk.alias.AccountOnboardingJsonParser
 import org.hyperledger.iroha.sdk.alias.AccountOnboardingPlanReceiptV1
 import org.hyperledger.iroha.sdk.alias.AccountOnboardingPlanRequestV1
+import org.hyperledger.iroha.sdk.alias.AccountOnboardingPrepareRequestV1
+import org.hyperledger.iroha.sdk.alias.AccountOnboardingPrepareResponseV1
+import org.hyperledger.iroha.sdk.alias.AccountOnboardingPreparedTransactionV1
+import org.hyperledger.iroha.sdk.alias.AccountOnboardingProofRequiredPrepareResponseV1
+import org.hyperledger.iroha.sdk.alias.AccountOnboardingCurrentStateRequestV1
+import org.hyperledger.iroha.sdk.alias.AccountOnboardingCurrentStateV1
+import org.hyperledger.iroha.sdk.alias.AccountOnboardingPreparedVerifier
 import org.hyperledger.iroha.sdk.alias.AccountOnboardingReceiptVerifier
-import org.hyperledger.iroha.sdk.alias.AccountOnboardingResponseV1
-import org.hyperledger.iroha.sdk.alias.AccountOnboardingResponseVerifier
 import org.hyperledger.iroha.sdk.alias.AliasSetupReportV1
+import org.hyperledger.iroha.sdk.alias.PreparedTransactionSubmitResponseV1
+import org.hyperledger.iroha.sdk.alias.TairaPublicResetMutationBindingV1
 import org.hyperledger.iroha.sdk.alias.requireOnboardingCredential
 import org.hyperledger.iroha.sdk.alias.AliasTransactionPlanJsonParser
 import org.hyperledger.iroha.sdk.alias.AliasTransactionPlanV1
@@ -141,18 +146,24 @@ class HttpClientTransport(
                     failed.completeExceptionally(cause)
                     return@handle failed
                 }
+                val statusCode = response.statusCode
+                if (statusCode != 202) {
+                    val error = RuntimeException(
+                        "transaction entrypoint submit request failed with status $statusCode",
+                    )
+                    notifyFailure(request, error)
+                    return@handle CompletableFuture<ClientResponse>().also {
+                        it.completeExceptionally(error)
+                    }
+                }
                 val clientResponse = ClientResponse(
-                    response.statusCode,
+                    statusCode,
                     response.body,
                     response.message,
                     extractEntrypointHash(response),
                     extractRejectCode(response),
                 )
-                if (clientResponse.statusCode < 200 || clientResponse.statusCode >= 300) {
-                    notifyFailure(request, RuntimeException("Torii request failed with status ${clientResponse.statusCode}"))
-                } else {
-                    notifyResponse(request, clientResponse)
-                }
+                notifyResponse(request, clientResponse)
                 CompletableFuture.completedFuture(clientResponse)
             }.thenCompose { it }
         }
@@ -177,8 +188,7 @@ class HttpClientTransport(
             Long.MAX_VALUE
         } else {
             val now = System.currentTimeMillis()
-            val delay = maxOf(0L, timeoutMillis)
-            if (delay > Long.MAX_VALUE - now) Long.MAX_VALUE else now + delay
+            if (timeoutMillis > Long.MAX_VALUE - now) Long.MAX_VALUE else now + timeoutMillis
         }
         val future = CompletableFuture<Map<String, Any>>()
         pollPipelineStatus(hashHex, resolved, deadline, 0, null, future)
@@ -490,23 +500,8 @@ class HttpClientTransport(
     override fun planSponsoredAccountOnboarding(
         request: AccountOnboardingPlanRequestV1,
         onboardingToken: String,
-        expectedNetworkId: NetworkId,
-    ): CompletableFuture<AccountOnboardingPlanReceiptV1> =
-        planSponsoredAccountOnboardingPinned(request, onboardingToken, expectedNetworkId, null)
-
-    override fun planSponsoredAccountOnboarding(
-        request: AccountOnboardingPlanRequestV1,
-        onboardingToken: String,
         expectedAuthority: String,
         expectedNetworkId: NetworkId,
-    ): CompletableFuture<AccountOnboardingPlanReceiptV1> =
-        planSponsoredAccountOnboardingPinned(request, onboardingToken, expectedNetworkId, expectedAuthority)
-
-    private fun planSponsoredAccountOnboardingPinned(
-        request: AccountOnboardingPlanRequestV1,
-        onboardingToken: String,
-        expectedNetworkId: NetworkId,
-        expectedAuthority: String?,
     ): CompletableFuture<AccountOnboardingPlanReceiptV1> {
         val body = JsonEncoder.encode(request.toJsonMap()).toByteArray(StandardCharsets.UTF_8)
         return fetchJson(
@@ -524,38 +519,128 @@ class HttpClientTransport(
         )
     }
 
-    override fun applySponsoredAccountOnboarding(
+    override fun prepareSponsoredAccountOnboarding(
+        request: AccountOnboardingPlanRequestV1,
         receipt: AccountOnboardingPlanReceiptV1,
-        onboardingToken: String,
-        expectedNetworkId: NetworkId,
-    ): CompletableFuture<AccountOnboardingResponseV1> =
-        applySponsoredAccountOnboardingPinned(receipt, onboardingToken, expectedNetworkId, null)
-
-    override fun applySponsoredAccountOnboarding(
-        receipt: AccountOnboardingPlanReceiptV1,
+        binding: TairaPublicResetMutationBindingV1,
         onboardingToken: String,
         expectedAuthority: String,
         expectedNetworkId: NetworkId,
-    ): CompletableFuture<AccountOnboardingResponseV1> =
-        applySponsoredAccountOnboardingPinned(receipt, onboardingToken, expectedNetworkId, expectedAuthority)
-
-    private fun applySponsoredAccountOnboardingPinned(
-        receipt: AccountOnboardingPlanReceiptV1,
-        onboardingToken: String,
-        expectedNetworkId: NetworkId,
-        expectedAuthority: String?,
-    ): CompletableFuture<AccountOnboardingResponseV1> {
-        AccountOnboardingReceiptVerifier.requireValid(receipt, expectedNetworkId, expectedAuthority)
-        val body = JsonEncoder.encode(AccountOnboardingApplyRequestV1(receipt).toJsonMap())
+    ): CompletableFuture<AccountOnboardingPrepareResponseV1> {
+        AccountOnboardingReceiptVerifier.requireValidForRequest(
+            request,
+            receipt,
+            expectedNetworkId,
+            expectedAuthority,
+        )
+        require(binding.kind == TairaPublicResetMutationBindingV1.ONBOARDING) {
+            "onboarding prepare requires an onboarding binding"
+        }
+        require(binding.executionExpiresAtUnixMs > System.currentTimeMillis()) {
+            "onboarding prepare binding is expired"
+        }
+        val body = JsonEncoder.encode(AccountOnboardingPrepareRequestV1(binding, receipt).toJsonMap())
             .toByteArray(StandardCharsets.UTF_8)
         return fetchJson(
+            buildOnboardingRequest("POST", "/v1/accounts/onboard/prepare", body, onboardingToken),
+            Function { response ->
+                when (val result = AccountOnboardingJsonParser.parsePrepareResponse(response)) {
+                    is AccountOnboardingPreparedTransactionV1 -> {
+                        AccountOnboardingPreparedVerifier.requireValidPrepared(
+                            result,
+                            request,
+                            receipt,
+                            binding,
+                            expectedNetworkId,
+                            expectedAuthority,
+                        )
+                        result
+                    }
+                    is AccountOnboardingProofRequiredPrepareResponseV1 ->
+                        AccountOnboardingPreparedVerifier.requireValidProofRequired(
+                            result,
+                            request,
+                            receipt,
+                            binding,
+                            expectedNetworkId,
+                            expectedAuthority,
+                        )
+                }
+            },
+            "sponsored account onboarding prepare",
+            200,
+        )
+    }
+
+    override fun verifyAccountOnboardingCurrentState(
+        proofRequired: AccountOnboardingProofRequiredPrepareResponseV1,
+        request: AccountOnboardingPlanRequestV1,
+        receipt: AccountOnboardingPlanReceiptV1,
+        binding: TairaPublicResetMutationBindingV1,
+        expectedAuthority: String,
+        expectedNetworkId: NetworkId,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<AccountOnboardingCurrentStateV1> {
+        AccountOnboardingPreparedVerifier.requireValidProofRequired(
+            proofRequired,
+            request,
+            receipt,
+            binding,
+            expectedNetworkId,
+            expectedAuthority,
+        )
+        val atomicRequest = AccountOnboardingCurrentStateRequestV1(
+            proofRequired.accountId,
+            proofRequired.alias,
+        )
+        val body = JsonEncoder.encode(atomicRequest.toJsonMap())
+            .toByteArray(StandardCharsets.UTF_8)
+        require(config.requireLocalSigningContext().networkId() == expectedNetworkId) {
+            "atomic onboarding current-state signing requires the expected network context"
+        }
+        return fetchExactJson(
+            buildVpnRequest(
+                "POST",
+                "/v1/accounts/onboarding/current-state",
+                body,
+                canonicalAuth,
+                ACCOUNT_ONBOARDING_CURRENT_STATE_RESPONSE_MAX_BYTES,
+            ),
+            Function { payload ->
+                AccountOnboardingJsonParser.parseCurrentStateResponse(payload)
+                    .classify(atomicRequest, expectedNetworkId)
+            },
+            "atomic account onboarding current-state",
+        )
+    }
+
+    override fun submitPreparedAccountOnboarding(
+        request: AccountOnboardingPlanRequestV1,
+        prepared: AccountOnboardingPreparedTransactionV1,
+        onboardingToken: String,
+        expectedAuthority: String,
+        expectedNetworkId: NetworkId,
+    ): CompletableFuture<PreparedTransactionSubmitResponseV1> {
+        AccountOnboardingPreparedVerifier.requireValidPrepared(
+            prepared,
+            request,
+            prepared.receipt,
+            prepared.binding,
+            expectedNetworkId,
+            expectedAuthority,
+        )
+        require(prepared.binding.executionExpiresAtUnixMs > System.currentTimeMillis()) {
+            "prepared onboarding binding is expired"
+        }
+        val body = JsonEncoder.encode(prepared.toJsonMap()).toByteArray(StandardCharsets.UTF_8)
+        return fetchJson(
             buildOnboardingRequest("POST", "/v1/accounts/onboard", body, onboardingToken),
-            AccountOnboardingJsonParser::parseResponse,
-            "sponsored account onboarding apply",
+            AccountOnboardingJsonParser::parseSubmitResponse,
+            "prepared account onboarding submit",
             responseValidator = { response, statusCode ->
-                AccountOnboardingResponseVerifier.requireValidForReceipt(
-                    receipt,
+                AccountOnboardingPreparedVerifier.requireValidSubmitResponse(
                     response,
+                    prepared,
                     statusCode,
                 )
             },
@@ -1097,6 +1182,8 @@ class HttpClientTransport(
                     val error = AmbiguousTransactionSubmissionException(
                         hashHex,
                         null,
+                        null,
+                        null,
                         cause,
                     )
                     notifyFailure(request, error)
@@ -1104,17 +1191,15 @@ class HttpClientTransport(
                         it.completeExceptionally(error)
                     }
                 }
-                val clientResponse = ClientResponse(
-                    response.statusCode,
-                    response.body,
-                    response.message,
-                    extractEntrypointHash(response) ?: hashHex,
-                    extractRejectCode(response),
-                )
-                if (submissionOutcomeIsAmbiguous(clientResponse.statusCode)) {
+                val statusCode = response.statusCode
+                val rejectCode = extractRejectCode(response)
+                val responseBody = HttpErrorMessageExtractor.extractMessage(response.body)
+                if (submissionOutcomeIsAmbiguous(statusCode)) {
                     val error = AmbiguousTransactionSubmissionException(
                         hashHex,
-                        clientResponse.statusCode,
+                        statusCode,
+                        rejectCode,
+                        responseBody,
                         null,
                     )
                     notifyFailure(request, error)
@@ -1122,6 +1207,25 @@ class HttpClientTransport(
                         it.completeExceptionally(error)
                     }
                 }
+                if (statusCode != 202) {
+                    val error = TransactionSubmissionHttpException(
+                        hashHex,
+                        statusCode,
+                        rejectCode,
+                        responseBody,
+                    )
+                    notifyFailure(request, error)
+                    return@handle CompletableFuture<ClientResponse>().also {
+                        it.completeExceptionally(error)
+                    }
+                }
+                val clientResponse = ClientResponse(
+                    statusCode,
+                    response.body,
+                    response.message,
+                    extractEntrypointHash(response) ?: hashHex,
+                    rejectCode,
+                )
                 notifyResponse(request, clientResponse)
                 CompletableFuture.completedFuture(clientResponse)
             }.thenCompose { it }
@@ -1131,6 +1235,7 @@ class HttpClientTransport(
     private fun submissionOutcomeIsAmbiguous(statusCode: Int): Boolean =
         statusCode in 300..399 ||
             statusCode == 408 ||
+            statusCode == 409 ||
             statusCode == 425 ||
             statusCode == 429 ||
             statusCode >= 500
@@ -1154,7 +1259,7 @@ class HttpClientTransport(
         if (!config.telemetryOptions().enabled) return; val sink = config.telemetrySink().orElse(null) ?: return
         val fields = LinkedHashMap<String, Any>()
         maybePutAuthorityHash(fields, request, sink, PIPELINE_STATUS_SIGNAL)
-        if (!transactionHash.isNullOrBlank()) fields["tx_hash"] = transactionHash
+        if (transactionHash != null) fields["tx_hash"] = transactionHash
         fields["status_kind"] = statusKind ?: ""; fields["outcome"] = if (isSuccess) "success" else if (isFailure) "failure" else "pending"; fields["attempts"] = attempts
         sink.emitSignal(PIPELINE_STATUS_SIGNAL, fields)
     }
@@ -1178,19 +1283,22 @@ class HttpClientTransport(
                 val clientResponse = ClientResponse(response.statusCode, response.body, response.message, null, extractRejectCode(response))
                 notifyResponse(request, clientResponse)
                 val statusCode = clientResponse.statusCode
-                if (statusCode != 200 && statusCode != 202 && statusCode != 204 && statusCode != 404) { future.completeExceptionally(buildPipelineStatusHttpException(hashHex, clientResponse)); return@whenComplete }
+                if (statusCode != 200 && statusCode != 404) { future.completeExceptionally(buildPipelineStatusHttpException(hashHex, clientResponse)); return@whenComplete }
                 val payload =
-                    if (statusCode == 204 || statusCode == 404) null
+                    if (statusCode == 404) null
                     else parsePipelineStatusPayload(clientResponse.body)
                 val nextAttempts = attemptsSoFar + 1
                 val statusLiteral =
                     if (payload == null) null
                     else PipelineStatusExtractor.requireAuthoritativeStatus(payload, hashHex)
-                val isSuccess = statusLiteral == "Applied"
-                val isFailure = statusLiteral != null && options.failureStatuses.contains(statusLiteral)
+                val isStateResolved = payload?.get("resolved_from") == "state"
+                val isSuccess = statusLiteral == "Applied" && isStateResolved
+                val isFailure =
+                    (statusLiteral == "Rejected" || statusLiteral == "Expired") &&
+                        isStateResolved
                 emitPipelineStatusTelemetry(request, hashHex, statusLiteral, isSuccess, isFailure, nextAttempts)
                 if (options.observer != null) { try { options.observer.onStatus(statusLiteral ?: "", payload ?: emptyMap(), nextAttempts) } catch (observerError: RuntimeException) { future.completeExceptionally(observerError); return@whenComplete } }
-                if (isSuccess) { future.complete(payload ?: emptyMap()); return@whenComplete }
+                if (isSuccess) { future.complete(payload); return@whenComplete }
                 if (isFailure) { future.completeExceptionally(TransactionStatusException(hashHex, statusLiteral, payload)); return@whenComplete }
                 if (configuredMaxAttempts != null && nextAttempts >= configuredMaxAttempts) { future.completeExceptionally(TransactionTimeoutException("Transaction $hashHex did not reach a terminal status after $nextAttempts attempts", hashHex, nextAttempts, payload)); return@whenComplete }
                 if (deadline != Long.MAX_VALUE && System.currentTimeMillis() >= deadline) { future.completeExceptionally(TransactionTimeoutException("Transaction $hashHex did not reach a terminal status within the configured timeout", hashHex, nextAttempts, payload)); return@whenComplete }
@@ -1357,6 +1465,7 @@ class HttpClientTransport(
         requireCanonicalHeadersUnset()
         val target = resolvePath(path)
         val builder = TransportRequest.builder().setUri(target).setMethod(method).addHeader("Accept", "application/json").setTimeout(config.requestTimeout())
+        if (maximumResponseBytes != null) builder.setMaximumResponseBytes(maximumResponseBytes)
         if (body != null) {
             builder.setBody(body).addHeader("Content-Type", "application/json")
         }
@@ -1738,6 +1847,7 @@ class HttpClientTransport(
         private const val SCCP_RECENT_RESPONSE_MAX_BYTES = 8L * 1024L * 1024L
         private const val SCCP_JSON_RESPONSE_MAX_BYTES = 64L * 1024L * 1024L
         private const val EXECUTED_BLOCK_WIRE_MAX_BYTES = 32L * 1024L * 1024L
+        private const val ACCOUNT_ONBOARDING_CURRENT_STATE_RESPONSE_MAX_BYTES = 4L * 1024L
         private const val APPLICATION_NORITO = "application/x-norito"
         private val CANONICAL_AUTH_HEADERS = setOf(
             CanonicalRequestSigner.HEADER_ACCOUNT,
@@ -1781,22 +1891,14 @@ class HttpClientTransport(
         private fun extractEntrypointHash(response: TransportResponse?): String? {
             if (response == null) return null
             val values = response.headers["x-iroha-entrypoint-hash"] ?: return null
-            for (value in values) {
-                val normalized = normalizeEntrypointHashHeader(value)
-                if (normalized != null) return normalized
+            check(values.size == 1) {
+                "Torii transaction hash header must contain exactly one value"
             }
-            return null
-        }
-        private fun normalizeEntrypointHashHeader(value: String?): String? {
-            var normalized = value?.trim() ?: return null
-            if (normalized.startsWith("0x") || normalized.startsWith("0X")) {
-                normalized = normalized.substring(2)
+            val value = values.single()
+            check(value.matches(Regex("[0-9a-f]{63}[13579bdf]"))) {
+                "Torii transaction hash header must be an exact lowercase marked 32-byte hash"
             }
-            if (normalized.length != 64) return null
-            if (!normalized.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }) {
-                return null
-            }
-            return normalized.lowercase(Locale.ROOT)
+            return value
         }
         private fun resolveAuthority(request: TransportRequest?): String {
             if (request == null) return ""; val authority = request.uri.authority; if (authority != null) return authority

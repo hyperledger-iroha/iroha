@@ -4,11 +4,11 @@ evaluation_interval: 1m
 tests:
   - interval: 1m
     input_series:
-      - series: 'torii_lane_admission_latency_seconds_bucket{lane_id="lane-1", endpoint="/transaction", le="0.512"}'
+      - series: 'torii_lane_admission_latency_seconds_bucket{lane_id="lane-1", endpoint="/v1/pipeline/transactions", le="0.512"}'
         values: '0 0 0 0 10 20 30 40 50'
-      - series: 'torii_lane_admission_latency_seconds_bucket{lane_id="lane-1", endpoint="/transaction", le="1.024"}'
+      - series: 'torii_lane_admission_latency_seconds_bucket{lane_id="lane-1", endpoint="/v1/pipeline/transactions", le="1.024"}'
         values: '0 0 0 0 19 38 57 76 95'
-      - series: 'torii_lane_admission_latency_seconds_bucket{lane_id="lane-1", endpoint="/transaction", le="+Inf"}'
+      - series: 'torii_lane_admission_latency_seconds_bucket{lane_id="lane-1", endpoint="/v1/pipeline/transactions", le="+Inf"}'
         values: '0 0 0 0 20 40 60 80 100'
     alert_rule_test:
       - alertname: SoranetLaneAdmissionLatencyDegraded
@@ -18,10 +18,10 @@ tests:
         eval_time: 9m
         exp_alerts:
           - exp_labels:
-              endpoint: /transaction
+              endpoint: /v1/pipeline/transactions
               lane_id: lane-1
               severity: warning
             exp_annotations:
               summary: "Lane admission latency P95 degraded"
               description: |
-                Lane lane-1 via /transaction has admission latency P95 1024 ms (>750 ms budget). Inspect backlog, DA health, and pacemaker timers before rerouting traffic.
+                Lane lane-1 via /v1/pipeline/transactions has admission latency P95 1024 ms (>750 ms budget). Inspect backlog, DA health, and pacemaker timers before rerouting traffic.

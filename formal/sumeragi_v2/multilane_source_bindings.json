@@ -730,8 +730,8 @@
     "runner": "scripts/formal/run_sumeragi_v2_inflight_first_release.sh",
     "evidence": "formal/sumeragi_v2/INFLIGHT_FIRST_RELEASE_EVIDENCE.md",
     "required_actions": [
-      "SelectQueuePlanV4Conjunction",
-      "FsyncReservationV5",
+      "SelectQueuePlanV1Conjunction",
+      "FsyncReservationV1",
       "ActivateKura",
       "FanoutFromProducer",
       "ServeLateBody",
@@ -762,8 +762,8 @@
       "FirstReleaseTypeInvariant",
       "MLPayloadSchemaV2CarriesExactAdmissionPreimage",
       "MLValidatorCarrierOwnership",
-      "MLSelectedQueuePlanV4ConjunctionBeforeReservationV5",
-      "MLReservationV5BeforeKuraActive",
+      "MLSelectedQueuePlanV1ConjunctionBeforeReservationV1",
+      "MLReservationV1BeforeKuraActive",
       "MLKuraActiveBeforeExecutionInput",
       "MLExecutionInputBeforeReadyAuthorization",
       "MLReadyAuthorizationBeforeLocalSignature",
@@ -776,16 +776,16 @@
       "MLPostCarrierCommitCleanupOrder",
       "MLReleasePrefixesRecoverable",
       "MLReleaseStageOrder",
-      "MLQueuePlanV4SelectedConjunctionBound4096"
+      "MLQueuePlanV1SelectedConjunctionBound4096"
     ],
     "mutations": [
       {
         "config": "inflight_first_release_reservation_before_selected_queue_plan_bug.cfg",
-        "invariant": "MLSelectedQueuePlanV4ConjunctionBeforeReservationV5"
+        "invariant": "MLSelectedQueuePlanV1ConjunctionBeforeReservationV1"
       },
       {
         "config": "inflight_first_release_kura_before_reservation_bug.cfg",
-        "invariant": "MLReservationV5BeforeKuraActive"
+        "invariant": "MLReservationV1BeforeKuraActive"
       },
       {
         "config": "inflight_first_release_ready_authorization_before_input_bug.cfg",
@@ -865,7 +865,7 @@
       },
       {
         "config": "inflight_first_release_oversize_selected_queue_plan_bug.cfg",
-        "invariant": "MLQueuePlanV4SelectedConjunctionBound4096"
+        "invariant": "MLQueuePlanV1SelectedConjunctionBound4096"
       }
     ],
     "production_symbols": [
@@ -877,7 +877,7 @@
           "pub version: u8",
           "pub entrypoint_hashes: Vec<Hash>",
           "pub entrypoints: Vec<TransactionEntrypoint>",
-          "pub reservation_keys: Vec<LaneQueueReservationKeyV2>",
+          "pub reservation_keys: Vec<LaneQueueReservationKeyV1>",
           "pub routing_plans: Vec<RoutingPlan>",
           "pub native_amx_receipts: Vec<Option<NativeAmxReceipt>>",
           "pub payload_hash: Hash",
@@ -889,7 +889,7 @@
         "kind": "method",
         "symbol": "LaneExecutablePayloadV1::new_signed_with_reservations",
         "required_tokens": [
-          "version: LANE_EXECUTABLE_PAYLOAD_VERSION_V2",
+          "version: LANE_EXECUTABLE_PAYLOAD_VERSION_V1",
           "reservation_keys",
           "routing_plans",
           "native_amx_receipts",
@@ -927,7 +927,7 @@
         "kind": "fn",
         "symbol": "validate_lane_executable_payload_body",
         "required_tokens": [
-          "version != LANE_EXECUTABLE_PAYLOAD_VERSION_V2",
+          "version != LANE_EXECUTABLE_PAYLOAD_VERSION_V1",
           "entrypoints.is_empty()",
           "entrypoints.len() > MAX_LANE_EXECUTABLE_ENTRYPOINTS",
           "reservation_keys.len() != entrypoints.len()",
@@ -957,20 +957,20 @@
       {
         "path": "crates/iroha_core/src/queue/journal.rs",
         "kind": "struct",
-        "symbol": "QueuePlanJournalRecordV4",
+        "symbol": "QueuePlanJournalRecordV1",
         "required_tokens": [
           "pub version: u16",
           "pub entrypoint: TransactionEntrypoint",
           "pub entrypoint_hash: HashOf<TransactionEntrypoint>",
           "pub routing_plan: RoutingPlan",
-          "pub admission_context: QueuePlanAdmissionContextV2",
-          "pub global_admission_identity: Option<QueuePlanGlobalAdmissionIdentityV2>"
+          "pub admission_context: QueuePlanAdmissionContextV1",
+          "pub global_admission_identity: Option<QueuePlanGlobalAdmissionIdentityV1>"
         ]
       },
       {
         "path": "crates/iroha_core/src/queue.rs",
         "kind": "struct",
-        "symbol": "LaneQueueReservationKeyV2",
+        "symbol": "LaneQueueReservationKeyV1",
         "required_tokens": [
           "pub version: u16",
           "pub entrypoint_hash: HashOf<TransactionEntrypoint>",
@@ -988,29 +988,29 @@
       {
         "path": "crates/iroha_core/src/queue.rs",
         "kind": "struct",
-        "symbol": "LaneQueueReservationRecordV5",
+        "symbol": "LaneQueueReservationRecordV1",
         "required_tokens": [
           "version: u16",
-          "key: LaneQueueReservationKeyV2",
+          "key: LaneQueueReservationKeyV1",
           "enqueue_timestamp_ms: u64",
-          "fifo_order: LaneQueueFifoOrderV5"
+          "fifo_order: LaneQueueFifoOrderV1"
         ]
       },
       {
         "path": "crates/iroha_core/src/queue/reservation_journal.rs",
         "kind": "enum",
-        "symbol": "LaneQueueReservationJournalFrameV6",
+        "symbol": "LaneQueueReservationJournalFrameV1",
         "required_tokens": [
           "Bootstrap {",
           "Snapshot {",
-          "PutBatch(Vec<LaneQueueReservationRecordV5>)",
-          "ReleaseBatch(Vec<LaneQueueReservationKeyV2>)",
-          "Commit(LaneQueueReservationKeyV2)",
-          "PlanTombstoned(LaneQueueReservationKeyV2)",
-          "ForgetCommit(LaneQueueReservationKeyV2)",
-          "PrepareRelease(LaneQueueReservationReleaseBarrierV3)",
-          "CompleteRelease(LaneQueueReservationReleaseCompletionV5)",
-          "ForgetRelease(LaneQueueReservationReleaseBarrierV3)"
+          "PutBatch(Vec<LaneQueueReservationRecordV1>)",
+          "ReleaseBatch(Vec<LaneQueueReservationKeyV1>)",
+          "Commit(LaneQueueReservationKeyV1)",
+          "PlanTombstoned(LaneQueueReservationKeyV1)",
+          "ForgetCommit(LaneQueueReservationKeyV1)",
+          "PrepareRelease(LaneQueueReservationReleaseBarrierV1)",
+          "CompleteRelease(LaneQueueReservationReleaseCompletionV1)",
+          "ForgetRelease(LaneQueueReservationReleaseBarrierV1)"
         ]
       },
       {
@@ -1018,7 +1018,7 @@
         "kind": "fn",
         "symbol": "bootstrap_frame",
         "required_tokens": [
-          "RESERVATION_JOURNAL_OPERATION_SCHEMA_V6",
+          "RESERVATION_JOURNAL_OPERATION_SCHEMA_V1",
           "RESERVATION_JOURNAL_FRAME_FORMAT_VERSION",
           "RESERVATION_JOURNAL_BOOTSTRAP_DOMAIN",
           "RESERVATION_JOURNAL_FRAME_MAGIC",
@@ -1125,7 +1125,7 @@
         "kind": "method",
         "symbol": "IndexedReservationReplayState::from_replay",
         "required_tokens": [
-          "LaneQueueReservationJournalFrameV6::Snapshot {",
+          "LaneQueueReservationJournalFrameV1::Snapshot {",
           "prepare_checked_transition(&frame, maximum)?",
           "state.apply_checked_transition(&frame, maximum, prepared)?",
           "canonical_reconciliation_owners_from_state(&state)?",
@@ -1454,7 +1454,7 @@
         "symbol": "IndexedReservationReplayState::validate_live_secondary_indexes",
         "required_tokens": [
           "fn validate_live_secondary_indexes(",
-          ") -> io::Result<LaneQueueReservationRecordV5>",
+          ") -> io::Result<LaneQueueReservationRecordV1>",
           "expected_key.entrypoint_hash != hash",
           "live reservation index key differs from the exact reservation hash",
           ".live",
@@ -1473,7 +1473,7 @@
         "kind": "method",
         "symbol": "IndexedReservationReplayState::remove_preflighted_live",
         "required_tokens": [
-          "fn remove_preflighted_live(&mut self, record: &LaneQueueReservationRecordV5)",
+          "fn remove_preflighted_live(&mut self, record: &LaneQueueReservationRecordV1)",
           "debug_assert_eq!(self.live.get(&hash).map(|entry| &entry.value), Some(record));",
           "self.fifo_ordinals.get(&record.fifo_order.ordinal)",
           "debug_assert!(",
@@ -1592,7 +1592,7 @@
           "queue.selected_count > 0u64 && queue.selected_count <= 4096u64",
           "queue.reservation_state\n                == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_ABSENT)\n                || queue.plan_state\n                    != refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_ABSENT)",
           "(carrier.execution_input_durable & !carrier.kura_active) == 0u128",
-          "(carrier.kura_active == 0u128 || history.ever_reservation_v5)",
+          "(carrier.kura_active == 0u128 || history.ever_reservation_v1)",
           "(session.ready_authorized & !carrier.execution_input_durable) == 0u128",
           "(history.ready_signed & !history.ever_ready_authorized) == 0u128",
           "decision.application_count <= 1u8",
@@ -1611,8 +1611,8 @@
         "required_tokens": [
           "production_in_flight_first_release_state_body!(before)",
           "production_in_flight_first_release_state_body!(after)",
-          "IN_FLIGHT_FIRST_RELEASE_ACTION_SELECT_QUEUE_PLAN_V4",
-          "IN_FLIGHT_FIRST_RELEASE_ACTION_FSYNC_RESERVATION_V5",
+          "IN_FLIGHT_FIRST_RELEASE_ACTION_SELECT_QUEUE_PLAN_V1",
+          "IN_FLIGHT_FIRST_RELEASE_ACTION_FSYNC_RESERVATION_V1",
           "IN_FLIGHT_FIRST_RELEASE_ACTION_ACTIVATE_KURA",
           "IN_FLIGHT_FIRST_RELEASE_ACTION_FANOUT_FROM_PRODUCER",
           "IN_FLIGHT_FIRST_RELEASE_ACTION_SERVE_LATE_BODY",
@@ -1731,8 +1731,8 @@
           "QueuePlanAdmissionRegistryMatch::Exact",
           "version: LANE_QUEUE_RESERVATION_JOURNAL_VERSION",
           "canonical_lane_queue_reservation_group_identity_projection",
-          "IN_FLIGHT_FIRST_RELEASE_ACTION_SELECT_QUEUE_PLAN_V4",
-          "IN_FLIGHT_FIRST_RELEASE_ACTION_FSYNC_RESERVATION_V5",
+          "IN_FLIGHT_FIRST_RELEASE_ACTION_SELECT_QUEUE_PLAN_V1",
+          "IN_FLIGHT_FIRST_RELEASE_ACTION_FSYNC_RESERVATION_V1",
           "check_production_in_flight_first_release_transition",
           "checked_reservation_fsync.into_projection()",
           "journal.put_batch(",
@@ -2451,7 +2451,7 @@
           "validator_count: u8",
           "producer: u128",
           "expected_group: LaneQueueReservationGroupBindingV1",
-          "ordered_keys: Vec<LaneQueueReservationKeyV2>"
+          "ordered_keys: Vec<LaneQueueReservationKeyV1>"
         ]
       },
       {
@@ -2491,7 +2491,7 @@
           "pub source: LaneBlockExecutionSourceV1",
           "pub entrypoint_hashes: Vec<Hash>",
           "pub entrypoints: Vec<TransactionEntrypoint>",
-          "pub reservation_keys: Vec<LaneQueueReservationKeyV2>",
+          "pub reservation_keys: Vec<LaneQueueReservationKeyV1>",
           "pub routing_plans: Vec<RoutingPlan>",
           "pub native_amx_receipts: Vec<Option<NativeAmxReceipt>>"
         ]
@@ -2698,7 +2698,7 @@
         "required_tokens": [
           "projection: ProductionInFlightFirstReleaseTransitionProjection",
           "path: PathBuf",
-          "replacement: AutonomousLaneEntrypointClaimV3"
+          "replacement: AutonomousLaneEntrypointClaimV1"
         ]
       },
       {
@@ -2897,7 +2897,7 @@
         "symbol": "AutonomousLaneQueueReleasePreparationAuthorization",
         "required_tokens": [
           "projection: ProductionInFlightFirstReleaseTransitionProjection",
-          "barrier: LaneQueueReservationReleaseBarrierV3",
+          "barrier: LaneQueueReservationReleaseBarrierV1",
           "claims_fully_released: bool"
         ]
       },
@@ -2916,7 +2916,7 @@
         "kind": "struct",
         "symbol": "AutonomousLaneQueueReleaseFinalizationAuthorization",
         "required_tokens": [
-          "barrier: LaneQueueReservationReleaseBarrierV3",
+          "barrier: LaneQueueReservationReleaseBarrierV1",
           "complete_projection: ProductionInFlightFirstReleaseTransitionProjection",
           "restore_projection: ProductionInFlightFirstReleaseTransitionProjection",
           "forget_projection: ProductionInFlightFirstReleaseTransitionProjection"
@@ -2967,7 +2967,7 @@
         "kind": "struct",
         "symbol": "DurableLaneQueueReleaseBarrierAuthorization",
         "required_tokens": [
-          "barrier: LaneQueueReservationReleaseBarrierV3",
+          "barrier: LaneQueueReservationReleaseBarrierV1",
           "terminal_absence: bool"
         ]
       },
@@ -3432,7 +3432,7 @@
         "kind": "method",
         "symbol": "IndexedReservationReplayState::from_replay",
         "tokens": [
-          "let frame = LaneQueueReservationJournalFrameV6::Snapshot {",
+          "let frame = LaneQueueReservationJournalFrameV1::Snapshot {",
           "let frame_digest = checked_transition_frame_digest(&frame)?",
           "state.prepare_checked_transition(&frame, maximum)?",
           "state.apply_checked_transition(&frame, maximum, prepared)?",
@@ -3574,27 +3574,27 @@
         "kind": "method",
         "symbol": "IndexedReservationReplayState::check_in_flight_transition",
         "tokens": [
-          "LaneQueueReservationJournalFrameV6::Snapshot {",
+          "LaneQueueReservationJournalFrameV1::Snapshot {",
           "IN_FLIGHT_RESERVATION_ACTION_RECOVER_SNAPSHOT",
           "self.ownership.get(&hash).copied()",
           "candidate.ownership.get(&hash).copied()",
-          "LaneQueueReservationJournalFrameV6::PutBatch(records) => {",
+          "LaneQueueReservationJournalFrameV1::PutBatch(records) => {",
           "let after = before.or(Some(DurableReservationOwnership::Live(key)));",
           "IN_FLIGHT_RESERVATION_ACTION_RESERVE",
-          "LaneQueueReservationJournalFrameV6::ReleaseBatch(keys) => {",
+          "LaneQueueReservationJournalFrameV1::ReleaseBatch(keys) => {",
           "let after = if before == Some(DurableReservationOwnership::Live(*key)) {",
           "IN_FLIGHT_RESERVATION_ACTION_RELEASE_DIRECT",
-          "LaneQueueReservationJournalFrameV6::Commit(key) => {",
+          "LaneQueueReservationJournalFrameV1::Commit(key) => {",
           "IN_FLIGHT_RESERVATION_ACTION_COMMIT",
           "Some(DurableReservationOwnership::Committed(*key))",
-          "LaneQueueReservationJournalFrameV6::PlanTombstoned(_) => Ok(()),",
-          "LaneQueueReservationJournalFrameV6::ForgetCommit(key) => {",
+          "LaneQueueReservationJournalFrameV1::PlanTombstoned(_) => Ok(()),",
+          "LaneQueueReservationJournalFrameV1::ForgetCommit(key) => {",
           "IN_FLIGHT_RESERVATION_ACTION_FORGET_COMMIT",
-          "LaneQueueReservationJournalFrameV6::PrepareRelease(barrier) => {",
+          "LaneQueueReservationJournalFrameV1::PrepareRelease(barrier) => {",
           "IN_FLIGHT_RESERVATION_ACTION_PREPARE_RELEASE",
-          "LaneQueueReservationJournalFrameV6::CompleteRelease(completion) => {",
+          "LaneQueueReservationJournalFrameV1::CompleteRelease(completion) => {",
           "IN_FLIGHT_RESERVATION_ACTION_COMPLETE_RELEASE",
-          "LaneQueueReservationJournalFrameV6::ForgetRelease(barrier) => {",
+          "LaneQueueReservationJournalFrameV1::ForgetRelease(barrier) => {",
           "IN_FLIGHT_RESERVATION_ACTION_FORGET_RELEASE"
         ]
       },
@@ -4593,7 +4593,7 @@
       {
         "path": "crates/iroha_core/src/queue/reservation_journal.rs",
         "kind": "enum",
-        "symbol": "LaneQueueReservationJournalFrameV6",
+        "symbol": "LaneQueueReservationJournalFrameV1",
         "forbidden_tokens": [
           "Prune",
           "RetiredLaneWideRemoval"
@@ -4604,7 +4604,7 @@
         "kind": "method",
         "symbol": "IndexedReservationReplayState::transition_semantics",
         "forbidden_tokens": [
-          "LaneQueueReservationJournalFrameV6::Prune",
+          "LaneQueueReservationJournalFrameV1::Prune",
           "transition_prune"
         ]
       },
@@ -4613,7 +4613,7 @@
         "kind": "method",
         "symbol": "IndexedReservationReplayState::check_in_flight_transition",
         "forbidden_tokens": [
-          "LaneQueueReservationJournalFrameV6::Prune",
+          "LaneQueueReservationJournalFrameV1::Prune",
           "IN_FLIGHT_RESERVATION_ACTION_PRUNE_RETIRED"
         ]
       },
@@ -4770,8 +4770,8 @@
         "path": "crates/iroha_core/src/lane_consensus.rs",
         "required_tokens": [
           "pub(crate) const MAX_LANE_EXECUTABLE_ENTRYPOINTS: usize = MAX_MERGE_EXECUTION_ENTRYPOINTS;",
-          "pub(crate) const LANE_EXECUTABLE_PAYLOAD_VERSION_V2: u8 = 2;",
-          "unknown.version = LANE_EXECUTABLE_PAYLOAD_VERSION_V2 + 1;",
+          "pub(crate) const LANE_EXECUTABLE_PAYLOAD_VERSION_V1: u8 = 1;",
+          "unknown.version = LANE_EXECUTABLE_PAYLOAD_VERSION_V1 + 1;",
           "fn autonomous_payload_requires_height_rotated_committee_author()",
           "committee membership and a valid signature must not confer slot authorship",
           "global carrier view must not change autonomous authorship"
@@ -4786,19 +4786,18 @@
       {
         "path": "crates/iroha_core/src/queue/journal.rs",
         "required_tokens": [
-          "pub const QUEUE_PLAN_JOURNAL_VERSION: u16 = 4;",
-          "fn corrupt_initial_v4_version_and_length_guard_fail_without_rewrite()",
+          "pub const QUEUE_PLAN_JOURNAL_VERSION: u16 = 1;",
+          "fn corrupt_initial_v1_version_and_length_guard_fail_without_rewrite()",
           "wrong_version[version_offset] ^= 0x01;"
         ]
       },
       {
         "path": "crates/iroha_core/src/queue/reservation_journal.rs",
         "required_tokens": [
-          "pub const LANE_QUEUE_RESERVATION_JOURNAL_VERSION: u16 = 5;",
-          "const RESERVATION_JOURNAL_OPERATION_SCHEMA_V6: &[u8] =",
-          "fn retired_v5_lane_wide_removal_fails_closed_at_bootstrap_and_operation_decode()",
-          "retired V5 operation tag must not decode as an ordered release",
-          "legacy.fifo_order.version = LANE_QUEUE_RESERVATION_JOURNAL_VERSION - 1;"
+          "pub const LANE_QUEUE_RESERVATION_JOURNAL_VERSION: u16 = 1;",
+          "const RESERVATION_JOURNAL_OPERATION_SCHEMA_V1: &[u8] =",
+          "fn reservation_record_rejects_zero_version_or_fifo_order_identity()",
+          "zero_version.fifo_order.version = 0;"
         ]
       },
       {
@@ -4973,21 +4972,21 @@
     ],
     "forbidden_tokens": [
       "LaneExecutablePayloadV3",
-      "PutBatchV4",
-      "MLPutBatchV4BeforeReservationV5",
-      "MLQueuePlanV4PutBatchBound4096",
-      "QueuePlanV5",
-      "QueuePlan V5",
-      "queuePlanV5",
-      "everQueuePlanV5",
-      "PutBatchV5",
-      "reservationV9",
-      "everReservationV9",
-      "FsyncReservationV9",
-      "reservation V9",
+      "QueuePlanJournalBatchPut",
+      "MLBatchPutBeforeReservation",
+      "MLQueuePlanBatchPutBound4096",
+      "QueuePlanFutureVersion",
+      "QueuePlan future version",
+      "queuePlanFutureVersion",
+      "everQueuePlanFutureVersion",
+      "PutBatchFutureVersion",
+      "reservationFutureVersion",
+      "everReservationFutureVersion",
+      "FsyncReservationFutureVersion",
+      "reservation future version",
       "MLPayloadV3CarriesExactAdmissionPreimage",
-      "MLPutBatchV5BeforeReservationV9",
-      "MLReservationV9BeforeKuraActive",
+      "MLBatchPutBeforeFutureReservation",
+      "MLFutureReservationBeforeKuraActive",
       "PrunedRetired",
       "PruneRetiredReservation"
     ]
@@ -6642,8 +6641,9 @@
           "kind": "enum",
           "symbol": "LaneHistoricalRecoveryKindV1",
           "required_tokens": [
-            "Codec index 3 is intentionally retired",
-            "#[codec(index = 4)]",
+            "#[codec(index = 0)]",
+            "#[codec(index = 1)]",
+            "#[codec(index = 2)]",
             "CanonicalExecutedBlock",
             "need: Box<CanonicalExecutedBlockNeedV1>",
             "chunk_index: u32"
@@ -6654,7 +6654,9 @@
           "kind": "enum",
           "symbol": "LaneHistoricalRecoveryPayloadV1",
           "required_tokens": [
-            "#[codec(index = 3)]",
+            "#[codec(index = 0)]",
+            "#[codec(index = 1)]",
+            "#[codec(index = 2)]",
             "CanonicalExecutedBlockChunk",
             "finality_artifact: V2FinalityArtifact",
             "wire_len: u64",
@@ -6700,7 +6702,7 @@
           "symbol": "validate_canonical_executed_block_request",
           "required_tokens": [
             "LaneHistoricalRecoveryKindV1::CanonicalExecutedBlock",
-            "LANE_HISTORICAL_RECOVERY_VERSION_V4",
+            "LANE_HISTORICAL_RECOVERY_VERSION_V1",
             "&request.requester != sender",
             "request.certificate.is_some()",
             "!request.signer_pops.is_empty()",
@@ -6906,7 +6908,7 @@
             "outstanding.retry_sent",
             "self.abandon_front_responder()?",
             "LaneHistoricalRecoveryKindV1::CanonicalExecutedBlock",
-            "LANE_HISTORICAL_RECOVERY_VERSION_V4",
+            "LANE_HISTORICAL_RECOVERY_VERSION_V1",
             "canonical_executed_block_request_fits_frame",
             "V2LaneWorkEffect::PostLaneBlock",
             "OutstandingCanonicalExecutedBlockRequest"
@@ -6943,7 +6945,7 @@
           "kind": "method",
           "symbol": "CanonicalExecutedBlockRecovery::accept_response",
           "required_tokens": [
-            "LANE_HISTORICAL_RECOVERY_VERSION_V4",
+            "LANE_HISTORICAL_RECOVERY_VERSION_V1",
             "canonical_executed_block_response_fits_frame",
             "HashOf::new(&outstanding.request)",
             "LaneHistoricalRecoveryKindV1::CanonicalExecutedBlock",
@@ -9879,7 +9881,7 @@
         {
           "path": "crates/iroha_core/src/queue.rs",
           "kind": "struct",
-          "symbol": "LaneQueueReservationKeyV2",
+          "symbol": "LaneQueueReservationKeyV1",
           "required_tokens": [
             "entrypoint_hash",
             "queue_plan_admission_binding_hash",
@@ -9892,7 +9894,7 @@
         {
           "path": "crates/iroha_core/src/queue.rs",
           "kind": "struct",
-          "symbol": "LaneQueueReservationRecordV5",
+          "symbol": "LaneQueueReservationRecordV1",
           "required_tokens": [
             "version",
             "key",
@@ -11542,7 +11544,7 @@
         {
           "path": "crates/iroha_core/src/torii_proxy.rs",
           "kind": "struct",
-          "symbol": "QueuePlanAdmissionBindingV2",
+          "symbol": "QueuePlanAdmissionBindingV1",
           "required_tokens": [
             "version",
             "network_id_digest",
@@ -11557,10 +11559,10 @@
         {
           "path": "crates/iroha_core/src/torii_proxy.rs",
           "kind": "fn",
-          "symbol": "validate_queue_plan_admission_certificate_for_network_digest_v2",
+          "symbol": "validate_queue_plan_admission_certificate_for_network_digest_v1",
           "required_tokens": [
             "expected_network_id_digest",
-            "QueuePlanAdmissionCertificateStrengthV2::Quorum",
+            "QueuePlanAdmissionCertificateStrengthV1::Quorum",
             "coordinator",
             "durability_threshold",
             "attestations",
@@ -11575,7 +11577,7 @@
           "kind": "fn",
           "symbol": "persist_queue_plan_admission_certificate",
           "required_tokens": [
-            "QueuePlanAdmissionCertificateStrengthV2::Quorum",
+            "QueuePlanAdmissionCertificateStrengthV1::Quorum",
             "queue_plan_admission_binding_registry_match",
             "persist_pending_queue_plan_admission_certificate",
             "disseminate_queue_plan_admission_publication",
@@ -12087,7 +12089,7 @@
           "kind": "fn",
           "symbol": "queue_plan_admission_registry_match_with_application_state_in_view",
           "required_tokens": [
-            "QueuePlanAdmissionRegistryKeyV2",
+            "QueuePlanAdmissionRegistryKeyV1",
             "decode_exact_queue_plan_admission_registry_marker",
             "queue_plan_registry_owner_application_state_in_view",
             "QueuePlanAdmissionRegistryMatch::Absent",
@@ -12298,13 +12300,13 @@
           "required_tokens": [
             "self.ensure_healthy()?",
             "removals.len() > self.limits.max_live_records",
-            "QueuePlanJournalFrameV4::RemoveBatch(requested.clone())",
+            "QueuePlanJournalFrameV1::RemoveBatch(requested.clone())",
             "prepare_replay_with_removed_entrypoints(Some(&entrypoints))",
             "if require_all_live",
             "live_removals.len() != requested.len()",
             "QueuePlanJournalExactRemoveResult::Removed",
             "atomic live-removal batch contains an already-absent target",
-            "QueuePlanJournalFrameV4::RemoveBatch(live_removals.clone())",
+            "QueuePlanJournalFrameV1::RemoveBatch(live_removals.clone())",
             "self.compact(true)?",
             "if compacted != (outcomes.clone(), live_removals.clone())",
             "self.append_encoded(&encoded, AppendPhase::OrdinaryRemove)",

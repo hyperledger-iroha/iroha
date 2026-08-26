@@ -1969,25 +1969,25 @@ pub(crate) fn parse_account_literal_with_world(
     dataspace_catalog: &DataSpaceCatalog,
     input: &str,
     now_ms: u64,
-) -> Option<AccountId> {
+) -> Result<Option<AccountId>, crate::sns::SnsError> {
     let literal = input.trim();
     if literal.is_empty() {
-        return None;
+        return Ok(None);
     }
-    AccountId::parse_encoded(literal)
-        .ok()
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .or_else(|| {
-            let alias = AccountAlias::from_literal(literal, dataspace_catalog).ok()?;
-            resolve_account_alias_in_world(world, dataspace_catalog, &alias, now_ms)
-        })
+    if let Ok(account_id) = AccountId::parse_encoded(literal) {
+        return Ok(Some(account_id));
+    }
+    let Ok(alias) = AccountAlias::from_literal(literal, dataspace_catalog) else {
+        return Ok(None);
+    };
+    resolve_account_alias_in_world(world, dataspace_catalog, &alias, now_ms)
 }
 pub(crate) fn resolve_account_alias_in_world(
     world: &impl WorldReadOnly,
     dataspace_catalog: &DataSpaceCatalog,
     alias: &AccountAlias,
     now_ms: u64,
-) -> Option<AccountId> {
+) -> Result<Option<AccountId>, crate::sns::SnsError> {
     crate::sns::resolve_active_account_alias(world, dataspace_catalog, alias, now_ms)
 }
 pub(crate) fn parse_asset_definition_literal_with_world(
@@ -2012,14 +2012,16 @@ fn parse_account_from_access_key(
     dataspace_catalog: &DataSpaceCatalog,
     key: &str,
     now_ms: u64,
-) -> Option<AccountId> {
+) -> Result<Option<AccountId>, crate::sns::SnsError> {
     if let Some(rest) = key.strip_prefix("account:") {
         parse_account_literal_with_world(world, dataspace_catalog, rest, now_ms)
     } else if let Some(rest) = key.strip_prefix("account.detail:") {
-        let (account_raw, _) = rest.split_once(':')?;
+        let Some((account_raw, _)) = rest.split_once(':') else {
+            return Ok(None);
+        };
         parse_account_literal_with_world(world, dataspace_catalog, account_raw, now_ms)
     } else {
-        None
+        Ok(None)
     }
 }
 fn warm_overlay_chunk(overlay: &TxOverlay, chunk_size: usize) -> usize {
@@ -2098,7 +2100,7 @@ mod prefetch_tests {
                 &format!("account:{alice}"),
                 0,
             ),
-            Some(expected.clone())
+            Ok(Some(expected.clone()))
         );
         assert_eq!(
             parse_account_from_access_key(
@@ -2107,7 +2109,7 @@ mod prefetch_tests {
                 &detail_key,
                 0,
             ),
-            Some(expected.clone())
+            Ok(Some(expected.clone()))
         );
         assert_eq!(expected.subject_id(), alice.subject_id());
         assert!(
@@ -2117,6 +2119,7 @@ mod prefetch_tests {
                 "asset:coin#wonderland",
                 0,
             )
+            .expect("valid access-key account state")
             .is_none()
         );
     }
@@ -2138,7 +2141,7 @@ mod prefetch_tests {
                 &literal,
                 0,
             ),
-            None
+            Ok(None)
         );
     }
     #[test]
@@ -2153,7 +2156,7 @@ mod prefetch_tests {
         let i105 = alice.canonical_i105().expect("i105 encoding");
         assert_eq!(
             parse_account_literal_with_world(&world_view, &DataSpaceCatalog::default(), &i105, 0,),
-            Some(alice)
+            Ok(Some(alice))
         );
     }
     #[test]
@@ -2176,7 +2179,7 @@ mod prefetch_tests {
                 &encoded,
                 0,
             ),
-            Some(account),
+            Ok(Some(account)),
             "canonical I105 account ids must remain valid without domain-linked account materialization"
         );
     }
@@ -2228,7 +2231,7 @@ mod prefetch_tests {
                 "gas@ivm.universal",
                 0,
             ),
-            Some(account_id),
+            Ok(Some(account_id)),
             "account selectors must resolve active on-chain aliases to canonical account ids"
         );
     }
@@ -2293,7 +2296,7 @@ mod prefetch_tests {
                 "treasury@retail",
                 0,
             ),
-            Some(account_id.clone()),
+            Ok(Some(account_id.clone())),
             "account selectors must resolve aliases in non-default dataspaces"
         );
     }
@@ -4359,7 +4362,7 @@ pub(crate) mod valid {
         }
         Ok(())
     }
-    /// Test-only harness for legacy block-time mailbox execution.
+    /// Test-only harness for deterministic block-time mailbox execution.
     ///
     /// Production replay must not depend on a local Soracloud runtime. Runtime
     /// effects must be persisted through explicit Soracloud ISIs in committed
@@ -4585,7 +4588,7 @@ pub(crate) mod valid {
                 authenticated_height_context: Some(Arc::new(context.clone())),
             }
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "iroha-core-tests"))]
         fn for_body_without_context_bound_attachments(block: &SignedBlock) -> Self {
             Self {
                 context_id: iroha_data_model::block::consensus_v2::HeightContextId(
@@ -4610,38 +4613,12 @@ pub(crate) mod valid {
         SignedGenesis {
             consensus_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
         },
-        #[cfg(any(test, feature = "iroha-core-tests"))]
-        Replay,
         SumeragiV2 {
             block_cadence: Duration,
             context: SumeragiV2ValidationContext,
         },
     }
     impl ConsensusValidationProfile {
-        const fn replay_compatibility(&self) -> bool {
-            #[cfg(any(test, feature = "iroha-core-tests"))]
-            {
-                return matches!(self, Self::Replay);
-            }
-            #[cfg(not(any(test, feature = "iroha-core-tests")))]
-            {
-                false
-            }
-        }
-        const fn require_execution_context(&self) -> bool {
-            match self {
-                #[cfg(any(test, feature = "iroha-core-tests"))]
-                Self::Replay => false,
-                Self::SignedGenesis { .. } | Self::SumeragiV2 { .. } => true,
-            }
-        }
-        const fn validate_execution_routes(&self) -> bool {
-            match self {
-                #[cfg(any(test, feature = "iroha-core-tests"))]
-                Self::Replay => false,
-                Self::SignedGenesis { .. } | Self::SumeragiV2 { .. } => true,
-            }
-        }
         /// Return whether validation may publish best-effort pipeline recovery metadata.
         ///
         /// Signed genesis validation executes against a disposable state overlay before
@@ -4657,8 +4634,6 @@ pub(crate) mod valid {
             match self {
                 Self::SumeragiV2 { block_cadence, .. } => Some(*block_cadence),
                 Self::SignedGenesis { .. } => None,
-                #[cfg(any(test, feature = "iroha-core-tests"))]
-                Self::Replay => None,
             }
         }
         const fn snapshot_bootstrap(
@@ -4667,26 +4642,20 @@ pub(crate) mod valid {
             match self {
                 Self::SumeragiV2 { context, .. } => context.snapshot_bootstrap,
                 Self::SignedGenesis { .. } => None,
-                #[cfg(any(test, feature = "iroha-core-tests"))]
-                Self::Replay => None,
             }
         }
         const fn v2_context(&self) -> Option<&SumeragiV2ValidationContext> {
             match self {
                 Self::SumeragiV2 { context, .. } => Some(context),
                 Self::SignedGenesis { .. } => None,
-                #[cfg(any(test, feature = "iroha-core-tests"))]
-                Self::Replay => None,
             }
         }
         const fn authoritative_consensus_mode(
             &self,
-        ) -> Option<iroha_data_model::block::consensus_v2::ConsensusMode> {
+        ) -> iroha_data_model::block::consensus_v2::ConsensusMode {
             match self {
-                Self::SignedGenesis { consensus_mode } => Some(*consensus_mode),
-                Self::SumeragiV2 { context, .. } => Some(context.consensus_mode),
-                #[cfg(any(test, feature = "iroha-core-tests"))]
-                Self::Replay => None,
+                Self::SignedGenesis { consensus_mode } => *consensus_mode,
+                Self::SumeragiV2 { context, .. } => context.consensus_mode,
             }
         }
     }
@@ -6783,22 +6752,30 @@ pub(crate) mod valid {
             }
             Ok(())
         }
-        /// Execute a historical replay fixture without an authenticated live consensus context.
+        #[cfg(any(test, feature = "iroha-core-tests"))]
+        fn sumeragi_v2_fixture_profile(block: &SignedBlock) -> ConsensusValidationProfile {
+            ConsensusValidationProfile::SumeragiV2 {
+                block_cadence: Duration::from_millis(1),
+                context: SumeragiV2ValidationContext::for_body_without_context_bound_attachments(
+                    block,
+                ),
+            }
+        }
+        /// Execute a strict Sumeragi-v2 test fixture through the current validation profile.
         ///
-        /// This helper exists only for non-shipping test builds. Live admission must use the
-        /// signed-genesis or Sumeragi-v2 entrypoints, both of which bind an authoritative
-        /// consensus mode explicitly.
+        /// This test-only entrypoint retains the production execution-context, routing, and
+        /// execution-witness checks. Context-bound attachments still require an authenticated
+        /// height context, so callers may use it only for bodies without those attachments.
         #[cfg(any(test, feature = "iroha-core-tests"))]
         #[doc(hidden)]
-        pub fn validate_replay_fixture(
+        pub fn validate_sumeragi_v2_fixture(
             mut block: SignedBlock,
             topology: &Topology,
             genesis_account: &AccountId,
             time_source: &TimeSource,
             state_block: &mut StateBlock<'_>,
         ) -> WithEvents<Result<ValidBlock, Error>> {
-            state_block.replay_compatibility = true;
-            if let Err(error) = Self::validate_replay_fixture_static(
+            if let Err(error) = Self::validate_sumeragi_v2_fixture_static(
                 &block,
                 topology,
                 genesis_account,
@@ -6811,8 +6788,7 @@ pub(crate) mod valid {
             if let Err(error) = Self::validate_staged_execution_controls(&block, state_block) {
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
-            let exec_witness_guard = (!state_block.replay_compatibility)
-                .then(crate::sumeragi::witness::exec_witness_guard);
+            let exec_witness_guard = crate::sumeragi::witness::exec_witness_guard();
             if let Err(error) =
                 Self::validate_and_record_transactions(&mut block, state_block, None, true)
             {
@@ -6826,9 +6802,7 @@ pub(crate) mod valid {
             {
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
-            if !state_block.replay_compatibility {
-                state_block.capture_exec_witness();
-            }
+            state_block.capture_exec_witness();
             drop(exec_witness_guard);
             if block.is_empty() {
                 let error = BlockValidationError::EmptyBlock;
@@ -6839,10 +6813,10 @@ pub(crate) mod valid {
             }
             WithEvents::new(Ok(ValidBlock::new_signatures_verified(block)))
         }
-        /// Execute a historical replay fixture and emit a rejection event on failure.
-        #[cfg(any(test, feature = "iroha-core-tests"))]
+        /// Execute a Sumeragi-v2 unit fixture and emit a rejection event on failure.
+        #[cfg(test)]
         #[doc(hidden)]
-        pub fn validate_replay_fixture_with_events<F: Fn(PipelineEventBox)>(
+        fn validate_sumeragi_v2_fixture_with_events<F: Fn(PipelineEventBox)>(
             mut block: SignedBlock,
             topology: &Topology,
             genesis_account: &AccountId,
@@ -6850,8 +6824,7 @@ pub(crate) mod valid {
             state_block: &mut StateBlock<'_>,
             send_events: F,
         ) -> WithEvents<Result<ValidBlock, Error>> {
-            state_block.replay_compatibility = true;
-            if let Err(error) = Self::validate_replay_fixture_static(
+            if let Err(error) = Self::validate_sumeragi_v2_fixture_static(
                 &block,
                 topology,
                 genesis_account,
@@ -6875,8 +6848,7 @@ pub(crate) mod valid {
                 send_events(ev);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
-            let exec_witness_guard = (!state_block.replay_compatibility)
-                .then(crate::sumeragi::witness::exec_witness_guard);
+            let exec_witness_guard = crate::sumeragi::witness::exec_witness_guard();
             if let Err(error) =
                 Self::validate_and_record_transactions(&mut block, state_block, None, true)
             {
@@ -6905,9 +6877,7 @@ pub(crate) mod valid {
                 send_events(ev);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
-            if !state_block.replay_compatibility {
-                state_block.capture_exec_witness();
-            }
+            state_block.capture_exec_witness();
             drop(exec_witness_guard);
             if block.is_empty() {
                 let error = BlockValidationError::EmptyBlock;
@@ -6966,10 +6936,14 @@ pub(crate) mod valid {
             )
             .unbox_state_block()
         }
-        /// Test-only replay validation entrypoint for exact recovery fixtures.
+        /// Validate a unit fixture through the current Sumeragi-v2 profile.
+        ///
+        /// This adapter retains the fixture controls needed by checkpoint and validation-cache
+        /// tests. It does not relax execution-context, routing, consensus-mode, transaction, or
+        /// execution-witness validation.
         #[cfg(test)]
         #[allow(clippy::too_many_arguments)]
-        pub(crate) fn validate_keep_voting_block_for_replay<'state>(
+        pub(crate) fn validate_sumeragi_v2_fixture_keep_voting_block<'state>(
             block: SignedBlock,
             topology: &Topology,
             genesis_account: &AccountId,
@@ -6979,6 +6953,7 @@ pub(crate) mod valid {
             soft_fork: bool,
             skip_block_signatures: bool,
         ) -> WithEvents<Result<(ValidBlock, StateBlock<'state>), Error>> {
+            let validation_profile = Self::sumeragi_v2_fixture_profile(&block);
             Self::validate_keep_voting_block_inner(
                 block,
                 topology,
@@ -6989,7 +6964,7 @@ pub(crate) mod valid {
                 soft_fork,
                 None,
                 skip_block_signatures,
-                ConsensusValidationProfile::Replay,
+                validation_profile,
                 false,
                 None,
             )
@@ -7040,7 +7015,7 @@ pub(crate) mod valid {
             )
             .unbox_state_block()
         }
-        /// Exercise replay-fixture execution with an externally prevalidated block signature.
+        /// Exercise a Sumeragi-v2 unit fixture with an externally prevalidated block signature.
         ///
         /// Callers must only use this after independently verifying that local validation roots
         /// and commit-certificate roots agree for the same block. The path still checks
@@ -7049,7 +7024,7 @@ pub(crate) mod valid {
         /// It skips only the block signature set authenticated by the commit certificate.
         #[cfg(test)]
         #[allow(clippy::too_many_arguments)]
-        pub(crate) fn validate_replay_fixture_prevalidated_with_events_and_timing<
+        fn validate_sumeragi_v2_fixture_prevalidated_with_events_and_timing<
             'state,
             F: FnMut(PipelineEventBox),
         >(
@@ -7062,6 +7037,7 @@ pub(crate) mod valid {
             timings: &mut ValidationTimings,
             mut send_events: F,
         ) -> WithEvents<Result<(ValidBlock, StateBlock<'state>), Error>> {
+            let validation_profile = Self::sumeragi_v2_fixture_profile(&block);
             Self::validate_keep_voting_block_inner(
                 block,
                 topology,
@@ -7072,7 +7048,7 @@ pub(crate) mod valid {
                 false,
                 Some(timings),
                 true,
-                ConsensusValidationProfile::Replay,
+                validation_profile,
                 false,
                 Some(&mut send_events),
             )
@@ -7125,8 +7101,7 @@ pub(crate) mod valid {
             state_block: &mut StateBlock<'_>,
         ) -> Result<Option<[u8; 32]>, BlockValidationError> {
             Self::validate_staged_execution_controls(&block, state_block)?;
-            let exec_witness_guard = (!state_block.replay_compatibility)
-                .then(crate::sumeragi::witness::exec_witness_guard);
+            let exec_witness_guard = crate::sumeragi::witness::exec_witness_guard();
             Self::validate_and_record_transactions_with_prepared(
                 &mut block,
                 state_block,
@@ -7376,7 +7351,6 @@ pub(crate) mod valid {
             allow_empty_block: bool,
             mut send_events: Option<&mut dyn FnMut(PipelineEventBox)>,
         ) -> WithEvents<Result<(ValidBlock, Box<StateBlock<'state>>), Error>> {
-            let replay_compatibility = validation_profile.replay_compatibility();
             let total_start = Instant::now();
             let stateless_start = Instant::now();
             let to_ms = |duration: Duration| -> u64 {
@@ -7478,7 +7452,7 @@ pub(crate) mod valid {
             if let Err(error) = Self::validate_npos_effects_with_state(
                 &block,
                 state,
-                validation_profile.authoritative_consensus_mode(),
+                Some(validation_profile.authoritative_consensus_mode()),
                 validation_profile
                     .v2_context()
                     .and_then(SumeragiV2ValidationContext::authenticated_height_context),
@@ -7557,7 +7531,7 @@ pub(crate) mod valid {
                 &block,
                 state,
                 soft_fork,
-                validation_profile.authoritative_consensus_mode(),
+                Some(validation_profile.authoritative_consensus_mode()),
             ) {
                 Ok(state_block) => state_block,
                 Err(error) => {
@@ -7571,7 +7545,6 @@ pub(crate) mod valid {
                     return WithEvents::new(Err((Box::new(block), Box::new(error))));
                 }
             };
-            state_block.replay_compatibility = replay_compatibility;
             if let Some(timings) = timings.as_deref_mut() {
                 timings.execution_state_block_ms = to_ms(state_block_start.elapsed());
             }
@@ -7581,8 +7554,7 @@ pub(crate) mod valid {
                 emit_rejection(&block, &error);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
-            let exec_witness_guard =
-                (!replay_compatibility).then(crate::sumeragi::witness::exec_witness_guard);
+            let exec_witness_guard = crate::sumeragi::witness::exec_witness_guard();
             let tx_start = Instant::now();
             let persist_pipeline_recovery_sidecar =
                 validation_profile.persist_pipeline_recovery_sidecar();
@@ -7643,9 +7615,7 @@ pub(crate) mod valid {
                 emit_rejection(&block, &error);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
-            if !replay_compatibility {
-                state_block.capture_exec_witness();
-            }
+            state_block.capture_exec_witness();
             drop(exec_witness_guard);
             if block.is_empty() && !allow_empty_block {
                 let error = BlockValidationError::EmptyBlock;
@@ -7673,10 +7643,10 @@ pub(crate) mod valid {
                 state_block,
             )))
         }
-        /// Validate a replay fixture while recording timing breakdowns and rejection events.
+        /// Validate a Sumeragi-v2 unit fixture while recording timings and rejection events.
         #[cfg(test)]
         #[allow(clippy::too_many_arguments)]
-        pub(crate) fn validate_replay_fixture_with_events_and_timing<
+        fn validate_sumeragi_v2_fixture_with_events_and_timing<
             'state,
             F: FnMut(PipelineEventBox),
         >(
@@ -7690,6 +7660,7 @@ pub(crate) mod valid {
             timings: &mut ValidationTimings,
             mut send_events: F,
         ) -> WithEvents<Result<(ValidBlock, StateBlock<'state>), Error>> {
+            let validation_profile = Self::sumeragi_v2_fixture_profile(&block);
             Self::validate_keep_voting_block_inner(
                 block,
                 topology,
@@ -7700,7 +7671,7 @@ pub(crate) mod valid {
                 soft_fork,
                 Some(timings),
                 false,
-                ConsensusValidationProfile::Replay,
+                validation_profile,
                 false,
                 Some(&mut send_events),
             )
@@ -9239,43 +9210,10 @@ pub(crate) mod valid {
             Ok(())
         }
         fn autonomous_lane_validation_context(
-            block: &SignedBlock,
-            state: &impl StateReadOnly,
             validation_profile: ConsensusValidationProfile,
         ) -> Result<SumeragiV2ValidationContext, BlockValidationError> {
             if let Some(context) = validation_profile.v2_context() {
                 return Ok(context.clone());
-            }
-            #[cfg(not(any(test, feature = "iroha-core-tests")))]
-            let _ = (block, state);
-            #[cfg(any(test, feature = "iroha-core-tests"))]
-            if matches!(validation_profile, ConsensusValidationProfile::Replay) {
-                let height = block.header().height().get();
-                let Some((canonical_header, finality)) = state
-                    .kura()
-                    .v2_finality_artifact_with_header(height)
-                    .map_err(|error| {
-                        Self::execution_context_error(format!(
-                            "autonomous lane replay could not authenticate v2 finality at height {height}: {error}"
-                        ))
-                    })?
-                else {
-                    return Err(Self::execution_context_error(format!(
-                        "autonomous lane replay requires authenticated v2 finality at height {height}"
-                    )));
-                };
-                if canonical_header != block.header()
-                    || finality.height != height
-                    || finality.block_hash != block.hash()
-                    || finality.height_context.network_id != *state.network_id()
-                {
-                    return Err(Self::execution_context_error(
-                        "autonomous lane replay finality differs from the exact canonical carrier",
-                    ));
-                }
-                return Ok(SumeragiV2ValidationContext::from_height_context(
-                    &finality.height_context,
-                ));
             }
             Err(Self::execution_context_error(
                 "autonomous lane payload envelopes require a Sumeragi v2 height context",
@@ -9567,8 +9505,7 @@ pub(crate) mod valid {
                     "genesis cannot carry autonomous lane payload envelopes",
                 ));
             }
-            let v2_context =
-                Self::autonomous_lane_validation_context(block, state, validation_profile)?;
+            let v2_context = Self::autonomous_lane_validation_context(validation_profile)?;
             let proposal_height = block.header().height().get();
             if v2_context.height != proposal_height {
                 return Err(Self::execution_context_error(format!(
@@ -9872,9 +9809,8 @@ pub(crate) mod valid {
             validation_profile: ConsensusValidationProfile,
         ) -> Result<(), BlockValidationError> {
             let bundle = Self::validate_execution_context_header(block)?;
-            let context_required = validation_profile.require_execution_context()
-                && !block.header().is_genesis()
-                && block.external_entrypoint_count() != 0;
+            let context_required =
+                !block.header().is_genesis() && block.external_entrypoint_count() != 0;
             let Some(bundle) = bundle else {
                 return if context_required {
                     Err(Self::execution_context_error(
@@ -9907,7 +9843,7 @@ pub(crate) mod valid {
                 bundle,
                 validation_profile.clone(),
             )?;
-            if !validation_profile.validate_execution_routes() || block.header().is_genesis() {
+            if block.header().is_genesis() {
                 return Ok(());
             }
             let native_amx_ownership_index = bundle
@@ -10326,7 +10262,7 @@ pub(crate) mod valid {
                 &crate::queue::RoutingPlan,
                 u64,
             ) -> Result<
-                Option<crate::torii_proxy::QueuePlanAdmissionBindingV2>,
+                Option<crate::torii_proxy::QueuePlanAdmissionBindingV1>,
                 String,
             >,
         ) -> Result<Vec<Option<Duration>>, BlockValidationError> {
@@ -10985,7 +10921,7 @@ pub(crate) mod valid {
             }
             Ok(())
         }
-        /// Static checks for a non-shipping historical replay fixture.
+        /// Static checks for a strict Sumeragi-v2 test fixture.
         #[cfg(any(test, feature = "iroha-core-tests"))]
         #[allow(
             clippy::too_many_arguments,
@@ -10993,7 +10929,7 @@ pub(crate) mod valid {
             clippy::explicit_iter_loop,
             clippy::collapsible_else_if
         )]
-        fn validate_replay_fixture_static(
+        fn validate_sumeragi_v2_fixture_static(
             block: &SignedBlock,
             topology: &Topology,
             genesis_account: &AccountId,
@@ -11001,6 +10937,7 @@ pub(crate) mod valid {
             soft_fork: bool,
             time_source: &TimeSource,
         ) -> Result<(), BlockValidationError> {
+            let validation_profile = Self::sumeragi_v2_fixture_profile(block);
             let static_data = Self::validate_static_state_dependent(
                 block,
                 topology,
@@ -11009,7 +10946,7 @@ pub(crate) mod valid {
                 soft_fork,
                 time_source,
                 false,
-                ConsensusValidationProfile::Replay,
+                validation_profile,
             )?;
             let prepared_txs = Self::prepare_external_transactions(block);
             let committed_heights = Self::committed_heights_for_prepared_transactions(
@@ -11833,11 +11770,7 @@ pub(crate) mod valid {
                 );
             }
             let height = block.header().height().get();
-            // Start a new witness window only for live validation; Kura replay
-            // correctness is checked through committed results and roots.
-            if !state_block.replay_compatibility {
-                crate::sumeragi::witness::start_block();
-            }
+            crate::sumeragi::witness::start_block();
             let sequential_entrypoints = Self::sequential_entrypoints_for_live_execution(block);
             if let Some(entrypoints) = sequential_entrypoints {
                 Self::validate_and_record_entrypoints_sequential(
@@ -13947,7 +13880,7 @@ pub(crate) mod valid {
                         accounts_to_prefetch.insert(entry.authority.clone());
                         if let Some(access_set) = access.get(entry.idx) {
                             for key in access_set.read_keys.iter() {
-                                if let Some(account) = parse_account_from_access_key(
+                                if let Ok(Some(account)) = parse_account_from_access_key(
                                     &state_block.world,
                                     &state_block.nexus.dataspace_catalog,
                                     key,
@@ -13957,7 +13890,7 @@ pub(crate) mod valid {
                                 }
                             }
                             for key in access_set.write_keys.iter() {
-                                if let Some(account) = parse_account_from_access_key(
+                                if let Ok(Some(account)) = parse_account_from_access_key(
                                     &state_block.world,
                                     &state_block.nexus.dataspace_catalog,
                                     key,
@@ -15668,8 +15601,7 @@ pub(crate) mod valid {
         ) -> WithEvents<ValidBlock> {
             Self::validate_staged_execution_controls(&block, state_block)
                 .expect("unchecked certified merge block requires its exact pre-staged sidecar");
-            let exec_witness_guard = (!state_block.replay_compatibility)
-                .then(crate::sumeragi::witness::exec_witness_guard);
+            let exec_witness_guard = crate::sumeragi::witness::exec_witness_guard();
             Self::validate_and_record_transactions(&mut block, state_block, None, false)
                 .expect("unchecked block should have internally consistent entrypoint hashes");
             if let Err(error) = validate_axt_envelopes(&block, state_block) {
@@ -15678,9 +15610,7 @@ pub(crate) mod valid {
             Self::validate_staged_merge_execution_authorization(&block, state_block).expect(
                 "unchecked certified merge execution requires exact post-effect authorization",
             );
-            if !state_block.replay_compatibility {
-                state_block.capture_exec_witness();
-            }
+            state_block.capture_exec_witness();
             drop(exec_witness_guard);
             WithEvents::new(ValidBlock::new_unverified(block))
         }
@@ -16102,7 +16032,7 @@ pub(crate) mod valid {
                 )
             };
         }
-        macro_rules! validate_static_replay_test_block {
+        macro_rules! validate_static_current_test_block {
             ($block:expr, $topology:expr, $view:expr, $time_source:expr) => {
                 ValidBlock::validate_static_state_dependent(
                     $block,
@@ -16112,13 +16042,13 @@ pub(crate) mod valid {
                     false,
                     $time_source,
                     false,
-                    ConsensusValidationProfile::Replay,
+                    sumeragi_v2_test_profile($block),
                 )
             };
         }
         macro_rules! validate_voting_test_block {
             ($block:expr, $topology:expr, $time_source:expr, $state:expr, $voting_block:expr) => {
-                ValidBlock::validate_keep_voting_block_for_replay(
+                ValidBlock::validate_sumeragi_v2_fixture_keep_voting_block(
                     $block,
                     $topology,
                     &ALICE_ID,
@@ -16742,8 +16672,8 @@ pub(crate) mod valid {
                     &producer,
                 )
                 .expect("derive canonical autonomous reservation identity");
-            let reservation = crate::queue::LaneQueueReservationKeyV2 {
-                version: crate::queue::LaneQueueReservationKeyV2::VERSION,
+            let reservation = crate::queue::LaneQueueReservationKeyV1 {
+                version: crate::queue::LaneQueueReservationKeyV1::VERSION,
                 entrypoint_hash: entrypoint.hash(),
                 queue_plan_admission_binding_hash: Hash::new(
                     b"block-native-amx-queue-plan-admission-binding",
@@ -16907,7 +16837,7 @@ pub(crate) mod valid {
                 .expect("an exact retry of the durable autonomous slot must remain admissible");
         }
         #[test]
-        fn autonomous_anchor_replay_requires_authenticated_v2_finality() {
+        fn autonomous_anchor_requires_sumeragi_v2_context() {
             let fixture = autonomous_anchor_fixture(None, 0);
             let view = fixture.state.query_view();
             let error = ValidBlock::validate_execution_context_autonomous_lane_payloads(
@@ -16915,14 +16845,16 @@ pub(crate) mod valid {
                 &fixture.topology,
                 &view,
                 &fixture.bundle,
-                ConsensusValidationProfile::Replay,
+                ConsensusValidationProfile::SignedGenesis {
+                    consensus_mode:
+                        iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
+                },
             )
-            .expect_err("replay must not infer an autonomous anchor context from mutable state");
+            .expect_err("autonomous admission must require an explicit Sumeragi-v2 context");
             assert!(matches!(
                 error,
                 BlockValidationError::ExecutionContextInvalid(message)
-                    if message.contains("authenticate v2 finality")
-                        || message.contains("authenticated v2 finality")
+                    if message.contains("require a Sumeragi v2 height context")
             ));
         }
         #[test]
@@ -18827,21 +18759,16 @@ pub(crate) mod valid {
             block
         }
         #[test]
-        fn live_validation_profiles_require_an_explicit_consensus_mode() {
+        fn validation_profiles_always_carry_an_explicit_consensus_mode() {
             use iroha_data_model::block::consensus_v2::ConsensusMode;
             // World/Parameters defaults do not authenticate a consensus mode.
             assert!(World::new().view().sumeragi_npos_parameters().is_none());
-            assert_eq!(
-                ConsensusValidationProfile::Replay.authoritative_consensus_mode(),
-                None,
-                "a replay fixture must not fabricate live consensus authority",
-            );
             assert_eq!(
                 ConsensusValidationProfile::SignedGenesis {
                     consensus_mode: ConsensusMode::Npos,
                 }
                 .authoritative_consensus_mode(),
-                Some(ConsensusMode::Npos),
+                ConsensusMode::Npos,
                 "an explicitly authenticated NPoS mode must not be downgraded",
             );
         }
@@ -19296,7 +19223,7 @@ pub(crate) mod valid {
             let signed: SignedBlock = new_block.into();
             let static_data = {
                 let view = state.query_view();
-                validate_static_replay_test_block!(&signed, &topology, &view, &time_source)
+                validate_static_current_test_block!(&signed, &topology, &view, &time_source)
                     .expect("static state-dependent validation should succeed")
             };
             let prepared_txs = ValidBlock::prepare_external_transactions(&signed);
@@ -19357,7 +19284,7 @@ pub(crate) mod valid {
             let signed: SignedBlock = new_block.into();
             let static_data = {
                 let view = state.query_view();
-                validate_static_replay_test_block!(&signed, &topology, &view, &time_source)
+                validate_static_current_test_block!(&signed, &topology, &view, &time_source)
                     .expect("static state-dependent validation should succeed")
             };
             let prepared_txs = ValidBlock::prepare_external_transactions(&signed);
@@ -22543,7 +22470,7 @@ pub(crate) mod valid {
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
             {
                 let mut state_block = state.block(candidate_block.header());
-                let validate_result = ValidBlock::validate_replay_fixture(
+                let validate_result = ValidBlock::validate_sumeragi_v2_fixture(
                     candidate_block.clone(),
                     &topology,
                     &ALICE_ID,
@@ -22564,7 +22491,7 @@ pub(crate) mod valid {
             {
                 let mut state_block = state.block(candidate_block.header());
                 let events = std::cell::RefCell::new(Vec::new());
-                let validate_result = ValidBlock::validate_replay_fixture_with_events(
+                let validate_result = ValidBlock::validate_sumeragi_v2_fixture_with_events(
                     candidate_block.clone(),
                     &topology,
                     &ALICE_ID,
@@ -22690,19 +22617,6 @@ pub(crate) mod valid {
             };
             let candidate: SignedBlock = candidate_at(1_000_000, "v2-wall-clock-work");
             let (_clock, local_time) = TimeSource::new_mock(Duration::ZERO);
-            let mut replay_voting_block = None;
-            let replay = validate_voting_test_block!(
-                candidate.clone(),
-                &topology,
-                &local_time,
-                &state,
-                &mut replay_voting_block
-            )
-            .unpack(|_| {});
-            assert!(matches!(
-                replay,
-                Err(error) if matches!(*error.1, BlockValidationError::BlockInTheFuture)
-            ));
             let mut v2_voting_block = None;
             let v2 = ValidBlock::validate_sumeragi_v2_candidate_keep_voting_block(
                 candidate.clone(),
@@ -22939,7 +22853,7 @@ pub(crate) mod valid {
                 TimeSource::new_mock(signed_block.header().creation_time());
             {
                 let mut state_block = state.block(signed_block.header());
-                ValidBlock::validate_replay_fixture(
+                ValidBlock::validate_sumeragi_v2_fixture(
                     signed_block.clone(),
                     &topology,
                     &ALICE_ID,
@@ -22952,7 +22866,7 @@ pub(crate) mod valid {
             {
                 let mut state_block = state.block(signed_block.header());
                 let events = std::cell::RefCell::new(Vec::new());
-                ValidBlock::validate_replay_fixture_with_events(
+                ValidBlock::validate_sumeragi_v2_fixture_with_events(
                     signed_block.clone(),
                     &topology,
                     &ALICE_ID,
@@ -23301,13 +23215,13 @@ pub(crate) mod valid {
                             .lane_incarnation_at_height(LaneId::SINGLE, 2)
                             .expect("default lane is active at candidate height")
                     };
-                let admission_context = crate::queue::QueuePlanAdmissionContextV2 {
-                    version: crate::queue::QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V2,
+                let admission_context = crate::queue::QueuePlanAdmissionContextV1 {
+                    version: crate::queue::QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V1,
                     authority_height: 1,
                     proposal_height: 2,
                     predecessor_block_hash: Some(predecessor_hash),
                     routing_plan_digest: routing_plan.digest(),
-                    route_incarnations: vec![crate::queue::QueuePlanRouteIncarnationV2 {
+                    route_incarnations: vec![crate::queue::QueuePlanRouteIncarnationV1 {
                         leg: routing_plan.coordinator_leg(),
                         lane_incarnation,
                         validator_set_hash_version:
@@ -23320,7 +23234,7 @@ pub(crate) mod valid {
                         validator_set,
                     }],
                 };
-                let binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+                let binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
                     state.network_id_ref(),
                     &entrypoint,
                     &routing_plan,
@@ -23827,7 +23741,7 @@ pub(crate) mod valid {
             );
         }
         #[test]
-        fn replay_fixture_with_events_and_timing_populates_stateless_cache() {
+        fn sumeragi_v2_fixture_with_events_and_timing_populates_stateless_cache() {
             setup_stateless_cache_state!(kura, state, leader_private, topology);
             setup_cacheable_transaction!(state, _tx_handle, tx_time_source, tx_hash, accepted);
             build_cacheable_block!(
@@ -23841,7 +23755,7 @@ pub(crate) mod valid {
             let mut voting_block: Option<super::super::VotingBlock> = None;
             let mut events = Vec::new();
             let mut timings = ValidationTimings::new();
-            let result = ValidBlock::validate_replay_fixture_with_events_and_timing(
+            let result = ValidBlock::validate_sumeragi_v2_fixture_with_events_and_timing(
                 signed_block,
                 &topology,
                 &ALICE_ID,
@@ -23948,17 +23862,18 @@ pub(crate) mod valid {
             let mut voting_block: Option<super::super::VotingBlock> = None;
             let mut events = Vec::new();
             let mut timings = ValidationTimings::new();
-            let result = ValidBlock::validate_replay_fixture_prevalidated_with_events_and_timing(
-                signed_block,
-                &topology,
-                &ALICE_ID,
-                &block_time_source,
-                &state,
-                &mut voting_block,
-                &mut timings,
-                |event| events.push(event),
-            )
-            .unpack(|_| {});
+            let result =
+                ValidBlock::validate_sumeragi_v2_fixture_prevalidated_with_events_and_timing(
+                    signed_block,
+                    &topology,
+                    &ALICE_ID,
+                    &block_time_source,
+                    &state,
+                    &mut voting_block,
+                    &mut timings,
+                    |event| events.push(event),
+                )
+                .unpack(|_| {});
             assert!(
                 result.is_ok(),
                 "prevalidated commit execution may skip only the authenticated block signature"
@@ -24001,7 +23916,7 @@ pub(crate) mod valid {
             let mut invalid_events = Vec::new();
             let mut invalid_timings = ValidationTimings::new();
             let invalid_result =
-                ValidBlock::validate_replay_fixture_prevalidated_with_events_and_timing(
+                ValidBlock::validate_sumeragi_v2_fixture_prevalidated_with_events_and_timing(
                     invalid_block.into(),
                     &topology,
                     &ALICE_ID,
@@ -24028,7 +23943,7 @@ pub(crate) mod valid {
             );
         }
         #[test]
-        fn replay_fixture_populates_stateless_cache() {
+        fn sumeragi_v2_fixture_populates_stateless_cache() {
             setup_stateless_cache_state!(kura, state, leader_private, topology);
             setup_cacheable_transaction!(state, _tx_handle, tx_time_source, tx_hash, accepted);
             build_cacheable_block!(
@@ -24040,7 +23955,7 @@ pub(crate) mod valid {
                 signed_block
             );
             let mut state_block = state.block(signed_block.header());
-            let result = ValidBlock::validate_replay_fixture(
+            let result = ValidBlock::validate_sumeragi_v2_fixture(
                 signed_block,
                 &topology,
                 &ALICE_ID,
@@ -24057,7 +23972,7 @@ pub(crate) mod valid {
             );
         }
         #[test]
-        fn replay_fixture_with_events_populates_stateless_cache() {
+        fn sumeragi_v2_fixture_with_events_populates_stateless_cache() {
             setup_stateless_cache_state!(kura, state, leader_private, topology);
             setup_cacheable_transaction!(state, _tx_handle, tx_time_source, tx_hash, accepted);
             build_cacheable_block!(
@@ -24070,7 +23985,7 @@ pub(crate) mod valid {
             );
             let mut state_block = state.block(signed_block.header());
             let events = std::cell::RefCell::new(Vec::new());
-            let result = ValidBlock::validate_replay_fixture_with_events(
+            let result = ValidBlock::validate_sumeragi_v2_fixture_with_events(
                 signed_block,
                 &topology,
                 &ALICE_ID,
@@ -24697,12 +24612,10 @@ mod commit {
             } else {
                 let batch_hash = source_tx_commitment;
                 let mut transcripts = if remote_spend_claims.is_empty() {
-                    let from = AccountId::parse_encoded(ACCOUNT_FROM_LITERAL)
-                        .expect("canonical sender")
-                        .into_account_id();
-                    let to = AccountId::parse_encoded(ACCOUNT_TO_LITERAL)
-                        .expect("canonical receiver")
-                        .into_account_id();
+                    let from =
+                        AccountId::parse_encoded(ACCOUNT_FROM_LITERAL).expect("canonical sender");
+                    let to =
+                        AccountId::parse_encoded(ACCOUNT_TO_LITERAL).expect("canonical receiver");
                     vec![TransferTranscript {
                         batch_hash,
                         deltas: vec![TransferDeltaTranscript {
@@ -24724,12 +24637,10 @@ mod commit {
                     remote_spend_claims
                         .iter()
                         .map(|claim| {
-                            let from = AccountId::parse_encoded(&claim.from)
-                                .expect("canonical sender")
-                                .into_account_id();
-                            let to = AccountId::parse_encoded(&claim.to)
-                                .expect("canonical receiver")
-                                .into_account_id();
+                            let from =
+                                AccountId::parse_encoded(&claim.from).expect("canonical sender");
+                            let to =
+                                AccountId::parse_encoded(&claim.to).expect("canonical receiver");
                             let amount = iroha_data_model::fastpq::normalized_numeric_to_u64(
                                 claim.effective_amount.as_numeric(),
                                 0,
@@ -28137,7 +28048,7 @@ mod tests {
             source.matches(&post_effect_authorization_needle).count();
         assert_eq!(
             post_effect_authorization_calls, 4,
-            "both replay fixtures, authenticated keep-voting validation, and unchecked execution must gate merge execution after effects"
+            "both Sumeragi-v2 fixtures, authenticated keep-voting validation, and unchecked execution must gate merge execution after effects"
         );
         assert_eq!(
             staged_reference_calls,
@@ -28446,8 +28357,8 @@ mod tests {
             signer_count,
         );
         let descriptor = &coordinator_proposal.descriptor;
-        let reservation = crate::queue::LaneQueueReservationKeyV2 {
-            version: crate::queue::LaneQueueReservationKeyV2::VERSION,
+        let reservation = crate::queue::LaneQueueReservationKeyV1 {
+            version: crate::queue::LaneQueueReservationKeyV1::VERSION,
             entrypoint_hash,
             queue_plan_admission_binding_hash: Hash::new(
                 b"historical-native-amx-queue-plan-admission",

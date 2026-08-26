@@ -23,11 +23,13 @@ use soranet_pq::{MlDsaError, MlDsaSuite, sign_mldsa_from_os, verify_mldsa};
 use std::{
     collections::HashMap,
     fmt,
+    ops::Deref,
     path::PathBuf,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use subtle::ConstantTimeEq as _;
 use thiserror::Error;
+use zeroize::{Zeroize as _, Zeroizing};
 /// Domain separator used when deriving `PoW` challenges.
 pub const CHALLENGE_DOMAIN: &[u8] = b"soranet.pow.challenge.v1";
 /// Domain separator used when hashing `PoW` solutions.
@@ -42,6 +44,43 @@ pub const ADMISSION_TRANSCRIPT_DOMAIN: &[u8] = b"soranet.pow.admission_transcrip
 pub const TICKET_BINDING_DOMAIN: &[u8] = b"soranet.pow.ticket_binding.v1";
 /// Length of the serialized `PoW` ticket payload.
 pub const TICKET_LEN: usize = 74;
+
+fn clear_sensitive_vec(value: &mut Vec<u8>) {
+    value.resize(value.capacity(), 0);
+    value.as_mut_slice().zeroize();
+    value.clear();
+}
+
+/// Fixed-width ticket serialization whose bearer bytes are redacted and
+/// scrubbed on drop.
+pub struct TicketBytes([u8; TICKET_LEN]);
+impl TicketBytes {
+    fn clear(&mut self) {
+        self.0.zeroize();
+    }
+}
+impl AsRef<[u8]> for TicketBytes {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+impl Deref for TicketBytes {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl fmt::Debug for TicketBytes {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("TicketBytes(<redacted>)")
+    }
+}
+impl Drop for TicketBytes {
+    fn drop(&mut self) {
+        self.clear();
+    }
+}
 const SIGNED_TICKET_PAYLOAD_LEN: usize = SIGNING_DOMAIN.len() + TICKET_LEN + 32 + 32;
 /// Maximum accepted bare Norito encoding for one signed ticket.
 pub const SIGNED_TICKET_MAX_ENCODED_BYTES_V1: usize = 8 * 1024;
@@ -83,7 +122,7 @@ pub(super) fn ticket_binding_commitment(
     *hasher.finalize().as_bytes()
 }
 /// Hashcash-style ticket attached to `SoraNet` circuit establishment.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct Ticket {
     /// Ticket format version (currently `1`).
     pub version: u8,
@@ -99,24 +138,41 @@ pub struct Ticket {
     /// Solution nonce satisfying the difficulty predicate.
     pub solution: [u8; 32],
 }
+impl fmt::Debug for Ticket {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Ticket")
+            .field("version", &self.version)
+            .field("difficulty", &self.difficulty)
+            .field("expires_at", &self.expires_at)
+            .field("client_nonce", &"[REDACTED]")
+            .field("solution", &"[REDACTED]")
+            .finish()
+    }
+}
+impl Drop for Ticket {
+    fn drop(&mut self) {
+        self.zeroize_sensitive_fields();
+    }
+}
 impl Ticket {
     /// Current ticket format version.
     pub const VERSION: u8 = 1;
-    /// Serialize the ticket to a fixed-length byte array.
+    /// Serialize the ticket to a fixed-length zeroizing owner.
     #[must_use]
-    pub fn to_bytes(self) -> [u8; TICKET_LEN] {
-        let mut out = [0u8; TICKET_LEN];
-        out[0] = self.version;
-        out[1] = self.difficulty;
-        out[2..10].copy_from_slice(&self.expires_at.to_be_bytes());
-        out[10..42].copy_from_slice(&self.client_nonce);
-        out[42..74].copy_from_slice(&self.solution);
+    pub fn to_bytes(&self) -> TicketBytes {
+        let mut out = TicketBytes([0u8; TICKET_LEN]);
+        out.0[0] = self.version;
+        out.0[1] = self.difficulty;
+        out.0[2..10].copy_from_slice(&self.expires_at.to_be_bytes());
+        out.0[10..42].copy_from_slice(&self.client_nonce);
+        out.0[42..74].copy_from_slice(&self.solution);
         out
     }
     /// Serialize the ticket to a `Vec<u8>`.
     #[must_use]
-    pub fn to_vec(self) -> Vec<u8> {
-        self.to_bytes().to_vec()
+    pub fn to_vec(&self) -> Vec<u8> {
+        self.to_bytes().as_ref().to_vec()
     }
     /// Parse a ticket from raw bytes.
     ///
@@ -139,8 +195,8 @@ impl Ticket {
         let expires_at_bytes = read_ticket_field::<8>(bytes, &mut cursor)?;
         let expires_at = u64::from_be_bytes(expires_at_bytes);
         unix_time_from_secs(expires_at).ok_or(Error::ExpiryTimestampOverflow(expires_at))?;
-        let client_nonce = read_ticket_field::<32>(bytes, &mut cursor)?;
-        let solution = read_ticket_field::<32>(bytes, &mut cursor)?;
+        let client_nonce = Zeroizing::new(read_ticket_field::<32>(bytes, &mut cursor)?);
+        let solution = Zeroizing::new(read_ticket_field::<32>(bytes, &mut cursor)?);
         if cursor != bytes.len() {
             return Err(Error::Malformed(format!(
                 "expected {TICKET_LEN} bytes, got {}",
@@ -151,8 +207,8 @@ impl Ticket {
             version,
             difficulty,
             expires_at,
-            client_nonce,
-            solution,
+            client_nonce: *client_nonce,
+            solution: *solution,
         })
     }
     /// Returns the ticket expiration timestamp as a `SystemTime`.
@@ -165,10 +221,18 @@ impl Ticket {
     pub fn checked_expires_at_time(&self) -> Option<SystemTime> {
         unix_time_from_secs(self.expires_at)
     }
-    /// Compute the revocation fingerprint for the ticket payload.
+    /// Compute the canonical revocation fingerprint for this ticket payload.
     #[must_use]
     pub fn revocation_fingerprint(&self) -> [u8; 32] {
-        compute_revocation_fingerprint(&self.to_bytes())
+        compute_ticket_revocation_fingerprint(&self.to_bytes())
+    }
+
+    fn zeroize_sensitive_fields(&mut self) {
+        self.version.zeroize();
+        self.difficulty.zeroize();
+        self.expires_at.zeroize();
+        self.client_nonce.zeroize();
+        self.solution.zeroize();
     }
 }
 fn read_ticket_byte(bytes: &[u8], cursor: &mut usize) -> Result<u8, Error> {
@@ -194,16 +258,16 @@ fn read_ticket_field<const N: usize>(bytes: &[u8], cursor: &mut usize) -> Result
     *cursor = end;
     Ok(out)
 }
-/// A `PoW` ticket signed by a relay using ML-DSA-44 (Dilithium2).
+/// A canonical Argon2 admission ticket envelope signed using ML-DSA-44.
 ///
-/// Signed tickets act as reusable tokens or "fast passes" for clients, binding the proof-of-work
-/// (or a difficulty-0 grant) to a specific relay and session context. The signature covers the
-/// ticket bytes, the relay ID, and the mandatory transcript hash to prevent replay across different
-/// sessions or relays.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+/// The signature covers the ticket bytes, relay ID, and mandatory transcript
+/// hash. Production consumers must verify the enclosed ticket with
+/// `soranet::puzzle`; a signature never downgrades admission to hashcash or a
+/// difficulty-zero grant.
+#[derive(PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[norito(decode_from_slice)]
 pub struct SignedTicket {
-    /// The underlying `PoW` ticket.
+    /// The underlying Argon2 ticket wire structure.
     pub ticket: Ticket,
     /// The relay identifier (32 bytes) that signed this ticket.
     pub relay_id: [u8; 32],
@@ -212,12 +276,45 @@ pub struct SignedTicket {
     /// ML-DSA-44 signature over `(ticket || relay_id || transcript_hash)`.
     pub signature: Vec<u8>,
 }
+impl fmt::Debug for SignedTicket {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SignedTicket")
+            .field("ticket", &self.ticket)
+            .field("relay_id", &"[REDACTED]")
+            .field("transcript_hash", &"[REDACTED]")
+            .field("signature", &"[REDACTED]")
+            .finish()
+    }
+}
+impl SignedTicket {
+    fn zeroize_sensitive_fields(&mut self) {
+        self.ticket.zeroize_sensitive_fields();
+        self.relay_id.zeroize();
+        self.transcript_hash.zeroize();
+        clear_sensitive_vec(&mut self.signature);
+    }
+}
+impl Drop for SignedTicket {
+    fn drop(&mut self) {
+        self.zeroize_sensitive_fields();
+    }
+}
 struct SignedTicketPayload {
     bytes: [u8; SIGNED_TICKET_PAYLOAD_LEN],
 }
 impl SignedTicketPayload {
     fn as_slice(&self) -> &[u8] {
         &self.bytes
+    }
+
+    fn zeroize_sensitive_fields(&mut self) {
+        self.bytes.zeroize();
+    }
+}
+impl Drop for SignedTicketPayload {
+    fn drop(&mut self) {
+        self.zeroize_sensitive_fields();
     }
 }
 impl SignedTicket {
@@ -243,7 +340,7 @@ impl SignedTicket {
             ticket,
             relay_id: *relay_id,
             transcript_hash: *transcript_hash,
-            signature: signature.as_bytes().to_vec(),
+            signature: signature.into_bytes(),
         })
     }
     /// Decode a signed ticket from a Norito payload.
@@ -335,10 +432,13 @@ impl SignedTicket {
     pub fn checked_expires_at(&self) -> Option<SystemTime> {
         self.ticket.checked_expires_at_time()
     }
-    /// Compute the revocation fingerprint for the embedded signature.
+    /// Compute the canonical revocation fingerprint for the underlying ticket.
+    ///
+    /// Signed and unsigned presentations intentionally share one replay
+    /// identity; randomized re-signing cannot mint a fresh revocation key.
     #[must_use]
     pub fn revocation_fingerprint(&self) -> [u8; 32] {
-        compute_revocation_fingerprint(&self.signature)
+        self.ticket.revocation_fingerprint()
     }
 }
 fn signed_ticket_decode_limits_v1() -> DecodeLimits {
@@ -465,8 +565,8 @@ pub enum TicketRevocationStoreError {
     /// Ticket expiry timestamp cannot be represented by `SystemTime`.
     #[error("revocation expiry timestamp {0} overflows system time")]
     ExpiryTimestampOverflow(u64),
-    /// Raw signature material is not a valid signed-ticket signature.
-    #[error("revocation signature malformed: {0}")]
+    /// A signed ticket carries malformed signature material.
+    #[error("signed-ticket revocation credential malformed: {0}")]
     MalformedSignature(String),
 }
 #[derive(Debug, Clone, Copy)]
@@ -552,7 +652,7 @@ impl TicketRevocationStore {
         store.load_from_disk(now)?;
         Ok(store)
     }
-    /// Insert a `SignedTicket` into the store using its signature and expiry.
+    /// Insert a `SignedTicket` using the canonical underlying-ticket identity.
     ///
     /// # Errors
     /// Propagates [`TicketRevocationStoreError`] when persistence fails while
@@ -562,26 +662,12 @@ impl TicketRevocationStore {
         ticket: &SignedTicket,
         now: SystemTime,
     ) -> Result<TicketRevocationInsertOutcome, TicketRevocationStoreError> {
+        validate_signed_ticket_signature_material(&ticket.signature)
+            .map_err(TicketRevocationStoreError::MalformedSignature)?;
         let expires_at = ticket.checked_expires_at().ok_or(
             TicketRevocationStoreError::ExpiryTimestampOverflow(ticket.ticket.expires_at),
         )?;
-        self.revoke_signature(&ticket.signature, expires_at, now)
-    }
-    /// Insert a raw signature and expiry into the store.
-    ///
-    /// # Errors
-    /// Propagates [`TicketRevocationStoreError`] when persistence fails while
-    /// recording the revocation.
-    pub fn revoke_signature(
-        &mut self,
-        signature: &[u8],
-        expires_at: SystemTime,
-        now: SystemTime,
-    ) -> Result<TicketRevocationInsertOutcome, TicketRevocationStoreError> {
-        validate_signed_ticket_signature_material(signature)
-            .map_err(TicketRevocationStoreError::MalformedSignature)?;
-        let fingerprint = compute_revocation_fingerprint(signature);
-        self.insert(fingerprint, expires_at, now)
+        self.insert(ticket.revocation_fingerprint(), expires_at, now)
     }
     /// Insert a ticket by hashing its serialized payload.
     ///
@@ -614,21 +700,6 @@ impl TicketRevocationStore {
         )?;
         self.insert(fingerprint, expires_at, now)
     }
-    /// Check if a signature has been revoked and is still within its TTL.
-    ///
-    /// # Errors
-    /// Returns [`TicketRevocationStoreError`] for malformed signature material
-    /// or when a previously failed mutation cannot be made durable.
-    pub fn is_revoked_signature(
-        &mut self,
-        signature: &[u8],
-        now: SystemTime,
-    ) -> Result<bool, TicketRevocationStoreError> {
-        validate_signed_ticket_signature_material(signature)
-            .map_err(TicketRevocationStoreError::MalformedSignature)?;
-        let fingerprint = compute_revocation_fingerprint(signature);
-        self.is_revoked_fingerprint(&fingerprint, now)
-    }
     /// Check if a ticket payload has been revoked and is still within its TTL.
     ///
     /// # Errors
@@ -645,14 +716,16 @@ impl TicketRevocationStore {
     /// Check if a ticket has been revoked.
     ///
     /// # Errors
-    /// Returns [`TicketRevocationStoreError`] for malformed signature material
-    /// or when a previously failed mutation cannot be made durable.
+    /// Returns [`TicketRevocationStoreError`] when a previously failed mutation
+    /// cannot be made durable.
     pub fn is_ticket_revoked(
         &mut self,
         ticket: &SignedTicket,
         now: SystemTime,
     ) -> Result<bool, TicketRevocationStoreError> {
-        self.is_revoked_signature(&ticket.signature, now)
+        validate_signed_ticket_signature_material(&ticket.signature)
+            .map_err(TicketRevocationStoreError::MalformedSignature)?;
+        self.is_revoked_fingerprint(&ticket.revocation_fingerprint(), now)
     }
     /// Number of active (non-expired) fingerprints.
     ///
@@ -1251,41 +1324,23 @@ pub fn verify_at(
     validate_ticket_policy_at(ticket, params, now)?;
     verify_ticket_solution(ticket, binding, params)
 }
-/// Verify a signed ticket, enforcing relay/transcript bindings and replay protection.
+/// Verify a hashcash-signed ticket at a fixed timestamp for legacy unit fixtures.
 ///
-/// # Errors
-/// Mirrors [`verify_signed_ticket_at`] while using the current system time.
-pub fn verify_signed_ticket(
-    signed_ticket: &SignedTicket,
-    public_key: &[u8],
-    binding: &ChallengeBinding<'_>,
-    params: &Parameters,
-    revocations: Option<&mut TicketRevocationStore>,
-) -> Result<(), Error> {
-    verify_signed_ticket_at(
-        signed_ticket,
-        public_key,
-        binding,
-        params,
-        revocations,
-        SystemTime::now(),
-    )
-}
-/// Verify a signed ticket at a fixed timestamp (exposed for testing).
-///
-/// The signature is verified against `public_key`, relay and transcript bindings
-/// must match the supplied `binding`, and (when provided) the revocation store
-/// is consulted to reject and persist replays.
+/// Production signed tickets are mandatory Argon2 envelopes and are verified by
+/// [`crate::soranet::puzzle::verify_signed_ticket_at`]. Keeping this helper
+/// test-only prevents a caller from silently selecting hashcash for a signed
+/// credential.
 ///
 /// # Errors
 /// Returns [`Error`] when signature verification fails, relay/transcript bindings
 /// mismatch, `PoW` validation fails, or the revocation store refuses the entry.
-pub fn verify_signed_ticket_at(
+#[cfg(test)]
+fn verify_signed_ticket_at(
     signed_ticket: &SignedTicket,
     public_key: &[u8],
     binding: &ChallengeBinding<'_>,
     params: &Parameters,
-    revocations: Option<&mut TicketRevocationStore>,
+    mut revocations: Option<&mut TicketRevocationStore>,
     now: SystemTime,
 ) -> Result<(), Error> {
     validate_binding(binding).map_err(Error::MalformedBinding)?;
@@ -1296,15 +1351,20 @@ pub fn verify_signed_ticket_at(
         return Err(Error::TranscriptMismatch);
     }
     validate_ticket_policy_at(&signed_ticket.ticket, params, now)?;
+    // The canonical ticket identity is cheap to derive and does not depend on
+    // ML-DSA's randomized signature. Reject a known replay before performing
+    // public-key verification so repeated bearer use cannot amplify CPU work.
+    SignedTicket::validate_signature_material(&signed_ticket.signature)?;
+    if let Some(store) = revocations.as_deref_mut()
+        && store
+            .is_ticket_revoked(signed_ticket, now)
+            .map_err(|err| Error::RevocationStore(err.to_string()))?
+    {
+        return Err(Error::Replay);
+    }
     signed_ticket.verify(public_key)?;
     verify_ticket_solution(&signed_ticket.ticket, binding, params)?;
     if let Some(store) = revocations {
-        if store
-            .is_ticket_revoked(signed_ticket, now)
-            .map_err(|err| Error::RevocationStore(err.to_string()))?
-        {
-            return Err(Error::Replay);
-        }
         let outcome = store
             .revoke_ticket(signed_ticket, now)
             .map_err(|err| Error::RevocationStore(err.to_string()))?;
@@ -1356,7 +1416,7 @@ fn verify_ticket_solution(
     if !bool::from(ticket.client_nonce.ct_eq(&expected_binding)) {
         return Err(Error::InvalidSolution);
     }
-    let challenge = derive_challenge(binding, ticket.client_nonce, ticket.expires_at);
+    let challenge = derive_challenge(binding, &ticket.client_nonce, ticket.expires_at);
     let digest = derive_solution_digest(&challenge, &ticket.solution);
     if !leading_zero_bits_at_least(digest.as_bytes(), params.difficulty) {
         return Err(Error::InvalidSolution);
@@ -1467,12 +1527,12 @@ where
             max_skew: params.max_future_skew,
         });
     }
-    let client_nonce = ticket_binding_commitment(
+    let client_nonce = Zeroizing::new(ticket_binding_commitment(
         binding.descriptor_commit,
         binding.relay_id,
         binding.transcript_hash,
-    );
-    let mut previous_solution = None;
+    ));
+    let mut previous_solution: Option<Zeroizing<[u8; 32]>> = None;
     loop {
         let minted_at = now();
         let expires_at = minted_at
@@ -1482,26 +1542,27 @@ where
         let wire_expires_at =
             unix_time_from_secs(expires_at_secs).ok_or(MintError::ExpiryTimestampOverflow(ttl))?;
         let mut prior = Vec::with_capacity(2);
-        prior.push(("ticket binding commitment", &client_nonce));
+        prior.push(("ticket binding commitment", &*client_nonce));
         if let Some(previous) = previous_solution.as_ref() {
-            prior.push(("previous solution nonce", previous));
+            prior.push(("previous solution nonce", &**previous));
         }
-        let challenge = derive_challenge(binding, client_nonce, expires_at_secs);
-        let mut solution = [0u8; 32];
-        fill_random(rng, "minting PoW solution nonce", &mut solution)?;
+        let challenge = derive_challenge(binding, &client_nonce, expires_at_secs);
+        let mut solution = Zeroizing::new([0u8; 32]);
+        fill_random(rng, "minting PoW solution nonce", &mut solution[..])?;
         reject_repeated_nonce_material("minting PoW solution nonce", &solution, &prior)?;
-        previous_solution = Some(solution);
         let digest = derive_digest(&challenge, &solution);
         let solved_at = now();
         if solved_at < minted_at {
             return Err(MintError::ClockMovedBackwards);
         }
         let Ok(remaining) = wire_expires_at.duration_since(solved_at) else {
+            previous_solution = Some(solution);
             continue;
         };
         if params.min_ttl.saturating_sub(remaining) > TTL_GRACE {
             // Expiry is challenge-bound. Re-anchor the next candidate instead
             // of returning proof bytes that current verifier policy rejects.
+            previous_solution = Some(solution);
             continue;
         }
         if leading_zero_bits_at_least(digest.as_bytes(), params.difficulty) {
@@ -1509,10 +1570,11 @@ where
                 version: 1,
                 difficulty: params.difficulty,
                 expires_at: expires_at_secs,
-                client_nonce,
-                solution,
+                client_nonce: *client_nonce,
+                solution: *solution,
             });
         }
+        previous_solution = Some(solution);
     }
 }
 fn validate_binding(binding: &ChallengeBinding<'_>) -> Result<(), String> {
@@ -1532,7 +1594,7 @@ fn validate_binding(binding: &ChallengeBinding<'_>) -> Result<(), String> {
 }
 fn derive_challenge(
     binding: &ChallengeBinding<'_>,
-    client_nonce: [u8; 32],
+    client_nonce: &[u8; 32],
     expires_at: u64,
 ) -> blake3::Hash {
     let mut hasher = Hasher::new();
@@ -1540,7 +1602,7 @@ fn derive_challenge(
     hasher.update(binding.descriptor_commit);
     hasher.update(binding.relay_id);
     hasher.update(binding.transcript_hash);
-    hasher.update(&client_nonce);
+    hasher.update(client_nonce);
     hasher.update(&expires_at.to_be_bytes());
     hasher.finalize()
 }
@@ -1608,10 +1670,10 @@ fn validate_signed_ticket_signature_material(signature: &[u8]) -> Result<(), Str
     }
     Ok(())
 }
-fn compute_revocation_fingerprint(signature: &[u8]) -> [u8; 32] {
+fn compute_ticket_revocation_fingerprint(ticket: &TicketBytes) -> [u8; 32] {
     let mut hasher = Hasher::new();
     hasher.update(REVOCATION_DOMAIN);
-    hasher.update(signature);
+    hasher.update(ticket.as_ref());
     hasher.finalize().into()
 }
 fn is_expired(expires_at: SystemTime, now: SystemTime) -> bool {
@@ -1737,7 +1799,7 @@ mod tests {
         expires_at: u64,
         difficulty: u8,
     ) -> [u8; 32] {
-        let challenge = derive_challenge(binding, client_nonce, expires_at);
+        let challenge = derive_challenge(binding, &client_nonce, expires_at);
         for suffix in u8::MIN..=u8::MAX {
             let mut solution = [0u8; 32];
             solution[31] = suffix;
@@ -1747,6 +1809,146 @@ mod tests {
             }
         }
         panic!("expected at least one invalid solution for difficulty {difficulty}");
+    }
+    #[test]
+    fn ticket_debug_redacts_bearer_proof_material() {
+        let ticket = Ticket {
+            version: Ticket::VERSION,
+            difficulty: 7,
+            expires_at: 1_700_000_123,
+            client_nonce: [17; 32],
+            solution: [34; 32],
+        };
+
+        let rendered = format!("{ticket:?}");
+        assert!(rendered.contains("version: 1"));
+        assert!(rendered.contains("difficulty: 7"));
+        assert!(rendered.contains("expires_at: 1700000123"));
+        assert_eq!(rendered.matches("[REDACTED]").count(), 2);
+        assert!(!rendered.contains("17, 17, 17"));
+        assert!(!rendered.contains("34, 34, 34"));
+    }
+    #[test]
+    fn ticket_drop_path_zeroizes_bearer_proof_material() {
+        assert!(std::mem::needs_drop::<Ticket>());
+        let mut ticket = Ticket {
+            version: Ticket::VERSION,
+            difficulty: 7,
+            expires_at: 1_700_000_123,
+            client_nonce: [17; 32],
+            solution: [34; 32],
+        };
+
+        ticket.zeroize_sensitive_fields();
+
+        assert_eq!(ticket.version, 0);
+        assert_eq!(ticket.difficulty, 0);
+        assert_eq!(ticket.expires_at, 0);
+        assert_eq!(ticket.client_nonce, [0; 32]);
+        assert_eq!(ticket.solution, [0; 32]);
+    }
+    #[test]
+    fn serialized_ticket_owner_redacts_and_scrubs() {
+        let ticket = Ticket {
+            version: Ticket::VERSION,
+            difficulty: 7,
+            expires_at: 1_700_000_123,
+            client_nonce: [17; 32],
+            solution: [34; 32],
+        };
+        let mut bytes = ticket.to_bytes();
+        assert!(std::mem::needs_drop::<TicketBytes>());
+        assert!(bytes.iter().any(|byte| *byte != 0));
+        assert_eq!(format!("{bytes:?}"), "TicketBytes(<redacted>)");
+        bytes.clear();
+        assert!(bytes.iter().all(|byte| *byte == 0));
+    }
+    #[test]
+    fn signed_ticket_debug_redacts_every_bearer_binding() {
+        let signed = SignedTicket {
+            ticket: Ticket {
+                version: Ticket::VERSION,
+                difficulty: 7,
+                expires_at: 1_700_000_123,
+                client_nonce: [17; 32],
+                solution: [34; 32],
+            },
+            relay_id: [51; 32],
+            transcript_hash: [68; 32],
+            signature: vec![85; MlDsaSuite::MlDsa44.signature_len()],
+        };
+
+        let rendered = format!("{signed:?}");
+        assert!(rendered.contains("SignedTicket"));
+        assert_eq!(rendered.matches("[REDACTED]").count(), 5);
+        for raw_prefix in [
+            "17, 17, 17",
+            "34, 34, 34",
+            "51, 51, 51",
+            "68, 68, 68",
+            "85, 85, 85",
+        ] {
+            assert!(
+                !rendered.contains(raw_prefix),
+                "debug output exposed bearer material: {rendered}"
+            );
+        }
+    }
+    #[test]
+    #[allow(unsafe_code)]
+    fn signed_ticket_drop_path_zeroizes_owned_bearer_material() {
+        assert!(std::mem::needs_drop::<SignedTicket>());
+        let signature_len = MlDsaSuite::MlDsa44.signature_len();
+        let mut signature = Vec::with_capacity(signature_len + 32);
+        let signature_capacity = signature.capacity();
+        signature.resize(signature_capacity, 85);
+        signature.truncate(signature_len);
+        let mut signed = SignedTicket {
+            ticket: Ticket {
+                version: Ticket::VERSION,
+                difficulty: 7,
+                expires_at: 1_700_000_123,
+                client_nonce: [17; 32],
+                solution: [34; 32],
+            },
+            relay_id: [51; 32],
+            transcript_hash: [68; 32],
+            signature,
+        };
+
+        signed.zeroize_sensitive_fields();
+
+        assert_eq!(signed.ticket.version, 0);
+        assert_eq!(signed.ticket.difficulty, 0);
+        assert_eq!(signed.ticket.expires_at, 0);
+        assert_eq!(signed.ticket.client_nonce, [0; 32]);
+        assert_eq!(signed.ticket.solution, [0; 32]);
+        assert_eq!(signed.relay_id, [0; 32]);
+        assert_eq!(signed.transcript_hash, [0; 32]);
+        assert!(signed.signature.is_empty());
+        assert_eq!(signed.signature.capacity(), signature_capacity);
+        // SAFETY: `zeroize_sensitive_fields` initializes and wipes every byte
+        // through the vector's capacity immediately before clearing its length.
+        unsafe { signed.signature.set_len(signature_capacity) };
+        assert!(signed.signature.iter().all(|byte| *byte == 0));
+        signed.signature.clear();
+    }
+    #[test]
+    fn signed_ticket_signing_payload_drop_path_zeroizes_staging_bytes() {
+        assert!(std::mem::needs_drop::<SignedTicketPayload>());
+        let ticket = Ticket {
+            version: Ticket::VERSION,
+            difficulty: 7,
+            expires_at: 1_700_000_123,
+            client_nonce: [17; 32],
+            solution: [34; 32],
+        };
+        let mut payload = SignedTicket::build_payload(&ticket, &[51; 32], &[68; 32]);
+        assert!(payload.bytes.iter().any(|byte| *byte != 0));
+
+        payload.zeroize_sensitive_fields();
+
+        assert!(payload.bytes.iter().all(|byte| *byte == 0));
     }
     #[test]
     fn admission_transcript_commits_to_exact_client_hello() {
@@ -1827,7 +2029,7 @@ mod tests {
         expected_challenge.extend_from_slice(&client_nonce);
         expected_challenge.extend_from_slice(&expires_at.to_be_bytes());
         assert_eq!(
-            derive_challenge(&binding, client_nonce, expires_at),
+            derive_challenge(&binding, &client_nonce, expires_at),
             blake3::hash(&expected_challenge)
         );
         let challenge = blake3::hash(b"challenge");
@@ -1841,14 +2043,21 @@ mod tests {
             derive_solution_digest(&challenge, &solution),
             blake3::hash(&expected_solution)
         );
-        let signature = vec![0x66; 97];
+        let ticket = Ticket {
+            version: Ticket::VERSION,
+            difficulty: 0,
+            expires_at,
+            client_nonce,
+            solution,
+        };
+        let ticket_bytes = ticket.to_bytes();
         let mut expected_revocation_input =
-            Vec::with_capacity(REVOCATION_DOMAIN.len() + signature.len());
+            Vec::with_capacity(REVOCATION_DOMAIN.len() + ticket_bytes.len());
         expected_revocation_input.extend_from_slice(REVOCATION_DOMAIN);
-        expected_revocation_input.extend_from_slice(&signature);
+        expected_revocation_input.extend_from_slice(&ticket_bytes);
         let expected_revocation: [u8; 32] = blake3::hash(&expected_revocation_input).into();
         assert_eq!(
-            compute_revocation_fingerprint(&signature),
+            compute_ticket_revocation_fingerprint(&ticket_bytes),
             expected_revocation
         );
     }
@@ -2370,18 +2579,104 @@ mod tests {
         let signed =
             SignedTicket::sign(ticket, &relay_id, &transcript, kp.secret_key()).expect("sign");
         signed.verify(kp.public_key()).expect("verify");
+        let encoded = signed.encode();
         // Tamper with ticket
-        let mut tampered = signed.clone();
+        let mut tampered = SignedTicket::decode(&encoded).expect("decode tamper fixture");
         tampered.ticket.difficulty = 0;
         tampered
             .verify(kp.public_key())
             .expect_err("tampered ticket");
         // Tamper with relay_id
-        let mut tampered_relay = signed.clone();
+        let mut tampered_relay = SignedTicket::decode(&encoded).expect("decode relay fixture");
         tampered_relay.relay_id[0] ^= 0xFF;
         tampered_relay
             .verify(kp.public_key())
             .expect_err("tampered relay");
+    }
+    #[test]
+    fn signed_and_unsigned_forms_share_one_replay_identity() {
+        use soranet_pq::generate_mldsa_keypair_from_os as generate_mldsa_keypair;
+
+        let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44).expect("keygen");
+        let ticket = Ticket {
+            version: Ticket::VERSION,
+            difficulty: 0,
+            expires_at: 10_120,
+            client_nonce: [0x11; 32],
+            solution: [0x22; 32],
+        };
+        let fingerprint = ticket.revocation_fingerprint();
+        let ticket_bytes = ticket.to_vec();
+        let signed_a = SignedTicket::sign(
+            Ticket::parse(&ticket_bytes).expect("decode first presentation"),
+            &RELAY_A,
+            &TRANSCRIPT,
+            keypair.secret_key(),
+        )
+        .expect("sign first presentation");
+        let signed_b = SignedTicket::sign(
+            Ticket::parse(&ticket_bytes).expect("decode second presentation"),
+            &RELAY_A,
+            &TRANSCRIPT,
+            keypair.secret_key(),
+        )
+        .expect("re-sign same ticket");
+        assert_ne!(
+            signed_a.signature, signed_b.signature,
+            "ML-DSA re-signing fixture must exercise distinct randomized signatures"
+        );
+
+        assert_eq!(signed_a.revocation_fingerprint(), fingerprint);
+        assert_eq!(signed_b.revocation_fingerprint(), fingerprint);
+        assert_eq!(
+            signed_a.revocation_fingerprint(),
+            signed_b.revocation_fingerprint(),
+            "randomized re-signing must not mint a fresh replay identity"
+        );
+
+        let distinct = Ticket {
+            version: Ticket::VERSION,
+            difficulty: 0,
+            expires_at: 10_120,
+            client_nonce: [0x11; 32],
+            solution: [0x23; 32],
+        };
+        assert_ne!(fingerprint, distinct.revocation_fingerprint());
+
+        let now = UNIX_EPOCH + Duration::from_secs(10_000);
+        let limits =
+            TicketRevocationStoreLimits::new(4, Duration::from_secs(300)).expect("replay limits");
+        let mut signed_first = TicketRevocationStore::in_memory(limits).expect("store");
+        assert_eq!(
+            signed_first
+                .revoke_ticket(&signed_a, now)
+                .expect("consume signed form")
+                .status,
+            TicketRevocationInsertStatus::Accepted
+        );
+        assert_eq!(
+            signed_first
+                .revoke_ticket_payload(&ticket, now)
+                .expect("consume unsigned form")
+                .status,
+            TicketRevocationInsertStatus::Duplicate
+        );
+
+        let mut unsigned_first = TicketRevocationStore::in_memory(limits).expect("store");
+        assert_eq!(
+            unsigned_first
+                .revoke_ticket_payload(&ticket, now)
+                .expect("consume unsigned form")
+                .status,
+            TicketRevocationInsertStatus::Accepted
+        );
+        assert_eq!(
+            unsigned_first
+                .revoke_ticket(&signed_b, now)
+                .expect("consume re-signed form")
+                .status,
+            TicketRevocationInsertStatus::Duplicate
+        );
     }
     #[test]
     fn signed_ticket_payload_matches_canonical_contiguous_layout() {
@@ -3048,22 +3343,21 @@ mod tests {
     fn revocation_store_retries_dirty_snapshot_after_failed_write() {
         let limits = TicketRevocationStoreLimits::new(4, Duration::from_secs(300)).expect("limits");
         let now = UNIX_EPOCH + Duration::from_secs(1_000);
-        let expiry = now + Duration::from_secs(120);
-        let signature = vec![0xA5; MlDsaSuite::MlDsa44.signature_len()];
+        let ticket = signed_ticket_with_expiry(1_120, 0xA5);
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("dirty-retry.norito");
         let mut store = TicketRevocationStore::load(&path, limits, now).expect("load");
         std::fs::remove_file(&path).expect("remove initial snapshot");
         std::fs::create_dir(&path).expect("block snapshot destination");
         let error = store
-            .revoke_signature(&signature, expiry, now)
+            .revoke_ticket(&ticket, now)
             .expect_err("the first snapshot write must fail");
         assert!(matches!(error, TicketRevocationStoreError::Io(_)));
         std::fs::remove_dir(&path).expect("remove snapshot blocker");
 
         assert!(
             store
-                .is_revoked_signature(&signature, now)
+                .is_ticket_revoked(&ticket, now)
                 .expect("a later query must retry the dirty snapshot")
         );
         drop(store);
@@ -3071,7 +3365,7 @@ mod tests {
         let mut reloaded = TicketRevocationStore::load(&path, limits, now).expect("reload");
         assert!(
             reloaded
-                .is_revoked_signature(&signature, now)
+                .is_ticket_revoked(&ticket, now)
                 .expect("failed-write revocation must survive restart after retry")
         );
     }
@@ -3081,7 +3375,8 @@ mod tests {
         let initial = UNIX_EPOCH + Duration::new(1_000, 100_000_000);
         let expiry = UNIX_EPOCH + Duration::new(1_100, 500_000_000);
         let before_expiry = UNIX_EPOCH + Duration::new(1_100, 250_000_000);
-        let signature = vec![0xA5; MlDsaSuite::MlDsa44.signature_len()];
+        let ticket = signed_ticket_with_expiry(1_101, 0xA5);
+        let fingerprint = ticket.revocation_fingerprint();
         let dir = tempdir().expect("tempdir");
         let expiry_path = dir.path().join("subsecond-expiry.norito");
         {
@@ -3089,8 +3384,8 @@ mod tests {
                 TicketRevocationStore::load(&expiry_path, limits, initial).expect("load");
             assert_eq!(
                 store
-                    .revoke_signature(&signature, expiry, initial)
-                    .expect("revoke signature")
+                    .insert(fingerprint, expiry, initial)
+                    .expect("revoke ticket fingerprint")
                     .status,
                 TicketRevocationInsertStatus::Accepted
             );
@@ -3099,12 +3394,12 @@ mod tests {
             .expect("reload before subsecond expiry");
         assert!(
             reloaded
-                .is_revoked_signature(&signature, before_expiry)
-                .expect("signature remains revoked")
+                .is_revoked_fingerprint(&fingerprint, before_expiry)
+                .expect("ticket remains revoked")
         );
         assert_eq!(
             reloaded
-                .revoke_signature(&signature, expiry, before_expiry)
+                .insert(fingerprint, expiry, before_expiry)
                 .expect("duplicate revocation")
                 .status,
             TicketRevocationInsertStatus::Duplicate
@@ -3115,13 +3410,14 @@ mod tests {
         let observed = UNIX_EPOCH + Duration::new(1_200, 500_000_000);
         let rollback = UNIX_EPOCH + Duration::new(1_200, 250_000_000);
         let rollback_expiry = UNIX_EPOCH + Duration::new(1_200, 400_000_000);
-        let rollback_signature = vec![0x5A; MlDsaSuite::MlDsa44.signature_len()];
+        let rollback_ticket = signed_ticket_with_expiry(1_201, 0x5A);
+        let rollback_fingerprint = rollback_ticket.revocation_fingerprint();
         {
             let mut store =
                 TicketRevocationStore::load(&high_water_path, limits, initial).expect("load");
             assert_eq!(
                 store
-                    .revoke_signature(&signature, observed, observed)
+                    .insert(fingerprint, observed, observed)
                     .expect("expired observation")
                     .status,
                 TicketRevocationInsertStatus::Expired
@@ -3131,7 +3427,7 @@ mod tests {
             .expect("reload after subsecond rollback");
         assert_eq!(
             reloaded
-                .revoke_signature(&rollback_signature, rollback_expiry, rollback)
+                .insert(rollback_fingerprint, rollback_expiry, rollback)
                 .expect("rollback revocation")
                 .status,
             TicketRevocationInsertStatus::Expired
@@ -3354,7 +3650,13 @@ mod tests {
             solution: [0u8; 32],
         };
         let signed = SignedTicket {
-            ticket,
+            ticket: Ticket {
+                version: Ticket::VERSION,
+                difficulty: 0,
+                expires_at: u64::MAX,
+                client_nonce: [0u8; 32],
+                solution: [0u8; 32],
+            },
             relay_id: RELAY_A,
             transcript_hash: TRANSCRIPT,
             signature: vec![0xAA; MlDsaSuite::MlDsa44.signature_len()],
@@ -3411,43 +3713,6 @@ mod tests {
                 .is_ticket_revoked(&long, later)
                 .expect("reloaded long ticket")
         );
-    }
-    #[test]
-    fn revocation_store_rejects_malformed_raw_signature_material() {
-        let now = UNIX_EPOCH + Duration::from_secs(11_000);
-        let expires_at = now + Duration::from_secs(120);
-        let limits = TicketRevocationStoreLimits::new(2, Duration::from_secs(600)).expect("limits");
-        let mut store = TicketRevocationStore::in_memory(limits).expect("store");
-        let short = vec![0x11; MlDsaSuite::MlDsa44.signature_len() - 1];
-        let all_zero = vec![0u8; MlDsaSuite::MlDsa44.signature_len()];
-        let err = store
-            .revoke_signature(&short, expires_at, now)
-            .expect_err("short raw signature should fail");
-        match err {
-            TicketRevocationStoreError::MalformedSignature(message) => {
-                assert!(message.contains("signature"));
-                assert!(message.contains("bytes"));
-            }
-            other => panic!("expected malformed raw signature length, got {other:?}"),
-        }
-        let err = store
-            .revoke_signature(&all_zero, expires_at, now)
-            .expect_err("all-zero raw signature should fail");
-        match err {
-            TicketRevocationStoreError::MalformedSignature(message) => {
-                assert!(message.contains("all zero"));
-            }
-            other => panic!("expected malformed all-zero raw signature, got {other:?}"),
-        }
-        assert_eq!(store.len(now).expect("len"), 0);
-        assert!(matches!(
-            store.is_revoked_signature(&short, now),
-            Err(TicketRevocationStoreError::MalformedSignature(_))
-        ));
-        assert!(matches!(
-            store.is_revoked_signature(&all_zero, now),
-            Err(TicketRevocationStoreError::MalformedSignature(_))
-        ));
     }
     #[test]
     fn revocation_store_handles_raw_ticket_bytes() {
@@ -3614,6 +3879,46 @@ mod tests {
         )
         .expect_err("replay should persist across reload");
         assert!(matches!(err, Error::Replay));
+    }
+    #[test]
+    fn known_signed_ticket_replay_is_rejected_before_public_key_crypto() {
+        let now = UNIX_EPOCH + Duration::from_secs(43_000);
+        let limits = TicketRevocationStoreLimits::new(2, Duration::from_secs(600)).expect("limits");
+        let mut store = TicketRevocationStore::in_memory(limits).expect("store");
+        let params = Parameters::new(0, Duration::from_secs(900), Duration::from_secs(60));
+        let descriptor = [0xAB; 32];
+        let binding = ChallengeBinding::new(&descriptor, &RELAY_A, &TRANSCRIPT);
+        let ticket = Ticket {
+            version: Ticket::VERSION,
+            difficulty: params.difficulty(),
+            expires_at: now.duration_since(UNIX_EPOCH).expect("epoch").as_secs() + 120,
+            client_nonce: ticket_binding_commitment(
+                binding.descriptor_commit,
+                binding.relay_id,
+                binding.transcript_hash,
+            ),
+            solution: [0; 32],
+        };
+        assert_eq!(
+            store
+                .revoke_ticket_payload(&ticket, now)
+                .expect("preload canonical replay")
+                .status,
+            TicketRevocationInsertStatus::Accepted
+        );
+        let replay = SignedTicket {
+            ticket,
+            relay_id: RELAY_A,
+            transcript_hash: TRANSCRIPT,
+            // Structurally valid, deliberately unauthenticated material. If
+            // ML-DSA/key validation runs first, the empty public key below
+            // produces a different error and this regression fails.
+            signature: vec![0x11; MlDsaSuite::MlDsa44.signature_len()],
+        };
+
+        let error = verify_signed_ticket_at(&replay, &[], &binding, &params, Some(&mut store), now)
+            .expect_err("known replay must be rejected before public-key work");
+        assert!(matches!(error, Error::Replay));
     }
     #[test]
     fn revocation_store_rejects_concurrent_ledger_owner() {

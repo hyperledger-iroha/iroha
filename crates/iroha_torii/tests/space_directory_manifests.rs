@@ -294,19 +294,12 @@ async fn space_directory_manifest_endpoint_returns_records() {
         dataspaces[0]["accounts"][0],
         Value::from(account_id.to_string())
     );
-    // Raw 64-hex UAID paths are accepted and canonicalized in the response payload.
+    // Raw 64-hex UAID paths are not a first-release wire form.
     let app = torii.router();
     let resp = fixtures::request_get(&app, &format!("/v1/space-directory/uaids/{raw_uaid}"))
         .await
         .expect("raw-hex bindings response");
-    assert_eq!(resp.status(), StatusCode::OK);
-    let raw_bindings = resp.into_body().collect().await.unwrap().to_bytes();
-    let raw_bindings_doc: Value = json::from_slice(&raw_bindings).expect("raw bindings payload");
-    assert_eq!(raw_bindings_doc["uaid"], Value::from(uaid.to_string()));
-    assert_eq!(
-        raw_bindings_doc["dataspaces"][0]["accounts"][0],
-        Value::from(account_id.to_string())
-    );
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     // Dataspace filter excludes unknown ids.
     let app = torii.router();
     let resp = fixtures::request_get(
@@ -372,7 +365,7 @@ async fn space_directory_manifest_endpoint_returns_records() {
     let app = torii.router();
     let resp = fixtures::request_get(
         &app,
-        &format!("/v1/space-directory/uaids/{uaid}/manifests?status=Active&limit=1"),
+        &format!("/v1/space-directory/uaids/{uaid}/manifests?status=active&limit=1"),
     )
     .await
     .expect("response");
@@ -383,7 +376,7 @@ async fn space_directory_manifest_endpoint_returns_records() {
     assert_eq!(
         active_doc["manifests"].as_array().unwrap().len(),
         1,
-        "status=Active returns bindings"
+        "status=active returns bindings"
     );
     // Invalid status values are rejected by the manifest query parser.
     let app = torii.router();
@@ -477,7 +470,7 @@ async fn space_directory_manifest_endpoint_returns_records() {
     let app = torii_rev.router();
     let resp = fixtures::request_get(
         &app,
-        &format!("/v1/space-directory/uaids/{uaid}/manifests?status=Inactive"),
+        &format!("/v1/space-directory/uaids/{uaid}/manifests?status=inactive"),
     )
     .await
     .expect("inactive response");
@@ -497,7 +490,7 @@ async fn space_directory_manifest_endpoint_returns_records() {
     // Active filter + pagination.
     let resp = fixtures::request_get(
         &app,
-        &format!("/v1/space-directory/uaids/{uaid}/manifests?status=Active&limit=1&offset=0"),
+        &format!("/v1/space-directory/uaids/{uaid}/manifests?status=active&limit=1&offset=0"),
     )
     .await
     .expect("active response");
@@ -702,7 +695,7 @@ async fn space_directory_manifest_endpoint_reports_filtered_total_when_public_pa
     let resp = torii
         .router()
         .oneshot(fixtures::get_request(
-            &(format!("/v1/space-directory/uaids/{uaid}/manifests?status=ACTIVE&limit=1&offset=1")),
+            &(format!("/v1/space-directory/uaids/{uaid}/manifests?status=active&limit=1&offset=1")),
         ))
         .await
         .expect("manifests response");
@@ -766,7 +759,7 @@ async fn space_directory_manifest_endpoint_keeps_null_revocation_reason_in_json(
     let resp = torii
         .router()
         .oneshot(fixtures::get_request(
-            &(format!("/v1/space-directory/uaids/{uaid}/manifests?status=Inactive")),
+            &(format!("/v1/space-directory/uaids/{uaid}/manifests?status=inactive")),
         ))
         .await
         .expect("inactive response");
@@ -954,11 +947,10 @@ async fn manifest_revoke_endpoint_returns_unsigned_transaction_draft() {
     assert_eq!(queue.queued_len(), 0, "Torii must not submit the draft");
 }
 #[tokio::test]
-async fn manifest_revoke_endpoint_canonicalizes_uaid_literal_in_queued_instruction() {
+async fn manifest_revoke_endpoint_rejects_padded_mixed_case_uaid() {
     let ManifestMutationHarness { router, queue, .. } = manifest_revoke_harness();
     let creds = iroha_torii::test_utils::random_authority();
     let uaid_hash = iroha_crypto::Hash::new(b"space-directory-revoke-canonical");
-    let expected_uaid = UniversalAccountId::from_hash(uaid_hash);
     let uaid_literal = format!(
         "  UaId:  {}  ",
         uaid_hash.as_ref().encode_hex::<String>().to_uppercase()
@@ -980,26 +972,14 @@ async fn manifest_revoke_endpoint_canonicalizes_uaid_literal_in_queued_instructi
     let resp = fixtures::request(&router, req)
         .await
         .expect("revoke response body");
-    let payload = decode_unsigned_transaction_draft(resp).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     assert_eq!(queue.queued_len(), 0, "Torii must not submit the draft");
-    let Executable::Instructions(instructions) = payload.instructions() else {
-        panic!("revoke draft should contain an instruction transaction");
-    };
-    let revoke = instructions[0]
-        .as_any()
-        .downcast_ref::<iroha_data_model::isi::space_directory::RevokeSpaceDirectoryManifest>()
-        .expect("queued instruction should be revoke manifest");
-    assert_eq!(revoke.uaid, expected_uaid);
-    assert_eq!(revoke.dataspace, DataSpaceId::new(11));
-    assert_eq!(revoke.revoked_epoch, 4096);
-    assert_eq!(revoke.reason.as_deref(), Some("test emergency revoke"));
 }
 #[tokio::test]
-async fn manifest_revoke_endpoint_accepts_raw_hex_uaid_without_reason() {
+async fn manifest_revoke_endpoint_rejects_raw_hex_uaid() {
     let ManifestMutationHarness { router, queue, .. } = manifest_revoke_harness();
     let creds = iroha_torii::test_utils::random_authority();
     let uaid_hash = iroha_crypto::Hash::new(b"space-directory-revoke-raw-no-reason");
-    let expected_uaid = UniversalAccountId::from_hash(uaid_hash);
     let raw_hex = uaid_hash.as_ref().encode_hex::<String>();
     let value = iroha_torii::json_object(vec![
         iroha_torii::json_entry("authority", creds.account.clone()),
@@ -1017,22 +997,8 @@ async fn manifest_revoke_endpoint_accepts_raw_hex_uaid_without_reason() {
     let resp = fixtures::request(&router, req)
         .await
         .expect("revoke response body");
-    let payload = decode_unsigned_transaction_draft(resp).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     assert_eq!(queue.queued_len(), 0, "Torii must not submit the draft");
-    let Executable::Instructions(instructions) = payload.instructions() else {
-        panic!("revoke draft should contain an instruction transaction");
-    };
-    let revoke = instructions[0]
-        .as_any()
-        .downcast_ref::<iroha_data_model::isi::space_directory::RevokeSpaceDirectoryManifest>()
-        .expect("queued instruction should be revoke manifest");
-    assert_eq!(revoke.uaid, expected_uaid);
-    assert_eq!(revoke.dataspace, DataSpaceId::new(12));
-    assert_eq!(revoke.revoked_epoch, 8192);
-    assert!(
-        revoke.reason.is_none(),
-        "omitted revoke reason should stay absent in the drafted instruction",
-    );
 }
 #[tokio::test]
 async fn manifest_revoke_endpoint_rejects_invalid_uaid_before_queueing() {

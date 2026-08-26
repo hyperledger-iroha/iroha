@@ -3,6 +3,7 @@ package org.hyperledger.iroha.android.norito;
 import java.util.List;
 import java.util.Optional;
 import org.hyperledger.iroha.android.address.PublicKeyCodec;
+import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.tx.MultisigSignature;
 import org.hyperledger.iroha.android.tx.MultisigSignatures;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
@@ -83,6 +84,11 @@ public final class SignedTransactionEncoder {
     } catch (final Exception ex) {
       throw new NoritoException("Failed to decode versioned signed transaction", ex);
     }
+  }
+
+  /** Decodes and exact-reencodes one canonical signed transaction payload. */
+  public static TransactionPayload decodeCanonicalPayload(final SignedTransaction transaction) {
+    return TransactionPayloadAdapter.validateCanonicalPayloadBytes(transaction.encodedPayload());
   }
 
   private static final class SignedRecord {

@@ -33,13 +33,19 @@ import org.hyperledger.iroha.android.alias.AliasLifecyclePlanRequestV1;
 import org.hyperledger.iroha.android.alias.AliasLifecycleTransactionPlanJsonParser;
 import org.hyperledger.iroha.android.alias.AliasLifecycleTransactionPlanV1;
 import org.hyperledger.iroha.android.alias.AliasSetupModels;
-import org.hyperledger.iroha.android.alias.AccountOnboardingApplyRequestV1;
 import org.hyperledger.iroha.android.alias.AccountOnboardingJsonParser;
 import org.hyperledger.iroha.android.alias.AccountOnboardingPlanReceiptV1;
 import org.hyperledger.iroha.android.alias.AccountOnboardingPlanRequestV1;
+import org.hyperledger.iroha.android.alias.AccountOnboardingPrepareRequestV1;
+import org.hyperledger.iroha.android.alias.AccountOnboardingPrepareResponseV1;
+import org.hyperledger.iroha.android.alias.AccountOnboardingPreparedTransactionV1;
+import org.hyperledger.iroha.android.alias.AccountOnboardingProofRequiredPrepareResponseV1;
+import org.hyperledger.iroha.android.alias.AccountOnboardingCurrentStateRequestV1;
+import org.hyperledger.iroha.android.alias.AccountOnboardingCurrentStateV1;
+import org.hyperledger.iroha.android.alias.AccountOnboardingPreparedVerifier;
 import org.hyperledger.iroha.android.alias.AccountOnboardingReceiptVerifier;
-import org.hyperledger.iroha.android.alias.AccountOnboardingResponseV1;
-import org.hyperledger.iroha.android.alias.AccountOnboardingResponseVerifier;
+import org.hyperledger.iroha.android.alias.PreparedTransactionSubmitResponseV1;
+import org.hyperledger.iroha.android.alias.TairaPublicResetMutationBindingV1;
 import org.hyperledger.iroha.android.alias.AliasTransactionPlanJsonParser;
 import org.hyperledger.iroha.android.alias.AliasTransactionPlanV1;
 import org.hyperledger.iroha.android.address.AccountAddress;
@@ -1225,14 +1231,6 @@ public final class HttpClientTransport implements IrohaClient {
   public CompletableFuture<AccountOnboardingPlanReceiptV1> planSponsoredAccountOnboarding(
       final AccountOnboardingPlanRequestV1 requestBody,
       final String onboardingToken,
-      final NetworkId expectedNetworkId) {
-    return planSponsoredAccountOnboarding(requestBody, onboardingToken, null, expectedNetworkId);
-  }
-
-  @Override
-  public CompletableFuture<AccountOnboardingPlanReceiptV1> planSponsoredAccountOnboarding(
-      final AccountOnboardingPlanRequestV1 requestBody,
-      final String onboardingToken,
       final String expectedAuthority,
       final NetworkId expectedNetworkId) {
     final byte[] body =
@@ -1250,31 +1248,119 @@ public final class HttpClientTransport implements IrohaClient {
   }
 
   @Override
-  public CompletableFuture<AccountOnboardingResponseV1> applySponsoredAccountOnboarding(
+  public CompletableFuture<AccountOnboardingPrepareResponseV1> prepareSponsoredAccountOnboarding(
+      final AccountOnboardingPlanRequestV1 requestBody,
       final AccountOnboardingPlanReceiptV1 receipt,
-      final String onboardingToken,
-      final NetworkId expectedNetworkId) {
-    return applySponsoredAccountOnboarding(receipt, onboardingToken, null, expectedNetworkId);
-  }
-
-  @Override
-  public CompletableFuture<AccountOnboardingResponseV1> applySponsoredAccountOnboarding(
-      final AccountOnboardingPlanReceiptV1 receipt,
+      final TairaPublicResetMutationBindingV1 binding,
       final String onboardingToken,
       final String expectedAuthority,
       final NetworkId expectedNetworkId) {
-    AccountOnboardingReceiptVerifier.requireValid(receipt, expectedNetworkId, expectedAuthority);
+    AccountOnboardingReceiptVerifier.requireValidForRequest(
+        requestBody, receipt, expectedNetworkId, expectedAuthority);
+    if (!TairaPublicResetMutationBindingV1.ONBOARDING.equals(binding.kind())) {
+      throw new IllegalArgumentException("onboarding prepare requires an onboarding binding");
+    }
+    if (binding.executionExpiresAtUnixMs() <= System.currentTimeMillis()) {
+      throw new IllegalArgumentException("onboarding prepare binding is expired");
+    }
     final byte[] body =
-        JsonEncoder.encode(new AccountOnboardingApplyRequestV1(receipt).toJsonMap())
+        JsonEncoder.encode(new AccountOnboardingPrepareRequestV1(binding, receipt).toJsonMap())
             .getBytes(StandardCharsets.UTF_8);
     return fetchJson(
+        buildOnboardingRequest("POST", "/v1/accounts/onboard/prepare", body, onboardingToken),
+        response -> {
+          final AccountOnboardingPrepareResponseV1 result =
+              AccountOnboardingJsonParser.parsePrepareResponse(response);
+          if (result instanceof AccountOnboardingPreparedTransactionV1) {
+            AccountOnboardingPreparedVerifier.requireValidPrepared(
+                (AccountOnboardingPreparedTransactionV1) result,
+                requestBody,
+                receipt,
+                binding,
+                expectedNetworkId,
+                expectedAuthority);
+          } else if (result instanceof AccountOnboardingProofRequiredPrepareResponseV1) {
+            AccountOnboardingPreparedVerifier.requireValidProofRequired(
+                (AccountOnboardingProofRequiredPrepareResponseV1) result,
+                requestBody,
+                receipt,
+                binding,
+                expectedNetworkId,
+                expectedAuthority);
+          } else {
+            throw new IllegalArgumentException("unsupported onboarding prepare response");
+          }
+          return result;
+        },
+        "sponsored account onboarding prepare",
+        200);
+  }
+
+  @Override
+  public CompletableFuture<AccountOnboardingCurrentStateV1>
+      verifyAccountOnboardingCurrentState(
+          final AccountOnboardingProofRequiredPrepareResponseV1 proofRequired,
+          final AccountOnboardingPlanRequestV1 requestBody,
+          final AccountOnboardingPlanReceiptV1 receipt,
+          final TairaPublicResetMutationBindingV1 binding,
+          final String expectedAuthority,
+          final NetworkId expectedNetworkId,
+          final ToriiCanonicalRequestAuth canonicalAuth) {
+    AccountOnboardingPreparedVerifier.requireValidProofRequired(
+        proofRequired,
+        requestBody,
+        receipt,
+        binding,
+        expectedNetworkId,
+        expectedAuthority);
+    final AccountOnboardingCurrentStateRequestV1 atomicRequest =
+        new AccountOnboardingCurrentStateRequestV1(
+            proofRequired.accountId(), proofRequired.alias());
+    final byte[] body =
+        JsonEncoder.encode(atomicRequest.toJsonMap()).getBytes(StandardCharsets.UTF_8);
+    if (!config.requireLocalSigningContext().networkId().equals(expectedNetworkId)) {
+      throw new IllegalArgumentException(
+          "atomic onboarding current-state signing requires the expected network context");
+    }
+    return fetchExactJson(
+        buildExactCanonicalJsonPostRequest(
+            "/v1/accounts/onboarding/current-state",
+            body,
+            canonicalAuth,
+            ACCOUNT_ONBOARDING_CURRENT_STATE_RESPONSE_MAX_BYTES),
+        response ->
+            AccountOnboardingJsonParser.parseCurrentStateResponse(response)
+                .classify(atomicRequest, expectedNetworkId),
+        "atomic account onboarding current-state");
+  }
+
+  @Override
+  public CompletableFuture<PreparedTransactionSubmitResponseV1> submitPreparedAccountOnboarding(
+      final AccountOnboardingPlanRequestV1 requestBody,
+      final AccountOnboardingPreparedTransactionV1 prepared,
+      final String onboardingToken,
+      final String expectedAuthority,
+      final NetworkId expectedNetworkId) {
+    AccountOnboardingPreparedVerifier.requireValidPrepared(
+        prepared,
+        requestBody,
+        prepared.receipt(),
+        prepared.binding(),
+        expectedNetworkId,
+        expectedAuthority);
+    if (prepared.binding().executionExpiresAtUnixMs() <= System.currentTimeMillis()) {
+      throw new IllegalArgumentException("prepared onboarding binding is expired");
+    }
+    final byte[] body =
+        JsonEncoder.encode(prepared.toJsonMap()).getBytes(StandardCharsets.UTF_8);
+    return fetchJson(
         buildOnboardingRequest("POST", "/v1/accounts/onboard", body, onboardingToken),
-        AccountOnboardingJsonParser::parseResponse,
-        "sponsored account onboarding apply",
+        AccountOnboardingJsonParser::parseSubmitResponse,
+        "prepared account onboarding submit",
         null,
         (response, statusCode) ->
-            AccountOnboardingResponseVerifier.requireValidForReceipt(
-                receipt, response, statusCode.intValue()));
+            AccountOnboardingPreparedVerifier.requireValidSubmitResponse(
+                response, prepared, statusCode.intValue()));
   }
 
   @Override
@@ -1551,7 +1637,7 @@ public final class HttpClientTransport implements IrohaClient {
     }
     final Map<String, Object> fields = new LinkedHashMap<>();
     maybePutAuthorityHash(fields, request, sink.get(), PIPELINE_STATUS_SIGNAL);
-    if (transactionHash != null && !transactionHash.trim().isEmpty()) {
+    if (transactionHash != null) {
       fields.put("tx_hash", transactionHash);
     }
     fields.put("status_kind", statusKind == null ? "" : statusKind);
@@ -1607,35 +1693,16 @@ public final class HttpClientTransport implements IrohaClient {
     if (values == null) {
       return Optional.empty();
     }
-    for (final String value : values) {
-      final String normalized = normalizeEntrypointHashHeader(value);
-      if (normalized != null) {
-        return Optional.of(normalized);
-      }
+    if (values.size() != 1) {
+      throw new IllegalStateException(
+          "Torii transaction hash header must contain exactly one value");
     }
-    return Optional.empty();
-  }
-
-  private static String normalizeEntrypointHashHeader(final String value) {
-    if (value == null) {
-      return null;
+    final String value = values.get(0);
+    if (value == null || !value.matches("[0-9a-f]{63}[13579bdf]")) {
+      throw new IllegalStateException(
+          "Torii transaction hash header must be an exact lowercase marked 32-byte hash");
     }
-    String normalized = value.trim();
-    if (normalized.startsWith("0x") || normalized.startsWith("0X")) {
-      normalized = normalized.substring(2);
-    }
-    if (normalized.length() != 64) {
-      return null;
-    }
-    for (int index = 0; index < normalized.length(); index++) {
-      final char ch = normalized.charAt(index);
-      final boolean hex =
-          (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F');
-      if (!hex) {
-        return null;
-      }
-    }
-    return normalized.toLowerCase(java.util.Locale.ROOT);
+    return Optional.of(value);
   }
 
   private static String resolveAuthority(final TransportRequest request) {
@@ -1712,20 +1779,14 @@ public final class HttpClientTransport implements IrohaClient {
                 notifyResponse(request, clientResponse);
 
                 final int statusCode = clientResponse.statusCode();
-                // Torii returns 202 while the transaction is still queued and
-                // 200 once an authoritative terminal status is available.
-                // Both responses carry the same validated status envelope.
-                if (statusCode != 200
-                    && statusCode != 202
-                    && statusCode != 204
-                    && statusCode != 404) {
+                if (statusCode != 200 && statusCode != 404) {
                   future.completeExceptionally(
                       buildPipelineStatusHttpException(hashHex, clientResponse));
                   return;
                 }
 
                 final Map<String, Object> payload =
-                    statusCode == 204 || statusCode == 404
+                    statusCode == 404
                         ? null
                         : parsePipelineStatusPayload(clientResponse.body());
                 final int nextAttempts = attemptsSoFar + 1;
@@ -1733,9 +1794,13 @@ public final class HttpClientTransport implements IrohaClient {
                     payload == null
                         ? null
                         : PipelineStatusExtractor.requireAuthoritativeStatus(payload, hashHex);
-                final boolean isSuccess = "Applied".equals(statusLiteral);
+                final boolean isStateResolved =
+                    payload != null && "state".equals(payload.get("resolved_from"));
+                final boolean isSuccess =
+                    "Applied".equals(statusLiteral) && isStateResolved;
                 final boolean isFailure =
-                    statusLiteral != null && options.failureStatuses().contains(statusLiteral);
+                    ("Rejected".equals(statusLiteral) || "Expired".equals(statusLiteral))
+                        && isStateResolved;
                 emitPipelineStatusTelemetry(
                     request, hashHex, statusLiteral, isSuccess, isFailure, nextAttempts);
 
@@ -2044,10 +2109,19 @@ public final class HttpClientTransport implements IrohaClient {
       final String path,
       final byte[] body,
       final ToriiCanonicalRequestAuth canonicalAuth) {
-    return buildVpnRequest(method, path, body, canonicalAuth, null);
+    return buildCanonicalJsonRequest(method, path, body, canonicalAuth, null);
   }
 
-  private TransportRequest buildVpnRequest(
+  private TransportRequest buildExactCanonicalJsonPostRequest(
+      final String path,
+      final byte[] body,
+      final ToriiCanonicalRequestAuth canonicalAuth,
+      final long maximumResponseBytes) {
+    return buildCanonicalJsonRequest(
+        "POST", path, body, canonicalAuth, Long.valueOf(maximumResponseBytes));
+  }
+
+  private TransportRequest buildCanonicalJsonRequest(
       final String method,
       final String path,
       final byte[] body,
@@ -2065,6 +2139,9 @@ public final class HttpClientTransport implements IrohaClient {
             .setMethod(method)
             .addHeader("Accept", "application/json")
             .setTimeout(config.requestTimeout());
+    if (maximumResponseBytes != null) {
+      builder.setMaximumResponseBytes(maximumResponseBytes);
+    }
     if (body != null) {
       builder.setBody(body).addHeader("Content-Type", "application/json");
     }
@@ -2216,9 +2293,8 @@ public final class HttpClientTransport implements IrohaClient {
       return Long.MAX_VALUE;
     }
     final long now = System.currentTimeMillis();
-    final long delay = Math.max(0L, timeoutMillis);
     try {
-      return Math.addExact(now, delay);
+      return Math.addExact(now, timeoutMillis);
     } catch (final ArithmeticException ignored) {
       return Long.MAX_VALUE;
     }
@@ -3694,6 +3770,7 @@ public final class HttpClientTransport implements IrohaClient {
   private static final long SCCP_RECENT_RESPONSE_MAX_BYTES = 8L * 1024L * 1024L;
   private static final long SCCP_JSON_RESPONSE_MAX_BYTES = 64L * 1024L * 1024L;
   private static final long EXECUTED_BLOCK_WIRE_MAX_BYTES = 32L * 1024L * 1024L;
+  private static final long ACCOUNT_ONBOARDING_CURRENT_STATE_RESPONSE_MAX_BYTES = 4L * 1024L;
   private static final String APPLICATION_JSON = "application/json";
   private static final String APPLICATION_NORITO = "application/x-norito";
 

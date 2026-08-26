@@ -10,6 +10,9 @@ from urllib.parse import urlencode
 _RETIRED_ISO_AUTH_HEADERS = frozenset(
     {
         "authorization",
+        "proxy-authorization",
+        "cookie",
+        "cookie2",
         "x-api-token",
         "x-iroha-account",
         "x-iroha-signature",
@@ -269,6 +272,16 @@ def _reject_retired_auth(
         raise ValueError(
             f"{context} requires generated operator signing; Session.auth is not accepted"
         )
+    cookies = getattr(session, "cookies", None)
+    if cookies is not None:
+        try:
+            has_cookies = len(cookies) != 0
+        except TypeError as exc:
+            raise TypeError(f"{context} requires a sized Session.cookies jar") from exc
+        if has_cookies:
+            raise ValueError(
+                f"{context} requires generated operator signing; Session.cookies is not accepted"
+            )
 
 
 def _require_one_shot_transport(client: Any, target: str, context: str) -> None:

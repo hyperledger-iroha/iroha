@@ -1,11 +1,14 @@
-use crate::{CarWriter, RAW_CODEC, ingest_single_file, verifier::ParsedCar};
+use crate::{
+    CarWriter, ingest_single_file,
+    verifier::{CarVerifier, ParsedCar},
+};
 use eyre::{Result, WrapErr, eyre};
 use iroha_data_model::{
     da::types::{BlobDigest, ExtraMetadata, StorageTicketId},
     taikai::{
-        SegmentDuration, SegmentTimestamp, TaikaiCarPointer, TaikaiEnvelopeIndexes, TaikaiEventId,
-        TaikaiIngestPointer, TaikaiRenditionId, TaikaiSegmentEnvelopeV1, TaikaiStreamId,
-        TaikaiTrackKind, TaikaiTrackMetadata,
+        SegmentDuration, SegmentTimestamp, TaikaiAudioLayout, TaikaiCarPointer, TaikaiCodec,
+        TaikaiEnvelopeIndexes, TaikaiEventId, TaikaiIngestPointer, TaikaiRenditionId,
+        TaikaiSegmentEnvelopeV1, TaikaiStreamId, TaikaiTrackKind, TaikaiTrackMetadata,
     },
 };
 use norito::json::{self, Map, Value};
@@ -15,8 +18,11 @@ use std::{
     borrow::Cow,
     fs,
     io::{self, Write},
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
 };
+
+static STAGED_OUTPUT_COUNTER: AtomicU64 = AtomicU64::new(0);
 /// Request describing a Taikai segment bundle operation.
 pub struct BundleRequest<'a> {
     pub payload_path: &'a Path,
@@ -52,6 +58,16 @@ pub struct BundleSummary {
     pub indexes_out: Option<PathBuf>,
     pub ingest_metadata_out: Option<PathBuf>,
     pub ingest_metadata: Map,
+}
+/// Commitments reconstructed from a canonically verified single-file Taikai CAR.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedTaikaiCar {
+    /// Canonical CAR CID, archive digest, and archive size.
+    pub car_pointer: TaikaiCarPointer,
+    /// Merkle root of the reconstructed chunk set.
+    pub chunk_root: BlobDigest,
+    /// Number of chunks in the reconstructed chunk set.
+    pub chunk_count: u32,
 }
 struct SegmentDetails<'a> {
     event_id: &'a TaikaiEventId,
@@ -89,8 +105,137 @@ pub struct RehydrateRequest<'a> {
     pub ingest_node_id: Option<String>,
     pub extra_metadata: Option<ExtraMetadata>,
 }
+/// Validate the track shape and codec pairing accepted by Taikai DA ingest.
+pub fn validate_track_metadata(track: &TaikaiTrackMetadata) -> Result<()> {
+    if track.average_bitrate_kbps == 0 {
+        return Err(eyre!("track bitrate must be greater than zero"));
+    }
+    if let TaikaiCodec::Custom(profile) = &track.codec
+        && (profile.is_empty() || profile.trim() != profile.as_str())
+    {
+        return Err(eyre!(
+            "custom codec profile must be non-empty and must not have surrounding whitespace"
+        ));
+    }
+    if let TaikaiCodec::Custom(profile) = &track.codec
+        && profile.chars().any(char::is_control)
+    {
+        return Err(eyre!(
+            "custom codec profile must not contain control characters"
+        ));
+    }
+    match track.kind {
+        TaikaiTrackKind::Video => {
+            if track.resolution.is_none() || track.audio_layout.is_some() {
+                return Err(eyre!(
+                    "video track metadata requires a resolution and no audio layout"
+                ));
+            }
+            if track
+                .resolution
+                .is_some_and(|resolution| resolution.width == 0 || resolution.height == 0)
+            {
+                return Err(eyre!("video track resolution dimensions must be non-zero"));
+            }
+            if !matches!(
+                &track.codec,
+                TaikaiCodec::AvcHigh
+                    | TaikaiCodec::HevcMain10
+                    | TaikaiCodec::Av1Main
+                    | TaikaiCodec::Custom(_)
+            ) {
+                return Err(eyre!(
+                    "codec is not valid for a video track; expected AV1/AVC/HEVC or custom"
+                ));
+            }
+        }
+        TaikaiTrackKind::Audio => {
+            if track.resolution.is_some() || track.audio_layout.is_none() {
+                return Err(eyre!(
+                    "audio track metadata requires an audio layout and no resolution"
+                ));
+            }
+            if matches!(track.audio_layout, Some(TaikaiAudioLayout::Custom(0))) {
+                return Err(eyre!(
+                    "custom audio layout channel count must be greater than zero"
+                ));
+            }
+            if !matches!(
+                &track.codec,
+                TaikaiCodec::AacLc | TaikaiCodec::Opus | TaikaiCodec::Custom(_)
+            ) {
+                return Err(eyre!(
+                    "codec is not valid for an audio track; expected AAC/Opus or custom"
+                ));
+            }
+        }
+        TaikaiTrackKind::Data => {
+            if track.resolution.is_some() || track.audio_layout.is_some() {
+                return Err(eyre!(
+                    "data track metadata must not include a resolution or audio layout"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+/// Reconstruct and canonically verify a single-file Taikai CAR.
+///
+/// The payload and its chunk plan are derived from the archive before the complete CAR encoding is
+/// reproduced byte-for-byte. Callers receive only commitments derived from that verified archive.
+pub fn verify_taikai_car(car_bytes: &[u8]) -> Result<VerifiedTaikaiCar> {
+    let parsed =
+        ParsedCar::parse(car_bytes).map_err(|err| eyre!("failed to parse Taikai CAR: {err}"))?;
+    let payload = parsed
+        .payload_bytes()
+        .map_err(|err| eyre!("failed to materialize Taikai CAR payload: {err}"))?;
+    if payload.is_empty() {
+        return Err(eyre!("Taikai CAR payload must not be empty"));
+    }
+    let ingest_summary = ingest_single_file(&payload)
+        .map_err(|err| eyre!("failed to rebuild chunk plan from Taikai CAR payload: {err}"))?;
+    let car_stats = CarVerifier::verify_canonical_car_with_plan(&ingest_summary.plan, car_bytes)
+        .map_err(|err| eyre!("failed to verify canonical Taikai CAR: {err}"))?;
+    let chunk_count = ingest_summary
+        .chunk_store
+        .chunks()
+        .len()
+        .try_into()
+        .map_err(|_| eyre!("chunk count exceeds u32::MAX"))?;
+    let chunk_root = BlobDigest::new(*ingest_summary.chunk_store.por_tree().root());
+    let car_digest = BlobDigest::from_hash(car_stats.car_archive_digest);
+    let cid_multibase = format!("b{}", encode_base32_lower(&car_stats.car_cid)?);
+    let car_pointer = TaikaiCarPointer::new(cid_multibase, car_digest, car_stats.car_size);
+    Ok(VerifiedTaikaiCar {
+        car_pointer,
+        chunk_root,
+        chunk_count,
+    })
+}
 /// Bundle a Taikai segment into deterministic CAR + Norito artifacts.
 pub fn bundle_segment(request: &BundleRequest<'_>) -> Result<BundleSummary> {
+    validate_track_metadata(&request.track)?;
+    if request.segment_duration == 0 {
+        return Err(eyre!("segment duration must be greater than zero"));
+    }
+    let mut paths = vec![
+        ("CAR output", request.car_out),
+        ("envelope output", request.envelope_out),
+    ];
+    if let Some(path) = request.indexes_out {
+        paths.push(("index output", path));
+    }
+    if let Some(path) = request.ingest_metadata_out {
+        paths.push(("ingest metadata output", path));
+    }
+    for (_, path) in &paths {
+        validate_output_writable(path)?;
+    }
+    if request.payload_bytes.is_none() {
+        paths.push(("payload input", request.payload_path));
+    }
+    validate_distinct_artifact_paths(&paths)?;
+
     let payload_cow: Cow<'_, [u8]> = if let Some(bytes) = request.payload_bytes {
         Cow::Borrowed(bytes)
     } else {
@@ -122,13 +267,17 @@ pub fn bundle_segment(request: &BundleRequest<'_>) -> Result<BundleSummary> {
     let chunk_root = BlobDigest::new(*summary.chunk_store.por_tree().root());
     let writer = CarWriter::new(&summary.plan, payload_cow.as_ref())
         .map_err(|err| eyre!("failed to initialise CAR writer: {err}"))?;
-    let mut car_file = open_output_file(request.car_out, "CAR archive")?;
+    let (car_stage, mut car_file) = create_staged_output(request.car_out, "CAR archive")?;
     let car_stats = writer.write_to(&mut car_file).map_err(|err| {
         eyre!(
-            "failed to write CAR archive `{}`: {err}",
+            "failed to stage CAR archive `{}`: {err}",
             request.car_out.display()
         )
     })?;
+    car_file
+        .flush()
+        .wrap_err_with(|| format!("failed to flush staged CAR `{}`", request.car_out.display()))?;
+    drop(car_file);
     let car_digest = BlobDigest::from_hash(car_stats.car_archive_digest);
     let cid_multibase = format!("b{}", encode_base32_lower(&car_stats.car_cid)?);
     let car_pointer = TaikaiCarPointer::new(cid_multibase.clone(), car_digest, car_stats.car_size);
@@ -139,6 +288,11 @@ pub fn bundle_segment(request: &BundleRequest<'_>) -> Result<BundleSummary> {
         chunk_count,
         car_pointer.clone(),
     );
+    let ingest_node_id = request
+        .ingest_node_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|node_id| !node_id.is_empty());
     let details = SegmentDetails {
         event_id: &request.event_id,
         stream_id: &request.stream_id,
@@ -150,19 +304,24 @@ pub fn bundle_segment(request: &BundleRequest<'_>) -> Result<BundleSummary> {
         wallclock_unix_ms: request.wallclock_unix_ms,
         ingest_latency_ms: request.ingest_latency_ms,
         live_edge_drift_ms: request.live_edge_drift_ms,
-        ingest_node_id: request.ingest_node_id.as_deref(),
+        ingest_node_id,
         extra_metadata: request.extra_metadata.clone(),
     };
     let envelope = build_envelope(&details, ingest_pointer);
     let ingest_metadata = build_ingest_metadata_from_details(&details)?;
-    write_outputs(
+    let (bundle_summary, prepared_outputs) = prepare_outputs(
         &envelope,
         ingest_metadata,
         request.envelope_out,
         request.indexes_out,
         request.ingest_metadata_out,
         request.car_out,
-    )
+    )?;
+    let mut staged_outputs = Vec::with_capacity(1 + prepared_outputs.len());
+    staged_outputs.push(car_stage);
+    staged_outputs.extend(stage_prepared_outputs(prepared_outputs)?);
+    publish_staged_outputs(staged_outputs)?;
+    Ok(bundle_summary)
 }
 fn build_envelope(
     details: &SegmentDetails<'_>,
@@ -209,22 +368,30 @@ fn build_ingest_metadata_from_details(details: &SegmentDetails<'_>) -> Result<Ma
     };
     build_ingest_metadata_inner(&params)
 }
-fn write_outputs(
+fn prepare_outputs<'a>(
     envelope: &TaikaiSegmentEnvelopeV1,
     ingest_metadata: Map,
-    envelope_out: &Path,
-    indexes_out: Option<&Path>,
-    ingest_metadata_out: Option<&Path>,
+    envelope_out: &'a Path,
+    indexes_out: Option<&'a Path>,
+    ingest_metadata_out: Option<&'a Path>,
     car_out: &Path,
-) -> Result<BundleSummary> {
+) -> Result<(BundleSummary, Vec<PreparedOutput<'a>>)> {
     let envelope_bytes =
         norito::to_bytes(envelope).wrap_err("failed to encode Taikai envelope payload")?;
-    write_output_bytes(envelope_out, "envelope output", &envelope_bytes)?;
+    let mut prepared_outputs = vec![PreparedOutput {
+        target: envelope_out,
+        label: "envelope output",
+        bytes: envelope_bytes,
+    }];
     let indexes = envelope.indexes();
     let indexes_out_paths = if let Some(path) = indexes_out {
         let rendered = json::to_json_pretty(&indexes)
             .map_err(|err| eyre!("failed to render Taikai index JSON: {err}"))?;
-        write_output_bytes(path, "index output", rendered.as_bytes())?;
+        prepared_outputs.push(PreparedOutput {
+            target: path,
+            label: "index output",
+            bytes: rendered.into_bytes(),
+        });
         Some(path.to_path_buf())
     } else {
         None
@@ -232,89 +399,91 @@ fn write_outputs(
     let ingest_metadata_out_paths = if let Some(path) = ingest_metadata_out {
         let rendered = json::to_json_pretty(&Value::Object(ingest_metadata.clone()))
             .map_err(|err| eyre!("failed to render ingest metadata JSON: {err}"))?;
-        write_output_bytes(path, "ingest metadata output", rendered.as_bytes())?;
+        prepared_outputs.push(PreparedOutput {
+            target: path,
+            label: "ingest metadata output",
+            bytes: rendered.into_bytes(),
+        });
         Some(path.to_path_buf())
     } else {
         None
     };
-    Ok(BundleSummary {
-        car_pointer: envelope.ingest.car.clone(),
-        chunk_root: envelope.ingest.chunk_root,
-        chunk_count: envelope.ingest.chunk_count,
-        car_out: car_out.to_path_buf(),
-        envelope_out: envelope_out.to_path_buf(),
-        indexes,
-        indexes_out: indexes_out_paths,
-        ingest_metadata_out: ingest_metadata_out_paths,
-        ingest_metadata,
-    })
+    Ok((
+        BundleSummary {
+            car_pointer: envelope.ingest.car.clone(),
+            chunk_root: envelope.ingest.chunk_root,
+            chunk_count: envelope.ingest.chunk_count,
+            car_out: car_out.to_path_buf(),
+            envelope_out: envelope_out.to_path_buf(),
+            indexes,
+            indexes_out: indexes_out_paths,
+            ingest_metadata_out: ingest_metadata_out_paths,
+            ingest_metadata,
+        },
+        prepared_outputs,
+    ))
 }
 /// Rebuild Taikai envelope/index/ingest metadata for an existing CAR archive.
 pub fn rehydrate_from_car(request: &RehydrateRequest<'_>) -> Result<BundleSummary> {
+    validate_track_metadata(&request.track)?;
+    if request.segment_duration == 0 {
+        return Err(eyre!("segment duration must be greater than zero"));
+    }
+    let mut outputs = vec![
+        ("CAR output", request.car_out),
+        ("envelope output", request.envelope_out),
+    ];
+    let mut non_car_outputs = vec![
+        ("CAR input", request.car_in),
+        ("envelope output", request.envelope_out),
+    ];
+    if let Some(path) = request.indexes_out {
+        outputs.push(("index output", path));
+        non_car_outputs.push(("index output", path));
+    }
+    if let Some(path) = request.ingest_metadata_out {
+        outputs.push(("ingest metadata output", path));
+        non_car_outputs.push(("ingest metadata output", path));
+    }
+    for (_, path) in &outputs {
+        validate_output_path(path)?;
+    }
+    validate_distinct_artifact_paths(&outputs)?;
+    // Rehydrating in place (including normalized aliases and hard links) is supported, but no
+    // metadata artifact may overwrite the source archive.
+    validate_distinct_artifact_paths(&non_car_outputs)?;
+    let car_output_is_input = paths_resolve_to_same_entry(request.car_in, request.car_out)?;
+    if !car_output_is_input {
+        validate_output_writable(request.car_out)?;
+    }
+    validate_output_writable(request.envelope_out)?;
+    if let Some(path) = request.indexes_out {
+        validate_output_writable(path)?;
+    }
+    if let Some(path) = request.ingest_metadata_out {
+        validate_output_writable(path)?;
+    }
+
     let car_bytes = fs::read(request.car_in)
         .wrap_err_with(|| format!("failed to read CAR `{}`", request.car_in.display()))?;
-    let parsed = ParsedCar::parse(&car_bytes)
-        .map_err(|err| eyre!("failed to parse CAR `{}`: {err}", request.car_in.display()))?;
-    // Rehydration explicitly needs an owned payload for its ingest artefacts;
-    // ordinary CAR verification keeps payload bytes as borrowed CAR slices.
-    let payload = parsed.payload_bytes().map_err(|err| {
-        eyre!(
-            "failed to materialize CAR payload `{}`: {err}",
+    let verified = verify_taikai_car(&car_bytes).wrap_err_with(|| {
+        format!(
+            "failed to reconstruct canonical Taikai CAR `{}`",
             request.car_in.display()
         )
     })?;
-    let ingest_summary = ingest_single_file(&payload).map_err(|err| {
-        eyre!(
-            "failed to rebuild chunk plan from CAR payload `{}`: {err}",
-            request.car_in.display()
-        )
-    })?;
-    if ingest_summary.plan.chunks.len() != parsed.chunk_sections().len() {
-        return Err(eyre!(
-            "chunk count mismatch between CAR ({}) and rebuilt plan ({})",
-            parsed.chunk_sections().len(),
-            ingest_summary.plan.chunks.len()
-        ));
-    }
-    for (idx, (plan_chunk, parsed_chunk)) in ingest_summary
-        .plan
-        .chunks
-        .iter()
-        .zip(parsed.chunk_sections())
-        .enumerate()
-    {
-        if plan_chunk.length != parsed_chunk.length {
-            return Err(eyre!(
-                "chunk length mismatch at index {idx} (plan={}, car={})",
-                plan_chunk.length,
-                parsed_chunk.length
-            ));
-        }
-        if plan_chunk.digest != parsed_chunk.digest {
-            return Err(eyre!(
-                "chunk digest mismatch at index {idx} for CAR `{}`",
-                request.car_in.display()
-            ));
-        }
-    }
-    let chunk_count: u32 = ingest_summary
-        .chunk_store
-        .chunks()
-        .len()
-        .try_into()
-        .map_err(|_| eyre!("chunk count exceeds u32::MAX"))?;
-    let chunk_root = BlobDigest::new(*ingest_summary.chunk_store.por_tree().root());
-    let car_digest = BlobDigest::from_hash(parsed.car_archive_digest());
-    let car_cid = crate::encode_cid(RAW_CODEC, parsed.car_archive_digest().as_bytes());
-    let cid_multibase = format!("b{}", encode_base32_lower(&car_cid)?);
-    let car_pointer = TaikaiCarPointer::new(cid_multibase, car_digest, parsed.total_len());
     let ingest_pointer = TaikaiIngestPointer::new(
         request.manifest_hash,
         request.storage_ticket,
-        chunk_root,
-        chunk_count,
-        car_pointer,
+        verified.chunk_root,
+        verified.chunk_count,
+        verified.car_pointer,
     );
+    let ingest_node_id = request
+        .ingest_node_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|node_id| !node_id.is_empty());
     let details = SegmentDetails {
         event_id: &request.event_id,
         stream_id: &request.stream_id,
@@ -326,22 +495,31 @@ pub fn rehydrate_from_car(request: &RehydrateRequest<'_>) -> Result<BundleSummar
         wallclock_unix_ms: request.wallclock_unix_ms,
         ingest_latency_ms: request.ingest_latency_ms,
         live_edge_drift_ms: request.live_edge_drift_ms,
-        ingest_node_id: request.ingest_node_id.as_deref(),
+        ingest_node_id,
         extra_metadata: request.extra_metadata.clone(),
     };
-    if request.car_out != request.car_in {
-        write_output_bytes(request.car_out, "CAR output", &car_bytes)?;
-    }
     let envelope = build_envelope(&details, ingest_pointer);
     let ingest_metadata = build_ingest_metadata_from_details(&details)?;
-    write_outputs(
+    let (bundle_summary, prepared_outputs) = prepare_outputs(
         &envelope,
         ingest_metadata,
         request.envelope_out,
         request.indexes_out,
         request.ingest_metadata_out,
         request.car_out,
-    )
+    )?;
+    let car_output_count = if car_output_is_input { 0 } else { 1 };
+    let mut staged_outputs = Vec::with_capacity(car_output_count + prepared_outputs.len());
+    if !car_output_is_input {
+        staged_outputs.push(stage_output_bytes(
+            request.car_out,
+            "CAR output",
+            &car_bytes,
+        )?);
+    }
+    staged_outputs.extend(stage_prepared_outputs(prepared_outputs)?);
+    publish_staged_outputs(staged_outputs)?;
+    Ok(bundle_summary)
 }
 /// Load the optional extra metadata JSON document used by publishers.
 pub fn load_extra_metadata(path: &Path) -> Result<ExtraMetadata> {
@@ -350,15 +528,418 @@ pub fn load_extra_metadata(path: &Path) -> Result<ExtraMetadata> {
     json::from_str(&contents)
         .wrap_err_with(|| format!("failed to parse metadata JSON `{}`", path.display()))
 }
+/// Validate that named Taikai inputs and outputs neither alias nor nest within one another.
+pub fn validate_distinct_artifact_paths(paths: &[(&str, &Path)]) -> Result<()> {
+    for (index, (left_label, left_path)) in paths.iter().enumerate() {
+        for (right_label, right_path) in &paths[index + 1..] {
+            let left_normalized = normalize_absolute_path(left_path)?;
+            let right_normalized = normalize_absolute_path(right_path)?;
+            if left_normalized != right_normalized
+                && (left_normalized.starts_with(&right_normalized)
+                    || right_normalized.starts_with(&left_normalized))
+            {
+                return Err(eyre!(
+                    "{left_label} `{}` and {right_label} `{}` must not be nested paths",
+                    left_path.display(),
+                    right_path.display()
+                ));
+            }
+            if paths_resolve_to_same_entry(left_path, right_path)? {
+                return Err(eyre!(
+                    "{left_label} `{}` and {right_label} `{}` must use distinct paths",
+                    left_path.display(),
+                    right_path.display()
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+fn paths_resolve_to_same_entry(left: &Path, right: &Path) -> Result<bool> {
+    if normalize_absolute_path(left)? == normalize_absolute_path(right)? {
+        return Ok(true);
+    }
+
+    let left_metadata = match fs::metadata(left) {
+        Ok(metadata) => Some(metadata),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => None,
+        Err(err) => {
+            return Err(eyre!(
+                "failed to inspect artifact path `{}`: {err}",
+                left.display()
+            ));
+        }
+    };
+    let right_metadata = match fs::metadata(right) {
+        Ok(metadata) => Some(metadata),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => None,
+        Err(err) => {
+            return Err(eyre!(
+                "failed to inspect artifact path `{}`: {err}",
+                right.display()
+            ));
+        }
+    };
+    let (Some(left_metadata), Some(right_metadata)) = (left_metadata, right_metadata) else {
+        return Ok(false);
+    };
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Ok(left_metadata.dev() == right_metadata.dev()
+            && left_metadata.ino() == right_metadata.ino())
+    }
+    #[cfg(not(unix))]
+    {
+        match (fs::canonicalize(left), fs::canonicalize(right)) {
+            (Ok(left), Ok(right)) => Ok(left == right),
+            _ => Ok(false),
+        }
+    }
+}
+fn normalize_absolute_path(path: &Path) -> Result<PathBuf> {
+    let absolute = std::path::absolute(path)
+        .wrap_err_with(|| format!("failed to resolve artifact path `{}`", path.display()))?;
+    let mut existing_prefix = absolute.as_path();
+    loop {
+        match fs::canonicalize(existing_prefix) {
+            Ok(canonical_prefix) => {
+                let suffix = absolute.strip_prefix(existing_prefix).map_err(|err| {
+                    eyre!(
+                        "failed to preserve artifact path suffix for `{}`: {err}",
+                        path.display()
+                    )
+                })?;
+                return Ok(normalize_path_components(&canonical_prefix.join(suffix)));
+            }
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+                ) =>
+            {
+                existing_prefix = existing_prefix.parent().ok_or_else(|| {
+                    eyre!(
+                        "failed to find an existing ancestor for artifact path `{}`",
+                        path.display()
+                    )
+                })?;
+            }
+            Err(err) => {
+                return Err(eyre!(
+                    "failed to canonicalize artifact path ancestor `{}`: {err}",
+                    existing_prefix.display()
+                ));
+            }
+        }
+    }
+}
+fn normalize_path_components(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                normalized.push(component.as_os_str());
+            }
+        }
+    }
+    normalized
+}
+struct PreparedOutput<'a> {
+    target: &'a Path,
+    label: &'static str,
+    bytes: Vec<u8>,
+}
+struct StagedOutput {
+    target: PathBuf,
+    stage: Option<PathBuf>,
+    label: &'static str,
+}
+impl StagedOutput {
+    fn stage_path(&self) -> &Path {
+        self.stage
+            .as_deref()
+            .expect("staged output path is present until publication")
+    }
+}
+impl Drop for StagedOutput {
+    fn drop(&mut self) {
+        if let Some(stage) = self.stage.take() {
+            let _ = fs::remove_file(stage);
+        }
+    }
+}
+struct PublishedOutput {
+    target: PathBuf,
+    backup: Option<PathBuf>,
+}
+fn create_staged_output(target: &Path, label: &'static str) -> Result<(StagedOutput, fs::File)> {
+    validate_output_writable(target)?;
+    ensure_parent_dir(target)?;
+    validate_output_writable(target)?;
+    let target_permissions = match fs::symlink_metadata(target) {
+        Ok(metadata) => Some(metadata.permissions()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => None,
+        Err(err) => {
+            return Err(eyre!(
+                "failed to inspect {label} `{}` before staging: {err}",
+                target.display()
+            ));
+        }
+    };
+    let parent = output_parent(target);
+    for _ in 0..128 {
+        let stage_path = unique_sibling_path(parent, "stage");
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        set_no_follow_flag(&mut options);
+        match options.open(&stage_path) {
+            Ok(file) => {
+                if let Some(permissions) = target_permissions.clone()
+                    && let Err(err) = fs::set_permissions(&stage_path, permissions)
+                {
+                    drop(file);
+                    let _ = fs::remove_file(&stage_path);
+                    return Err(eyre!(
+                        "failed to preserve permissions while staging {label} `{}`: {err}",
+                        target.display()
+                    ));
+                }
+                return Ok((
+                    StagedOutput {
+                        target: target.to_path_buf(),
+                        stage: Some(stage_path),
+                        label,
+                    },
+                    file,
+                ));
+            }
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(err) => {
+                return Err(eyre!(
+                    "failed to create staged {label} for `{}`: {err}",
+                    target.display()
+                ));
+            }
+        }
+    }
+    Err(eyre!(
+        "failed to allocate a unique staged {label} for `{}`",
+        target.display()
+    ))
+}
+fn stage_output_bytes(target: &Path, label: &'static str, bytes: &[u8]) -> Result<StagedOutput> {
+    let (staged, mut file) = create_staged_output(target, label)?;
+    file.write_all(bytes)
+        .wrap_err_with(|| format!("failed to stage {label} `{}`", target.display()))?;
+    file.flush()
+        .wrap_err_with(|| format!("failed to flush staged {label} `{}`", target.display()))?;
+    drop(file);
+    Ok(staged)
+}
+fn stage_prepared_outputs(outputs: Vec<PreparedOutput<'_>>) -> Result<Vec<StagedOutput>> {
+    outputs
+        .into_iter()
+        .map(|output| stage_output_bytes(output.target, output.label, &output.bytes))
+        .collect()
+}
+fn publish_staged_outputs(outputs: Vec<StagedOutput>) -> Result<()> {
+    publish_staged_outputs_with_hook(outputs, |_| Ok(()))
+}
+fn publish_staged_outputs_with_hook(
+    mut outputs: Vec<StagedOutput>,
+    mut before_publish: impl FnMut(usize) -> Result<()>,
+) -> Result<()> {
+    let mut published = Vec::with_capacity(outputs.len());
+    for (index, output) in outputs.iter_mut().enumerate() {
+        if let Err(err) = before_publish(index) {
+            return Err(error_with_rollback(err, &published));
+        }
+        if let Err(err) = validate_output_writable(&output.target) {
+            return Err(error_with_rollback(err, &published));
+        }
+        let backup = match backup_existing_output(&output.target, output.label) {
+            Ok(backup) => backup,
+            Err(err) => return Err(error_with_rollback(err, &published)),
+        };
+        let publication = PublishedOutput {
+            target: output.target.clone(),
+            backup,
+        };
+        if let Err(err) = fs::rename(output.stage_path(), &output.target) {
+            published.push(publication);
+            return Err(error_with_rollback(
+                eyre!(
+                    "failed to publish staged {} `{}`: {err}",
+                    output.label,
+                    output.target.display()
+                ),
+                &published,
+            ));
+        }
+        output.stage = None;
+        published.push(publication);
+    }
+    cleanup_backups(&published)
+}
+fn backup_existing_output(target: &Path, label: &str) -> Result<Option<PathBuf>> {
+    match fs::symlink_metadata(target) {
+        Ok(_) => {}
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            return Err(eyre!(
+                "failed to inspect {label} `{}` before publication: {err}",
+                target.display()
+            ));
+        }
+    }
+    let parent = output_parent(target);
+    for _ in 0..128 {
+        let backup_dir = unique_sibling_path(parent, "backup");
+        match fs::create_dir(&backup_dir) {
+            Ok(()) => {
+                let backup = backup_dir.join("original");
+                return match fs::rename(target, &backup) {
+                    Ok(()) => Ok(Some(backup)),
+                    Err(err) => {
+                        let cleanup_error = fs::remove_dir(&backup_dir).err();
+                        Err(match cleanup_error {
+                            Some(cleanup_error) => eyre!(
+                                "failed to preserve existing {label} `{}` before publication: {err}; failed to remove backup directory `{}`: {cleanup_error}",
+                                target.display(),
+                                backup_dir.display()
+                            ),
+                            None => eyre!(
+                                "failed to preserve existing {label} `{}` before publication: {err}",
+                                target.display()
+                            ),
+                        })
+                    }
+                };
+            }
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(err) => {
+                return Err(eyre!(
+                    "failed to create a backup directory for existing {label} `{}`: {err}",
+                    target.display()
+                ));
+            }
+        }
+    }
+    Err(eyre!(
+        "failed to allocate a backup for existing {label} `{}`",
+        target.display()
+    ))
+}
+fn error_with_rollback(error: eyre::Report, published: &[PublishedOutput]) -> eyre::Report {
+    match rollback_published_outputs(published) {
+        Ok(()) => error,
+        Err(rollback_error) => {
+            eyre!("{error}; failed to roll back published outputs: {rollback_error}")
+        }
+    }
+}
+fn rollback_published_outputs(published: &[PublishedOutput]) -> Result<()> {
+    let mut failures = Vec::new();
+    for output in published.iter().rev() {
+        match fs::remove_file(&output.target) {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => {
+                failures.push(format!(
+                    "failed to remove replacement `{}`: {err}",
+                    output.target.display()
+                ));
+                continue;
+            }
+        }
+        if let Some(backup) = &output.backup
+            && let Err(err) = fs::rename(backup, &output.target)
+        {
+            failures.push(format!(
+                "failed to restore `{}` from `{}`: {err}",
+                output.target.display(),
+                backup.display()
+            ));
+            continue;
+        }
+        if let Some(backup) = &output.backup
+            && let Some(backup_dir) = backup.parent()
+            && let Err(err) = fs::remove_dir(backup_dir)
+        {
+            failures.push(format!(
+                "failed to remove restored backup directory `{}`: {err}",
+                backup_dir.display()
+            ));
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(eyre!(failures.join("; ")))
+    }
+}
+fn cleanup_backups(published: &[PublishedOutput]) -> Result<()> {
+    let mut failures = Vec::new();
+    for output in published {
+        if let Some(backup) = &output.backup
+            && let Err(err) = fs::remove_file(backup)
+            && err.kind() != io::ErrorKind::NotFound
+        {
+            failures.push(format!(
+                "failed to remove backup `{}`: {err}",
+                backup.display()
+            ));
+            continue;
+        }
+        if let Some(backup) = &output.backup
+            && let Some(backup_dir) = backup.parent()
+            && let Err(err) = fs::remove_dir(backup_dir)
+            && err.kind() != io::ErrorKind::NotFound
+        {
+            failures.push(format!(
+                "failed to remove backup directory `{}`: {err}",
+                backup_dir.display()
+            ));
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(eyre!(
+            "outputs were published but backup cleanup failed: {}",
+            failures.join("; ")
+        ))
+    }
+}
+fn output_parent(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+}
+fn unique_sibling_path(parent: &Path, kind: &str) -> PathBuf {
+    let counter = STAGED_OUTPUT_COUNTER.fetch_add(1, Ordering::Relaxed);
+    parent.join(format!(
+        ".taikai-car-{kind}-{}-{counter}",
+        std::process::id()
+    ))
+}
+#[cfg(test)]
 fn write_output_bytes(path: &Path, label: &str, bytes: &[u8]) -> Result<()> {
     let mut file = open_output_file(path, label)?;
     file.write_all(bytes)
         .wrap_err_with(|| format!("failed to write {label} `{}`", path.display()))
 }
+#[cfg(test)]
 fn open_output_file(path: &Path, label: &str) -> Result<fs::File> {
-    validate_output_path(path)?;
+    validate_output_writable(path)?;
     ensure_parent_dir(path)?;
-    validate_output_path(path)?;
+    validate_output_writable(path)?;
     let mut options = fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
     set_no_follow_flag(&mut options);
@@ -392,8 +973,8 @@ fn validate_output_path(path: &Path) -> Result<()> {
             if metadata.file_type().is_symlink() {
                 return Err(eyre!("output `{}` must not be a symlink", path.display()));
             }
-            if metadata.is_dir() {
-                return Err(eyre!("output `{}` must not be a directory", path.display()));
+            if !metadata.is_file() {
+                return Err(eyre!("output `{}` must be a regular file", path.display()));
             }
         }
         Err(err) if err.kind() == io::ErrorKind::NotFound => {}
@@ -434,6 +1015,29 @@ fn validate_output_path(path: &Path) -> Result<()> {
             }
         }
     }
+    Ok(())
+}
+fn validate_output_writable(path: &Path) -> Result<()> {
+    validate_output_path(path)?;
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => {
+            return Err(eyre!(
+                "failed to inspect output `{}`: {err}",
+                path.display()
+            ));
+        }
+    };
+    if metadata.permissions().readonly() {
+        return Err(eyre!("output `{}` must be writable", path.display()));
+    }
+    let mut options = fs::OpenOptions::new();
+    options.write(true);
+    set_no_follow_flag(&mut options);
+    options
+        .open(path)
+        .wrap_err_with(|| format!("output `{}` must be writable", path.display()))?;
     Ok(())
 }
 #[cfg(unix)]
@@ -661,6 +1265,69 @@ mod tests {
         let path = temp.path().canonicalize().expect("canonical tempdir");
         (temp, path)
     }
+    fn minimal_bundle_request<'a>(
+        payload_path: &'a Path,
+        car_out: &'a Path,
+        envelope_out: &'a Path,
+    ) -> BundleRequest<'a> {
+        BundleRequest {
+            payload_path,
+            payload_bytes: None,
+            car_out,
+            envelope_out,
+            indexes_out: None,
+            ingest_metadata_out: None,
+            manifest_hash: BlobDigest::new([1u8; 32]),
+            storage_ticket: StorageTicketId::new([2u8; 32]),
+            event_id: TaikaiEventId::new(Name::from_str("event").expect("name")),
+            stream_id: TaikaiStreamId::new(Name::from_str("stream").expect("name")),
+            rendition_id: TaikaiRenditionId::new(Name::from_str("1080p").expect("name")),
+            track: TaikaiTrackMetadata::video(
+                TaikaiCodec::Av1Main,
+                8_000,
+                TaikaiResolution::new(1920, 1080),
+            ),
+            segment_sequence: 42,
+            segment_start_pts: 36_000,
+            segment_duration: 2_000_000,
+            wallclock_unix_ms: 1_702_560_000_000,
+            ingest_latency_ms: None,
+            live_edge_drift_ms: None,
+            ingest_node_id: None,
+            extra_metadata: None,
+        }
+    }
+    fn minimal_rehydrate_request<'a>(
+        car_in: &'a Path,
+        car_out: &'a Path,
+        envelope_out: &'a Path,
+    ) -> RehydrateRequest<'a> {
+        RehydrateRequest {
+            car_in,
+            car_out,
+            envelope_out,
+            indexes_out: None,
+            ingest_metadata_out: None,
+            manifest_hash: BlobDigest::new([1u8; 32]),
+            storage_ticket: StorageTicketId::new([2u8; 32]),
+            event_id: TaikaiEventId::new(Name::from_str("event").expect("name")),
+            stream_id: TaikaiStreamId::new(Name::from_str("stream").expect("name")),
+            rendition_id: TaikaiRenditionId::new(Name::from_str("1080p").expect("name")),
+            track: TaikaiTrackMetadata::video(
+                TaikaiCodec::Av1Main,
+                8_000,
+                TaikaiResolution::new(1920, 1080),
+            ),
+            segment_sequence: 42,
+            segment_start_pts: 36_000,
+            segment_duration: 2_000_000,
+            wallclock_unix_ms: 1_702_560_000_000,
+            ingest_latency_ms: None,
+            live_edge_drift_ms: None,
+            ingest_node_id: None,
+            extra_metadata: None,
+        }
+    }
     #[test]
     fn bundle_writes_outputs() {
         let (_tmp, tmp_path) = canonical_tempdir();
@@ -718,6 +1385,369 @@ mod tests {
         assert!(summary.ingest_metadata_out.as_ref().unwrap().exists());
     }
     #[test]
+    fn verify_taikai_car_reconstructs_canonical_commitments() {
+        let payload = b"taikai-verified-car-payload";
+        let ingest = ingest_single_file(payload).expect("plan payload");
+        let expected_chunk_count =
+            u32::try_from(ingest.chunk_store.chunks().len()).expect("chunk count fits u32");
+        let expected_chunk_root = BlobDigest::new(*ingest.chunk_store.por_tree().root());
+        let mut car_bytes = Vec::new();
+        let stats = CarWriter::new(&ingest.plan, payload)
+            .expect("create writer")
+            .write_to(&mut car_bytes)
+            .expect("write CAR");
+
+        let verified = verify_taikai_car(&car_bytes).expect("verify canonical Taikai CAR");
+
+        assert_eq!(verified.chunk_count, expected_chunk_count);
+        assert_eq!(verified.chunk_root, expected_chunk_root);
+        assert_eq!(verified.car_pointer.car_size_bytes, stats.car_size);
+        assert_eq!(
+            verified.car_pointer.car_digest,
+            BlobDigest::from_hash(stats.car_archive_digest)
+        );
+        assert_eq!(
+            verified.car_pointer.cid_multibase,
+            format!(
+                "b{}",
+                encode_base32_lower(&stats.car_cid).expect("encode CID")
+            )
+        );
+    }
+    #[test]
+    fn verify_taikai_car_rejects_noncanonical_container() {
+        let payload = b"taikai-noncanonical-car-payload";
+        let ingest = ingest_single_file(payload).expect("plan payload");
+        let mut car_bytes = Vec::new();
+        CarWriter::new(&ingest.plan, payload)
+            .expect("create writer")
+            .write_to(&mut car_bytes)
+            .expect("write CAR");
+        car_bytes[crate::PRAGMA.len() + 1] ^= 1;
+        ParsedCar::parse(&car_bytes).expect("mutated CAR remains structurally parseable");
+
+        let err = verify_taikai_car(&car_bytes).expect_err("reject non-canonical container");
+
+        assert!(
+            err.to_string().contains("canonical Taikai CAR"),
+            "unexpected error: {err}"
+        );
+    }
+    #[test]
+    fn rehydrate_rejects_noncanonical_car_before_writing_outputs() {
+        let (_tmp, tmp_path) = canonical_tempdir();
+        let payload = b"taikai-rehydrate-payload";
+        let ingest = ingest_single_file(payload).expect("plan payload");
+        let mut car_bytes = Vec::new();
+        CarWriter::new(&ingest.plan, payload)
+            .expect("create writer")
+            .write_to(&mut car_bytes)
+            .expect("write CAR");
+
+        // Reserved CARv2 header bytes must stay zero. The structural parser accepts this
+        // mutation, so rehydration must still run the canonical-container verifier.
+        car_bytes[crate::PRAGMA.len() + 1] ^= 1;
+        ParsedCar::parse(&car_bytes).expect("mutated CAR remains structurally parseable");
+
+        let car_in = tmp_path.join("noncanonical.car");
+        let car_out = tmp_path.join("copy.car");
+        let envelope_out = tmp_path.join("segment.to");
+        fs::write(&car_in, car_bytes).expect("write mutated CAR");
+        let request = minimal_rehydrate_request(&car_in, &car_out, &envelope_out);
+
+        let err = rehydrate_from_car(&request).expect_err("reject non-canonical CAR");
+        assert!(
+            err.to_string().contains("canonical Taikai CAR"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            !car_out.exists(),
+            "failed rehydration must not copy the CAR"
+        );
+        assert!(
+            !envelope_out.exists(),
+            "failed rehydration must not emit an envelope"
+        );
+    }
+    #[test]
+    fn bundle_rejects_colliding_artifact_paths_before_writing() {
+        let (_tmp, tmp_path) = canonical_tempdir();
+        let payload = tmp_path.join("segment.bin");
+        fs::write(&payload, b"taikai-payload").expect("write payload");
+        let colliding_output = tmp_path.join("segment.car");
+        let request = minimal_bundle_request(&payload, &colliding_output, &colliding_output);
+
+        let err = bundle_segment(&request).expect_err("reject colliding outputs");
+        assert!(
+            err.to_string().contains("must use distinct paths"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            !colliding_output.exists(),
+            "collision must fail before opening either output"
+        );
+    }
+    #[test]
+    fn bundle_rejects_nested_artifact_paths_before_writing() {
+        let (_tmp, tmp_path) = canonical_tempdir();
+        let payload = tmp_path.join("segment.bin");
+        fs::write(&payload, b"taikai-payload").expect("write payload");
+        let car_out = tmp_path.join("artifact");
+        let envelope_out = car_out.join("segment.to");
+        let request = minimal_bundle_request(&payload, &car_out, &envelope_out);
+
+        let err = bundle_segment(&request).expect_err("reject nested outputs");
+        assert!(
+            err.to_string().contains("must not be nested paths"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            !car_out.exists(),
+            "collision must fail before writing the CAR"
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn distinct_artifact_paths_resolve_symlinked_input_ancestors() {
+        let (_tmp, tmp_path) = canonical_tempdir();
+        let real_root = tmp_path.join("real");
+        let real_bundle = real_root.join("bundle");
+        fs::create_dir_all(&real_bundle).expect("create real bundle directory");
+        let linked_root = tmp_path.join("linked");
+        std::os::unix::fs::symlink(&real_root, &linked_root).expect("create root symlink");
+        let input = linked_root.join("bundle");
+        let output = real_bundle.join("report.json");
+
+        let err = validate_distinct_artifact_paths(&[
+            ("bundle input", input.as_path()),
+            ("report output", output.as_path()),
+        ])
+        .expect_err("reject nesting through a symlinked input ancestor");
+
+        assert!(
+            err.to_string().contains("must not be nested paths"),
+            "unexpected error: {err}"
+        );
+    }
+    #[test]
+    fn transactional_publish_rolls_back_prior_outputs_on_late_failure() {
+        let (_tmp, tmp_path) = canonical_tempdir();
+        let first = tmp_path.join("first.out");
+        let second = tmp_path.join("second.out");
+        fs::write(&first, b"old-first").expect("write first target");
+        fs::write(&second, b"old-second").expect("write second target");
+        let staged = vec![
+            stage_output_bytes(&first, "first output", b"new-first").expect("stage first"),
+            stage_output_bytes(&second, "second output", b"new-second").expect("stage second"),
+        ];
+
+        let err = publish_staged_outputs_with_hook(staged, |index| {
+            if index == 1 {
+                Err(eyre!("injected late publication failure"))
+            } else {
+                Ok(())
+            }
+        })
+        .expect_err("inject failure after first publication");
+
+        assert!(
+            err.to_string()
+                .contains("injected late publication failure"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(fs::read(&first).expect("read first target"), b"old-first");
+        assert_eq!(
+            fs::read(&second).expect("read second target"),
+            b"old-second"
+        );
+        let leaked_paths = fs::read_dir(&tmp_path)
+            .expect("read temp directory")
+            .map(|entry| entry.expect("directory entry").file_name())
+            .filter(|name| name.to_string_lossy().starts_with(".taikai-car-"))
+            .collect::<Vec<_>>();
+        assert!(leaked_paths.is_empty(), "leaked paths: {leaked_paths:?}");
+    }
+    #[test]
+    fn bundle_rejects_track_codec_mismatch_before_writing() {
+        let (_tmp, tmp_path) = canonical_tempdir();
+        let payload = tmp_path.join("segment.bin");
+        fs::write(&payload, b"taikai-payload").expect("write payload");
+        let car_out = tmp_path.join("segment.car");
+        let envelope_out = tmp_path.join("segment.to");
+        let mut request = minimal_bundle_request(&payload, &car_out, &envelope_out);
+        request.track.codec = TaikaiCodec::AacLc;
+
+        let err = bundle_segment(&request).expect_err("reject AAC video track");
+        assert!(
+            err.to_string().contains("not valid for a video track"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            !car_out.exists(),
+            "invalid track must fail before CAR output"
+        );
+        assert!(
+            !envelope_out.exists(),
+            "invalid track must fail before envelope output"
+        );
+    }
+    #[test]
+    fn validate_track_metadata_rejects_custom_codec_control_characters() {
+        let track = TaikaiTrackMetadata::data(TaikaiCodec::Custom("id3\0spoof".into()), 32);
+
+        let err = validate_track_metadata(&track).expect_err("reject control character");
+
+        assert!(
+            err.to_string().contains("control characters"),
+            "unexpected error: {err}"
+        );
+    }
+    #[test]
+    fn bundle_normalizes_ingest_node_id_across_outputs() {
+        let (_tmp, tmp_path) = canonical_tempdir();
+        let payload = tmp_path.join("segment.bin");
+        fs::write(&payload, b"taikai-payload").expect("write payload");
+        let car_out = tmp_path.join("segment.car");
+        let envelope_out = tmp_path.join("segment.to");
+        let ingest_out = tmp_path.join("segment.ingest.json");
+        let mut request = minimal_bundle_request(&payload, &car_out, &envelope_out);
+        request.ingest_metadata_out = Some(&ingest_out);
+        request.ingest_node_id = Some("  node-a  ".to_owned());
+
+        let summary = bundle_segment(&request).expect("bundle");
+        let envelope: TaikaiSegmentEnvelopeV1 =
+            norito::decode_from_bytes(&fs::read(&envelope_out).expect("read envelope"))
+                .expect("decode envelope");
+
+        assert_eq!(
+            envelope.instrumentation.ingest_node_id.as_deref(),
+            Some("node-a")
+        );
+        assert_eq!(
+            summary
+                .ingest_metadata
+                .get("taikai.instrumentation.ingest_node_id")
+                .and_then(Value::as_str),
+            Some("node-a")
+        );
+    }
+    #[test]
+    fn bundle_preflights_readonly_late_output_before_writing() {
+        let (_tmp, tmp_path) = canonical_tempdir();
+        let payload = tmp_path.join("segment.bin");
+        fs::write(&payload, b"taikai-payload").expect("write payload");
+        let car_out = tmp_path.join("segment.car");
+        let envelope_out = tmp_path.join("segment.to");
+        let indexes_out = tmp_path.join("segment.indexes.json");
+        fs::write(&indexes_out, b"preserve").expect("write existing index");
+        let mut permissions = fs::metadata(&indexes_out)
+            .expect("index metadata")
+            .permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&indexes_out, permissions).expect("make index read-only");
+        let mut request = minimal_bundle_request(&payload, &car_out, &envelope_out);
+        request.indexes_out = Some(&indexes_out);
+
+        let err = bundle_segment(&request).expect_err("reject read-only late output");
+
+        assert!(
+            err.to_string().contains("must be writable"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            !car_out.exists(),
+            "CAR must not be written before preflight"
+        );
+        assert!(
+            !envelope_out.exists(),
+            "envelope must not be written before preflight"
+        );
+        assert_eq!(fs::read(indexes_out).expect("read index"), b"preserve");
+    }
+    #[cfg(unix)]
+    #[test]
+    fn bundle_preflights_all_outputs_before_writing_car() {
+        let (_tmp, tmp_path) = canonical_tempdir();
+        let payload = tmp_path.join("segment.bin");
+        fs::write(&payload, b"taikai-payload").expect("write payload");
+        let car_out = tmp_path.join("segment.car");
+        let envelope_target = tmp_path.join("target.to");
+        fs::write(&envelope_target, b"unchanged").expect("write envelope target");
+        let envelope_out = tmp_path.join("segment.to");
+        std::os::unix::fs::symlink(&envelope_target, &envelope_out).expect("create symlink");
+        let request = minimal_bundle_request(&payload, &car_out, &envelope_out);
+
+        let err = bundle_segment(&request).expect_err("reject invalid envelope output");
+        assert!(
+            err.to_string().contains("must not be a symlink"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            !car_out.exists(),
+            "preflight must run before writing the CAR"
+        );
+        assert_eq!(
+            fs::read(&envelope_target).expect("read target"),
+            b"unchanged"
+        );
+    }
+    #[test]
+    fn rehydrate_rejects_metadata_output_that_aliases_car_input() {
+        let (_tmp, tmp_path) = canonical_tempdir();
+        let payload = b"taikai-rehydrate-payload";
+        let ingest = ingest_single_file(payload).expect("plan payload");
+        let mut car_bytes = Vec::new();
+        CarWriter::new(&ingest.plan, payload)
+            .expect("create writer")
+            .write_to(&mut car_bytes)
+            .expect("write CAR");
+        let car_in = tmp_path.join("segment.car");
+        let car_out = tmp_path.join("copy.car");
+        fs::write(&car_in, &car_bytes).expect("write CAR input");
+        let request = minimal_rehydrate_request(&car_in, &car_out, &car_in);
+
+        let err = rehydrate_from_car(&request).expect_err("protect CAR input");
+        assert!(
+            err.to_string().contains("must use distinct paths"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(fs::read(&car_in).expect("read CAR input"), car_bytes);
+        assert!(
+            !car_out.exists(),
+            "collision must fail before copying the CAR"
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn rehydrate_treats_hard_link_car_output_as_in_place() {
+        let (_tmp, tmp_path) = canonical_tempdir();
+        let payload = b"taikai-hard-link-car-payload";
+        let ingest = ingest_single_file(payload).expect("plan payload");
+        let mut car_bytes = Vec::new();
+        CarWriter::new(&ingest.plan, payload)
+            .expect("create writer")
+            .write_to(&mut car_bytes)
+            .expect("write CAR");
+        let car_in = tmp_path.join("segment.car");
+        let car_out = tmp_path.join("segment-alias.car");
+        let envelope_out = tmp_path.join("segment.to");
+        fs::write(&car_in, &car_bytes).expect("write CAR input");
+        fs::hard_link(&car_in, &car_out).expect("create hard link");
+        let mut permissions = fs::metadata(&car_in).expect("CAR metadata").permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&car_in, permissions).expect("make CAR read-only");
+        let request = minimal_rehydrate_request(&car_in, &car_out, &envelope_out);
+
+        rehydrate_from_car(&request).expect("rehydrate without rewriting hard-linked CAR");
+
+        assert_eq!(fs::read(&car_in).expect("read CAR input"), car_bytes);
+        assert_eq!(
+            fs::read(&car_out).expect("read CAR output alias"),
+            car_bytes
+        );
+        assert!(envelope_out.is_file());
+    }
+    #[test]
     fn write_output_bytes_creates_parent_and_writes_all_bytes() {
         let (_tmp, tmp_path) = canonical_tempdir();
         let output_path = tmp_path.join("nested").join("segment.to");
@@ -744,6 +1774,22 @@ mod tests {
             "unexpected error: {message}"
         );
         assert_eq!(fs::read(&target_path).expect("read target"), b"unchanged\n");
+    }
+    #[cfg(unix)]
+    #[test]
+    fn write_output_bytes_rejects_socket_output() {
+        let (_tmp, tmp_path) = canonical_tempdir();
+        let output_path = tmp_path.join("segment.sock");
+        let _listener =
+            std::os::unix::net::UnixListener::bind(&output_path).expect("bind Unix socket");
+
+        let err = write_output_bytes(&output_path, "test output", b"replace")
+            .expect_err("reject socket output");
+
+        assert!(
+            err.to_string().contains("must be a regular file"),
+            "unexpected error: {err}"
+        );
     }
     #[cfg(unix)]
     #[test]

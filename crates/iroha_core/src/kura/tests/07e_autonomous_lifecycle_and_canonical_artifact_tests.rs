@@ -504,7 +504,7 @@ fn autonomous_entrypoint_claim_rejects_replay_after_restart_and_recovers_temp() 
         "recovered claim must reject a delayed conflicting lane payload"
     );
     let orphan_entrypoint_hash = Hash::new(b"orphan-startup-entrypoint-claim");
-    let orphan_claim = AutonomousLaneEntrypointClaimV3::new(&later_height, orphan_entrypoint_hash);
+    let orphan_claim = AutonomousLaneEntrypointClaimV1::new(&later_height, orphan_entrypoint_hash);
     let orphan_path = Kura::autonomous_lane_entrypoint_claim_path(
         temp_dir.path(),
         &network_id,

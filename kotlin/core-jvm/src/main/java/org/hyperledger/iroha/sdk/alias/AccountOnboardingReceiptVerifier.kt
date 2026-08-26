@@ -22,43 +22,67 @@ object AccountOnboardingReceiptVerifier {
     fun canonicalHash(body: AccountOnboardingPlanBodyV1): ByteArray =
         IrohaHash.prehash(HASH_DOMAIN + AliasNoritoCodec.encodeOnboardingPlanBody(body))
 
-    /** Verifies the receipt against the exact local network and optional onboarding authority. */
+    /** Verifies the receipt against the exact local network and onboarding authority. */
     @JvmStatic
     fun verify(
         receipt: AccountOnboardingPlanReceiptV1,
         expectedNetworkId: NetworkId,
-        expectedAuthority: String?,
+        expectedAuthority: String,
     ): Boolean {
         if (receipt.body.networkId != expectedNetworkId) return false
-        if (expectedAuthority != null) {
-            val canonicalExpected = try {
-                requireCanonicalI105Address(expectedAuthority, "expectedAuthority")
-            } catch (_: IllegalArgumentException) {
-                return false
-            }
-            if (receipt.body.authority != canonicalExpected) return false
+        val canonicalExpected = try {
+            requireCanonicalI105Address(expectedAuthority, "expectedAuthority")
+        } catch (_: IllegalArgumentException) {
+            return false
         }
+        if (!sameAccountIdentity(receipt.body.authority, canonicalExpected)) return false
         val carriedHash = AliasHashText.decode(receipt.planHash) ?: return false
         if (!MessageDigest.isEqual(carriedHash, canonicalHash(receipt.body))) return false
         val signature = decodeHex(receipt.signature) ?: return false
-        return try {
-            val address = AccountAddress.fromI105(receipt.body.authority, null)
+        return verifyAuthoritySignature(receipt.body.authority, carriedHash, signature)
+    }
+
+    /** Verifies an exact digest/message against the single-key authority encoded by an I105 account. */
+    @JvmStatic
+    fun verifyAuthoritySignature(authority: String, message: ByteArray, signatureHex: String): Boolean {
+        val signature = decodeHex(signatureHex) ?: return false
+        return verifyAuthoritySignature(authority, message, signature)
+    }
+
+    /** Compares universal account identities independently of the I105 display discriminant. */
+    @JvmStatic
+    fun sameAccountIdentity(left: String, right: String): Boolean = try {
+        val leftBytes = AccountAddress.fromI105(
+            requireCanonicalI105Address(left, "left"),
+            null,
+        ).canonicalBytes
+        val rightBytes = AccountAddress.fromI105(
+            requireCanonicalI105Address(right, "right"),
+            null,
+        ).canonicalBytes
+        MessageDigest.isEqual(leftBytes, rightBytes)
+    } catch (_: Exception) {
+        false
+    }
+
+    internal fun verifyAuthoritySignature(authority: String, message: ByteArray, signature: ByteArray): Boolean =
+        try {
+            val address = AccountAddress.fromI105(authority, null)
             val signatory = address.singleKeyPayloadIgnoringCurveSupport() ?: return false
             when (signatory.curveId) {
-                0x01 -> verifyEd25519(signatory.publicKey, carriedHash, signature)
-                else -> verifyNative(signatory.curveId, signatory.publicKey, carriedHash, signature)
+                0x01 -> verifyEd25519(signatory.publicKey, message, signature)
+                else -> verifyNative(signatory.curveId, signatory.publicKey, message, signature)
             }
         } catch (_: Exception) {
             false
         }
-    }
 
-    /** Requires a valid receipt for the exact local network and optional authority. */
+    /** Requires a valid receipt for the exact local network and authority. */
     @JvmStatic
     fun requireValid(
         receipt: AccountOnboardingPlanReceiptV1,
         expectedNetworkId: NetworkId,
-        expectedAuthority: String?,
+        expectedAuthority: String,
     ): AccountOnboardingPlanReceiptV1 {
         require(verify(receipt, expectedNetworkId, expectedAuthority)) {
             "account onboarding receipt network, hash, or authority signature is invalid"
@@ -72,7 +96,7 @@ object AccountOnboardingReceiptVerifier {
         request: AccountOnboardingPlanRequestV1,
         receipt: AccountOnboardingPlanReceiptV1,
         expectedNetworkId: NetworkId,
-        expectedAuthority: String?,
+        expectedAuthority: String,
     ): AccountOnboardingPlanReceiptV1 {
         require(receipt.body.request == request) {
             "account onboarding receipt does not match the exact normalized request"

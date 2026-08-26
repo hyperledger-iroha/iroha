@@ -46,6 +46,7 @@ import {
   buildRecordKaigiUsageInstruction,
   buildSetKaigiRelayManifestInstruction,
   buildRegisterKaigiRelayInstruction,
+  buildReportKaigiRelayHealthInstruction,
   buildRegisterSmartContractCodeInstruction,
   buildRegisterSmartContractBytesInstruction,
   buildRemoveSmartContractBytesInstruction,
@@ -98,6 +99,27 @@ const RETIRED_TRANSACTION_DOMAIN_FIELDS = Object.freeze([
   "chainId",
   "chain_id",
 ]);
+
+const RETIRED_TRANSACTION_FINALITY_FIELDS = Object.freeze([
+  "allowShortHash",
+  "endpoints",
+  "failureStatuses",
+  "scope",
+  "statusEndpoints",
+  "successStatuses",
+  "terminalStatuses",
+  "transactionStatusScope",
+]);
+
+function rejectRetiredTransactionFinalityFields(options, context) {
+  for (const field of RETIRED_TRANSACTION_FINALITY_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(options, field)) {
+      throw new TypeError(
+        `${context}.${field} is unsupported; transaction finality is fixed to global state-resolved Applied`,
+      );
+    }
+  }
+}
 
 function transactionNetworkIdBytes(input, context) {
   if (input === null || typeof input !== "object" || Array.isArray(input)) {
@@ -2179,11 +2201,7 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
   }
   const record = normalizePlainObject(input, "input");
   const opts = normalizePlainObject(options, "options");
-  if (Object.prototype.hasOwnProperty.call(opts, "transactionStatusScope")) {
-    throw new TypeError(
-      "options.transactionStatusScope is unsupported; finality waits always use global scope",
-    );
-  }
+  rejectRetiredTransactionFinalityFields(opts, "options");
   const { signal } = ToriiClient._normalizeOptionsWithSignal(
     opts.signal === undefined ? {} : { signal: opts.signal },
     "submitIvmProvedContractCall",
@@ -4174,6 +4192,38 @@ export function buildRegisterKaigiRelayTransaction(input) {
 }
 
 /**
+ * Build a transaction containing a `Kaigi::ReportKaigiRelayHealth` instruction.
+ */
+export function buildReportKaigiRelayHealthTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    report,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm = null,
+  } = input;
+  const instruction = buildReportKaigiRelayHealthInstruction(report);
+  return buildTransaction({
+    networkId,
+    authority,
+    feePayment,
+    instructions: [instruction],
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+    privateKeyAlgorithm,
+  });
+}
+
+/**
  * Build a transaction containing a `ProposeDeployContract` instruction.
  */
 export function buildProposeDeployContractTransaction(input) {
@@ -4639,17 +4689,13 @@ export async function submitSignedTransaction(
   if (!(client instanceof ToriiClient)) {
     throw new TypeError("client must be an instance of ToriiClient");
   }
+  rejectRetiredTransactionFinalityFields(options, "options");
   for (const field of RETIRED_TRANSACTION_DOMAIN_FIELDS) {
     if (Object.prototype.hasOwnProperty.call(options, field)) {
       throw new TypeError(
         `options.${field} is unsupported; provide networkId when re-signing`,
       );
     }
-  }
-  if (Object.prototype.hasOwnProperty.call(options, "scope")) {
-    throw new TypeError(
-      "options.scope is unsupported; finality waits always use global scope",
-    );
   }
   let txBuffer = toBuffer(signedTransaction);
   if (Object.prototype.hasOwnProperty.call(options, "privateKey")) {

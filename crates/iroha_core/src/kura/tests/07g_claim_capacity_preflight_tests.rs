@@ -18,7 +18,7 @@ fn autonomous_claim_initial_staging_preflights_the_whole_named_temp_set() {
         .iter()
         .map(|entrypoint_hash| {
             u64::try_from(
-                norito::encode_canonical(&AutonomousLaneEntrypointClaimV3::new(
+                norito::encode_canonical(&AutonomousLaneEntrypointClaimV1::new(
                     &payload,
                     *entrypoint_hash,
                 ))
@@ -163,7 +163,7 @@ fn autonomous_claim_release_cas_preflights_promotions_removals_and_atomic_peak()
         } else {
             current_delta -= i128::from(named_temp_len);
         }
-        let replacement = AutonomousLaneEntrypointClaimV3::release_pending_for_payload(
+        let replacement = AutonomousLaneEntrypointClaimV1::release_pending_for_payload(
             &payload,
             *entrypoint_hash,
             retirement_hash,

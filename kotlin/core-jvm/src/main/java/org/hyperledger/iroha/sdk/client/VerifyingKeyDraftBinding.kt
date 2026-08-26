@@ -20,8 +20,8 @@ import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 internal enum class VerifyingKeyDraftOperation(
     val wireName: String,
 ) {
-    REGISTER("iroha_data_model::isi::verifying_keys::RegisterVerifyingKey"),
-    UPDATE("iroha_data_model::isi::verifying_keys::UpdateVerifyingKey"),
+    REGISTER("iroha.instruction.v1::verifying_keys::RegisterVerifyingKey"),
+    UPDATE("iroha.instruction.v1::verifying_keys::UpdateVerifyingKey"),
 }
 
 /**

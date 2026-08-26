@@ -707,7 +707,10 @@ internal sealed class ToriiIdentifierResolveResponseJsonConverter : JsonConverte
             PolicyId = RequirePolicyId(payload, "policy_id", "identifier receipt.payload.policy_id"),
             OpaqueId = RequireExactString(payload, "opaque_id", "identifier receipt.payload.opaque_id"),
             ReceiptHash = RequireExactString(payload, "receipt_hash", "identifier receipt.payload.receipt_hash"),
-            Uaid = RequireExactString(payload, "uaid", "identifier receipt.payload.uaid"),
+            Uaid = RequireCanonicalUaidLiteral(
+                payload,
+                "uaid",
+                "identifier receipt.payload.uaid"),
             AccountId = RequireExactString(payload, "account_id", "identifier receipt.payload.account_id"),
             ResolvedAtMilliseconds = RequirePositiveInt64(
                 execution,
@@ -907,6 +910,24 @@ internal sealed class ToriiIdentifierResolveResponseJsonConverter : JsonConverte
         }
 
         throw new JsonException($"{field} must be a string.");
+    }
+
+    private static string RequireCanonicalUaidLiteral(
+        JsonObject payload,
+        string propertyName,
+        string field)
+    {
+        var text = RequireExactString(payload, propertyName, field);
+        try
+        {
+            return ToriiUaidDirectMetadata.RequireCanonicalUaidLiteral(text, field);
+        }
+        catch (ArgumentException exception)
+        {
+            throw new JsonException(
+                $"{field} must be a canonical `uaid:<64 lowercase hex chars>` literal.",
+                exception);
+        }
     }
 
     private static void ValidateOptionalExactString(JsonObject payload, string propertyName, string field)

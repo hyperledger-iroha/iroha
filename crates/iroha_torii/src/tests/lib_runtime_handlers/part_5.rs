@@ -88,6 +88,28 @@ fn pipeline_status_cache_prune_load_profile() {
 #[test]
 fn parse_signed_transaction_hash_rejects_invalid() {
     assert!(parse_signed_transaction_hash("not-a-hash").is_err());
+    let canonical = HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::new(
+        b"pipeline-status-exact-hash",
+    ))
+    .to_string();
+    assert!(parse_signed_transaction_hash(&canonical).is_ok());
+    for retired in [
+        canonical.to_ascii_uppercase(),
+        format!(" {canonical}"),
+        format!("{canonical} "),
+        format!("{}0", &canonical[..63]),
+    ] {
+        assert!(
+            parse_signed_transaction_hash(&retired).is_err(),
+            "noncanonical hash spelling must fail: {retired:?}"
+        );
+    }
+
+    let unknown_query = format!(r#"{{"hash":"{canonical}","legacy_scope":"auto"}}"#);
+    assert!(
+        norito::json::from_str::<PipelineStatusQuery>(&unknown_query).is_err(),
+        "pipeline status query must reject unknown compatibility fields"
+    );
 }
 #[tokio::test]
 async fn pipeline_status_string_query_preserves_decimal_hash_and_whitespace() {

@@ -18,13 +18,13 @@ import { createBlockProofVerification } from "./blockProofVerification.js";
 import { crc64Xz } from "./crc64Xz.js";
 import {
   AccountAddress,
-  canonicalizeDomainLabel,
   curveIdFromAlgorithm,
   curveIdToAlgorithm,
   ensureCurveIdEnabled,
   normalizeBytes,
   validatePublicKeyForCurve,
 } from "./address.js";
+import { canonicalizeDomainIdLabel } from "./domainId.js";
 import {
   getCurveEntryByPublicKeyMulticodec,
   publicKeyMulticodecForCurveId,
@@ -286,6 +286,17 @@ const END_KAIGI_WIRE_ID = "iroha_data_model::isi::kaigi::EndKaigi";
 const RECORD_KAIGI_USAGE_WIRE_ID = "iroha_data_model::isi::kaigi::RecordKaigiUsage";
 const SET_KAIGI_RELAY_MANIFEST_WIRE_ID = "iroha_data_model::isi::kaigi::SetKaigiRelayManifest";
 const REGISTER_KAIGI_RELAY_WIRE_ID = "iroha_data_model::isi::kaigi::RegisterKaigiRelay";
+const REPORT_KAIGI_RELAY_HEALTH_WIRE_ID = "iroha_data_model::isi::kaigi::ReportKaigiRelayHealth";
+const KAIGI_WIRE_IDS = new Set([
+  CREATE_KAIGI_WIRE_ID,
+  JOIN_KAIGI_WIRE_ID,
+  LEAVE_KAIGI_WIRE_ID,
+  END_KAIGI_WIRE_ID,
+  RECORD_KAIGI_USAGE_WIRE_ID,
+  SET_KAIGI_RELAY_MANIFEST_WIRE_ID,
+  REGISTER_KAIGI_RELAY_WIRE_ID,
+  REPORT_KAIGI_RELAY_HEALTH_WIRE_ID,
+]);
 const PROPOSE_DEPLOY_CONTRACT_WIRE_ID = "iroha_data_model::isi::governance::ProposeDeployContract";
 const CAST_ZK_BALLOT_WIRE_ID = "iroha_data_model::isi::governance::CastZkBallot";
 const CAST_PLAIN_BALLOT_WIRE_ID = "iroha_data_model::isi::governance::CastPlainBallot";
@@ -321,6 +332,7 @@ const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({
   [RECORD_KAIGI_USAGE_WIRE_ID]: RECORD_KAIGI_USAGE_WIRE_ID,
   [SET_KAIGI_RELAY_MANIFEST_WIRE_ID]: SET_KAIGI_RELAY_MANIFEST_WIRE_ID,
   [REGISTER_KAIGI_RELAY_WIRE_ID]: REGISTER_KAIGI_RELAY_WIRE_ID,
+  [REPORT_KAIGI_RELAY_HEALTH_WIRE_ID]: REPORT_KAIGI_RELAY_HEALTH_WIRE_ID,
   [PROPOSE_DEPLOY_CONTRACT_WIRE_ID]: PROPOSE_DEPLOY_CONTRACT_WIRE_ID,
   [CAST_ZK_BALLOT_WIRE_ID]: CAST_ZK_BALLOT_WIRE_ID,
   [CAST_PLAIN_BALLOT_WIRE_ID]: CAST_PLAIN_BALLOT_WIRE_ID,
@@ -558,6 +570,11 @@ function encodeNormalizedInstruction(normalized) {
   rejectRetiredGenericZkInstruction(normalized);
   validateGovernanceInstructionBoundary(normalized);
   let encoded;
+  if (kaigiInstructionNeedsLosslessPureCodec(normalized)) {
+    encoded = encodePureJsInstruction(normalized);
+    cacheInstructionRoundTrip(encoded, normalized);
+    return encoded;
+  }
   try {
     const native = resolveNative("noritoEncodeInstruction");
     encoded = native.noritoEncodeInstruction(JSON.stringify(normalized));
@@ -576,6 +593,47 @@ function encodeNormalizedInstruction(normalized) {
   }
   cacheInstructionRoundTrip(encoded, normalized);
   return encoded;
+}
+
+function kaigiU64NeedsLosslessPureCodec(value) {
+  return typeof value === JS_TYPE_BIGINT || typeof value === JS_TYPE_STRING;
+}
+
+function kaigiManifestNeedsLosslessPureCodec(manifest) {
+  return isPlainObject(manifest) && kaigiU64NeedsLosslessPureCodec(manifest.expiry_ms);
+}
+
+function kaigiInstructionNeedsLosslessPureCodec(instruction) {
+  if (!isPlainObject(instruction) || !isPlainObject(instruction.Kaigi)) {
+    return false;
+  }
+  const kaigi = instruction.Kaigi;
+  if (isPlainObject(kaigi.CreateKaigi)) {
+    const call = kaigi.CreateKaigi.call;
+    return isPlainObject(call) && (
+      kaigiU64NeedsLosslessPureCodec(call.gas_rate_per_minute) ||
+      kaigiU64NeedsLosslessPureCodec(call.scheduled_start_ms) ||
+      kaigiManifestNeedsLosslessPureCodec(call.relay_manifest)
+    );
+  }
+  if (isPlainObject(kaigi.EndKaigi)) {
+    return kaigiU64NeedsLosslessPureCodec(kaigi.EndKaigi.ended_at_ms);
+  }
+  if (isPlainObject(kaigi.RecordKaigiUsage)) {
+    return kaigiU64NeedsLosslessPureCodec(kaigi.RecordKaigiUsage.duration_ms) ||
+      kaigiU64NeedsLosslessPureCodec(kaigi.RecordKaigiUsage.billed_gas);
+  }
+  if (isPlainObject(kaigi.SetKaigiRelayManifest)) {
+    return kaigiManifestNeedsLosslessPureCodec(
+      kaigi.SetKaigiRelayManifest.relay_manifest,
+    );
+  }
+  if (isPlainObject(kaigi.ReportKaigiRelayHealth)) {
+    return kaigiU64NeedsLosslessPureCodec(
+      kaigi.ReportKaigiRelayHealth.reported_at_ms,
+    );
+  }
+  return false;
 }
 
 function isPureJsUnsupportedInstructionError(error) {
@@ -1454,6 +1512,16 @@ export function noritoDecodeInstructionBoxArchive(bytes) {
  */
 export function noritoDecodeInstruction(bytes, options = {}) {
   const buffer = toBuffer(bytes);
+  try {
+    const { wireId } = decodeInstructionEnvelope(buffer);
+    if (KAIGI_WIRE_IDS.has(wireId)) {
+      const decoded = decodePureJsInstruction(buffer);
+      validateDecodedInstructionProofAttachments(decoded);
+      return options.parseJson === false ? JSON.stringify(decoded) : decoded;
+    }
+  } catch {
+    // Let the native decoder below report malformed or non-instruction frames.
+  }
   let json;
   try {
     const native = resolveNative("noritoDecodeInstruction");
@@ -2908,6 +2976,7 @@ function decodePureJsInstructionPayload(wireId, payload, innerFlags, framedInstr
     case RECORD_KAIGI_USAGE_WIRE_ID:
     case SET_KAIGI_RELAY_MANIFEST_WIRE_ID:
     case REGISTER_KAIGI_RELAY_WIRE_ID:
+    case REPORT_KAIGI_RELAY_HEALTH_WIRE_ID:
       return decodeKaigiInstructionPayload(wireId, payload);
     case REGISTER_ZK_ASSET_WIRE_ID:
     case SCHEDULE_CONFIDENTIAL_POLICY_TRANSITION_WIRE_ID:
@@ -4121,6 +4190,42 @@ function decodeKaigiInstructionPayload(wireId, payload) {
         },
       };
     }
+    case REPORT_KAIGI_RELAY_HEALTH_WIRE_ID: {
+      const fields = decodeStructFields(payload, "Kaigi.ReportKaigiRelayHealth", [
+        "call_id",
+        "relay_id",
+        "status",
+        "reported_at_ms",
+        "notes",
+      ]);
+      return {
+        Kaigi: {
+          ReportKaigiRelayHealth: {
+            call_id: decodeKaigiIdValue(
+              fields.call_id,
+              "Kaigi.ReportKaigiRelayHealth.call_id",
+            ),
+            relay_id: decodeAccountIdValue(
+              fields.relay_id,
+              "Kaigi.ReportKaigiRelayHealth.relay_id",
+            ),
+            status: decodeKaigiRelayHealthStatusValue(
+              fields.status,
+              "Kaigi.ReportKaigiRelayHealth.status",
+            ),
+            reported_at_ms: decodeU64NumberValue(
+              fields.reported_at_ms,
+              "Kaigi.ReportKaigiRelayHealth.reported_at_ms",
+            ),
+            notes: decodeOptionValue(
+              fields.notes,
+              decodeKaigiRelayHealthNotesValue,
+              "Kaigi.ReportKaigiRelayHealth.notes",
+            ),
+          },
+        },
+      };
+    }
     default:
       throw new Error(`unsupported Kaigi wire id ${wireId}`);
   }
@@ -4597,7 +4702,7 @@ function encodeU64NumberValue(value, context) {
 
 function decodeU64NumberValue(payload, context) {
   const value = BigInt(decodeU64Value(payload, context));
-  return bigintToSafeNumber(value, context);
+  return value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : value.toString(10);
 }
 
 function encodeU128Value(value, context) {
@@ -4660,7 +4765,7 @@ function encodeDomainIdValue(value, context) {
     throw new TypeError(`${context} must use the exact domain.dataspace form`);
   }
   const [name, dataspace] = segments.map((segment) =>
-    canonicalizeDomainLabel(segment),
+    canonicalizeDomainIdLabel(segment, `${context} label`),
   );
   return encodeStructValue([
     [encodeNameValue(name, `${context}.name`)],
@@ -6149,6 +6254,12 @@ function encodeKaigiInstruction(instruction) {
       encodeRegisterKaigiRelayPayload(instruction.RegisterKaigiRelay),
     );
   }
+  if (isPlainObject(instruction.ReportKaigiRelayHealth)) {
+    return encodeInstructionEnvelope(
+      REPORT_KAIGI_RELAY_HEALTH_WIRE_ID,
+      encodeReportKaigiRelayHealthPayload(instruction.ReportKaigiRelayHealth),
+    );
+  }
   throw new Error(
     `Internal Norito canonicalization does not support Kaigi instruction ${describeInstructionShape(instruction)}`,
   );
@@ -6206,6 +6317,32 @@ function encodeSetKaigiRelayManifestPayload(value) {
 function encodeRegisterKaigiRelayPayload(value) {
   return encodeStructValue([
     [encodeKaigiRelayRegistrationValue(value.relay, "Kaigi.RegisterKaigiRelay.relay")],
+  ]);
+}
+
+function encodeReportKaigiRelayHealthPayload(value) {
+  return encodeStructValue([
+    [encodeKaigiIdValue(value.call_id, "Kaigi.ReportKaigiRelayHealth.call_id")],
+    [encodeAccountIdValue(value.relay_id, "Kaigi.ReportKaigiRelayHealth.relay_id")],
+    [
+      encodeKaigiRelayHealthStatusValue(
+        value.status,
+        "Kaigi.ReportKaigiRelayHealth.status",
+      ),
+    ],
+    [
+      encodeU64NumberValue(
+        value.reported_at_ms,
+        "Kaigi.ReportKaigiRelayHealth.reported_at_ms",
+      ),
+    ],
+    [
+      encodeOptionValue(
+        value.notes,
+        encodeKaigiRelayHealthNotesValue,
+        "Kaigi.ReportKaigiRelayHealth.notes",
+      ),
+    ],
   ]);
 }
 
@@ -6554,11 +6691,7 @@ function decodeKaigiRelayHopValue(payload, context) {
 function encodeKaigiRelayRegistrationValue(value, context) {
   return encodeStructValue([
     [encodeAccountIdValue(value.relay_id, `${context}.relay_id`)],
-    [
-      encodeNoritoField(
-        Buffer.from(normalizeFlexibleBytes(value.hpke_public_key, `${context}.hpke_public_key`)),
-      ),
-    ],
+    [encodeByteVecValue(value.hpke_public_key, `${context}.hpke_public_key`)],
     [encodeU8Value(value.bandwidth_class, `${context}.bandwidth_class`)],
   ]);
 }
@@ -6571,14 +6704,83 @@ function decodeKaigiRelayRegistrationValue(payload, context) {
   ]);
   return {
     relay_id: decodeAccountIdValue(fields.relay_id, `${context}.relay_id`),
-    hpke_public_key: (() => {
-      const reader = new BufferReader(fields.hpke_public_key, `${context}.hpke_public_key.outer`);
-      const bytes = readNoritoField(reader, "value");
-      reader.assertEof();
-      return Buffer.from(bytes).toString(BASE64_ENCODING);
-    })(),
+    hpke_public_key: decodeByteVecAsBase64(
+      fields.hpke_public_key,
+      `${context}.hpke_public_key`,
+    ),
     bandwidth_class: decodeU8Value(fields.bandwidth_class, `${context}.bandwidth_class`),
   };
+}
+
+function encodeKaigiRelayHealthStatusValue(value, context) {
+  const status = typeof value === JS_TYPE_STRING ? value : value?.status;
+  switch (status) {
+    case "Healthy":
+      return encodeEnumTagValue(0);
+    case "Degraded":
+      return encodeEnumTagValue(1);
+    case "Unavailable":
+      return encodeEnumTagValue(2);
+    default:
+      throw new TypeError(
+        `${context} must be Healthy, Degraded, or Unavailable`,
+      );
+  }
+}
+
+function decodeKaigiRelayHealthStatusValue(payload, context) {
+  const reader = new BufferReader(payload, context);
+  const tag = reader.readU32LE("tag");
+  reader.assertEof();
+  let status;
+  switch (tag) {
+    case 0:
+      status = "Healthy";
+      break;
+    case 1:
+      status = "Degraded";
+      break;
+    case 2:
+      status = "Unavailable";
+      break;
+    default:
+      throw new Error(`${context} uses unsupported relay health status ${tag}`);
+  }
+  return { status, state: null };
+}
+
+function validateKaigiRelayHealthNotesValue(value, context) {
+  if (typeof value !== JS_TYPE_STRING) {
+    throw new TypeError(`${context} must be a string`);
+  }
+  assertWellFormedUtf16(value, context);
+  let scalarCount = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      index += 1;
+    }
+    scalarCount += 1;
+    if (scalarCount > 512) {
+      throw new RangeError(
+        `${context} must not exceed 512 Unicode scalar values`,
+      );
+    }
+  }
+  return value;
+}
+
+function encodeKaigiRelayHealthNotesValue(value, context) {
+  return encodeNoritoStringValue(
+    validateKaigiRelayHealthNotesValue(value, context),
+  );
+}
+
+function decodeKaigiRelayHealthNotesValue(payload, context) {
+  return validateKaigiRelayHealthNotesValue(
+    decodeStringValue(payload, context),
+    context,
+  );
 }
 
 function encodeRegisterRwaPayload(value) {

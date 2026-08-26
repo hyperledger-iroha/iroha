@@ -218,11 +218,11 @@ async fn invalid_account_segments_increment_metric() {
     );
 }
 #[tokio::test]
-async fn local8_segments_increment_invalid_metric() {
+async fn malformed_segments_increment_invalid_metric() {
     let (app, metrics) = test_router_with_metrics();
     let literal = "sn1short";
     let reason = AccountId::parse_encoded(literal)
-        .expect_err("short Local-8 literal must fail to parse")
+        .expect_err("malformed literal must fail to parse")
         .reason();
     let before_invalid = metrics
         .torii_address_invalid_total
@@ -246,7 +246,7 @@ async fn local8_segments_increment_invalid_metric() {
     assert_eq!(
         after_invalid,
         before_invalid + 1,
-        "torii_address_invalid_total delta mismatch for Local-8"
+        "torii_address_invalid_total delta mismatch for malformed input"
     );
 }
 #[tokio::test]
@@ -982,7 +982,7 @@ async fn repo_agreements_query_filter_rejects_invalid_literal() {
     );
 }
 #[tokio::test]
-async fn repo_agreements_query_filter_rejects_local8_literal() {
+async fn repo_agreements_query_filter_rejects_malformed_literal() {
     let (app, metrics) = test_router_with_metrics();
     let literal = "sn1short";
     let reason = AccountId::parse_encoded(literal)
@@ -1086,7 +1086,7 @@ async fn kaigi_relay_detail_invalid_segment_increments_metric() {
     assert_eq!(counter.get(), before + 1);
 }
 #[tokio::test]
-async fn kaigi_relay_detail_local8_segment_increments_invalid_metric() {
+async fn kaigi_relay_detail_malformed_segment_increments_invalid_metric() {
     let (app, metrics, operator_key_pair) = build_test_router();
     let literal = "sn1short";
     let reason = AccountId::parse_encoded(literal)
@@ -1243,7 +1243,7 @@ async fn nexus_public_lane_stake_invalid_literal_increments_metric() {
     assert_eq!(counter.get(), before + 1);
 }
 #[tokio::test]
-async fn nexus_public_lane_stake_local8_literal_increments_invalid_metric() {
+async fn nexus_public_lane_stake_malformed_literal_increments_invalid_metric() {
     let (app, metrics) = test_router_with_metrics();
     let literal = "sn1short";
     let encoded = encode_query_value(literal);

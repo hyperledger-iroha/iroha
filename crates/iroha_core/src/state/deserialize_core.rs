@@ -417,21 +417,6 @@ impl KuraSeed {
             take_required(&mut map, "nexus_runtime")?;
         let chain_id: ChainId = take_required(&mut map, "chain_id")?;
         let network_id: NetworkId = take_required(&mut map, "network_id")?;
-        let world_view = world.view();
-        for (_receipt_id, receipt) in world_view
-            .soracloud_private_uploaded_model_execution_receipts()
-            .iter()
-        {
-            if receipt.network_id != network_id {
-                return Err(json::Error::InvalidField {
-                    field: "state.world.soracloud_private_uploaded_model_execution_receipts"
-                        .to_owned(),
-                    message: "private receipt network_id must match the snapshot network_id"
-                        .to_owned(),
-                });
-            }
-        }
-        drop(world_view);
         let block_hashes: Vec<HashOf<BlockHeader>> = take_required(&mut map, "block_hashes")?;
         let committed_height =
             u64::try_from(block_hashes.len()).map_err(|_| json::Error::InvalidField {
@@ -439,7 +424,6 @@ impl KuraSeed {
                 message: "committed height does not fit u64".to_owned(),
             })?;
         validate_replication_order_completion_anchors(&world, &block_hashes)?;
-        validate_private_uploaded_model_execution_height_anchors(&world, committed_height)?;
         validate_musubi_resolver_checkpoint_anchors(&world, &block_hashes)?;
         world
             .privacy_consensus_policy
@@ -1296,51 +1280,6 @@ fn validate_replication_order_completion_anchors(
                     ),
                 });
             }
-        }
-    }
-    Ok(())
-}
-fn validate_private_uploaded_model_execution_height_anchors(
-    world: &World,
-    committed_height: u64,
-) -> Result<(), json::Error> {
-    for ((service_name, request_id), claim) in world
-        .soracloud_private_uploaded_model_execution_claims
-        .view()
-        .iter()
-    {
-        if claim.claimed_block_height > committed_height {
-            return Err(json::Error::InvalidField {
-                field: "state.world.soracloud_private_uploaded_model_execution_claims".to_owned(),
-                message: format!(
-                    "private execution claim {service_name}/{request_id} anchors future block height {} beyond snapshot committed height {committed_height}",
-                    claim.claimed_block_height,
-                ),
-            });
-        }
-    }
-    for (receipt_id, receipt) in world
-        .soracloud_private_uploaded_model_execution_receipts
-        .view()
-        .iter()
-    {
-        if receipt.authorization_claim_block_height > committed_height {
-            return Err(json::Error::InvalidField {
-                field: "state.world.soracloud_private_uploaded_model_execution_receipts".to_owned(),
-                message: format!(
-                    "private execution receipt {receipt_id} anchors future authorization-claim block height {} beyond snapshot committed height {committed_height}",
-                    receipt.authorization_claim_block_height,
-                ),
-            });
-        }
-        if receipt.emitted_block_height > committed_height {
-            return Err(json::Error::InvalidField {
-                field: "state.world.soracloud_private_uploaded_model_execution_receipts".to_owned(),
-                message: format!(
-                    "private execution receipt {receipt_id} anchors future emission block height {} beyond snapshot committed height {committed_height}",
-                    receipt.emitted_block_height,
-                ),
-            });
         }
     }
     Ok(())

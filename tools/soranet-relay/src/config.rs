@@ -9,11 +9,9 @@ use crate::{
 use ed25519_dalek::VerifyingKey;
 use hex::FromHexError;
 use iroha_crypto::{
-    Algorithm, PublicKey,
+    Algorithm, PrivateKey, PublicKey,
     soranet::{
-        certificate::{
-            CertificateValidationPhase, RelayCertificateBundleV2, SRC_V2_MAX_BUNDLE_BYTES,
-        },
+        certificate::{RelayCertificateBundleV2, SRC_V2_MAX_BUNDLE_BYTES},
         handshake::{HandshakeSuite, update_suite_list},
         pow, puzzle,
         replay::REPLAY_LEDGER_MAX_ENTRIES_V1,
@@ -34,10 +32,11 @@ use norito::{
 };
 use soranet_pq::MlDsaSuite;
 use std::{
+    collections::BTreeSet,
     fmt,
     fs::{self, File, Metadata as FsMetadata, OpenOptions},
     io::{self, Read as _},
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     num::NonZeroU32,
     path::{Path, PathBuf},
     str::FromStr,
@@ -45,9 +44,8 @@ use std::{
     time::{Duration, SystemTime},
 };
 use thiserror::Error;
-const DEFAULT_SELF_SIGNED_SUBJECT: &str = "soranet-relay.local";
-const ML_KEM_768_PUBLIC_LEN: usize = 1_184;
-const ML_KEM_768_SECRET_LEN: usize = 2_400;
+use tokio_tungstenite::tungstenite::http::Uri;
+const ED25519_IDENTITY_SEED_LEN_V1: usize = 32;
 // First-release admission limits for operator-controlled relay artifacts. The
 // 1 MiB config corridor fits 8,192 inline 32-byte revocations (the existing
 // replay-store capacity) plus the rest of the config. Its 128 KiB field limit
@@ -60,17 +58,17 @@ pub(crate) const RELAY_CONFIG_JSON_MAX_SEQUENCE_ELEMENTS_V1: usize = 8_192;
 const RELAY_CONFIG_JSON_MAX_TOTAL_ELEMENTS_V1: usize = 32_768;
 const RELAY_CONFIG_JSON_MAX_ALLOCATED_BYTES_V1: usize = 8 * 1024 * 1024;
 const RELAY_CONFIG_JSON_MAX_DEPTH_V1: usize = 32;
-// RelayDescriptorManifestV1 carries 7,232 hex bytes of mandatory Ed25519 and
-// ML-KEM-768 secret material. A 64 KiB document, 8 KiB field, and depth 16
-// leave ample room for its versioned metadata while bounding the recursive
-// compatibility lookup below.
-const DESCRIPTOR_MANIFEST_JSON_MAX_BYTES_V1: usize = 64 * 1024;
+// RelayDescriptorManifestV1 carries one exact two-signing-key identity object.
+// Its largest field is the 4,032-byte ML-DSA-65 private key encoded as 8,064
+// hex characters; the complete mandatory key material occupies 8,128 hex
+// characters before member names and JSON punctuation.
+const DESCRIPTOR_MANIFEST_JSON_MAX_BYTES_V1: usize = 16 * 1024;
 const DESCRIPTOR_MANIFEST_JSON_MAX_FIELD_BYTES_V1: usize = 8 * 1024;
-const DESCRIPTOR_MANIFEST_JSON_MAX_TOTAL_STRING_BYTES_V1: usize = 48 * 1024;
-const DESCRIPTOR_MANIFEST_JSON_MAX_SEQUENCE_ELEMENTS_V1: usize = 1_024;
-const DESCRIPTOR_MANIFEST_JSON_MAX_TOTAL_ELEMENTS_V1: usize = 4_096;
-const DESCRIPTOR_MANIFEST_JSON_MAX_ALLOCATED_BYTES_V1: usize = 1024 * 1024;
-const DESCRIPTOR_MANIFEST_JSON_MAX_DEPTH_V1: usize = 16;
+const DESCRIPTOR_MANIFEST_JSON_MAX_TOTAL_STRING_BYTES_V1: usize = 12 * 1024;
+const DESCRIPTOR_MANIFEST_JSON_MAX_SEQUENCE_ELEMENTS_V1: usize = 8;
+const DESCRIPTOR_MANIFEST_JSON_MAX_TOTAL_ELEMENTS_V1: usize = 16;
+const DESCRIPTOR_MANIFEST_JSON_MAX_ALLOCATED_BYTES_V1: usize = 128 * 1024;
+const DESCRIPTOR_MANIFEST_JSON_MAX_DEPTH_V1: usize = 4;
 fn absolute_replay_state_path(path: &Path) -> io::Result<PathBuf> {
     if path.is_absolute() {
         return Ok(path.to_path_buf());
@@ -274,6 +272,37 @@ fn validate_private_file_permissions(metadata: &FsMetadata, artifact: &str) -> i
     Ok(())
 }
 #[cfg(unix)]
+fn validate_trusted_config_file_permissions(
+    metadata: &FsMetadata,
+    artifact: &str,
+) -> io::Result<()> {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+    let owner = metadata.uid();
+    let effective_uid = effective_uid()?;
+    if owner != effective_uid && owner != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "{artifact} must be owned by the effective user ({effective_uid}) or root, not UID {owner}"
+            ),
+        ));
+    }
+    if metadata.nlink() != 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("{artifact} must have exactly one hard link"),
+        ));
+    }
+    if metadata.permissions().mode() & 0o022 != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("{artifact} must not be group- or other-writable on Unix"),
+        ));
+    }
+    Ok(())
+}
+#[cfg(unix)]
 pub(crate) fn effective_uid() -> io::Result<u32> {
     use std::os::unix::fs::MetadataExt as _;
 
@@ -329,6 +358,54 @@ fn trusted_private_file_path(path: &Path, artifact: &str) -> io::Result<PathBuf>
                 io::ErrorKind::PermissionDenied,
                 format!(
                     "{artifact} parent {} must be owned by the effective user or root and must not be unsafely writable",
+                    ancestor.display()
+                ),
+            ));
+        }
+    }
+    Ok(canonical_parent.join(file_name))
+}
+#[cfg(unix)]
+fn trusted_config_file_path(path: &Path, artifact: &str) -> io::Result<PathBuf> {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+    if !path.is_absolute() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("{artifact} path must be absolute"),
+        ));
+    }
+    let file_name = path.file_name().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{artifact} path must name a file"),
+        )
+    })?;
+    let parent = path.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{artifact} path must have a parent directory"),
+        )
+    })?;
+    // Resolve the parent once and use only the resolved path for every later
+    // metadata check/open. This safely permits fixed system aliases such as
+    // macOS `/var -> /private/var` without reopening through that alias.
+    let canonical_parent = fs::canonicalize(parent)?;
+    let effective_uid = effective_uid()?;
+    for ancestor in canonical_parent.ancestors() {
+        let metadata = fs::symlink_metadata(ancestor)?;
+        if metadata.file_type().is_symlink()
+            || !metadata.is_dir()
+            || !trusted_private_ancestor(
+                metadata.uid(),
+                metadata.permissions().mode(),
+                effective_uid,
+            )
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "{artifact} parent {} must be a trusted direct directory without unsafe writes",
                     ancestor.display()
                 ),
             ));
@@ -475,6 +552,15 @@ fn trusted_private_file_path(_path: &Path, artifact: &str) -> io::Result<PathBuf
     ))
 }
 #[cfg(not(unix))]
+fn trusted_config_file_path(_path: &Path, artifact: &str) -> io::Result<PathBuf> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        format!(
+            "{artifact} cannot be loaded securely on this platform because Unix owner/mode custody checks are unavailable"
+        ),
+    ))
+}
+#[cfg(not(unix))]
 fn validate_private_file_permissions(_metadata: &FsMetadata, artifact: &str) -> io::Result<()> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
@@ -483,14 +569,36 @@ fn validate_private_file_permissions(_metadata: &FsMetadata, artifact: &str) -> 
         ),
     ))
 }
+#[cfg(not(unix))]
+fn validate_trusted_config_file_permissions(
+    _metadata: &FsMetadata,
+    artifact: &str,
+) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        format!(
+            "{artifact} cannot be loaded securely on this platform because Unix owner/mode custody checks are unavailable"
+        ),
+    ))
+}
+#[derive(Clone, Copy)]
+enum DirectRegularFilePolicy {
+    Ambient,
+    Private,
+    TrustedConfig,
+}
 fn validate_direct_regular_file_policy(
     metadata: &FsMetadata,
     artifact: &str,
-    require_private_permissions: bool,
+    policy: DirectRegularFilePolicy,
 ) -> io::Result<()> {
     validate_direct_regular_file(metadata, artifact)?;
-    if require_private_permissions {
-        validate_private_file_permissions(metadata, artifact)?;
+    match policy {
+        DirectRegularFilePolicy::Ambient => {}
+        DirectRegularFilePolicy::Private => validate_private_file_permissions(metadata, artifact)?,
+        DirectRegularFilePolicy::TrustedConfig => {
+            validate_trusted_config_file_permissions(metadata, artifact)?;
+        }
     }
     Ok(())
 }
@@ -521,7 +629,12 @@ pub fn read_bounded_direct_regular_file(
     maximum: usize,
     artifact: &str,
 ) -> io::Result<Vec<u8>> {
-    read_bounded_direct_regular_file_with_policy(path, maximum, artifact, false)
+    read_bounded_direct_regular_file_with_policy(
+        path,
+        maximum,
+        artifact,
+        DirectRegularFilePolicy::Ambient,
+    )
 }
 /// Read one immutable private-file snapshot with the same bounds and direct
 /// identity checks as [`read_bounded_direct_regular_file`].
@@ -534,24 +647,97 @@ pub fn read_bounded_private_regular_file(
     path: &Path,
     maximum: usize,
     artifact: &str,
+) -> io::Result<PrivateFileBytes> {
+    read_bounded_direct_regular_file_with_policy(
+        path,
+        maximum,
+        artifact,
+        DirectRegularFilePolicy::Private,
+    )
+    .map(PrivateFileBytes)
+}
+/// An owner for bytes read from a private file.
+///
+/// The type is deliberately non-cloneable and redacts debug output. Its drop
+/// path overwrites the entire allocation, including spare capacity.
+pub struct PrivateFileBytes(Vec<u8>);
+impl PrivateFileBytes {
+    /// Overwrite the owned allocation immediately while retaining the owner.
+    pub fn clear(&mut self) {
+        clear_sensitive_bytes(&mut self.0);
+        self.0.clear();
+    }
+}
+impl From<Vec<u8>> for PrivateFileBytes {
+    fn from(bytes: Vec<u8>) -> Self {
+        Self(bytes)
+    }
+}
+impl AsRef<[u8]> for PrivateFileBytes {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_slice()
+    }
+}
+impl std::ops::Deref for PrivateFileBytes {
+    type Target = [u8];
+    fn deref(&self) -> &Self::Target {
+        self.0.as_slice()
+    }
+}
+impl fmt::Debug for PrivateFileBytes {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("<redacted private file bytes>")
+    }
+}
+impl Drop for PrivateFileBytes {
+    fn drop(&mut self) {
+        self.clear();
+    }
+}
+/// Overwrite every byte in a sensitive vector's allocation.
+///
+/// The logical length is preserved, but spare capacity is initialized and
+/// cleared as well so previously truncated credentials cannot survive until
+/// the allocation is reused.
+pub fn clear_sensitive_bytes(bytes: &mut Vec<u8>) {
+    let initialized_len = bytes.len();
+    bytes.resize(bytes.capacity(), 0);
+    zeroize::Zeroize::zeroize(bytes.as_mut_slice());
+    bytes.truncate(initialized_len);
+}
+/// Read a trusted relay configuration snapshot.
+///
+/// The complete named parent chain must be direct and owned by root or the
+/// relay user without unsafe writes. The leaf must have the same trusted owner,
+/// exactly one link, and no group/other write bits. Read access may be broader
+/// because the configuration is not itself secret, but its pinned WSS origins
+/// are security authority.
+pub fn read_bounded_trusted_config_file(
+    path: &Path,
+    maximum: usize,
+    artifact: &str,
 ) -> io::Result<Vec<u8>> {
-    read_bounded_direct_regular_file_with_policy(path, maximum, artifact, true)
+    read_bounded_direct_regular_file_with_policy(
+        path,
+        maximum,
+        artifact,
+        DirectRegularFilePolicy::TrustedConfig,
+    )
 }
 fn read_bounded_direct_regular_file_with_policy(
     path: &Path,
     maximum: usize,
     artifact: &str,
-    require_private_permissions: bool,
+    policy: DirectRegularFilePolicy,
 ) -> io::Result<Vec<u8>> {
-    let trusted_path;
-    let path = if require_private_permissions {
-        trusted_path = trusted_private_file_path(path, artifact)?;
-        trusted_path.as_path()
-    } else {
-        path
+    let trusted_path = match policy {
+        DirectRegularFilePolicy::Ambient => None,
+        DirectRegularFilePolicy::Private => Some(trusted_private_file_path(path, artifact)?),
+        DirectRegularFilePolicy::TrustedConfig => Some(trusted_config_file_path(path, artifact)?),
     };
+    let path = trusted_path.as_deref().unwrap_or(path);
     let before = fs::symlink_metadata(path)?;
-    validate_direct_regular_file_policy(&before, artifact, require_private_permissions)?;
+    validate_direct_regular_file_policy(&before, artifact, policy)?;
     let maximum_u64 = u64::try_from(maximum).unwrap_or(u64::MAX);
     if before.len() > maximum_u64 {
         return Err(io::Error::new(
@@ -566,7 +752,7 @@ fn read_bounded_direct_regular_file_with_policy(
     replace_bounded_file_for_test(path)?;
     let mut file = open_direct_regular_file(path)?;
     let opened = file.metadata()?;
-    validate_direct_regular_file_policy(&opened, artifact, require_private_permissions)?;
+    validate_direct_regular_file_policy(&opened, artifact, policy)?;
     if !config_file_metadata_unchanged(&before, &opened) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -613,8 +799,8 @@ fn read_bounded_direct_regular_file_with_policy(
     }
     let after_file = file.metadata()?;
     let after_path = fs::symlink_metadata(path)?;
-    validate_direct_regular_file_policy(&after_file, artifact, require_private_permissions)?;
-    validate_direct_regular_file_policy(&after_path, artifact, require_private_permissions)?;
+    validate_direct_regular_file_policy(&after_file, artifact, policy)?;
+    validate_direct_regular_file_policy(&after_path, artifact, policy)?;
     if !config_file_metadata_unchanged(&opened, &after_file)
         || !config_file_metadata_unchanged(&opened, &after_path)
     {
@@ -628,8 +814,7 @@ fn read_bounded_direct_regular_file_with_policy(
 struct SensitiveReadBuffer(Vec<u8>);
 impl SensitiveReadBuffer {
     fn clear(&mut self) {
-        self.0.fill(0);
-        std::hint::black_box(self.0.as_mut_slice());
+        clear_sensitive_bytes(&mut self.0);
     }
     fn into_vec(mut self) -> Vec<u8> {
         std::mem::take(&mut self.0)
@@ -643,8 +828,7 @@ impl Drop for SensitiveReadBuffer {
 struct SensitiveReadProbe([u8; 1]);
 impl SensitiveReadProbe {
     fn clear(&mut self) {
-        self.0.fill(0);
-        std::hint::black_box(&mut self.0);
+        zeroize::Zeroize::zeroize(&mut self.0);
     }
 }
 impl Drop for SensitiveReadProbe {
@@ -704,6 +888,7 @@ const DEFAULT_VPN_METER_HASH_HEX: &str =
     "0000000000000000000000000000000000000000000000000000000000000000";
 /// Maximum byte length of one canonical first-release GAR category.
 pub(crate) const GAR_CATEGORY_MAX_BYTES_V1: usize = 64;
+const WSS_ENDPOINT_MAX_BYTES_V1: usize = 2_048;
 
 /// Return whether a GAR category is in the canonical first-release form.
 pub(crate) fn is_canonical_gar_category_v1(category: &str) -> bool {
@@ -731,6 +916,91 @@ pub(crate) fn validate_gar_category_v1(field: &str, category: &str) -> Result<()
     Err(ConfigError::Routing(format!(
         "{field} must be 1..={GAR_CATEGORY_MAX_BYTES_V1} bytes of canonical lowercase ASCII dot-separated segments"
     )))
+}
+
+fn is_canonical_wss_host_v1(host: &str) -> bool {
+    if host.is_empty() {
+        return false;
+    }
+    if let Some(ipv6) = host
+        .strip_prefix('[')
+        .and_then(|host| host.strip_suffix(']'))
+    {
+        return ipv6
+            .parse::<std::net::Ipv6Addr>()
+            .is_ok_and(|address| format!("[{address}]") == host);
+    }
+    if let Ok(address) = host.parse::<IpAddr>() {
+        return matches!(address, IpAddr::V4(_)) && address.to_string() == host;
+    }
+    if host.len() > 253
+        || host != host.to_ascii_lowercase()
+        || host.starts_with('.')
+        || host.ends_with('.')
+        || host
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || byte == b'.')
+    {
+        return false;
+    }
+    host.split('.').all(|label| {
+        !label.is_empty()
+            && label.len() <= 63
+            && label
+                .as_bytes()
+                .first()
+                .is_some_and(u8::is_ascii_alphanumeric)
+            && label
+                .as_bytes()
+                .last()
+                .is_some_and(u8::is_ascii_alphanumeric)
+            && label
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+    })
+}
+
+pub(crate) fn validate_wss_endpoint_v1(field: &str, endpoint: &str) -> Result<(), ConfigError> {
+    if endpoint.is_empty()
+        || endpoint.len() > WSS_ENDPOINT_MAX_BYTES_V1
+        || endpoint.trim() != endpoint
+        || !endpoint.is_ascii()
+        || !endpoint.starts_with("wss://")
+        || endpoint.contains(['#', '\\'])
+    {
+        return Err(ConfigError::Routing(format!(
+            "{field} must be an exact canonical wss:// URL of at most {WSS_ENDPOINT_MAX_BYTES_V1} ASCII bytes"
+        )));
+    }
+    let uri = Uri::from_str(endpoint).map_err(|error| {
+        ConfigError::Routing(format!("{field} is not a valid wss:// URL: {error}"))
+    })?;
+    if uri.scheme_str() != Some("wss") {
+        return Err(ConfigError::Routing(format!(
+            "{field} must use the wss scheme"
+        )));
+    }
+    if uri.query().is_some() {
+        return Err(ConfigError::Routing(format!(
+            "{field} must not contain a query because adapter URLs are operational metadata"
+        )));
+    }
+    let authority = uri.authority().ok_or_else(|| {
+        ConfigError::Routing(format!("{field} must contain a WebSocket authority"))
+    })?;
+    let port_is_canonical = authority
+        .port()
+        .is_none_or(|port| port.as_str() == port.as_u16().to_string());
+    if authority.as_str().contains(['@', '%'])
+        || authority.port_u16() == Some(0)
+        || !port_is_canonical
+        || !is_canonical_wss_host_v1(authority.host())
+    {
+        return Err(ConfigError::Routing(format!(
+            "{field} must contain a canonical host with no userinfo, escapes, or zero port"
+        )));
+    }
+    Ok(())
 }
 /// Operating mode for the relay.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -790,20 +1060,13 @@ impl json::JsonDeserialize for RelayMode {
 pub struct TlsConfig {
     /// Path to the PEM-encoded certificate chain served by the relay.
     ///
-    /// Omission enables a development-only self-signed leaf. VPN exits reject
-    /// that mode and require this path plus `private_key_path`.
+    /// Production runtime construction requires this path and `private_key_path`.
+    /// Tests may omit both and use the crate-private test transport constructor.
     pub certificate_path: Option<PathBuf>,
     /// Path to the PEM-encoded private key that matches `certificate_path`.
     pub private_key_path: Option<PathBuf>,
-    /// Subject used only by the development self-signed certificate path.
-    pub self_signed_subject: Option<String>,
 }
 impl TlsConfig {
-    pub fn subject_or_default(&self) -> &str {
-        self.self_signed_subject
-            .as_deref()
-            .unwrap_or(DEFAULT_SELF_SIGNED_SUBJECT)
-    }
     pub fn validate(&self) -> Result<(), ConfigError> {
         match (&self.certificate_path, &self.private_key_path) {
             (Some(_), Some(_)) | (None, None) => Ok(()),
@@ -1038,18 +1301,7 @@ impl ExitRoutingConfig {
     pub fn validate(&mut self) -> Result<(), ConfigError> {
         if let Some(route) = self.norito_stream.as_mut() {
             route.apply_defaults();
-            let trimmed = route.torii_ws_url.trim();
-            if trimmed.is_empty() {
-                return Err(ConfigError::Routing(
-                    "norito_stream.torii_ws_url must not be empty".to_string(),
-                ));
-            }
-            if !trimmed.starts_with("ws://") && !trimmed.starts_with("wss://") {
-                return Err(ConfigError::Routing(format!(
-                    "norito_stream.torii_ws_url must start with ws:// or wss:// (got `{trimmed}`)"
-                )));
-            }
-            route.torii_ws_url = trimmed.to_owned();
+            validate_wss_endpoint_v1("norito_stream.torii_ws_url", &route.torii_ws_url)?;
             if let Some(category) = route.gar_category_read_only.as_deref() {
                 validate_gar_category_v1("norito_stream.gar_category_read_only", category)?;
             }
@@ -1059,18 +1311,7 @@ impl ExitRoutingConfig {
         }
         if let Some(route) = self.kaigi_stream.as_mut() {
             route.apply_defaults();
-            let trimmed = route.hub_ws_url.trim();
-            if trimmed.is_empty() {
-                return Err(ConfigError::Routing(
-                    "kaigi_stream.hub_ws_url must not be empty".to_string(),
-                ));
-            }
-            if !trimmed.starts_with("ws://") && !trimmed.starts_with("wss://") {
-                return Err(ConfigError::Routing(format!(
-                    "kaigi_stream.hub_ws_url must start with ws:// or wss:// (got `{trimmed}`)"
-                )));
-            }
-            route.hub_ws_url = trimmed.to_owned();
+            validate_wss_endpoint_v1("kaigi_stream.hub_ws_url", &route.hub_ws_url)?;
             if let Some(category) = route.gar_category_public.as_deref() {
                 validate_gar_category_v1("kaigi_stream.gar_category_public", category)?;
             }
@@ -1084,7 +1325,7 @@ impl ExitRoutingConfig {
 /// Connection settings for the Norito streaming endpoint.
 #[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
 pub struct NoritoStreamRoutingConfig {
-    /// Torii WebSocket endpoint (ws:// or wss://) exposed to clients.
+    /// Exact TLS WebSocket endpoint (`wss://`) exposed by Torii.
     pub torii_ws_url: String,
     /// Connection timeout when opening a Norito route.
     #[norito(default = "default_norito_connect_timeout_millis")]
@@ -1121,7 +1362,7 @@ impl NoritoStreamRoutingConfig {
 /// Connection settings for the Kaigi streaming endpoint.
 #[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
 pub struct KaigiStreamRoutingConfig {
-    /// Hub WebSocket endpoint (ws:// or wss://) used for Kaigi streams.
+    /// Exact TLS WebSocket endpoint (`wss://`) used for Kaigi streams.
     pub hub_ws_url: String,
     /// Connection timeout when opening a Kaigi route.
     #[norito(default = "default_kaigi_connect_timeout_millis")]
@@ -1451,7 +1692,8 @@ impl VpnConfig {
     }
     pub(crate) fn parse_route_push(&self) -> Result<Vec<VpnRouteV1>, ConfigError> {
         let mut parsed = Vec::with_capacity(self.route_push.len());
-        for route in &self.route_push {
+        let mut seen = BTreeSet::new();
+        for (index, route) in self.route_push.iter().enumerate() {
             let trimmed = route.trim();
             if trimmed.is_empty() {
                 return Err(ConfigError::Vpn(
@@ -1480,6 +1722,34 @@ impl VpnConfig {
                     "vpn.route_push CIDR prefix `{prefix}` exceeds maximum {max_prefix} for `{addr}`"
                 )));
             }
+            let network = match addr {
+                IpAddr::V4(addr) => {
+                    let mask = if prefix == 0 {
+                        0
+                    } else {
+                        u32::MAX << (32 - prefix)
+                    };
+                    IpAddr::V4((u32::from(addr) & mask).into())
+                }
+                IpAddr::V6(addr) => {
+                    let mask = if prefix == 0 {
+                        0
+                    } else {
+                        u128::MAX << (128 - prefix)
+                    };
+                    IpAddr::V6((u128::from(addr) & mask).into())
+                }
+            };
+            if addr != network {
+                return Err(ConfigError::Vpn(format!(
+                    "vpn.route_push[{index}] must clear all host bits; canonical network prefix is {network}/{prefix}"
+                )));
+            }
+            if !seen.insert((network, prefix)) {
+                return Err(ConfigError::Vpn(
+                    "vpn.route_push must not contain semantically duplicate entries".to_string(),
+                ));
+            }
             parsed.push(VpnRouteV1 {
                 cidr: format!("{addr}/{prefix}"),
                 via: None,
@@ -1490,7 +1760,8 @@ impl VpnConfig {
     }
     pub(crate) fn parse_dns_overrides(&self) -> Result<Vec<String>, ConfigError> {
         let mut parsed = Vec::with_capacity(self.dns_overrides.len());
-        for dns in &self.dns_overrides {
+        let mut seen = BTreeSet::new();
+        for (index, dns) in self.dns_overrides.iter().enumerate() {
             let trimmed = dns.trim();
             if trimmed.is_empty() {
                 return Err(ConfigError::Vpn(
@@ -1502,6 +1773,22 @@ impl VpnConfig {
                     "vpn.dns_overrides entry `{trimmed}` is not a valid IP address: {err}"
                 ))
             })?;
+            let normalized = match addr {
+                IpAddr::V6(addr) => addr.to_ipv4_mapped().map_or(IpAddr::V6(addr), IpAddr::V4),
+                IpAddr::V4(_) => addr,
+            };
+            let limited_broadcast =
+                matches!(normalized, IpAddr::V4(addr) if addr == std::net::Ipv4Addr::BROADCAST);
+            if normalized.is_unspecified() || normalized.is_multicast() || limited_broadcast {
+                return Err(ConfigError::Vpn(format!(
+                    "vpn.dns_overrides[{index}] must be a unicast IP address"
+                )));
+            }
+            if !seen.insert(normalized) {
+                return Err(ConfigError::Vpn(
+                    "vpn.dns_overrides must not contain semantically duplicate entries".to_string(),
+                ));
+            }
             parsed.push(addr.to_string());
         }
         Ok(parsed)
@@ -1614,18 +1901,15 @@ fn read_vpn_shared_secret(path: &Path, artifact: &str) -> Result<[u8; 32], Confi
         }
         Ok(())
     })();
-    raw.fill(0);
-    std::hint::black_box(raw.as_mut_slice());
+    raw.clear();
     match decoded {
         Ok(()) => {
             let result = bytes;
-            bytes.fill(0);
-            std::hint::black_box(&mut bytes);
+            zeroize::Zeroize::zeroize(&mut bytes);
             Ok(result)
         }
         Err(error) => {
-            bytes.fill(0);
-            std::hint::black_box(&mut bytes);
+            zeroize::Zeroize::zeroize(&mut bytes);
             Err(error)
         }
     }
@@ -1782,6 +2066,7 @@ pub const fn vpn_runtime_available() -> bool {
 }
 /// Proof-of-work policy.
 #[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
+#[norito(deny_unknown_fields)]
 pub struct PowConfig {
     /// Whether PoW is required for admission tokens (must be `true` in v1).
     #[norito(default = "PowConfig::default_required")]
@@ -1804,12 +2089,9 @@ pub struct PowConfig {
     /// On-disk path where revocations are persisted.
     #[norito(default = "PowConfig::default_revocation_store_path")]
     pub revocation_store_path: PathBuf,
-    /// Optional verifying key used for signed PoW tickets.
+    /// Optional ML-DSA-44 key used for signed Argon2 ticket envelopes.
     #[norito(default)]
     pub signed_ticket_public_key_hex: Option<String>,
-    /// Adaptive difficulty tuning parameters.
-    #[norito(default)]
-    pub adaptive: AdaptiveDifficultyConfig,
     /// Global rate limits applied to handshake traffic.
     #[norito(default)]
     pub quotas: QuotaConfig,
@@ -1843,7 +2125,6 @@ impl Default for PowConfig {
             revocation_store_ttl_secs: Self::default_revocation_store_ttl(),
             revocation_store_path: Self::default_revocation_store_path(),
             signed_ticket_public_key_hex: None,
-            adaptive: AdaptiveDifficultyConfig::default(),
             quotas: QuotaConfig::default(),
             quotas_per_mode: None,
             slowloris: SlowlorisConfig::default(),
@@ -1912,8 +2193,6 @@ impl PowConfig {
         if self.revocation_store_path.as_os_str().is_empty() {
             self.revocation_store_path = Self::default_revocation_store_path();
         }
-        self.adaptive.apply_defaults();
-        self.adaptive.validate()?;
         self.quotas.apply_defaults();
         self.quotas.validate_named("quotas")?;
         if let Some(overrides) = self.quotas_per_mode.as_mut() {
@@ -1924,6 +2203,7 @@ impl PowConfig {
         let puzzle = self.puzzle.get_or_insert_with(PuzzleConfig::default);
         puzzle.apply_defaults();
         puzzle.validate()?;
+        let _ = self.signed_ticket_public_key()?;
         if let Some(token) = self.token.as_mut() {
             token.apply_defaults();
             token.validate()?;
@@ -1978,113 +2258,34 @@ impl PowConfig {
             None => Ok(None),
         }
     }
+    /// Decode and validate the optional ML-DSA-44 signed-puzzle verifier key.
+    pub fn signed_ticket_public_key(&self) -> Result<Option<Vec<u8>>, ConfigError> {
+        let Some(encoded) = self.signed_ticket_public_key_hex.as_deref() else {
+            return Ok(None);
+        };
+        let public_key = hex::decode(encoded).map_err(|kind| ConfigError::Hex {
+            field: "pow.signed_ticket_public_key_hex".to_owned(),
+            kind,
+        })?;
+        if hex::encode(&public_key) != encoded {
+            return Err(ConfigError::Puzzle(
+                "pow.signed_ticket_public_key_hex must use canonical lowercase hex".to_owned(),
+            ));
+        }
+        MlDsaSuite::MlDsa44
+            .validate_public_key(&public_key)
+            .map_err(|error| {
+                ConfigError::Puzzle(format!(
+                    "pow.signed_ticket_public_key_hex is not a valid ML-DSA-44 key: {error}"
+                ))
+            })?;
+        Ok(Some(public_key))
+    }
     pub fn replay_filter(&self) -> &ReplayFilterConfig {
         &self.replay_filter
     }
     pub fn emergency_throttle(&self) -> Option<&EmergencyThrottleConfig> {
         self.emergency.as_ref()
-    }
-}
-/// Adaptive difficulty tuning knobs for the relay PoW verifier.
-#[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
-pub struct AdaptiveDifficultyConfig {
-    /// Whether adaptive difficulty tuning is enabled.
-    #[norito(default = "AdaptiveDifficultyConfig::default_enabled")]
-    pub enabled: bool,
-    /// Minimum difficulty the tuner may select.
-    #[norito(default = "AdaptiveDifficultyConfig::default_min_difficulty")]
-    pub min_difficulty: u8,
-    /// Maximum difficulty the tuner may select.
-    #[norito(default = "AdaptiveDifficultyConfig::default_max_difficulty")]
-    pub max_difficulty: u8,
-    /// Consecutive failures required before increasing difficulty.
-    #[norito(default = "AdaptiveDifficultyConfig::default_pow_failure_threshold")]
-    pub pow_failure_threshold: u32,
-    /// Consecutive successes required before decreasing difficulty.
-    #[norito(default = "AdaptiveDifficultyConfig::default_success_threshold")]
-    pub success_threshold: u32,
-    /// Sliding window used when counting successes/failures.
-    #[norito(default = "AdaptiveDifficultyConfig::default_window_secs")]
-    pub window_secs: u64,
-    /// Step applied when increasing difficulty.
-    #[norito(default = "AdaptiveDifficultyConfig::default_increase_step")]
-    pub increase_step: u8,
-    /// Step applied when decreasing difficulty.
-    #[norito(default = "AdaptiveDifficultyConfig::default_decrease_step")]
-    pub decrease_step: u8,
-}
-impl Default for AdaptiveDifficultyConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            min_difficulty: Self::default_min_difficulty(),
-            max_difficulty: Self::default_max_difficulty(),
-            pow_failure_threshold: Self::default_pow_failure_threshold(),
-            success_threshold: Self::default_success_threshold(),
-            window_secs: Self::default_window_secs(),
-            increase_step: Self::default_increase_step(),
-            decrease_step: Self::default_decrease_step(),
-        }
-    }
-}
-impl AdaptiveDifficultyConfig {
-    const fn default_enabled() -> bool {
-        true
-    }
-    const fn default_min_difficulty() -> u8 {
-        puzzle::DEFAULT_DIFFICULTY
-    }
-    const fn default_max_difficulty() -> u8 {
-        28
-    }
-    const fn default_pow_failure_threshold() -> u32 {
-        24
-    }
-    const fn default_success_threshold() -> u32 {
-        480
-    }
-    const fn default_window_secs() -> u64 {
-        60
-    }
-    const fn default_increase_step() -> u8 {
-        1
-    }
-    const fn default_decrease_step() -> u8 {
-        1
-    }
-    pub fn apply_defaults(&mut self) {
-        if self.max_difficulty < self.min_difficulty {
-            self.max_difficulty = self.min_difficulty;
-        }
-        if self.pow_failure_threshold == 0 {
-            self.pow_failure_threshold = Self::default_pow_failure_threshold();
-        }
-        if self.success_threshold == 0 {
-            self.success_threshold = Self::default_success_threshold();
-        }
-        if self.window_secs == 0 {
-            self.window_secs = Self::default_window_secs();
-        }
-        if self.increase_step == 0 {
-            self.increase_step = Self::default_increase_step();
-        }
-        if self.decrease_step == 0 {
-            self.decrease_step = Self::default_decrease_step();
-        }
-    }
-    fn validate(&self) -> Result<(), ConfigError> {
-        if self.min_difficulty == 0 {
-            return Err(ConfigError::Puzzle(
-                "pow.adaptive.min_difficulty must be greater than zero".to_owned(),
-            ));
-        }
-        if self.max_difficulty > puzzle::MAX_DIFFICULTY {
-            return Err(ConfigError::Puzzle(format!(
-                "pow.adaptive.max_difficulty must not exceed {}",
-                puzzle::MAX_DIFFICULTY
-            )));
-        }
-        Ok(())
     }
 }
 /// Argon2 puzzle configuration applied to inbound handshakes.
@@ -2377,13 +2578,13 @@ impl TokenConfig {
             public_key,
             Duration::from_secs(self.max_ttl_secs),
             Duration::from_secs(self.clock_skew_secs),
+            store,
         )
         .map_err(|err| {
             ConfigError::Token(format!(
                 "invalid pow.token.issuer_public_key_hex verifier key: {err}"
             ))
-        })?
-        .with_replay_store(store);
+        })?;
         let mut revocations = Vec::with_capacity(self.revocation_list_hex.len());
         for (idx, value) in self.revocation_list_hex.iter().enumerate() {
             let bytes = hex::decode(value).map_err(|kind| ConfigError::Hex {
@@ -2474,9 +2675,6 @@ pub struct GuardDirectoryConfig {
     /// This value must be obtained through a trust path independent of `snapshot_path`; the
     /// snapshot's embedded `directory_hash` does not authenticate its embedded issuer records.
     pub expected_snapshot_digest_hex: String,
-    /// Whether to tolerate missing entries when verifying a snapshot.
-    #[norito(default)]
-    pub allow_missing_entry: bool,
     /// Optional path to a pinning proof associated with the snapshot.
     #[norito(default)]
     pub pinning_proof_path: Option<PathBuf>,
@@ -2525,10 +2723,6 @@ impl GuardDirectoryConfig {
             ));
         }
         Ok(bytes)
-    }
-    #[must_use]
-    pub fn allow_missing_entry(&self) -> bool {
-        self.allow_missing_entry
     }
     #[must_use]
     pub fn pinning_proof_path(&self) -> Option<&Path> {
@@ -3076,18 +3270,15 @@ impl ComplianceConfig {
             }
             Ok(())
         })();
-        encoded.fill(0);
-        std::hint::black_box(encoded.as_mut_slice());
+        encoded.clear();
         match decoded {
             Ok(()) => {
                 let result = salt;
-                salt.fill(0);
-                std::hint::black_box(&mut salt);
+                zeroize::Zeroize::zeroize(&mut salt);
                 Ok(Some(result))
             }
             Err(error) => {
-                salt.fill(0);
-                std::hint::black_box(&mut salt);
+                zeroize::Zeroize::zeroize(&mut salt);
                 Err(error)
             }
         }
@@ -3163,7 +3354,7 @@ pub struct HandshakePolicy {
 /// Certificate verification configuration.
 #[derive(Debug, Clone, JsonDeserialize, JsonSerialize)]
 pub struct CertificateConfig {
-    /// Path to the Norito-encoded certificate bundle.
+    /// Path to the canonical SRCv2 CBOR certificate bundle.
     pub bundle_path: PathBuf,
     /// Hex-encoded Ed25519 issuer public key expected in the bundle.
     pub issuer_ed25519_hex: String,
@@ -3251,67 +3442,32 @@ impl CertificateConfig {
         })
     }
 }
-/// ML-KEM keypair decoded from the descriptor manifest.
-#[derive(PartialEq, Eq)]
-pub struct MlKemKeys {
-    /// ML-KEM-768 public key bytes.
-    pub public: Vec<u8>,
-    /// ML-KEM-768 secret key bytes.
-    pub private: Vec<u8>,
-}
-impl MlKemKeys {
-    fn clear_private_material(&mut self) {
-        self.private.fill(0);
-        std::hint::black_box(self.private.as_mut_slice());
-    }
-}
-impl fmt::Debug for MlKemKeys {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("MlKemKeys")
-            .field("public_len", &self.public.len())
-            .field("private", &"<redacted>")
-            .finish()
-    }
-}
-impl Drop for MlKemKeys {
-    fn drop(&mut self) {
-        self.clear_private_material();
-    }
-}
+/// Private relay identity material decoded from the exact v1 descriptor manifest.
+///
+/// This owner is deliberately non-cloneable. Callers consume the two signing
+/// identities from one immutable manifest snapshot.
 pub(crate) struct ManifestSecrets {
-    pub(crate) identity_private_key: Option<[u8; 32]>,
-    pub(crate) ml_kem_private_key: Option<Vec<u8>>,
-    pub(crate) ml_kem_public_key: Option<Vec<u8>>,
+    ed25519_private_key: [u8; ED25519_IDENTITY_SEED_LEN_V1],
+    mldsa65_private_key: Vec<u8>,
 }
 impl ManifestSecrets {
+    pub(crate) fn into_private_keys(mut self) -> ([u8; ED25519_IDENTITY_SEED_LEN_V1], Vec<u8>) {
+        let ed25519 = std::mem::take(&mut self.ed25519_private_key);
+        let mldsa65 = std::mem::take(&mut self.mldsa65_private_key);
+        (ed25519, mldsa65)
+    }
+
     fn clear_private_material(&mut self) {
-        if let Some(seed) = self.identity_private_key.as_mut() {
-            seed.fill(0);
-            std::hint::black_box(seed);
-        }
-        if let Some(private) = self.ml_kem_private_key.as_mut() {
-            private.fill(0);
-            std::hint::black_box(private.as_mut_slice());
-        }
+        zeroize::Zeroize::zeroize(&mut self.ed25519_private_key);
+        clear_sensitive_bytes(&mut self.mldsa65_private_key);
     }
 }
 impl fmt::Debug for ManifestSecrets {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ManifestSecrets")
-            .field(
-                "identity_private_key",
-                &self.identity_private_key.as_ref().map(|_| "<redacted>"),
-            )
-            .field(
-                "ml_kem_private_key",
-                &self.ml_kem_private_key.as_ref().map(|_| "<redacted>"),
-            )
-            .field(
-                "ml_kem_public_key_len",
-                &self.ml_kem_public_key.as_ref().map(Vec::len),
-            )
+            .field("ed25519_private_key", &"<redacted>")
+            .field("mldsa65_private_key", &"<redacted>")
             .finish()
     }
 }
@@ -3557,33 +3713,33 @@ impl HandshakePolicy {
     pub fn load_certificate_bundle_at(
         &self,
         at_unix: i64,
-    ) -> Result<Option<RelayCertificateBundleV2>, ConfigError> {
-        let Some(certificate) = &self.certificate else {
-            return Ok(None);
-        };
+    ) -> Result<RelayCertificateBundleV2, ConfigError> {
+        let certificate = self.certificate.as_ref().ok_or_else(|| {
+            ConfigError::Handshake(
+                "first-release relay authentication requires handshake.certificate".to_owned(),
+            )
+        })?;
         let bundle = certificate.load_bundle()?;
         let issuer_ed25519 = certificate.parse_issuer_ed25519()?;
         let issuer_mldsa = certificate.parse_issuer_mldsa()?;
         bundle
-            .verify_at(
-                &issuer_ed25519,
-                issuer_mldsa.as_slice(),
-                CertificateValidationPhase::Phase3RequireDual,
-                at_unix,
-            )
+            .verify_at(&issuer_ed25519, issuer_mldsa.as_slice(), at_unix)
             .map_err(|err| ConfigError::Certificate {
                 path: certificate.bundle_path.clone(),
                 message: format!("certificate verification failed: {err}"),
             })?;
-        Ok(Some(bundle))
+        Ok(bundle)
     }
     pub fn descriptor_manifest_path(&self) -> Option<&Path> {
         self.descriptor_manifest_path.as_deref()
     }
-    pub(crate) fn manifest_secrets(&self) -> Result<Option<ManifestSecrets>, ConfigError> {
-        let Some(path) = self.descriptor_manifest_path() else {
-            return Ok(None);
-        };
+    pub(crate) fn manifest_secrets(&self) -> Result<ManifestSecrets, ConfigError> {
+        let path = self.descriptor_manifest_path().ok_or_else(|| {
+            ConfigError::Handshake(
+                "first-release relay authentication requires handshake.descriptor_manifest_path"
+                    .to_owned(),
+            )
+        })?;
         let mut bytes = read_bounded_private_regular_file(
             path,
             DESCRIPTOR_MANIFEST_JSON_MAX_BYTES_V1,
@@ -3610,71 +3766,9 @@ impl HandshakePolicy {
                 )
             })
         })();
-        bytes.fill(0);
-        std::hint::black_box(bytes.as_mut_slice());
+        bytes.clear();
         let value = SensitiveManifestJson(value?);
-        let identity_private_key = extract_manifest_identity_private_key(&value.0)
-            .map(|hex| {
-                decode_manifest_identity_seed(hex).map_err(|message| manifest_error(path, message))
-            })
-            .transpose()?;
-        let (private_hex, public_hex) = extract_manifest_ml_kem_hex(&value.0);
-        let private_hex = private_hex.map(str::trim).filter(|value| !value.is_empty());
-        let public_hex = public_hex.map(str::trim).filter(|value| !value.is_empty());
-        let (ml_kem_private_key, ml_kem_public_key) = match (private_hex, public_hex) {
-            (None, None) => (None, None),
-            (Some(private), Some(public)) => {
-                let private = decode_manifest_ml_kem_key(
-                    private,
-                    ML_KEM_768_SECRET_LEN,
-                    "ml_kem_private_key_hex",
-                )
-                .map_err(|message| manifest_error(path, message))?;
-                let public =
-                    decode_manifest_ml_kem_key(public, ML_KEM_768_PUBLIC_LEN, "ml_kem_public_hex")
-                        .map_err(|message| manifest_error(path, message))?;
-                (Some(private), Some(public))
-            }
-            _ => {
-                return Err(manifest_error(
-                    path,
-                    "descriptor manifest must provide both ml_kem_private_key_hex and ml_kem_public_hex when configuring ML-KEM identity material",
-                ));
-            }
-        };
-        Ok(Some(ManifestSecrets {
-            identity_private_key,
-            ml_kem_private_key,
-            ml_kem_public_key,
-        }))
-    }
-    pub fn ml_kem_keys_from_manifest(&self) -> Result<Option<MlKemKeys>, ConfigError> {
-        Ok(self.manifest_secrets()?.and_then(|mut secrets| {
-            match (
-                secrets.ml_kem_public_key.take(),
-                secrets.ml_kem_private_key.take(),
-            ) {
-                (Some(public), Some(private)) => Some(MlKemKeys { public, private }),
-                _ => None,
-            }
-        }))
-    }
-    pub fn identity_private_key_from_manifest(&self) -> Result<Option<[u8; 32]>, ConfigError> {
-        match self.manifest_secrets()? {
-            Some(mut secrets) => {
-                if let Some(seed) = secrets.identity_private_key.take() {
-                    return Ok(Some(seed));
-                }
-                let path = self
-                    .descriptor_manifest_path()
-                    .expect("descriptor manifest path available when secrets loaded");
-                Err(manifest_error(
-                    path,
-                    "descriptor manifest missing identity private key",
-                ))
-            }
-            None => Ok(None),
-        }
+        parse_manifest_secrets_v1(&value.0).map_err(|message| manifest_error(path, message))
     }
 }
 struct SensitiveManifestJson(norito::json::Value);
@@ -3688,9 +3782,11 @@ fn clear_manifest_json_strings(value: &mut norito::json::Value) {
     match value {
         Value::String(string) => {
             let len = string.len();
-            string.clear();
-            string.extend(std::iter::repeat_n('\0', len));
-            std::hint::black_box(string.as_bytes());
+            let mut bytes = std::mem::take(string).into_bytes();
+            bytes.resize(bytes.capacity(), 0);
+            zeroize::Zeroize::zeroize(bytes.as_mut_slice());
+            bytes.truncate(len);
+            *string = String::from_utf8(bytes).expect("zeroized string bytes are valid UTF-8");
         }
         Value::Array(values) => {
             for value in values {
@@ -3711,120 +3807,123 @@ fn manifest_error(path: &Path, message: impl Into<String>) -> ConfigError {
         message: message.into(),
     }
 }
-fn decode_manifest_identity_seed(hex_value: &str) -> Result<[u8; 32], String> {
-    if hex_value.len() != 64 {
+fn require_exact_manifest_fields(
+    object: &norito::json::Map,
+    object_name: &str,
+    required: &[&str],
+) -> Result<(), String> {
+    if let Some(field) = object
+        .keys()
+        .find(|field| !required.contains(&field.as_str()))
+    {
         return Err(format!(
-            "identity private key hex must contain exactly 64 hex characters (got {})",
+            "descriptor manifest {object_name} contains unknown field `{field}`"
+        ));
+    }
+    if let Some(field) = required.iter().find(|field| !object.contains_key(**field)) {
+        return Err(format!(
+            "descriptor manifest {object_name} is missing required field `{field}`"
+        ));
+    }
+    Ok(())
+}
+fn parse_manifest_secrets_v1(value: &norito::json::Value) -> Result<ManifestSecrets, String> {
+    let root = value
+        .as_object()
+        .ok_or_else(|| "descriptor manifest root must be a JSON object".to_owned())?;
+    require_exact_manifest_fields(root, "root", &["version", "identity"])?;
+    if root.get("version").and_then(norito::json::Value::as_u64) != Some(1) {
+        return Err("descriptor manifest `version` must be the integer 1".to_owned());
+    }
+    let identity = root
+        .get("identity")
+        .and_then(norito::json::Value::as_object)
+        .ok_or_else(|| "descriptor manifest `identity` must be a JSON object".to_owned())?;
+    require_exact_manifest_fields(
+        identity,
+        "identity",
+        &["ed25519_private_key_hex", "mldsa65_private_key_hex"],
+    )?;
+    let ed25519_hex = identity
+        .get("ed25519_private_key_hex")
+        .and_then(norito::json::Value::as_str)
+        .ok_or_else(|| {
+            "descriptor manifest `identity.ed25519_private_key_hex` must be a string".to_owned()
+        })?;
+    let mldsa65_hex = identity
+        .get("mldsa65_private_key_hex")
+        .and_then(norito::json::Value::as_str)
+        .ok_or_else(|| {
+            "descriptor manifest `identity.mldsa65_private_key_hex` must be a string".to_owned()
+        })?;
+    let mut secrets = ManifestSecrets {
+        ed25519_private_key: decode_manifest_identity_seed(ed25519_hex)?,
+        mldsa65_private_key: Vec::new(),
+    };
+    // Install the Ed25519 seed in its drop-scrubbing owner before the second
+    // fallible decode so an invalid ML-DSA key cannot leave the seed in an
+    // ordinary partially initialized stack value.
+    secrets.mldsa65_private_key = decode_manifest_mldsa65_private_key(mldsa65_hex)?;
+    Ok(secrets)
+}
+fn require_canonical_lowercase_hex(hex_value: &str, field: &str) -> Result<(), String> {
+    if !hex_value
+        .as_bytes()
+        .iter()
+        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+    {
+        return Err(format!(
+            "{field} must use canonical lowercase hexadecimal without whitespace or prefixes"
+        ));
+    }
+    Ok(())
+}
+fn decode_manifest_identity_seed(
+    hex_value: &str,
+) -> Result<[u8; ED25519_IDENTITY_SEED_LEN_V1], String> {
+    let expected_hex_len = ED25519_IDENTITY_SEED_LEN_V1 * 2;
+    if hex_value.len() != expected_hex_len {
+        return Err(format!(
+            "identity.ed25519_private_key_hex must contain exactly {expected_hex_len} hex characters (got {})",
             hex_value.len()
         ));
     }
-    let mut seed = [0u8; 32];
+    require_canonical_lowercase_hex(hex_value, "identity.ed25519_private_key_hex")?;
+    let mut seed = [0u8; ED25519_IDENTITY_SEED_LEN_V1];
     if let Err(err) = hex::decode_to_slice(hex_value, &mut seed) {
-        seed.fill(0);
-        std::hint::black_box(&mut seed);
-        return Err(format!("identity private key hex invalid: {err}"));
+        zeroize::Zeroize::zeroize(&mut seed);
+        return Err(format!(
+            "identity.ed25519_private_key_hex is invalid: {err}"
+        ));
+    }
+    if seed.iter().all(|byte| *byte == 0) {
+        zeroize::Zeroize::zeroize(&mut seed);
+        return Err("identity.ed25519_private_key_hex must not be all zero".to_owned());
     }
     Ok(seed)
 }
-fn decode_manifest_ml_kem_key(
-    hex_value: &str,
-    expected_len: usize,
-    field: &str,
-) -> Result<Vec<u8>, String> {
-    let expected_hex_len = expected_len.saturating_mul(2);
+fn decode_manifest_mldsa65_private_key(hex_value: &str) -> Result<Vec<u8>, String> {
+    let field = "identity.mldsa65_private_key_hex";
+    let expected_len = MlDsaSuite::MlDsa65.secret_key_len();
+    let expected_hex_len = expected_len
+        .checked_mul(2)
+        .expect("ML-DSA-65 private-key length fits usize");
     if hex_value.len() != expected_hex_len {
         return Err(format!(
             "{field} must contain exactly {expected_hex_len} hex characters (got {})",
             hex_value.len()
         ));
     }
+    require_canonical_lowercase_hex(hex_value, field)?;
     let mut decoded = SensitiveReadBuffer(vec![0; expected_len]);
     hex::decode_to_slice(hex_value, &mut decoded.0)
-        .map_err(|err| format!("{field} invalid: {err}"))?;
+        .map_err(|err| format!("{field} is invalid: {err}"))?;
+    if decoded.0.iter().all(|byte| *byte == 0) {
+        return Err(format!("{field} must not be all zero"));
+    }
+    PrivateKey::from_bytes(Algorithm::MlDsa, &decoded.0)
+        .map_err(|err| format!("{field} does not encode a valid ML-DSA-65 private key: {err}"))?;
     Ok(decoded.into_vec())
-}
-fn extract_manifest_identity_private_key(value: &norito::json::Value) -> Option<&str> {
-    use norito::json::Value;
-    match value {
-        Value::Object(map) => {
-            if let Some(hex) = map.get("identity_private_key_hex").and_then(Value::as_str) {
-                return Some(hex);
-            }
-            if let Some(identity) = map.get("identity").and_then(Value::as_object) {
-                if let Some(hex) = identity
-                    .get("ed25519_private_key_hex")
-                    .and_then(Value::as_str)
-                {
-                    return Some(hex);
-                }
-                if let Some(hex) = identity.get("private_key_hex").and_then(Value::as_str) {
-                    return Some(hex);
-                }
-            }
-            if let Some(relay) = map.get("relay").and_then(Value::as_object)
-                && let Some(identity) = relay.get("identity").and_then(Value::as_object)
-            {
-                if let Some(hex) = identity
-                    .get("ed25519_private_key_hex")
-                    .and_then(Value::as_str)
-                {
-                    return Some(hex);
-                }
-                if let Some(hex) = identity.get("private_key_hex").and_then(Value::as_str) {
-                    return Some(hex);
-                }
-            }
-            for child in map.values() {
-                if let Some(hex) = extract_manifest_identity_private_key(child) {
-                    return Some(hex);
-                }
-            }
-            None
-        }
-        Value::Array(array) => array
-            .iter()
-            .find_map(|item| extract_manifest_identity_private_key(item)),
-        _ => None,
-    }
-}
-fn extract_manifest_ml_kem_hex(value: &norito::json::Value) -> (Option<&str>, Option<&str>) {
-    use norito::json::Value;
-    match value {
-        Value::Object(map) => {
-            let mut private = map.get("ml_kem_private_key_hex").and_then(Value::as_str);
-            let mut public = map.get("ml_kem_public_hex").and_then(Value::as_str);
-            if let Some(identity) = map.get("identity").and_then(Value::as_object) {
-                if private.is_none() {
-                    private = identity
-                        .get("ml_kem_private_key_hex")
-                        .and_then(Value::as_str);
-                }
-                if public.is_none() {
-                    public = identity.get("ml_kem_public_hex").and_then(Value::as_str);
-                }
-            }
-            if private.is_some() || public.is_some() {
-                return (private, public);
-            }
-            for child in map.values() {
-                let (child_private, child_public) = extract_manifest_ml_kem_hex(child);
-                if child_private.is_some() || child_public.is_some() {
-                    return (child_private, child_public);
-                }
-            }
-            (None, None)
-        }
-        Value::Array(array) => {
-            for item in array {
-                let (child_private, child_public) = extract_manifest_ml_kem_hex(item);
-                if child_private.is_some() || child_public.is_some() {
-                    return (child_private, child_public);
-                }
-            }
-            (None, None)
-        }
-        _ => (None, None),
-    }
 }
 /// Relay configuration structure loaded from a JSON file.
 #[derive(Debug, Clone, JsonDeserialize, JsonSerialize)]
@@ -3874,7 +3973,29 @@ pub struct RelayConfig {
     pub constant_rate_profile: ConstantRateProfileName,
 }
 
-fn reject_retired_secret_config_fields(value: &norito::json::Value) -> Result<(), ConfigError> {
+fn reject_retired_config_fields(value: &norito::json::Value) -> Result<(), ConfigError> {
+    if value
+        .as_object()
+        .and_then(|root| root.get("guard_directory"))
+        .and_then(norito::json::Value::as_object)
+        .is_some_and(|guard| guard.contains_key("allow_missing_entry"))
+    {
+        return Err(ConfigError::JsonAdmission(
+            "retired configuration field `guard_directory.allow_missing_entry` is not accepted; a configured directory always requires exact authenticated relay membership"
+                .to_owned(),
+        ));
+    }
+    if value
+        .as_object()
+        .and_then(|root| root.get("tls"))
+        .and_then(norito::json::Value::as_object)
+        .is_some_and(|tls| tls.contains_key("self_signed_subject"))
+    {
+        return Err(ConfigError::JsonAdmission(
+            "retired configuration field `tls.self_signed_subject` is not accepted; production relays require a pinned operator certificate and the self-signed path is test-only"
+                .to_owned(),
+        ));
+    }
     const RETIRED_FIELDS: &[(&[&str], &str)] = &[
         (&["handshake"], "identity_private_key_hex"),
         (&["vpn"], "helper_ticket_secret_hex"),
@@ -3910,7 +4031,7 @@ fn reject_retired_secret_config_fields(value: &norito::json::Value) -> Result<()
 
 impl RelayConfig {
     pub fn load(path: impl AsRef<Path>) -> Result<Self, ConfigError> {
-        let mut data = read_bounded_direct_regular_file(
+        let mut data = read_bounded_trusted_config_file(
             path.as_ref(),
             RELAY_CONFIG_JSON_MAX_BYTES_V1,
             "relay configuration JSON",
@@ -3923,7 +4044,7 @@ impl RelayConfig {
                     json::from_slice(&data)
                 })?;
             let value = SensitiveManifestJson(value);
-            reject_retired_secret_config_fields(&value.0)?;
+            reject_retired_config_fields(&value.0)?;
             let mut config: RelayConfig =
                 norito::with_decode_limits_scope(RELAY_CONFIG_JSON_DECODE_LIMITS_V1, || {
                     json::from_slice(&data)
@@ -4048,16 +4169,46 @@ impl RelayConfig {
                     "vpn.enabled requires a persistent relay identity key".to_owned(),
                 ));
             }
-            let guard = self.guard_directory.as_ref().ok_or_else(|| {
+            self.guard_directory.as_ref().ok_or_else(|| {
                 ConfigError::Vpn(
                     "vpn.enabled requires an authenticated guard_directory snapshot".to_owned(),
                 )
             })?;
-            if guard.allow_missing_entry {
-                return Err(ConfigError::Vpn(
-                    "vpn.enabled forbids guard_directory.allow_missing_entry".to_owned(),
-                ));
-            }
+        }
+        #[cfg(not(test))]
+        self.validate_production_transport()?;
+        Ok(())
+    }
+    fn validate_production_transport(&self) -> Result<(), ConfigError> {
+        let tls = self
+            .tls
+            .as_ref()
+            .expect("TLS defaults are applied before production validation");
+        if tls.certificate_path.is_none() || tls.private_key_path.is_none() {
+            return Err(ConfigError::TlsPaths(
+                "production relays require tls.certificate_path and tls.private_key_path"
+                    .to_owned(),
+            ));
+        }
+        let handshake = self
+            .handshake
+            .as_ref()
+            .expect("handshake defaults are applied before production validation");
+        if handshake.certificate.is_none() {
+            return Err(ConfigError::Handshake(
+                "production relays require a dual-signed handshake.certificate bundle".to_owned(),
+            ));
+        }
+        if handshake.descriptor_manifest_path.is_none() {
+            return Err(ConfigError::Handshake(
+                "production relays require a private handshake.descriptor_manifest_path".to_owned(),
+            ));
+        }
+        if self.guard_directory.is_none() {
+            return Err(ConfigError::GuardDirectory(
+                "production relays require an authenticated guard_directory snapshot and exact relay membership"
+                    .to_owned(),
+            ));
         }
         Ok(())
     }
@@ -4088,12 +4239,6 @@ impl RelayConfig {
     }
     pub fn guard_directory_config(&self) -> Option<&GuardDirectoryConfig> {
         self.guard_directory.as_ref()
-    }
-    pub fn self_signed_subject(&self) -> &str {
-        self.tls
-            .as_ref()
-            .map(TlsConfig::subject_or_default)
-            .unwrap_or(DEFAULT_SELF_SIGNED_SUBJECT)
     }
     pub fn pow_config(&self) -> &PowConfig {
         self.pow

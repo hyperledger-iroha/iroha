@@ -60,10 +60,10 @@ async fn frame_io_rejects_invalid_class() {
         payload: Vec::new(),
     };
     let padded = overlay.pad_cell(cell).expect("padded frame");
-    let mut bad_bytes = padded.frame.bytes;
-    bad_bytes[1] = 9;
+    let mut bad_frame = padded.frame;
+    bad_frame.as_mut()[1] = 9;
     let (mut writer, mut reader) = duplex(2 * iroha_data_model::soranet::vpn::VPN_CELL_LEN);
-    writer.write_all(&bad_bytes).await.expect("written");
+    writer.write_all(bad_frame.as_ref()).await.expect("written");
     let err = read_frame(&overlay, &mut reader)
         .await
         .expect_err("invalid class should fail");
@@ -114,7 +114,7 @@ async fn scheduler_applies_pacing_without_cover() {
             .all(|pair| pair[1].deadline >= pair[0].deadline)
     );
     let (mut writer, mut reader) = duplex(2 * iroha_data_model::soranet::vpn::VPN_CELL_LEN);
-    let send_schedule = schedule.clone();
+    let send_schedule = schedule;
     let send_handle = tokio::spawn(async move {
         send_scheduled_frames(&send_schedule, &mut writer, None)
             .await
@@ -169,6 +169,22 @@ fn scheduler_rejects_sequence_wrap() {
     assert!(matches!(
         schedule_frames(&overlay, vec![data_cell], cover_meta, [0x11; 32]),
         Err(VpnFrameBuildError::SequenceExhausted)
+    ));
+}
+
+#[test]
+fn scheduler_rejects_inert_cover_seed_even_when_cover_is_disabled() {
+    let overlay = VpnOverlay::from_config(VpnConfig::default());
+    let cover_meta = CoverFrameMeta {
+        circuit_id: [0x01; 16],
+        flow_label: VpnFlowLabelV1::from_u32(1).expect("flow"),
+        ack: 0,
+        flags: VpnCellFlagsV1::new(true, false, false, false),
+        start_sequence: 0,
+    };
+    assert!(matches!(
+        schedule_frames(&overlay, Vec::new(), cover_meta, [0; 32]),
+        Err(VpnFrameBuildError::InvalidCoverSeed)
     ));
 }
 #[tokio::test]
@@ -263,7 +279,8 @@ async fn cover_and_data_metrics_accounted_separately() {
     metrics.set_vpn_meter_labels("vpn.session", "vpn.egress.bytes");
     let session = overlay.start_session(Arc::clone(&metrics));
     let (mut writer, mut reader) = duplex(2 * iroha_data_model::soranet::vpn::VPN_CELL_LEN);
-    let send_schedule = schedule.clone();
+    let schedule_len = schedule.len();
+    let send_schedule = schedule;
     let send = tokio::spawn(async move {
         send_scheduled_frames(&send_schedule, &mut writer, Some(&session))
             .await
@@ -272,7 +289,7 @@ async fn cover_and_data_metrics_accounted_separately() {
     let read_overlay = Arc::clone(&overlay);
     let read = tokio::spawn(async move {
         let mut frames = Vec::new();
-        for _ in 0..schedule.len() {
+        for _ in 0..schedule_len {
             frames.push(read_frame(&read_overlay, &mut reader).await.expect("frame"));
         }
         frames

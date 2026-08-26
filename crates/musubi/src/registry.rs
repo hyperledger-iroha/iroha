@@ -879,14 +879,12 @@ impl RegistrySigningClientV1 {
         input: &str,
     ) -> Result<iroha_data_model::account::AccountId, RegistryErrorV1> {
         let _chain_discriminant = ChainDiscriminantGuard::enter(self.account_chain_discriminant);
-        iroha_data_model::account::AccountId::parse_encoded(input)
-            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-            .map_err(|_| {
-                RegistryErrorV1::new(
-                    RegistryFailureClassV1::Permanent,
-                    "MUSUBI_ACCOUNT_ID_INVALID",
-                )
-            })
+        iroha_data_model::account::AccountId::parse_encoded(input).map_err(|_| {
+            RegistryErrorV1::new(
+                RegistryFailureClassV1::Permanent,
+                "MUSUBI_ACCOUNT_ID_INVALID",
+            )
+        })
     }
     /// Sign, submit, and wait for commitment of one concrete V1 instruction.
     ///
@@ -1062,6 +1060,9 @@ impl RegistrySigningClientV1 {
             ));
         }
         match response.status.kind.as_str() {
+            "Applied" if response.resolved_from != "state" => {
+                Ok(RegistryTransactionStateV1::Pending)
+            }
             "Applied" => response
                 .status
                 .block_height
@@ -2854,7 +2855,7 @@ private_key = "{}"
         norito::json::to_vec(&norito::json!({
             "hash": hash,
             "status": { "kind": kind, "block_height": 44 },
-            "scope": "local",
+            "scope": "global",
             "resolved_from": "state",
         }))
         .expect("transaction status JSON")
@@ -2923,7 +2924,7 @@ private_key = "{}"
         let cached_rejection = norito::json::to_vec(&norito::json!({
             "hash": cached_rejection_hash,
             "status": { "kind": "Rejected", "block_height": 44 },
-            "scope": "local",
+            "scope": "global",
             "resolved_from": "cache",
         }))
         .expect("cached rejection JSON");
@@ -2936,11 +2937,27 @@ private_key = "{}"
             RegistryTransactionStateV1::Pending
         );
         server.join().expect("cached rejection server");
+        let cached_applied = norito::json::to_vec(&norito::json!({
+            "hash": transaction_hash.clone(),
+            "status": { "kind": "Applied", "block_height": 44 },
+            "scope": "global",
+            "resolved_from": "cache",
+        }))
+        .expect("cached Applied JSON");
+        let (url, server) = serve_json_once(cached_applied);
+        let signing = signing_client_at(&url, &signer, test_network_id(0x15));
+        assert_eq!(
+            signing
+                .transaction_application_state_v1(&transaction)
+                .expect("non-authoritative Applied remains pending"),
+            RegistryTransactionStateV1::Pending
+        );
+        server.join().expect("cached Applied server");
         let heightless_applied_hash = transaction_hash.clone();
         let heightless_applied = norito::json::to_vec(&norito::json!({
             "hash": heightless_applied_hash,
             "status": { "kind": "Applied" },
-            "scope": "local",
+            "scope": "global",
             "resolved_from": "state",
         }))
         .expect("heightless applied JSON");
@@ -2967,7 +2984,7 @@ private_key = "{}"
         let zero_height_expiry = norito::json::to_vec(&norito::json!({
             "hash": transaction_hash,
             "status": { "kind": "Expired", "block_height": 0 },
-            "scope": "local",
+            "scope": "global",
             "resolved_from": "state",
         }))
         .expect("zero-height expiry JSON");

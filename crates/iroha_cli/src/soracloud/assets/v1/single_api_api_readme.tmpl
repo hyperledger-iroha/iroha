@@ -19,8 +19,12 @@ use the IVM bytecode emitted by `./build.sh`.
 ## Build
 
 ```bash
-./build.sh
+KOTO_BIN=/absolute/path/to/koto KOTO_BIN_SHA256=<lowercase-sha256> ./build.sh
 ```
+
+`KOTO_BIN` must be an absolute, non-symlinked same-revision binary and
+`KOTO_BIN_SHA256` must match it; the script never searches `PATH` or compiles a
+source fallback.
 
 The build emits `build/api-service.to` plus
 `build/api-service.contract_manifest.json`.
@@ -28,7 +32,7 @@ The build emits `build/api-service.to` plus
 ## Offline verification
 
 ```bash
-./verify-build.sh
+KOTO_BIN=/absolute/path/to/koto ./verify-build.sh
 ```
 
 `verify-build.sh` recompiles `contract/api_service.ko` with `koto build` and

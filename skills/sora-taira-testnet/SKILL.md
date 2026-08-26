@@ -11,13 +11,15 @@ API contracts in shell scripts.
 ## Select the workflow
 
 - For a disposable local four-validator testnet, use
-  `python3 scripts/taira_devnet.py up`.
+  `python3 scripts/taira_devnet.py up --inrou-canary-dir <owner-only-workspace>`.
 - For live public Taira reads, prefer the curated `iroha.*` MCP tools at
   `https://taira.sora.org/v1/mcp`.
 - For public endpoint diagnostics, use the same-revision compiled
   `iroha taira doctor --public-root https://taira.sora.org --json`.
-- For a public write canary, require explicit user authorization and use
-  `iroha taira write-canary` with runtime-only credentials.
+- For a public write canary, require explicit user authorization and use the
+  same-revision `iroha taira public-reset apply` coordinator. Its
+  `write-canary` child is a low-level singular prepared-operation surface, not
+  a standalone aggregate command.
 
 Stay read-only until the user explicitly asks to mutate live state. Treat
 `authority`, `private_key`, bearer tokens, onboarding tokens, and forwarded
@@ -50,46 +52,57 @@ does not start or verify the workload loopback bridge.
 Run from the repository root:
 
 ```bash
-python3 scripts/taira_devnet.py up
+python3 scripts/taira_devnet.py up \
+  --inrou-canary-dir /private/runtime/taira-inrou-canary
 python3 scripts/taira_devnet.py check
 python3 scripts/taira_devnet.py down
 ```
 
-`up` builds the current Kagami, daemon, and CLI and replaces one marked
-owner-only directory under `/var/lib/iroha-taira-devnet/` by default. It
+`up` builds the current Kagami, daemon, CLI, and SoraFS node and replaces one
+marked owner-only directory under `/var/lib/iroha-taira-devnet/` by default. It
 generates exactly four fresh-key NPoS validators on the canonical Taira chain,
 binds them to loopback, validates all four configs with the current daemon,
-starts them, requires health/readiness,
-submits a signed ping, waits for its typed `Applied` status, requires four-peer
-height convergence, and performs a semantic MCP initialize/tools-list smoke.
+stages and preseeds the required Inrou guest, starts the validators, requires
+health/readiness, submits a signed ping, waits for its typed `Applied` status,
+requires four-peer height convergence, performs a semantic MCP
+initialize/tools-list smoke, and proves the exact four-replica workload route.
 
-Treat `up` as the startup-boundary qualification command. It requires
+Treat `up` as the startup-boundary and guest-workload qualification command. It requires
 Linux/AArch64, uid 0, KVM API version 12, and the four canonical locked Inrou
 identities. Each daemon runs an artifact-free probe of the production machine
 type and host CPU under KVM, private namespaces, cgroup limits, anonymous QMP,
 QEMU user networking, the private loopback connector, and the owner firewall.
-This does not prove guest boot, a workload, placements, or the public route;
-request the real canary workspace for those checks. `up` builds the fixed
-`local-release` binaries for the exact native target, records the `optimizations`
-HEAD plus a pre/post tracked-diff and non-ignored-untracked worktree observation,
-hashes the selected executables, and verifies live validator and CLI build
-identities. The report calls this `source_observation` and sets
+It then proves guest boot, a workload, four placements, and the public route
+from the required canary workspace. `up` builds the fixed `local-release`
+binaries for the exact native target, records the `optimizations` HEAD plus a
+pre/post tracked-diff and non-ignored-untracked worktree observation, hashes the
+selected executables, and verifies live validator and CLI build identities. The
+report calls this `source_observation` and sets
 `cargo_source_consumption` to `not_proven`; ignored files, Cargo configuration,
 external build-script inputs, toolchains, and caches are outside its scope.
-`check` is read-only health/convergence inspection; it does not re-establish
-KVM, source/binary, signed-write, or Inrou-route qualification.
+`check` is read-only live verification and requires the owner-only exact V1
+guest qualification record emitted by `up`. It rehashes the retained input
+snapshot, revalidates the retained stage with the exact recorded CLI binary,
+requires that binary, the current `optimizations` HEAD, and every live
+validator still match the recorded source/target identities, then invokes
+exactly one `iroha taira inrou-check`. That command performs an account-signed
+service-status read, compares the live container and service manifest hashes
+with the fully revalidated stage, and observes all four exact route identities.
+It does not repeat KVM qualification, submit a ping, register an artifact, or
+submit an Inrou mutation. The historical deploy receipt is reported only as
+`inrou_stored_deploy_receipt`; fresh evidence is `inrou_live_check`.
 
-When `--inrou-canary-dir` is used, keep the workspace outside the repository
-and disjoint from both `--dir` and the qualification Cargo target. Every
+Keep the required `--inrou-canary-dir` workspace outside the repository and
+disjoint from both `--dir` and the qualification Cargo target. Every
 ancestor must be direct, root-owned, and non-writable by group/other. The
 launcher pins each input identity and digest, revalidates it before cohort
 replacement, snapshots it through no-follow descriptors, and reports
 `inrou_canary_input_content_sha256`; the compiled stager consumes only that
 owner-only snapshot.
 
-Use `python3 scripts/taira_devnet.py up --full-doctor` only when the broad public
-product-route surface is part of the test. A minimal throwaway chain must not
-be rejected merely because an unrelated optional application route is absent.
+Add `--full-doctor` to the mandatory `up --inrou-canary-dir ...` command only
+when the broad public-product route surface is part of the test. The doctor is
+additive and never replaces guest workload qualification.
 
 This optional local diagnostic does not qualify a public ingress. Run the
 same-revision `iroha taira doctor` directly against the public ingress under
@@ -101,16 +114,27 @@ leaves bounded peer logs for diagnosis; if ownership or termination cannot be
 proved, it warns instead of claiming cleanup. `down` retains those logs; the
 next `up` replaces the bundle.
 
-For the offline public-reset inventory handoff, use the single canonical
-read-only command:
+Build the public-reset evidence binary with the release profile, then admit the
+complete runtime input closure locally before authorizing mutation:
 
 ```bash
-python3 scripts/taira_public_reset.py preflight --inventory /private/runtime/inventory.json
+cargo build --locked --profile release -p iroha_cli --bin iroha
+target/release/iroha taira public-reset preflight \
+  --inventory /private/runtime/taira-public-reset/inventory.json \
+  --authorization /private/runtime/taira-public-reset/authorization.json \
+  --trusted-public-key /private/runtime/taira-public-reset/trusted-public-key.json \
+  --ssh-identity /private/runtime/taira-public-reset/id_ed25519 \
+  --known-hosts /private/runtime/taira-public-reset/known_hosts
 ```
 
-`confirm` validates an explicit inventory-bound acknowledgement. `apply` is a
-fail-closed placeholder and always refuses because this repository has no
-authenticated public deployment executor.
+`iroha taira public-reset preflight` and `iroha taira public-reset apply` are
+the only public-reset surfaces. There is no Python controller, compatibility
+alias, or parallel V1 schema. Preflight performs local fail-closed admission;
+apply is the live mutating operation. Apply requires explicit owner-private,
+runtime-only authorization, SSH, and canary inputs and every admitted host must
+already contain the trusted compiled dispatcher and reset guard. Never persist
+those inputs in the repository or let the candidate provision its own host
+authority.
 
 ## Public MCP endpoint
 
@@ -167,28 +191,30 @@ public node without validator/operator evidence.
 
 ## Public CLI diagnostics
 
-Copy `configs/soranexus/taira/taira-canary-client.example.toml` to an ignored,
-owner-only runtime path and replace its placeholders. Then run:
+Run the read-only public diagnostic without loading client configuration or
+signing material:
 
 ```bash
-target/local-release/iroha -c /private/runtime/client.toml \
+target/release/iroha \
   taira doctor --public-root https://taira.sora.org --json
 ```
 
-For an explicitly authorized write canary:
+For explicitly authorized mutation, use the admitted same-revision
+`iroha taira public-reset apply` workflow. It owns the ordered onboarding,
+faucet, and final-canary prepare/persist/submit/recover sequence. Its low-level
+`iroha taira write-canary` child handles exactly one operation and exactly one
+action over inherited numeric descriptors; there is no aggregate or one-shot
+form. Keep the populated
+`configs/soranexus/taira/taira-canary-client.example.toml` copy and onboarding
+token in the owner-only runtime workspace. Do not replace the compiled protocol
+with a parallel Python implementation.
 
-```bash
-target/local-release/iroha -c /private/runtime/client.toml \
-  --fee-payer authority \
-  taira write-canary \
-  --public-root https://taira.sora.org \
-  --onboarding-token-file /private/runtime/onboarding.token \
-  --write-config /private/runtime/canary-client.toml \
-  --json
-```
-
-The canary CLI owns onboarding, faucet funding, blocking submission, and
-receipt verification. Do not replace it with a parallel Python implementation.
+Deployment proof always runs a fresh same-revision read-only Inrou check;
+retained receipts are audit evidence and never substitute for current
+liveness. Host cleanup persists one request-bound plan before mutation, then
+removes only marker-admitted upload/release roots through crash-resumable
+tombstones within the signed reclaim-byte cap. It does not scan or prune live
+state, secrets, the selected release, or rollback state.
 
 Before other live writes, verify the account exists, holds a positive fee
 asset balance, and has the exact required permission. After any reset, treat
@@ -202,17 +228,18 @@ For a pre-signed transaction envelope, prefer
 ```json
 {
   "body_base64": "<base64-encoded versioned SignedTransaction>",
-  "hash": "<64-character lowercase transaction hash>",
+  "hash": "<64-character canonical lowercase Iroha transaction hash>",
   "status_accept": "application/json",
-  "terminal_statuses": ["Applied"],
   "timeout_ms": 120000
 }
 ```
 
 Compute the expected hash locally and require the submit receipt hash, returned
-hash fields, and final `Applied` status to match it. `Rejected`, `Expired`, a
-timeout, or a successful submit without terminal `Applied` is not success. Do
-not pass more than one envelope encoding.
+hash fields, and exact global, state-resolved `Applied` status to match it. The
+wait finality rule is fixed and has no terminal-status override. `Rejected`,
+`Expired`, cached `Applied`, a timeout, or a successful submit without
+state-resolved `Applied` is not success. Do not pass more than one envelope
+encoding.
 
 For Musubi reads, prefer:
 
@@ -256,7 +283,7 @@ visibility, not a bad CID.
    `x-iroha-fanout-routes-*` headers show any failed, denied, unavailable, or
    not-found route, even when HTTP status is 2xx. Do not reconcile or zero
    cached wallet state from an incomplete read.
-2. Report transaction hashes and terminal status for successful writes.
+2. Report transaction hashes and exact global/state `Applied` evidence for successful writes.
 3. Surface server errors and classify them as authentication, validation,
    missing-tool exposure, endpoint availability, or chain-health failures.
 4. Do not invent operator credentials or direct validator hostnames.

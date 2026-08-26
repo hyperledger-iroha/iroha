@@ -476,13 +476,12 @@ mod governance_service_registry_tests {
             Slot::ReputationFinalizedArchiveRetentionAuthority,
             Slot::SoracloudRuntimeMutationSigner,
             Slot::ReputationJournalCheckpoint,
-            Slot::SoracloudHfInferenceCredentialProvider,
             Slot::ModerationCheckpointStore,
             Slot::EvidenceViewerTransparencyPublisher,
             Slot::StreamTokenGatewayAdmission,
             Slot::ModerationPanelNotificationArchive,
         ];
-        assert_eq!(slots.len(), 55);
+        assert_eq!(slots.len(), 54);
         for (index, slot) in slots.into_iter().enumerate() {
             assert_eq!(usize::from(slot.wire_id()), index + 1);
             assert!(stock_runtime_provider_slot_is_supported(slot));
@@ -848,8 +847,6 @@ define_runtime_provider_backends_v1! {
         optional evidence_viewer_transparency_publisher: Arc< dyn sorafs_node::evidence_viewer::transparency_producer:: EvidenceViewerTransparencyPublisherV1, > => pub fn with_evidence_viewer_transparency_publisher(publisher);
         /// Attach the deployment-owned Soracloud transaction and provenance signer.
         optional soracloud_runtime_mutation_signer: Arc<dyn crate::soracloud_runtime_signer::SoracloudRuntimeMutationSignerV1> => pub fn with_soracloud_runtime_mutation_signer(signer);
-        /// Attach the deployment-owned authenticated HF credential provider.
-        optional soracloud_hf_inference_credential_provider: Arc<dyn crate::soracloud_hf_credential::SoracloudHfInferenceCredentialProviderV1> => pub fn with_soracloud_hf_inference_credential_provider(provider);
         /// Attach the exact-qualified global threshold-beacon partial signer.
         optional global_beacon_partial_signer: Arc<dyn GlobalBeaconPartialSignerBrokerBackendV1> => pub fn with_global_beacon_partial_signer(signer);
         /// Attach the exact-qualified Parliament TLE partial-release signer.

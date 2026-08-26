@@ -113,7 +113,7 @@ public final class IdentifierReceiptCanonicalEncoderTests {
                 samplePayloadWithHashFields(
                     " " + "opaque:" + "44".repeat(32),
                     "55".repeat(32),
-                    "uaid:" + "66".repeat(32),
+                    "uaid:" + "66".repeat(31) + "67",
                     "11".repeat(32),
                     "EE".repeat(32))),
         "opaque_id exactness must fail");
@@ -123,7 +123,7 @@ public final class IdentifierReceiptCanonicalEncoderTests {
                 samplePayloadWithHashFields(
                     "opaque:" + "44".repeat(32),
                     "55".repeat(32) + " ",
-                    "uaid:" + "66".repeat(32),
+                    "uaid:" + "66".repeat(31) + "67",
                     "11".repeat(32),
                     "EE".repeat(32))),
         "receipt_hash exactness must fail");
@@ -133,7 +133,7 @@ public final class IdentifierReceiptCanonicalEncoderTests {
                 samplePayloadWithHashFields(
                     "opaque:" + "44".repeat(32),
                     "55".repeat(32),
-                    " " + "uaid:" + "66".repeat(32),
+                    " " + "uaid:" + "66".repeat(31) + "67",
                     "11".repeat(32),
                     "EE".repeat(32))),
         "uaid exactness must fail");
@@ -143,7 +143,7 @@ public final class IdentifierReceiptCanonicalEncoderTests {
                 samplePayloadWithHashFields(
                     "opaque:" + "44".repeat(32),
                     "55".repeat(32),
-                    "uaid:" + "66".repeat(32),
+                    "uaid:" + "66".repeat(31) + "67",
                     " " + "11".repeat(32),
                     "EE".repeat(32))),
         "program_digest exactness must fail");
@@ -153,10 +153,29 @@ public final class IdentifierReceiptCanonicalEncoderTests {
                 samplePayloadWithHashFields(
                     "opaque:" + "44".repeat(32),
                     "55".repeat(32),
-                    "uaid:" + "66".repeat(32),
+                    "uaid:" + "66".repeat(31) + "67",
                     "11".repeat(32),
                     "EE".repeat(32) + " ")),
         "opening input_ciphertext_hash exactness must fail");
+
+    final String canonicalUaid = "uaid:" + "66".repeat(31) + "67";
+    for (final String uaid :
+        new String[] {
+          canonicalUaid.substring("uaid:".length()),
+          canonicalUaid.toUpperCase(Locale.ROOT),
+          "uaid:" + "66".repeat(32)
+        }) {
+      assertThrows(
+          () ->
+              IdentifierReceiptCanonicalEncoder.encodePayload(
+                  samplePayloadWithHashFields(
+                      "opaque:" + "44".repeat(32),
+                      "55".repeat(32),
+                      uaid,
+                      "11".repeat(32),
+                      "EE".repeat(32))),
+          "canonical UAID validation must fail");
+    }
 
     assertThrows(
         () -> IdentifierReceiptCanonicalEncoder.encodePayload(samplePayloadWithTimestamps(-1L, 142L, 84L, 242L)),
@@ -395,7 +414,7 @@ public final class IdentifierReceiptCanonicalEncoderTests {
             "A1B2C3D4"),
         "opaque:" + "44".repeat(32),
         "55".repeat(32),
-        "uaid:" + "66".repeat(32),
+        "uaid:" + "66".repeat(31) + "67",
         ACCOUNT_ID);
   }
 
@@ -444,7 +463,7 @@ public final class IdentifierReceiptCanonicalEncoderTests {
         accountId,
         "opaque:" + "44".repeat(32),
         "55".repeat(32),
-        "uaid:" + "66".repeat(32),
+        "uaid:" + "66".repeat(31) + "67",
         "11".repeat(32),
         "EE".repeat(32));
   }

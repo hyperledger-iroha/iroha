@@ -13,8 +13,8 @@ use iroha_data_model::{
     account::AccountId,
     asset::{AssetBalancePolicy, AssetDefinition},
     isi::{
-        Instruction, InstructionBox, Register, decode_instruction_from_pair,
-        frame_instruction_payload,
+        Instruction, InstructionBox, InstructionRegistry, Register, decode_instruction_from_pair,
+        frame_instruction_payload, framed_instruction_payload,
     },
     metadata::Metadata,
     name::Name,
@@ -1448,11 +1448,9 @@ fn build_instruction(raw: &RawInstruction) -> Result<InstructionBox> {
         .with_context(|| format!("failed to decode wire instruction '{}'", raw.wire_name))
 }
 fn parse_account_id(value: &str) -> Result<AccountId> {
-    let account = AccountId::parse_encoded(value)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .with_context(|| {
-            format!("account id '{value}' must be a canonical I105-encoded literal")
-        })?;
+    let account = AccountId::parse_encoded(value).with_context(|| {
+        format!("account id '{value}' must be a canonical I105-encoded literal")
+    })?;
     if account.to_string() != value {
         bail!("account id '{value}' must use its exact canonical I105 encoding");
     }
@@ -1549,16 +1547,26 @@ fn wire_payloads_from_encoded(encoded: &[u8]) -> Result<Vec<WireInstructionPaylo
     let mut out = Vec::new();
     for instruction in payload.instructions().explicit_instructions() {
         let type_name = Instruction::id(&**instruction);
-        let wire_name = registry.wire_id(type_name).unwrap_or(type_name);
-        let payload = Instruction::dyn_encode(&**instruction);
-        let framed =
-            frame_instruction_payload(type_name, &payload).map_err(|err| eyre!(err.to_string()))?;
+        let wire_name = required_instruction_wire_id(&registry, type_name)?;
+        let (framed_wire_name, framed) = framed_instruction_payload(instruction)
+            .ok_or_else(|| eyre!("instruction type `{type_name}` cannot be framed"))?;
+        if framed_wire_name != wire_name {
+            bail!("instruction registry returned inconsistent V1 wire identifiers");
+        }
         out.push(WireInstructionPayload {
             wire_name: wire_name.to_owned(),
             payload_base64: BASE64.encode(framed),
         });
     }
     Ok(out)
+}
+fn required_instruction_wire_id(
+    registry: &InstructionRegistry,
+    type_name: &'static str,
+) -> Result<&'static str> {
+    registry
+        .wire_id(type_name)
+        .ok_or_else(|| eyre!("instruction type `{type_name}` has no registered V1 wire identifier"))
 }
 fn apply_wire_payloads_to_payload_json(
     payload: &mut Value,
@@ -3471,11 +3479,23 @@ mod tests {
             .into();
         let type_name = Instruction::id(&*instruction).to_owned();
         let payload = Instruction::dyn_encode(&*instruction);
-        let framed = frame_instruction_payload(&type_name, &payload).expect("frame instruction");
+        let framed = frame_instruction_payload("iroha.register", &payload)
+            .expect("frame instruction by canonical wire identifier");
         let decoded =
             decode_instruction_from_pair("iroha.register", &framed).expect("decode instruction");
         assert_eq!(Instruction::id(&*decoded), type_name);
         assert_eq!(Instruction::dyn_encode(&*decoded), payload);
+    }
+    #[test]
+    fn fixture_export_rejects_type_name_fallback() {
+        let registry = iroha_data_model::instruction_registry::default();
+        let error = required_instruction_wire_id(&registry, "legacy::UnregisteredInstruction")
+            .expect_err("an unregistered type must not become its own wire identifier");
+        assert!(
+            error
+                .to_string()
+                .contains("has no registered V1 wire identifier")
+        );
     }
     fn sample_manifest() -> Manifest {
         Manifest {

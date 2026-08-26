@@ -16332,7 +16332,7 @@ def test_queue_plan_semantic_request_production_source_is_bound() -> None:
             "pub fn queue_plan_synced_request_id_from_network_digest(",
             "    Hash::new(\n"
             "        norito::encode_canonical(&(\n"
-            "            QUEUE_PLAN_SYNCED_REQUEST_DOMAIN_V5,\n"
+            "            QUEUE_PLAN_SYNCED_REQUEST_DOMAIN_V1,\n"
             "            network_id_digest,\n"
             "            entrypoint_hash,\n"
             "        ))\n"
@@ -16377,7 +16377,7 @@ def test_queue_plan_semantic_request_production_source_is_bound() -> None:
         ),
         (
             "crates/iroha_core/src/torii_proxy.rs",
-            "pub fn validate_queue_plan_admission_certificate_for_network_digest_v2(",
+            "pub fn validate_queue_plan_admission_certificate_for_network_digest_v1(",
             "    certificate.binding.validate_structure()?;",
             "    let _ = &certificate.binding;",
             "certificate validation must invoke canonical semantic-request validation",
@@ -16392,8 +16392,8 @@ def test_queue_plan_semantic_request_production_source_is_bound() -> None:
         (
             "crates/iroha_core/src/queue/journal.rs",
             "fn global_admission_binding(&self)",
-            "QueuePlanAdmissionBindingV2::try_from_durable_admission(&durable_admission)",
-            "QueuePlanAdmissionBindingV2::try_from_durable_admission_unchecked(&durable_admission)",
+            "QueuePlanAdmissionBindingV1::try_from_durable_admission(&durable_admission)",
+            "QueuePlanAdmissionBindingV1::try_from_durable_admission_unchecked(&durable_admission)",
             "journal replay must pass its durable identity through the shared binding validator",
         ),
         (
@@ -16405,7 +16405,7 @@ def test_queue_plan_semantic_request_production_source_is_bound() -> None:
             "    )",
             "    Hash::new(\n"
             "        norito::to_bytes(&(\n"
-            "            \"torii:proxy:queue-plan-synced:v5\",\n"
+            "            \"torii:proxy:queue-plan-synced:v1\",\n"
             "            app.state.network_id_ref(),\n"
             "            entrypoint_hash,\n"
             "        ))\n"

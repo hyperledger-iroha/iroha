@@ -5085,20 +5085,6 @@ pub(crate) fn peer_key_policy_reject_snapshot_for_tests() -> (u64, Option<&'stat
     );
     (total, last_reason)
 }
-static VRF_PENALTY_EPOCH: AtomicU64 = AtomicU64::new(0);
-static VRF_NON_REVEAL_TOTAL: AtomicU64 = AtomicU64::new(0);
-static VRF_NO_PARTICIPATION_TOTAL: AtomicU64 = AtomicU64::new(0);
-static VRF_LATE_REVEALS_TOTAL: AtomicU64 = AtomicU64::new(0);
-/// Return the legacy VRF penalty counters still consumed by one Torii route.
-#[must_use]
-pub fn vrf_penalty_snapshot() -> (u64, u64, u64, u64) {
-    (
-        VRF_PENALTY_EPOCH.load(Ordering::Relaxed),
-        VRF_NON_REVEAL_TOTAL.load(Ordering::Relaxed),
-        VRF_NO_PARTICIPATION_TOTAL.load(Ordering::Relaxed),
-        VRF_LATE_REVEALS_TOTAL.load(Ordering::Relaxed),
-    )
-}
 /// Worker-loop queue identifiers used by the remaining async adapter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WorkerQueueKind {

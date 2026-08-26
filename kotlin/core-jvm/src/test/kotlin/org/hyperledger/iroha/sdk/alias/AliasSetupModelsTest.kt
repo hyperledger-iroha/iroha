@@ -593,7 +593,7 @@ class AliasSetupModelsTest {
     }
 
     @Test
-    fun sponsoredOnboardingReceiptIsTypedSecretFreeAndRoundTripsForApply() {
+    fun sponsoredOnboardingReceiptAndPrepareRequestAreTypedAndSecretFree() {
         val intent = AliasIntentV1.AccountAlias(
             AliasAccountIntentV1(
                 resolvedAlias(),
@@ -623,16 +623,34 @@ class AliasSetupModelsTest {
         val receipt = AccountOnboardingPlanReceiptV1(body, "03".repeat(32), "AA")
         val encoded = JsonEncoder.encode(receipt.toJsonMap()).toByteArray(StandardCharsets.UTF_8)
         assertEquals(receipt, AccountOnboardingJsonParser.parseReceipt(encoded))
-        val apply = AccountOnboardingApplyRequestV1(receipt).toJsonMap()
-        assertFalse(JsonEncoder.encode(apply).contains("token"))
-        assertFalse(JsonEncoder.encode(apply).contains("private_key"))
-
-        val response = AccountOnboardingJsonParser.parseResponse(
-            """{"account_id":"${account(0x22)}","alias":"merchant@banka.paynet","status":"Unchanged","disposition":{"kind":"no_op","value":null}}"""
-                .toByteArray(StandardCharsets.UTF_8),
+        val binding = TairaPublicResetMutationBindingV1(
+            authorizationSha256 = "11".repeat(32),
+            authorizationNonce = "onboarding-fixture-nonce-0000001",
+            kind = TairaPublicResetMutationBindingV1.ONBOARDING,
+            phase = "onboarding",
+            idempotencyKey = "22".repeat(32),
+            executionExpiresAtUnixMs = 4_102_444_800_000,
         )
-        assertEquals(AccountOnboardingStatusV1.UNCHANGED, response.status)
-        assertEquals(null, response.transactionHashHex)
+        val prepare = AccountOnboardingPrepareRequestV1(binding, receipt).toJsonMap()
+        assertFalse(JsonEncoder.encode(prepare).contains("token"))
+        assertFalse(JsonEncoder.encode(prepare).contains("private_key"))
+        assertTrue(JsonEncoder.encode(prepare).contains("\"schema\":\"iroha.accounts.onboard.prepare.v1\""))
+
+        val proofRequired = AccountOnboardingJsonParser.parsePrepareResponse(
+            JsonEncoder.encode(
+                AccountOnboardingProofRequiredPrepareResponseV1(
+                    binding,
+                    "03".repeat(32),
+                    account(0x22),
+                    "merchant@banka.paynet",
+                    AliasPlanDispositionV1.NO_OP,
+                    "aa".repeat(64),
+                ).toJsonMap(),
+            ).toByteArray(StandardCharsets.UTF_8),
+        )
+        assertTrue(proofRequired is AccountOnboardingProofRequiredPrepareResponseV1)
+        assertEquals("ProofRequired", proofRequired.outcome)
+        assertEquals("account_alias_current_state", proofRequired.proofKind)
 
         val readiness = AccountOnboardingJsonParser.parseReadiness(
             """{"version":1,"status":{"status":"ready","value":null},"diagnostics":[]}"""
@@ -640,145 +658,6 @@ class AliasSetupModelsTest {
         )
         assertEquals(AliasSetupStatusV1.READY, readiness.status)
         assertTrue(readiness.diagnostics.isEmpty())
-    }
-
-    @Test
-    fun onboardingResponseRequiresExactStatusHashAndDispositionSemantics() {
-        val hash = "ab".repeat(32)
-        val account = account(0x22)
-
-        AccountOnboardingResponseV1(
-            account,
-            "merchant@banka.paynet",
-            hash,
-            AccountOnboardingStatusV1.QUEUED,
-            AliasPlanDispositionV1.CREATE,
-        )
-        AccountOnboardingResponseV1(
-            account,
-            "merchant@banka.paynet",
-            hash,
-            AccountOnboardingStatusV1.REPAIRED,
-            AliasPlanDispositionV1.REPAIR,
-        )
-        AccountOnboardingResponseV1(
-            account,
-            "merchant@banka.paynet",
-            hash,
-            AccountOnboardingStatusV1.REPAIRED,
-            AliasPlanDispositionV1.NO_OP,
-        )
-        AccountOnboardingResponseV1(
-            account,
-            "merchant@banka.paynet",
-            null,
-            AccountOnboardingStatusV1.UNCHANGED,
-            AliasPlanDispositionV1.NO_OP,
-        )
-
-        listOf(
-            Triple(AccountOnboardingStatusV1.QUEUED, AliasPlanDispositionV1.REPAIR, hash),
-            Triple(AccountOnboardingStatusV1.REPAIRED, AliasPlanDispositionV1.CREATE, hash),
-            Triple(AccountOnboardingStatusV1.UNCHANGED, AliasPlanDispositionV1.NO_OP, hash),
-            Triple(AccountOnboardingStatusV1.QUEUED, AliasPlanDispositionV1.CREATE, null),
-        ).forEach { (status, disposition, transactionHash) ->
-            assertFailsWith<IllegalArgumentException> {
-                AccountOnboardingResponseV1(
-                    account,
-                    "merchant@banka.paynet",
-                    transactionHash,
-                    status,
-                    disposition,
-                )
-            }
-        }
-        assertFailsWith<IllegalArgumentException> {
-            AccountOnboardingResponseV1(
-                account,
-                "Merchant@Banka.Paynet",
-                null,
-                AccountOnboardingStatusV1.UNCHANGED,
-                AliasPlanDispositionV1.NO_OP,
-            )
-        }
-    }
-
-    @Test
-    fun onboardingResponseVerifierBindsReceiptAndHttpStatus() {
-        val createReceipt = AccountOnboardingPlanReceiptV1(
-            onboardingBody(account(0x11)),
-            "03".repeat(32),
-            "AA",
-        )
-        val unchanged = AccountOnboardingResponseV1(
-            account(0x22),
-            "merchant@banka.paynet",
-            null,
-            AccountOnboardingStatusV1.UNCHANGED,
-            AliasPlanDispositionV1.NO_OP,
-        )
-        assertEquals(
-            unchanged,
-            AccountOnboardingResponseVerifier.requireValidForReceipt(
-                createReceipt,
-                unchanged,
-                200,
-            ),
-        )
-
-        val queued = AccountOnboardingResponseV1(
-            account(0x22),
-            "merchant@banka.paynet",
-            "ab".repeat(32),
-            AccountOnboardingStatusV1.QUEUED,
-            AliasPlanDispositionV1.CREATE,
-        )
-        assertEquals(
-            queued,
-            AccountOnboardingResponseVerifier.requireValidForReceipt(createReceipt, queued, 202),
-        )
-
-        assertFailsWith<IllegalArgumentException> {
-            AccountOnboardingResponseVerifier.requireValidForReceipt(createReceipt, queued, 200)
-        }
-        val substituted = AccountOnboardingResponseV1(
-            account(0x23),
-            "merchant@banka.paynet",
-            null,
-            AccountOnboardingStatusV1.UNCHANGED,
-            AliasPlanDispositionV1.NO_OP,
-        )
-        assertFailsWith<IllegalArgumentException> {
-            AccountOnboardingResponseVerifier.requireValidForReceipt(
-                createReceipt,
-                substituted,
-                200,
-            )
-        }
-
-        val noOpReceipt = AccountOnboardingPlanReceiptV1(
-            onboardingBody(account(0x11), disposition = AliasPlanDispositionV1.NO_OP),
-            "04".repeat(32),
-            "AA",
-        )
-        val ancillaryRepair = AccountOnboardingResponseV1(
-            account(0x22),
-            "merchant@banka.paynet",
-            "cd".repeat(32),
-            AccountOnboardingStatusV1.REPAIRED,
-            AliasPlanDispositionV1.NO_OP,
-        )
-        assertEquals(
-            ancillaryRepair,
-            AccountOnboardingResponseVerifier.requireValidForReceipt(
-                noOpReceipt,
-                ancillaryRepair,
-                202,
-            ),
-        )
-        assertFailsWith<IllegalArgumentException> {
-            AccountOnboardingResponseVerifier.requireValidForReceipt(noOpReceipt, queued, 202)
-        }
     }
 
     @Test
@@ -799,15 +678,23 @@ class AliasSetupModelsTest {
         )
 
         val receipt = signedOnboardingReceipt(body, signer)
-        assertTrue(AccountOnboardingReceiptVerifier.verify(receipt, body.networkId, null))
-        assertEquals(receipt, AccountOnboardingReceiptVerifier.requireValidForRequest(body.request, receipt, body.networkId, null))
+        assertTrue(AccountOnboardingReceiptVerifier.verify(receipt, body.networkId, authority))
+        assertEquals(
+            receipt,
+            AccountOnboardingReceiptVerifier.requireValidForRequest(
+                body.request,
+                receipt,
+                body.networkId,
+                authority,
+            ),
+        )
 
         val tampered = AccountOnboardingPlanReceiptV1(
             onboardingBody(authority, OTHER_NETWORK_ID),
             receipt.planHash,
             receipt.signature,
         )
-        assertFalse(AccountOnboardingReceiptVerifier.verify(tampered, body.networkId, null))
+        assertFalse(AccountOnboardingReceiptVerifier.verify(tampered, body.networkId, authority))
 
         val wrongSigner = Ed25519PrivateKeyParameters(ByteArray(32) { 0x52.toByte() }, 0)
         val wrongAuthority = AccountAddress.fromAccount(
@@ -815,13 +702,12 @@ class AliasSetupModelsTest {
             "ed25519",
         ).toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
         val wrongAuthorityReceipt = signedOnboardingReceipt(onboardingBody(wrongAuthority), signer)
-        assertFalse(AccountOnboardingReceiptVerifier.verify(wrongAuthorityReceipt, body.networkId, null))
+        assertFalse(AccountOnboardingReceiptVerifier.verify(wrongAuthorityReceipt, body.networkId, authority))
 
         val substitutedSelfSignedReceipt = signedOnboardingReceipt(
             onboardingBody(wrongAuthority),
             wrongSigner,
         )
-        assertTrue(AccountOnboardingReceiptVerifier.verify(substitutedSelfSignedReceipt, body.networkId, null))
         assertFalse(
             AccountOnboardingReceiptVerifier.verify(substitutedSelfSignedReceipt, body.networkId, authority),
         )

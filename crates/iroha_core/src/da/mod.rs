@@ -40,7 +40,7 @@ pub use proofs::{
 };
 pub use replay_cache::{
     LaneEpoch, ReplayCache, ReplayCacheConfig, ReplayFingerprint, ReplayInsertOutcome, ReplayKey,
-    ReplayPrimeError,
+    ReplayPrimeError, ReplayReservation,
 };
 pub use shard_cursor::{
     DaShardCursor, DaShardCursorError, DaShardCursorIndex, DaShardCursorJournal, LaneShardCursor,

@@ -745,24 +745,6 @@ ret = "r10=&SoracloudResponse(PublishCheckpoint) under SoracloudIvmHost; CoreHos
 gas = "G_soracloud + request bytes (+ response bytes under SoracloudIvmHost)"
 
 [[syscall]]
-number = "0xC5"
-args = "r10=&SoracloudRequest(ReadSecret)"
-ret = "r10=&SoracloudResponse(ReadSecret) under SoracloudIvmHost; CoreHostImpl returns metered NotImplemented after validation"
-gas = "G_soracloud + request bytes (+ response bytes under SoracloudIvmHost)"
-
-[[syscall]]
-number = "0xC6"
-args = "r10=&SoracloudRequest(ReadCredential)"
-ret = "r10=&SoracloudResponse(ReadCredential) under SoracloudIvmHost; CoreHostImpl returns metered NotImplemented after validation"
-gas = "G_soracloud + request bytes (+ response bytes under SoracloudIvmHost)"
-
-[[syscall]]
-number = "0xC7"
-args = "r10=&SoracloudRequest(EgressFetch)"
-ret = "r10=&SoracloudResponse(EgressFetch) under SoracloudIvmHost; CoreHostImpl returns metered NotImplemented after validation"
-gas = "G_soracloud + request bytes (+ response bytes under SoracloudIvmHost)"
-
-[[syscall]]
 number = "0xC8"
 args = "r10=&SoracloudRequest(ReadConfig)"
 ret = "r10=&SoracloudResponse(ReadConfig) under SoracloudIvmHost; CoreHostImpl returns metered NotImplemented after validation"

@@ -17,7 +17,7 @@ import {
 } from "../src/kagemushaOffline.js";
 
 const OPERATION_ID = "11".repeat(32);
-const TRANSACTION_HASH = "22".repeat(32);
+const TRANSACTION_HASH = "23".repeat(32);
 
 function jsonResponse(payload, { status = 200, headers = {} } = {}) {
   return new Response(JSON.stringify(payload), {
@@ -276,6 +276,18 @@ test("rejected operation parsing requires the exact error envelope", () => {
         },
       }, OPERATION_ID),
       /error\.details must be an object/u,
+    );
+    assert.throws(
+      () => normalize({
+        state: "pending",
+        value: {
+          operation_id: OPERATION_ID,
+          kind: { kind: "redeem", value: null },
+          transaction_hash: "22".repeat(32),
+          submitted_at_ms: 1234,
+        },
+      }, OPERATION_ID),
+      /canonical lowercase 32-byte Iroha hash/u,
     );
   }
 });

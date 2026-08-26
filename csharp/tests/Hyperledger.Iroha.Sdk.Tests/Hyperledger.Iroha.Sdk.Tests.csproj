@@ -31,6 +31,7 @@
     <None Include="../../../fixtures/norito_rpc/transaction_payloads.json" Link="Fixtures/norito_rpc/transaction_payloads.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../fixtures/sccp/native_transfer_event_v1.json" Link="Fixtures/sccp/native_transfer_event_v1.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../fixtures/norito_rpc/alias_setup_v1/alias_setup_v1.json" Link="Fixtures/alias_setup_v1.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../../fixtures/prepared_transactions/prepared_transaction_signature_v1.json" Link="Fixtures/prepared_transaction_signature_v1.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../fixtures/privacy/exact12_v1.tsv" Link="Fixtures/privacy/exact12_v1.tsv" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../fixtures/privacy/exact12_typed_fixture_bundle_v1.norito.b64" Link="Fixtures/privacy/exact12_typed_fixture_bundle_v1.norito.b64" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../fixtures/sorafs_manifest/orderbook/**/*.to" Link="Fixtures/sorafs_manifest/orderbook/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />

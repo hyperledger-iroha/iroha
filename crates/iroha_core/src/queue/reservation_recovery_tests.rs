@@ -3,7 +3,7 @@
 // Included by `queue::tests` so source-bound libtest names remain stable.
 fn live_snapshot_phase_fixture() -> (
     LaneQueueReservationReconciliationSnapshotV1,
-    Vec<LaneQueueReservationKeyV2>,
+    Vec<LaneQueueReservationKeyV1>,
     LaneQueueReservationGroupBindingV1,
 ) {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -33,7 +33,7 @@ fn live_snapshot_phase_fixture() -> (
         .expect("bind exact snapshot phase group");
     let snapshot = queue
         .lane_reservation_reconciliation_snapshot()
-        .expect("capture exact live V4/V6 phase snapshot");
+        .expect("capture exact live V1 phase snapshot");
     (snapshot, keys, group)
 }
 struct ReplayedSnapshotRecoveryFixture {
@@ -41,7 +41,7 @@ struct ReplayedSnapshotRecoveryFixture {
     snapshot: LaneQueueReservationReconciliationSnapshotV1,
     groups: Vec<(
         LaneQueueReservationGroupBindingV1,
-        Vec<LaneQueueReservationKeyV2>,
+        Vec<LaneQueueReservationKeyV1>,
     )>,
     _journal_dir: TempDir,
 }
@@ -108,7 +108,7 @@ fn replayed_snapshot_recovery_fixture(
                     .lock()
                     .as_mut()
                     .expect("installed reservation journal")
-                    .complete_release(LaneQueueReservationReleaseCompletionV5 {
+                    .complete_release(LaneQueueReservationReleaseCompletionV1 {
                         version: LANE_QUEUE_RESERVATION_JOURNAL_VERSION,
                         barrier,
                         ordered_records,
@@ -121,10 +121,10 @@ fn replayed_snapshot_recovery_fixture(
     let queue = Queue::test(config_factory(), &time_source);
     queue
         .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
-        .expect("restore exact V6 snapshot planner owners");
+        .expect("restore exact V1 snapshot planner owners");
     queue
         .install_plan_journal(&plan_path, 1024 * 1024, true)
-        .expect("restore exact V4 snapshot planner owners");
+        .expect("restore exact V1 snapshot planner owners");
     let expected_replayed = group_sizes.iter().sum::<usize>();
     assert_eq!(
         queue
@@ -145,7 +145,7 @@ fn replayed_snapshot_recovery_fixture(
 }
 include!("retired_release_snapshot_recovery_tests.rs");
 #[test]
-fn snapshot_recovery_phase_gate_accepts_only_exact_v4_v6_prefixes_and_order() {
+fn snapshot_recovery_phase_gate_accepts_only_exact_v1_prefixes_and_order() {
     let (live_snapshot, keys, group) = live_snapshot_phase_fixture();
     let cleanup_gate = LaneQueueCarrierCleanupGate::direct_test(group);
     let live_state = cleanup_gate.cleanup_state(
@@ -236,7 +236,7 @@ fn snapshot_recovery_phase_gate_accepts_only_exact_v4_v6_prefixes_and_order() {
         .iter_mut()
         .find(|phase| phase.key == keys[0])
         .expect("first phase exists")
-        .reservation_phase = LaneQueueReservationOwnerPhaseV6::CommitBarrier;
+        .reservation_phase = LaneQueueReservationOwnerPhaseV1::CommitBarrier;
     let partial_phases = lane_reservation_recovery_phase_map(&partial_commit)
         .expect("partition the exact partial Commit cut");
     let partial_state = cleanup_gate.cleanup_state(
@@ -262,7 +262,7 @@ fn snapshot_recovery_phase_gate_accepts_only_exact_v4_v6_prefixes_and_order() {
     committed.ordered_groups.clear();
     committed.commit_barriers = keys.clone();
     for phase in &mut committed.ordered_owner_phases {
-        phase.reservation_phase = LaneQueueReservationOwnerPhaseV6::CommitBarrier;
+        phase.reservation_phase = LaneQueueReservationOwnerPhaseV1::CommitBarrier;
     }
     let committed_state = cleanup_gate.cleanup_state(
         IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED,
@@ -271,7 +271,7 @@ fn snapshot_recovery_phase_gate_accepts_only_exact_v4_v6_prefixes_and_order() {
         0,
         0,
     );
-    // V4 can be one durable append ahead of its V6 marker. Until the marker is durable, the
+    // V1 can be one durable append ahead of its V1 marker. Until the marker is durable, the
     // composed PersistPlanTombstone action has not linearized and the signed prefix stays at zero.
     committed
         .ordered_owner_phases
@@ -279,18 +279,18 @@ fn snapshot_recovery_phase_gate_accepts_only_exact_v4_v6_prefixes_and_order() {
         .find(|phase| phase.key == keys[0])
         .expect("first committed phase exists")
         .queue_plan_phase = QueuePlanReservationPhaseV1::Tombstoned;
-    let v4_ahead_phases = lane_reservation_recovery_phase_map(&committed)
-        .expect("partition the exact V4-before-V6 crash window");
+    let v1_ahead_phases = lane_reservation_recovery_phase_map(&committed)
+        .expect("partition the exact V1-before-V1 crash window");
     assert!(
         lane_reservation_snapshot_group_phase_agrees(
             &committed,
-            &v4_ahead_phases,
+            &v1_ahead_phases,
             group,
             &keys,
             committed_state,
         )
         .is_ok(),
-        "the one bounded V4-before-V6 crash window must remain recoverable"
+        "the one bounded V1-before-V1 crash window must remain recoverable"
     );
     committed
         .ordered_owner_phases
@@ -309,7 +309,7 @@ fn snapshot_recovery_phase_gate_accepts_only_exact_v4_v6_prefixes_and_order() {
             committed_state,
         )
         .is_err(),
-        "a durable V6 marker cannot be hidden behind a stale signed prefix"
+        "a durable V1 marker cannot be hidden behind a stale signed prefix"
     );
     let first_tombstone_state = cleanup_gate.cleanup_state(
         IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED,
@@ -327,7 +327,7 @@ fn snapshot_recovery_phase_gate_accepts_only_exact_v4_v6_prefixes_and_order() {
             first_tombstone_state,
         )
         .is_ok(),
-        "the signed tombstone prefix must advance exactly with its V6 marker"
+        "the signed tombstone prefix must advance exactly with its V1 marker"
     );
     committed
         .ordered_owner_phases
@@ -346,7 +346,7 @@ fn snapshot_recovery_phase_gate_accepts_only_exact_v4_v6_prefixes_and_order() {
             first_tombstone_state,
         )
         .is_err(),
-        "a signed completed prefix requires the exact durable V6 marker"
+        "a signed completed prefix requires the exact durable V1 marker"
     );
 }
 #[test]
@@ -385,10 +385,10 @@ fn snapshot_recovery_authority_requires_complete_exact_group_coverage_and_is_a_s
     let queue = Queue::test(config_factory(), &time_source);
     queue
         .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
-        .expect("restore exact V6 reservation snapshot");
+        .expect("restore exact V1 reservation snapshot");
     queue
         .install_plan_journal(&plan_path, 1024 * 1024, true)
-        .expect("restore exact V4 QueuePlan journal");
+        .expect("restore exact V1 QueuePlan journal");
     assert_eq!(
         queue
             .replay_plan_journal(&state)
@@ -398,7 +398,7 @@ fn snapshot_recovery_authority_requires_complete_exact_group_coverage_and_is_a_s
     );
     let snapshot = queue
         .lane_reservation_reconciliation_snapshot()
-        .expect("capture the combined V4/V6 startup snapshot");
+        .expect("capture the combined V1 startup snapshot");
     let group = lane_queue_reservation_group_binding_from_ordered_keys(keys.iter())
         .expect("bind exact startup reservation group");
     let recovered_state = LaneQueueCarrierCleanupGate::direct_test(group).cleanup_state(
@@ -417,7 +417,7 @@ fn snapshot_recovery_authority_requires_complete_exact_group_coverage_and_is_a_s
     let validator_set_hash = HashOf::<Vec<PeerId>>::from_untyped_unchecked(Hash::new(
         b"snapshot-authority-validator-set",
     ));
-    let lifecycle_projection = |ordered_keys: Vec<LaneQueueReservationKeyV2>,
+    let lifecycle_projection = |ordered_keys: Vec<LaneQueueReservationKeyV1>,
                                 cursor_seed: &'static [u8]| {
         LaneReservationSnapshotLifecycleProjectionV1 {
             height_context_id,
@@ -425,7 +425,7 @@ fn snapshot_recovery_authority_requires_complete_exact_group_coverage_and_is_a_s
             executable_payload_hash: Hash::new(b"snapshot-authority-executable-payload"),
             cursor_sequence: 1,
             cursor_hash: Hash::new(cursor_seed),
-            cursor_phase: AutonomousLifecycleCursorPhaseKindV2::Live,
+            cursor_phase: AutonomousLifecycleCursorPhaseKindV1::Live,
             owner_generation: 1,
             source_generation: None,
             validator_set_hash_version: 1,
@@ -661,7 +661,7 @@ fn snapshot_recovery_rejects_strict_absence_against_prepared_release_phase() {
     let (group, keys) = &fixture.groups[0];
     assert_eq!(fixture.snapshot.ordered_owner_phases.len(), keys.len());
     assert!(fixture.snapshot.ordered_owner_phases.iter().all(|phase| {
-        phase.reservation_phase == LaneQueueReservationOwnerPhaseV6::ReleasePrepared
+        phase.reservation_phase == LaneQueueReservationOwnerPhaseV1::ReleasePrepared
     }));
     let strict_state =
         strictly_absent_lane_reservation_snapshot_recovery_state(&fixture.snapshot, *group, keys)
@@ -747,7 +747,7 @@ fn completed_release_install_and_replay_remain_quarantined_until_explicit_proof(
             .lock()
             .as_mut()
             .expect("installed reservation journal")
-            .complete_release(LaneQueueReservationReleaseCompletionV5 {
+            .complete_release(LaneQueueReservationReleaseCompletionV1 {
                 version: LANE_QUEUE_RESERVATION_JOURNAL_VERSION,
                 barrier: barrier.clone(),
                 ordered_records,
@@ -1684,7 +1684,7 @@ fn replay_late_forged_commit_barrier_preserves_every_durable_owner() {
     assert!(queue.routing_plans.is_empty());
     assert!(queue.durable_plan_claims.is_empty());
     let mut expected_barriers = vec![keys[0], forged];
-    expected_barriers.sort_by_key(LaneQueueReservationKeyV2::digest);
+    expected_barriers.sort_by_key(LaneQueueReservationKeyV1::digest);
     assert_eq!(queue.lane_reservation_commit_barriers(), expected_barriers);
     assert_eq!(
         queue
@@ -2063,7 +2063,7 @@ fn plan_tombstoned_commit_barrier_replays_absent_until_explicit_proof() {
         snapshot.ordered_owner_phases,
         vec![LaneQueueReservationRecoveryPhaseV1 {
             key,
-            reservation_phase: LaneQueueReservationOwnerPhaseV6::CommitBarrier,
+            reservation_phase: LaneQueueReservationOwnerPhaseV1::CommitBarrier,
             queue_plan_phase: QueuePlanReservationPhaseV1::Tombstoned,
             plan_tombstone_marked: false,
         }]
@@ -2074,7 +2074,7 @@ fn plan_tombstoned_commit_barrier_replays_absent_until_explicit_proof() {
     assert_eq!(
         queue
             .commit_lane_reservation_for_test(&key)
-            .expect("persist V6 marker before simulated publication crash"),
+            .expect("persist V1 marker before simulated publication crash"),
         LaneQueueReservationOutcome::AlreadyFinalized
     );
     assert_eq!(queue.lane_reservation_commit_barriers(), vec![key]);
@@ -2089,7 +2089,7 @@ fn plan_tombstoned_commit_barrier_replays_absent_until_explicit_proof() {
         .as_mut()
         .expect("installed plan journal")
         .compact_if_needed()
-        .expect("compact away retained V4 tombstone after V6 marker");
+        .expect("compact away retained V1 tombstone after V1 marker");
     drop(queue);
     let queue = Queue::test(config_factory(), &time_source);
     assert_eq!(
@@ -2107,7 +2107,7 @@ fn plan_tombstoned_commit_barrier_replays_absent_until_explicit_proof() {
     );
     queue
         .replay_plan_journal(&state)
-        .expect("V6 marker proves compacted V4 tombstone");
+        .expect("durable marker proves compacted V1 tombstone");
     assert_eq!(
         queue
             .lane_reservation_reconciliation_snapshot()
@@ -2115,7 +2115,7 @@ fn plan_tombstoned_commit_barrier_replays_absent_until_explicit_proof() {
             .ordered_owner_phases,
         vec![LaneQueueReservationRecoveryPhaseV1 {
             key,
-            reservation_phase: LaneQueueReservationOwnerPhaseV6::CommitBarrier,
+            reservation_phase: LaneQueueReservationOwnerPhaseV1::CommitBarrier,
             queue_plan_phase: QueuePlanReservationPhaseV1::Tombstoned,
             plan_tombstone_marked: true,
         }]
@@ -2129,7 +2129,7 @@ fn plan_tombstoned_commit_barrier_replays_absent_until_explicit_proof() {
     assert!(queue.lane_reservation_commit_barriers().is_empty());
 }
 #[test]
-fn unmarked_commit_without_live_or_retained_v4_tombstone_fails_closed() {
+fn unmarked_commit_without_live_or_retained_v1_tombstone_fails_closed() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let state = lane_reservation_test_state();
     let dir = tempdir().expect("tempdir");
@@ -2152,11 +2152,11 @@ fn unmarked_commit_without_live_or_retained_v4_tombstone_fails_closed() {
         let plan = plan.as_mut().expect("installed plan journal");
         assert_eq!(
             plan.remove_exact_global_admission_binding_strict_durable(&key)
-                .expect("persist exact V4 tombstone"),
+                .expect("persist exact V1 tombstone"),
             QueuePlanJournalExactRemoveResult::Removed
         );
         plan.compact_if_needed()
-            .expect("compact away unmarked V4 tombstone evidence");
+            .expect("compact away unmarked V1 tombstone evidence");
         key
     };
     let block_header = ValidBlock::new_dummy(&checked_random_queue_keypair().into_parts().1)
@@ -2183,7 +2183,7 @@ fn unmarked_commit_without_live_or_retained_v4_tombstone_fails_closed() {
     );
     let error = queue
         .replay_plan_journal(&state)
-        .expect_err("unmarked absence without retained V4 evidence must fail closed");
+        .expect_err("unmarked absence without retained V1 evidence must fail closed");
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
     assert!(
         error

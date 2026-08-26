@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.sdk.address
 
+import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -28,6 +29,20 @@ class AccountAddressTest {
             AccountAddress.fromI105(nonCanonical, AccountAddress.DEFAULT_I105_DISCRIMINANT)
         }
         assertEquals(AccountAddressErrorCode.INVALID_I105_CHAR, error.code)
+    }
+
+    @Test
+    fun rejectsRetiredDomainSelectorPrefix() {
+        val canonical = AccountAddress.fromAccount(TestEd25519Keys.publicKey(0x01), "ed25519")
+            .canonicalBytes
+        val selectorPrefixed =
+            byteArrayOf(canonical[0], 0x01) +
+                ByteArray(12) { (it + 1).toByte() } +
+                canonical.copyOfRange(1, canonical.size)
+
+        assertFailsWith<AccountAddressException> {
+            AccountAddress.fromCanonicalBytes(selectorPrefixed)
+        }
     }
 
     @Test

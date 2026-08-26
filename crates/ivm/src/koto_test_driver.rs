@@ -2387,7 +2387,6 @@ fn make_tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
 }
 fn parse_account_literal(raw: &str) -> Result<AccountId, String> {
     AccountId::parse_encoded(raw)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .or_else(|_| {
             raw.parse::<iroha_data_model::smart_contract::ContractAddress>()
                 .map(|address| address.subject_id())

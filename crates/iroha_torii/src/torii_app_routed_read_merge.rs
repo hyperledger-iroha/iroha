@@ -242,9 +242,6 @@ fn list_items_from_payload<'a>(
     payload: &'a Value,
     context: &'static str,
 ) -> Result<&'a [Value], Response> {
-    if let Some(items) = payload.as_array() {
-        return Ok(items);
-    }
     if let Some(items) = payload
         .as_object()
         .and_then(|obj| obj.get("items"))
@@ -260,7 +257,6 @@ fn list_items_from_owned_payload(
     context: &'static str,
 ) -> Result<Vec<Value>, Response> {
     match payload {
-        Value::Array(items) => Ok(items),
         Value::Object(mut object) => match object.remove("items") {
             Some(Value::Array(items)) => Ok(items),
             _ => Err(torii_internal_json_error(context)),
@@ -344,14 +340,15 @@ fn merged_list_response(
 ) -> Result<Response, Response> {
     budget.begin_json_merge();
     let item_count = payloads.iter().try_fold(0_usize, |count, payload| {
-        count.checked_add(
-            list_items_from_payload(
-                payload,
-                "expected JSON object with `items` or JSON array payload while merging list response",
-            )?
-            .len(),
-        )
-        .ok_or_else(torii_routed_read_accounting_response)
+        count
+            .checked_add(
+                list_items_from_payload(
+                    payload,
+                    "expected JSON object with `items` while merging list response",
+                )?
+                .len(),
+            )
+            .ok_or_else(torii_routed_read_accounting_response)
     })?;
     budget.admit_merge_btree::<Vec<u8>, ()>(1, item_count)?;
     let mut seen = BTreeSet::<Vec<u8>>::new();
@@ -359,7 +356,7 @@ fn merged_list_response(
     for payload in payloads {
         let payload_items = list_items_from_owned_payload(
             payload,
-            "expected JSON object with `items` or JSON array payload while merging list response",
+            "expected JSON object with `items` while merging list response",
         )?;
         for item in payload_items {
             let key = budget.canonical_json_candidate(&item)?;
@@ -714,6 +711,11 @@ fn pipeline_status_payload_tie_break(payload: &Value) -> Result<(u8, u64), Respo
     let object = payload.as_object().ok_or_else(|| {
         torii_internal_json_error("routed pipeline status payload must be a JSON object")
     })?;
+    if object.get("scope").and_then(Value::as_str) != Some("global") {
+        return Err(torii_internal_json_error(
+            "routed pipeline status scope must be exact `global`",
+        ));
+    }
     let resolved_from = object
         .get("resolved_from")
         .and_then(Value::as_str)
@@ -724,7 +726,11 @@ fn pipeline_status_payload_tie_break(payload: &Value) -> Result<(u8, u64), Respo
         "state" => 3,
         "cache" => 2,
         "queue" => 1,
-        _ => 0,
+        _ => {
+            return Err(torii_internal_json_error(
+                "routed pipeline status contained an unknown resolution source",
+            ));
+        }
     };
     let block_height = object
         .get("status")
@@ -771,7 +777,13 @@ fn merged_pipeline_status_response(
                         "multiple dataspaces returned pipeline statuses for different hashes",
                     ));
                 }
-                if rank > *current_rank || (rank == *current_rank && tie_break > *current_tie_break)
+                // Resolution authority is primary: a state observation must not lose to a
+                // semantically later but non-authoritative cache hint. Within one source class,
+                // prefer the later status and then the greater carrier height.
+                if tie_break.0 > current_tie_break.0
+                    || (tie_break.0 == current_tie_break.0
+                        && (rank > *current_rank
+                            || (rank == *current_rank && tie_break.1 > current_tie_break.1)))
                 {
                     best = Some((payload, rank, tie_break));
                 }
@@ -1882,6 +1894,24 @@ mod routed_read_merge_regression_tests {
                     .and_then(|value| value.to_str().ok()),
                 Some("invalid_proxy_response")
             );
+        }
+    }
+
+    #[test]
+    fn pipeline_status_merge_rejects_inexact_routing_metadata() {
+        for (scope, resolved_from) in [("global", "legacy"), ("local", "state")] {
+            let response = merged_pipeline_status_response(
+                vec![norito::json!({
+                    "hash": "abc",
+                    "status": {"kind": "Applied", "block_height": 7},
+                    "scope": scope,
+                    "resolved_from": resolved_from
+                })],
+                "proxy",
+                test_budget(),
+            )
+            .expect_err("inexact pipeline routing metadata must fail closed");
+            assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         }
     }
 

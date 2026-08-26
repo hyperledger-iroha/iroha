@@ -157,7 +157,6 @@ on:
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ContractJsonParser.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/IdentifierJsonParser.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/RamLfeJsonParser.java"
-      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/SoracloudPrivateUploadedModelJsonParser.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/VpnJsonParser.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/IdentifierPolicyListResponse.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/RamLfeProgramPolicyListResponse.java"
@@ -330,7 +329,6 @@ on:
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/OfflineToriiClientTests.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/ClientConfigNoritoRpcTests.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/SubscriptionToriiClientTests.java"
-      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/SoracloudPrivateUploadedModelJsonParserTests.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/mock/ToriiMockServer.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/mock/ToriiMockServerTests.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/stream/ToriiEventStreamClientTests.java"
@@ -816,7 +814,7 @@ jobs:
           wheel_dir="$(mktemp -d)"
           (
             cd python/iroha_python
-            python -m maturin build --locked --release --interpreter python --out "${wheel_dir}"
+            IROHA_PYTHON_SKIP_RUNTIME_LINK=1 python -m maturin build --locked --release --interpreter python --out "${wheel_dir}"
           )
           python -m pip install --no-deps "${wheel_dir}"/iroha_python-*.whl
       - name: Enforce the Kagemusha Python SDK boundary

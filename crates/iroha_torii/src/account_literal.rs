@@ -6,7 +6,7 @@ pub fn display_literal(account_id: &AccountId) -> String {
 /// Render a canonical literal string for display.
 pub fn display_from_literal(literal: &str) -> Option<String> {
     match AccountId::parse_encoded(literal) {
-        Ok(parsed) => Some(parsed.canonical().to_owned()),
+        Ok(account_id) => Some(account_id.to_string()),
         Err(err) => {
             iroha_logger::warn!(
                 %literal,
@@ -48,11 +48,11 @@ mod tests {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let literal = ALICE_ID.to_string();
         let parsed = AccountId::parse_encoded(&literal).expect("i105 literal should parse");
-        assert_eq!(parsed.canonical(), literal);
-        assert_eq!(parsed.account_id().controller(), ALICE_ID.controller());
+        assert_eq!(parsed.to_string(), literal);
+        assert_eq!(parsed.controller(), ALICE_ID.controller());
         let reparsed =
             AccountId::parse_encoded(&literal).expect("repeated hook call should be harmless");
-        assert_eq!(reparsed.canonical(), literal);
-        assert_eq!(reparsed.account_id().controller(), ALICE_ID.controller());
+        assert_eq!(reparsed.to_string(), literal);
+        assert_eq!(reparsed.controller(), ALICE_ID.controller());
     }
 }

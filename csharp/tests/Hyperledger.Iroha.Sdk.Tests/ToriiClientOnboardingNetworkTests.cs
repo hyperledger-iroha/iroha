@@ -7,7 +7,7 @@ namespace Hyperledger.Iroha.Sdk.Tests;
 public sealed partial class ToriiClientTests
 {
     [Fact]
-    public async Task ApplyAccountOnboardingAsyncRejectsWrongNetworkBeforeDispatch()
+    public async Task PrepareAccountOnboardingAsyncRejectsWrongNetworkBeforeDispatch()
     {
         var receipt = new ToriiAccountOnboardingPlanReceipt
         {
@@ -25,8 +25,18 @@ public sealed partial class ToriiClientTests
             throw new InvalidOperationException("wrong-network onboarding receipt reached HTTP dispatch"));
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
 
-        await Assert.ThrowsAnyAsync<ArgumentException>(() => client.ApplyAccountOnboardingAsync(
+        await Assert.ThrowsAnyAsync<ArgumentException>(() => client.PrepareAccountOnboardingAsync(
+            receipt.Body.Request,
             receipt,
+            new ToriiTairaPublicResetMutationBindingV1
+            {
+                AuthorizationSha256 = new string('a', 64),
+                AuthorizationNonce = new string('n', 32),
+                Kind = ToriiAccountOnboardingPreparedTransactionV1.OperationV1,
+                Phase = "pre_edge",
+                IdempotencyKey = new string('b', 64),
+                ExecutionExpiresAtUnixMilliseconds = ulong.MaxValue,
+            },
             AccountOnboardingToken,
             OnboardingFixtureAuthority,
             NetworkId.Parse(AlternateNetworkId),

@@ -22,6 +22,8 @@ import javax.crypto.Cipher;
 import javax.crypto.Mac;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
+import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters;
+import org.bouncycastle.crypto.util.PrivateKeyFactory;
 import org.bouncycastle.crypto.generators.Argon2BytesGenerator;
 import org.bouncycastle.crypto.params.Argon2Parameters;
 import org.hyperledger.iroha.android.crypto.MlDsaPrivateKey;
@@ -152,6 +154,7 @@ public final class DeterministicKeyExporter {
       return algorithm;
     }
     if (isEd25519PrivateKey(privateKey) && isEd25519PublicKey(publicKey)) {
+      ensureEd25519KeyPair(privateKey, publicKey);
       return SigningAlgorithm.ED25519;
     }
     throw new KeyExportException(
@@ -477,7 +480,7 @@ public final class DeterministicKeyExporter {
       final SigningAlgorithm algorithm,
       final byte[] privateKeyBytes,
       final byte[] publicKeyBytes)
-      throws GeneralSecurityException {
+      throws GeneralSecurityException, KeyExportException {
     return switch (algorithm) {
       case ED25519 -> {
         final KeyFactory factory = KeyFactory.getInstance(KEY_ALGORITHM);
@@ -485,6 +488,7 @@ public final class DeterministicKeyExporter {
             factory.generatePrivate(new PKCS8EncodedKeySpec(privateKeyBytes));
         final PublicKey publicKey =
             factory.generatePublic(new X509EncodedKeySpec(publicKeyBytes));
+        ensureEd25519KeyPair(privateKey, publicKey);
         yield new KeyPairData(privateKey, publicKey, SigningAlgorithm.ED25519);
       }
       case ML_DSA -> {
@@ -504,6 +508,47 @@ public final class DeterministicKeyExporter {
         yield new KeyPairData(pair.getPrivate(), pair.getPublic(), algorithm);
       }
     };
+  }
+
+  private static void ensureEd25519KeyPair(
+      final PrivateKey privateKey, final PublicKey publicKey) throws KeyExportException {
+    final byte[] privateBytes = privateKey.getEncoded();
+    final byte[] publicBytes = publicKey.getEncoded();
+    if (privateBytes == null || publicBytes == null) {
+      throw new KeyExportException("Ed25519 key encoding is unavailable");
+    }
+    try {
+      final byte[] expected;
+      final byte[] actual;
+      try {
+        final Object privateParameters = PrivateKeyFactory.createKey(privateBytes);
+        if (!(privateParameters instanceof Ed25519PrivateKeyParameters ed25519Private)) {
+          throw new KeyExportException("Ed25519 key encodings use an unexpected algorithm");
+        }
+        if (publicBytes.length != ED25519_SPKI_SIZE
+            || !Arrays.equals(
+                Arrays.copyOfRange(publicBytes, 0, ED25519_SPKI_PREFIX.length),
+                ED25519_SPKI_PREFIX)) {
+          throw new KeyExportException("Ed25519 public key encoding is not canonical");
+        }
+        expected = ed25519Private.generatePublicKey().getEncoded();
+        actual = Arrays.copyOfRange(publicBytes, ED25519_SPKI_PREFIX.length, publicBytes.length);
+      } catch (final KeyExportException ex) {
+        throw ex;
+      } catch (final java.io.IOException | RuntimeException ex) {
+        throw new KeyExportException("Failed to validate Ed25519 key pair", ex);
+      }
+      try {
+        if (!MessageDigest.isEqual(expected, actual)) {
+          throw new KeyExportException("Ed25519 public key does not match private key");
+        }
+      } finally {
+        Arrays.fill(expected, (byte) 0);
+        Arrays.fill(actual, (byte) 0);
+      }
+    } finally {
+      Arrays.fill(privateBytes, (byte) 0);
+    }
   }
 
   private static String hkdfSaltDomain() {

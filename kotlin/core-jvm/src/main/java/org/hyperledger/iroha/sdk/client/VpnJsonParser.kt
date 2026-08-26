@@ -11,6 +11,7 @@ import java.nio.charset.StandardCharsets
 object VpnJsonParser {
 
     private const val VPN_HELPER_TICKET_HEX_LENGTH = 1_576
+    private const val RELAY_MLDSA65_PUBLIC_KEY_HEX_LENGTH = 3_904
     private const val U32_MAX = 4_294_967_295L
     private val EXIT_CLASSES = setOf("standard", "low-latency", "high-security")
     private val RECEIPT_STATUSES =
@@ -22,7 +23,7 @@ object VpnJsonParser {
         "excluded_routes", "dns_servers", "tunnel_addresses", "mtu_bytes",
         "display_billing_label", "operator_account_id",
         "lease_fee", "settlement_grace_secs", "flow_label_bits", "padding_budget_ms",
-        "relay_id_hex", "descriptor_commit_hex", "tls_server_name",
+        "relay_id_hex", "relay_mldsa65_public_key_hex", "descriptor_commit_hex", "tls_server_name",
         "relay_tls_spki_sha256_hex", "relay_certificate_sha256_hex",
         "directory_snapshot_digest_hex",
     )
@@ -31,7 +32,7 @@ object VpnJsonParser {
         "exit_class", "relay_endpoint", "lease_secs", "quote_expires_at_ms", "fee_asset_id",
         "escrow_account_id", "operator_account_id", "lease_fee", "route_pushes",
         "excluded_routes", "dns_servers", "tunnel_addresses", "mtu_bytes", "meter_family",
-        "flow_label_bits", "padding_budget_ms", "relay_id_hex", "descriptor_commit_hex",
+        "flow_label_bits", "padding_budget_ms", "relay_id_hex", "relay_mldsa65_public_key_hex", "descriptor_commit_hex",
         "tls_server_name", "relay_tls_spki_sha256_hex", "relay_certificate_sha256_hex",
         "directory_snapshot_digest_hex",
         "metering_public_key_hex", "open_lease_instruction",
@@ -40,7 +41,7 @@ object VpnJsonParser {
         "session_id", "account_id", "exit_class", "relay_endpoint", "lease_secs",
         "expires_at_ms", "connected_at_ms", "meter_family", "quote_id", "payment_reference",
         "payment_tx_hash", "fee_asset_id", "escrow_account_id", "operator_account_id",
-        "lease_fee", "flow_label_bits", "padding_budget_ms", "relay_id_hex",
+        "lease_fee", "flow_label_bits", "padding_budget_ms", "relay_id_hex", "relay_mldsa65_public_key_hex",
         "descriptor_commit_hex", "tls_server_name", "relay_tls_spki_sha256_hex",
         "relay_certificate_sha256_hex", "directory_snapshot_digest_hex",
         "route_pushes", "excluded_routes", "dns_servers", "tunnel_addresses", "mtu_bytes",
@@ -90,6 +91,7 @@ object VpnJsonParser {
             flowLabelBits = exactInt(root["flow_label_bits"], "vpn profile response.flow_label_bits", 24),
             paddingBudgetMs = boundedInt(root["padding_budget_ms"], "vpn profile response.padding_budget_ms", 1, 65_535),
             relayIdHex = trust.relayIdHex,
+            relayMldsa65PublicKeyHex = trust.relayMldsa65PublicKeyHex,
             descriptorCommitHex = trust.descriptorCommitHex,
             tlsServerName = trust.tlsServerName,
             relayTlsSpkiSha256Hex = trust.relayTlsSpkiSha256Hex,
@@ -126,6 +128,7 @@ object VpnJsonParser {
             flowLabelBits = exactInt(root["flow_label_bits"], "vpn quote response.flow_label_bits", 24),
             paddingBudgetMs = boundedInt(root["padding_budget_ms"], "vpn quote response.padding_budget_ms", 1, 65_535),
             relayIdHex = trust.relayIdHex,
+            relayMldsa65PublicKeyHex = trust.relayMldsa65PublicKeyHex,
             descriptorCommitHex = trust.descriptorCommitHex,
             tlsServerName = trust.tlsServerName,
             relayTlsSpkiSha256Hex = trust.relayTlsSpkiSha256Hex,
@@ -164,6 +167,7 @@ object VpnJsonParser {
             flowLabelBits = exactInt(root["flow_label_bits"], "vpn session response.flow_label_bits", 24),
             paddingBudgetMs = boundedInt(root["padding_budget_ms"], "vpn session response.padding_budget_ms", 1, 65_535),
             relayIdHex = trust.relayIdHex,
+            relayMldsa65PublicKeyHex = trust.relayMldsa65PublicKeyHex,
             descriptorCommitHex = trust.descriptorCommitHex,
             tlsServerName = trust.tlsServerName,
             relayTlsSpkiSha256Hex = trust.relayTlsSpkiSha256Hex,
@@ -367,6 +371,7 @@ object VpnJsonParser {
 
     private class VpnTrustTuple(
         val relayIdHex: String,
+        val relayMldsa65PublicKeyHex: String,
         val descriptorCommitHex: String,
         val tlsServerName: String,
         val relayTlsSpkiSha256Hex: String,
@@ -380,6 +385,11 @@ object VpnJsonParser {
         allowEmpty: Boolean,
     ): VpnTrustTuple = VpnTrustTuple(
         relayIdHex = trustRelayId(root["relay_id_hex"], "$context.relay_id_hex", allowEmpty),
+        relayMldsa65PublicKeyHex = trustMldsa65PublicKey(
+            root["relay_mldsa65_public_key_hex"],
+            "$context.relay_mldsa65_public_key_hex",
+            allowEmpty,
+        ),
         descriptorCommitHex = trustDigest(
             root["descriptor_commit_hex"],
             "$context.descriptor_commit_hex",
@@ -410,6 +420,13 @@ object VpnJsonParser {
     private fun trustRelayId(value: Any?, field: String, allowEmpty: Boolean): String {
         if (allowEmpty && value == "") return ""
         return ed25519PublicKeyHex(value, field)
+    }
+
+    private fun trustMldsa65PublicKey(value: Any?, field: String, allowEmpty: Boolean): String {
+        if (allowEmpty && value == "") return ""
+        val canonical = canonicalHex(value, field, RELAY_MLDSA65_PUBLIC_KEY_HEX_LENGTH)
+        check(canonical.any { it != '0' }) { "$field must not be the all-zero ML-DSA-65 key" }
+        return canonical
     }
 
     private fun trustDigest(value: Any?, field: String, allowEmpty: Boolean): String {

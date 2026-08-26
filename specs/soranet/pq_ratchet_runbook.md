@@ -40,13 +40,20 @@ soranet-directory inspect \
   --snapshot ./artefacts/guard_directory_pre_drill.norito
 soranet-directory rotate \
   --snapshot ./artefacts/guard_directory_pre_drill.norito \
+  --expected-snapshot-digest <snapshot-digest-hex> \
   --out ./artefacts/guard_directory_post_drill.norito \
   --keys-out ./artefacts/guard_issuer_rotation --overwrite
 ```
 
   `soranet-directory inspect` is a structural diagnostic and does not
-  authenticate the snapshot; retain the governance digest alongside the
-  rotation artefacts.
+  authenticate the snapshot. Rotation does: it requires the exact digest from
+  the independent governance channel and rejects a source outside its validity
+  window at the current time. Use `--at-unix` only to make an approved rotation
+  ceremony's authentication time explicit. `--keys-out` must name a new
+  owner-private directory; the complete key bundle is durably published before
+  the snapshot becomes visible, and a pre-publication snapshot failure rolls
+  the bundle back. Retain both the ceremony time and the
+  governance digest alongside the rotation artefacts.
 
 - Change window approved by networking & observability on-call.
 

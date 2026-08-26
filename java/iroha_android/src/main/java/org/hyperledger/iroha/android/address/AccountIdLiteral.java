@@ -28,16 +28,12 @@ public final class AccountIdLiteral {
       throw new IllegalArgumentException(
           field + " must use canonical I105 encoded account without @domain");
     }
-    final AccountAddress.ParseResult parsed;
+    final AccountAddress address;
     try {
-      parsed = AccountAddress.parseAny(value, null);
+      address = AccountAddress.parseEncoded(value, null);
     } catch (final AccountAddress.AccountAddressException ex) {
       throw new IllegalArgumentException(
           field + " must use a canonical I105 encoded account literal", ex);
-    }
-    if (parsed.format != AccountAddress.Format.I105) {
-      throw new IllegalArgumentException(
-          field + " must use a canonical I105 encoded account literal");
     }
     final Integer discriminant = AccountAddress.detectI105Discriminant(value);
     if (discriminant == null) {
@@ -46,7 +42,7 @@ public final class AccountIdLiteral {
     }
     final String canonical;
     try {
-      canonical = parsed.address.toI105(discriminant.intValue());
+      canonical = address.toI105(discriminant.intValue());
     } catch (final AccountAddress.AccountAddressException ex) {
       throw new IllegalArgumentException(
           field + " must use a canonical I105 encoded account literal", ex);

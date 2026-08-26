@@ -11,7 +11,7 @@ use iroha_crypto::{HashOf, PublicKey};
 use iroha_data_model::isi::{Burn, Transfer};
 use iroha_data_model::{
     NetworkId,
-    account::{Account, AccountId, ParsedAccountId, address::ChainDiscriminantGuard},
+    account::{Account, AccountId, address::ChainDiscriminantGuard},
     asset::{AssetDefinitionAlias, AssetDefinitionId, AssetId},
     block::consensus_v2::{ConsensusMode, ValidatorPower},
     isi::{
@@ -375,7 +375,6 @@ pub(super) fn prepare_release_roster_v4<T: std::io::Write>(
 }
 fn parse_taira_account(raw: &str) -> Result<AccountId> {
     AccountId::parse_encoded(raw)
-        .map(ParsedAccountId::into_account_id)
         .map_err(|error| eyre!("invalid Taira account literal `{raw}`: {error}"))
 }
 fn taira_base_verifier_records(

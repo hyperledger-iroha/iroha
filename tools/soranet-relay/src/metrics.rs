@@ -6,7 +6,7 @@ use std::{
     collections::BTreeMap,
     fmt::Write as _,
     sync::{
-        Mutex,
+        Mutex, MutexGuard,
         atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
     },
     time::Duration,
@@ -28,6 +28,11 @@ fn saturating_add(atom: &AtomicU64, value: u64) {
     let _ = atom.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
         Some(current.saturating_add(value))
     });
+}
+fn recover_metrics_lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 /// Key used for per-issuer token verification outcomes.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -88,7 +93,6 @@ pub struct Metrics {
     padding_throttled: AtomicU64,
     token_outcomes: Mutex<BTreeMap<TokenOutcomeKey, u64>>,
     descriptor_commit: Mutex<Option<String>>,
-    ml_kem_public: Mutex<Option<String>>,
     downgrade_counts: Mutex<BTreeMap<String, u64>>,
     constant_rate_profile: Mutex<Option<String>>,
     constant_rate_neighbors: AtomicU64,
@@ -164,7 +168,6 @@ impl Default for Metrics {
             padding_throttled: AtomicU64::new(0),
             token_outcomes: Mutex::new(BTreeMap::new()),
             descriptor_commit: Mutex::new(None),
-            ml_kem_public: Mutex::new(None),
             downgrade_counts: Mutex::new(BTreeMap::new()),
             constant_rate_profile: Mutex::new(None),
             constant_rate_neighbors: AtomicU64::new(0),
@@ -264,18 +267,8 @@ impl Metrics {
             .store(count, Ordering::Relaxed);
     }
     pub fn set_descriptor_commit_hex(&self, commit: Option<String>) {
-        let mut guard = self
-            .descriptor_commit
-            .lock()
-            .expect("metrics descriptor commit mutex poisoned");
+        let mut guard = recover_metrics_lock(&self.descriptor_commit);
         *guard = commit;
-    }
-    pub fn set_ml_kem_public_hex(&self, key: Option<String>) {
-        let mut guard = self
-            .ml_kem_public
-            .lock()
-            .expect("metrics ml-kem public mutex poisoned");
-        *guard = key;
     }
     pub fn set_constant_rate_profile(
         &self,
@@ -285,10 +278,7 @@ impl Metrics {
         dummy_floor: u64,
     ) {
         {
-            let mut guard = self
-                .constant_rate_profile
-                .lock()
-                .expect("metrics constant-rate profile mutex poisoned");
+            let mut guard = recover_metrics_lock(&self.constant_rate_profile);
             *guard = Some(profile.to_string());
         }
         self.constant_rate_neighbors
@@ -369,10 +359,7 @@ impl Metrics {
     }
     pub fn record_downgrade(&self, reason: &str) {
         let normalized = normalize_downgrade_reason(reason);
-        let mut guard = self
-            .downgrade_counts
-            .lock()
-            .expect("metrics downgrade mutex poisoned");
+        let mut guard = recover_metrics_lock(&self.downgrade_counts);
         if let Some(count) = guard.get_mut(&normalized) {
             *count = count.saturating_add(1);
             return;
@@ -402,10 +389,7 @@ impl Metrics {
         self.padding_throttled.fetch_add(1, Ordering::Relaxed);
     }
     pub fn record_token_outcome(&self, issuer_hex: &str, relay_hex: &str, outcome: &str) {
-        let mut guard = self
-            .token_outcomes
-            .lock()
-            .expect("token outcomes mutex poisoned");
+        let mut guard = recover_metrics_lock(&self.token_outcomes);
         let key = TokenOutcomeKey {
             issuer: bounded_metric_label(issuer_hex),
             relay: bounded_metric_label(relay_hex),
@@ -428,14 +412,8 @@ impl Metrics {
         *count = count.saturating_add(1);
     }
     pub fn set_vpn_meter_labels(&self, session_label: &str, byte_label: &str) {
-        let mut session = self
-            .vpn_session_meter_label
-            .lock()
-            .expect("vpn session meter mutex poisoned");
-        let mut bytes = self
-            .vpn_byte_meter_label
-            .lock()
-            .expect("vpn byte meter mutex poisoned");
+        let mut session = recover_metrics_lock(&self.vpn_session_meter_label);
+        let mut bytes = recover_metrics_lock(&self.vpn_byte_meter_label);
         *session = Some(session_label.trim().to_owned());
         *bytes = Some(byte_label.trim().to_owned());
     }
@@ -553,32 +531,11 @@ impl Metrics {
             padding_cells: self.padding_cells.load(Ordering::Relaxed),
             padding_bytes: self.padding_bytes.load(Ordering::Relaxed),
             padding_throttled: self.padding_throttled.load(Ordering::Relaxed),
-            token_outcomes: self
-                .token_outcomes
-                .lock()
-                .expect("token outcomes mutex poisoned")
-                .clone(),
-            downgrade_counts: self
-                .downgrade_counts
-                .lock()
-                .expect("metrics downgrade mutex poisoned")
-                .clone(),
+            token_outcomes: recover_metrics_lock(&self.token_outcomes).clone(),
+            downgrade_counts: recover_metrics_lock(&self.downgrade_counts).clone(),
             vpn_runtime_state: self.vpn_runtime_state(),
-            descriptor_commit: self
-                .descriptor_commit
-                .lock()
-                .expect("metrics descriptor commit mutex poisoned")
-                .clone(),
-            ml_kem_public: self
-                .ml_kem_public
-                .lock()
-                .expect("metrics ml-kem public mutex poisoned")
-                .clone(),
-            constant_rate_profile: self
-                .constant_rate_profile
-                .lock()
-                .expect("metrics constant-rate profile mutex poisoned")
-                .clone(),
+            descriptor_commit: recover_metrics_lock(&self.descriptor_commit).clone(),
+            constant_rate_profile: recover_metrics_lock(&self.constant_rate_profile).clone(),
             constant_rate_neighbors: self.constant_rate_neighbors.load(Ordering::Relaxed),
             constant_rate_active_neighbors: self
                 .constant_rate_active_neighbors
@@ -606,16 +563,8 @@ impl Metrics {
                 .constant_rate_congestion_drops
                 .load(Ordering::Relaxed),
             constant_rate_degraded: self.constant_rate_degraded.load(Ordering::Relaxed),
-            vpn_session_meter_label: self
-                .vpn_session_meter_label
-                .lock()
-                .expect("vpn session meter mutex poisoned")
-                .clone(),
-            vpn_byte_meter_label: self
-                .vpn_byte_meter_label
-                .lock()
-                .expect("vpn byte meter mutex poisoned")
-                .clone(),
+            vpn_session_meter_label: recover_metrics_lock(&self.vpn_session_meter_label).clone(),
+            vpn_byte_meter_label: recover_metrics_lock(&self.vpn_byte_meter_label).clone(),
             vpn_sessions: self.vpn_sessions.load(Ordering::Relaxed),
             vpn_bytes: self.vpn_bytes.load(Ordering::Relaxed),
             vpn_ingress_bytes: self.vpn_ingress_bytes.load(Ordering::Relaxed),
@@ -1318,17 +1267,6 @@ impl Metrics {
                 commit = commit,
             );
         }
-        if let Some(kem) = snapshot.ml_kem_public {
-            help_and_type!(
-                "# HELP soranet_guard_mlkem_public Relay ML-KEM key advertised for guard pinning.",
-                "# TYPE soranet_guard_mlkem_public gauge"
-            );
-            metric_line!(
-                "soranet_guard_mlkem_public{{{labels},key=\"{kem}\"}} 1",
-                labels = labels,
-                kem = kem,
-            );
-        }
         output
     }
 }
@@ -1463,8 +1401,6 @@ pub struct MetricsSnapshot {
     pub downgrade_counts: BTreeMap<String, u64>,
     /// Optional descriptor commit advertised to clients.
     pub descriptor_commit: Option<String>,
-    /// Optional ML-KEM public key advertised to clients.
-    pub ml_kem_public: Option<String>,
     /// Current constant-rate profile name.
     pub constant_rate_profile: Option<String>,
     /// Neighbors detected for constant-rate lanes.
@@ -1568,6 +1504,44 @@ pub struct MetricsSnapshot {
 mod tests {
     use super::*;
     use iroha_primitives::numeric::Quantity;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    fn poison<T>(mutex: &Mutex<T>) {
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let _guard = mutex.lock().expect("unpoisoned fixture mutex");
+            panic!("poison observability fixture mutex");
+        }));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn poisoned_observability_locks_recover_without_panicking() {
+        let metrics = Metrics::new();
+        poison(&metrics.token_outcomes);
+        poison(&metrics.descriptor_commit);
+        poison(&metrics.downgrade_counts);
+        poison(&metrics.constant_rate_profile);
+        poison(&metrics.vpn_session_meter_label);
+        poison(&metrics.vpn_byte_meter_label);
+
+        metrics.record_token_outcome("issuer", "relay", "accepted");
+        metrics.set_descriptor_commit_hex(Some("commit".to_owned()));
+        metrics.record_downgrade("no overlapping handshake suite");
+        metrics.set_constant_rate_profile("core", 8, 5.0, 4);
+        metrics.set_vpn_meter_labels("vpn.session", "vpn.bytes");
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.descriptor_commit.as_deref(), Some("commit"));
+        assert_eq!(snapshot.constant_rate_profile.as_deref(), Some("core"));
+        assert_eq!(
+            snapshot.vpn_session_meter_label.as_deref(),
+            Some("vpn.session")
+        );
+        assert_eq!(snapshot.vpn_byte_meter_label.as_deref(), Some("vpn.bytes"));
+        assert_eq!(snapshot.token_outcomes.values().sum::<u64>(), 1);
+        assert_eq!(snapshot.downgrade_counts.values().sum::<u64>(), 1);
+    }
+
     #[test]
     fn normalize_maps_known_patterns() {
         assert_eq!(
@@ -1679,7 +1653,6 @@ mod tests {
         metrics.record_throttled();
         metrics.record_capacity_reject();
         metrics.set_descriptor_commit_hex(Some("deadbeef".to_string()));
-        metrics.set_ml_kem_public_hex(Some("cafebabe".to_string()));
         metrics.set_pow_difficulty(12);
         metrics.record_remote_quota_throttle();
         metrics.record_descriptor_quota_throttle();
@@ -1827,9 +1800,6 @@ mod tests {
         )));
         assert!(rendered.contains(&format!(
             "soranet_guard_descriptor_commit{{{label_block},commit=\"deadbeef\"}} 1"
-        )));
-        assert!(rendered.contains(&format!(
-            "soranet_guard_mlkem_public{{{label_block},key=\"cafebabe\"}} 1"
         )));
         assert!(rendered.contains("soranet_vpn_sessions_total"));
         assert!(rendered.contains("vpn_session_meter=\"vpn.session\""));

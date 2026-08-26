@@ -915,9 +915,7 @@ fn registered_device_from_record(record: &DeviceRecord) -> RegisteredDevice {
 }
 fn canonical_account(account_id: &str) -> Result<AccountId, PushError> {
     let trimmed = account_id.trim();
-    AccountId::parse_encoded(trimmed)
-        .map(|parsed| parsed.into_account_id())
-        .map_err(|_| PushError::InvalidAccount(account_id.to_owned()))
+    AccountId::parse_encoded(trimmed).map_err(|_| PushError::InvalidAccount(account_id.to_owned()))
 }
 fn validate_device_record(record: &DeviceRecord, max_topics: usize) -> io::Result<()> {
     let account = canonical_account(&record.account_id)
@@ -2036,9 +2034,7 @@ mod tests {
         bridge
             .register_device(register_request("token-2"))
             .expect("second device");
-        let account = AccountId::parse_encoded(TEST_ACCOUNT_I105)
-            .expect("account")
-            .into_account_id();
+        let account = AccountId::parse_encoded(TEST_ACCOUNT_I105).expect("account");
         let error = bridge
             .enqueue_activity(
                 &account,
@@ -2220,9 +2216,7 @@ mod tests {
                 topics: None,
             })
             .expect("register");
-        let account = AccountId::parse_encoded(TEST_ACCOUNT_I105)
-            .expect("account")
-            .into_account_id();
+        let account = AccountId::parse_encoded(TEST_ACCOUNT_I105).expect("account");
         bridge
             .enqueue_activity(
                 &account,
@@ -2264,9 +2258,7 @@ mod tests {
                 topics: None,
             })
             .expect("register");
-        let account = AccountId::parse_encoded(TEST_ACCOUNT_I105)
-            .expect("account")
-            .into_account_id();
+        let account = AccountId::parse_encoded(TEST_ACCOUNT_I105).expect("account");
         bridge
             .enqueue_activity(
                 &account,
@@ -2299,9 +2291,7 @@ mod tests {
                 topics: None,
             })
             .expect("register");
-        let account = AccountId::parse_encoded(TEST_ACCOUNT_I105)
-            .expect("account")
-            .into_account_id();
+        let account = AccountId::parse_encoded(TEST_ACCOUNT_I105).expect("account");
         bridge
             .enqueue_activity(
                 &account,
