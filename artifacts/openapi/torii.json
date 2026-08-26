@@ -1089,17 +1089,17 @@
               }
             ]
           },
-          "lease_expires_sequence": {
+          "lease_expires_height": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
           },
-          "lease_remaining_ticks": {
+          "lease_remaining_blocks": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
           },
-          "lease_started_sequence": {
+          "lease_started_height": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -1186,9 +1186,9 @@
           "apartment_name",
           "manifest_hash",
           "status",
-          "lease_started_sequence",
-          "lease_expires_sequence",
-          "lease_remaining_ticks",
+          "lease_started_height",
+          "lease_expires_height",
+          "lease_remaining_blocks",
           "restart_count",
           "state_quota_bytes",
           "tool_capability_count",
@@ -1560,12 +1560,12 @@
               }
             ]
           },
-          "lease_expires_sequence": {
+          "lease_expires_height": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
           },
-          "lease_remaining_ticks": {
+          "lease_remaining_blocks": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -1631,8 +1631,8 @@
           "apartment_name",
           "sequence",
           "status",
-          "lease_expires_sequence",
-          "lease_remaining_ticks",
+          "lease_expires_height",
+          "lease_remaining_blocks",
           "manifest_hash",
           "revoked_policy_capability_count",
           "budget_ceiling_units",
@@ -1660,7 +1660,7 @@
             "minimum": 0,
             "type": "integer"
           },
-          "lease_ticks": {
+          "lease_blocks": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -1671,7 +1671,7 @@
         },
         "required": [
           "manifest",
-          "lease_ticks",
+          "lease_blocks",
           "autonomy_budget_units"
         ],
         "type": "object"
@@ -1682,7 +1682,7 @@
           "apartment_name": {
             "type": "string"
           },
-          "lease_ticks": {
+          "lease_blocks": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -1690,7 +1690,7 @@
         },
         "required": [
           "apartment_name",
-          "lease_ticks"
+          "lease_blocks"
         ],
         "type": "object"
       },
@@ -5637,15 +5637,19 @@
               }
             ]
           },
-          "config_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
+          "config_generation": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "config_mutations": {
+            "items": {
+              "$ref": "#/components/schemas/SoraServiceConfigMutationV1"
+            },
+            "type": "array"
+          },
+          "config_snapshot_hash": {
+            "$ref": "#/components/schemas/Hash"
           },
           "consent_evidence_hash": {
             "anyOf": [
@@ -5700,6 +5704,16 @@
               }
             ]
           },
+          "lease_usage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SoraServiceLeaseUsageAuditV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "policy_name": {
             "anyOf": [
               {
@@ -5720,30 +5734,49 @@
               }
             ]
           },
-          "rollout_handle": {
+          "process_generation": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "rollout_state": {
             "anyOf": [
               {
-                "type": "string"
+                "$ref": "#/components/schemas/RolloutRuntimeState"
               },
               {
                 "type": "null"
               }
             ]
           },
-          "secret_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
+          "secret_generation": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "secret_mutations": {
+            "items": {
+              "$ref": "#/components/schemas/SoraServiceSecretMutationV1"
+            },
+            "type": "array"
+          },
+          "secret_snapshot_hash": {
+            "$ref": "#/components/schemas/Hash"
           },
           "sequence": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
+          },
+          "service_lease_commitment": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "service_manifest_hash": {
             "$ref": "#/components/schemas/Hash"
@@ -5776,18 +5809,25 @@
           "to_version",
           "service_manifest_hash",
           "container_manifest_hash",
+          "process_generation",
+          "config_generation",
+          "secret_generation",
+          "config_snapshot_hash",
+          "secret_snapshot_hash",
           "binding_name",
           "state_key",
-          "config_name",
-          "secret_name",
+          "config_mutations",
+          "secret_mutations",
           "governance_tx_hash",
-          "rollout_handle",
+          "rollout_state",
           "policy_name",
           "policy_snapshot_hash",
           "jurisdiction_tag",
           "consent_evidence_hash",
           "break_glass",
           "break_glass_reason",
+          "lease_usage",
+          "service_lease_commitment",
           "lease_reporting_epoch_rollover",
           "signed_by"
         ],
@@ -23717,18 +23757,26 @@
           "service_name": {
             "type": "string"
           },
+          "service_version": {
+            "type": "string"
+          },
+          "output_recipient": {
+            "$ref": "#/components/schemas/SoraUploadedModelEncryptionRecipientV1"
+          },
           "weight_version": {
             "type": "string"
           }
         },
         "required": [
           "service_name",
+          "service_version",
           "weight_version",
           "model_id",
           "model_name",
           "bundle_root",
           "decryption_request_id",
-          "input_artifact"
+          "input_artifact",
+          "output_recipient"
         ],
         "type": "object"
       },
@@ -23748,19 +23796,31 @@
           "status": {
             "$ref": "#/components/schemas/UploadedModelStatusResponse"
           },
-          "tx_instructions": {
-            "items": {
-              "$ref": "#/components/schemas/SoracloudTxInstruction"
-            },
-            "type": "array"
+          "submission_status": {
+            "enum": [
+              "submitted",
+              "committed"
+            ],
+            "type": "string"
+          },
+          "transaction_hash": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
           "schema_version",
           "status",
+          "submission_status",
+          "transaction_hash",
           "receipt",
-          "output_artifact",
-          "tx_instructions"
+          "output_artifact"
         ],
         "type": "object"
       },
@@ -23770,6 +23830,10 @@
           "continue_cursor": {
             "anyOf": [
               {
+                "description": "Opaque canonical URL-safe no-padding V1 token for the next page. It binds the exact filters and the first page's ledger sequence snapshot.",
+                "maxLength": 114,
+                "minLength": 114,
+                "pattern": "^[A-Za-z0-9_-]{114}$",
                 "type": "string"
               },
               {
@@ -23794,10 +23858,18 @@
             "type": "array"
           },
           "remaining_items": {
-            "format": "uint32",
-            "maximum": 4294967295,
-            "minimum": 0,
-            "type": "integer"
+            "anyOf": [
+              {
+                "description": "Exact number of matching rows after this page when count_mode is exact.",
+                "format": "uint32",
+                "maximum": 4294967295,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "returned_items": {
             "format": "uint32",
@@ -31713,7 +31785,7 @@
           "egress_price_per_mib": {
             "$ref": "#/components/schemas/Quantity"
           },
-          "lease_duration_sequences": {
+          "lease_duration_blocks": {
             "format": "uint64",
             "minimum": 1,
             "type": "integer"
@@ -31724,14 +31796,14 @@
           "quota_class": {
             "type": "string"
           },
-          "runtime_price_per_sequence": {
+          "runtime_price_per_block": {
             "$ref": "#/components/schemas/Quantity"
           },
           "schema_version": {
             "const": 1,
             "type": "integer"
           },
-          "storage_price_per_gib_sequence": {
+          "storage_price_per_gib_block": {
             "$ref": "#/components/schemas/Quantity"
           }
         },
@@ -31740,9 +31812,9 @@
           "quota_class",
           "deployment_deposit",
           "prepaid_runtime_balance",
-          "lease_duration_sequences",
-          "runtime_price_per_sequence",
-          "storage_price_per_gib_sequence",
+          "lease_duration_blocks",
+          "runtime_price_per_block",
+          "storage_price_per_gib_block",
           "egress_price_per_mib"
         ],
         "type": "object"
@@ -31890,6 +31962,58 @@
         ],
         "type": "object"
       },
+      "SoraInrouReplicaPlacementV1": {
+        "additionalProperties": false,
+        "properties": {
+          "peer_id": {
+            "type": "string"
+          },
+          "replica_slot": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "selected_geography_tag": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "selected_guest_isa": {
+            "$ref": "#/components/schemas/SoraInrouGuestIsaV1"
+          },
+          "selection_latency_ms": {
+            "anyOf": [
+              {
+                "format": "uint32",
+                "maximum": 4294967295,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "validator_account_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "replica_slot",
+          "validator_account_id",
+          "peer_id",
+          "selected_guest_isa",
+          "selected_geography_tag",
+          "selection_latency_ms"
+        ],
+        "type": "object"
+      },
       "SoraLeaseVolumeBindingV1": {
         "additionalProperties": false,
         "properties": {
@@ -32030,7 +32154,7 @@
           "queue_name": {
             "type": "string"
           },
-          "retention_sequences": {
+          "retention_blocks": {
             "format": "uint32",
             "maximum": 4294967295,
             "minimum": 1,
@@ -32041,7 +32165,7 @@
           "queue_name",
           "max_pending_messages",
           "max_message_bytes",
-          "retention_sequences"
+          "retention_blocks"
         ],
         "type": "object"
       },
@@ -32224,7 +32348,8 @@
           },
           "ciphertext_bytes": {
             "format": "uint64",
-            "minimum": 0,
+            "maximum": 75497472,
+            "minimum": 1,
             "type": "integer"
           },
           "schema_version": {
@@ -32233,11 +32358,15 @@
           },
           "sorafs_manifest_digest": {
             "$ref": "#/components/schemas/ManifestDigest"
+          },
+          "sorafs_root_cid": {
+            "$ref": "#/components/schemas/PinManifestRootCidV1"
           }
         },
         "required": [
           "schema_version",
           "sorafs_manifest_digest",
+          "sorafs_root_cid",
           "artifact_hash",
           "ciphertext_bytes",
           "artifact_role"
@@ -32252,6 +32381,11 @@
           },
           "decryption_request_id": {
             "type": "string"
+          },
+          "emitted_block_height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
           },
           "emitted_sequence": {
             "format": "uint64",
@@ -32273,11 +32407,17 @@
           "model_manifest_digest": {
             "$ref": "#/components/schemas/ManifestDigest"
           },
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
+          },
           "output_artifact": {
             "$ref": "#/components/schemas/SoraPrivateModelArtifactRefV1"
           },
           "output_commitment": {
             "$ref": "#/components/schemas/Hash"
+          },
+          "output_recipient": {
+            "$ref": "#/components/schemas/SoraUploadedModelEncryptionRecipientV1"
           },
           "policy_id": {
             "type": "string"
@@ -32301,14 +32441,19 @@
           "service_name": {
             "type": "string"
           },
+          "service_version": {
+            "type": "string"
+          },
           "weight_version": {
             "type": "string"
           }
         },
         "required": [
           "schema_version",
+          "network_id",
           "receipt_id",
           "service_name",
+          "service_version",
           "model_id",
           "weight_version",
           "runtime_version",
@@ -32321,9 +32466,11 @@
           "output_artifact",
           "input_commitment",
           "output_commitment",
+          "output_recipient",
           "request_commitment",
           "result_commitment",
-          "emitted_sequence"
+          "emitted_sequence",
+          "emitted_block_height"
         ],
         "type": "object"
       },
@@ -32591,6 +32738,75 @@
             },
             "required": [
               "visibility",
+              "value"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "SoraServiceConfigEntryV1": {
+        "additionalProperties": false,
+        "properties": {
+          "config_name": {
+            "type": "string"
+          },
+          "last_update_sequence": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schema_version": {
+            "const": 1,
+            "type": "integer"
+          },
+          "value_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "value_json": {
+            "$ref": "#/components/schemas/JsonValue"
+          }
+        },
+        "required": [
+          "schema_version",
+          "config_name",
+          "value_json",
+          "value_hash",
+          "last_update_sequence"
+        ],
+        "type": "object"
+      },
+      "SoraServiceConfigMutationV1": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "operation": {
+                "const": "Upsert",
+                "type": "string"
+              },
+              "value": {
+                "$ref": "#/components/schemas/SoraServiceConfigEntryV1"
+              }
+            },
+            "required": [
+              "operation",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "operation": {
+                "const": "Delete",
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "operation",
               "value"
             ],
             "type": "object"
@@ -32979,6 +33195,71 @@
           "artifacts"
         ],
         "type": "object"
+      },
+      "SoraServiceSecretEntryV1": {
+        "additionalProperties": false,
+        "properties": {
+          "envelope": {
+            "$ref": "#/components/schemas/SecretEnvelopeV1"
+          },
+          "last_update_sequence": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schema_version": {
+            "const": 1,
+            "type": "integer"
+          },
+          "secret_name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "secret_name",
+          "envelope",
+          "last_update_sequence"
+        ],
+        "type": "object"
+      },
+      "SoraServiceSecretMutationV1": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "operation": {
+                "const": "Upsert",
+                "type": "string"
+              },
+              "value": {
+                "$ref": "#/components/schemas/SoraServiceSecretEntryV1"
+              }
+            },
+            "required": [
+              "operation",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "operation": {
+                "const": "Delete",
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "operation",
+              "value"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "SoraStateBindingV1": {
         "additionalProperties": false,
@@ -33785,6 +34066,23 @@
             "additionalProperties": false,
             "properties": {
               "action": {
+                "const": "LeaseUsage",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "action",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "action": {
                 "const": "LeaseReportingEpochRollover",
                 "type": "string"
               },
@@ -34151,7 +34449,7 @@
             "minimum": 0,
             "type": "integer"
           },
-          "lease_expires_sequence": {
+          "lease_expires_height": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -34194,7 +34492,7 @@
           "manifest_hash",
           "status",
           "process_generation",
-          "lease_expires_sequence",
+          "lease_expires_height",
           "last_active_sequence",
           "materialization_dir",
           "pending_wallet_request_count",
@@ -34571,7 +34869,7 @@
           "kind": {
             "$ref": "#/components/schemas/SoraLeaseVolumeKindV1"
           },
-          "lease_expires_sequence": {
+          "lease_expires_height": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -34605,7 +34903,7 @@
           "storage_class",
           "mount_path",
           "max_total_bytes",
-          "lease_expires_sequence",
+          "lease_expires_height",
           "authoritative_generation",
           "local_materialization_dir"
         ],
@@ -34631,7 +34929,7 @@
           "queue_name": {
             "type": "string"
           },
-          "retention_sequences": {
+          "retention_blocks": {
             "format": "uint32",
             "maximum": 4294967295,
             "minimum": 0,
@@ -34643,7 +34941,7 @@
           "queue_name",
           "max_pending_messages",
           "max_message_bytes",
-          "retention_sequences"
+          "retention_blocks"
         ],
         "type": "object"
       },
@@ -34828,7 +35126,7 @@
               }
             ]
           },
-          "lease_expires_sequence": {
+          "lease_expires_height": {
             "anyOf": [
               {
                 "format": "uint64",
@@ -34907,12 +35205,6 @@
                 "type": "null"
               }
             ]
-          },
-          "reported_pending_mailbox_messages": {
-            "format": "uint32",
-            "maximum": 4294967295,
-            "minimum": 0,
-            "type": "integer"
           },
           "role": {
             "$ref": "#/components/schemas/SoracloudRuntimeRevisionRole"
@@ -34995,14 +35287,13 @@
           "local_replicas",
           "health_status",
           "load_factor_bps",
-          "reported_pending_mailbox_messages",
           "authoritative_pending_mailbox_messages",
           "rollout_handle",
           "config_generation",
           "secret_generation",
           "quota_class",
           "service_lease_status",
-          "lease_expires_sequence",
+          "lease_expires_height",
           "remaining_runtime_balance",
           "config_entry_count",
           "secret_entry_count",
@@ -35177,11 +35468,6 @@
                 "minimum": 0,
                 "type": "integer"
               },
-              "reported_pending_mailbox_messages": {
-                "format": "uint64",
-                "minimum": 0,
-                "type": "integer"
-              },
               "service_revisions": {
                 "format": "uint64",
                 "minimum": 0,
@@ -35198,7 +35484,6 @@
               "service_revisions",
               "apartments",
               "max_load_factor_bps",
-              "reported_pending_mailbox_messages",
               "authoritative_pending_mailbox_messages",
               "bundle_cache_misses",
               "artifact_cache_misses"
@@ -47166,15 +47451,17 @@
             "minimum": 0,
             "type": "integer"
           },
-          "active_service_version": {
-            "type": "string"
+          "assignment": {
+            "$ref": "#/components/schemas/SoraServiceLeaseReporterAssignmentV1"
           },
           "finalize_reporter": {
             "type": "boolean"
           },
-          "replica_slot": {
-            "format": "uint16",
-            "maximum": 65535,
+          "forced_finalization": {
+            "type": "boolean"
+          },
+          "last_updated_height": {
+            "format": "uint64",
             "minimum": 0,
             "type": "integer"
           },
@@ -47182,18 +47469,42 @@
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
-          },
-          "validator_account_id": {
-            "type": "string"
           }
         },
         "required": [
           "reporting_epoch",
-          "active_service_version",
-          "replica_slot",
-          "validator_account_id",
+          "assignment",
           "accounted_egress_bytes",
-          "finalize_reporter"
+          "last_updated_height",
+          "finalize_reporter",
+          "forced_finalization"
+        ],
+        "type": "object"
+      },
+      "SoraServiceLeaseReporterAssignmentV1": {
+        "additionalProperties": false,
+        "properties": {
+          "placement": {
+            "$ref": "#/components/schemas/SoraInrouReplicaPlacementV1"
+          },
+          "placement_reconciled_at_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schema_version": {
+            "const": 1,
+            "type": "integer"
+          },
+          "service_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "service_version",
+          "placement",
+          "placement_reconciled_at_ms"
         ],
         "type": "object"
       },
@@ -47209,7 +47520,13 @@
             "minimum": 0,
             "type": "integer"
           },
-          "lease_started_sequence": {
+          "forced_finalized_checkpoint_count": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lease_started_height": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -47250,13 +47567,14 @@
         },
         "required": [
           "schema_version",
-          "lease_started_sequence",
+          "lease_started_height",
           "previous_reporting_epoch",
           "new_reporting_epoch",
           "reporter_account_id",
           "active_service_version",
           "replica_slot",
           "finalized_checkpoint_count",
+          "forced_finalized_checkpoint_count",
           "settled_egress_bytes_delta",
           "settled_egress_bytes"
         ],
@@ -47292,12 +47610,12 @@
               }
             ]
           },
-          "lease_expires_sequence": {
+          "lease_expires_height": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
           },
-          "lease_started_sequence": {
+          "lease_started_height": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -47313,7 +47631,7 @@
             "minimum": 0,
             "type": "integer"
           },
-          "runtime_price_per_sequence": {
+          "runtime_price_per_block": {
             "$ref": "#/components/schemas/Quantity"
           },
           "schema_version": {
@@ -47328,7 +47646,7 @@
           "status": {
             "$ref": "#/components/schemas/SoraServiceLeaseStatusV1"
           },
-          "storage_price_per_gib_sequence": {
+          "storage_price_per_gib_block": {
             "$ref": "#/components/schemas/Quantity"
           }
         },
@@ -47338,16 +47656,49 @@
           "quota_class",
           "deployment_deposit",
           "prepaid_runtime_balance",
-          "runtime_price_per_sequence",
-          "storage_price_per_gib_sequence",
+          "runtime_price_per_block",
+          "storage_price_per_gib_block",
           "egress_price_per_mib",
-          "lease_started_sequence",
-          "lease_expires_sequence",
+          "lease_started_height",
+          "lease_expires_height",
           "reporting_epoch",
           "settled_egress_bytes",
           "egress_reporter_checkpoints",
           "accounted_egress_bytes",
           "last_status_reason"
+        ],
+        "type": "object"
+      },
+      "SoraServiceLeaseUsageAuditV1": {
+        "additionalProperties": false,
+        "properties": {
+          "assignment": {
+            "$ref": "#/components/schemas/SoraServiceLeaseReporterAssignmentV1"
+          },
+          "finalize_reporter": {
+            "type": "boolean"
+          },
+          "replica_accounted_egress_bytes": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reporting_epoch": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schema_version": {
+            "const": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "reporting_epoch",
+          "assignment",
+          "replica_accounted_egress_bytes",
+          "finalize_reporter"
         ],
         "type": "object"
       }
@@ -72305,7 +72656,17 @@
                 }
               }
             },
-            "description": "Successful response"
+            "description": "Exact replay of an already committed private execution receipt"
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateUploadedModelExecuteResponse"
+                }
+              }
+            },
+            "description": "Encrypted output durably ingested and atomic pin-plus-receipt transaction submitted"
           }
         },
         "summary": "Execute a private uploaded model.",
@@ -72396,11 +72757,25 @@
             }
           },
           {
+            "description": "Opaque continue_cursor returned by the preceding page. The token is bound to the exact filters and initial ledger sequence snapshot.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 114,
+              "minLength": 114,
+              "pattern": "^[A-Za-z0-9_-]{114}$",
+              "type": "string"
+            }
+          },
+          {
             "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
+              "default": 50,
               "format": "uint32",
+              "maximum": 500,
               "minimum": 1,
               "type": "integer"
             }
@@ -73727,7 +74102,7 @@
     },
     "/v1/soracloud/status": {
       "get": {
-        "description": "Fetch the exact V1 Soracloud service-health, routing, hosted-HTTP topology, resource-pressure, failed-admission, runtime-manager, and control-plane projections. Routing reports configured_lane_count, declared_lane_count, active lane ids/count, and autoscale-capacity lane ids/count separately.",
+        "description": "Fetch the exact V1 Soracloud service-health, routing, hosted-HTTP topology, resource-pressure, failed-admission, runtime-manager, and control-plane projections. Routing reports `configured_lane_count`, `declared_lane_count`, `active_lane_ids`/`active_lane_count`, and `autoscale_capacity_lane_ids`/`autoscale_capacity_lane_count` separately.",
         "parameters": [
           {
             "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",

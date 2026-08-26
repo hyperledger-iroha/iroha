@@ -13,15 +13,6 @@ Completed history lives in [`status.md`](./status.md).
   keep host-local Python execution, probing, and warmth heartbeats
   hard-rejected; authenticated imports remain inert storage.
 
-## Merged-candidate compile recovery
-
-- After the merge is recorded as a signed, clean source commit, replay the
-  Torii OpenAPI owner and synchronize the complete five-file artifact bundle.
-  The embedded source-owned specification is synchronized with the reconciled
-  router, while the inherited release copies and unsigned manifests still
-  describe the preceding source commit and artifact digest; do not hand-edit
-  that provenance bundle in the dirty merge worktree.
-
 ## SORA Parliament hardening
 
 - Obtain an independent review of the exact timed-OVN arithmetic,
