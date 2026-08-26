@@ -1356,6 +1356,7 @@ fn install_recovered_validate_retry_seal(
         effect.clone(),
         durable.clone(),
         pending,
+        ordinal,
         None,
     )
     .expect("seal recovered Validate retry owner");
@@ -1413,6 +1414,218 @@ fn assert_recovered_validate_retry_stutter_is_inert(executor: &V2EffectExecutor<
     assert_eq!(executor.pending_work(), 0);
 }
 
+#[derive(Clone, Copy, Debug)]
+enum BoundValidateRetryAuthorityKind {
+    Live,
+    Recovered,
+    Published,
+}
+
+fn install_bound_validate_retry_authority_for_cleanup(
+    executor: &mut V2EffectExecutor<FakeRuntime>,
+    fixture: &Fixture,
+    key: (wire::ConsensusRound, wire::BlockSubject),
+    kind: BoundValidateRetryAuthorityKind,
+    lifecycle_ordinal: u128,
+) {
+    let effect = AdapterEffect::ValidateBody {
+        tag: tag(0),
+        round: key.0,
+        subject: key.1,
+    };
+    let fetch = AdapterEffect::FetchBody {
+        tag: tag(0),
+        round: key.0,
+        subject: key.1,
+        manifest: None,
+        certified_sources: Vec::new(),
+        certificate: None,
+    };
+    let ownership = bound_test_effect_ownership(&fetch, tag(0), lifecycle_ordinal + 1)
+        .rebind_as_inherited_adapter_effect(&effect)
+        .expect("project exact cleanup Validate owner");
+    let pending = ownership
+        .exact_pending_adapter_effect_binding(&effect)
+        .expect("seal exact cleanup Validate binding");
+    let durable = DurableBodyReceipt::for_test(
+        fixture.context.id(),
+        key.0,
+        key.1,
+        HashOf::new(&fixture.manifest),
+    );
+    match kind {
+        BoundValidateRetryAuthorityKind::Live => {
+            assert!(
+                executor
+                    .durable_validate_retry_seals
+                    .insert(
+                        key,
+                        DurableValidateRetrySealV1::Live {
+                            effect,
+                            ownership,
+                            lifecycle_ordinal: Some(lifecycle_ordinal),
+                        },
+                    )
+                    .is_none()
+            );
+        }
+        BoundValidateRetryAuthorityKind::Recovered => {
+            let owner = RecoveredDurableValidateRetryOwnerV1::for_test(
+                effect,
+                durable,
+                pending,
+                lifecycle_ordinal,
+                None,
+            )
+            .expect("seal recovered cleanup Validate owner");
+            let frontier = owner
+                .initial_retry_frontier()
+                .expect("recovered cleanup owner retains its initial frontier");
+            assert!(
+                executor
+                    .durable_validate_retry_seals
+                    .insert(
+                        key,
+                        DurableValidateRetrySealV1::Recovered {
+                            owner: Arc::new(owner),
+                            frontier,
+                            lifecycle_ordinal: Some(lifecycle_ordinal),
+                        },
+                    )
+                    .is_none()
+            );
+        }
+        BoundValidateRetryAuthorityKind::Published => {
+            let mut marker =
+                PublishedLifecycleValidateRetryMarkerV1::prepare(&effect, &durable, &pending)
+                    .expect("seal published cleanup Validate marker");
+            marker
+                .bind_lifecycle_ordinal(lifecycle_ordinal)
+                .expect("bind published cleanup Validate ordinal");
+            assert!(
+                executor
+                    .published_lifecycle_validate_retry_markers
+                    .insert(key, marker)
+                    .is_none()
+            );
+        }
+    }
+}
+
+fn bound_validate_retry_ordinal_for_cleanup(
+    executor: &V2EffectExecutor<FakeRuntime>,
+    key: (wire::ConsensusRound, wire::BlockSubject),
+    kind: BoundValidateRetryAuthorityKind,
+) -> Option<u128> {
+    match kind {
+        BoundValidateRetryAuthorityKind::Live | BoundValidateRetryAuthorityKind::Recovered => {
+            executor
+                .durable_validate_retry_seals
+                .get(&key)
+                .and_then(DurableValidateRetrySealV1::lifecycle_ordinal)
+        }
+        BoundValidateRetryAuthorityKind::Published => executor
+            .published_lifecycle_validate_retry_markers
+            .get(&key)
+            .and_then(|marker| marker.lifecycle_ordinal),
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn decision_cleanup_defers_live_validate_authority_retirement_until_exact_resolution() {
+    let fixture = Fixture::new();
+    let (foreign_subject, _) = distinct_body(&fixture);
+    let selected_key = (fixture.manifest.round, fixture.manifest.subject);
+    let foreign_key = (fixture.manifest.round, foreign_subject);
+    let commit = fixture.qc(wire::GlobalPhase::Commit);
+    let decision = (
+        commit.round,
+        commit.proposal_round,
+        commit.subject,
+        commit.execution_commitment,
+    );
+    let kinds = [
+        BoundValidateRetryAuthorityKind::Live,
+        BoundValidateRetryAuthorityKind::Recovered,
+        BoundValidateRetryAuthorityKind::Published,
+    ];
+
+    for (kind_index, kind) in kinds.into_iter().enumerate() {
+        for authority_is_selected in [false, true] {
+            for drain_decision_body in [false, true] {
+                let mut executor = fixture.executor(EffectQueueConfig::default());
+                let mut services = fixture.services();
+                let key = if authority_is_selected {
+                    selected_key
+                } else {
+                    foreign_key
+                };
+                let lifecycle_ordinal = 40_000_u128
+                    + u128::try_from(kind_index).expect("kind index fits u128") * 100
+                    + if authority_is_selected { 10 } else { 0 }
+                    + if drain_decision_body { 1 } else { 0 };
+                install_bound_validate_retry_authority_for_cleanup(
+                    &mut executor,
+                    &fixture,
+                    key,
+                    kind,
+                    lifecycle_ordinal,
+                );
+
+                executor
+                    .reconcile_decision_work(decision, drain_decision_body, &mut services)
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "{kind:?} Decision cleanup failed for selected={authority_is_selected}, drain={drain_decision_body}: {error:?}"
+                        )
+                    });
+                assert_eq!(
+                    bound_validate_retry_ordinal_for_cleanup(&executor, key, kind),
+                    Some(lifecycle_ordinal),
+                    "{kind:?} cleanup retired a live row for selected={authority_is_selected}, drain={drain_decision_body}",
+                );
+                assert!(!executor.durable_validate_retry_seals_are_finalization_inert());
+
+                let wrong_ordinal = lifecycle_ordinal + 1;
+                assert!(matches!(
+                    executor.release_validate_retry_lifecycle_ordinal(key, wrong_ordinal),
+                    Err(EffectExecutorError::Contract(reason)) if reason.contains("ordinal")
+                ));
+                assert_eq!(
+                    bound_validate_retry_ordinal_for_cleanup(&executor, key, kind),
+                    Some(lifecycle_ordinal),
+                    "{kind:?} wrong-ordinal release mutated the live authority",
+                );
+
+                assert_eq!(
+                    executor
+                        .release_validate_retry_lifecycle_ordinal(key, lifecycle_ordinal)
+                        .expect("release exact cleanup Validate authority"),
+                    true,
+                );
+                let retains_selected_tombstone = authority_is_selected && !drain_decision_body;
+                assert_eq!(
+                    bound_validate_retry_ordinal_for_cleanup(&executor, key, kind),
+                    None,
+                    "{kind:?} exact release retained the live ordinal",
+                );
+                let authority_still_present = match kind {
+                    BoundValidateRetryAuthorityKind::Live
+                    | BoundValidateRetryAuthorityKind::Recovered => {
+                        executor.durable_validate_retry_seals.contains_key(&key)
+                    }
+                    BoundValidateRetryAuthorityKind::Published => executor
+                        .published_lifecycle_validate_retry_markers
+                        .contains_key(&key),
+                };
+                assert_eq!(authority_still_present, retains_selected_tombstone);
+                assert!(executor.durable_validate_retry_seals_are_finalization_inert());
+            }
+        }
+    }
+}
+
 #[test]
 #[allow(clippy::too_many_lines)]
 fn recovered_validate_retry_frontier_is_monotonic_and_keeps_its_physical_owner() {
@@ -1425,6 +1638,7 @@ fn recovered_validate_retry_frontier_is_monotonic_and_keeps_its_physical_owner()
     let DurableValidateRetrySealV1::Recovered {
         owner: initial_owner,
         frontier: initial_frontier,
+        ..
     } = &executor.durable_validate_retry_seals[&key]
     else {
         panic!("cold installation must retain Recovered lineage")
@@ -1445,8 +1659,9 @@ fn recovered_validate_retry_frontier_is_monotonic_and_keeps_its_physical_owner()
     executor
         .retain_effect_batch(vec![prepare_effect.clone()], vec![prepare_ownership])
         .expect("None-to-Prepare retry advances only the inert frontier");
-    let DurableValidateRetrySealV1::Recovered { owner, frontier } =
-        &executor.durable_validate_retry_seals[&key]
+    let DurableValidateRetrySealV1::Recovered {
+        owner, frontier, ..
+    } = &executor.durable_validate_retry_seals[&key]
     else {
         panic!("authority refinement changed Recovered lineage")
     };
@@ -1468,8 +1683,9 @@ fn recovered_validate_retry_frontier_is_monotonic_and_keeps_its_physical_owner()
     executor
         .retain_effect_batch(vec![prepare_effect], vec![same_ownership])
         .expect("same authority from a distinct causal root remains an inert stutter");
-    let DurableValidateRetrySealV1::Recovered { owner, frontier } =
-        &executor.durable_validate_retry_seals[&key]
+    let DurableValidateRetrySealV1::Recovered {
+        owner, frontier, ..
+    } = &executor.durable_validate_retry_seals[&key]
     else {
         panic!("same retry changed Recovered lineage")
     };
@@ -1486,8 +1702,9 @@ fn recovered_validate_retry_frontier_is_monotonic_and_keeps_its_physical_owner()
     executor
         .retain_effect_batch(vec![stale_effect], vec![stale_ownership])
         .expect("stale weaker retry stutters without downgrading authority");
-    let DurableValidateRetrySealV1::Recovered { owner, frontier } =
-        &executor.durable_validate_retry_seals[&key]
+    let DurableValidateRetrySealV1::Recovered {
+        owner, frontier, ..
+    } = &executor.durable_validate_retry_seals[&key]
     else {
         panic!("stale retry changed Recovered lineage")
     };
@@ -1507,7 +1724,10 @@ fn recovered_validate_retry_frontier_is_monotonic_and_keeps_its_physical_owner()
         .retain_effect_batch(vec![commit_effect], vec![commit_ownership])
         .expect("Prepare-to-Commit retry advances the same inert frontier");
     let accepted = executor.durable_validate_retry_seals[&key].clone();
-    let DurableValidateRetrySealV1::Recovered { owner, frontier } = &accepted else {
+    let DurableValidateRetrySealV1::Recovered {
+        owner, frontier, ..
+    } = &accepted
+    else {
         panic!("Commit refinement changed Recovered lineage")
     };
     assert!(Arc::ptr_eq(owner, &initial_owner));
@@ -2313,7 +2533,7 @@ fn published_lifecycle_validate_marker_coalesces_timer_authority_upgrade() {
         .expect("preflight the direct lifecycle marker catalog")
         .bind_validate_successor(&initial_validate, &initial_pending)
         .expect("bind the exact lifecycle-published Validate successor");
-    executor.commit_published_lifecycle_validate_retry_marker(prepared);
+    executor.commit_published_lifecycle_validate_retry_marker(prepared, 9_022);
 
     let next_tag = tag(1);
     let commit = fixture.qc(wire::GlobalPhase::Commit);
@@ -2397,6 +2617,7 @@ fn cold_recovered_lifecycle_validate_marker_coalesces_timer_authority_upgrade() 
             &initial_validate,
             &initial_pending,
             &durable,
+            9_024,
         )
         .expect("restore the cold-opened Validate retry marker before clock activation");
 

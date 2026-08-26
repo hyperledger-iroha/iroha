@@ -852,8 +852,9 @@ def static_errors(o: dict[str, str] | None = None) -> list[str]:
             r"read_configured_kagemusha_promotion_reservation\(.*?"
             r"unsupported outside macOS until a platform-specific root-custody path is reviewed.*?"
             r"fn kagemusha_catalog_revalidation_receipt_path_v1\(.*?"
+            r"let promotion_id_hex\s*=\s*hex::encode\(promotion_id\);.*?"
             r"Path::new\(KAGEMUSHA_CATALOG_REVALIDATION_RECEIPT_ROOT_V1\).*?"
-            r'\.join\(format!\("\{\}\.json",\s*hex::encode\(promotion_id\)\)\)'
+            r'\.join\(format!\("\{promotion_id_hex\}\.json"\)\)'
         ),
         "fixed receipt path/platform gate",
     )
@@ -2135,7 +2136,7 @@ def static_errors(o: dict[str, str] | None = None) -> list[str]:
     rp(pa, KAGAMI, e,
         (r"fn snapshot_after_one_staged_entry\(.*?"
          r"if !self\.snapshot\.matches_except_links\(current\).*?"
-         r"\.checked_sub\(self\.snapshot\.links\).*?\.is_some_and\(\|delta\| delta <= 1\).*?"
+         r"\.checked_sub\(self\.snapshot\.links\).*?\.is_none_or\(\|delta\| delta > 1\).*?"
          r"self\.verify_path_identity_against\(current\)\?;.*?Ok\(current\).*?"
          r"fn verify_path_identity_against\(.*?if opened != Some\(expected_parent\).*?"
          r"if index == final_component \{\s*current == expected_parent\s*\} else \{\s*"

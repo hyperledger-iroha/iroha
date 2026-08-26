@@ -526,6 +526,7 @@ def shell_array(name):
 
 for name in (
     "REQUIRED_BRIDGE_SYMBOLS",
+    "PARLIAMENT_TIMED_OVN_C_SYMBOLS",
     "SORAFS_APPEAL_FINANCE_C_SYMBOLS",
     "PRIVACY_COMPILED_PROFILE_C_SYMBOLS",
     "KAGEMUSHA_C_SYMBOLS",
@@ -581,6 +582,8 @@ def emit(symbol):
 emit("connect_norito_bridge_abi_version")
 for symbol in shell_array("KAGEMUSHA_C_SYMBOLS"):
     emit(symbol)
+for symbol in shell_array("PARLIAMENT_TIMED_OVN_C_SYMBOLS"):
+    emit(symbol)
 for symbol in shell_array("SORAFS_APPEAL_FINANCE_C_SYMBOLS"):
     emit(symbol)
 for symbol in shell_array("PRIVACY_COMPILED_PROFILE_C_SYMBOLS"):
@@ -592,6 +595,8 @@ for namespace in (
     for method in shell_array("KAGEMUSHA_JNI_METHODS"):
         emit(f"Java_{namespace}_KagemushaRecursiveSpendProver_{method}")
 for symbol in shell_array("VALIDATION_FEE_JNI_SYMBOLS"):
+    emit(symbol)
+for symbol in shell_array("PARLIAMENT_TIMED_OVN_JNI_SYMBOLS"):
     emit(symbol)
 for symbol in shell_array("SORAFS_APPEAL_FINANCE_JNI_SYMBOLS"):
     emit(symbol)
@@ -1827,6 +1832,15 @@ run_expect_reference_only_binary_fail \
   "$extra_binary_symbol" \
   "connect_norito_bridge_abi_version" \
   "$inspection_tools"
+for parliament_c_symbol in \
+  connect_norito_parliament_timed_ovn_verify_casting_proof_v1 \
+  connect_norito_parliament_timed_ovn_registration_from_proof_v1 \
+  connect_norito_parliament_timed_ovn_ballot_from_proof_v1; do
+  run_expect_reference_only_binary_fail \
+    "$extra_binary_symbol" \
+    "$parliament_c_symbol" \
+    "$inspection_tools"
+done
 run_expect_binary_fail \
   "$extra_binary_symbol" \
   "Kagemusha export inventory is not exact" \
@@ -2452,6 +2466,25 @@ run_expect_android_missing_symbol_fail \
   "$with_android_outputs" \
   "Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeSignerContractRevision" \
   "$android_inspection_tools"
+for parliament_c_symbol in \
+  connect_norito_parliament_timed_ovn_verify_casting_proof_v1 \
+  connect_norito_parliament_timed_ovn_registration_from_proof_v1 \
+  connect_norito_parliament_timed_ovn_ballot_from_proof_v1; do
+  run_expect_android_missing_symbol_fail \
+    "$with_android_outputs" \
+    "$parliament_c_symbol" \
+    "$android_inspection_tools"
+done
+for parliament_jni_symbol in \
+  Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeBridgeAbiVersion \
+  Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeVerifyCastingProofV1 \
+  Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeRegistrationFromProofV1 \
+  Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeBallotFromProofV1; do
+  run_expect_android_missing_symbol_fail \
+    "$with_android_outputs" \
+    "$parliament_jni_symbol" \
+    "$android_inspection_tools"
+done
 run_expect_android_missing_symbol_fail \
   "$with_android_outputs" \
   "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json" \

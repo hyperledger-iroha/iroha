@@ -73,6 +73,21 @@ def validate_workflow(source: str) -> None:
     require("--release" not in body, "Parliament PR job must not consume release binaries")
 
 
+def validate_mandatory_npos_boundary(source: str) -> None:
+    """Require the genuine four-validator pre-boundary beacon corridor."""
+
+    for marker in (
+        "async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_gate()",
+        "SumeragiNposParameters::default()",
+        "const MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS: u64 = 8;",
+        "pulse_height = boundary_height - 1",
+        "global_threshold_beacon_npos_successor_seed_v1(",
+        "status.height_context.epoch_seed",
+        "verify_finalized_global_threshold_beacon_pulse_v1(",
+    ):
+        require(marker in source, f"mandatory NPoS beacon corridor lost `{marker}`")
+
+
 class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
     """Mutation-resistant source checks for the dedicated network corridor."""
 
@@ -121,6 +136,20 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
             "MarkEnacted",
         ):
             require(retired not in corridor, f"corridor regained retired `{retired}`")
+        validate_mandatory_npos_boundary(corridor)
+
+    def test_mandatory_npos_boundary_rejects_each_removed_security_marker(self) -> None:
+        corridor = CORRIDOR.read_text(encoding="utf-8")
+        for marker in (
+            "async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_gate()",
+            "SumeragiNposParameters::default()",
+            "const MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS: u64 = 8;",
+            "pulse_height = boundary_height - 1",
+            "global_threshold_beacon_npos_successor_seed_v1(",
+            "status.height_context.epoch_seed",
+        ):
+            with self.subTest(marker=marker), self.assertRaises(ContractError):
+                validate_mandatory_npos_boundary(corridor.replace(marker, "", 1))
 
 
 if __name__ == "__main__":

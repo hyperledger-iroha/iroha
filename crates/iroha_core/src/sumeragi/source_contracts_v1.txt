@@ -1150,9 +1150,18 @@ required|callers|.bind_durable_body(receipt.clone())|live Proposal replay handof
 required|callers|.project_validate(effect.clone(), validate_ownership.clone())|live Proposal replay handoff omitted {required}
 required|callers|.into_pending_durable_validate_admission()|live Proposal replay handoff omitted {required}
 required|callers|durable_validate_retry_seals_are_finalization_inert(|executor rollover stopped proving every surviving Validate retry seal belongs to the exact decided body
+required|callers|seal.lifecycle_ordinal().is_none()|executor rollover accepted a still-live Validate retry authority as an inert tombstone
+required|callers|!marker.owns_live_lifecycle_row()|executor rollover accepted a still-live direct Validate marker as inert
 required|callers|.chain(self.durable_validate_retry_seals.keys())|protected-lock retirement omitted inert Validate retry seals from its exact body census
-required|callers|.retain(\pkey, _\p !drain_decision_body && *key == decision_body)|Decision cleanup stopped retaining only the exact live decision-body Validate retry seal
-required|callers|.retain(\pkey, _\p Some(*key) == protected_body)|EnterView cleanup stopped retaining only the exact protected-body Validate retry seal
+required|callers|seal.lifecycle_ordinal().is_some()|cleanup stopped preserving exact still-live Validate retry authority
+required|callers|marker.owns_live_lifecycle_row()|cleanup stopped preserving exact still-live direct Validate authority
+required|callers|!drain_decision_body && *key == decision_body|Decision cleanup stopped retaining the selected inert Validate retry tombstone
+required|callers|Some(*key) == protected_body|EnterView cleanup stopped retaining the protected inert Validate retry tombstone
+required|callers|fn release_validate_retry_lifecycle_ordinal(|executor omitted exact post-publication Validate authority release
+required|callers|.release_lifecycle_ordinal(lifecycle_ordinal)|Validate authority release stopped checking its exact logical row
+required|callers|self.decision_body_drained \p\p selected != key|resolved losing or drained Validate authority stopped retiring after deferred cleanup
+required|callers|fn bind_validate_retry_lifecycle_ordinal(|committed generic Validate admission stopped binding its exact logical row
+required|callers|commit_published_lifecycle_validate_retry_marker(|direct Store-to-Validate publication stopped binding its exact logical child row
 end
 case|invalid_body_replay_pre_admission_is_closed_exact_and_lifecycle_owned
 region|production|registry|begin|-|before|\n#[cfg(test)]\nmod tests {
@@ -2074,8 +2083,10 @@ required|owner|expected_decision: Option<(|cold Validate owner lost the exact re
 required|owner|effect: AdapterEffect|cold Validate owner lost the immutable Validate effect
 required|owner|durable_receipt: DurableBodyReceipt|cold Validate owner lost its checksummed body receipt
 required|owner|binding: RecoveredDurableValidateRetryBindingV1|cold Validate owner lost its exact runtime binding
+required|owner|lifecycle_ordinal: u128|cold Validate owner lost its exact live logical row
 forbidden|owner|Clone|cold Validate owner became cloneable
 required|owner_impl|fn key(|cold Validate owner lost its exact proposal-round and subject key
+required|owner_impl|fn lifecycle_ordinal(|cold Validate owner stopped exposing its immutable logical row only to the closed executor install
 required|owner_impl|fn bind_validated_marker(|cold Validate owner lost its exact marker-binding oracle
 required|owner_impl|fn exactly_matches_validated_marker(|cold Validate owner lost post-binding marker revalidation
 required|owner_impl|self.key() == key|cold Validate marker deferral stopped checking the exact owner key
@@ -2132,6 +2143,7 @@ required|projection|coordinator.ready_index.contains(&record.ordinal)|cold censu
 required|projection|validate.matches_recovered_record(|cold census omitted complete recovered-carrier validation
 required|projection|project_recovered_durable_validate_retry_binding(|cold census lost its opaque exact runtime binding
 required|projection|matching_decision|cold census failed to pass the associated Decision ceiling into retry binding
+required|projection|lifecycle_ordinal: address.ordinal|cold census stopped transferring the exact registry row into its closed owner
 required|projection|owners.insert(key, owner).is_some()|cold census stopped rejecting a second exact-key owner
 required|projection|RecoveredDurableValidateRetryCensusV1 {|cold census stopped sealing the complete owner map behind one opaque move-only value
 count|projection_source|pub(super) fn project_recovered_durable_validate_retry_census(|1|cold Validate census must have one registry mint
@@ -2188,8 +2200,14 @@ required|seal|Live {|Validate retry seal lost the distinct live lineage
 required|seal|Recovered {|Validate retry seal lost the distinct recovered lineage
 required|seal|owner:|recovered retry seal lost its immutable storage-authenticated owner
 required|seal|frontier:|recovered retry seal lost its persistent monotonic authority frontier
+required|seal|lifecycle_ordinal: Option<u128>|Validate retry seal stopped distinguishing a live registry row from an inert tombstone
 forbidden|seal|Recovered(Arc<RecoveredDurableValidateRetryOwnerV1>)|recovered retry seal retained the immutable-startup tuple which permits effect or authority rollback
 required|seal_projection|Some(Self::Live {|normal admission stopped minting only the live retry lineage
+required|seal_projection|lifecycle_ordinal: None|fresh pre-admission Validate retry seal incorrectly claimed a committed registry row
+required|seal_projection|fn lifecycle_ordinal(|Validate retry seal lost its exact live-row observation
+required|seal_projection|fn bind_lifecycle_ordinal(|Validate retry settlement lost its one-way exact row bind
+required|seal_projection|fn release_lifecycle_ordinal(|Validate retry resolution lost its exact row release
+required|seal_projection|existing != ordinal|Validate retry authority accepted logical-row substitution
 required|seal_projection|Self::Recovered {|retry projection stopped distinguishing recovered ownership
 required|seal_projection|frontier|recovered retry projection stopped consulting its retained authority and EventTag frontier
 required|seal_projection|exactly_matches_retry|recovered retry projection stopped proving its exact cold owner
@@ -2204,6 +2222,7 @@ forbidden|seal_projection|owner: Arc::new(incoming|recovered retry projection pe
 required|install|owner.exactly_matches_validated_marker(key, validated)|cold owner installation stopped rechecking the marker-derived authority ceiling
 required|install|frontier: owner.initial_retry_frontier()|cold owner installation stopped sealing the marker-derived commitment and startup statement into its retry frontier
 required|install|DurableValidateRetrySealV1::Recovered {|cold owner installation lost its lineage-tagged persistent retry frontier
+required|install|lifecycle_ordinal: Some(owner.lifecycle_ordinal())|cold owner installation stopped retaining its exact live registry row
 required|install|owner: Arc::new(owner)|cold owner installation lost its immutable storage-authenticated owner
 forbidden|install|DurableValidateRetrySealV1::Recovered(Arc::new(owner))|cold owner installation retained immutable startup authority and accepted later conflicting refinements
 required|runtime_decision|self.driver.replayed_decision_key()|cold launch stopped reading the runtime's exact replayed Decision
@@ -2239,9 +2258,11 @@ required|decision_cleanup|.transpose()|Decision cleanup stopped propagating a co
 required|decision_cleanup|!self.pending_durable_validate_admissions.is_empty()|Decision cleanup must not overtake live Validate admission ownership
 required|decision_cleanup|let Some(seal) = projected_recovered_decision_seal|Decision cleanup lost its preflighted replacement recovered frontier
 required|decision_cleanup|.insert(decision_body, seal);|Decision cleanup stopped committing the replacement frontier only after fallible retirement work
-required|decision_cleanup|self.durable_validate_retry_seals|Decision cleanup lost the inert retry-seal map
-required|decision_cleanup|.retain(\pkey, _\p !drain_decision_body && *key == decision_body);|Decision cleanup must retain only the exact selected-body stutter or drain it terminally
-order|decision_cleanup|7|project_recovered_commitment_ceiling(decision_commitment)|self.preflight_remote_proposal_replay_indexes()?|retire_proposal_work_after_decision(|let Some(seal) = projected_recovered_decision_seal|.insert(decision_body, seal);|.retain(\pkey, _\p !drain_decision_body && *key == decision_body);|self.protected_decision = Some(durable_decision)|Decision commitment conflict preflight must precede fallible retirement, and replacement frontier commit must precede final cleanup publication
+required|decision_cleanup|self.durable_validate_retry_seals|Decision cleanup lost the retry-authority map
+required|decision_cleanup|seal.lifecycle_ordinal().is_some()|Decision cleanup retired an unresolved Validate lifecycle row
+required|decision_cleanup|!drain_decision_body && *key == decision_body|Decision cleanup lost the selected inert retry tombstone
+required|decision_cleanup|marker.owns_live_lifecycle_row()|Decision cleanup retired an unresolved direct Store-to-Validate row
+order|decision_cleanup|7|project_recovered_commitment_ceiling(decision_commitment)|self.preflight_remote_proposal_replay_indexes()?|retire_proposal_work_after_decision(|let Some(seal) = projected_recovered_decision_seal|.insert(decision_body, seal);|self.durable_validate_retry_seals.retain(\pkey, seal\p {|self.protected_decision = Some(durable_decision)|Decision commitment conflict preflight must precede fallible retirement, and replacement frontier commit plus live-authority filtering must precede final cleanup publication
 order|launch|4|.replayed_decision_key()|project_recovered_durable_validate_retry_census(|V2EffectExecutor::open_with_body_store(|ProductionV2Services::start_with_apply_service(|cold Validate census projection, closed marker deferral and installation, and service exposure must remain ordered
 required|launch|recovered_validate_retry_census|body-store open lost the exact opaque census by-value handoff
 forbidden|launch|&recovered_validate_retry_census|launch borrowed a reusable or caller-selectable cold owner census

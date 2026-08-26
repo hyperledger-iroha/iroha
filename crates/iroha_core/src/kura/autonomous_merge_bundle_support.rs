@@ -2066,7 +2066,14 @@ impl Kura {
             let frontier_descriptor = &frontier_artifact.proposal.descriptor;
             self.require_active_lane_artifact(&entry, frontier_descriptor)
                 .map_err(|_| "latest certified frontier targets stale lane geometry")?;
-            if frontier_descriptor.lane_block_height < lane_block_height {
+            // Durable readback must never outrun its authenticated frontier. During
+            // publication, however, `certified_override` is the incoming certificate
+            // whose bundle is being preflighted before that same transaction advances
+            // the frontier. Comparing that override to the predecessor frontier would
+            // reject every sequential lane height after the first.
+            if certified_override.is_none()
+                && frontier_descriptor.lane_block_height < lane_block_height
+            {
                 return Err("certified lane block pair is ahead of its durable frontier");
             }
             if frontier_descriptor.lane_block_height == lane_block_height
