@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -31,7 +32,20 @@ from typing import NoReturn
 if __package__:
     from .compute_workspace_source_manifest import workspace_source_manifest
 else:
-    from compute_workspace_source_manifest import workspace_source_manifest
+    _manifest_module_path = Path(__file__).resolve(strict=True).with_name(
+        "compute_workspace_source_manifest.py"
+    )
+    _manifest_module_spec = importlib.util.spec_from_file_location(
+        "_iroha_compute_workspace_source_manifest",
+        _manifest_module_path,
+    )
+    if _manifest_module_spec is None or _manifest_module_spec.loader is None:
+        raise ImportError(
+            f"unable to load workspace source manifest helper: {_manifest_module_path}"
+        )
+    _manifest_module = importlib.util.module_from_spec(_manifest_module_spec)
+    _manifest_module_spec.loader.exec_module(_manifest_module)
+    workspace_source_manifest = _manifest_module.workspace_source_manifest
 
 
 SCHEMA = "iroha.native-sdk-abi22-artifact.v1"

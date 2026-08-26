@@ -182,6 +182,29 @@ def native_artifact(tmp_path: Path) -> Path:
     return artifact
 
 
+def test_checker_cli_loads_manifest_helper_under_python_isolation(
+    tmp_path: Path,
+) -> None:
+    """The direct checker entrypoint resolves its sibling under ``-I -S``."""
+
+    completed = subprocess.run(
+        (
+            sys.executable,
+            "-I",
+            "-S",
+            str(REPO_ROOT / "scripts/check_native_sdk_abi22_artifact.py"),
+            "--help",
+        ),
+        cwd=tmp_path,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "{record,verify}" in completed.stdout
+    assert "--source-root" in completed.stdout
+
+
 def exact_probe(_sdk: str, _path: Path) -> int:
     """Return the sole accepted first-release bridge ABI."""
 
