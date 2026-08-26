@@ -69,12 +69,12 @@ Completed history lives in [`status.md`](./status.md).
   count/length/tip marker and durable latest-route summary; Fast must never recover that authority
   by decoding every historical frame.
 - Add large-history startup benchmarks that separately report marker preflight, hash-journal
-  binding, single-pass snapshot hashing, typed snapshot decode, required current-state index
-  projection, deferred merge metadata, Sumeragi replay planning, and recursive disk accounting,
-  then enforce zero-copy historical-hash, no-historical-body, no-deep-snapshot-validation, and
-  no-historical-cryptography regressions for Fast mode. If current-world typed decode or required
-  read-index projection dominates incident recovery, add a signed mmap/lazy World view rather than
-  weakening the signer, network, size, or exact-tip boundary.
+  binding, five-artifact metadata binding, bounded-manifest authentication, exact-tip validation,
+  minimal-State construction, merge metadata, Sumeragi replay planning, and recursive disk
+  accounting. Enforce zero-copy historical-hash, no-historical-body, no-snapshot-payload-read,
+  no-Merkle-read, no-current-World-decode, no-derived-index, no-full-StateView,
+  no-deep-snapshot-validation, and no-historical-cryptography regressions for Fast mode without
+  weakening the signer, network, configured confidential-policy, size, or exact-tip boundary.
 
 ## Norito archive API closure
 

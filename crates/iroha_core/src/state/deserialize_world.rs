@@ -7636,6 +7636,12 @@ fn parse_world(
                 message,
             })?;
     }
+    if emergency_fast {
+        iroha_logger::warn!(
+            "emergency Fast snapshot restore deferred every derived World index until a Strict restart"
+        );
+        return Ok(world);
+    }
     world.rebuild_domain_owner_index();
     world
         .rebuild_uaid_account_index()
@@ -7689,21 +7695,12 @@ fn parse_world(
     world.rebuild_nft_owner_index();
     world.rebuild_rwa_indexes();
     world.rebuild_escrow_indexes();
-    if emergency_fast {
-        world
-            .rebuild_vpn_lease_indexes_emergency_fast()
-            .map_err(|message| json::Error::InvalidField {
-                field: "vpn_leases".into(),
-                message,
-            })?;
-    } else {
-        world
-            .rebuild_vpn_lease_indexes()
-            .map_err(|message| json::Error::InvalidField {
-                field: "vpn_leases".into(),
-                message,
-            })?;
-    }
+    world
+        .rebuild_vpn_lease_indexes()
+        .map_err(|message| json::Error::InvalidField {
+            field: "vpn_leases".into(),
+            message,
+        })?;
     world.rebuild_repo_agreement_indexes();
     world.rebuild_proof_status_index();
     world
@@ -7712,14 +7709,12 @@ fn parse_world(
             field: "opaque_uaids".into(),
             message,
         })?;
-    if !emergency_fast {
-        world
-            .validate_identifier_claims()
-            .map_err(|message| json::Error::InvalidField {
-                field: "identifier_claims".into(),
-                message,
-            })?;
-    }
+    world
+        .validate_identifier_claims()
+        .map_err(|message| json::Error::InvalidField {
+            field: "identifier_claims".into(),
+            message,
+        })?;
     Ok(world)
 }
 struct BuildStateInputs {
@@ -9130,7 +9125,6 @@ mod decode_tests {
     fn borrowed_snapshot_field_errors_retain_the_schema_field() {
         let error = match (SnapshotJsonField::Borrowed {
             raw: "[]",
-            emergency_fast: false,
         })
         .decode_canonical::<Cell<Vec<PeerId>>>("commit_topology")
         {
@@ -9142,20 +9136,6 @@ mod decode_tests {
             json::Error::InvalidField { field, message }
                 if field == "commit_topology" && message.contains("expected object start")
         ));
-    }
-    #[test]
-    fn emergency_fast_snapshot_fields_skip_canonical_reserialization() {
-        let input = r#"{"values":[ ]}"#;
-        let mut strict = SnapshotJsonMap::parse(input, "fixture").expect("strict fixture map");
-        let strict_error = take_required::<Vec<u8>>(&mut strict, "values")
-            .expect_err("Strict restore must reject noncanonical field bytes");
-        assert!(strict_error.to_string().contains("not canonically encoded"));
-
-        let mut emergency_fast = SnapshotJsonMap::parse_emergency_fast(input, "fixture")
-            .expect("emergency Fast fixture map");
-        let values = take_required::<Vec<u8>>(&mut emergency_fast, "values")
-            .expect("Fast restore keeps typed parsing without canonical reserialization");
-        assert!(values.is_empty());
     }
     #[test]
     fn snapshot_record_order_must_be_strict_and_duplicate_free() {

@@ -189,7 +189,6 @@ fn map_to_bundles(map: BTreeMap<Hash, Vec<TransferTranscript>>) -> Vec<TransferT
         })
         .collect()
 }
-#[cfg(test)]
 fn map_ref_to_bundles(
     map: &BTreeMap<Hash, Vec<TransferTranscript>>,
 ) -> Vec<TransferTranscriptBundle> {
@@ -635,7 +634,6 @@ pub fn record_read_from_access_key(state_block: &StateBlock<'_>, access_key: &st
         // no further processing needed for asset_def access
     }
 }
-#[cfg(test)]
 /// Snapshot the current witness without clearing it (for debugging/inspection).
 pub fn snapshot_exec_witness() -> ExecWitness {
     let g = lock_slot();
