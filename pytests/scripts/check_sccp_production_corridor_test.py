@@ -355,6 +355,21 @@ def test_evidence_workflow_installs_rust_and_runs_real_corridor() -> None:
     assert "bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts" in job
 
 
+def test_python_workflow_installs_hash_locked_sdk_dependencies() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    job = workflow_job(workflow, "python-sdk")
+    for required in (
+        'python-version: "3.12"',
+        "cache-dependency-path: python/iroha_python/requirements-ci.lock",
+        "--require-hashes",
+        "--only-binary=:all:",
+        "-r python/iroha_python/requirements-ci.lock",
+    ):
+        assert required in job
+    assert '"python/iroha_python/requirements-ci.lock"' in workflow
+    assert "pip install --upgrade pip pytest" not in job
+
+
 def test_swift_workflow_binds_the_exact_first_release_bridge_envelope() -> None:
     job = workflow_job(WORKFLOW.read_text(encoding="utf-8"), "swift-sdk")
     for required in (
