@@ -1677,6 +1677,13 @@ def test_repository_wires_exact_abi23_release_contract() -> None:
         < jni_lane.index('JAVA_BINARY="$JAVA_HOME_DIR/bin/java"')
     )
     assert "resolved Java home must be a canonical non-symlink JDK directory" in jni_lane
+    source_seal_target = 'NORITO_BRIDGE_SEAL_CARGO_TARGET_DIR="$CARGO_TARGET_DIR"'
+    assert source_seal_target in jni_lane
+    assert (
+        jni_lane.index('CARGO_TARGET_DIR="$BUILD_SESSION/cargo-target"')
+        < jni_lane.index(source_seal_target)
+        < jni_lane.index('source_seal snapshot --root "$ROOT_DIR" --platform android')
+    )
     assert '"$PYTHON_BINARY" -I -S' in jni_lane
     assert '--set "IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION=1"' in jni_lane
     assert "--sdk c-jni" in jni_lane
