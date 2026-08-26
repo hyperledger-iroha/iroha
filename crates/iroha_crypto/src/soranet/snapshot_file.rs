@@ -114,6 +114,7 @@ impl CustodiedSnapshotPath {
         validate_custodied_ancestor_chain(&self.parent_path, self.owner_uid, false)?;
         Ok(())
     }
+    #[cfg(unix)]
     pub(super) fn sync_parent(&self) -> io::Result<()> {
         self.verify_parent()?;
         self.parent.sync_all()?;
