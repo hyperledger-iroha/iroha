@@ -61,7 +61,7 @@ fn test_try_keypair_generation_from_seed<C: BlsConfiguration>() {
         BlsImpl::<C>::try_keypair(KeyGenOption::UseSeed(SEED.to_vec())).expect("BLS keypair");
     assert!(
         (pk_1, sk_1.to_bytes()) == (pk_2, sk_2.to_bytes()),
-        "Checked keypair does not match compatibility keypair"
+        "checked keypair does not match reference keypair"
     );
 }
 fn test_try_keypair_rejects_all_zero_seed<C: BlsConfiguration>() {

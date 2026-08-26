@@ -1487,8 +1487,11 @@ mod tests {
             .collect();
         let signing_key = SigningKey::from_bytes(&[0x33; 32]);
         let (vrf_public, vrf_private) =
-            iroha_crypto::BlsNormal::try_keypair(iroha_crypto::KeyGenOption::UseSeed(vec![0x34; 32]))
-                .expect("fixture BLS keypair");
+            iroha_crypto::BlsNormal::try_keypair(iroha_crypto::KeyGenOption::UseSeed(vec![
+                0x34;
+                32
+            ]))
+            .expect("fixture BLS keypair");
         let vrf_pair: iroha_crypto::KeyPair = (vrf_public, vrf_private).into();
         let proposal = ProviderAdmissionProposalV1 {
             version: PROVIDER_ADMISSION_PROPOSAL_VERSION_V1,

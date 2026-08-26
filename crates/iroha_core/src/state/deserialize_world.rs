@@ -7738,7 +7738,7 @@ fn build_state(
         sccp_registry_cache: parking_lot::Mutex::new(SccpRegistryCache::default()),
     };
     state
-        .rebuild_derived_state_indexes_with_mode(emergency_fast)
+        .finalize_snapshot_derived_state_indexes(emergency_fast)
         .map_err(MergeLedgerCommitError::ExecutionStatePublication)?;
     #[cfg(feature = "sm")]
     if active_runtime {
@@ -8957,7 +8957,7 @@ mod decode_tests {
             encoded_hex: hex::encode(&encoded),
         };
         assert_eq!(
-            decode_snapshot_records::<u64>(vec![record], "fixture")
+            decode_snapshot_records::<u64>(vec![record], "fixture", true)
                 .expect("canonical Norito record"),
             [7]
         );
@@ -8968,6 +8968,7 @@ mod decode_tests {
                 encoded_hex: hex::encode(trailing),
             }],
             "fixture",
+            true,
         )
         .expect_err("trailing or alternate Norito bytes must fail closed");
         assert!(error.to_string().contains("fixture"));

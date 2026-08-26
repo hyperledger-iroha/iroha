@@ -6332,6 +6332,17 @@ pub mod isi {
                         "Kagemusha V4 redemption requires configured shielded asset state",
                     )
                 })?;
+            let change_note = request
+                .offline_change
+                .as_ref()
+                .map(|change| (change.output.note_commitment, change.output.spend_nullifier));
+            // Reject replayed and namespace-conflicting state before charging or
+            // running any recursive, unshield, or change proof verification.
+            ensure_kagemusha_v4_redemption_state_is_fresh(
+                zk_state,
+                statement.current_note.spend_nullifier,
+                change_note,
+            )?;
             let provenance = validate_kagemusha_v4_finalized_topup_anchors(
                 &statement.topup_anchor_refs,
                 statement.current_note.amount.atomic_units,

@@ -678,7 +678,7 @@ mod tests {
     use super::*;
     #[cfg(feature = "rand")]
     use rand_core::{TryCryptoRng, TryRngCore};
-    const SEEDED_KEYGEN_COMPAT_SEED: &[u8] = b"iroha-bls-seeded-keygen-compat";
+    const SEEDED_KEYGEN_REFERENCE_SEED: &[u8] = b"iroha-bls-seeded-keygen-reference";
     #[test]
     fn verify_ok_cache_confirms_exact_triple_inside_collision_bucket() {
         let mut cache = VerifyOkCache::new();
@@ -771,33 +771,37 @@ mod tests {
     }
     #[cfg(feature = "rand")]
     impl TryCryptoRng for FillSequenceTryRng {}
-    fn legacy_seeded_keypair<C: BlsConfiguration>() -> (PublicKey<C::Engine>, ManagedSecretKey<C>) {
+    fn reference_seeded_keypair<C: BlsConfiguration>() -> (PublicKey<C::Engine>, ManagedSecretKey<C>)
+    {
         let salt = b"BLS-SIG-KEYGEN-SALT-";
         let secret_key_size =
             u8::try_from(C::Engine::SECRET_KEY_SIZE).expect("BLS secret-key size fits u8");
         let info = [0u8, secret_key_size];
-        let mut seed = SEEDED_KEYGEN_COMPAT_SEED.to_vec();
+        let mut seed = SEEDED_KEYGEN_REFERENCE_SEED.to_vec();
         let mut ikm = vec![0u8; seed.len() + 1];
         ikm[..seed.len()].copy_from_slice(&seed);
         seed.zeroize();
         let mut okm = vec![0u8; C::Engine::SECRET_KEY_SIZE];
         let h = hkdf::Hkdf::<Sha256>::new(Some(&salt[..]), &ikm);
-        h.expand(&info, &mut okm).expect("legacy BLS HKDF expands");
+        h.expand(&info, &mut okm)
+            .expect("reference BLS HKDF expands");
         ikm.zeroize();
         let deterministic_rng = crate::rng::rng_from_seed_slice(&okm);
         let secret = SecretKeyVT::<C::Engine>::from_seed(&okm).into_split(deterministic_rng);
         okm.zeroize();
         let private = ManagedSecretKey::new(secret);
-        let public = private.try_public_key().expect("legacy public key derives");
+        let public = private
+            .try_public_key()
+            .expect("reference public key derives");
         (public, private)
     }
-    fn assert_seeded_keypair_matches_legacy_ikm<C: BlsConfiguration>() {
+    fn assert_seeded_keypair_matches_reference_ikm<C: BlsConfiguration>() {
         let (public, private) =
-            BlsImpl::<C>::try_keypair(KeyGenOption::UseSeed(SEEDED_KEYGEN_COMPAT_SEED.to_vec()))
+            BlsImpl::<C>::try_keypair(KeyGenOption::UseSeed(SEEDED_KEYGEN_REFERENCE_SEED.to_vec()))
                 .expect("streaming BLS keypair derives");
-        let (legacy_public, legacy_private) = legacy_seeded_keypair::<C>();
-        assert_eq!(public.to_bytes(), legacy_public.to_bytes());
-        assert_eq!(private.to_bytes(), legacy_private.to_bytes());
+        let (reference_public, reference_private) = reference_seeded_keypair::<C>();
+        assert_eq!(public.to_bytes(), reference_public.to_bytes());
+        assert_eq!(private.to_bytes(), reference_private.to_bytes());
     }
     fn assert_managed_secret_clone_preserves_bytes<C: BlsConfiguration>() {
         let (public, private) = BlsImpl::<C>::try_keypair(KeyGenOption::UseSeed(
@@ -826,9 +830,9 @@ mod tests {
         );
     }
     #[test]
-    fn seeded_keygen_hkdf_extract_streaming_matches_legacy_ikm() {
-        assert_seeded_keypair_matches_legacy_ikm::<NormalConfiguration>();
-        assert_seeded_keypair_matches_legacy_ikm::<SmallConfiguration>();
+    fn seeded_keygen_hkdf_extract_streaming_matches_reference_ikm() {
+        assert_seeded_keypair_matches_reference_ikm::<NormalConfiguration>();
+        assert_seeded_keypair_matches_reference_ikm::<SmallConfiguration>();
     }
     #[test]
     fn managed_secret_clone_preserves_bytes() {

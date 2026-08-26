@@ -486,6 +486,28 @@ mod tests {
         }
     }
     #[test]
+    fn kagemusha_redemption_checks_state_freshness_before_proof_work() {
+        let source = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/smartcontracts/isi/offline.rs"
+        ));
+        let redemption = source
+            .split_once("impl Execute for RedeemKagemushaRecursiveV4")
+            .map(|(_, redemption)| redemption)
+            .expect("Kagemusha V4 redemption executor");
+        let freshness = redemption
+            .find("ensure_kagemusha_v4_redemption_state_is_fresh(")
+            .expect("early confidential-state freshness check");
+        let proof_accounting = redemption
+            .find("state_transaction.register_confidential_proof(")
+            .expect("recursive proof accounting");
+        let recursive_verification = redemption
+            .find("verify_kagemusha_v4_recursive_bundle(")
+            .expect("recursive proof verification");
+        assert!(freshness < proof_accounting);
+        assert!(freshness < recursive_verification);
+    }
+    #[test]
     fn kagemusha_redemption_state_delta_commits_in_place() {
         const CURRENT_NULLIFIER: [u8; 32] = [0x71; 32];
         const CHANGE_COMMITMENT: [u8; 32] = [0x72; 32];

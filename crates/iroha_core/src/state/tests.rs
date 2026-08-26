@@ -37242,6 +37242,29 @@ state_test! { sync vpn_lease_projection_rejects_a_foreign_exact_network
     let_row! { error = validate_vpn_lease_network(&foreign, &local_network) .expect_err("foreign VPN lease must fail exact-network restoration") };
     assert!(error.contains("different exact network"));
 }
+state_test! { sync emergency_fast_snapshot_index_finalization_defers_vpn_network_validation
+    let_row! { operator_key = KeyPair::try_from_seed(vec![0x93; 32], Algorithm::Ed25519) .expect("deterministic VPN operator key") };
+    let_row! { foreign_network = NetworkId::from_genesis_hash( HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xFD; Hash::LENGTH])), ) };
+    let foreign = indexed_settled_vpn_lease(
+        &foreign_network,
+        &*ALICE_ID,
+        2,
+        1,
+        &operator_key,
+    );
+    let kura = crate::kura::Kura::blank_kura_for_testing();
+    let query = crate::query::store::LiveQueryStore::start_test();
+    let mut state = State::new_for_testing(World::default(), kura, query);
+    state.world.vpn_leases.insert(foreign.lease_id, foreign);
+
+    let error = state
+        .finalize_snapshot_derived_state_indexes(false)
+        .expect_err("Strict snapshot restore must validate every retained VPN network");
+    assert!(error.contains("different exact network"));
+    state
+        .finalize_snapshot_derived_state_indexes(true)
+        .expect("emergency Fast snapshot restore must defer the VPN semantic scan");
+}
 state_test! { sync governance_lock_test_mutator_replaces_removes_and_rolls_back_expiry_index
     let world = World::default();
     let referendum_id = "indexed-locks".to_owned();

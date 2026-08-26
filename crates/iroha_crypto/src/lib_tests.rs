@@ -759,20 +759,20 @@ mod tests {
     }
     #[test]
     #[cfg(feature = "bls")]
-    fn bls_pop_hashes_match_legacy_contiguous_layout() {
+    fn bls_pop_hashes_match_reference_contiguous_layout() {
         let pk_bytes = [0x42; 96];
         let pop = [0xA5; 48];
-        let mut legacy_message = Vec::with_capacity(POP_DST.len() + pk_bytes.len());
-        legacy_message.extend_from_slice(POP_DST.as_bytes());
-        legacy_message.extend_from_slice(&pk_bytes);
-        let expected_message_hash: [u8; Hash::LENGTH] = Hash::new(&legacy_message).into();
+        let mut reference_message = Vec::with_capacity(POP_DST.len() + pk_bytes.len());
+        reference_message.extend_from_slice(POP_DST.as_bytes());
+        reference_message.extend_from_slice(&pk_bytes);
+        let expected_message_hash: [u8; Hash::LENGTH] = Hash::new(&reference_message).into();
         assert_eq!(bls_pop_message_hash(&pk_bytes), expected_message_hash);
-        let mut legacy_cache_key = Vec::with_capacity(pk_bytes.len() + pop.len());
-        legacy_cache_key.extend_from_slice(&pk_bytes);
-        legacy_cache_key.extend_from_slice(&pop);
+        let mut reference_cache_key = Vec::with_capacity(pk_bytes.len() + pop.len());
+        reference_cache_key.extend_from_slice(&pk_bytes);
+        reference_cache_key.extend_from_slice(&pop);
         assert_eq!(
             bls_pop_cache_key(&pk_bytes, &pop),
-            Hash::new(&legacy_cache_key)
+            Hash::new(&reference_cache_key)
         );
     }
     #[test]

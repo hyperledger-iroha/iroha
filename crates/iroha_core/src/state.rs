@@ -24857,13 +24857,6 @@ impl State {
         &self.telemetry
     }
     pub(crate) fn rebuild_derived_state_indexes(&mut self) -> core::result::Result<(), String> {
-        self.rebuild_derived_state_indexes_with_mode(false)
-    }
-
-    pub(crate) fn rebuild_derived_state_indexes_with_mode(
-        &mut self,
-        emergency_fast: bool,
-    ) -> core::result::Result<(), String> {
         self.world
             .rebuild_asset_definition_alias_indexes()
             .map_err(|error| {
@@ -24872,6 +24865,38 @@ impl State {
         self.world
             .rebuild_contract_alias_indexes()
             .map_err(|error| format!("failed to rebuild contract alias indexes: {error}"))?;
+        self.rebuild_snapshot_root_indexes()?;
+        let leases = self.world.vpn_leases.view();
+        for (_, record) in leases.iter() {
+            validate_vpn_lease_network(record, &self.network_id)?;
+        }
+        self.world
+            .rebuild_vpn_lease_indexes()
+            .map_err(|error| format!("failed to rebuild VPN lease indexes: {error}"))?;
+        self.world
+            .rebuild_confidential_policy_transition_index()
+            .map_err(|error| {
+                format!("failed to rebuild confidential-policy transition index: {error}")
+            })?;
+        self.world.rebuild_governance_read_indexes();
+        // Defer AXT policy refresh until the runtime lane catalog is applied.
+        Ok(())
+    }
+
+    pub(crate) fn finalize_snapshot_derived_state_indexes(
+        &mut self,
+        emergency_fast: bool,
+    ) -> core::result::Result<(), String> {
+        if !emergency_fast {
+            let leases = self.world.vpn_leases.view();
+            for (_, record) in leases.iter() {
+                validate_vpn_lease_network(record, &self.network_id)?;
+            }
+        }
+        self.rebuild_snapshot_root_indexes()
+    }
+
+    fn rebuild_snapshot_root_indexes(&mut self) -> core::result::Result<(), String> {
         let rebuilt = self.rebuild_uaid_dataspace_bindings()?;
         iroha_logger::debug!(
             rebuilt_uaids = rebuilt,
@@ -24880,28 +24905,6 @@ impl State {
         self.world
             .rebuild_account_scope_directory()
             .map_err(|error| format!("failed to rebuild account scope directory: {error}"))?;
-        if !emergency_fast {
-            let leases = self.world.vpn_leases.view();
-            for (_, record) in leases.iter() {
-                validate_vpn_lease_network(record, &self.network_id)?;
-            }
-        }
-        if emergency_fast {
-            self.world
-                .rebuild_vpn_lease_indexes_emergency_fast()
-                .map_err(|error| format!("failed to rebuild VPN lease indexes: {error}"))?;
-        } else {
-            self.world
-                .rebuild_vpn_lease_indexes()
-                .map_err(|error| format!("failed to rebuild VPN lease indexes: {error}"))?;
-        }
-        self.world
-            .rebuild_confidential_policy_transition_index()
-            .map_err(|error| {
-                format!("failed to rebuild confidential-policy transition index: {error}")
-            })?;
-        self.world.rebuild_governance_read_indexes();
-        // Defer AXT policy refresh until the runtime lane catalog is applied.
         Ok(())
     }
     fn rebuild_uaid_dataspace_bindings(&mut self) -> core::result::Result<usize, String> {

@@ -1687,6 +1687,12 @@ fn decode_flags_guard_overrides_active_payload_context() {
         let _neutral = DecodeFlagsGuard::enter(0);
         assert_eq!(current_decode_flags_effective(), Some(0));
         assert!(!use_compact_len());
+        let _nested = PayloadCtxGuard::enter(&payload);
+        assert_eq!(current_decode_flags_effective(), Some(0));
+        assert!(
+            !use_compact_len(),
+            "a nested payload must not restore stale outer layout flags"
+        );
     }
     reset_decode_state();
 }

@@ -1,6 +1,6 @@
 //! Validate that stored BLS keypair fixtures line up with the expected public keys.
 #![cfg(feature = "bls")]
-use iroha_crypto::{KeyPair, PrivateKey, PublicKey};
+use iroha_crypto::{BlsNormal, BlsSmall, KeyGenOption, KeyPair, PrivateKey, PublicKey};
 #[test]
 fn bls_keys_match_localnet_soranexus() {
     // Sanity-check the localnet BLS keypairs used by the Sora Nexus configs.
@@ -30,4 +30,25 @@ fn bls_keys_match_localnet_soranexus() {
         KeyPair::new(public, private)
             .unwrap_or_else(|e| panic!("keypair mismatch for {public_hex}: {e}"));
     }
+}
+
+#[test]
+fn seeded_signatures_match_first_release_golden_bytes() {
+    let seed = b"iroha-bls-signature-golden-v1";
+    let message = b"iroha first release BLS signature";
+    let (normal_public, normal_private) =
+        BlsNormal::try_keypair(KeyGenOption::UseSeed(seed.to_vec())).expect("normal keypair");
+    let normal = BlsNormal::try_sign(message, &normal_private).expect("normal signature");
+    BlsNormal::verify(message, &normal, &normal_public).expect("normal signature verifies");
+
+    let (small_public, small_private) =
+        BlsSmall::try_keypair(KeyGenOption::UseSeed(seed.to_vec())).expect("small keypair");
+    let small = BlsSmall::try_sign(message, &small_private).expect("small signature");
+    BlsSmall::verify(message, &small, &small_public).expect("small signature verifies");
+
+    panic!(
+        "normal={}\nsmall={}",
+        hex::encode_upper(normal),
+        hex::encode_upper(small)
+    );
 }

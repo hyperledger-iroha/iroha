@@ -15,7 +15,7 @@
 //! scalar from the 32‑byte secret key bytes deterministically.
 //!
 //! Keys
-//! - Uses the existing BLS key types and backends selected by the `bls` feature.
+//! - Uses the canonical BLS key types enabled by the `bls` feature.
 //! - Supports both Normal and Small variants transparently via the generic
 //!   implementation in `signature::bls`.
 //!
@@ -687,10 +687,10 @@ mod tests {
         for (index, byte) in sigma.iter_mut().enumerate() {
             *byte = u8::try_from(index).expect("sigma fixture index fits in u8");
         }
-        let mut legacy_output = Vec::with_capacity(VRF_OUTPUT_HASH_DOMAIN.len() + sigma.len());
-        legacy_output.extend_from_slice(VRF_OUTPUT_HASH_DOMAIN);
-        legacy_output.extend_from_slice(&sigma);
-        assert_eq!(output_from_sigma(&sigma).0, blake2b_256(&legacy_output));
+        let mut reference_output = Vec::with_capacity(VRF_OUTPUT_HASH_DOMAIN.len() + sigma.len());
+        reference_output.extend_from_slice(VRF_OUTPUT_HASH_DOMAIN);
+        reference_output.extend_from_slice(&sigma);
+        assert_eq!(output_from_sigma(&sigma).0, blake2b_256(&reference_output));
     }
     #[test]
     fn vrf_prehash_uses_raw_blake2b() {

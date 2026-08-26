@@ -1217,15 +1217,13 @@ impl PayloadCtxGuard {
         PayloadCtxGuard { prev, flags_guard }
     }
 
-    fn inherited_flags(prev: Option<&PayloadCtxState>) -> Option<u8> {
-        prev.and_then(|state| state.flags_active.then_some(state.flags))
-            .or_else(current_decode_flags_effective)
-    }
-
     pub fn enter(bytes: &[u8]) -> Self {
         let prev = payload_ctx_state();
         let schema = prev.as_ref().and_then(|state| state.schema);
-        let flags = Self::inherited_flags(prev.as_ref());
+        // An explicit decode guard is authoritative over a restored outer
+        // payload context. This matches `effective_decode_flags()` and avoids
+        // silently reverting nested field decoders to stale layout flags.
+        let flags = current_decode_flags_effective();
         Self::install(bytes, bytes.len(), schema, flags)
     }
     /// Install a payload context with an explicit logical length while preserving
@@ -1233,7 +1231,7 @@ impl PayloadCtxGuard {
     pub fn enter_with_len(bytes: &[u8], logical_len: usize) -> Self {
         let prev = payload_ctx_state();
         let schema = prev.as_ref().and_then(|state| state.schema);
-        let flags = Self::inherited_flags(prev.as_ref());
+        let flags = current_decode_flags_effective();
         Self::install(bytes, logical_len, schema, flags)
     }
     pub fn enter_with_schema(bytes: &[u8], schema: [u8; 16]) -> Self {
