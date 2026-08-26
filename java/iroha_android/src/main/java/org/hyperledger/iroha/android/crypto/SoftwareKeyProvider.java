@@ -5,13 +5,13 @@ import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.NoSuchAlgorithmException;
 import java.security.NoSuchProviderException;
-import java.security.Provider;
 import java.security.SecureRandom;
 import java.security.Security;
 import java.util.Arrays;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.hyperledger.iroha.android.IrohaKeyManager.KeyProvider;
 import org.hyperledger.iroha.android.KeyManagementException;
 import org.hyperledger.iroha.android.crypto.KeyProviderMetadata;
@@ -30,6 +30,7 @@ import org.hyperledger.iroha.android.crypto.export.KeyPassphraseProvider;
  */
 public final class SoftwareKeyProvider implements KeyProvider {
   private static final int ML_DSA_SEED_LENGTH_BYTES = 32;
+  private static final String BOUNCY_CASTLE_PROVIDER_NAME = "BC";
 
   /** Controls which JCA provider is used for Ed25519 key generation. */
   public enum ProviderPolicy {
@@ -333,20 +334,12 @@ public final class SoftwareKeyProvider implements KeyProvider {
 
   static Optional<KeyPairGenerator> tryBouncyCastleGenerator() {
     try {
-      final Class<?> providerClass =
-          Class.forName("org.bouncycastle.jce.provider.BouncyCastleProvider");
-      final Provider provider =
-          (Provider) providerClass.getDeclaredConstructor().newInstance();
-      final String providerName = provider.getName();
-      if (Security.getProvider(providerName) == null) {
-        Security.addProvider(provider);
+      if (Security.getProvider(BOUNCY_CASTLE_PROVIDER_NAME) == null) {
+        Security.addProvider(new BouncyCastleProvider());
       }
-      return Optional.of(KeyPairGenerator.getInstance("EdDSA", providerName));
-    } catch (final ClassNotFoundException e) {
-      return Optional.empty();
-    } catch (final ReflectiveOperationException | ClassCastException e) {
-      return Optional.empty();
-    } catch (final NoSuchAlgorithmException | NoSuchProviderException ex) {
+      return Optional.of(
+          KeyPairGenerator.getInstance("EdDSA", BOUNCY_CASTLE_PROVIDER_NAME));
+    } catch (final NoSuchAlgorithmException | NoSuchProviderException | SecurityException ex) {
       return Optional.empty();
     }
   }

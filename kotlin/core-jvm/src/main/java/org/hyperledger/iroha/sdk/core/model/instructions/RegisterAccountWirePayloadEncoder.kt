@@ -151,7 +151,7 @@ object RegisterAccountWirePayloadEncoder {
                 "RegisterBox::Account payload",
             )
             val payload = decoder.readBytes(payloadLength)
-            val child = NoritoDecoder(payload, decoder.flags, decoder.flagsHint)
+            val child = NoritoDecoder(payload, decoder.flags)
             val accountId = decodeRegisterAccountStruct(child)
             require(child.remaining() == 0) { "Trailing bytes after RegisterBox::Account payload" }
             return accountId
@@ -159,7 +159,7 @@ object RegisterAccountWirePayloadEncoder {
 
         private fun decodeRegisterAccountStruct(decoder: NoritoDecoder): String {
             val newAccountPayload = decodeSizedRawField(decoder, "Register<Account>.object")
-            val child = NoritoDecoder(newAccountPayload, decoder.flags, decoder.flagsHint)
+            val child = NoritoDecoder(newAccountPayload, decoder.flags)
             val accountId = decodeNewAccount(child)
             require(child.remaining() == 0) { "Trailing bytes after NewAccount payload" }
             return accountId
@@ -171,7 +171,6 @@ object RegisterAccountWirePayloadEncoder {
                 accountPayload,
                 chainDiscriminant,
                 decoder.flags,
-                decoder.flagsHint,
             )
             requireEmptySequence(decodeSizedRawField(decoder, "NewAccount.metadata"), "NewAccount.metadata")
             requireNone(decodeSizedRawField(decoder, "NewAccount.label"), "NewAccount.label")
@@ -196,7 +195,7 @@ object RegisterAccountWirePayloadEncoder {
     }
 
     private fun requireEmptySequence(payload: ByteArray, fieldName: String) {
-        val decoder = NoritoDecoder(payload, 0, NoritoHeader.MINOR_VERSION)
+        val decoder = NoritoDecoder(payload, 0)
         val count = decoder.readUInt(64)
         require(count == 0L) { "$fieldName must be empty" }
         require(decoder.remaining() == 0) { "Trailing bytes after $fieldName" }

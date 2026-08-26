@@ -44117,11 +44117,7 @@ pub struct Torii {
     p2p: Option<iroha_core::IrohaNetwork>,
     #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
     local_peer_id: Option<PeerId>,
-    // Query and transaction rate limits (operator-local)
-    #[allow(dead_code)]
-    query_rate_per_authority_per_sec: Option<std::num::NonZeroU32>,
-    #[allow(dead_code)]
-    query_burst_per_authority: Option<std::num::NonZeroU32>,
+    // Query and transaction admission (operator-local)
     query_max_inflight: usize,
     query_heavy_max_inflight: usize,
     query_fanout_max_retained_bytes: usize,
@@ -44129,24 +44125,8 @@ pub struct Torii {
     app_api_routed_read_body_read_timeout: Duration,
     app_query_limits: routing::AppQueryLimits,
     query_queue_timeout: Duration,
-    #[allow(dead_code)]
-    tx_rate_per_authority_per_sec: Option<std::num::NonZeroU32>,
-    #[allow(dead_code)]
-    tx_burst_per_authority: Option<std::num::NonZeroU32>,
-    #[allow(dead_code)]
-    deploy_rate_per_origin_per_sec: Option<std::num::NonZeroU32>,
-    #[allow(dead_code)]
-    deploy_burst_per_origin: Option<std::num::NonZeroU32>,
-    #[allow(dead_code)]
-    soracloud_public_rate_per_ip_per_sec: Option<std::num::NonZeroU32>,
-    #[allow(dead_code)]
-    soracloud_public_burst_per_ip: Option<std::num::NonZeroU32>,
     soracloud_public_max_inflight: usize,
     soracloud_public_max_response_bytes: usize,
-    #[allow(dead_code)]
-    soracloud_mutation_rate_per_account_origin_per_sec: Option<std::num::NonZeroU32>,
-    #[allow(dead_code)]
-    soracloud_mutation_burst_per_account_origin: Option<std::num::NonZeroU32>,
     soracloud_mutation_max_inflight: usize,
     soracloud_mutation_max_body_bytes: usize,
     soracloud_upload_max_body_bytes: usize,
@@ -44519,6 +44499,16 @@ impl ToriiRuntimeDeps {
             torii_proxy_bridge_signer: None,
             vpn_operator_signer: None,
         }
+    }
+
+    /// Retain only bounded, in-memory dependencies for an emergency Fast boot.
+    ///
+    /// Fast mode is an explicitly degraded recovery posture. Deployment-owned
+    /// services can open durable journals, reconcile remote state, or start
+    /// signers while Torii is being constructed, so none of them may cross this
+    /// boundary. The normal Strict restart reconstructs and validates them.
+    fn into_emergency_fast(self) -> Self {
+        Self::new(self.telemetry)
     }
     /// Attach the deployment-owned Parliament TLE partial-release coordinator.
     ///
@@ -45026,6 +45016,73 @@ fn torii_runtime_deps_keep_vpn_and_proxy_signers_separate() {
     );
     assert_ne!(proxy_signer.public_key(), vpn_signer.public_key());
 }
+
+#[cfg(test)]
+#[test]
+fn emergency_fast_runtime_deps_drop_external_services_and_signers() {
+    let proxy_signer = KeyPair::try_from_seed(vec![0x93; 32], iroha_crypto::Algorithm::Ed25519)
+        .expect("proxy signer fixture");
+    let vpn_signer = KeyPair::try_from_seed(vec![0x94; 32], iroha_crypto::Algorithm::Ed25519)
+        .expect("VPN signer fixture");
+    let deps = ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled())
+        .with_torii_proxy_bridge_signer(proxy_signer)
+        .with_vpn_operator_signer(vpn_signer)
+        .into_emergency_fast();
+
+    assert!(deps.torii_proxy_bridge_signer.is_none());
+    assert!(deps.vpn_operator_signer.is_none());
+    assert!(deps.soracloud_runtime.is_none());
+    assert!(deps.sorafs_node.is_none());
+}
+
+#[cfg(test)]
+#[test]
+fn emergency_fast_uses_only_the_process_local_sorafs_facade() {
+    let compact_source: String = include_str!("lib.rs")
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect();
+    let fast_facade = compact_source
+        .find(
+            "letsorafs_node=ifemergency_fast{sorafs_node::NodeHandle::try_new_emergency_disabled(",
+        )
+        .expect("emergency-disabled SoraFS facade");
+    let durable_constructor = compact_source[fast_facade..]
+        .find("sorafs_node::NodeHandle::try_new_with_policies_and_runtime_deps(")
+        .map(|offset| fast_facade + offset)
+        .expect("Strict SoraFS constructor");
+    let process_local_por = compact_source[fast_facade..]
+        .find("ifemergency_fast{(Arc::new(sorafs::PorCoordinator::with_record_limit(1)),None,)")
+        .map(|offset| fast_facade + offset)
+        .expect("process-local emergency PoR coordinator");
+
+    assert!(fast_facade < durable_constructor && durable_constructor < process_local_por);
+}
+
+#[cfg(test)]
+#[test]
+fn emergency_fast_does_not_configure_or_start_the_background_zk_prover() {
+    let source = include_str!("lib.rs");
+    let app_services = source
+        .split_once("// Configure app API subsystems (attachments) from Torii config")
+        .expect("app-service startup section")
+        .1
+        .split_once("let query_rate = config")
+        .expect("end of app-service startup section")
+        .0;
+    let fast_guard = app_services
+        .find("if !emergency_fast")
+        .expect("emergency Fast ZK-prover guard");
+    let configure = app_services
+        .find("crate::zk_prover::configure(")
+        .expect("ZK-prover configuration");
+    let start = app_services
+        .find("crate::zk_prover::start_worker()")
+        .expect("ZK-prover worker start");
+
+    assert!(fast_guard < configure && configure < start);
+}
+
 impl From<routing::MaybeTelemetry> for ToriiRuntimeDeps {
     fn from(telemetry: routing::MaybeTelemetry) -> Self {
         Self::new(telemetry)
@@ -47886,7 +47943,7 @@ impl Torii {
         chain_id: ChainId,
         network_id: NetworkId,
         kiso: KisoHandle,
-        config: Config,
+        mut config: Config,
         queue: Arc<Queue>,
         events: EventsSender,
         query_service: LiveQueryStoreHandle,
@@ -47901,7 +47958,49 @@ impl Torii {
             state.network_id, network_id,
             "Torii network id must match the genesis-derived Core state identity"
         );
+        let emergency_fast = kura.emergency_fast_startup_enabled();
+        if emergency_fast {
+            // Keep emergency startup independent of every optional durable
+            // Torii subsystem. These services are reconstructed and audited on
+            // the next Strict restart; Fast never opens their journals or
+            // starts their mutation workers.
+            config.privacy_bootle_lantern_issuer = None;
+            config.webhooks_enabled = false;
+            config.zk_attachments_enabled = false;
+            config.zk_prover_enabled = false;
+            config.push.enabled = false;
+            config.iso_bridge.enabled = false;
+            config.iso_bridge.store_dir = None;
+            config.iso_bridge.audit_export_dir = None;
+            config.operator_auth = iroha_config::parameters::actual::ToriiOperatorAuth::default();
+            config.da_ingest.taikai_anchor = None;
+            config.sorafs_discovery = iroha_config::parameters::actual::SorafsDiscovery::default();
+            config.sorafs_discovery.discovery_enabled = false;
+            config.sorafs_storage = iroha_config::parameters::actual::SorafsStorage::default();
+            config.sorafs_storage.enabled = false;
+            config.sorafs_repair = iroha_config::parameters::actual::SorafsRepair::default();
+            config.sorafs_repair.enabled = false;
+            config.sorafs_gc = iroha_config::parameters::actual::SorafsGc::default();
+            config.sorafs_gc.enabled = false;
+            config.sorafs_por = iroha_config::parameters::actual::SorafsPor::default();
+            config.sorafs_por.enabled = false;
+            config.sorafs_gateway = iroha_config::parameters::actual::SorafsGateway::default();
+            config.sorafs_gateway.acme.enabled = false;
+            config.sorafs_gateway.compliance = None;
+            config.sorafs_appeal_finance_settlement =
+                iroha_config::parameters::actual::SorafsAppealFinanceSettlement::default();
+            config.account_onboarding = None;
+            config.faucet = None;
+            config.kagemusha_commands = None;
+            config.ram_lfe = None;
+            config.tx_history = None;
+        }
         let runtime_deps = runtime_deps.into();
+        let runtime_deps = if emergency_fast {
+            runtime_deps.into_emergency_fast()
+        } else {
+            runtime_deps
+        };
         #[cfg(feature = "app_api")]
         let mut runtime_deps = runtime_deps;
         #[cfg(feature = "app_api")]
@@ -48150,23 +48249,25 @@ impl Torii {
                     telemetry.clone(),
                 );
             }
-            // Non-consensus background prover hook (disabled by default)
-            crate::zk_prover::configure(
-                config.zk_prover_enabled,
-                config.zk_prover_scan_period_secs,
-                config.zk_prover_reports_ttl_secs,
-                config.zk_prover_reports_max_count,
-                config.zk_prover_reports_max_bytes,
-                config.zk_prover_max_inflight,
-                config.zk_prover_max_scan_bytes,
-                config.zk_prover_max_scan_millis,
-                config.zk_prover_keys_dir.clone(),
-                config.zk_prover_allowed_backends.clone(),
-                config.zk_prover_allowed_circuits.clone(),
-                Some(state.clone()),
-                telemetry.clone(),
-            );
-            crate::zk_prover::start_worker();
+            if !emergency_fast {
+                // Non-consensus background prover hook (disabled by default)
+                crate::zk_prover::configure(
+                    config.zk_prover_enabled,
+                    config.zk_prover_scan_period_secs,
+                    config.zk_prover_reports_ttl_secs,
+                    config.zk_prover_reports_max_count,
+                    config.zk_prover_reports_max_bytes,
+                    config.zk_prover_max_inflight,
+                    config.zk_prover_max_scan_bytes,
+                    config.zk_prover_max_scan_millis,
+                    config.zk_prover_keys_dir.clone(),
+                    config.zk_prover_allowed_backends.clone(),
+                    config.zk_prover_allowed_circuits.clone(),
+                    Some(state.clone()),
+                    telemetry.clone(),
+                );
+                crate::zk_prover::start_worker();
+            }
         }
         let query_rate = config
             .query_rate_per_authority_per_sec
@@ -48456,10 +48557,20 @@ impl Torii {
             )
         });
         #[cfg(feature = "app_api")]
-        let sorafs_cache =
-            shared_sorafs_cache.or_else(|| build_sorafs_cache(&config, sorafs_admission.clone()));
+        let sorafs_cache = if emergency_fast {
+            None
+        } else {
+            shared_sorafs_cache.or_else(|| build_sorafs_cache(&config, sorafs_admission.clone()))
+        };
         #[cfg(feature = "app_api")]
-        let sorafs_node = {
+        let sorafs_node = if emergency_fast {
+            let data_dir = sorafs_node::config::StorageConfig::from(&config.sorafs_storage)
+                .data_dir()
+                .clone();
+            sorafs_node::NodeHandle::try_new_emergency_disabled(data_dir).unwrap_or_else(|err| {
+                panic!("failed to initialise emergency-disabled SoraFS facade: {err}")
+            })
+        } else {
             let storage_config = sorafs_node::config::StorageConfig::from(&config.sorafs_storage);
             let repair_config = sorafs_node::config::RepairConfig::from(&config.sorafs_repair);
             let gc_config = sorafs_node::config::GcConfig::from(&config.sorafs_gc);
@@ -49033,10 +49144,17 @@ impl Torii {
             shared_sorafs_stream_token_signer,
         );
         #[cfg(feature = "app_api")]
-        let (por_coordinator, por_runtime) =
-            build_por_components(&config, &network_id, &sorafs_node, sorafs_admission.clone());
+        let (por_coordinator, por_runtime) = if emergency_fast {
+            (Arc::new(sorafs::PorCoordinator::with_record_limit(1)), None)
+        } else {
+            build_por_components(&config, &network_id, &sorafs_node, sorafs_admission.clone())
+        };
         #[cfg(feature = "app_api")]
-        let gc_runtime = build_gc_runtime(&sorafs_node, state.clone());
+        let gc_runtime = if emergency_fast {
+            None
+        } else {
+            build_gc_runtime(&sorafs_node, state.clone())
+        };
         #[cfg(feature = "app_api")]
         let account_onboarding = config.account_onboarding.as_ref().map(|cfg| {
             let mut api_token_hashes_by_domain = BTreeMap::new();
@@ -49174,9 +49292,11 @@ impl Torii {
             Some(config.recipient_lookup.requests_per_minute),
         );
         #[cfg(feature = "app_api")]
-        let musubi_search = Arc::new(RwLock::new(select_initial_musubi_search_index(
-            rebuild_musubi_search_index(state.as_ref(), None),
-        )));
+        let musubi_search = Arc::new(RwLock::new(if emergency_fast {
+            iroha_core::musubi_search::MusubiSearchIndexV1::default()
+        } else {
+            select_initial_musubi_search_index(rebuild_musubi_search_index(state.as_ref(), None))
+        }));
         Self {
             chain_id: Arc::new(chain_id),
             signed_query_admission,
@@ -49226,8 +49346,6 @@ impl Torii {
             p2p: None,
             #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
             local_peer_id: None,
-            query_rate_per_authority_per_sec: config.query_rate_per_authority_per_sec,
-            query_burst_per_authority: config.query_burst_per_authority,
             query_max_inflight: config.query_max_inflight.get(),
             query_heavy_max_inflight: config.query_heavy_max_inflight.get(),
             query_fanout_max_retained_bytes: usize::try_from(
@@ -49238,21 +49356,11 @@ impl Torii {
             app_api_routed_read_body_read_timeout: config.app_api_routed_read_body_read_timeout,
             app_query_limits,
             query_queue_timeout: config.query_queue_timeout,
-            tx_rate_per_authority_per_sec: config.tx_rate_per_authority_per_sec,
-            tx_burst_per_authority: config.tx_burst_per_authority,
-            deploy_rate_per_origin_per_sec: config.deploy_rate_per_origin_per_sec,
-            deploy_burst_per_origin: config.deploy_burst_per_origin,
-            soracloud_public_rate_per_ip_per_sec: config.soracloud_public_rate_per_ip_per_sec,
-            soracloud_public_burst_per_ip: config.soracloud_public_burst_per_ip,
             soracloud_public_max_inflight: config.soracloud_public_max_inflight.get(),
             soracloud_public_max_response_bytes: usize::try_from(
                 config.soracloud_public_max_response_bytes.get(),
             )
             .unwrap_or(usize::MAX),
-            soracloud_mutation_rate_per_account_origin_per_sec: config
-                .soracloud_mutation_rate_per_account_origin_per_sec,
-            soracloud_mutation_burst_per_account_origin: config
-                .soracloud_mutation_burst_per_account_origin,
             soracloud_mutation_max_inflight: config.soracloud_mutation_max_inflight.get(),
             soracloud_mutation_max_body_bytes: usize::try_from(
                 config.soracloud_mutation_max_body_bytes.get(),
@@ -49532,6 +49640,30 @@ impl Torii {
         Some(layer)
     }
     fn prepare_da_runtime_services(&self) -> DaRuntimeServices {
+        let replay_cache_config = iroha_core::da::ReplayCacheConfig::new()
+            .with_max_entries_per_lane(self.da_ingest.replay_cache_capacity)
+            .with_max_lane_epochs(self.da_ingest.replay_cache_max_lane_epochs)
+            .with_ttl(self.da_ingest.replay_cache_ttl)
+            .with_max_sequence_lag(self.da_ingest.replay_cache_max_sequence_lag);
+        if self.kura.emergency_fast_startup_enabled() {
+            // Handlers fail closed in Fast mode. Keep only bounded placeholders
+            // so router construction never opens, scans, verifies, or repairs
+            // the durable receipt/cursor trees.
+            let replay_cache = Arc::new(iroha_core::da::ReplayCache::new(replay_cache_config));
+            let replay_store = Arc::new(da::ReplayCursorStore::in_memory_with_max_lane_epochs(
+                self.da_ingest.replay_cache_max_lane_epochs,
+            ));
+            let receipt_log = Arc::new(da::DaReceiptLog::in_memory(
+                Arc::clone(&replay_store),
+                self.da_receipt_signer.public_key().clone(),
+            ));
+            return DaRuntimeServices {
+                replay_cache,
+                replay_store,
+                receipt_log,
+                spooler: None,
+            };
+        }
         let replay_store_dir = self.da_ingest.replay_cache_store_dir.clone();
         let replay_cursor_store = da::ReplayCursorStore::open_with_max_lane_epochs(
             replay_store_dir.clone(),
@@ -49543,11 +49675,6 @@ impl Torii {
                 replay_store_dir.display()
             )
         });
-        let replay_cache_config = iroha_core::da::ReplayCacheConfig::new()
-            .with_max_entries_per_lane(self.da_ingest.replay_cache_capacity)
-            .with_max_lane_epochs(self.da_ingest.replay_cache_max_lane_epochs)
-            .with_ttl(self.da_ingest.replay_cache_ttl)
-            .with_max_sequence_lag(self.da_ingest.replay_cache_max_sequence_lag);
         let replay_cache = Arc::new(iroha_core::da::ReplayCache::new(replay_cache_config));
         for (lane_epoch, highest) in replay_cursor_store.highest_sequences() {
             replay_cache
@@ -50248,6 +50375,7 @@ impl Torii {
         self,
         shutdown_signal: ShutdownSignal,
     ) -> core::result::Result<(), Report<Error>> {
+        let emergency_fast = self.kura.emergency_fast_startup_enabled();
         #[cfg(feature = "app_api")]
         if let Some(code) = self.sorafs_moderation_startup_error {
             return Err(Report::new(Error::SorafsModerationStartup { code }));
@@ -50295,7 +50423,9 @@ impl Torii {
             }
         }
         #[cfg(feature = "app_api")]
-        self.spawn_musubi_search_projection_worker(shutdown_signal.clone());
+        if !emergency_fast {
+            self.spawn_musubi_search_projection_worker(shutdown_signal.clone());
+        }
         if let Some(runtime) = self.iso_bridge.clone() {
             let mut rx = self.events.subscribe();
             tokio::spawn(async move {
@@ -50385,7 +50515,7 @@ impl Torii {
         }
         #[cfg(feature = "app_api")]
         {
-            if let Some(anchor_cfg) = self.da_ingest.taikai_anchor.clone() {
+            if !emergency_fast && let Some(anchor_cfg) = self.da_ingest.taikai_anchor.clone() {
                 crate::da::spawn_anchor_worker(
                     self.da_ingest.manifest_store_dir.clone(),
                     anchor_cfg,
@@ -50394,26 +50524,33 @@ impl Torii {
             }
         }
         #[cfg(feature = "app_api")]
-        self.spawn_pin_registry_metrics_worker(shutdown_signal.clone());
+        if !emergency_fast {
+            self.spawn_pin_registry_metrics_worker(shutdown_signal.clone());
+        }
         #[cfg(feature = "app_api")]
-        self.spawn_por_ingestion_metrics_worker(shutdown_signal.clone());
+        if !emergency_fast {
+            self.spawn_por_ingestion_metrics_worker(shutdown_signal.clone());
+        }
         #[cfg(feature = "app_api")]
-        let evidence_viewer_compaction_worker =
-            self.spawn_evidence_viewer_compaction_worker(shutdown_signal.clone());
+        let evidence_viewer_compaction_worker = if emergency_fast {
+            None
+        } else {
+            self.spawn_evidence_viewer_compaction_worker(shutdown_signal.clone())
+        };
         #[cfg(feature = "app_api")]
-        if let Some(runtime) = &self.por_runtime {
+        if !emergency_fast && let Some(runtime) = &self.por_runtime {
             runtime.clone().spawn(shutdown_signal.clone());
         }
         #[cfg(feature = "app_api")]
-        if let Some(runtime) = &self.sorafs_pop_credentials {
+        if !emergency_fast && let Some(runtime) = &self.sorafs_pop_credentials {
             runtime.clone().spawn(shutdown_signal.clone());
         }
         #[cfg(feature = "app_api")]
-        if let Some(runtime) = &self.gc_runtime {
+        if !emergency_fast && let Some(runtime) = &self.gc_runtime {
             runtime.clone().spawn(shutdown_signal.clone());
         }
         #[cfg(feature = "app_api")]
-        if let Some(components) = &self.sorafs_gateway_security {
+        if !emergency_fast && let Some(components) = &self.sorafs_gateway_security {
             if let Some(automation) = &components.tls_automation {
                 automation.spawn(self.telemetry.clone(), shutdown_signal.clone());
             }
@@ -50425,7 +50562,7 @@ impl Torii {
             .attach_with(|| self.address.clone().into_attachment())?;
         let (api_router, app_state) = self.create_api_router_with_state();
         #[cfg(feature = "app_api")]
-        {
+        if !emergency_fast {
             sorafs::api::spawn_sorafs_capacity_reconciler_worker(
                 app_state.clone(),
                 shutdown_signal.clone(),

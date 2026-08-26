@@ -827,6 +827,7 @@ impl<T> MerkleTree<T> {
     }
     /// Validate the retained cache and expose its canonical leaves without
     /// cloning the response-sized leaf set.
+    #[cfg(feature = "json")]
     fn serialized_view(&self) -> Result<(u8, LeafHashIterator<'_, T>), MerkleError> {
         Self::validate_nodes(&self.nodes)?;
         let leaf_count = self.leaf_count();
@@ -1855,7 +1856,7 @@ mod tests {
             PACKED_SEQ | PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
         ] {
             norito::core::reset_decode_state();
-            let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
+            let _guard = norito::core::DecodeFlagsGuard::enter(flags);
             let mut actual = Vec::new();
             norito::core::serialize_to_buffer(&proof, &mut actual)
                 .expect("serialize borrowed Merkle-proof tuple");

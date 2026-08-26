@@ -33032,8 +33032,7 @@ mod tests {
             justification: "exercise durable private execution recovery".to_owned(),
             jurisdiction_tag: policy.jurisdiction_tag.clone(),
             consent_evidence_hash: None,
-            requested_ttl_blocks: std::num::NonZeroU32::new(100)
-                .expect("100 is non-zero"),
+            requested_ttl_blocks: std::num::NonZeroU32::new(100).expect("100 is non-zero"),
             break_glass: false,
             break_glass_reason: None,
             governance_tx_hash: Hash::new(b"private execution authorization fixture"),
@@ -33062,12 +33061,8 @@ mod tests {
             process_generation: 1,
             config_generation: 0,
             secret_generation: 0,
-            config_snapshot_hash: derive_soracloud_service_config_snapshot_hash_v1(
-                &BTreeMap::new(),
-            ),
-            secret_snapshot_hash: derive_soracloud_service_secret_snapshot_hash_v1(
-                &BTreeMap::new(),
-            ),
+            config_snapshot_hash: derive_soracloud_service_config_snapshot_hash_v1(&BTreeMap::new()),
+            secret_snapshot_hash: derive_soracloud_service_secret_snapshot_hash_v1(&BTreeMap::new()),
             governance_tx_hash: Some(record.request.governance_tx_hash),
             binding_name: Some(record.request.binding_name.clone()),
             state_key: Some(record.request.state_key.clone()),
@@ -38845,7 +38840,7 @@ mod tests {
         crypto: &ProviderCryptoFixture,
     ) -> Result<AdmissionRegistry> {
         let (vrf_public, vrf_private) =
-            BlsNormal::keypair(KeyGenOption::UseSeed(body.provider_id.to_vec()))
+            BlsNormal::try_keypair(KeyGenOption::UseSeed(body.provider_id.to_vec()))
                 .wrap_err("derive Soracloud provider VRF fixture key")?;
         let vrf_pair: KeyPair = (vrf_public, vrf_private).into();
         let endpoint = body
@@ -39242,7 +39237,7 @@ mod tests {
                 .lock()
                 .iter()
                 .filter_map(|instruction| {
-                    iroha_data_model::isi::Instruction::as_any(instruction)
+                    iroha_data_model::isi::Instruction::as_any(&**instruction)
                         .downcast_ref::<
                             iroha_data_model::isi::soracloud::ApplySoracloudOrderedMailboxResult,
                         >()
@@ -39258,7 +39253,7 @@ mod tests {
                 .lock()
                 .iter()
                 .filter_map(|instruction| {
-                    iroha_data_model::isi::Instruction::as_any(instruction)
+                    iroha_data_model::isi::Instruction::as_any(&**instruction)
                         .downcast_ref::<iroha_data_model::isi::soracloud::SetSoracloudRuntimeState>(
                         )
                         .cloned()
@@ -39273,7 +39268,7 @@ mod tests {
                 .lock()
                 .iter()
                 .filter_map(|instruction| {
-                    iroha_data_model::isi::Instruction::as_any(instruction)
+                    iroha_data_model::isi::Instruction::as_any(&**instruction)
                         .downcast_ref::<iroha_data_model::isi::soracloud::AdvertiseSoracloudInrouHost>()
                         .cloned()
                 })
@@ -39287,7 +39282,7 @@ mod tests {
                 .lock()
                 .iter()
                 .filter_map(|instruction| {
-                    iroha_data_model::isi::Instruction::as_any(instruction)
+                    iroha_data_model::isi::Instruction::as_any(&**instruction)
                         .downcast_ref::<
                             iroha_data_model::isi::soracloud::ClearSoracloudInrouReplicaRuntimeState,
                         >()
@@ -39317,7 +39312,7 @@ mod tests {
                 .lock()
                 .iter()
                 .filter_map(|instruction| {
-                    iroha_data_model::isi::Instruction::as_any(instruction)
+                    iroha_data_model::isi::Instruction::as_any(&**instruction)
                         .downcast_ref::<
                             iroha_data_model::isi::soracloud::ReportSoracloudServiceLeaseUsage,
                         >()
@@ -39332,7 +39327,7 @@ mod tests {
                 .lock()
                 .iter()
                 .filter_map(|instruction| {
-                    iroha_data_model::isi::Instruction::as_any(instruction)
+                    iroha_data_model::isi::Instruction::as_any(&**instruction)
                         .downcast_ref::<
                             iroha_data_model::isi::soracloud::ReportSoracloudModelHostViolation,
                         >()
@@ -39347,7 +39342,7 @@ mod tests {
                 .lock()
                 .iter()
                 .filter_map(|instruction| {
-                    iroha_data_model::isi::Instruction::as_any(instruction)
+                    iroha_data_model::isi::Instruction::as_any(&**instruction)
                         .downcast_ref::<
                             iroha_data_model::isi::soracloud::HeartbeatSoracloudModelHost,
                         >()
@@ -39360,7 +39355,7 @@ mod tests {
                 .lock()
                 .iter()
                 .filter(|instruction| {
-                    iroha_data_model::isi::Instruction::as_any(*instruction)
+                    iroha_data_model::isi::Instruction::as_any(&***instruction)
                         .downcast_ref::<iroha_data_model::isi::soracloud::ReconcileSoracloudModelHosts>()
                         .is_some()
                 })
@@ -39372,7 +39367,7 @@ mod tests {
                 .lock()
                 .iter()
                 .filter(|instruction| {
-                    iroha_data_model::isi::Instruction::as_any(*instruction)
+                    iroha_data_model::isi::Instruction::as_any(&***instruction)
                         .downcast_ref::<
                             iroha_data_model::isi::soracloud::ReconcileSoracloudInrouPlacements,
                         >()
@@ -39385,7 +39380,7 @@ mod tests {
                 .lock()
                 .iter()
                 .filter(|instruction| {
-                    iroha_data_model::isi::Instruction::as_any(*instruction)
+                    iroha_data_model::isi::Instruction::as_any(&***instruction)
                         .downcast_ref::<
                             iroha_data_model::isi::soracloud::WithdrawSoracloudInrouHost,
                         >()

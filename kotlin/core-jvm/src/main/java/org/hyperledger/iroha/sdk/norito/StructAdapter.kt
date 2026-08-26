@@ -94,7 +94,7 @@ class StructAdapter internal constructor(
             val value: Any?
             if (size != null) {
                 val chunk = decoder.readBytes(size)
-                val child = NoritoDecoder(chunk, decoder.flags, decoder.flagsHint)
+                val child = NoritoDecoder(chunk, decoder.flags)
                 value = NoritoAdapters.decodeAdapter(adapter, child)
                 require(child.remaining() == 0) { "Packed field did not consume all bytes" }
             } else {

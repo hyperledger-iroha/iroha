@@ -430,7 +430,7 @@ asset_id = client.compose_asset_id(
     scope="dataspace:42",
 )
 
-client.mint_asset_and_wait(
+client.mint_asset_quantity_and_wait(
     authority="<asset-owner>",
     fee_payment=mint_fee_payment,
     private_key_hex="<64-hex-private-key>",
@@ -438,7 +438,7 @@ client.mint_asset_and_wait(
     quantity="100",
 )
 
-client.transfer_assets_and_wait(
+client.transfer_assets_quantity_and_wait(
     authority="<payer>",
     fee_payment=transfer_fee_payment,
     private_key_hex="<64-hex-private-key>",
@@ -2323,7 +2323,7 @@ no environment variables need to be exported.
 - Re-export the maintained Norito codec (`iroha-norito`) so payload encoding and
   decoding stay consistent with Rust fixtures.
 - Provide a convenient constructor for the Torii HTTP client used to manage
-  attachments and prover reports.
+  attachments.
 - Expose generic `CryptoKeyPair` helpers over every signature algorithm compiled
   into `iroha_crypto`: Ed25519, secp256k1, ML-DSA-65, the TC26 GOST R
   34.10-2012 parameter sets, BLS normal/small, and SM2. The helpers cover

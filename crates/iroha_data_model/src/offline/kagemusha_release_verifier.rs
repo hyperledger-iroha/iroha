@@ -3,10 +3,7 @@
 use super::*;
 
 const VERIFIER_OWNER_PREFIX_V4: &str = "kagemusha-v4-";
-const VERIFIER_OWNER_PREFIX_V5: &str = "kagemusha-v5-";
-const VERIFIER_KEY_PREFIX_V5: &str = "v5-";
 const VERIFIER_IDENTITY_SCHEMA_V4: &str = "kagemusha.offline.recursive_spend.verifier_identity.v4";
-const VERIFIER_IDENTITY_SCHEMA_V5: &str = "kagemusha.offline.recursive_spend.verifier_identity.v5";
 
 #[derive(Encode)]
 struct VerifierIdentity {
@@ -36,29 +33,6 @@ pub fn kagemusha_recursive_spend_verifier_key_id_v4(
     VerifyingKeyId::new(
         KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4,
         format!("{circuit_id}-{}", hex::encode(manifest_sha256)),
-    )
-}
-
-/// Return the release-qualified verifier-key registry identifier for one V5 release parity.
-///
-/// V5 retains the ABI-21 circuit ids but uses a disjoint registry namespace,
-/// so V4 and V5 release records cannot select the same qualified registry id
-/// even when their canonical manifest digests happen to match.
-#[must_use]
-pub fn kagemusha_recursive_spend_verifier_key_id_v5(
-    parity: KagemushaPastaCycleParityV1,
-    manifest_sha256: [u8; 32],
-) -> VerifyingKeyId {
-    let circuit_id = match parity {
-        KagemushaPastaCycleParityV1::StepEq => KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
-        KagemushaPastaCycleParityV1::StepEp => KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
-    };
-    VerifyingKeyId::new(
-        KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4,
-        format!(
-            "{VERIFIER_KEY_PREFIX_V5}{circuit_id}-{}",
-            hex::encode(manifest_sha256)
-        ),
     )
 }
 
@@ -116,40 +90,6 @@ pub fn kagemusha_recursive_spend_verifier_public_inputs_schema_hash_v4(
     )
 }
 
-/// Return the exact manifest-owner identifier required by a V5 verifier record.
-#[must_use]
-pub fn kagemusha_recursive_spend_verifier_owner_manifest_id_v5(
-    manifest_sha256: [u8; 32],
-) -> String {
-    format!("{VERIFIER_OWNER_PREFIX_V5}{}", hex::encode(manifest_sha256))
-}
-
-/// Derive the manifest- and layout-bound V5 verifier public-input identity.
-///
-/// # Errors
-///
-/// Returns [`KagemushaValidationError`] when the manifest, profile, or canonical identity is invalid.
-pub fn kagemusha_recursive_spend_verifier_public_inputs_schema_hash_v5(
-    manifest: &KagemushaRecursiveSpendArtifactManifestV5,
-    parity: KagemushaPastaCycleParityV1,
-) -> Result<[u8; 32], KagemushaValidationError> {
-    let manifest_sha256 = manifest.canonical_sha256()?;
-    let profile = manifest
-        .profiles
-        .iter()
-        .find(|profile| profile.parity == parity)
-        .ok_or(KagemushaValidationError::InvalidRecursiveSpendProof {
-            field: "pasta_cycle.v5.verifier_identity.profile",
-        })?;
-    public_inputs_schema_hash(
-        VERIFIER_IDENTITY_SCHEMA_V5,
-        KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V5,
-        manifest_sha256,
-        parity,
-        profile,
-    )
-}
-
 pub(super) fn verifying_key_commitment_v1(
     key: &VerifyingKeyBox,
 ) -> Result<[u8; 32], KagemushaReleaseVerificationError> {
@@ -165,26 +105,4 @@ pub(super) fn verifying_key_commitment_v1(
     hasher.update(key_len.to_be_bytes());
     hasher.update(&key.bytes);
     Ok(hasher.finalize().into())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn v5_verifier_key_ids_are_disjoint_from_v4_for_the_same_manifest_digest() {
-        let manifest_sha256 = [0x5a; 32];
-
-        for parity in [
-            KagemushaPastaCycleParityV1::StepEq,
-            KagemushaPastaCycleParityV1::StepEp,
-        ] {
-            let v4 = kagemusha_recursive_spend_verifier_key_id_v4(parity, manifest_sha256);
-            let v5 = kagemusha_recursive_spend_verifier_key_id_v5(parity, manifest_sha256);
-
-            assert_ne!(v5, v4);
-            assert!(v5.is_portable_registry_id());
-            assert!(v5.name.starts_with(VERIFIER_KEY_PREFIX_V5));
-        }
-    }
 }

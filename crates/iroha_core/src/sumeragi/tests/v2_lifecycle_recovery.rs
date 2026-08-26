@@ -25,7 +25,7 @@ use crate::{
 };
 use iroha_config::{
     base::WithOrigin,
-    kura::{FsyncMode, InitMode},
+    kura::FsyncMode,
     parameters::{
         actual::{
             Kura as KuraConfig, LaneConfig as RuntimeLaneConfig, Nexus, Queue as QueueConfig,
@@ -75,7 +75,7 @@ fn lifecycle_runtime_lane_config() -> RuntimeLaneConfig {
 }
 fn lifecycle_kura_config(dir: &TempDir) -> KuraConfig {
     KuraConfig {
-        init_mode: InitMode::Strict,
+        init_mode: iroha_config::kura::InitMode::Strict,
         store_dir: WithOrigin::inline(dir.path().to_path_buf()),
         max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
         blocks_in_memory: BLOCKS_IN_MEMORY,

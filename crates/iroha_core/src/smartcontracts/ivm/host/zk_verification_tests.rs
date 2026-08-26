@@ -2,7 +2,6 @@
 #[cfg(feature = "zk-halo2-ipa")]
 #[test]
 fn enforce_zk_envelope_maps_errors_and_ok() {
-    crate::test_alias::ensure();
     let mut host = CoreHost::new(fixture_account("alice"));
     host.set_chain_id_bytes(b"chain".to_vec());
     host.set_current_manifest_id(Some("core".to_string()));
@@ -44,7 +43,6 @@ fn enforce_zk_envelope_maps_errors_and_ok() {
 #[cfg(feature = "zk-halo2-ipa")]
 #[test]
 fn enforce_zk_envelope_rejects_shared_open_verify_shape_failures() {
-    crate::test_alias::ensure();
     let mut host = CoreHost::new(fixture_account("alice"));
     host.set_chain_id_bytes(b"chain".to_vec());
     host.set_current_manifest_id(Some("core".to_string()));
@@ -157,7 +155,6 @@ fn enforce_zk_envelope_rejects_shared_open_verify_shape_failures() {
 #[cfg(feature = "zk-halo2-ipa")]
 #[test]
 fn enforce_zk_envelope_rejects_namespace_and_manifest_replays() {
-    crate::test_alias::ensure();
     let mut host = CoreHost::new(fixture_account("alice"));
     host.set_chain_id_bytes(b"chain".to_vec());
     host.set_current_manifest_id(Some("core".to_string()));
@@ -209,7 +206,6 @@ fn enforce_zk_envelope_rejects_namespace_and_manifest_replays() {
 #[cfg(feature = "zk-halo2-ipa")]
 #[test]
 fn enforce_zk_envelope_rejects_vk_metadata_mismatch() {
-    crate::test_alias::ensure();
     let mut host = CoreHost::new(fixture_account("alice"));
     host.set_chain_id_bytes(b"chain".to_vec());
     host.set_current_manifest_id(Some("core".to_string()));
@@ -279,7 +275,6 @@ fn enforce_zk_envelope_rejects_vk_metadata_mismatch() {
 }
 #[test]
 fn generic_verify_proof_syscall_reports_registry_precheck_errors() {
-    crate::test_alias::ensure();
     let mut host = CoreHost::new(fixture_account("alice"));
     host.set_chain_id_bytes(b"chain".to_vec());
     host.set_current_manifest_id(Some("core".to_string()));
@@ -301,7 +296,6 @@ fn generic_verify_proof_syscall_reports_registry_precheck_errors() {
 }
 #[test]
 fn unaffordable_zk_verification_stops_before_verifier_or_latch_mutation() {
-    crate::test_alias::ensure();
     let mut host = CoreHost::new(fixture_account("alice"));
     let code = [
         ivm::encoding::wide::encode_sys(
@@ -338,7 +332,6 @@ fn unaffordable_zk_verification_stops_before_verifier_or_latch_mutation() {
 }
 #[test]
 fn zk_verify_batch_quote_and_actual_scale_with_every_proof() {
-    crate::test_alias::ensure();
     let envelope = ivm::host::decode_canonical_zk_envelope(&dummy_env(
         "halo2/ipa:metering",
         [1u8; 32],
@@ -375,7 +368,6 @@ fn zk_verify_batch_quote_and_actual_scale_with_every_proof() {
 }
 #[test]
 fn unaffordable_zk_batch_stops_before_decode_allocation_or_backend_work() {
-    crate::test_alias::ensure();
     let envelope = ivm::host::decode_canonical_zk_envelope(&dummy_env(
         "halo2/ipa:metering",
         [1u8; 32],
@@ -412,7 +404,6 @@ fn unaffordable_zk_batch_stops_before_decode_allocation_or_backend_work() {
 }
 #[test]
 fn zk_verify_batch_rejects_configured_count_cap_after_metered_prepare() {
-    crate::test_alias::ensure();
     let envelope = ivm::host::decode_canonical_zk_envelope(&dummy_env(
         "halo2/ipa:metering",
         [1u8; 32],
@@ -446,7 +437,6 @@ fn zk_verify_batch_rejects_configured_count_cap_after_metered_prepare() {
 }
 #[test]
 fn generic_verify_proof_syscall_rejects_injected_non_production_vk_snapshot() {
-    crate::test_alias::ensure();
     for backend in [
         "halo2/mock",
         "halo2/ipa:production-ready",
@@ -500,7 +490,6 @@ fn generic_verify_proof_syscall_rejects_injected_non_production_vk_snapshot() {
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[test]
 fn generic_verify_proof_revalidates_injected_halo2_material_at_dispatch() {
-    crate::test_alias::ensure();
     let backend = "halo2/ipa";
     let circuit_id = crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID;
     let public_inputs = vec![1_u8, 2, 3, 4];
@@ -546,7 +535,6 @@ fn generic_verify_proof_revalidates_injected_halo2_material_at_dispatch() {
 #[cfg(feature = "zk-stark")]
 #[test]
 fn zk_verify_batch_accepts_stark_registry_bound_envelope() {
-    crate::test_alias::ensure();
     let mut host = CoreHost::new(fixture_account("alice"));
     host.set_chain_id_bytes(b"chain".to_vec());
     host.set_current_manifest_id(Some("core".to_string()));
@@ -611,7 +599,6 @@ fn zk_verify_batch_accepts_stark_registry_bound_envelope() {
 #[cfg(feature = "zk-halo2-ipa")]
 #[test]
 fn zk_verify_batch_returns_statuses_with_registry_binding() {
-    crate::test_alias::ensure();
     let mut host = CoreHost::new(fixture_account("alice"));
     host.set_chain_id_bytes(b"chain".to_vec());
     host.set_current_manifest_id(Some("core".to_string()));
@@ -640,7 +627,6 @@ fn zk_verify_batch_returns_statuses_with_registry_binding() {
 #[cfg(feature = "zk-halo2-ipa")]
 #[test]
 fn zk_verify_batch_reports_backend_verifier_failure_after_prechecks() {
-    crate::test_alias::ensure();
     let mut host = CoreHost::new(fixture_account("alice"));
     host.set_chain_id_bytes(b"chain".to_vec());
     host.set_current_manifest_id(Some("core".to_string()));
@@ -669,7 +655,6 @@ fn zk_verify_batch_reports_backend_verifier_failure_after_prechecks() {
 #[cfg(feature = "zk-halo2-ipa")]
 #[test]
 fn zk_verify_batch_reports_first_error_for_dummy_payloads() {
-    crate::test_alias::ensure();
     let mut host = CoreHost::new(fixture_account("alice"));
     host.set_chain_id_bytes(b"chain".to_vec());
     host.set_current_manifest_id(Some("core".to_string()));

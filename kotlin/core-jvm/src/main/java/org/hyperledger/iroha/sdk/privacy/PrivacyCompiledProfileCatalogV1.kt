@@ -125,7 +125,7 @@ object PrivacyCompiledProfileCatalogCodecV1 {
 
         val framed = NoritoHeader.decode(snapshot, SCHEMA_HASH)
         framed.header.validateChecksum(framed.payload)
-        val decoder = NoritoDecoder(framed.payload, framed.header.flags, framed.header.minor)
+        val decoder = NoritoDecoder(framed.payload, framed.header.flags)
         val catalog = CatalogAdapter.decode(decoder)
         require(decoder.remaining() == 0) {
             "compiled-profile catalog contains trailing payload data"
@@ -534,7 +534,7 @@ object PrivacyCompiledProfileCatalogCodecV1 {
         length: Int,
         fieldName: String,
     ): T {
-        val child = NoritoDecoder(decoder.readBytes(length), decoder.flags, decoder.flagsHint)
+        val child = NoritoDecoder(decoder.readBytes(length), decoder.flags)
         val value = adapter.decode(child)
         require(child.remaining() == 0) { "$fieldName contains trailing or unknown data" }
         return value

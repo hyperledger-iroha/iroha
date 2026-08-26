@@ -14,7 +14,6 @@ from typing import (
     Any,
     Callable,
     Dict,
-    Iterable,
     Mapping,
     MutableMapping,
     Optional,
@@ -1454,12 +1453,6 @@ def _normalize_path(path: Union[str, os.PathLike[str]]) -> str:
     if not isinstance(value, str) or not value:
         raise TypeError("provider path must be a non-empty string or path-like object")
     return value
-
-
-def _maybe_tuple(value: Optional[Iterable[str]]) -> Optional[Tuple[str, ...]]:
-    if value is None:
-        return None
-    return tuple(str(entry) for entry in value)
 
 
 @dataclass(frozen=True)

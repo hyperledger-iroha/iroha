@@ -275,7 +275,9 @@ mod torii_app_fanout_norito_dto_sealed {
 // TODO: Add one concrete implementation at a time after its authoritative
 // source path and every reachable decoder allocation are pre-admission bounded.
 trait ToriiAppFanoutNoritoDto:
-    torii_app_fanout_norito_dto_sealed::Sealed + for<'de> norito::NoritoDeserialize<'de>
+    torii_app_fanout_norito_dto_sealed::Sealed
+    + norito::NoritoSerialize
+    + for<'de> norito::NoritoDeserialize<'de>
 {
 }
 /// Decode one admitted, canonical-layout route response sequentially.

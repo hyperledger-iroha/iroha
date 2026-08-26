@@ -13,11 +13,10 @@ use iroha_config::parameters::actual::NtsEnforcementMode;
 use iroha_data_model::peer::Peer;
 use norito::codec::{Decode, Encode};
 use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
+    collections::{BTreeMap, VecDeque},
     sync::{OnceLock, RwLock},
     time::Instant,
 };
-use tokio::sync::watch;
 /// Outbound time probe message (peer → peer).
 #[derive(Clone, Copy, Debug, Encode, Decode)]
 pub struct TimePing {
@@ -331,12 +330,8 @@ fn now_ms() -> u64 {
 fn clone_bounded<'a, T: Clone + 'a>(values: impl Iterator<Item = &'a T>, limit: usize) -> Vec<T> {
     values.take(limit).cloned().collect()
 }
-/// Start the NTS background sampler with explicit parameters. Idempotent.
-pub fn start_with_params(
-    network: IrohaNetwork,
-    _peers_rx: watch::Receiver<BTreeSet<Peer>>,
-    params: Params,
-) {
+/// Start the NTS background sampler. Idempotent.
+pub fn start(network: IrohaNetwork, params: Params) {
     configure(params);
     let (guard, initialized_here) = initialize_service_once(&SERVICE, params);
     if !initialized_here {
@@ -389,9 +384,14 @@ pub fn start_with_params(
         }
     });
 }
-/// Start the NTS background sampler with default parameters. Idempotent.
-pub fn start(network: IrohaNetwork, peers_rx: watch::Receiver<BTreeSet<Peer>>) {
-    start_with_params(network, peers_rx, Params::default())
+fn sample_measurement(t1_ms: u64, t2_ms: u64, t3_ms: u64, t4_ms: u64) -> Option<(i64, u64)> {
+    let t1 = i128::from(t1_ms);
+    let t2 = i128::from(t2_ms);
+    let t3 = i128::from(t3_ms);
+    let t4 = i128::from(t4_ms);
+    let offset_ms = i64::try_from(i128::midpoint(t2 - t1, t3 - t4)).ok()?;
+    let rtt_ms = u64::try_from((t4 - t1) - (t3 - t2)).ok()?;
+    Some((offset_ms, rtt_ms))
 }
 /// Handle incoming time messages from the network relay.
 pub async fn handle_message(peer: Peer, msg: crate::NetworkMessage, network: &IrohaNetwork) {
@@ -413,26 +413,27 @@ pub async fn handle_message(peer: Peer, msg: crate::NetworkMessage, network: &Ir
             let t4 = now_ms();
             let received_at = Instant::now();
             let pid = peer.id().clone();
-            let mut svc = SERVICE.get().expect("time service").lock().await;
+            let Some(service) = SERVICE.get() else {
+                return;
+            };
+            let mut svc = service.lock().await;
             // A late pong cannot be correlated with a live probe. Pruning before
             // removal enforces the same deadline whether or not the sampler ticked.
             if let Some(probe) = svc.take_live_probe(&pid, p.id, received_at) {
-                let t1_i = i128::from(probe.t1_ms);
-                let t2_i = i128::from(p.t2_ms);
-                let t3_i = i128::from(p.t3_ms);
-                let t4_i = i128::from(t4);
-                // NTP-style offset and RTT
-                let offset = i128::midpoint(t2_i - t1_i, t3_i - t4_i);
-                let rtt = u64::try_from(((t4_i - t1_i) - (t3_i - t2_i)).max(0)).unwrap_or(0);
+                let Some((offset_ms, rtt_ms)) =
+                    sample_measurement(probe.t1_ms, p.t2_ms, p.t3_ms, t4)
+                else {
+                    return;
+                };
                 let sample = Sample {
-                    offset_ms: i64::try_from(offset).unwrap_or(0),
-                    rtt_ms: rtt,
+                    offset_ms,
+                    rtt_ms,
                     expires_at: svc.sample_deadline(received_at),
                 };
                 svc.record_sample(pid, sample);
                 // Update RTT histogram aggregates
                 let mut idx = 0usize;
-                while idx < svc.rtt_bounds_ms.len() && rtt > svc.rtt_bounds_ms[idx] {
+                while idx < svc.rtt_bounds_ms.len() && rtt_ms > svc.rtt_bounds_ms[idx] {
                     idx += 1;
                 }
                 if idx >= svc.rtt_bucket_counts.len() {
@@ -441,7 +442,7 @@ pub async fn handle_message(peer: Peer, msg: crate::NetworkMessage, network: &Ir
                 if let Some(slot) = svc.rtt_bucket_counts.get_mut(idx) {
                     *slot = slot.saturating_add(1);
                 }
-                svc.rtt_ms_sum = svc.rtt_ms_sum.saturating_add(rtt);
+                svc.rtt_ms_sum = svc.rtt_ms_sum.saturating_add(rtt_ms);
                 svc.rtt_ms_count = svc.rtt_ms_count.saturating_add(1);
             }
         }
@@ -526,10 +527,26 @@ pub fn now() -> NetworkTimeStatus {
     } else {
         median
     };
+    let local_now = SystemTime::now();
     let adjusted_now = if offset >= 0 {
-        SystemTime::now() + Duration::from_millis(offset.unsigned_abs())
+        local_now.checked_add(Duration::from_millis(offset.unsigned_abs()))
     } else {
-        SystemTime::now() - Duration::from_millis(offset.unsigned_abs())
+        local_now.checked_sub(Duration::from_millis(offset.unsigned_abs()))
+    };
+    let Some(adjusted_now) = adjusted_now else {
+        let fallback = true;
+        return NetworkTimeStatus {
+            now: local_now,
+            offset_ms: offset,
+            confidence_ms: mad,
+            sample_count,
+            peer_count,
+            fallback,
+            health: svc
+                .params
+                .health_policy
+                .evaluate(sample_count, offset, mad, fallback),
+        };
     };
     let fallback = false;
     NetworkTimeStatus {
@@ -558,7 +575,7 @@ fn trimmed_median_and_mad(offsets: &mut [i64], trim_percent: u8) -> (i64, u64) {
     let hi = (n - trim).max(trim + 1);
     let slice = &offsets[trim..hi];
     let median = slice[slice.len() / 2];
-    let mut devs: Vec<u64> = slice.iter().map(|&x| (x - median).unsigned_abs()).collect();
+    let mut devs: Vec<u64> = slice.iter().map(|&x| x.abs_diff(median)).collect();
     devs.sort_unstable();
     let mad = devs[devs.len() / 2];
     (median, mad)
@@ -719,6 +736,20 @@ mod tests {
         );
         // MAD should be small given tight cluster around ~11
         assert!(mad <= 2, "mad {mad} too large");
+    }
+    #[test]
+    fn trimmed_median_and_mad_handles_integer_endpoints() {
+        let mut offsets = [i64::MIN, i64::MAX];
+        assert_eq!(
+            trimmed_median_and_mad(&mut offsets, 0),
+            (i64::MAX, u64::MAX)
+        );
+    }
+    #[test]
+    fn sample_measurement_rejects_unrepresentable_or_negative_values() {
+        assert_eq!(sample_measurement(100, 110, 112, 122), Some((0, 20)));
+        assert_eq!(sample_measurement(0, u64::MAX, u64::MAX, 0), None);
+        assert_eq!(sample_measurement(0, 0, 2, 1), None);
     }
     #[test]
     fn now_fallback_without_service() {

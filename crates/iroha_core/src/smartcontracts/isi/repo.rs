@@ -929,7 +929,6 @@ mod tests {
         AssetDefinitionId,
         AccountId,
     ) {
-        crate::test_alias::ensure();
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
         let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);

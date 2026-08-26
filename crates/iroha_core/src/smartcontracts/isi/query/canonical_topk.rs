@@ -1,17 +1,10 @@
 //! Bounded canonical top-K materialization for server-owned query fanout.
-use super::{QueryExecutionBudget, QueryExecutionStats, QueryLimits};
-use crate::{smartcontracts::ValidQuery, state::StateReadOnly};
 use iroha_data_model::{
-    prelude::{Pagination, SelectorTuple},
-    query::{
-        QueryOutput, QueryOutputBatchBox,
-        dsl::{CompoundPredicate, EvaluateSelector, HasProjection, SelectorMarker},
-        error::QueryExecutionFail as Error,
-        parameters::QueryParams,
-    },
+    prelude::Pagination,
+    query::{QueryOutputBatchBox, error::QueryExecutionFail as Error},
 };
 use norito::core::NoritoSerialize;
-use std::{any::TypeId, collections::BTreeSet, io::Cursor};
+use std::{collections::BTreeSet, io::Cursor};
 /// Conservative deterministic charge for the retained `Vec` handle, one
 /// `BTreeSet` slot, allocator bookkeeping, and tree-node slack of one item.
 ///
@@ -23,12 +16,11 @@ pub const CANONICAL_QUERY_RETAINED_ITEM_OVERHEAD_BYTES: u64 = 512;
 /// output column. Its backing allocation is charged separately from the exact
 /// per-arm inline item size and is reserved at its final capacity up front.
 pub const CANONICAL_QUERY_OUTPUT_CONTAINER_OVERHEAD_BYTES: u64 = 512;
-/// Resident upper envelope for one source row admitted before a canonical
-/// local scan calls its query implementation.
+/// Resident upper envelope for one source row admitted by canonical fanout.
 ///
-/// The only admitted implementations yield name-backed `RoleId` or
-/// `TriggerId` values. Names are limited to 255 bytes; this allowance also
-/// covers their fixed Rust wrappers and allocator bookkeeping.
+/// The first-release fanout sources yield name-backed `RoleId` or `TriggerId`
+/// values. Names are limited to 255 bytes; this allowance also covers their
+/// fixed Rust wrappers and allocator bookkeeping.
 pub const CANONICAL_QUERY_PREBOUNDED_SOURCE_BYTES: u64 = 1024;
 /// Deterministic fixed allowance for reconstructing one admitted identifier.
 ///
@@ -826,194 +818,21 @@ fn canonical_id_decode_profile(bytes: &[u8]) -> Result<CandidateDecodeProfile, E
         allocation_charge,
     })
 }
-fn projected_column<T>(
-    values: Vec<T>,
-    selector: &SelectorTuple<T>,
-) -> Result<QueryOutputBatchBox, Error>
-where
-    T: HasProjection<SelectorMarker, AtomType = ()> + Send + Sync + 'static,
-    <T as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<T> + Send + Sync,
-    QueryOutputBatchBox: From<Vec<T>>,
-{
-    let mut projections = selector.iter();
-    let Some(projection) = projections.next() else {
-        return Ok(QueryOutputBatchBox::from(values));
-    };
-    if projections.next().is_some() {
-        return Err(Error::Conversion(
-            "canonical query fanout requires exactly one projected output column".to_owned(),
-        ));
-    }
-    projection.project(values.into_iter())
-}
-fn canonical_query_source_bound<Q: 'static>() -> Option<u64> {
-    use iroha_data_model::query::{role, trigger};
-    let query = TypeId::of::<Q>();
-    if query == TypeId::of::<role::prelude::FindRoleIds>()
-        || query == TypeId::of::<trigger::prelude::FindActiveTriggerIds>()
-    {
-        return Some(CANONICAL_QUERY_PREBOUNDED_SOURCE_BYTES);
-    }
-    None
-}
-pub(super) fn ensure_canonical_query_source_admitted<T, Q>(
-    predicate: &CompoundPredicate<T>,
-    selector: &SelectorTuple<T>,
-    params: &QueryParams,
-    output_limits: CanonicalQueryOutputLimits,
-) -> Result<(), Error>
-where
-    T: HasProjection<SelectorMarker, AtomType = ()> + 'static,
-    Q: 'static,
-{
-    let Some(required_source_bytes) = canonical_query_source_bound::<Q>() else {
-        return Err(Error::Conversion(format!(
-            "canonical fanout rejects `{}` before source execution because its query implementation does not provide lazy protocol-bounded rows",
-            core::any::type_name::<Q>(),
-        )));
-    };
-    if !predicate.is_pass() {
-        return Err(Error::Conversion(format!(
-            "canonical fanout rejects filtered `{}` before source execution because predicate work is not exposed to the deterministic budget",
-            core::any::type_name::<Q>(),
-        )));
-    }
-    if selector.iter().next().is_some() {
-        return Err(Error::Conversion(
-            "canonical query fanout requires identity output and rejects selectors before source execution"
-                .to_owned(),
-        ));
-    }
-    if params.sorting != Default::default() {
-        return Err(Error::Conversion(
-            "canonical query fanout orders by canonical item bytes and does not support metadata sorting"
-                .to_owned(),
-        ));
-    }
-    if output_limits.max_source_item_bytes < required_source_bytes {
-        return Err(Error::CapacityLimit);
-    }
-    Ok(())
-}
-// TODO: Reconnect this generic entry point after every canonical producer has
-// a source-owned adapter; current production dispatch fails closed earlier.
-#[allow(dead_code)]
-pub(super) fn execute_canonical_query<T, Q>(
-    query: Q,
-    predicate: CompoundPredicate<T>,
-    selector: SelectorTuple<T>,
-    state: &impl StateReadOnly,
-    params: &QueryParams,
-    limits: QueryLimits,
-    output_limits: CanonicalQueryOutputLimits,
-    budget: Option<QueryExecutionBudget>,
-) -> Result<(QueryOutput, QueryExecutionStats), Error>
-where
-    T: HasProjection<SelectorMarker, AtomType = ()> + NoritoSerialize + Send + Sync + 'static,
-    <T as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<T> + Send + Sync,
-    QueryOutputBatchBox: From<Vec<T>>,
-    Q: ValidQuery<Item = T> + 'static,
-{
-    ensure_canonical_query_source_admitted::<T, Q>(&predicate, &selector, params, output_limits)?;
-    let iter = ValidQuery::execute(query, predicate, state)?;
-    apply_canonical_query_postprocessing(iter, selector, params, limits, output_limits, budget)
-}
-pub(super) fn apply_canonical_query_postprocessing<I>(
-    iter: I,
-    selector: SelectorTuple<I::Item>,
-    params: &QueryParams,
-    limits: QueryLimits,
-    output_limits: CanonicalQueryOutputLimits,
-    budget: Option<QueryExecutionBudget>,
-) -> Result<(QueryOutput, QueryExecutionStats), Error>
-where
-    I: Iterator,
-    I::Item: HasProjection<SelectorMarker, AtomType = ()> + NoritoSerialize + Send + Sync + 'static,
-    <I::Item as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<I::Item> + Send + Sync,
-    QueryOutputBatchBox: From<Vec<I::Item>>,
-{
-    let keep = canonical_keep(params, limits, output_limits)?;
-    let mut accumulator = CanonicalQueryOutputAccumulator::new(
-        keep,
-        output_limits.max_encoded_item_bytes,
-        output_limits.max_retained_bytes,
-        output_limits.max_decode_allocated_bytes,
-    );
-    accumulator.push_batch(projected_column(Vec::new(), &selector)?)?;
-    let mut stats = QueryExecutionStats::default();
-    for value in iter {
-        // Charge the source row before projection, then charge the canonical
-        // projected frame before allocating it. The final response frame is
-        // charged by `execute_ephemeral_with_stats`; these are distinct real
-        // serialization passes, so the conservative double byte charge is
-        // intentional.
-        let Some(source_bytes) = value.encoded_len_exact() else {
-            return Err(Error::Conversion(
-                "canonical query source row has no allocation-free exact encoded length".to_owned(),
-            ));
-        };
-        let source_bytes = u64::try_from(source_bytes).map_err(|_| Error::CapacityLimit)?;
-        if source_bytes > output_limits.max_source_item_bytes {
-            return Err(Error::GasBudgetExceeded);
-        }
-        stats.record_preflighted_item(source_bytes, budget)?;
-        let candidate = projected_column(vec![value], &selector)?;
-        if let Some(budget) = budget {
-            let remaining = budget.remaining_bytes(stats.processed_items, stats.processed_bytes)?;
-            let encoded = exact_canonical_frame_len(
-                &candidate,
-                remaining.min(output_limits.max_encoded_item_bytes),
-            )?;
-            stats.record_precomputed_bytes(encoded, Some(budget))?;
-        }
-        accumulator.push_batch(candidate)?;
-    }
-    let batch = accumulator.finish(params.pagination)?;
-    Ok((QueryOutput::new(batch.into(), 0, None), stats))
-}
-fn canonical_keep(
-    params: &QueryParams,
-    limits: QueryLimits,
-    output_limits: CanonicalQueryOutputLimits,
-) -> Result<u64, Error> {
-    let keep = match params.pagination.limit_value() {
-        Some(limit) => params
-            .pagination
-            .offset_value()
-            .checked_add(limit.get())
-            .ok_or(Error::CapacityLimit)?,
-        None => limits.max_fetch_size,
-    };
-    (keep <= output_limits.max_items)
-        .then_some(keep)
-        .ok_or(Error::CapacityLimit)
-}
 #[cfg(test)]
 mod tests {
     use super::*;
     use iroha_data_model::{
-        domain::Domain,
         query::{QueryOutputBatchBox, parameters::Pagination},
         role::RoleId,
     };
     use nonzero_ext::nonzero;
     use std::collections::BTreeSet;
     const GENEROUS_ITEM_BYTES: u64 = 1024 * 1024;
-    const GENEROUS_SOURCE_BYTES: u64 = 1024 * 1024;
     const GENEROUS_RETAINED_BYTES: u64 = 8 * 1024 * 1024;
     const GENEROUS_DECODE_BYTES: u64 = 8 * 1024 * 1024;
     fn string_frame(value: &str) -> Vec<u8> {
         norito::encode_canonical(&QueryOutputBatchBox::String(vec![value.to_owned()]))
             .expect("encode string candidate")
-    }
-    fn generous_output_limits(max_items: u64) -> CanonicalQueryOutputLimits {
-        CanonicalQueryOutputLimits::new(
-            max_items,
-            GENEROUS_SOURCE_BYTES,
-            GENEROUS_ITEM_BYTES,
-            GENEROUS_RETAINED_BYTES,
-            GENEROUS_DECODE_BYTES,
-        )
     }
     fn reference_strings(values: &[&str], pagination: Pagination, keep: usize) -> Vec<String> {
         let frames: BTreeSet<_> = values.iter().map(|value| string_frame(value)).collect();
@@ -1093,90 +912,6 @@ mod tests {
         assert_eq!(actual, reference);
         assert_eq!(actual.len(), usize::try_from(encoded_len).unwrap());
         assert!(actual.capacity() >= charged_capacity);
-    }
-    #[test]
-    fn canonical_source_admission_is_query_specific_and_fails_closed() {
-        let params = QueryParams::default();
-        ensure_canonical_query_source_admitted::<
-            iroha_data_model::role::RoleId,
-            iroha_data_model::query::role::prelude::FindRoleIds,
-        >(
-            &CompoundPredicate::PASS,
-            &SelectorTuple::default(),
-            &params,
-            generous_output_limits(1),
-        )
-        .expect("lazy bounded role IDs remain available");
-        macro_rules! assert_unbounded_query_rejected {
-            ($item:ty, $query:ty) => {{
-                let error = ensure_canonical_query_source_admitted::<$item, $query>(
-                    &CompoundPredicate::PASS,
-                    &SelectorTuple::default(),
-                    &params,
-                    generous_output_limits(1),
-                )
-                .expect_err("unbounded query source must fail before execution");
-                assert!(
-                    matches!(&error, Error::Conversion(message) if message.contains("before source execution")),
-                    "unexpected source-admission error: {error:?}",
-                );
-            }};
-        }
-        assert_unbounded_query_rejected!(
-            Domain,
-            iroha_data_model::query::domain::prelude::FindDomains
-        );
-        assert_unbounded_query_rejected!(
-            iroha_data_model::account::Account,
-            iroha_data_model::query::account::prelude::FindAccounts
-        );
-        assert_unbounded_query_rejected!(
-            iroha_data_model::block::SignedBlock,
-            iroha_data_model::query::block::prelude::FindBlocks
-        );
-        assert_unbounded_query_rejected!(
-            iroha_data_model::peer::PeerId,
-            iroha_data_model::query::peer::prelude::FindPeers
-        );
-        assert_unbounded_query_rejected!(
-            iroha_data_model::role::RoleId,
-            iroha_data_model::query::role::prelude::FindRolesByAccountId
-        );
-        let sorted_params = QueryParams {
-            sorting: iroha_data_model::query::parameters::Sorting::by_metadata_key(
-                "rank".parse().expect("metadata key"),
-            ),
-            ..QueryParams::default()
-        };
-        let error = ensure_canonical_query_source_admitted::<
-            iroha_data_model::role::RoleId,
-            iroha_data_model::query::role::prelude::FindRoleIds,
-        >(
-            &CompoundPredicate::PASS,
-            &SelectorTuple::default(),
-            &sorted_params,
-            generous_output_limits(1),
-        )
-        .expect_err("metadata sorting is incompatible with canonical byte ordering");
-        assert!(matches!(error, Error::Conversion(_)));
-    }
-    #[cfg(feature = "ids_projection")]
-    #[test]
-    fn canonical_source_admission_rejects_a_selector_before_execution() {
-        let error = ensure_canonical_query_source_admitted::<
-            iroha_data_model::role::RoleId,
-            iroha_data_model::query::role::prelude::FindRoleIds,
-        >(
-            &CompoundPredicate::PASS,
-            &SelectorTuple::ids_only(),
-            &QueryParams::default(),
-            generous_output_limits(1),
-        )
-        .expect_err("canonical local execution must reject projection allocation");
-        assert!(
-            matches!(&error, Error::Conversion(message) if message.contains("before source execution")),
-            "unexpected selector-admission error: {error:?}",
-        );
     }
     #[test]
     fn canonical_accumulator_matches_reference_set_dedupes_and_is_permutation_invariant() {
@@ -1515,144 +1250,5 @@ mod tests {
         };
         assert!(blocks.capacity() >= capacity);
         assert!(blocks.is_empty());
-    }
-    #[test]
-    fn canonical_query_mode_scans_all_rows_before_canonical_pagination() {
-        let roles: Vec<RoleId> = ["late-z", "early-a", "middle-m", "duplicate-a"]
-            .into_iter()
-            .map(|name| name.parse().expect("role ID"))
-            .collect();
-        let params = QueryParams {
-            pagination: Pagination::new(Some(nonzero!(2_u64)), 1),
-            ..QueryParams::default()
-        };
-        let output_limits = CanonicalQueryOutputLimits::new(
-            3,
-            GENEROUS_SOURCE_BYTES,
-            GENEROUS_ITEM_BYTES,
-            GENEROUS_RETAINED_BYTES,
-            GENEROUS_DECODE_BYTES,
-        );
-        let budget = QueryExecutionBudget::from_weighted_limit(16 * 1024 * 1024, 1, 1);
-        let (output, stats) = apply_canonical_query_postprocessing(
-            roles.clone().into_iter(),
-            SelectorTuple::default(),
-            &params,
-            QueryLimits::new(16),
-            output_limits,
-            Some(budget),
-        )
-        .expect("canonical query postprocessing");
-        assert_eq!(stats.processed_items(), roles.len() as u64);
-        assert_eq!(output.batch.column_count(), 1);
-        assert!(output.continue_cursor.is_none());
-        let QueryOutputBatchBox::RoleId(actual) =
-            output.batch.into_columns().pop().expect("one column")
-        else {
-            panic!("role projection changed variant")
-        };
-        let mut reference = CanonicalQueryOutputAccumulator::new(
-            3,
-            GENEROUS_ITEM_BYTES,
-            GENEROUS_RETAINED_BYTES,
-            GENEROUS_DECODE_BYTES,
-        );
-        reference
-            .push_batch(QueryOutputBatchBox::RoleId(roles))
-            .expect("reference role IDs");
-        let QueryOutputBatchBox::RoleId(expected) = reference
-            .finish(params.pagination)
-            .expect("finish reference")
-        else {
-            panic!("reference role projection changed variant")
-        };
-        assert_eq!(actual, expected);
-    }
-    #[test]
-    fn canonical_query_mode_enforces_the_exact_source_and_projected_work_bound() {
-        let roles: Vec<RoleId> = ["work-a", "work-b"]
-            .into_iter()
-            .map(|name| name.parse().expect("role ID"))
-            .collect();
-        let expected_bytes = roles.iter().fold(0_u64, |total, role| {
-            let source = u64::try_from(
-                norito::core::NoritoSerialize::encoded_len_exact(role)
-                    .expect("measure source role ID"),
-            )
-            .expect("source length fits u64");
-            let candidate = QueryOutputBatchBox::RoleId(vec![role.clone()]);
-            let projected =
-                exact_canonical_frame_len(&candidate, u64::MAX).expect("measure projected role ID");
-            total.saturating_add(source).saturating_add(projected)
-        });
-        let exact_units = expected_bytes.saturating_add(roles.len() as u64);
-        let params = QueryParams {
-            pagination: Pagination::new(Some(nonzero!(2_u64)), 0),
-            ..QueryParams::default()
-        };
-        let output_limits = CanonicalQueryOutputLimits::new(
-            2,
-            GENEROUS_SOURCE_BYTES,
-            GENEROUS_ITEM_BYTES,
-            GENEROUS_RETAINED_BYTES,
-            GENEROUS_DECODE_BYTES,
-        );
-        let (_, stats) = apply_canonical_query_postprocessing(
-            roles.clone().into_iter(),
-            SelectorTuple::default(),
-            &params,
-            QueryLimits::new(2),
-            output_limits,
-            Some(QueryExecutionBudget::from_weighted_limit(exact_units, 1, 1)),
-        )
-        .expect("exact work allowance fits");
-        assert_eq!(stats.processed_items(), roles.len() as u64);
-        assert_eq!(stats.processed_bytes(), expected_bytes);
-        let error = apply_canonical_query_postprocessing(
-            roles.into_iter(),
-            SelectorTuple::default(),
-            &params,
-            QueryLimits::new(2),
-            output_limits,
-            Some(QueryExecutionBudget::from_weighted_limit(
-                exact_units.saturating_sub(1),
-                1,
-                1,
-            )),
-        )
-        .expect_err("one missing work unit must fail");
-        assert!(matches!(error, Error::GasBudgetExceeded));
-    }
-    #[cfg(feature = "ids_projection")]
-    #[test]
-    fn canonical_query_mode_rejects_unproven_projection_before_scanning() {
-        let domains = std::iter::once_with(|| -> Domain {
-            panic!("unproven projection must be rejected before reading a source row")
-        });
-        let params = QueryParams {
-            pagination: Pagination::new(Some(nonzero!(2_u64)), 0),
-            ..QueryParams::default()
-        };
-        let output_limits = CanonicalQueryOutputLimits::new(
-            2,
-            GENEROUS_SOURCE_BYTES,
-            GENEROUS_ITEM_BYTES,
-            GENEROUS_RETAINED_BYTES,
-            GENEROUS_DECODE_BYTES,
-        );
-        let error = apply_canonical_query_postprocessing(
-            domains,
-            SelectorTuple::ids_only(),
-            &params,
-            QueryLimits::new(3),
-            output_limits,
-            Some(QueryExecutionBudget::from_weighted_limit(
-                16 * 1024 * 1024,
-                1,
-                1,
-            )),
-        )
-        .expect_err("unproven projection output must fail closed");
-        assert!(matches!(error, Error::Conversion(_)));
     }
 }

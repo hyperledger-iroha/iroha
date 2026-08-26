@@ -14,15 +14,3 @@ fn columnar_json_keys_present() {
     assert!(obj.contains_key("probes"));
     assert!(obj.contains_key("bytes_saved_total"));
 }
-#[test]
-#[cfg(feature = "json")]
-fn codec_json_keys_present() {
-    norito::codec::adaptive_metrics_reset();
-    let small: Vec<u64> = (0..16u64).collect();
-    let _ = norito::codec::encode_adaptive(&small);
-    let v = norito::codec::adaptive_metrics_json_value();
-    let obj = v.as_object().expect("object");
-    assert!(obj.contains_key("calls"));
-    assert!(obj.contains_key("reencodes"));
-    assert!(obj.contains_key("bytes_abs_diff_total"));
-}

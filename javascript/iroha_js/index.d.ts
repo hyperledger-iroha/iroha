@@ -2146,60 +2146,6 @@ export interface ToriiContractEventItem {
   fee_payment?: NoritoFeePaymentIntent;
 }
 
-export interface ToriiProverReport {
-  id: string;
-  ok: boolean;
-  error: string | null;
-  content_type: string;
-  size: number;
-  created_ms: number;
-  processed_ms: number;
-  latency_ms: number;
-  zk1_tags: ReadonlyArray<string> | null;
-}
-
-export interface ToriiProverReportIdList {
-  kind: "ids";
-  ids: ReadonlyArray<string>;
-}
-
-export interface ToriiProverReportMessageSummary {
-  id: string;
-  error: string | null;
-}
-
-export interface ToriiProverReportMessagesList {
-  kind: "messages";
-  messages: ReadonlyArray<ToriiProverReportMessageSummary>;
-}
-
-export interface ToriiProverReportFilters {
-  okOnly?: boolean;
-  failedOnly?: boolean;
-  errorsOnly?: boolean;
-  idsOnly?: boolean;
-  messagesOnly?: boolean;
-  latest?: boolean;
-  contentType?: string;
-  hasTag?: string;
-  id?: string;
-  limit?: NumericLike;
-  offset?: NumericLike;
-  sinceMs?: NumericLike;
-  beforeMs?: NumericLike;
-  order?: "asc" | "desc";
-}
-
-export interface ToriiProverReportCollection {
-  kind: "reports";
-  reports: ReadonlyArray<ToriiProverReport>;
-}
-
-export type ToriiProverReportListResult =
-  | ToriiProverReportCollection
-  | ToriiProverReportIdList
-  | ToriiProverReportMessagesList;
-
 export interface ToriiAttachmentMetadata {
   id: string;
   contentType: string;
@@ -8100,10 +8046,6 @@ export interface IsoMessageWaitOptions {
   signal?: AbortSignal;
   retryProfile?: string;
   resolveOnAcceptedWithoutTransaction?: boolean;
-  /**
-   * Alias for {@link resolveOnAcceptedWithoutTransaction}.
-   */
-  resolveOnAccepted?: boolean;
   onPoll?: (event: IsoMessagePollEvent) => void | Promise<void>;
 }
 
@@ -11923,30 +11865,6 @@ export declare class ToriiClient {
   streamKaigiRelayEvents(
     options?: KaigiRelayEventsOptions,
   ): AsyncGenerator<ToriiSseEvent<KaigiRelayEventPayload>, void, unknown>;
-  listProverReports(
-    filters?: ToriiProverReportFilters,
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiProverReportListResult>;
-  iterateProverReports(
-    filters?: ToriiProverReportFilters,
-    options?: PaginationIteratorOptions & { signal?: AbortSignal },
-  ): AsyncGenerator<
-    ToriiProverReport | string | ToriiProverReportMessageSummary,
-    void,
-    unknown
-  >;
-  getProverReport(
-    reportId: string,
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiProverReport>;
-  deleteProverReport(
-    reportId: string,
-    options?: { signal?: AbortSignal },
-  ): Promise<void>;
-  countProverReports(
-    filters?: ToriiProverReportFilters,
-    options?: { signal?: AbortSignal },
-  ): Promise<number>;
   submitIsoPacs008(
     message: ArrayBufferView | ArrayBuffer | Buffer | string,
     options?: {

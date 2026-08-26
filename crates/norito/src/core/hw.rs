@@ -74,14 +74,14 @@ pub fn has_neon() -> bool {
 /// True if a GPU compression backend is available (CUDA or Metal).
 #[inline]
 pub fn has_gpu_compression() -> bool {
-    #[cfg(all(feature = "gpu-compression", not(target_arch = "wasm32")))]
+    #[cfg(feature = "gpu-compression")]
     {
         if !gpu_policy_allowed() {
             return false;
         }
         super::gpu_zstd::available()
     }
-    #[cfg(any(not(feature = "gpu-compression"), target_arch = "wasm32"))]
+    #[cfg(not(feature = "gpu-compression"))]
     {
         false
     }

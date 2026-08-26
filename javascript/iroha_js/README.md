@@ -1021,30 +1021,6 @@ console.log(meta.contentType, meta.size, meta.createdMs);
 When you pass `authToken` or `apiToken` credentials, prefer an `https://` Torii base URL; the
 client will reject insecure schemes unless you opt into `allowInsecure: true` for local/dev use.
 
-const reportsResult = await torii.listProverReports({
-  failedOnly: true,
-  hasTag: "PROF",
-  limit: 5,
-});
-if (reportsResult.kind === "reports") {
-  for (const report of reportsResult.reports) {
-    console.log(report.id, report.error, report.latency_ms);
-  }
-} else if (reportsResult.kind === "ids") {
-  console.log("report ids:", reportsResult.ids);
-} else {
-  // messages_only projection
-  console.log("failed messages:", reportsResult.messages);
-}
-// listProverReports/countProverReports accept ToriiProverReportFilters to keep the
-// available query flags (failedOnly, hasTag, sinceMs, order, etc.) fully typed.
-// Pass an AbortSignal as the second argument to the prover helpers to cancel
-// long-running queries before Torii responds.
-for await (const report of torii.iterateProverReports({ failedOnly: true }, { pageSize: 2 })) {
-  // If idsOnly/messagesOnly are provided, the iterator yields strings or message summaries.
-  console.log(report);
-}
-
 const instruction = buildRegisterDomainInstruction({
   domainId: "wonderland",
   metadata: { key: "value" },

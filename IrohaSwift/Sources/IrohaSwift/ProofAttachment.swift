@@ -520,10 +520,7 @@ public struct ProofAttachment: Sendable, Equatable {
             throw makeError(expectedLength, actual)
         }
         var writer = CanonicalNoritoWriter()
-        for byte in bytes {
-            writer.writeLength(1)
-            writer.writeUInt8(byte)
-        }
+        writer.writeByteFields(bytes)
         return writer.data
     }
 }

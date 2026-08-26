@@ -124,6 +124,18 @@ impl V2GlobalBeaconLifecycle {
             .iter()
             .map(|entry| entry.validator.clone())
             .collect::<Vec<_>>();
+        if local_validator.is_none() {
+            return Ok(Self {
+                context: context.clone(),
+                roster,
+                local_validator: None,
+                signer: None,
+                requested: false,
+                required_for_consensus: false,
+                active: None,
+                outbound: Vec::new(),
+            });
+        }
         let required_for_consensus = context.mode == wire::ConsensusMode::Npos
             && context
                 .height

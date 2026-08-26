@@ -1,4 +1,4 @@
-//! Float roundtrip tests (f32, f64) covering strict-safe paths.
+//! Float roundtrip tests (f32, f64) covering fallible decode paths.
 use norito::core::*;
 #[test]
 fn f32_roundtrip() {

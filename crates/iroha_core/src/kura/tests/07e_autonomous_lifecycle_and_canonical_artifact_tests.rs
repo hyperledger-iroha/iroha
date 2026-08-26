@@ -1349,11 +1349,14 @@ fn lane_block_payload_availability_rebuilds_missing_artifact_sidecar_from_canoni
     );
     {
         let mut block_data = kura.block_data.lock();
-        for (_, block) in block_data.iter_mut() {
-            *block = None;
+        for index in 0..block_data.len() {
+            block_data[index].1 = None;
         }
         assert!(
-            block_data.iter().all(|(_, block)| block.is_none()),
+            block_data
+                .as_slice()
+                .iter()
+                .all(|(_, block)| block.is_none()),
             "test setup should force recovery through durable block rehydration"
         );
     }

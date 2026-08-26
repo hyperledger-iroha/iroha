@@ -16,18 +16,14 @@ struct OuterRequest {
     signer: String,
     gas_limit: Option<u64>,
 }
-fn bare_payload_with_flags<T: NoritoSerialize>(value: &T, flags: u8, flags_hint: u8) -> Vec<u8> {
-    let _guard = DecodeFlagsGuard::enter_with_hint(flags, flags_hint);
+fn bare_payload_with_flags<T: NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
+    let _guard = DecodeFlagsGuard::enter(flags);
     let mut payload = Vec::new();
     norito_core::serialize_to_buffer(value, &mut payload).expect("serialize bare payload");
     payload
 }
-fn sequential_bare_payload_with_flags<T: NoritoSerialize>(
-    value: &T,
-    flags: u8,
-    flags_hint: u8,
-) -> Vec<u8> {
-    let _guard = DecodeFlagsGuard::enter_with_hint(flags, flags_hint);
+fn sequential_bare_payload_with_flags<T: NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
+    let _guard = DecodeFlagsGuard::enter(flags);
     let _sequential = norito_core::SequentialOverrideGuard::enter();
     let mut payload = Vec::new();
     norito_core::serialize_to_buffer(value, &mut payload).expect("serialize bare payload");
@@ -46,9 +42,8 @@ fn flattened_struct_fields_are_binary_inline() {
     let bytes = norito::to_bytes(&request).expect("encode request");
     let view = norito_core::from_bytes_view(&bytes).expect("payload view");
     let flags = view.flags();
-    let flags_hint = view.flags_hint();
     let payload = view.as_bytes();
-    let selector_payload = bare_payload_with_flags(&request.selector, flags, flags_hint);
+    let selector_payload = bare_payload_with_flags(&request.selector, flags);
     assert_eq!(
         payload.get(..selector_payload.len()),
         Some(selector_payload.as_slice()),
@@ -59,7 +54,7 @@ fn flattened_struct_fields_are_binary_inline() {
         Some(payload.len()),
         "exact length must match the flattened wire payload"
     );
-    let _guard = DecodeFlagsGuard::enter_with_hint(flags, flags_hint);
+    let _guard = DecodeFlagsGuard::enter(flags);
     let (selector, used) =
         <InnerSelector as DecodeFromSlice>::decode_from_slice(payload).expect("prefix selector");
     assert_eq!(selector, request.selector);
@@ -79,8 +74,8 @@ fn flattened_struct_uses_sequential_layout_even_when_packed_struct_is_requested(
     };
     let flags =
         header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN | header_flags::FIELD_BITSET;
-    let payload = bare_payload_with_flags(&request, flags, flags);
-    let selector_payload = sequential_bare_payload_with_flags(&request.selector, flags, flags);
+    let payload = bare_payload_with_flags(&request, flags);
+    let selector_payload = sequential_bare_payload_with_flags(&request.selector, flags);
     assert_eq!(
         payload.get(..selector_payload.len()),
         Some(selector_payload.as_slice()),

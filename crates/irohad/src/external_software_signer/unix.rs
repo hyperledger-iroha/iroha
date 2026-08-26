@@ -1329,8 +1329,8 @@ pub(super) fn load_bounded_software_signer_credential_v1(
         return Err(SoftwareSignerCredentialErrorV1::InvalidLength);
     }
     let expected_identity = validate_credential_path(path)?;
-    let named_before = fs::symlink_metadata(path)
-        .map_err(|_| SoftwareSignerCredentialErrorV1::Unavailable)?;
+    let named_before =
+        fs::symlink_metadata(path).map_err(|_| SoftwareSignerCredentialErrorV1::Unavailable)?;
     let mut options = OpenOptions::new();
     options.read(true).custom_flags(
         (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC)
@@ -1364,8 +1364,8 @@ pub(super) fn load_bounded_software_signer_credential_v1(
     let opened_after = descriptor
         .metadata()
         .map_err(|_| SoftwareSignerCredentialErrorV1::Unavailable)?;
-    let named_after = fs::symlink_metadata(path)
-        .map_err(|_| SoftwareSignerCredentialErrorV1::Unavailable)?;
+    let named_after =
+        fs::symlink_metadata(path).map_err(|_| SoftwareSignerCredentialErrorV1::Unavailable)?;
     if (opened_after.dev(), opened_after.ino()) != expected_identity
         || !same_credential_metadata_v1(&opened, &opened_after)
         || !same_credential_metadata_v1(&opened_after, &named_after)

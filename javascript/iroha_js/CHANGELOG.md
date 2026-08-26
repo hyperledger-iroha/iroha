@@ -321,10 +321,8 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   query parameters, Torii health snapshots now only parse JSON responses, the `X-Iroha-API-Token`
   alias is no longer emitted, V1 telemetry counter aliases are dropped, and account address
   decoding rejects extension-flag headers. Tests and docs now reflect the first-release surface.
-- Added `ToriiClient.iterateVerifyingKeys` and `iterateProverReports` plus
-  iterator option whitelists so SoraFS/registry/prover paginators accept their
-  filter fields alongside paging knobs; typings, README snippets, and Jest
-  coverage close the remaining JS-04/JS-07 pagination gaps.【javascript/iroha_js/src/toriiClient.js:1181】【javascript/iroha_js/src/toriiClient.js:4671】【javascript/iroha_js/src/toriiClient.js:6949】【javascript/iroha_js/index.d.ts:5470】【javascript/iroha_js/test/toriiClient.test.js:761】【javascript/iroha_js/test/toriiClient.test.js:11493】【javascript/iroha_js/README.md:106】
+- Added `ToriiClient.iterateVerifyingKeys` and an iterator option whitelist so
+  registry pagination accepts its filter fields alongside paging knobs.
 - The JS SNS helpers now track the ledger-backed `/v1/sns/names...` Torii API.
   `createSnsGovernanceCase`, `exportSnsGovernanceCases`, and
   `iterateSnsGovernanceCases` are retained only as validation stubs that reject

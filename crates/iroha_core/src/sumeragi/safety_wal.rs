@@ -267,7 +267,7 @@ impl SafetyWalLeaderWireStoreAuthority {
             .publish_atomic(frame, maximum, "leader-wire lifecycle")
     }
     /// Remove and directory-sync the exact fixed snapshot, when present.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn retire(self, maximum: u64) -> Result<(), String> {
         self.entry.retire(maximum, "leader-wire lifecycle")
     }

@@ -7,7 +7,7 @@ use crate::{
 };
 use iroha_config::{
     base::WithOrigin,
-    kura::{FsyncMode, InitMode},
+    kura::FsyncMode,
     parameters::{
         actual::{Kura as KuraConfig, LaneConfig},
         defaults::kura::{
@@ -826,9 +826,7 @@ fn state_with_exact_pending_sccp_snapshot_fixture(
     (state, key, record)
 }
 fn kura_config_for_snapshot_test(store_dir: &Path, blocks_in_memory: NonZeroUsize) -> KuraConfig {
-    KuraConfig {
-        init_mode: InitMode::Strict,
-        store_dir: WithOrigin::inline(store_dir.to_path_buf()),
+    KuraConfig { init_mode: iroha_config::kura::InitMode::Strict, store_dir: WithOrigin::inline(store_dir.to_path_buf()),
         max_disk_usage_bytes: MAX_DISK_USAGE_BYTES,
         blocks_in_memory,
         lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,

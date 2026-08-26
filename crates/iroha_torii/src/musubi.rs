@@ -195,6 +195,12 @@ pub async fn handler_search_packages(
     State(app): State<SharedAppState>,
     NoritoJson(request): NoritoJson<MusubiSearchQueryV1>,
 ) -> Result<JsonBody<MusubiSearchPageV1>> {
+    if app.kura.emergency_fast_startup_enabled() {
+        return Err(Error::AppServiceUnavailable {
+            code: "emergency_fast_musubi_search_unavailable",
+            message: "Musubi search is unavailable during emergency Fast startup.".to_owned(),
+        });
+    }
     request.validate().map_err(invalid_query_request)?;
     let result = app.musubi_search.read().await.search(&request);
     match result {

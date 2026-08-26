@@ -3653,7 +3653,7 @@ pub mod codec {
             // Table checksums are part of signed TOML artefacts, so keep their
             // hash input pinned to the legacy canonical Norito layout rather
             // than whichever layout is the current encode default.
-            let _guard = norito_core::DecodeFlagsGuard::enter_with_hint(0, 0);
+            let _guard = norito_core::DecodeFlagsGuard::enter(0);
             norito_core::to_bytes(&signed.payload.body)
                 .map_err(|_| BundleTableError::InvalidStructure("failed to encode table body"))?
         };

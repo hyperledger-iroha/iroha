@@ -15,10 +15,7 @@
 //!   monotonic with payload sizes and relative complexity.
 use iroha_config::parameters::actual::ConfidentialGas as ActualConfidentialGas;
 use iroha_data_model::{
-    isi as dm_isi,
-    isi::{Instruction as _, InstructionBox},
-    proof::ProofAttachment,
-    zk::OpenVerifyEnvelope,
+    isi as dm_isi, isi::InstructionBox, proof::ProofAttachment, zk::OpenVerifyEnvelope,
 };
 use norito::decode_canonical;
 #[cfg(test)]
@@ -69,7 +66,6 @@ pub const DEFAULT_ZK_GAS_PER_COMMITMENT: u64 = 500;
 const FIELD_ELEMENT_BYTES: usize = 32;
 /// Dynamic factors (per-byte) applied to encoded payloads where sensible.
 const PER_BYTE_JSON: u64 = 1; // charge per JSON byte
-const PER_BYTE_GENERIC: u64 = 0; // currently unused; reserved for future
 const PER_BYTE_PIN_MANIFEST: u64 = 1;
 const PER_KAIGI_PROOF_BYTE: u64 = 5;
 const PER_BYTE_SEALED_COMMITMENT: u64 = 1;
@@ -248,8 +244,7 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
         j.get().len()
     }
     // Downcast by visiting known grouped enums first, then concrete types.
-    // Fall back to Norito-encoded size to keep custom/unknown instructions
-    // bounded deterministically.
+    // Unclassified instructions use the fixed first-release base cost.
     let any = instr.as_any();
     // Register
     if let Some(reg) = any.downcast_ref::<dm_isi::register::RegisterBox>() {
@@ -414,10 +409,10 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
     {
         return gas_for_soracloud_private_execution_receipt();
     }
-    // Fallback: charge based on Norito-encoded size of the instruction payload
-    // This ensures determinism for unknown/custom instructions under custom executors.
-    let bytes = instr.dyn_encode();
-    BASE_CUSTOM + PER_BYTE_GENERIC.saturating_mul(bytes.len() as u64)
+    // Unclassified instructions have a fixed first-release cost. Avoid encoding
+    // the full instruction here: the retired per-byte factor was zero, so that
+    // allocation and traversal could not affect the charged gas.
+    BASE_CUSTOM
 }
 /// Compute gas for a sequence of instructions.
 pub fn meter_instructions(is: &[InstructionBox]) -> u64 {
@@ -549,6 +544,15 @@ mod tests {
         ];
         let sum_inline = v.iter().map(meter_instruction).sum::<u64>();
         assert_eq!(sum_inline, meter_instructions(&v));
+    }
+    #[test]
+    fn unclassified_instruction_has_fixed_cost() {
+        let instruction = InstructionBox::from(dm_isi::SetParameter::new(
+            iroha_data_model::parameter::Parameter::Sumeragi(
+                iroha_data_model::parameter::system::SumeragiParameter::MaxClockDriftMs(1),
+            ),
+        ));
+        assert_eq!(meter_instruction(&instruction), BASE_CUSTOM);
     }
     #[test]
     fn transfer_batch_gas_matches_entry_sum() {

@@ -37,7 +37,6 @@ struct TrustPenalties {
 const PENALTY_REASON_INVALID_SIGNATURE: &str = "invalid_signature";
 const PENALTY_REASON_UNKNOWN_PEER: &str = "unknown_peer";
 #[derive(Debug, Clone, Copy)]
-#[allow(dead_code)]
 enum TrustPenaltyKind {
     BadGossip,
     UnknownPeer,

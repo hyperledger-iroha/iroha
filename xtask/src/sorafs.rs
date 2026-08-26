@@ -3399,7 +3399,7 @@ pub fn write_admission_fixtures(target_dir: &Path) -> Result<(), Box<dyn Error>>
         checked_ed25519_public_key_array(provider_pair.public_key(), "provider public key")?;
     let provider_public_vec = provider_public.to_vec();
     let (vrf_public, vrf_private) =
-        BlsNormal::keypair(KeyGenOption::UseSeed(provider_seed.to_vec()))
+        BlsNormal::try_keypair(KeyGenOption::UseSeed(provider_seed.to_vec()))
             .map_err(|err| format!("failed to derive provider VRF fixture key: {err}"))?;
     let vrf_pair: KeyPair = (vrf_public, vrf_private).into();
     let provider_vrf_key = ProviderVrfPublicKeyV1::BlsNormal(

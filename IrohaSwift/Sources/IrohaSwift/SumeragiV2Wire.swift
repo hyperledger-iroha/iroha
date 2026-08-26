@@ -2249,13 +2249,6 @@ private func sumeragiV2ByteVector(_ bytes: Data) -> Data {
     return output
 }
 
-private func sumeragiV2String(_ value: String) -> Data {
-    let bytes = Data(value.utf8)
-    var output = sumeragiV2Varint(UInt64(bytes.count))
-    output.append(bytes)
-    return output
-}
-
 private func sumeragiV2Option(_ payload: Data?) -> Data {
     guard let payload else { return Data([0]) }
     var output = Data([1])
@@ -2321,16 +2314,6 @@ private func sumeragiV2DecodeByteVector(_ data: Data) throws -> Data {
     }
     let value = try reader.rawBytes(Int(length), label: "byte vector")
     try reader.finish("byte vector")
-    return value
-}
-
-private func sumeragiV2DecodeString(_ data: Data) throws -> String {
-    var reader = SumeragiV2Reader(data)
-    let bytes = try reader.compactField("string bytes")
-    try reader.finish("string")
-    guard let value = String(data: bytes, encoding: .utf8) else {
-        throw SumeragiV2WireError.invalid("string is not valid UTF-8")
-    }
     return value
 }
 

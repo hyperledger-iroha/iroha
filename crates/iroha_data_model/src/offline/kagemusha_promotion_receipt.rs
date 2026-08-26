@@ -14,7 +14,7 @@ use crate::{
         proofs::{AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1, TrustedBlockProofAnchor},
     },
     bridge::{BridgeFinalityProof, BridgeFinalityVerifier, verify_bridge_finality_proof},
-    isi::{Instruction as _, offline::ActivateKagemushaRecursiveReleaseV4},
+    isi::offline::ActivateKagemushaRecursiveReleaseV4,
     offline::OfflineDeviceAttestationPolicy,
     peer::PeerId,
     query::CommittedTransaction,

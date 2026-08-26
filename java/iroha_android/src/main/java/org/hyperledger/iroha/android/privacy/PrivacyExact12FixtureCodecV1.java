@@ -97,8 +97,7 @@ public final class PrivacyExact12FixtureCodecV1 {
     final NoritoDecoder decoder =
         new NoritoDecoder(
             decodedHeader.payload(),
-            decodedHeader.header().flags(),
-            decodedHeader.header().minor());
+            decodedHeader.header().flags());
     final PrivacyExact12FixtureBundleV1 bundle = BUNDLE_ADAPTER.decode(decoder);
     if (decoder.remaining() != 0) {
       throw new IllegalArgumentException("exact-12 fixture contains trailing payload data");
@@ -414,7 +413,7 @@ public final class PrivacyExact12FixtureCodecV1 {
     }
     final NoritoDecoder child =
         new NoritoDecoder(
-            decoder.readBytes((int) encodedLength), decoder.flags(), decoder.flagsHint());
+            decoder.readBytes((int) encodedLength), decoder.flags());
     final long declaredLength = child.readLength(false);
     if (declaredLength < 1L || declaredLength > maximum) {
       throw new IllegalArgumentException(fieldName + " byte length is invalid");
@@ -467,7 +466,7 @@ public final class PrivacyExact12FixtureCodecV1 {
       final int length,
       final String fieldName) {
     final NoritoDecoder child =
-        new NoritoDecoder(decoder.readBytes(length), decoder.flags(), decoder.flagsHint());
+        new NoritoDecoder(decoder.readBytes(length), decoder.flags());
     final T value = adapter.decode(child);
     if (child.remaining() != 0) {
       throw new IllegalArgumentException(fieldName + " contains trailing or unknown data");

@@ -154,6 +154,17 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
         )
         self.assertNotEqual(original, seal.fingerprint(self.root, inputs))
 
+    def test_apple_fingerprint_authenticates_a_tracked_source_deletion(self) -> None:
+        inputs = self.inputs("apple")
+        relative = "IrohaSwift/Sources/IrohaSwift/Core.swift"
+        original = seal.fingerprint(self.root, inputs)
+
+        (self.root / relative).unlink()
+
+        self.assertNotIn(relative, seal.listed_files(self.root, inputs))
+        self.assertNotEqual(original, seal.fingerprint(self.root, inputs))
+        self.assertIn(f" D {relative}", seal.status(self.root, inputs))
+
     def test_selected_lock_is_root_lock_in_metadata_and_fingerprint(self) -> None:
         root_lock = self.root / "Cargo.lock"
         with mock.patch.object(seal, "local_dependency_roots", return_value=set()):

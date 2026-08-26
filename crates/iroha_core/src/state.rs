@@ -178,6 +178,7 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::{
     nft::CanModifyNftMetadata, sorafs::CanOperateSorafsRepair, trigger::CanExecuteTrigger,
 };
+use iroha_file_mmap::ReadOnlyMmap;
 use iroha_logger::prelude::*;
 use iroha_primitives::{
     const_vec::ConstVec,
@@ -1227,17 +1228,77 @@ macro_rules! build_world_view {
 /// monotonically and can be rolled back deterministically by truncating the tail. To avoid
 /// blocking read-only state views during block execution, block-scoped access buffers appended
 /// hashes and only applies them under a short write lock at commit time.
-#[derive(Default)]
 pub struct BlockHashes {
-    inner: parking_lot::RwLock<Vec<HashOf<BlockHeader>>>,
+    inner: parking_lot::RwLock<BlockHashStorage>,
     committed_height: AtomicUsize,
+}
+
+enum BlockHashStorage {
+    Owned(Vec<HashOf<BlockHeader>>),
+    EmergencyFastMapped(ReadOnlyMmap),
+}
+
+impl BlockHashStorage {
+    fn as_slice(&self) -> &[HashOf<BlockHeader>] {
+        match self {
+            Self::Owned(hashes) => hashes,
+            Self::EmergencyFastMapped(mapping) => mapped_block_hashes(mapping),
+        }
+    }
+}
+
+/// Interpret the fixed-width Kura hash journal without faulting or copying all
+/// of its pages during emergency Fast startup.
+#[allow(unsafe_code)]
+fn mapped_block_hashes(mapping: &ReadOnlyMmap) -> &[HashOf<BlockHeader>] {
+    let bytes = mapping.as_slice();
+    assert_eq!(
+        bytes.len() % Hash::LENGTH,
+        0,
+        "Kura hash mapping must contain complete fixed-width hashes"
+    );
+    assert!(
+        bytes
+            .as_ptr()
+            .align_offset(std::mem::align_of::<HashOf<BlockHeader>>())
+            == 0,
+        "Kura hash mapping must satisfy HashOf alignment"
+    );
+    // SAFETY: `Hash` and `HashOf<T>` are transparent wrappers around `[u8; 32]`
+    // and explicitly have no trap representation. The mapping is read-only,
+    // page-aligned, and retained for at least the returned slice lifetime.
+    unsafe {
+        std::slice::from_raw_parts(
+            bytes.as_ptr().cast::<HashOf<BlockHeader>>(),
+            bytes.len() / Hash::LENGTH,
+        )
+    }
+}
+
+impl Default for BlockHashes {
+    fn default() -> Self {
+        Self::new(Vec::new())
+    }
 }
 impl BlockHashes {
     /// Construct a new container from an explicit vector.
     pub fn new(initial: Vec<HashOf<BlockHeader>>) -> Self {
         let committed_height = initial.len();
         Self {
-            inner: parking_lot::RwLock::new(initial),
+            inner: parking_lot::RwLock::new(BlockHashStorage::Owned(initial)),
+            committed_height: AtomicUsize::new(committed_height),
+        }
+    }
+    /// Construct a zero-copy read-only view of the exact Kura hash prefix used
+    /// by emergency Fast mode.
+    fn new_emergency_fast_mapped(mapping: ReadOnlyMmap, committed_height: usize) -> Self {
+        assert_eq!(
+            mapping.len(),
+            committed_height.saturating_mul(Hash::LENGTH),
+            "mapped Kura hash prefix must match its committed height"
+        );
+        Self {
+            inner: parking_lot::RwLock::new(BlockHashStorage::EmergencyFastMapped(mapping)),
             committed_height: AtomicUsize::new(committed_height),
         }
     }
@@ -1263,7 +1324,7 @@ impl BlockHashes {
 /// Block-scoped access to the block hash log with staged updates.
 pub struct BlockHashesBlock<'a> {
     inner: &'a BlockHashes,
-    guard: Option<parking_lot::RwLockReadGuard<'a, Vec<HashOf<BlockHeader>>>>,
+    guard: Option<parking_lot::RwLockReadGuard<'a, BlockHashStorage>>,
     visible_len: usize,
     pending: Vec<HashOf<BlockHeader>>,
     visible: Vec<HashOf<BlockHeader>>,
@@ -1272,11 +1333,11 @@ impl<'a> BlockHashesBlock<'a> {
     fn new(inner: &'a BlockHashes, revert_latest: bool) -> Self {
         let guard = inner.inner.read();
         let visible_len = if revert_latest {
-            guard.len().saturating_sub(1)
+            guard.as_slice().len().saturating_sub(1)
         } else {
-            guard.len()
+            guard.as_slice().len()
         };
-        let visible = guard[..visible_len].to_vec();
+        let visible = guard.as_slice()[..visible_len].to_vec();
         Self {
             inner,
             guard: Some(guard),
@@ -1325,11 +1386,13 @@ impl<'a> BlockHashesBlock<'a> {
         let visible_len = self.visible_len;
         self.guard.take();
         let mut guard = self.inner.inner.write();
-        guard.truncate(visible_len);
-        guard.extend(pending);
+        let mut hashes = guard.as_slice().to_vec();
+        hashes.truncate(visible_len);
+        hashes.extend(pending);
+        *guard = BlockHashStorage::Owned(hashes);
         self.inner
             .committed_height
-            .store(guard.len(), Ordering::Release);
+            .store(guard.as_slice().len(), Ordering::Release);
     }
     /// Commit mutations in tests without exposing the block hash log publicly.
     pub fn commit_for_tests(self) {
@@ -1372,13 +1435,40 @@ impl std::ops::Deref for BlockHashesTransaction<'_> {
 }
 /// Read-only view of the committed block hashes.
 pub struct BlockHashesView<'a> {
-    guard: parking_lot::RwLockReadGuard<'a, Vec<HashOf<BlockHeader>>>,
+    guard: parking_lot::RwLockReadGuard<'a, BlockHashStorage>,
 }
 impl std::ops::Deref for BlockHashesView<'_> {
-    type Target = Vec<HashOf<BlockHeader>>;
+    type Target = [HashOf<BlockHeader>];
     #[allow(clippy::explicit_auto_deref)]
     fn deref(&self) -> &Self::Target {
-        &*self.guard
+        self.guard.as_slice()
+    }
+}
+#[cfg(test)]
+mod emergency_fast_block_hash_mapping_tests {
+    use super::*;
+    use std::io::Write as _;
+
+    #[test]
+    fn mapped_hash_journal_preserves_height_and_values_without_owned_copy() {
+        let hashes = [
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x31; 32])),
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x42; 32])),
+        ];
+        let mut file = tempfile::NamedTempFile::new().expect("create mapped hash fixture");
+        for hash in hashes {
+            file.write_all(hash.as_ref()).expect("write hash fixture");
+        }
+        let mapping = ReadOnlyMmap::copy_read_only(file.as_file(), hashes.len() * Hash::LENGTH)
+            .expect("map hash fixture");
+        let journal = BlockHashes::new_emergency_fast_mapped(mapping, hashes.len());
+
+        assert_eq!(journal.committed_height(), hashes.len());
+        assert_eq!(&*journal.view(), hashes.as_slice());
+        assert!(matches!(
+            &*journal.inner.read(),
+            BlockHashStorage::EmergencyFastMapped(_)
+        ));
     }
 }
 /// Small per-transaction cache to speed up hot permission checks
@@ -10705,7 +10795,10 @@ fn load_state_journals(
     // remove stale files. Snapshot bootstrap opens the whole Kura tree as an
     // authenticated read-only candidate, so retain process-local empty
     // journals until the token-consuming Kura finalizer has completed.
-    if !allow_durable_recovery || kura.provisional_snapshot_bootstrap_pending() {
+    if !allow_durable_recovery
+        || kura.provisional_snapshot_bootstrap_pending()
+        || kura.emergency_fast_startup_enabled()
+    {
         let mut query_index = QueryIndexJournal::new(QueryIndexJournal::journal_path(&store_root));
         if let Some(status) = canonical_query_index_status {
             query_index.set_latest(status.indexed_height, status.indexed_block_hash);
@@ -10750,7 +10843,9 @@ fn load_state_journals(
     // Loading a valid temp journal can replace and remove files. Dropping an unpublished
     // mutation invalidates both caches before the synchronous stable scan republishes them.
     drop(accounting_mutation);
-    if let Err(err) = kura.refresh_disk_usage_bytes() {
+    if !kura.emergency_fast_startup_enabled()
+        && let Err(err) = kura.refresh_disk_usage_bytes()
+    {
         warn!(
             ?err,
             "failed to reconcile Kura disk usage after state journal recovery"
@@ -17761,18 +17856,31 @@ impl World {
         self.asset_escrows_by_status = public_by_status.into_iter().collect();
     }
     fn rebuild_vpn_lease_indexes(&mut self) -> Result<(), String> {
+        self.rebuild_vpn_lease_indexes_with_validation(true)
+    }
+
+    fn rebuild_vpn_lease_indexes_emergency_fast(&mut self) -> Result<(), String> {
+        self.rebuild_vpn_lease_indexes_with_validation(false)
+    }
+
+    fn rebuild_vpn_lease_indexes_with_validation(
+        &mut self,
+        validate_records: bool,
+    ) -> Result<(), String> {
         let mut active_by_account = BTreeMap::<AccountId, [u8; 32]>::new();
         let mut active_by_address_slot = BTreeMap::<VpnAddressSlotV1, [u8; 32]>::new();
         let mut by_account = BTreeMap::<AccountId, BTreeSet<(u64, [u8; 32])>>::new();
         for (lease_id, record) in self.vpn_leases.view().iter() {
-            if lease_id != &record.lease_id {
-                return Err(format!(
-                    "VPN lease map key {} does not match record id {}",
-                    hex::encode(lease_id),
-                    hex::encode(record.lease_id)
-                ));
+            if validate_records {
+                if lease_id != &record.lease_id {
+                    return Err(format!(
+                        "VPN lease map key {} does not match record id {}",
+                        hex::encode(lease_id),
+                        hex::encode(record.lease_id)
+                    ));
+                }
+                validate_vpn_lease_quote_projection(record)?;
             }
-            validate_vpn_lease_quote_projection(record)?;
             if record.status == VpnLeaseStatusV1::Active {
                 if let Some(existing) =
                     active_by_account.insert(record.client_account_id.clone(), record.lease_id)
@@ -23531,6 +23639,16 @@ impl State {
         self.merge_consensus_snapshot_inner(None)
             .expect("merge snapshot without entry validation cannot fail")
     }
+    fn ensure_merge_history_available(&self) -> Result<(), MergeLedgerCommitError> {
+        if self.kura.emergency_fast_startup_enabled() {
+            return Err(MergeLedgerCommitError::Persistence(
+                crate::kura::Error::EmergencyFastAuxiliaryUnavailable {
+                    subsystem: "merge authority",
+                },
+            ));
+        }
+        Ok(())
+    }
     fn merge_consensus_snapshot_validating(
         &self,
         entry: &MergeLedgerEntry,
@@ -23766,6 +23884,11 @@ impl State {
     /// Return the block storage backend used by state recovery and consensus sidecars.
     pub(crate) fn kura(&self) -> &Kura {
         &self.kura
+    }
+    /// Return whether the node is running the bounded, read-only emergency startup posture.
+    #[must_use]
+    pub fn emergency_fast_startup_enabled(&self) -> bool {
+        self.kura.emergency_fast_startup_enabled()
     }
     /// Return whether this State owns the exact supplied live Kura handle.
     ///
@@ -24830,19 +24953,10 @@ impl State {
         self.world
             .rebuild_contract_alias_indexes()
             .map_err(|error| format!("failed to rebuild contract alias indexes: {error}"))?;
-        let rebuilt = self.rebuild_uaid_dataspace_bindings()?;
-        iroha_logger::debug!(
-            rebuilt_uaids = rebuilt,
-            "rebuilt derived UAID dataspace bindings from authoritative manifest records"
-        );
-        self.world
-            .rebuild_account_scope_directory()
-            .map_err(|error| format!("failed to rebuild account scope directory: {error}"))?;
-        {
-            let leases = self.world.vpn_leases.view();
-            for (_, record) in leases.iter() {
-                validate_vpn_lease_network(record, &self.network_id)?;
-            }
+        self.rebuild_snapshot_root_indexes()?;
+        let leases = self.world.vpn_leases.view();
+        for (_, record) in leases.iter() {
+            validate_vpn_lease_network(record, &self.network_id)?;
         }
         self.world
             .rebuild_vpn_lease_indexes()
@@ -24856,38 +24970,57 @@ impl State {
         // Defer AXT policy refresh until the runtime lane catalog is applied.
         Ok(())
     }
+
+    pub(crate) fn finalize_snapshot_derived_state_indexes(
+        &mut self,
+        emergency_fast: bool,
+    ) -> core::result::Result<(), String> {
+        if !emergency_fast {
+            let leases = self.world.vpn_leases.view();
+            for (_, record) in leases.iter() {
+                validate_vpn_lease_network(record, &self.network_id)?;
+            }
+        }
+        self.rebuild_snapshot_root_indexes()
+    }
+
+    fn rebuild_snapshot_root_indexes(&mut self) -> core::result::Result<(), String> {
+        let rebuilt = self.rebuild_uaid_dataspace_bindings()?;
+        iroha_logger::debug!(
+            rebuilt_uaids = rebuilt,
+            "rebuilt derived UAID dataspace bindings from authoritative manifest records"
+        );
+        self.world
+            .rebuild_account_scope_directory()
+            .map_err(|error| format!("failed to rebuild account scope directory: {error}"))?;
+        Ok(())
+    }
     fn rebuild_uaid_dataspace_bindings(&mut self) -> core::result::Result<usize, String> {
-        let mut manifest_uaids: Vec<_> = {
+        let manifests: Vec<_> = {
             let view = self.world.space_directory_manifests.view();
-            view.iter().map(|(uaid, _)| *uaid).collect()
+            view.iter()
+                .map(|(uaid, manifests)| (*uaid, manifests.clone()))
+                .collect()
         };
-        manifest_uaids.sort_unstable();
-        manifest_uaids.dedup();
-        let rebuilt = manifest_uaids.len();
+        let accounts_by_uaid = {
+            let accounts = self.world.accounts.view();
+            let mut grouped = BTreeMap::<UniversalAccountId, Vec<AccountId>>::new();
+            for (account_id, value) in accounts.iter() {
+                if let Some(uaid) = value.as_ref().uaid() {
+                    grouped.entry(*uaid).or_default().push(account_id.clone());
+                }
+            }
+            grouped
+        };
+        let rebuilt = manifests.len();
         self.world.uaid_dataspaces = Storage::default();
-        for uaid in manifest_uaids {
-            let accounts: Vec<_> = {
-                let view = self.world.accounts.view();
-                view.iter()
-                    .filter(|(_, value)| {
-                        value
-                            .as_ref()
-                            .uaid()
-                            .is_some_and(|present| *present == uaid)
-                    })
-                    .map(|(account_id, _)| account_id.clone())
-                    .collect()
+        for (uaid, manifests) in manifests {
+            let Some(accounts) = accounts_by_uaid.get(&uaid) else {
+                continue;
             };
             if accounts.is_empty() {
                 continue;
             }
-            let manifests = {
-                let view = self.world.space_directory_manifests.view();
-                view.get(&uaid).cloned()
-            };
-            let Some(manifests) = manifests else {
-                continue;
-            };
             let mut bindings = UaidDataspaceBindings::default();
             for (dataspace, record) in manifests.iter() {
                 if !record.is_active() {
@@ -24902,7 +25035,7 @@ impl State {
                         dataspace.as_u64()
                     ));
                 }
-                for account_id in &accounts {
+                for account_id in accounts {
                     bindings.bind_account(*dataspace, account_id.clone());
                 }
             }
@@ -25768,7 +25901,11 @@ impl State {
             #[cfg(feature = "telemetry")]
             telemetry,
         )?;
-        if !s.kura.provisional_snapshot_bootstrap_pending() {
+        if s.kura.emergency_fast_startup_enabled() {
+            warn!(
+                "emergency Fast startup left merge authority unavailable; local merge production and merge-dependent writes are disabled until a Strict restart"
+            );
+        } else if !s.kura.provisional_snapshot_bootstrap_pending() {
             s.recover_merge_ledger_from_kura()?;
         }
         Ok(s)
@@ -28010,6 +28147,7 @@ impl State {
         Ok(())
     }
     fn recover_merge_ledger_from_kura(&self) -> Result<(), MergeLedgerCommitError> {
+        self.ensure_merge_history_available()?;
         // Build and validate the complete replacement off to the side. No
         // in-memory merge authority is published until every durable entry,
         // carrier, QC, and restored-State binding has passed validation.
@@ -28200,6 +28338,7 @@ impl State {
         Ok(())
     }
     fn replay_persisted_merge_settlements(&self) -> Result<(), MergeLedgerCommitError> {
+        self.ensure_merge_history_available()?;
         let _state_commit_lock = self.state_commit_lock.lock();
         self.settled_nexus_fee_receipts.write().clear();
         let committed_block_hashes = self.block_hashes.view().iter().copied().collect::<Vec<_>>();
@@ -30343,6 +30482,9 @@ impl State {
         &self,
         frozen_mode: ConsensusMode,
     ) -> Option<Vec<MergeExecutionSource>> {
+        if self.ensure_merge_history_available().is_err() {
+            return None;
+        }
         let consensus = self.merge_consensus_snapshot();
         self.canonical_merge_execution_sources_for_consensus(&consensus, frozen_mode)
     }
@@ -30486,6 +30628,9 @@ impl State {
     /// its exact execution input cannot keep the merge producer selected. Exact candidate
     /// construction and follower validation remain authoritative.
     pub(crate) fn has_pending_merge_execution_sources(&self, frozen_mode: ConsensusMode) -> bool {
+        if self.ensure_merge_history_available().is_err() {
+            return false;
+        }
         let consensus = self.merge_consensus_snapshot();
         let lifecycle = &consensus.lifecycle;
         let nexus = &lifecycle.nexus;
@@ -30559,6 +30704,9 @@ impl State {
         application_block_header: BlockHeader,
         frozen_mode: ConsensusMode,
     ) -> Option<MergeExecutionBatch> {
+        if self.ensure_merge_history_available().is_err() {
+            return None;
+        }
         let consensus = self.merge_consensus_snapshot();
         self.build_merge_execution_batch_for_consensus(
             epoch_id,
@@ -30580,6 +30728,9 @@ impl State {
         application_block_header: BlockHeader,
         frozen_mode: ConsensusMode,
     ) -> Option<crate::merge::MergeLedgerCandidate> {
+        if self.ensure_merge_history_available().is_err() {
+            return None;
+        }
         let consensus = self.merge_consensus_snapshot();
         let epoch_id = consensus.admission.expected_epoch();
         let global_view = application_block_header.view_change_index();
@@ -31770,6 +31921,7 @@ impl State {
         global_view: u64,
         frozen_mode: ConsensusMode,
     ) -> Result<(), MergeLedgerCommitError> {
+        self.ensure_merge_history_available()?;
         let consensus = self.merge_consensus_snapshot();
         self.validate_merge_candidate_round_binding(
             candidate,
@@ -31892,6 +32044,9 @@ impl State {
         &self,
         global_view: Option<u64>,
     ) -> Vec<crate::merge::MergeLedgerCandidate> {
+        if self.ensure_merge_history_available().is_err() {
+            return Vec::new();
+        }
         self.hydrate_verified_lane_relay_records_from_contract_state();
         let consensus = self.merge_consensus_snapshot();
         let lifecycle = &consensus.lifecycle;
@@ -32537,12 +32692,13 @@ impl State {
         for (lane_id, dataspace_id, incarnation) in active_routes.iter().copied() {
             if let Some(receipt) = self
                 .kura
-                .latest_native_amx_participant_application_receipt_matching(
+                .checked_latest_native_amx_participant_application_receipt_matching(
                     lane_id,
                     dataspace_id,
                     incarnation,
                     |_| true,
                 )
+                .map_err(MergeLedgerCommitError::Persistence)?
             {
                 let row = Self::native_amx_participant_application_diagnostic_row_from_receipt(
                     &receipt,
@@ -32809,16 +32965,12 @@ impl State {
                 ) {
                     return None;
                 }
-                let receipt = self
-                    .kura
-                    .latest_native_amx_participant_application_receipt_matching(
-                        lane.id,
-                        lane.dataspace_id,
-                        incarnation,
-                        |receipt| {
-                            Self::native_amx_participant_receipt_matches_frontier(receipt, marker)
-                        },
-                    )?;
+                let receipt = self.kura.read_native_amx_participant_application_receipt(
+                    lane.id,
+                    lane.dataspace_id,
+                    incarnation,
+                    marker.lane_block_height,
+                )?;
                 Self::native_amx_participant_receipt_matches_frontier(&receipt, marker).then_some((
                     lane.id,
                     lane.dataspace_id,
@@ -32870,13 +33022,11 @@ impl State {
             }
             let applied = self
                 .kura
-                .latest_native_amx_participant_application_receipt_matching(
+                .read_native_amx_participant_application_receipt(
                     lane.id,
                     lane.dataspace_id,
                     incarnation,
-                    |receipt| {
-                        Self::native_amx_participant_receipt_matches_frontier(receipt, marker)
-                    },
+                    marker.lane_block_height,
                 )
                 .is_some_and(|receipt| {
                     Self::native_amx_participant_receipt_matches_frontier(&receipt, marker)
@@ -32923,13 +33073,11 @@ impl State {
         if let Some(marker) = native_marker {
             let receipt = state
                 .kura()
-                .latest_native_amx_participant_application_receipt_matching(
+                .read_native_amx_participant_application_receipt(
                     descriptor.lane_id,
                     descriptor.dataspace_id,
                     descriptor.lane_incarnation,
-                    |receipt| {
-                        Self::native_amx_participant_receipt_matches_frontier(receipt, marker)
-                    },
+                    marker.lane_block_height,
                 );
             if !receipt.is_some_and(|receipt| {
                 Self::native_amx_participant_receipt_matches_frontier(&receipt, marker)
@@ -33019,13 +33167,11 @@ impl State {
             };
             let applied = self
                 .kura
-                .latest_native_amx_participant_application_receipt_matching(
+                .read_native_amx_participant_application_receipt(
                     lane.id,
                     lane.dataspace_id,
                     incarnation,
-                    |receipt| {
-                        Self::native_amx_participant_receipt_matches_frontier(receipt, marker)
-                    },
+                    marker.lane_block_height,
                 )
                 .is_some_and(|receipt| {
                     Self::native_amx_participant_receipt_matches_frontier(&receipt, marker)
@@ -33395,7 +33541,10 @@ impl State {
             )
             .wrap_err("failed to read pending autonomous merge diagnostics")?;
         let mut source_budget = SUMERAGI_AUTONOMOUS_LANE_EXECUTIONS_MAX.saturating_mul(2);
-        let committed_entries = self.kura.merge_ledger_latest_snapshot(source_budget);
+        let committed_entries = self
+            .kura
+            .merge_ledger_latest_snapshot(source_budget)
+            .wrap_err("failed to read committed autonomous merge diagnostics")?;
         for (committed, entry_hash, entry) in pending_entries
             .into_iter()
             .map(|(hash, entry)| (false, hash, entry))
@@ -34267,6 +34416,9 @@ impl State {
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
     ) -> Option<(u64, u64)> {
+        if self.ensure_merge_history_available().is_err() {
+            return None;
+        }
         let consensus = self.merge_consensus_snapshot();
         let lifecycle = &consensus.lifecycle;
         let lane_incarnation = lifecycle.incarnations.get(&lane_id).copied()?;
@@ -37557,6 +37709,7 @@ impl State {
         entry: &MergeLedgerEntry,
         frozen_mode: ConsensusMode,
     ) -> Result<(), MergeLedgerCommitError> {
+        self.ensure_merge_history_available()?;
         if !entry.has_current_version() {
             return Err(MergeLedgerCommitError::ExecutionBatchInvalid(format!(
                 "unsupported merge ledger entry version {}",
@@ -37636,6 +37789,7 @@ impl State {
         Option<(HashOf<MergeLedgerEntry>, MergeLedgerEntry, BlockHeader)>,
         MergeLedgerCommitError,
     > {
+        self.ensure_merge_history_available()?;
         let selected_carrier_header = round_header.clone();
         self.kura
             .select_pending_certified_merge_entry_matching(|entry_hash, entry| {
@@ -37679,6 +37833,7 @@ impl State {
         entry: &MergeLedgerEntry,
         publication_mode: MergeLedgerPublicationMode,
     ) -> Result<(Arc<MergeLedgerEntry>, Option<PipelineEventBox>), MergeLedgerCommitError> {
+        self.ensure_merge_history_available()?;
         let entry_hash = entry.canonical_hash();
         let carrier = self
             .kura
@@ -37952,27 +38107,12 @@ impl State {
             state_block.stage_queue_plan_admissions_for_carrier(admission_bytes)
         })
     }
-    /// Append a merge-ledger entry to the in-memory cache and persist it via Kura.
+    /// Append a merge-ledger entry directly for legacy-path unit tests.
     ///
-    /// # Errors
-    /// Production callers always receive [`MergeLedgerCommitError::ExecutionRequiresGlobalBlock`];
-    /// every merge entry must be carried by global block consensus.
-    pub fn commit_merge_entry(
-        &self,
-        entry: MergeLedgerEntry,
-    ) -> core::result::Result<Arc<MergeLedgerEntry>, MergeLedgerCommitError> {
-        #[cfg(test)]
-        {
-            return self.commit_merge_entry_legacy_for_test(entry);
-        }
-        #[cfg(not(test))]
-        {
-            let _ = entry;
-            Err(MergeLedgerCommitError::ExecutionRequiresGlobalBlock)
-        }
-    }
+    /// Production code has no direct append surface: every merge entry must be
+    /// carried by global block consensus.
     #[cfg(test)]
-    fn commit_merge_entry_legacy_for_test(
+    pub fn commit_merge_entry(
         &self,
         entry: MergeLedgerEntry,
     ) -> core::result::Result<Arc<MergeLedgerEntry>, MergeLedgerCommitError> {
@@ -38008,7 +38148,7 @@ impl State {
         )?;
         let settlement_plan = self.prepare_nexus_fee_settlement_for_merge(&entry)?;
         let event_entry = entry.clone();
-        self.kura.append_merge_entry(&entry)?;
+        self.kura.append_merge_entry_for_test(&entry)?;
         self.apply_nexus_fee_settlement_plan(settlement_plan)?;
         let stored_entry = {
             let state_write_lock_wait_start = Instant::now();
@@ -38419,20 +38559,28 @@ impl State {
                     .to_owned(),
             ));
         }
-        Self::preflight_configured_primary_geometry_replay(
-            &self.kura,
-            &self.network_id,
-            configured_lane_catalog,
-        )?;
         let configured_hash = LaneLifecycleParameterV1::catalog_hash(configured_lane_catalog);
         let geometry = configured_primary_replay_geometry(configured_lane_catalog)?;
-        self.kura
-            .establish_or_verify_configured_primary_geometry_anchor(
-                geometry.lane_config.primary(),
-                geometry.primary_incarnation,
-                configured_hash,
-            )
-            .map_err(|error| LaneLifecycleError::ConfiguredCatalogBaseline(error.to_string()))?;
+        if self.kura.emergency_fast_startup_enabled() {
+            warn!(
+                "emergency Fast startup skipped configured-primary geometry journal authentication"
+            );
+        } else {
+            Self::preflight_configured_primary_geometry_replay(
+                &self.kura,
+                &self.network_id,
+                configured_lane_catalog,
+            )?;
+            self.kura
+                .establish_or_verify_configured_primary_geometry_anchor(
+                    geometry.lane_config.primary(),
+                    geometry.primary_incarnation,
+                    configured_hash,
+                )
+                .map_err(|error| {
+                    LaneLifecycleError::ConfiguredCatalogBaseline(error.to_string())
+                })?;
+        }
         {
             let nexus = self.nexus.get_mut();
             nexus.lane_catalog = geometry.catalog;
@@ -38462,20 +38610,22 @@ impl State {
             ));
         }
         let configured_hash = LaneLifecycleParameterV1::catalog_hash(configured_lane_catalog);
-        let durable_hash = self
-            .kura
-            .configured_lane_catalog_baseline()
-            .map_err(|error| LaneLifecycleError::ConfiguredCatalogBaseline(error.to_string()))?
-            .ok_or_else(|| {
-                LaneLifecycleError::ConfiguredCatalogBaseline(
-                    "restored configured-primary anchor has no authenticated Kura catalog baseline"
-                        .to_owned(),
-                )
-            })?;
-        if durable_hash != configured_hash {
-            return Err(LaneLifecycleError::ConfiguredCatalogBaseline(format!(
-                "restored configured-primary anchor mismatch: expected {durable_hash}, attempted {configured_hash}"
-            )));
+        if !self.kura.emergency_fast_startup_enabled() {
+            let durable_hash = self
+                .kura
+                .configured_lane_catalog_baseline()
+                .map_err(|error| LaneLifecycleError::ConfiguredCatalogBaseline(error.to_string()))?
+                .ok_or_else(|| {
+                    LaneLifecycleError::ConfiguredCatalogBaseline(
+                        "restored configured-primary anchor has no authenticated Kura catalog baseline"
+                            .to_owned(),
+                    )
+                })?;
+            if durable_hash != configured_hash {
+                return Err(LaneLifecycleError::ConfiguredCatalogBaseline(format!(
+                    "restored configured-primary anchor mismatch: expected {durable_hash}, attempted {configured_hash}"
+                )));
+            }
         }
         let nexus = self.nexus_snapshot();
         let primary = nexus.lane_config.entry(LaneId::SINGLE).ok_or_else(|| {
@@ -38539,13 +38689,20 @@ impl State {
                 "restored physical primary lane zero must have activation height 0".to_owned(),
             ));
         }
-        self.kura
-            .establish_or_verify_configured_primary_geometry_anchor(
-                primary,
-                incarnation,
-                configured_hash,
-            )
-            .map_err(|error| LaneLifecycleError::ConfiguredCatalogBaseline(error.to_string()))
+        if self.kura.emergency_fast_startup_enabled() {
+            warn!(
+                "emergency Fast startup trusted the snapshot primary descriptor without decoding the geometry journal"
+            );
+            Ok(())
+        } else {
+            self.kura
+                .establish_or_verify_configured_primary_geometry_anchor(
+                    primary,
+                    incarnation,
+                    configured_hash,
+                )
+                .map_err(|error| LaneLifecycleError::ConfiguredCatalogBaseline(error.to_string()))
+        }
     }
     /// Install Nexus configuration sourced from this process's validated startup configuration.
     ///
@@ -38559,8 +38716,24 @@ impl State {
     /// Returns a `LaneLifecycleError` under the same conditions as [`Self::set_nexus`].
     pub fn set_nexus_from_config(
         &mut self,
-        nexus: iroha_config::parameters::actual::Nexus,
+        mut nexus: iroha_config::parameters::actual::Nexus,
     ) -> Result<(), LaneLifecycleError> {
+        if self.kura.emergency_fast_startup_enabled() && self.nexus_runtime_restored_from_snapshot {
+            let restored_catalog = self.nexus.get_mut().lane_catalog.clone();
+            if nexus.lane_catalog != restored_catalog {
+                return Err(LaneLifecycleError::ConfiguredCatalogBaseline(
+                    "emergency Fast configuration differs from the restored runtime lane catalog"
+                        .to_owned(),
+                ));
+            }
+            nexus.lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+            *self.nexus.get_mut() = nexus;
+            warn!(
+                "emergency Fast startup installed restored Nexus configuration without full world-state reconciliation"
+            );
+            return Ok(());
+        }
         let configured_catalog_hash =
             iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash(
                 &nexus.configured_lane_catalog,
@@ -38569,20 +38742,24 @@ impl State {
             .kura
             .exact_durable_blocks_count()
             .map_err(|error| LaneLifecycleError::Storage(error.to_string()))?;
-        if let Some(expected) = self
-            .kura
-            .configured_lane_catalog_baseline()
-            .map_err(|err| LaneLifecycleError::ConfiguredCatalogBaseline(err.to_string()))?
-        {
-            if expected != configured_catalog_hash {
-                return Err(LaneLifecycleError::ConfiguredCatalogBaseline(format!(
-                    "configured lane catalog baseline mismatch: expected {expected}, attempted {configured_catalog_hash}"
-                )));
+        if !self.kura.emergency_fast_startup_enabled() {
+            if let Some(expected) = self
+                .kura
+                .configured_lane_catalog_baseline()
+                .map_err(|err| LaneLifecycleError::ConfiguredCatalogBaseline(err.to_string()))?
+            {
+                if expected != configured_catalog_hash {
+                    return Err(LaneLifecycleError::ConfiguredCatalogBaseline(format!(
+                        "configured lane catalog baseline mismatch: expected {expected}, attempted {configured_catalog_hash}"
+                    )));
+                }
+            } else if durable_blocks > 0 {
+                self.kura
+                    .verify_configured_lane_catalog_baseline(configured_catalog_hash)
+                    .map_err(|err| {
+                        LaneLifecycleError::ConfiguredCatalogBaseline(err.to_string())
+                    })?;
             }
-        } else if durable_blocks > 0 {
-            self.kura
-                .verify_configured_lane_catalog_baseline(configured_catalog_hash)
-                .map_err(|err| LaneLifecycleError::ConfiguredCatalogBaseline(err.to_string()))?;
         }
         let current_catalog = self.nexus.read().lane_catalog.clone();
         let effective_catalog_is_authenticated = if self.nexus_runtime_restored_from_snapshot {
@@ -38606,8 +38783,14 @@ impl State {
             configured_lane_catalog,
             Some(configured_catalog_hash),
         )?;
-        self.replay_persisted_merge_settlements()
-            .map_err(|err| LaneLifecycleError::Storage(format!("merge side-effect replay: {err}")))
+        if self.kura.emergency_fast_startup_enabled() {
+            warn!("emergency Fast startup deferred merge settlement replay until a Strict restart");
+            Ok(())
+        } else {
+            self.replay_persisted_merge_settlements().map_err(|err| {
+                LaneLifecycleError::Storage(format!("merge side-effect replay: {err}"))
+            })
+        }
     }
     fn ensure_config_catalog_mutation_is_pre_genesis(
         &self,
@@ -38625,6 +38808,7 @@ impl State {
             .map_err(|error| LaneLifecycleError::Storage(error.to_string()))?;
         if height == 0 && (durable_blocks == 0 || allow_durable_reconciliation) {
             if !allow_durable_reconciliation
+                && !self.kura.emergency_fast_startup_enabled()
                 && let Some(expected) = self
                     .kura
                     .configured_lane_catalog_baseline()
@@ -38941,47 +39125,53 @@ impl State {
                 current_block_height,
             )?;
         }
-        self.apply_lane_geometry_updates(
-            &previous_lane_config,
-            &nexus.lane_config,
-            &previous_lane_incarnations,
-            &updated_lane_incarnations,
-            &previous_lane_incarnation_activation_heights,
-            &updated_lane_incarnation_activation_heights,
-            &previous_lane_incarnation_lineage,
-            &updated_lane_incarnation_lineage,
-            &geometry_replaced_lane_ids,
-            current_block_height,
-        )?;
-        if let Err(failure) = self.mark_lane_geometry_catalog_published(
-            &nexus.lane_config,
-            &updated_lane_incarnations,
-            &updated_lane_incarnation_activation_heights,
-            &updated_lane_incarnation_lineage,
-            configured_baseline,
-        ) {
-            let LaneGeometryCatalogPublicationFailure {
-                error,
-                rollback_safe,
-            } = failure;
-            if !rollback_safe {
-                return Err(error);
-            }
-            self.rollback_lane_geometry_updates(
+        if self.kura.emergency_fast_startup_enabled() {
+            warn!(
+                "emergency Fast startup skipped lane-geometry publication and backend reconciliation"
+            );
+        } else {
+            self.apply_lane_geometry_updates(
                 &previous_lane_config,
                 &nexus.lane_config,
                 &previous_lane_incarnations,
+                &updated_lane_incarnations,
                 &previous_lane_incarnation_activation_heights,
+                &updated_lane_incarnation_activation_heights,
                 &previous_lane_incarnation_lineage,
+                &updated_lane_incarnation_lineage,
                 &geometry_replaced_lane_ids,
                 current_block_height,
-            )
-            .map_err(|rollback| {
-                LaneLifecycleError::Storage(format!(
-                    "{error}; lane geometry rollback also failed: {rollback}"
-                ))
-            })?;
-            return Err(error);
+            )?;
+            if let Err(failure) = self.mark_lane_geometry_catalog_published(
+                &nexus.lane_config,
+                &updated_lane_incarnations,
+                &updated_lane_incarnation_activation_heights,
+                &updated_lane_incarnation_lineage,
+                configured_baseline,
+            ) {
+                let LaneGeometryCatalogPublicationFailure {
+                    error,
+                    rollback_safe,
+                } = failure;
+                if !rollback_safe {
+                    return Err(error);
+                }
+                self.rollback_lane_geometry_updates(
+                    &previous_lane_config,
+                    &nexus.lane_config,
+                    &previous_lane_incarnations,
+                    &previous_lane_incarnation_activation_heights,
+                    &previous_lane_incarnation_lineage,
+                    &geometry_replaced_lane_ids,
+                    current_block_height,
+                )
+                .map_err(|rollback| {
+                    LaneLifecycleError::Storage(format!(
+                        "{error}; lane geometry rollback also failed: {rollback}"
+                    ))
+                })?;
+                return Err(error);
+            }
         }
         let active_reset_lanes = Self::active_reset_lanes(&lanes_to_reset, &nexus.lane_config);
         let reset_height = self.block_hashes.view().len() as u64;
@@ -40844,6 +41034,9 @@ impl State {
     }
     #[allow(clippy::too_many_lines)]
     fn enforce_nexus_storage_budget(&self, block_height: u64) {
+        if self.kura.emergency_fast_startup_enabled() {
+            return;
+        }
         let nexus = self.nexus.read();
         let Some(max_disk) = nexus
             .storage
@@ -43818,6 +44011,12 @@ fn validate_sccp_state_view(
     kura: &Kura,
     config: Option<&iroha_config::parameters::actual::Sccp>,
 ) -> core::result::Result<(), String> {
+    if kura.emergency_fast_startup_enabled() {
+        warn!(
+            "emergency Fast mode deferred historical SCCP archive-to-WSV reconciliation until a Strict restart"
+        );
+        return Ok(());
+    }
     let committed_height = u64::try_from(committed_height)
         .map_err(|_| "committed WSV height does not fit the SCCP height domain".to_owned())?;
     let retained_archive_inventory = kura

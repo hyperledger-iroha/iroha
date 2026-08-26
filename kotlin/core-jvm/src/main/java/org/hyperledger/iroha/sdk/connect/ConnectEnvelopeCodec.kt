@@ -160,7 +160,7 @@ object ConnectEnvelopeCodec {
 
                 val algorithmLength = decoder.readLength(compactLen)
                 val algorithmBytes = decoder.readBytes(algorithmLength.toInt())
-                val algorithmDecoder = NoritoDecoder(algorithmBytes, decoder.flags, decoder.flagsHint)
+                val algorithmDecoder = NoritoDecoder(algorithmBytes, decoder.flags)
                 val algorithm = UINT32.decode(algorithmDecoder).toInt()
                 if (algorithmDecoder.remaining() != 0) {
                     throw IllegalArgumentException(
@@ -170,7 +170,7 @@ object ConnectEnvelopeCodec {
 
                 val signatureLength = decoder.readLength(compactLen)
                 val signatureBytes = decoder.readBytes(signatureLength.toInt())
-                val signatureDecoder = NoritoDecoder(signatureBytes, decoder.flags, decoder.flagsHint)
+                val signatureDecoder = NoritoDecoder(signatureBytes, decoder.flags)
                 val signature = BYTE_VECTOR.decode(signatureDecoder)
                 if (signatureDecoder.remaining() != 0) {
                     throw IllegalArgumentException(
@@ -422,7 +422,7 @@ object ConnectEnvelopeCodec {
             throw IllegalArgumentException("$fieldName field too large: $fieldLength")
         }
         val fieldBytes = decoder.readBytes(fieldLength.toInt())
-        val child = NoritoDecoder(fieldBytes, decoder.flags, decoder.flagsHint)
+        val child = NoritoDecoder(fieldBytes, decoder.flags)
         val value = adapter.decode(child)
         if (child.remaining() != 0) {
             throw IllegalArgumentException("$fieldName trailing bytes: ${child.remaining()}")

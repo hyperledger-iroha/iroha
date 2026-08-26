@@ -6426,6 +6426,33 @@ impl SumeragiHandle {
             output_guard,
         }
     }
+    /// Construct a permanently closed consensus ingress without launching an
+    /// OS thread or allocating production queue geometry.
+    ///
+    /// Emergency Fast mode is read-only for its entire process lifetime. The
+    /// false readiness flag makes every owned ingress retryable and prevents
+    /// queue-plan wake publication while preserving the ordinary handle type
+    /// expected by P2P and Torii wiring.
+    #[must_use]
+    pub fn emergency_fast_disabled() -> Self {
+        let block = Arc::new(
+            FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, None,
+            ),
+        );
+        let (lane_relay, lane_relay_rx) = mpsc::sync_channel(0);
+        let (wake, wake_rx) = mpsc::sync_channel(0);
+        drop(lane_relay_rx);
+        drop(wake_rx);
+        Self::new(
+            block,
+            lane_relay,
+            wake,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+            ConsensusOutputGuard::isolated(),
+        )
+    }
     fn wake(&self) {
         let _ = self.wake.try_send(());
     }
@@ -6687,6 +6714,18 @@ impl SumeragiHandle {
     #[must_use]
     pub fn restart_required(&self) -> bool {
         self.output_guard.restart_required()
+    }
+}
+#[cfg(test)]
+mod emergency_fast_handle_tests {
+    use super::*;
+
+    #[test]
+    fn disabled_handle_never_opens_consensus_admission() {
+        let handle = SumeragiHandle::emergency_fast_disabled();
+        assert!(!handle.notify_pending_queue_plan_admission());
+        assert!(!handle.ingress_ready.load(Ordering::Acquire));
+        assert!(!handle.restart_required());
     }
 }
 #[cfg(any(test, feature = "sumeragi-main-loop-tests"))]

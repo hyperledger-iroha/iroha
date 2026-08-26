@@ -843,6 +843,20 @@ baseTest("pure JS Norito asset definition codec rejects adversarial fields", () 
     assert.throws(
       () =>
         noritoEncodeInstruction(
+          withAssetPatch({ mintable: { kind: "Limited", tokens: 5 } }),
+        ),
+      /must be a non-empty string/u,
+    );
+    assert.throws(
+      () =>
+        noritoEncodeInstruction(
+          withAssetPatch({ mintable: { kind: "Limited", value: "5" } }),
+        ),
+      /must be a non-empty string/u,
+    );
+    assert.throws(
+      () =>
+        noritoEncodeInstruction(
           withAssetPatch({ balance_scope_policy: "ObserverScoped" }),
         ),
       /Global or DataspaceRestricted/,

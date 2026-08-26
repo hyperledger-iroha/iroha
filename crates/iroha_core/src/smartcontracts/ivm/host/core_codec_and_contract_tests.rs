@@ -148,7 +148,7 @@ fn read_option_int(vm: &IVM, handle: u64) -> Option<i64> {
 }
 fn decode_typed_leaf<T>(vm: &IVM, pointer: u64, expected: PointerType) -> T
 where
-    for<'de> T: NoritoDeserialize<'de>,
+    for<'de> T: NoritoDeserialize<'de> + norito::NoritoSerialize,
 {
     let tlv = vm.memory.validate_tlv(pointer).expect("typed leaf TLV");
     assert_eq!(tlv.type_id, expected);

@@ -1,6 +1,5 @@
 #[test]
 fn every_core_query_page_family_uses_canonical_id_order_and_next_offset() {
-    crate::test_alias::ensure();
     let authority = fixture_account("alice");
     let second_account = fixture_account("bob");
     let domain_ids = [
@@ -202,7 +201,6 @@ fn v1_core_query_gas_schedule_golden() {
 }
 #[test]
 fn block_height_sysvar_uses_attached_transaction_context() {
-    crate::test_alias::ensure();
     let authority: AccountId = fixture_account("alice");
     let world = World::new();
     let kura = Kura::blank_kura_for_testing();
@@ -222,7 +220,6 @@ fn block_height_sysvar_uses_attached_transaction_context() {
 }
 #[test]
 fn execute_query_syscall_charges_sorted_queries_by_scanned_items() {
-    crate::test_alias::ensure();
     let authority: AccountId = fixture_account("alice");
     let domain: Domain =
         Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
@@ -286,7 +283,6 @@ fn execute_query_syscall_charges_sorted_queries_by_scanned_items() {
 }
 #[test]
 fn execute_query_syscall_sorted_offset_ignores_offset_penalty() {
-    crate::test_alias::ensure();
     let authority: AccountId = fixture_account("alice");
     let domain: Domain =
         Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
@@ -351,7 +347,6 @@ fn execute_query_syscall_sorted_offset_ignores_offset_penalty() {
 }
 #[test]
 fn execute_query_syscall_out_of_gas_when_budget_exhausted() {
-    crate::test_alias::ensure();
     let world = World::new();
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -372,7 +367,6 @@ fn execute_query_syscall_out_of_gas_when_budget_exhausted() {
 }
 #[test]
 fn execute_query_syscall_out_of_gas_when_response_bytes_exceed_budget() {
-    crate::test_alias::ensure();
     let world = World::new();
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -393,7 +387,6 @@ fn execute_query_syscall_out_of_gas_when_response_bytes_exceed_budget() {
 }
 #[test]
 fn execute_query_syscall_rejects_continue_request() {
-    crate::test_alias::ensure();
     let world = World::new();
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -420,7 +413,6 @@ fn execute_query_syscall_rejects_continue_request() {
 
 #[test]
 fn dispatched_failed_query_consumes_its_fail_closed_reserve() {
-    crate::test_alias::ensure();
     let state = State::new_for_testing(
         World::new(),
         Kura::blank_kura_for_testing(),

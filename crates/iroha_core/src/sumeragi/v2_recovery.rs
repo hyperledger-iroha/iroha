@@ -75,6 +75,8 @@ impl PartialEq for V2StartupReplayPlan {
 impl Eq for V2StartupReplayPlan {}
 const V2_STARTUP_REPLAY_BOUNDARY_HASH_DOMAIN: &[u8] =
     b"iroha:sumeragi:v2:startup-replay-boundary:v1\0";
+const V2_EMERGENCY_FAST_REPLAY_BOUNDARY_HASH_DOMAIN: &[u8] =
+    b"iroha:sumeragi:v2:emergency-fast-replay-boundary:v1\0";
 fn v2_startup_replay_boundary_hash(boundary: &ExactReplayBoundary) -> Hash {
     let count = boundary.count.to_le_bytes();
     let mut chunks = Vec::with_capacity(boundary.hashes.len().saturating_add(2));
@@ -82,6 +84,19 @@ fn v2_startup_replay_boundary_hash(boundary: &ExactReplayBoundary) -> Hash {
     chunks.push(count.as_slice());
     chunks.extend(boundary.hashes.iter().map(|hash| hash.as_ref().as_slice()));
     Hash::new_from_chunks(&chunks)
+}
+fn v2_emergency_fast_replay_boundary_hash(
+    count: u64,
+    tip_hash: Option<HashOf<BlockHeader>>,
+) -> Hash {
+    let count = count.to_le_bytes();
+    Hash::new_from_chunks(&[
+        V2_EMERGENCY_FAST_REPLAY_BOUNDARY_HASH_DOMAIN,
+        count.as_slice(),
+        tip_hash
+            .as_ref()
+            .map_or(&[][..], |hash| hash.as_ref().as_slice()),
+    ])
 }
 /// Non-forgeable startup authorization for one exact imported snapshot lineage.
 ///
@@ -159,10 +174,17 @@ impl V2StartupReplayPlan {
                     height: u64::try_from(self.durable_height)?,
                     reason: "startup replay plan has no Kura-minted storage identity binding",
                 })?;
-        let boundary = binding.replay_boundary();
-        if usize::try_from(boundary.count)? != self.durable_height
-            || v2_startup_replay_boundary_hash(boundary) != self.durable_boundary_hash
-        {
+        let binding_matches = if let Some(boundary) = binding.strict_replay_boundary() {
+            usize::try_from(boundary.count)? == self.durable_height
+                && v2_startup_replay_boundary_hash(boundary) == self.durable_boundary_hash
+        } else if let Some((count, tip_hash)) = binding.emergency_fast_boundary() {
+            usize::try_from(count)? == self.durable_height
+                && v2_emergency_fast_replay_boundary_hash(count, tip_hash)
+                    == self.durable_boundary_hash
+        } else {
+            false
+        };
+        if !binding_matches {
             return Err(V2StartupReplayError::InvalidReplayMetadata {
                 height: u64::try_from(self.durable_height)?,
                 reason: "startup replay plan disagrees with its Kura-minted storage binding",
@@ -176,11 +198,16 @@ impl V2StartupReplayPlan {
     /// # Errors
     ///
     /// Returns an error when WSV is ahead of Kura or lies beyond the authenticated prefix at a
-    /// height other than the one recoverable durable tip.
+    /// height other than the one recoverable durable tip. Emergency Fast mode also rejects a WSV
+    /// behind the complete prefix instead of silently turning startup into historical replay.
     pub fn validate_restored_state_height(
         &self,
         state_height: usize,
     ) -> Result<(), V2StartupReplayError> {
+        let emergency_fast = self
+            .storage_binding
+            .as_ref()
+            .is_some_and(|binding| binding.emergency_fast_boundary().is_some());
         if state_height > self.durable_height {
             return Err(V2StartupReplayError::StateHeightOutsidePlan {
                 state_height,
@@ -199,21 +226,38 @@ impl V2StartupReplayPlan {
                 pending_tip_height: self.pending_tip_height,
             });
         }
+        if emergency_fast && state_height < self.complete_prefix_height {
+            // Reconstructing WSV from historical bodies defeats the emergency startup bound and
+            // would consume auxiliary evidence that Fast deliberately did not authenticate.
+            // Require an already-current snapshot, or the exact predecessor of one pending tip.
+            return Err(V2StartupReplayError::StateHeightOutsidePlan {
+                state_height,
+                durable_height: self.durable_height,
+                complete_prefix_height: self.complete_prefix_height,
+                pending_tip_height: self.pending_tip_height,
+            });
+        }
         Ok(())
     }
 }
-/// Inspect every durable Kura height and select the only safe generic-replay boundary.
+/// Select the startup replay boundary for Kura's configured initialization mode.
 ///
-/// Full bodies are trusted for generic replay only after all replay/finality sidecars form one
-/// exact authenticated tuple. A missing tuple is a recoverable crash image solely at the durable
-/// tip; an interior gap, multiple-height suffix, impossible publication order, or corrupt binding
-/// fails closed. Only heights inside Kura's typed audited-import boundary are exempt from the
-/// sidecar requirement, whether or not a legacy body happens to remain locally available.
+/// Strict mode inspects every durable height. Full bodies are trusted for generic replay only
+/// after all replay/finality sidecars form one exact authenticated tuple. A missing tuple is a
+/// recoverable crash image solely at the durable tip; an interior gap, multiple-height suffix,
+/// impossible publication order, or corrupt binding fails closed. Only heights inside Kura's
+/// typed audited-import boundary are exempt from the sidecar requirement.
+///
+/// Emergency Fast mode trusts the stable canonical journal, checks only the active tip needed by
+/// recovery, and requires an already-current State snapshot so historical replay never begins.
 ///
 /// # Errors
 ///
 /// Returns [`V2StartupReplayError`] for malformed Kura metadata or a non-tip recovery gap.
 pub fn plan_v2_startup_replay(kura: &Kura) -> Result<V2StartupReplayPlan, V2StartupReplayError> {
+    if kura.emergency_fast_startup_enabled() {
+        return plan_emergency_fast_v2_startup_replay(kura);
+    }
     let planned = (|| {
         let mut startup_verification = kura.begin_v2_startup_finality_verification()?;
         if startup_verification.is_none() {
@@ -233,6 +277,36 @@ pub fn plan_v2_startup_replay(kura: &Kura) -> Result<V2StartupReplayPlan, V2Star
         kura.finish_v2_startup_finality_verification();
     }
     planned
+}
+/// Build a bounded emergency replay plan without scanning historical finality or replay sidecars.
+///
+/// Fast mode trusts the durable canonical journal and never enters consensus recovery. It requires
+/// State to be restored at the exact durable height and leaves all active-height and finality
+/// inspection to the next Strict restart.
+fn plan_emergency_fast_v2_startup_replay(
+    kura: &Kura,
+) -> Result<V2StartupReplayPlan, V2StartupReplayError> {
+    let storage_binding = kura.emergency_fast_startup_replay_binding()?;
+    let (count, tip_hash) = storage_binding.emergency_fast_boundary().ok_or(
+        V2StartupReplayError::InvalidReplayMetadata {
+            height: 0,
+            reason: "Kura returned a Strict binding for emergency Fast startup",
+        },
+    )?;
+    let durable_height = usize::try_from(count)?;
+    let durable_boundary_hash = v2_emergency_fast_replay_boundary_hash(count, tip_hash);
+    iroha_logger::warn!(
+        durable_height,
+        "Sumeragi emergency Fast startup skipped all finality, checkpoint, manifest, and active-height recovery inspection"
+    );
+    Ok(V2StartupReplayPlan {
+        durable_height,
+        durable_boundary_hash,
+        storage_binding: Some(storage_binding),
+        audited_bootstrap_prefix_height: 0,
+        complete_prefix_height: durable_height,
+        pending_tip_height: None,
+    })
 }
 fn plan_v2_startup_replay_inner(
     kura: &Kura,

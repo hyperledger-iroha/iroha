@@ -73,10 +73,22 @@ impl Default for ZkAssetState {
     }
 }
 impl ZkAssetState {
-    /// Read the persisted current root after checking constant-size tree metadata.
-    pub fn current_root(&self) -> Result<[u8; 32], String> {
+    /// Compute the root after one commitment without cloning or mutating the
+    /// retained tree state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the retained tree metadata is inconsistent, the
+    /// commitment is not canonical, or the fixed-capacity tree is full.
+    pub fn preview_commitment_root(&self, commitment: [u8; 32]) -> Result<[u8; 32], String> {
         self.validate_tree_metadata()?;
-        Ok(self.persisted_root)
+        let append = crate::zk::confidential_v2::append_confidential_tree_frontier_v2(
+            self.commitments.len(),
+            self.tree_frontier,
+            self.persisted_root,
+            &[commitment],
+        )?;
+        Ok(append.current_root)
     }
     /// Validate the constant-size metadata needed by hot mutation and root reads.
     ///

@@ -1,13 +1,10 @@
 use crate::error::NoSuchAlgorithm;
 use core::{fmt, str::FromStr};
 use iroha_schema::{IntoSchema, TypeId};
-#[cfg(not(feature = "ffi_import"))]
 use norito::json::{
     self, JsonDeserialize as NoritoJsonDeserialize, JsonSerialize as NoritoJsonSerialize,
 };
-#[cfg(not(feature = "ffi_import"))]
 use norito::{Decode, Encode, core as norito_core};
-#[cfg(not(feature = "ffi_import"))]
 use std::string::String;
 /// String algorithm representation
 pub const ED_25519: &str = "ed25519";
@@ -201,7 +198,6 @@ impl TryFrom<u8> for Algorithm {
         }
     }
 }
-#[cfg(not(feature = "ffi_import"))]
 impl IntoSchema for Algorithm {
     fn type_name() -> String {
         "Algorithm".into()
@@ -256,7 +252,6 @@ impl IntoSchema for Algorithm {
         }));
     }
 }
-#[cfg(not(feature = "ffi_import"))]
 impl<'a> norito_core::DecodeFromSlice<'a> for Algorithm {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito_core::Error> {
         let (raw, used) = <u8 as norito_core::DecodeFromSlice>::decode_from_slice(bytes)?;
@@ -265,7 +260,6 @@ impl<'a> norito_core::DecodeFromSlice<'a> for Algorithm {
         Ok((algorithm, used))
     }
 }
-#[cfg(not(feature = "ffi_import"))]
 impl NoritoJsonSerialize for Algorithm {
     fn json_serialize(&self, out: &mut String) {
         let value = self.as_static_str().to_string();
@@ -278,7 +272,6 @@ impl NoritoJsonSerialize for Algorithm {
         json::write_json_string_to(self.as_static_str(), out)
     }
 }
-#[cfg(not(feature = "ffi_import"))]
 impl NoritoJsonDeserialize for Algorithm {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let value: String = NoritoJsonDeserialize::json_deserialize(parser)?;

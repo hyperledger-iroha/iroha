@@ -19,3 +19,19 @@ fn node_handle_storage_methods_error_when_disabled() {
         Err(AdmittedPayloadReadLeaseErrorV1::Disabled)
     ));
 }
+
+#[test]
+fn emergency_disabled_handle_does_not_open_durable_runtime_trees() {
+    let temp = tempfile::tempdir().expect("temporary root");
+    let emergency_root = temp.path().join("emergency-fast");
+    let handle = NodeHandle::try_new_emergency_disabled(emergency_root.clone())
+        .expect("disabled process-local handle");
+
+    assert!(!handle.is_enabled());
+    assert_eq!(handle.config().runtime_retention().state_entry_limit(), 1);
+    assert_eq!(handle.config().runtime_retention().event_history_limit(), 1);
+    assert!(
+        !emergency_root.exists(),
+        "Fast startup must not create PoTR or transaction-forwarder trees"
+    );
+}

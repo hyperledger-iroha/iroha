@@ -41,35 +41,15 @@ fn mintable_limited_serialize_as_string_label() {
     assert!(matches!(decoded, Mintable::Limited(tokens) if tokens.value() == 7));
 }
 #[test]
-fn mintable_limited_accepts_object_representation() {
-    let object = norito::json!({
-        "kind": "Limited",
-        "tokens": 5
-    });
-    let mintable: Mintable = json::from_value(object).expect("deserialize object form");
-    assert!(matches!(mintable, Mintable::Limited(tokens) if tokens.value() == 5));
-}
-#[test]
-fn mintable_limited_accepts_string_tokens() {
-    let object = norito::json!({
-        "kind": "Limited",
-        "value": "3"
-    });
-    let mintable: Mintable = json::from_value(object).expect("deserialize string tokens");
-    assert!(matches!(mintable, Mintable::Limited(tokens) if tokens.value() == 3));
-}
-#[test]
-fn mintable_rejects_zero_tokens_in_limited_object() {
-    let object = norito::json!({
-        "kind": "Limited",
-        "tokens": 0
-    });
-    let err = json::from_value::<Mintable>(object).expect_err("zero tokens should fail");
-    let message = err.to_string();
-    assert!(
-        message.contains("tokens") || message.contains("Limited"),
-        "unexpected error message: {message}"
-    );
+fn mintable_rejects_noncanonical_object_representations() {
+    for object in [
+        norito::json!({"kind": "Limited", "tokens": 5}),
+        norito::json!({"kind": "Limited", "value": "3"}),
+        norito::json!({"kind": "Infinitely"}),
+    ] {
+        json::from_value::<Mintable>(object)
+            .expect_err("mintability must use the canonical string representation");
+    }
 }
 #[test]
 fn mintability_tokens_constructor_handles_zero() {

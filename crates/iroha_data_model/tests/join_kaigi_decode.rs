@@ -40,7 +40,7 @@ fn join_kaigi_roundtrip_preserves_optional_fields() {
         decoded, boxed,
         "roundtrip should preserve instruction bytes"
     );
-    let decoded_join = iroha_data_model::isi::Instruction::as_any(&decoded)
+    let decoded_join = iroha_data_model::isi::Instruction::as_any(&*decoded)
         .downcast_ref::<JoinKaigi>()
         .expect("decoded JoinKaigi instruction");
     assert_eq!(decoded_join.call_id, call_id);

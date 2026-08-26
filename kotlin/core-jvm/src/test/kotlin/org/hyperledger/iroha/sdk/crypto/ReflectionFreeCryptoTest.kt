@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.sdk.crypto
 
 import java.security.Signature
+import java.security.Security
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -16,6 +17,7 @@ class ReflectionFreeCryptoTest {
             .generateEphemeral()
 
         assertEquals("BC", generator.provider.name)
+        assertTrue(Security.getProvider("BC") === generator.provider)
         assertTrue(keyPair.private.encoded.isNotEmpty())
         assertTrue(keyPair.public.encoded.isNotEmpty())
     }

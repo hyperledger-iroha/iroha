@@ -698,7 +698,6 @@ fn evicted_remote_body_rehydrates_after_restart_and_new_adverts() {
 fn fast_init_preserves_remote_only_metadata_after_restart() {
     let temp_dir = TempDir::new().unwrap();
     let mut config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
-    config.init_mode = InitMode::Fast;
     let height = nonzero!(2_usize);
     let block_hash = {
         let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
@@ -723,6 +722,7 @@ fn fast_init_preserves_remote_only_metadata_after_restart() {
         }
         block_hash
     };
+    config.init_mode = InitMode::Fast;
     let (kura, block_count) =
         Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
             .expect("fast reopen");

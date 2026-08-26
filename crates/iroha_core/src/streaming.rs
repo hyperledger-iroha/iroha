@@ -1500,18 +1500,6 @@ impl StreamingHandle {
         }
         Ok(())
     }
-    /// Install default `SoraNet` routing metadata applied to privacy routes lacking explicit values.
-    #[allow(dead_code)]
-    pub(crate) fn set_soranet_defaults(&mut self, defaults: Option<SoranetRouteDefaults>) {
-        self.soranet_defaults = defaults;
-    }
-    /// Attach `SoraNet` defaults using a builder-style API.
-    #[must_use]
-    #[allow(dead_code)]
-    pub(crate) fn with_soranet_defaults(mut self, defaults: SoranetRouteDefaults) -> Self {
-        self.soranet_defaults = Some(defaults);
-        self
-    }
     /// Apply `SoraNet` defaults derived from configuration.
     pub fn set_soranet_config(&mut self, config: &actual::StreamingSoranet) {
         self.soranet_provisioning_enabled = config.enabled;

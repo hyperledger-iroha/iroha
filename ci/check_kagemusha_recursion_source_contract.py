@@ -2,7 +2,7 @@
 """Static Kagemusha recursion/source-residency contracts.
 
 These checks intentionally inspect implementation source.  Keeping them here
-avoids compiling almost nine hundred lines of Rust substring tests while the
+avoids compiling several hundred lines of Rust substring tests while the
 authenticated readiness gate retains the same structural coverage.
 """
 
@@ -18,32 +18,21 @@ GENERATED = (
     "crates/iroha_core/src/zk/kagemusha_recursion_adapter/generated_artifacts.rs"
 )
 PROBE = "crates/iroha_core/src/zk/kagemusha_recursion_adapter/k17_probe.rs"
-BUILDER = (
+PARENT_VERIFIER = (
     "crates/iroha_core/src/zk/kagemusha_recursion_adapter/"
-    "serialized_audit_builder_v7.rs"
+    "scalar_lineage_parent_verifier_v4.rs"
 )
-RELEASE = (
-    "crates/iroha_core/src/zk/kagemusha_recursion_adapter/"
-    "serialized_audit_release_proof_v7.rs"
-)
-BRIDGE = (
-    "crates/iroha_core/src/zk/kagemusha_recursion_adapter/"
-    "serialized_audit_bridge_v7.rs"
-)
-VECTOR = (
-    "crates/iroha_core/src/zk/kagemusha_recursion_adapter/"
-    "serialized_audit_vector_v7.rs"
-)
-SERIALIZED = "crates/iroha_core/src/zk/kagemusha_serialized_audit_v7.rs"
 BENCHMARK = "crates/iroha_core/src/bin/kagemusha_recursive_spend_v4_memory_benchmark.rs"
 BENCHMARK_WRAPPER = "scripts/run_kagemusha_v4_generation_benchmark.py"
-FACADE = "crates/iroha_core/src/zk/kagemusha_v2.rs"
 BUNDLE = "crates/iroha_core/src/bin/kagemusha_recursive_spend_v4_bundle.rs"
 CATALOG = (
     "crates/iroha_core/src/smartcontracts/isi/offline/"
     "kagemusha_terminal_registry_v4.rs"
 )
 KAGAMI = "crates/iroha_kagami/src/kagemusha.rs"
+# The sole V4 backend still requires independent shipping review and release-device
+# qualification. Promotion must remain blocked until both land in the same source closure.
+V4_SHIPPING_BACKEND_REVIEWED = False
 
 _IN_GATE = globals().get("_KAGEMUSHA_RECURSION_SOURCE_CONTRACT_CONTEXT_V1") is True
 _SOURCE = globals().get("_KAGEMUSHA_RECURSION_SOURCE_CONTRACT_SOURCE_V1")
@@ -123,6 +112,22 @@ def _ordered(
 
 
 def _adapter_contracts(text: str, errors: list[str]) -> None:
+    _require(
+        text,
+        ADAPTER,
+        errors,
+        'include!("kagemusha_recursion_adapter/scalar_lineage_parent_verifier_v4.rs");',
+        'include!("kagemusha_recursion_adapter/k17_probe.rs");',
+    )
+    _forbid(
+        text,
+        ADAPTER,
+        errors,
+        "scalar_lineage_parent_verifier_v7",
+        "serialized_audit_",
+        "serialized_phase_zero_rank",
+        "verified_instance_cells",
+    )
     header = _section(
         text,
         ADAPTER,
@@ -384,6 +389,27 @@ def _adapter_contracts(text: str, errors: list[str]) -> None:
     )
 
 
+def _parent_verifier_contracts(text: str, errors: list[str]) -> None:
+    _count(text, PARENT_VERIFIER, errors, "fn verify_ordinary_parent", 1)
+    _require(
+        text,
+        PARENT_VERIFIER,
+        errors,
+        "ExactReader::new(proof_bytes)",
+        "PlonkSuccinctVerifier::<IpaAs<C, Bgh19>>::read_proof(",
+        "PlonkSuccinctVerifier::<IpaAs<C, Bgh19>>::verify(",
+        "position.get() != proof_bytes.len()",
+        "accumulators.len() != 1",
+    )
+    _forbid(
+        text,
+        PARENT_VERIFIER,
+        errors,
+        "kagemusha-generation-memory-lab",
+        "serialized_",
+    )
+
+
 def _probe_contracts(text: str, errors: list[str]) -> None:
     wrapper = _section(
         text,
@@ -441,355 +467,10 @@ def _probe_contracts(text: str, errors: list[str]) -> None:
     )
 
 
-def _serialized_builder_contracts(text: str, adapter: str, errors: list[str]) -> None:
-    induction = _section(
-        text,
-        BUILDER,
-        errors,
-        "fn constrain_kagemusha_serialized_parent_induction_v7",
-        "fn constrain_kagemusha_serialized_challenge_and_native_evaluation_v7",
-    )
-    _require(
-        induction,
-        BUILDER,
-        errors,
-        "for value in &parent.instance_cells",
-        "Existing(parent.present), Existing(*value)",
-        "ctx.constrain_equal(&selected, value)",
-    )
-    _ordered(
-        induction,
-        BUILDER,
-        errors,
-        "for value in &parent.instance_cells",
-        "slots.push(KagemushaAssignedParentSlotV7",
-    )
-    verifier = _section(
-        text,
-        BUILDER,
-        errors,
-        "fn verify_kagemusha_serialized_atomic_pair_v7",
-        "fn verify_kagemusha_serialized_null_parent_pair_v7",
-    )
-    _count(verifier, BUILDER, errors, "verify_and_decide_eq_accumulation_v4", 1)
-    _count(verifier, BUILDER, errors, "verify_and_decide_ep_accumulation_v4", 1)
-    _count(
-        verifier,
-        BUILDER,
-        errors,
-        "KagemushaIpaAccumulationProofV4::initialization(manifest.k)",
-        2,
-    )
-    _ordered(
-        verifier,
-        BUILDER,
-        errors,
-        "public challenge is not commitment-derived",
-        "verify_and_decide_eq_accumulation_v4",
-        "verify_and_decide_ep_accumulation_v4",
-        "Ok(KagemushaSerializedVerifiedPairV7",
-        reverse_last=True,
-    )
-    creator = _section(text, BUILDER, errors, "fn create_kagemusha_serialized_atomic_pair_once_v7")
-    _count(creator, BUILDER, errors, ".serialized_jobs.precommitment(", 4)
-    _count(creator, BUILDER, errors, ".serialized_jobs.capacity_profile()?", 4)
-    for parity, label in (("eq", "Eq"), ("ep", "Ep")):
-        placeholder = f"let (step_{parity}_commitment,"
-        key_load = f"let step_{parity}_prepared_key = load_step_{parity}_proving_key()?;"
-        final_build = (
-            f"let (step_{parity}_circuit, step_{parity}_instances) = "
-            f"build_step_{parity}(join)?;"
-        )
-        count_recapture = f"Kagemusha V7 {label} placeholder/final serialized counts drifted"
-        instance_snapshot = f"let step_{parity}_final_cells ="
-        instance_invariance = (
-            f"&step_{parity}_placeholder_cells,\n        &step_{parity}_final_cells"
-        )
-        final_precommit = f"let step_{parity}_final_commitment ="
-        invariant = f"Kagemusha V7 {label} placeholder/final precommitment invariance failed"
-        _ordered(
-            creator,
-            BUILDER,
-            errors,
-            placeholder,
-            key_load,
-            final_build,
-            count_recapture,
-            final_precommit,
-            invariant,
-        )
-        _ordered(creator, BUILDER, errors, final_build, instance_snapshot, instance_invariance)
-        start = creator.find(placeholder)
-        key = creator.find(key_load)
-        finish = creator.find(invariant)
-        precommit = creator.find(final_precommit)
-        if min(start, key, finish, precommit) >= 0:
-            _require(
-                creator[start:key],
-                BUILDER,
-                errors,
-                f"step_{parity}_params,",
-                f"step_{parity}_precommit_verifying_key,",
-                f"iroha_crypto::rng_from_seed_slice(&step_{parity}_seed.0)",
-            )
-            _require(
-                creator[precommit:finish],
-                BUILDER,
-                errors,
-                (
-                    f"step_{parity}_params,\n        "
-                    f"step_{parity}_precommit_verifying_key"
-                ),
-                f"iroha_crypto::rng_from_seed_slice(&step_{parity}_seed.0)",
-            )
-        _count(
-            creator,
-            BUILDER,
-            errors,
-            f"iroha_crypto::rng_from_seed_slice(&step_{parity}_seed.0)",
-            2,
-        )
-        _ordered(
-            creator,
-            BUILDER,
-            errors,
-            invariant,
-            f"let (step_{parity}_proof, step_{parity}_verifying_key) =",
-        )
-        proof = creator.find(f"let (step_{parity}_proof, step_{parity}_verifying_key) =")
-        if proof >= 0:
-            _require(creator[proof:], BUILDER, errors, f"step_{parity}_prepared_key.key")
-
-    geometry = _section(
-        text,
-        BUILDER,
-        errors,
-        "fn validate_kagemusha_serialized_vk_geometry_v7",
-        "fn succinct_verify_kagemusha_serialized_eq_v7",
-    )
-    _require(
-        geometry,
-        BUILDER,
-        errors,
-        "actual_phases.as_slice() != expected_phases.as_slice()",
-        "u32::try_from(actual_rank).ok() != Some(expected_rank)",
-        "!selected_is_permuted_advice",
-        "constraints.permutation().get_columns().len()",
-        "constraints.blinding_factors()",
-        "actual_proof_bytes != expected_proof_bytes",
-    )
-    for function, end, parity in (
-        (
-            "fn succinct_verify_kagemusha_serialized_eq_v7",
-            "fn succinct_verify_kagemusha_serialized_ep_v7",
-            "StepEq",
-        ),
-        (
-            "fn succinct_verify_kagemusha_serialized_ep_v7",
-            "fn kagemusha_serialized_instance_u128_v7",
-            "StepEp",
-        ),
-    ):
-        parity_verifier = _section(text, BUILDER, errors, function, end)
-        _ordered(
-            parity_verifier,
-            BUILDER,
-            errors,
-            "validate_kagemusha_serialized_vk_geometry_v7(",
-            f"KagemushaPastaCycleParityV1::{parity}",
-            "kagemusha_selected_advice_commitment_v7(",
-        )
-    matcher = _section(
-        adapter,
-        ADAPTER,
-        errors,
-        "let shape_probe_role = if kagemusha_k17_shape_probe_is_active_v5()",
-        "if let Some(role) = shape_probe_role",
-    )
-    for role in ("StepEqLive", "StepEpLive"):
-        _count(text, BUILDER, errors, f'"{role}"', 1)
-        _require(matcher, ADAPTER, errors, f'"{role}" => "{role}"')
-    _forbid(
-        text,
-        BUILDER,
-        errors,
-        '"StepEq live"',
-        '"StepEp live"',
-        '"StepEqNullParent"',
-        '"StepEpNullParent"',
-    )
-
-
-def _release_contracts(text: str, errors: list[str]) -> None:
-    execute = _section(text, RELEASE, errors, "fn execute_kagemusha_serialized_release_proof_v7()")
-    _ordered(
-        execute,
-        RELEASE,
-        errors,
-        "start_kagemusha_generation_memory_guard_v4(Some(",
-        "KAGEMUSHA_GENERATION_REVIEWED_MAX_ESTIMATED_BYTES_V5",
-        "rayon::ThreadPoolBuilder::new()",
-        ".num_threads(KAGEMUSHA_GENERATION_RAYON_THREADS_V5)",
-        "pool.install(move || execute_kagemusha_serialized_release_proof_in_pool_v7",
-        "prepare_kagemusha_serialized_release_material_v7(",
-    )
-    _forbid(text, RELEASE, errors, ".effective_memory_limit_bytes()\n        .min(")
-    wire = _section(
-        text,
-        RELEASE,
-        errors,
-        "struct KagemushaSerializedReleaseCarrierWireV7",
-        "impl KagemushaSerializedReleaseCarrierWireV7",
-    )
-    _require(
-        wire,
-        RELEASE,
-        errors,
-        "manifest_sha256: [u8; 32]",
-        "step_eq_instances: [u128; KAGEMUSHA_SERIALIZED_PUBLIC_INSTANCE_CELLS_V7]",
-        "step_ep_instances: [u128; KAGEMUSHA_SERIALIZED_PUBLIC_INSTANCE_CELLS_V7]",
-        "payload: Vec<u8>",
-    )
-    _forbid(wire, RELEASE, errors, "step_eq_lineage:", "step_ep_lineage:")
-    _require(
-        text,
-        RELEASE,
-        errors,
-        "norito::encode_canonical(&wire)",
-        "KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4",
-        "canonical_carrier_bytes",
-        "raw_proof_pair_bytes",
-        "carrier host/public instance splice detected",
-        "null_carrier_bytes",
-        "null_carrier_sha256",
-    )
-    _forbid(text, RELEASE, errors, "KAGEMUSHA_SERIALIZED_PAIR_BYTES_V7")
-    live = _section(
-        text,
-        RELEASE,
-        errors,
-        "    fn authenticate(\n",
-        "struct KagemushaSerializedReleaseCarrierV7",
-    )
-    _require(
-        live,
-        RELEASE,
-        errors,
-        "verify_kagemusha_serialized_atomic_pair_v7(",
-        "verify_and_decide_eq_accumulation_v4(",
-        "verify_and_decide_ep_accumulation_v4(",
-    )
-    identity = _section(
-        text,
-        RELEASE,
-        errors,
-        "fn kagemusha_serialized_carrier_bundle_digest_v7(",
-        "fn prepare_kagemusha_serialized_case_recursions_v7(",
-    )
-    _require(
-        identity,
-        RELEASE,
-        errors,
-        "validate_kagemusha_serialized_release_carrier_seal_v7(",
-        "Ok(carrier.canonical_sha256)",
-    )
-    recursion = _section(
-        text,
-        RELEASE,
-        errors,
-        "fn prepare_kagemusha_serialized_case_recursions_v7(",
-        "fn assert_kagemusha_serialized_live_mutations_fail_v7(",
-    )
-    _require(recursion, RELEASE, errors, "kagemusha_serialized_parent_slots_digest_v7(")
-    null_wire = _section(
-        text,
-        RELEASE,
-        errors,
-        "struct KagemushaSerializedNullCarrierWireV7",
-        "impl KagemushaSerializedNullCarrierWireV7",
-    )
-    _require(
-        null_wire,
-        RELEASE,
-        errors,
-        "manifest_sha256: [u8; 32]",
-        "payload: Vec<u8>",
-        "step_eq_proof: &'a [u8]",
-        "step_ep_proof: &'a [u8]",
-        "step_eq_post_proof_fold: &'a [u8]",
-        "step_ep_post_proof_fold: &'a [u8]",
-        "step_eq_branch_merge_fold: &'a [u8]",
-        "step_ep_branch_merge_fold: &'a [u8]",
-    )
-    null_auth = _section(
-        text,
-        RELEASE,
-        errors,
-        "fn authenticate_kagemusha_serialized_null_carrier_v7(",
-        "fn seal_kagemusha_serialized_null_carrier_v7(",
-    )
-    _require(
-        null_auth,
-        RELEASE,
-        errors,
-        "succinct_verify_kagemusha_serialized_eq_v7(",
-        "succinct_verify_kagemusha_serialized_ep_v7(",
-        "for proof in [&step_eq_post, &step_eq_branch]",
-        "for proof in [&step_ep_post, &step_ep_branch]",
-    )
-    _count(null_auth, RELEASE, errors, "verify_and_decide_eq_accumulation_v4(", 1)
-    _count(null_auth, RELEASE, errors, "verify_and_decide_ep_accumulation_v4(", 1)
-
-
 def _inventory_and_callers(texts: dict[str, str], errors: list[str]) -> None:
     retired = "probe-compact-k17-ipa-audit-bridge"
     _forbid(texts[BENCHMARK], BENCHMARK, errors, retired)
     _forbid(texts[BENCHMARK_WRAPPER], BENCHMARK_WRAPPER, errors, retired)
-    _forbid(
-        texts[FACADE],
-        FACADE,
-        errors,
-        "run_kagemusha_k17_ipa_audit_bridge_probe_v7",
-    )
-    _require(
-        texts[BRIDGE],
-        BRIDGE,
-        errors,
-        "KAGEMUSHA_SERIALIZED_BRIDGE_REVIEWED_V7: bool = false",
-        "if !KAGEMUSHA_SERIALIZED_BRIDGE_REVIEWED_V7",
-    )
-    _count(
-        texts[VECTOR],
-        VECTOR,
-        errors,
-        (
-            "impl<F: ff::PrimeField> super::kagemusha_serialized_audit_v7::"
-            "KagemushaNativeAuditVectorSourceV7<F>"
-        ),
-        1,
-    )
-    _count(
-        texts[VECTOR],
-        VECTOR,
-        errors,
-        "KagemushaFrozenNativeAuditVectorV7::from_reviewed_source(",
-        1,
-    )
-    _count(
-        texts[VECTOR],
-        VECTOR,
-        errors,
-        "KagemushaReviewedNativeAuditSourceV7(elements)",
-        1,
-    )
-    _count(
-        texts[SERIALIZED],
-        SERIALIZED,
-        errors,
-        "pub(super) fn from_reviewed_source<S>(",
-        1,
-    )
-
     adapter = texts[ADAPTER]
     verifier_signature = _section(
         adapter,
@@ -853,19 +534,19 @@ def recursion_source_contract_errors(
 ) -> list[str]:
     """Return deterministic source-contract diagnostics for the reviewed tree."""
     errors: list[str] = []
+    if require_shipping_backend and not V4_SHIPPING_BACKEND_REVIEWED:
+        errors.append(
+            f"{ADAPTER}: production promotion requires an independently reviewed "
+            "ABI-21/V4 shipping recursion backend"
+        )
     overrides = overrides or {}
     paths = (
         ADAPTER,
         GENERATED,
         PROBE,
-        BUILDER,
-        RELEASE,
-        BRIDGE,
-        VECTOR,
-        SERIALIZED,
+        PARENT_VERIFIER,
         BENCHMARK,
         BENCHMARK_WRAPPER,
-        FACADE,
         BUNDLE,
         CATALOG,
         KAGAMI,
@@ -888,8 +569,7 @@ def recursion_source_contract_errors(
     for function in (
         "recursion_source_contract_errors",
         "_adapter_contracts",
-        "_serialized_builder_contracts",
-        "_release_contracts",
+        "_parent_verifier_contracts",
     ):
         if len(re.findall(rf"(?m)^def {re.escape(function)}\(", provider)) != 1:
             errors.append(f"{PROVIDER}: expected exactly one {function} definition")
@@ -897,16 +577,9 @@ def recursion_source_contract_errors(
         if re.search(r"(?m)^(?:<<<<<<<(?: .*)?|=======|>>>>>>>(?: .*)?)$", text):
             errors.append(f"{relative}: unresolved Git merge conflict marker")
     _adapter_contracts(texts[ADAPTER], errors)
+    _parent_verifier_contracts(texts[PARENT_VERIFIER], errors)
     _probe_contracts(texts[PROBE], errors)
-    _serialized_builder_contracts(texts[BUILDER], texts[ADAPTER], errors)
-    _release_contracts(texts[RELEASE], errors)
     _inventory_and_callers(texts, errors)
-    if require_shipping_backend and (
-        "KAGEMUSHA_SERIALIZED_BRIDGE_REVIEWED_V7: bool = true" not in texts[BRIDGE]
-    ):
-        errors.append(
-            f"{BRIDGE}: production promotion requires a reviewed shipping recursion backend"
-        )
     return errors
 
 
@@ -921,8 +594,8 @@ def _main(arguments: list[str]) -> int:
         if not negative:
             errors.append("self-test failed to reject compact-header length substitution")
         shipping = recursion_source_contract_errors(root, require_shipping_backend=True)
-        if not any("requires a reviewed shipping recursion backend" in item for item in shipping):
-            errors.append("self-test failed to keep the unreviewed backend promotion-blocking")
+        if not any("requires an independently reviewed ABI-21/V4" in item for item in shipping):
+            errors.append("self-test failed to keep the V4 backend promotion-blocking")
     if errors:
         for error in errors:
             print(error, file=sys.stderr)

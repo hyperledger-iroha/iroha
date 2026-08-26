@@ -561,7 +561,7 @@ impl Kura {
             if data.len() <= idx {
                 return None;
             }
-            (idx, data[idx].1.is_some())
+            (idx, data.cached_body(idx).is_some())
         };
         if has_cached {
             if self.prune_recovery_is_required() {

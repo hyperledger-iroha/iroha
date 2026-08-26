@@ -155,7 +155,7 @@ use norito::{
 };
 use parking_lot::{Condvar, Mutex};
 use std::{
-    collections::{BTreeMap, BTreeSet, HashSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     fmt::Debug,
     io::{BufWriter, ErrorKind, Read, Seek, SeekFrom, Write},
     num::{NonZeroU64, NonZeroUsize},
@@ -490,6 +490,8 @@ fn default_fastpq_proof_sidecar_queue_cap() -> usize {
 fn default_pipeline_sidecar_queue_cap() -> usize {
     BLOCKS_IN_MEMORY.get()
 }
+const EMERGENCY_FAST_RECENT_BLOCK_CACHE_CAPACITY: NonZeroUsize =
+    NonZeroUsize::new(256).expect("the emergency Fast cache ceiling is non-zero");
 fn default_fastpq_proof_sidecar_max_bytes() -> usize {
     usize::try_from(FASTPQ_DEFAULTS::PROOF_SIDECAR_MAX_BYTES.get())
         .unwrap_or(usize::MAX)
@@ -584,6 +586,8 @@ pub struct Kura {
     prune_recovery_required: AtomicBool,
     /// The array of block hashes and a slot for an arc of the block. This is normally recovered from the index file.
     block_data: Mutex<BlockData>,
+    /// Whether emergency Fast startup deliberately left historical auxiliary indexes unknown.
+    auxiliary_history_deferred: bool,
     /// Number of pre-fork blocks whose body schema is intentionally not decoded in bootstrap mode.
     hard_fork_hash_only_block_count: AtomicUsize,
     /// Reverse lookup for committed block hash to block height.
@@ -915,6 +919,7 @@ impl MergeLedgerLog {
             Self::load_entries(&mut file, cache_capacity)?;
         file.try_io(|f| f.seek(SeekFrom::End(0)))?;
         Ok(Self {
+            history_deferred: false,
             file: Some(file),
             entries,
             cache_capacity,
@@ -941,6 +946,7 @@ impl MergeLedgerLog {
     fn in_memory(cache_capacity: usize) -> Self {
         let cache_capacity = sanitize_merge_cache_capacity(cache_capacity);
         Self {
+            history_deferred: false,
             file: None,
             entries: Vec::new(),
             cache_capacity,
@@ -964,7 +970,22 @@ impl MergeLedgerLog {
             fail_next_append_after: None,
         }
     }
+    /// Construct an opaque merge-log placeholder without opening or scanning the durable file.
+    fn deferred(cache_capacity: usize) -> Self {
+        let mut log = Self::in_memory(cache_capacity);
+        log.history_deferred = true;
+        log
+    }
+    fn ensure_history_available(&self) -> Result<()> {
+        if self.history_deferred {
+            return Err(Error::EmergencyFastAuxiliaryUnavailable {
+                subsystem: "merge ledger",
+            });
+        }
+        Ok(())
+    }
     fn append(&mut self, entry: &MergeLedgerEntry) -> Result<bool> {
+        self.ensure_history_available()?;
         if self.preflight_append(entry)? {
             self.append_preflighted(entry)?;
             return Ok(true);
@@ -976,6 +997,7 @@ impl MergeLedgerLog {
     /// Returns `false` when the exact entry is already present and `true` when
     /// it is the next contiguous frame.
     fn preflight_append(&mut self, entry: &MergeLedgerEntry) -> Result<bool> {
+        self.ensure_history_available()?;
         self.recover_failed_append_tail()?;
         if !entry.has_current_version() {
             return Err(Error::MergeCarrierConflict(format!(
@@ -1019,6 +1041,7 @@ impl MergeLedgerLog {
         Ok(true)
     }
     fn recover_failed_append_tail(&mut self) -> Result<()> {
+        self.ensure_history_available()?;
         let Some(frame_offset) = self.append_recovery_offset else {
             return Ok(());
         };
@@ -1042,6 +1065,7 @@ impl MergeLedgerLog {
         )
     }
     fn append_preflighted(&mut self, entry: &MergeLedgerEntry) -> Result<()> {
+        self.ensure_history_available()?;
         let entry_hash = entry.canonical_hash();
         let encoded = Encode::encode(entry);
         let len: u32 = encoded.len().try_into().map_err(|_| {
@@ -1156,6 +1180,7 @@ impl MergeLedgerLog {
         Ok(entry)
     }
     fn all_entries(&mut self) -> Result<Vec<MergeLedgerEntry>> {
+        self.ensure_history_available()?;
         self.recover_failed_append_tail()?;
         #[cfg(test)]
         {
@@ -1198,6 +1223,7 @@ impl MergeLedgerLog {
         Ok(entries)
     }
     fn validate_indexed_file_length(&mut self) -> Result<()> {
+        self.ensure_history_available()?;
         self.recover_failed_append_tail()?;
         let Some(file) = self.file.as_mut() else {
             return Ok(());
@@ -1344,6 +1370,7 @@ impl MergeLedgerLog {
         ))
     }
     fn truncate_to_len(&mut self, keep: usize) -> Result<()> {
+        self.ensure_history_available()?;
         self.recover_failed_append_tail()?;
         if keep >= self.total_entries {
             return Ok(());
@@ -1530,16 +1557,16 @@ impl Kura {
         }
     }
     fn build_block_height_index(block_data: &BlockData) -> BlockHeightIndex {
-        block_data
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, (hash, _))| {
-                NonZeroUsize::new(idx.saturating_add(1)).map(|height| (*hash, height))
-            })
-            .fold(BTreeMap::new(), |mut index, (hash, height)| {
-                index.entry(hash).or_insert(height);
-                index
-            })
+        let Some(entries) = block_data.dense_entries() else {
+            return HashMap::new();
+        };
+        let mut index = HashMap::with_capacity(block_data.len());
+        for (offset, (hash, _)) in entries.iter().enumerate() {
+            if let Some(height) = NonZeroUsize::new(offset.saturating_add(1)) {
+                index.entry(*hash).or_insert(height);
+            }
+        }
+        index
     }
     fn build_transaction_entrypoint_index(block_data: &BlockData) -> TransactionEntrypointIndex {
         let mut index = TransactionEntrypointIndex {
@@ -1552,7 +1579,10 @@ impl Kura {
             heights_by_timestamp_ms: BTreeMap::new(),
             heights_by_result_status: BTreeMap::new(),
         };
-        for (idx, (_, block)) in block_data.iter().enumerate() {
+        let Some(entries) = block_data.dense_entries() else {
+            return index;
+        };
+        for (idx, (_, block)) in entries.iter().enumerate() {
             let Some(block) = block else {
                 continue;
             };
@@ -2071,10 +2101,16 @@ impl Kura {
                 config.store_dir.resolve_relative_path(),
             )
         })?;
-        let pending_control_sidecar_limits = PendingControlSidecarLimits::from_config(
-            sumeragi_limits,
-            &config.store_dir.resolve_relative_path(),
-        )?;
+        let pending_control_sidecar_limits = if config.init_mode == InitMode::Fast {
+            // Consensus and every sidecar writer remain disabled for the whole Fast process.
+            // Do not let their unused production bounds delay or reject an emergency read boot.
+            PendingControlSidecarLimits::default()
+        } else {
+            PendingControlSidecarLimits::from_config(
+                sumeragi_limits,
+                &config.store_dir.resolve_relative_path(),
+            )?
+        };
         let provisional_hash_only_prefix = bootstrap_policy
             .enabled
             .then_some(bootstrap_policy.audited_height)
@@ -2296,18 +2332,29 @@ impl Kura {
         if configured_store_dir.as_os_str().is_empty() {
             return Err(Error::EmptyStoreRoot);
         }
-        let replica_registry_key_capacity = config
-            .replica_advert
-            .validate(config.blocks_in_memory)
-            .map_err(|error| Error::InvalidKuraReplicaAdvertConfiguration(error.to_string()))?;
-        let native_amx_evidence_prune_intent_max_bytes =
+        let replica_registry_key_capacity = if config.init_mode == InitMode::Fast {
+            NonZeroUsize::MIN
+        } else {
+            config
+                .replica_advert
+                .validate(config.blocks_in_memory)
+                .map_err(|error| Error::InvalidKuraReplicaAdvertConfiguration(error.to_string()))?
+        };
+        let native_amx_evidence_prune_intent_max_bytes = if config.init_mode == InitMode::Fast {
+            0
+        } else {
             Self::native_amx_evidence_prune_intent_max_bytes_for_retention(
                 config.lane_history_retention,
                 pending_control_sidecar_limits.aggregate_bytes,
-            )?;
-        create_dir_all_with_context(&configured_store_dir)?;
+            )?
+        };
+        if config.init_mode == InitMode::Strict {
+            create_dir_all_with_context(&configured_store_dir)?;
+        }
         // Resolve aliases once, before taking the lock, and use the same stable
-        // absolute root for every subsequent Kura path.
+        // absolute root for every subsequent Kura path. Fast deliberately does
+        // not create a missing root; it is valid only for Strict-initialized
+        // storage.
         let store_dir = std::fs::canonicalize(&configured_store_dir)
             .map_err(|error| Error::IO(error, configured_store_dir))?;
         let store_root = store_dir.clone();
@@ -2315,14 +2362,46 @@ impl Kura {
         #[cfg(all(unix, not(target_os = "espidf")))]
         let store_root_directory =
             Self::open_safety_wal_store_root_directory(&store_root, &store_root_lock_file)?;
-        Self::reject_retired_commit_roster_artifacts(&store_root)?;
-        let lane_history_retention = config.lane_history_retention;
+        if config.init_mode == InitMode::Strict {
+            Self::reject_retired_commit_roster_artifacts(&store_root)?;
+        }
+        let blocks_in_memory = if config.init_mode == InitMode::Fast {
+            NonZeroUsize::new(
+                config
+                    .blocks_in_memory
+                    .get()
+                    .min(EMERGENCY_FAST_RECENT_BLOCK_CACHE_CAPACITY.get()),
+            )
+            .expect("the emergency Fast cache ceiling is non-zero")
+        } else {
+            config.blocks_in_memory
+        };
+        let lane_history_retention = if config.init_mode == InitMode::Fast {
+            NonZeroUsize::MIN
+        } else {
+            config.lane_history_retention
+        };
         let primary_lane = lane_config.primary();
         let authenticated_configured_catalog = configured_catalog_hash.is_some();
         let mut provisional_open = provisional_hash_only_prefix.is_some();
         let mut read_only_primary_paths = None;
+        if provisional_open && config.init_mode == InitMode::Fast {
+            return Err(Error::InvalidSnapshotBootstrapMarker {
+                path: store_root,
+                reason: "emergency Fast mode cannot authenticate or finalize an imported snapshot; restart in strict mode"
+                    .to_owned(),
+            });
+        }
         if let Some(configured_catalog_hash) = configured_catalog_hash {
-            if provisional_open {
+            if config.init_mode == InitMode::Fast {
+                read_only_primary_paths = Some(Self::emergency_fast_configured_primary_paths(
+                    &store_dir,
+                    primary_lane,
+                )?);
+                warn!(
+                    "emergency Fast startup skipped configured-catalog and lane-geometry journal decoding"
+                );
+            } else if provisional_open {
                 Self::verify_configured_lane_catalog_baseline_read_only(
                     &store_dir,
                     configured_catalog_hash,
@@ -2357,7 +2436,7 @@ impl Kura {
                     Err(error) => return Err(error),
                 }
             }
-            if !provisional_open {
+            if !provisional_open && config.init_mode == InitMode::Strict {
                 Self::establish_or_verify_configured_lane_catalog_baseline_with_lock(
                     &store_dir,
                     configured_catalog_hash,
@@ -2367,18 +2446,24 @@ impl Kura {
                 Self::configured_catalog_preflight_crash_boundary(&store_dir)?;
             }
         }
-        Self::recover_autonomous_lifecycle_process_generation_atomic_temporary_on_startup(
-            &store_root,
-            &store_root_lock_file,
-            authenticated_configured_catalog && !provisional_open,
-        )?;
-        Self::read_autonomous_lifecycle_process_generation_record_for(&store_root)?;
-        Self::recover_autonomous_lifecycle_bootstrap_atomic_temporary_on_startup(
-            &store_root,
-            lane_config,
-            &store_root_lock_file,
-            authenticated_configured_catalog && !provisional_open,
-        )?;
+        if config.init_mode == InitMode::Strict {
+            Self::recover_autonomous_lifecycle_process_generation_atomic_temporary_on_startup(
+                &store_root,
+                &store_root_lock_file,
+                authenticated_configured_catalog && !provisional_open,
+            )?;
+            Self::read_autonomous_lifecycle_process_generation_record_for(&store_root)?;
+            Self::recover_autonomous_lifecycle_bootstrap_atomic_temporary_on_startup(
+                &store_root,
+                lane_config,
+                &store_root_lock_file,
+                authenticated_configured_catalog && !provisional_open,
+            )?;
+        } else {
+            warn!(
+                "emergency Fast startup deferred process-generation and autonomous bootstrap artifact audits until a Strict restart"
+            );
+        }
         let (blocks_root, merge_log_path, journal_resolved_primary) =
             if let Some(paths) = read_only_primary_paths {
                 paths
@@ -2392,7 +2477,9 @@ impl Kura {
         if blocks_root.as_os_str().is_empty() || merge_log_path.as_os_str().is_empty() {
             return Err(Error::EmptyStoreRoot);
         }
-        Self::reject_retired_pipeline_roster_sidecars(&blocks_root)?;
+        if config.init_mode == InitMode::Strict {
+            Self::reject_retired_pipeline_roster_sidecars(&blocks_root)?;
+        }
         let merge_cache_capacity =
             sanitize_merge_cache_capacity(config.merge_ledger_cache_capacity);
         if let Some(preflight) = configured_primary_preflight.as_mut() {
@@ -2410,6 +2497,7 @@ impl Kura {
         let mut provisional_snapshot_bootstrap = None;
         let pending_rollback;
         let durable_height_bound;
+        let mut fast_preflight_height = None;
         if provisional_open {
             for path in [
                 Self::rollback_intent_path(&blocks_root),
@@ -2471,32 +2559,98 @@ impl Kura {
                         .to_owned(),
                 });
             }
-            // Reading a rollback marker can promote a fully synced temporary marker. Do that only
-            // on the ordinary, fully authorized startup path.
-            pending_rollback = Self::load_rollback_intent(&blocks_root)?;
-            block_store.recover_canonical_storage_stages()?;
-            if journal_resolved_primary {
-                block_store.require_existing_journal_bound_canonical_files()?;
+            match config.init_mode {
+                InitMode::Fast => {
+                    for path in [
+                        Self::rollback_intent_path(&blocks_root),
+                        Self::rollback_intent_path(&blocks_root).with_extension("norito.tmp"),
+                    ] {
+                        match std::fs::symlink_metadata(&path) {
+                            Ok(_) => {
+                                return Err(Error::PruneIntentConflict(
+                                    "Kura fast init cannot recover a pending rollback; restart in strict mode"
+                                        .to_owned(),
+                                ));
+                            }
+                            Err(error) if error.kind() == ErrorKind::NotFound => {}
+                            Err(error) => return Err(Error::IO(error, path)),
+                        }
+                    }
+                    if journal_resolved_primary {
+                        block_store.require_existing_journal_bound_canonical_files()?;
+                    }
+                    let height = block_store.preflight_fast_durable_prefix()?;
+                    fast_preflight_height = Some(height);
+                    durable_height_bound = height;
+                    pending_rollback = None;
+                }
+                InitMode::Strict => {
+                    // Reading a rollback marker can promote a fully synced temporary marker. Do
+                    // that only on the fully validating startup path.
+                    pending_rollback = Self::load_rollback_intent(&blocks_root)?;
+                    block_store.recover_canonical_storage_stages()?;
+                    if journal_resolved_primary {
+                        block_store.require_existing_journal_bound_canonical_files()?;
+                    }
+                    durable_height_bound = block_store
+                        .read_commit_marker()?
+                        .map_or(0, |marker| marker.count);
+                }
             }
-            durable_height_bound = block_store
-                .read_commit_marker()?
-                .map_or(0, |marker| marker.count);
         }
-        let v2_finality_floor = Self::highest_v2_finality_artifact_height_for(
-            &store_root,
-            &blocks_root,
-            durable_height_bound,
-        )?;
+        let v2_finality_floor = if provisional_open || config.init_mode == InitMode::Strict {
+            Self::highest_v2_finality_artifact_height_for(
+                &store_root,
+                &blocks_root,
+                durable_height_bound,
+            )?
+        } else {
+            None
+        };
         if !provisional_open {
             if let Some(finalized_height) = v2_finality_floor {
                 block_store.preflight_v2_finalized_prefix(finalized_height)?;
             }
-            block_store.create_files_if_they_do_not_exist()?;
+            match config.init_mode {
+                InitMode::Fast => block_store.open_fast_prevalidated_files_read_only()?,
+                InitMode::Strict => block_store.create_files_if_they_do_not_exist()?,
+            }
+            if let Some(expected_height) = fast_preflight_height {
+                let actual_height = block_store.read_exact_durable_index_count()?;
+                if actual_height != expected_height {
+                    return Err(Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "Kura fast init recovery changed the committed block boundary",
+                        ),
+                        blocks_root.clone(),
+                    ));
+                }
+            }
         }
         if let Some(preflight) = configured_primary_preflight.as_mut() {
             Self::reverify_configured_primary_blocks_open(preflight, &blocks_root, true)?;
         }
-        let prune_intent = Self::read_prune_intent_for_startup(&store_root, provisional_open)?;
+        let prune_intent = if config.init_mode == InitMode::Fast {
+            for path in [
+                store_root.join(PRUNE_INTENT_FILE_NAME),
+                store_root.join(PRUNE_INTENT_TEMP_FILE_NAME),
+            ] {
+                match std::fs::symlink_metadata(&path) {
+                    Ok(_) => {
+                        return Err(Error::PruneIntentConflict(
+                            "Kura emergency Fast init cannot recover a pending prune; restart in strict mode"
+                                .to_owned(),
+                        ));
+                    }
+                    Err(error) if error.kind() == ErrorKind::NotFound => {}
+                    Err(error) => return Err(Error::IO(error, path)),
+                }
+            }
+            None
+        } else {
+            Self::read_prune_intent_for_startup(&store_root, provisional_open)?
+        };
         if prune_intent.is_some() && pending_rollback.is_some() {
             return Err(Error::PruneIntentConflict(
                 "durable prune and rollback intents are both active".to_owned(),
@@ -2535,8 +2689,14 @@ impl Kura {
         if let Some(preflight) = configured_primary_preflight.as_mut() {
             Self::reverify_configured_primary_merge_open(preflight, &merge_log_path, false)?;
         }
-        let mut merge_log =
-            MergeLedgerLog::startup(&merge_log_path, merge_cache_capacity, provisional_open)?;
+        let mut merge_log = if config.init_mode == InitMode::Fast {
+            warn!(
+                "emergency Fast startup deferred merge-ledger decoding, indexing, and tail repair until a Strict restart"
+            );
+            MergeLedgerLog::deferred(merge_cache_capacity)
+        } else {
+            MergeLedgerLog::startup(&merge_log_path, merge_cache_capacity, provisional_open)?
+        };
         if let Some(preflight) = configured_primary_preflight.as_mut() {
             Self::reverify_configured_primary_merge_open(preflight, &merge_log_path, true)?;
         }
@@ -2556,7 +2716,7 @@ impl Kura {
         let block_plain_text_path = config
             .debug_output_new_blocks
             .then(|| blocks_root.join("blocks.jsonl"));
-        let (_, mut chain_validation) = Kura::init(
+        let mut chain_validation = Kura::init(
             &mut block_store,
             config.init_mode,
             v2_finality_floor,
@@ -2567,7 +2727,7 @@ impl Kura {
         if let Some(preflight) = configured_primary_preflight.as_mut() {
             Self::reverify_configured_primary_blocks_open(preflight, &blocks_root, true)?;
         }
-        if !provisional_open {
+        if !provisional_open && config.init_mode == InitMode::Strict {
             let manifest_reconciliation = Self::reconcile_commit_manifests(
                 &mut block_store,
                 &blocks_root,
@@ -2591,15 +2751,17 @@ impl Kura {
                 }
             }
         }
-        let block_data = chain_validation
-            .hashes
-            .iter()
-            .copied()
-            .map(|hash| (hash, None))
-            .collect();
+        let block_count = usize::try_from(block_store.read_exact_durable_index_count()?)?;
+        let block_data = if config.init_mode == InitMode::Fast && !provisional_open {
+            BlockData::deferred(block_count)
+        } else {
+            std::mem::take(&mut chain_validation.hashes)
+                .into_iter()
+                .map(|hash| (hash, None))
+                .collect()
+        };
         let block_height_index = Self::build_block_height_index(&block_data);
         let transaction_entrypoint_index = Self::build_transaction_entrypoint_index(&block_data);
-        let block_count = block_data.len();
         let hard_fork_hash_only_block_count = chain_validation
             .hard_fork_hash_only_block_count
             .min(block_count);
@@ -2611,7 +2773,7 @@ impl Kura {
             );
         }
         info!(
-            mode=?config.init_mode,
+            mode = ?config.init_mode,
             block_count,
             "Kura block journal init complete"
         );
@@ -2623,7 +2785,11 @@ impl Kura {
         }
         let defer_lane_provisioning = authenticated_configured_catalog || journal_resolved_primary;
         if !provisional_open {
-            if defer_lane_provisioning {
+            if config.init_mode == InitMode::Fast {
+                warn!(
+                    "emergency Fast startup skipped lane directory provisioning and geometry reconciliation"
+                );
+            } else if defer_lane_provisioning {
                 // The authenticated catalog or geometry journal will provision secondary lanes
                 // after its binding is verified.  The already-resolved canonical lane still
                 // needs its auxiliary directory before startup replay inventories it.
@@ -2644,7 +2810,10 @@ impl Kura {
         } else {
             Self::lane_storage_entries_from_config(lane_config)
         };
-        if !provisional_open && merge_log.total_entries > block_count {
+        if config.init_mode == InitMode::Strict
+            && !provisional_open
+            && merge_log.total_entries > block_count
+        {
             let trimmed = merge_log.total_entries - block_count;
             if chain_validation.truncated {
                 info!(
@@ -2671,6 +2840,7 @@ impl Kura {
             prune_in_progress: AtomicBool::new(false),
             prune_recovery_required: AtomicBool::new(false),
             block_data: Mutex::new(block_data),
+            auxiliary_history_deferred: config.init_mode == InitMode::Fast && !provisional_open,
             hard_fork_hash_only_block_count: AtomicUsize::new(hard_fork_hash_only_block_count),
             block_height_index: Mutex::new(block_height_index),
             transaction_entrypoint_index: Mutex::new(transaction_entrypoint_index),
@@ -2686,7 +2856,7 @@ impl Kura {
             merge_carrier_lock: Mutex::new(()),
             merge_carrier_index: Mutex::new(MergeCarrierIndex::default()),
             pipeline_sidecar_queue: Mutex::new(VecDeque::new()),
-            pipeline_sidecar_queue_cap: AtomicUsize::new(config.blocks_in_memory.get()),
+            pipeline_sidecar_queue_cap: AtomicUsize::new(blocks_in_memory.get()),
             fastpq_proof_queue: Mutex::new(VecDeque::new()),
             fastpq_proof_sidecar_queue_cap: AtomicUsize::new(
                 default_fastpq_proof_sidecar_queue_cap(),
@@ -2702,11 +2872,17 @@ impl Kura {
             active_merge_path: Mutex::new(merge_log_path.clone()),
             lane_storage_entries: Mutex::new(startup_lane_storage_entries),
             committed_lane_status_revision: AtomicU64::new(0),
-            latest_certified_frontier_storage_unknown: AtomicBool::new(false),
+            latest_certified_frontier_storage_unknown: AtomicBool::new(
+                config.init_mode == InitMode::Fast && !provisional_open,
+            ),
             certified_frontier_pair_durability: Mutex::new(BTreeMap::new()),
             certified_frontier_artifact_validation: Mutex::new(BTreeMap::new()),
             lane_geometry_lock: Mutex::new(()),
-            max_disk_usage_bytes: config.max_disk_usage_bytes.get(),
+            max_disk_usage_bytes: if config.init_mode == InitMode::Fast {
+                0
+            } else {
+                config.max_disk_usage_bytes.get()
+            },
             eviction_required_replicas: config.replica_advert.eviction_required_replicas,
             local_peer_id: OnceLock::new(),
             replica_registry: Mutex::new(BTreeMap::new()),
@@ -2731,7 +2907,7 @@ impl Kura {
             disk_usage_initialized: AtomicBool::new(false),
             disk_usage_total_initialized: AtomicBool::new(false),
             disk_usage_total_last_refresh: AtomicU64::new(0),
-            blocks_in_memory: config.blocks_in_memory,
+            blocks_in_memory,
             lane_history_retention,
             pending_control_sidecar_limits,
             native_amx_evidence_prune_intent_max_bytes,
@@ -2806,7 +2982,6 @@ impl Kura {
             #[cfg(test)]
             pending_queue_plan_admission_batch_validations: AtomicUsize::new(0),
             #[cfg(test)]
-            #[cfg(test)]
             fail_retained_rewrite_discard_after: AtomicUsize::new(usize::MAX),
             #[cfg(test)]
             fail_next_retained_rewrite_recovery: AtomicBool::new(false),
@@ -2845,53 +3020,66 @@ impl Kura {
         if let Some(intent) = prune_intent.as_ref() {
             kura.preflight_recovered_prune_capacity_before_mutation(intent)?;
         }
-        kura.audit_retained_autonomous_lifecycle_cursor_generations()?;
+        if config.init_mode == InitMode::Strict {
+            kura.audit_retained_autonomous_lifecycle_cursor_generations()?;
+        }
         if !provisional_open {
-            kura.recover_retained_block_rewrite_stage_on_startup(&blocks_root)?;
-            kura.recover_lane_block_execution_input_pairs_on_startup()?;
-            kura.reconcile_historical_autonomous_recovery_atomic_temps_on_startup()?;
-            let verified_finality = kura.validate_v2_finality_inventory_on_startup()?;
-            kura.install_v2_startup_finality_verification_inventory(verified_finality);
-            kura.prune_retained_block_records_from(
-                &blocks_root,
-                u64::try_from(block_count)?.saturating_add(1),
-            )?;
-            kura.validate_retained_block_inventory_on_startup()?;
-            kura.recover_canonical_association_stage()?;
-            kura.reconcile_merge_carriers_from_durable_blocks_with_authority(
-                None,
-                prune_intent.is_some(),
-            )?;
-            if let Some(intent) = prune_intent.as_ref() {
-                kura.complete_recovered_prune_intent(intent)?;
+            if config.init_mode == InitMode::Strict {
+                kura.recover_retained_block_rewrite_stage_on_startup(&blocks_root)?;
+                kura.recover_lane_block_execution_input_pairs_on_startup()?;
+                kura.reconcile_historical_autonomous_recovery_atomic_temps_on_startup()?;
+                let verified_finality = kura.validate_v2_finality_inventory_on_startup(true)?;
+                kura.install_v2_startup_finality_verification_inventory(verified_finality);
+                kura.prune_retained_block_records_from(
+                    &blocks_root,
+                    u64::try_from(block_count)?.saturating_add(1),
+                )?;
+                kura.validate_retained_block_inventory_on_startup()?;
+                kura.recover_canonical_association_stage()?;
+                kura.reconcile_merge_carriers_from_durable_blocks_with_authority(
+                    None,
+                    prune_intent.is_some(),
+                    true,
+                )?;
+                if let Some(intent) = prune_intent.as_ref() {
+                    kura.complete_recovered_prune_intent(intent)?;
+                }
+                kura.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()?;
+                kura.rebuild_certified_bundle_capacity_reservations_on_startup()?;
+                kura.repair_lane_merge_application_frontiers_on_startup()?;
+                kura.rebuild_autonomous_lane_route_latest_attempt_indexes_on_startup()?;
+                kura.repair_autonomous_lane_merge_bundles_on_startup()?;
+                kura.rebuild_native_amx_participant_receipt_latest_indexes_on_startup()?;
+                kura.refresh_v2_startup_replay_auxiliary_binding()?;
+                kura.validate_configured_kura_capacity_after_startup_recovery()?;
+            } else {
+                warn!(
+                    "Kura emergency Fast mode skipped canonical association, historical retained, lane, merge-carrier, reservation, and capacity recovery"
+                );
             }
-            kura.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()?;
-            kura.rebuild_certified_bundle_capacity_reservations_on_startup()?;
-            kura.repair_lane_merge_application_frontiers_on_startup()?;
-            kura.rebuild_autonomous_lane_route_latest_attempt_indexes_on_startup()?;
-            kura.repair_autonomous_lane_merge_bundles_on_startup()?;
-            kura.rebuild_native_amx_participant_receipt_latest_indexes_on_startup()?;
-            kura.refresh_v2_startup_replay_auxiliary_binding()?;
-            kura.validate_configured_kura_capacity_after_startup_recovery()?;
         }
-        match kura.kura_disk_usage_bytes() {
-            Ok(bytes) => {
-                kura.disk_usage.store(bytes, Ordering::Relaxed);
-                kura.disk_usage_initialized.store(true, Ordering::Relaxed);
+        if config.init_mode == InitMode::Strict {
+            match kura.kura_disk_usage_bytes_with_total() {
+                Ok((enforced, total)) => {
+                    kura.disk_usage.store(enforced, Ordering::Relaxed);
+                    kura.disk_usage_initialized.store(true, Ordering::Relaxed);
+                    kura.disk_usage_total.store(total, Ordering::Relaxed);
+                    kura.disk_usage_total_initialized
+                        .store(true, Ordering::Relaxed);
+                    kura.disk_usage_total_last_refresh
+                        .store(Self::now_unix_secs(), Ordering::Relaxed);
+                }
+                Err(err) => warn!(
+                    ?err,
+                    path = %kura.store_root.display(),
+                    "failed to measure initial Kura disk usage"
+                ),
             }
-            Err(err) => warn!(
-                ?err,
-                path = %kura.store_root.display(),
-                "failed to measure initial Kura disk usage"
-            ),
-        }
-        match kura.refresh_total_disk_usage_bytes() {
-            Ok(_) => {}
-            Err(err) => warn!(
-                ?err,
-                path = %kura.store_root.display(),
-                "failed to measure initial total Kura disk usage"
-            ),
+        } else {
+            warn!(
+                configured_limit = config.max_disk_usage_bytes.get(),
+                "Kura emergency Fast mode skipped the full disk-usage inventory and suspended its local Kura capacity cap until a Strict restart"
+            );
         }
         let verified_finality_count = kura
             .v2_startup_finality_verification_inventory
@@ -2918,6 +3106,16 @@ impl Kura {
             &LaneConfig::default(),
             BLOCKS_IN_MEMORY,
         )
+    }
+    /// Create an empty isolated Kura with emergency Fast read semantics for
+    /// focused snapshot-deserialization tests.
+    #[cfg(test)]
+    pub(crate) fn blank_emergency_fast_kura_for_testing() -> Arc<Kura> {
+        let mut kura = Self::blank_kura_for_testing();
+        Arc::get_mut(&mut kura)
+            .expect("fresh test Kura has one owner")
+            .auxiliary_history_deferred = true;
+        kura
     }
     /// Return the number of FASTPQ proof snapshots awaiting persistence in tests.
     #[cfg(test)]
@@ -3027,9 +3225,10 @@ impl Kura {
             prune_lock: Mutex::new(()),
             prune_in_progress: AtomicBool::new(false),
             prune_recovery_required: AtomicBool::new(false),
-            block_data: Mutex::new(Vec::new()),
+            block_data: Mutex::new(BlockData::default()),
+            auxiliary_history_deferred: false,
             hard_fork_hash_only_block_count: AtomicUsize::new(0),
-            block_height_index: Mutex::new(BTreeMap::new()),
+            block_height_index: Mutex::new(HashMap::new()),
             transaction_entrypoint_index: Mutex::new(TransactionEntrypointIndex::complete_empty()),
             block_notify_tx,
             block_notify_rx: Mutex::new(Some(block_notify_rx)),
@@ -3296,6 +3495,11 @@ impl Kura {
     /// rejecting safety evidence could prevent finality or prevent the eviction needed to satisfy
     /// that same budget. Use [`Self::refresh_disk_usage_bytes`] to resync both counters.
     pub(crate) fn disk_usage_bytes(&self) -> Result<u64> {
+        if self.emergency_fast_startup_enabled()
+            && !self.disk_usage_total_initialized.load(Ordering::Acquire)
+        {
+            return Err(self.emergency_fast_disk_usage_unavailable());
+        }
         loop {
             let generation = {
                 let mut accounting = self.disk_usage_total_accounting.lock();
@@ -3318,8 +3522,11 @@ impl Kura {
             return Ok(self.disk_usage_total.load(Ordering::Relaxed));
         }
     }
-    /// Recompute on-disk bytes used by Kura and refresh the cached value.
+    /// Recompute enforced and total on-disk bytes in one scan and refresh both caches.
     pub(crate) fn refresh_disk_usage_bytes(&self) -> Result<u64> {
+        if self.emergency_fast_startup_enabled() {
+            return Err(self.emergency_fast_disk_usage_unavailable());
+        }
         loop {
             let generation = {
                 let mut accounting = self.disk_usage_total_accounting.lock();
@@ -3329,9 +3536,8 @@ impl Kura {
                 }
                 accounting.generation
             };
-            let enforced = self.kura_disk_usage_bytes();
+            let scanned = self.kura_disk_usage_bytes_with_total();
             let durable_budget = self.persisted_count_and_unindexed_bytes_raw();
-            let total = self.kura_total_disk_usage_bytes();
             #[cfg(test)]
             self.maybe_pause_total_disk_usage_scan_after_scan_for_tests();
             let accounting = self.disk_usage_total_accounting.lock();
@@ -3339,18 +3545,8 @@ impl Kura {
                 drop(accounting);
                 continue;
             }
-            let usage = match enforced {
+            let (usage, total) = match scanned {
                 Ok(usage) => usage,
-                Err(error) => {
-                    self.disk_usage_initialized.store(false, Ordering::Relaxed);
-                    self.disk_usage_total_initialized
-                        .store(false, Ordering::Relaxed);
-                    self.invalidate_durable_budget_snapshot();
-                    return Err(error);
-                }
-            };
-            let total = match total {
-                Ok(total) => total,
                 Err(error) => {
                     self.disk_usage_initialized.store(false, Ordering::Relaxed);
                     self.disk_usage_total_initialized
@@ -3380,6 +3576,9 @@ impl Kura {
     }
     /// Recompute total on-disk bytes and refresh the cached value.
     pub(crate) fn refresh_total_disk_usage_bytes(&self) -> Result<u64> {
+        if self.emergency_fast_startup_enabled() {
+            return Err(self.emergency_fast_disk_usage_unavailable());
+        }
         loop {
             let generation = {
                 let mut accounting = self.disk_usage_total_accounting.lock();
@@ -3458,6 +3657,9 @@ impl Kura {
         }
     }
     fn maybe_refresh_total_disk_usage_bytes(&self) -> Result<()> {
+        if self.emergency_fast_startup_enabled() {
+            return Err(self.emergency_fast_disk_usage_unavailable());
+        }
         if !self.disk_usage_total_initialized.load(Ordering::Relaxed) {
             let _ = self.refresh_total_disk_usage_bytes()?;
             return Ok(());
@@ -3470,11 +3672,19 @@ impl Kura {
         Ok(())
     }
     fn ensure_disk_usage_initialized(&self) -> Result<()> {
+        if self.emergency_fast_startup_enabled() {
+            return Err(self.emergency_fast_disk_usage_unavailable());
+        }
         if self.disk_usage_initialized.load(Ordering::Relaxed) {
             return Ok(());
         }
         let _ = self.refresh_disk_usage_bytes()?;
         Ok(())
+    }
+    fn emergency_fast_disk_usage_unavailable(&self) -> Error {
+        Error::EmergencyFastAuxiliaryUnavailable {
+            subsystem: "disk-usage inventory",
+        }
     }
     /// Update the cached disk usage by applying a before/after delta.
     pub(crate) fn update_disk_usage_delta(&self, before: u64, after: u64) {
@@ -3826,6 +4036,11 @@ impl Kura {
     }
     fn resolve_canonical_storage_before_mutation(&self) -> Result<()> {
         self.durable_mutation_authorized()?;
+        if self.emergency_fast_startup_enabled() {
+            return Err(Error::EmergencyFastAuxiliaryUnavailable {
+                subsystem: "canonical mutation",
+            });
+        }
         if self.store_root.as_os_str().is_empty() {
             return Ok(());
         }
@@ -5148,6 +5363,12 @@ impl Kura {
         *self.lane_storage_entries.lock() = restored_entries;
         drop(_canonical_chain_guard);
         drop(_prune_guard);
+        if self.emergency_fast_startup_enabled() {
+            warn!(
+                "Kura emergency Fast mode skipped historical lane repair and capacity audits after snapshot lane restore"
+            );
+            return Ok(());
+        }
         self.recover_lane_block_execution_input_pairs_on_startup()?;
         self.reconcile_historical_autonomous_recovery_atomic_temps_on_startup()?;
         self.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()?;
@@ -5229,6 +5450,12 @@ impl Kura {
                 ),
                 primary_merge_path,
             ));
+        }
+        if self.emergency_fast_startup_enabled() {
+            warn!(
+                "Kura emergency Fast mode skipped historical lane repair and capacity audits after geometry restore"
+            );
+            return Ok(());
         }
         self.recover_lane_block_execution_input_pairs_on_startup()?;
         self.reconcile_historical_autonomous_recovery_atomic_temps_on_startup()?;
@@ -5613,6 +5840,11 @@ impl Kura {
         Ok(())
     }
     fn preflight_retire_lane_storage(&self, entry: &LaneConfigEntry) -> Result<()> {
+        if self.auxiliary_history_deferred {
+            return Err(Error::EmergencyFastAuxiliaryUnavailable {
+                subsystem: "certified-bundle capacity reservations",
+            });
+        }
         self.ensure_lane_has_no_certified_bundle_capacity_reservation(entry)?;
         let blocks_dir = entry.blocks_dir(&self.store_root);
         if blocks_dir == *self.active_blocks_dir.lock() {
@@ -5787,15 +6019,17 @@ impl Kura {
         accounting_mutation.finish();
         Ok(())
     }
-    /// Append a merge-ledger entry to the persistent log and in-memory cache.
+    /// Append a merge-ledger entry without its mandatory global carrier block for focused tests.
     ///
     /// # Errors
     /// Returns an error if the merge-ledger entry cannot be persisted.
-    pub fn append_merge_entry(&self, entry: &MergeLedgerEntry) -> Result<()> {
+    #[cfg(test)]
+    pub(crate) fn append_merge_entry_for_test(&self, entry: &MergeLedgerEntry) -> Result<()> {
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
         self.resolve_canonical_storage_before_mutation()?;
         self.append_merge_entry_after_storage_resolution(entry)
     }
+    #[cfg(test)]
     fn append_merge_entry_after_storage_resolution(&self, entry: &MergeLedgerEntry) -> Result<()> {
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         let appended = self.merge_log.lock().append(entry)?;
@@ -8097,6 +8331,11 @@ impl Kura {
                 return Ok(());
             }
         }
+        if self.auxiliary_history_deferred {
+            return Err(Error::EmergencyFastAuxiliaryUnavailable {
+                subsystem: "merge-carrier index",
+            });
+        }
         let records = self.merge_carrier_records_from_disk_unlocked()?;
         let mut index = self.merge_carrier_index.lock();
         #[cfg(test)]
@@ -9106,12 +9345,17 @@ impl Kura {
         authority: &SnapshotFinalizationMutationAuthority<'_>,
     ) -> Result<()> {
         authority.validate_for(self)?;
-        self.reconcile_merge_carriers_from_durable_blocks_with_authority(Some(authority), false)
+        self.reconcile_merge_carriers_from_durable_blocks_with_authority(
+            Some(authority),
+            false,
+            true,
+        )
     }
     fn reconcile_merge_carriers_from_durable_blocks_with_authority(
         &self,
         finalization_authority: Option<&SnapshotFinalizationMutationAuthority<'_>>,
         reject_missing_retained_carrier: bool,
+        scan_canonical_bodies: bool,
     ) -> Result<()> {
         if let Some(authority) = finalization_authority {
             authority.validate_for(self)?;
@@ -9205,44 +9449,46 @@ impl Kura {
         // bytes, but keep every merge-derived transaction index explicitly
         // incomplete until the repaired carrier is authenticated by durable
         // current-version finality below.
-        for height in 1..=block_count {
-            let height = NonZeroUsize::new(height).expect("durable block height is non-zero");
-            let Some(block) = self.get_block_without_merge_sidecar(height) else {
-                continue;
-            };
-            let Some(reference) = Self::block_merge_reference(&block) else {
-                continue;
-            };
-            let entry = self.merge_entry_by_hash(reference.entry_hash)?.ok_or(
-                Error::MissingCertifiedMergeSidecar {
-                    entry_hash: reference.entry_hash,
-                },
-            )?;
-            if !reference.matches_entry(&entry) {
-                return Err(Error::MergeReferenceMismatch(format!(
-                    "canonical block {} compact reference does not match its sidecar",
-                    height.get()
-                )));
-            }
-            if reject_missing_retained_carrier {
-                let record = Self::carrier_record_for_block_entry(&block, &entry)?;
-                let _guard = self.merge_carrier_lock.lock();
-                if self.preflight_merge_carrier_record_unlocked(record)? {
-                    return Err(Error::PruneIntentConflict(format!(
-                        "active prune cannot allocate missing retained merge carrier at block {}",
+        if scan_canonical_bodies {
+            for height in 1..=block_count {
+                let height = NonZeroUsize::new(height).expect("durable block height is non-zero");
+                let Some(block) = self.get_block_without_merge_sidecar(height) else {
+                    continue;
+                };
+                let Some(reference) = Self::block_merge_reference(&block) else {
+                    continue;
+                };
+                let entry = self.merge_entry_by_hash(reference.entry_hash)?.ok_or(
+                    Error::MissingCertifiedMergeSidecar {
+                        entry_hash: reference.entry_hash,
+                    },
+                )?;
+                if !reference.matches_entry(&entry) {
+                    return Err(Error::MergeReferenceMismatch(format!(
+                        "canonical block {} compact reference does not match its sidecar",
                         height.get()
                     )));
                 }
-            } else {
-                self.append_committed_merge_entry_for_block_if_missing(&block, &entry)?;
+                if reject_missing_retained_carrier {
+                    let record = Self::carrier_record_for_block_entry(&block, &entry)?;
+                    let _guard = self.merge_carrier_lock.lock();
+                    if self.preflight_merge_carrier_record_unlocked(record)? {
+                        return Err(Error::PruneIntentConflict(format!(
+                            "active prune cannot allocate missing retained merge carrier at block {}",
+                            height.get()
+                        )));
+                    }
+                } else {
+                    self.append_committed_merge_entry_for_block_if_missing(&block, &entry)?;
+                }
+                self.set_transaction_entrypoint_index_entry_with_merge(
+                    height.get(),
+                    &block,
+                    None,
+                    block_count,
+                    false,
+                );
             }
-            self.set_transaction_entrypoint_index_entry_with_merge(
-                height.get(),
-                &block,
-                None,
-                block_count,
-                false,
-            );
         }
         // Existing carrier files must never silently migrate to another
         // block. A normal process restart may retain only the sole durable tip
@@ -9267,7 +9513,9 @@ impl Kura {
                 })?;
             let height = NonZeroUsize::new(usize::try_from(record.block_height)?)
                 .ok_or_else(|| Error::MergeCarrierConflict("carrier height is zero".to_owned()))?;
-            if let Some(block) = self.get_block_without_merge_sidecar(height) {
+            if scan_canonical_bodies
+                && let Some(block) = self.get_block_without_merge_sidecar(height)
+            {
                 self.set_transaction_entrypoint_index_entry_with_merge(
                     height.get(),
                     &block,
@@ -11315,7 +11563,7 @@ impl Kura {
             let committed = {
                 let mut merge_log = self.merge_log.lock();
                 self.ensure_prune_recovery_not_required()?;
-                merge_log.contains_hash(hash)
+                merge_log.contains_hash(hash)?
             };
             if committed {
                 continue;
@@ -11632,7 +11880,8 @@ impl Kura {
         Ok((merge_log_len_before, carrier_written))
     }
     /// Snapshot merge-ledger entries retained in the in-memory cache.
-    pub fn merge_ledger_snapshot(&self) -> Vec<MergeLedgerEntry> {
+    #[cfg(test)]
+    pub(crate) fn merge_ledger_snapshot(&self) -> Vec<MergeLedgerEntry> {
         if self.prune_recovery_is_required()
             || self.canonical_storage_poisoned.load(Ordering::Acquire)
         {
@@ -11654,29 +11903,25 @@ impl Kura {
     }
     /// Snapshot at most `limit` newest cached merge-ledger entries, newest first.
     ///
-    /// Unlike [`Self::merge_ledger_snapshot`], diagnostic callers can use this
-    /// accessor without cloning an operator-configured cache of arbitrary size.
-    #[must_use]
-    pub fn merge_ledger_latest_snapshot(&self, limit: usize) -> Vec<MergeLedgerEntry> {
-        if limit == 0
-            || self.prune_recovery_is_required()
-            || self.canonical_storage_poisoned.load(Ordering::Acquire)
-        {
-            return Vec::new();
-        }
+    /// Diagnostic callers can use this accessor without cloning an
+    /// operator-configured cache of arbitrary size.
+    ///
+    /// # Errors
+    /// Returns an explicit unavailable error when emergency Fast startup
+    /// deferred merge history, or when canonical storage is fail-stop poisoned.
+    pub(crate) fn merge_ledger_latest_snapshot(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<MergeLedgerEntry>> {
+        self.ensure_prune_recovery_not_required()?;
+        self.ensure_canonical_storage_not_poisoned()?;
         let merge_log = self.merge_log.lock();
-        if self.prune_recovery_is_required()
-            || self.canonical_storage_poisoned.load(Ordering::Acquire)
-        {
-            return Vec::new();
-        }
-        let entries = merge_log.latest_snapshot(limit);
-        if self.prune_recovery_is_required()
-            || self.canonical_storage_poisoned.load(Ordering::Acquire)
-        {
-            return Vec::new();
-        }
-        entries
+        self.ensure_prune_recovery_not_required()?;
+        self.ensure_canonical_storage_not_poisoned()?;
+        let entries = merge_log.latest_snapshot(limit)?;
+        self.ensure_prune_recovery_not_required()?;
+        self.ensure_canonical_storage_not_poisoned()?;
+        Ok(entries)
     }
     /// Read every durable merge-ledger entry in chronological order.
     ///
@@ -11709,6 +11954,7 @@ impl Kura {
         let merge_log = self.merge_log.lock();
         self.ensure_prune_recovery_not_required()?;
         self.ensure_canonical_storage_not_poisoned()?;
+        merge_log.ensure_history_available()?;
         let heights = merge_log.latest_execution_heights();
         self.ensure_prune_recovery_not_required()?;
         self.ensure_canonical_storage_not_poisoned()?;
@@ -11823,7 +12069,7 @@ impl Kura {
         mode: InitMode,
         v2_finality_floor: Option<u64>,
         provisional_hash_only_prefix: Option<usize>,
-    ) -> Result<(BlockData, ChainValidation)> {
+    ) -> Result<ChainValidation> {
         let block_index_count: usize = block_store
             .read_durable_index_count()?
             .try_into()
@@ -11837,17 +12083,14 @@ impl Kura {
             )?
         } else {
             match mode {
-                InitMode::Fast => Kura::init_fast_mode(
-                    block_store,
-                    block_index_count,
-                    v2_finality_floor,
-                )
-                .or_else(|error| {
-                    warn!(%error, "Hashes file is broken. Falling back to strict init mode.");
-                    Kura::init_strict_mode(block_store, block_index_count, v2_finality_floor)
-                }),
+                InitMode::Fast => {
+                    warn!(
+                        "Kura fast init trusts the durable local journal and defers full block validation; restart in strict mode after emergency recovery"
+                    );
+                    Kura::init_fast_mode(block_store, block_index_count, v2_finality_floor)
+                }
                 InitMode::Strict => {
-                    Kura::init_strict_mode(block_store, block_index_count, v2_finality_floor)
+                    Kura::init_canonical_chain(block_store, block_index_count, v2_finality_floor)
                 }
             }?
         };
@@ -11860,14 +12103,7 @@ impl Kura {
         if chain_validation.hash_mismatch {
             warn!("Kura rewrote hashes file after detecting mismatches with on-disk blocks");
         }
-        // The none value is set in order to indicate that the blocks exist on disk but are not yet loaded.
-        let block_data = chain_validation
-            .hashes
-            .iter()
-            .copied()
-            .map(|hash| (hash, None))
-            .collect();
-        Ok((block_data, chain_validation))
+        Ok(chain_validation)
     }
     fn init_provisional_snapshot_bootstrap(
         block_store: &mut BlockStore,
@@ -11976,52 +12212,49 @@ impl Kura {
         };
         block_store.overwrite_block_hash_suffix(finalized_height, suffix)
     }
+    /// Open the exact durable journal without decoding historical block bodies.
+    ///
+    /// Read-only preflight has already bound the durable count and terminal hash.
+    /// Fast mode leaves any unpublished suffix untouched and deliberately trusts the
+    /// committed journal prefix. A requested block is still decoded and checked
+    /// lazily before it is returned.
     fn init_fast_mode(
         block_store: &mut BlockStore,
         block_index_count: usize,
         v2_finality_floor: Option<u64>,
     ) -> Result<ChainValidation, Error> {
-        let mut block_hashes_count: usize = block_store
-            .read_hashes_count()?
-            .try_into()
-            .expect("INTERNAL BUG: block hashes count exceeds usize::MAX");
-        if block_hashes_count > block_index_count {
-            Self::ensure_startup_rewrite_respects_v2_finality(
-                v2_finality_floor,
-                u64::try_from(block_index_count)?.saturating_add(1),
-            )?;
-            warn!(
-                hashes_count = block_hashes_count,
-                index_count = block_index_count,
-                "hashes file longer than index; truncating to durable count"
-            );
-            block_store.truncate_hashes_to_count(block_index_count as u64)?;
-            block_hashes_count = block_index_count;
+        if block_store.fast_prevalidated_count != Some(u64::try_from(block_index_count)?) {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "Kura fast init did not pass the read-only committed-prefix preflight",
+                ),
+                block_store.path_to_blockchain.clone(),
+            ));
         }
-        if block_hashes_count == block_index_count {
-            let mut block_indices = vec![BlockIndex::default(); block_index_count];
-            block_store.read_block_indices(0, &mut block_indices)?;
-            let expected_hashes = block_store.read_block_hashes(0, block_hashes_count)?;
-            let validation = Self::validate_block_chain(
-                block_store,
-                &block_indices,
-                Some(&expected_hashes),
-                0,
-                v2_finality_floor,
-            )?;
-            if validation.truncated || validation.hash_mismatch {
-                Self::rewrite_validated_block_hashes(
-                    block_store,
-                    &validation.hashes,
-                    v2_finality_floor,
-                )?;
-            }
-            Ok(validation)
-        } else {
-            Err(Error::HashesFileHeightMismatch)
+        block_store.fast_prevalidated_count = None;
+        if block_store.read_exact_durable_index_count()? != u64::try_from(block_index_count)? {
+            return Err(Error::HashesFileHeightMismatch);
         }
+        let durable_height = u64::try_from(block_index_count)?;
+        if let Some(finalized_height) = v2_finality_floor
+            && durable_height < finalized_height
+        {
+            return Err(Error::V2FinalityBeyondDurableChain {
+                finalized_height,
+                durable_height,
+            });
+        }
+        Ok(ChainValidation {
+            // Fast keeps only the durable count and reads exact hashes on demand. This avoids
+            // startup I/O and RAM proportional to total chain height.
+            hashes: Vec::new(),
+            truncated: false,
+            hash_mismatch: false,
+            hard_fork_hash_only_block_count: 0,
+        })
     }
-    fn init_strict_mode(
+    fn init_canonical_chain(
         block_store: &mut BlockStore,
         block_index_count: usize,
         v2_finality_floor: Option<u64>,
@@ -12471,6 +12704,9 @@ impl Kura {
         }
         #[cfg(test)]
         self.observe_canonical_read_after_prune_check_for_tests(CANONICAL_HASH_READER_OBSERVED);
+        if self.emergency_fast_startup_enabled() {
+            return self.get_durable_block_hash(block_height);
+        }
         let hash_data_guard = self.block_data.lock();
         if self.prune_recovery_is_required() {
             return None;
@@ -12480,7 +12716,7 @@ impl Kura {
             return None;
         }
         let block_index = block_height - 1;
-        Some(hash_data_guard[block_index].0)
+        hash_data_guard.get(block_index).map(|(hash, _)| *hash)
     }
     /// Get the committed hash at the provided height from Kura's durable hash journal.
     pub fn get_durable_block_hash(
@@ -12506,21 +12742,21 @@ impl Kura {
         hash
     }
     /// Resolve the height of the block with the given hash.
+    ///
+    /// Emergency Fast mode resolves only hashes learned after startup or by a
+    /// height-based block read. It deliberately does not scan the complete
+    /// durable hash journal to answer a reverse lookup.
     pub fn get_block_height_by_hash(&self, hash: HashOf<BlockHeader>) -> Option<NonZeroUsize> {
         if self.prune_recovery_is_required()
             || self.canonical_storage_poisoned.load(Ordering::Acquire)
         {
             return None;
         }
-        let index = self.block_height_index.lock();
+        let cached = self.block_height_index.lock().get(&hash).copied();
         if self.prune_recovery_is_required() {
             return None;
         }
-        let height = index.get(&hash).copied();
-        if self.prune_recovery_is_required() {
-            return None;
-        }
-        height
+        cached
     }
     /// Resolve block heights containing the given transaction entrypoint hash.
     ///
@@ -12834,6 +13070,15 @@ impl Kura {
     ) -> Option<Arc<SignedBlock>> {
         self.get_block_inner(block_height, false)
     }
+    fn poison_corrupt_canonical_read(&self, block_index: usize, reason: &'static str) {
+        let path = self.active_blocks_dir.lock().clone();
+        let error = Error::IO(std::io::Error::new(ErrorKind::InvalidData, reason), path);
+        error!(
+            block_index,
+            reason, "Canonical Kura block read failed validation"
+        );
+        self.poison_canonical_storage("canonical block read validation", &error);
+    }
     fn get_block_inner(
         &self,
         block_height: NonZeroUsize,
@@ -12852,7 +13097,7 @@ impl Kura {
         }
         #[cfg(test)]
         self.observe_canonical_read_after_prune_check_for_tests(CANONICAL_BLOCK_READER_OBSERVED);
-        let (block_index, expected_hash, cached_block, should_cache, chain_len) = {
+        let (block_index, known_hash, known_previous_hash, cached_block, should_cache, chain_len) = {
             let data = self.block_data.lock();
             if self.prune_recovery_is_required() {
                 return None;
@@ -12868,11 +13113,42 @@ impl Kura {
                 );
                 return None;
             }
-            let expected_hash = data[idx].0;
-            let cached_block = data[idx].1.as_ref().map(Arc::clone);
+            let known_hash = data.known_hash(idx);
+            let known_previous_hash = idx
+                .checked_sub(1)
+                .and_then(|previous| data.known_hash(previous));
+            let cached_block = data.cached_body(idx);
             let should_cache = idx + self.blocks_in_memory.get() >= data.len();
-            (idx, expected_hash, cached_block, should_cache, data.len())
+            (
+                idx,
+                known_hash,
+                known_previous_hash,
+                cached_block,
+                should_cache,
+                data.len(),
+            )
         };
+        let expected_hash = known_hash.or_else(|| self.get_durable_block_hash(block_height))?;
+        let expected_previous_hash = if block_index == 0 {
+            None
+        } else {
+            let previous_height = NonZeroUsize::new(block_index)
+                .expect("a non-genesis block has a non-zero parent height");
+            Some(known_previous_hash.or_else(|| self.get_durable_block_hash(previous_height))?)
+        };
+        if should_cache {
+            let mut data = self.block_data.lock();
+            if data.len() != chain_len || self.prune_recovery_is_required() {
+                return None;
+            }
+            data.cache_hash(block_index, expected_hash);
+            if let (Some(previous_index), Some(previous_hash)) =
+                (block_index.checked_sub(1), expected_previous_hash)
+            {
+                data.cache_hash(previous_index, previous_hash);
+            }
+            self.set_block_height_index_entry(block_height.get(), expected_hash);
+        }
         let (block, is_evicted) = {
             let mut block_store = self.block_store.lock();
             if self.prune_recovery_is_required() {
@@ -12887,6 +13163,14 @@ impl Kura {
             };
             let is_evicted = index.is_evicted();
             let BlockIndex { start, length } = index;
+            if length > STRICT_INIT_MAX_BLOCK_BYTES {
+                drop(block_store);
+                self.poison_corrupt_canonical_read(
+                    block_index,
+                    "committed block length exceeds the canonical wire limit",
+                );
+                return None;
+            }
             if length == 0 {
                 debug!(
                     block_index,
@@ -12900,7 +13184,7 @@ impl Kura {
                 let outcome = if is_evicted { "miss" } else { "hit" };
                 telemetry.inc_storage_da_cache("kura", outcome);
             }
-            let block = if is_evicted {
+            let loaded = if is_evicted {
                 let height = block_index.saturating_add(1) as u64;
                 let (finality_wire_len, finality_wire_hash) = match self
                     .verified_v2_finality_wire_hash_for_eviction(
@@ -12951,7 +13235,7 @@ impl Kura {
                     let actual_len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
                     telemetry.add_storage_da_churn_bytes("kura", "rehydrated", actual_len);
                 }
-                match decode_framed_signed_block(&bytes) {
+                let decoded = match decode_framed_signed_block(&bytes) {
                     Ok(decoded) => decoded,
                     Err(error) => {
                         if self.is_hard_fork_hash_only_block(block_index) {
@@ -12969,7 +13253,8 @@ impl Kura {
                         );
                         return None;
                     }
-                }
+                };
+                decoded
             } else {
                 if let Some(block) = cached_block {
                     return Some(block);
@@ -12978,6 +13263,11 @@ impl Kura {
                     Ok(slice) => slice,
                     Err(error) => {
                         error!(?error, block_index, "Failed to borrow block data slice");
+                        drop(block_store);
+                        self.poison_corrupt_canonical_read(
+                            block_index,
+                            "committed inline block range is unreadable",
+                        );
                         return None;
                     }
                 };
@@ -12993,11 +13283,16 @@ impl Kura {
                             return None;
                         }
                         error!(?error, block_index, "Failed to decode block from disk");
+                        drop(block_store);
+                        self.poison_corrupt_canonical_read(
+                            block_index,
+                            "committed inline block body is not decodable",
+                        );
                         return None;
                     }
                 }
             };
-            (block, is_evicted)
+            (loaded, is_evicted)
         };
         if self.prune_recovery_is_required() {
             return None;
@@ -13008,6 +13303,29 @@ impl Kura {
                 actual = ?block.hash(),
                 block_index,
                 "Loaded block hash mismatched the index entry"
+            );
+            self.poison_corrupt_canonical_read(
+                block_index,
+                "loaded block hash mismatches the canonical hash journal",
+            );
+            return None;
+        }
+        let header = block.header();
+        let expected_height = u64::try_from(block_height.get()).ok()?;
+        if header.height().get() != expected_height
+            || header.prev_block_hash() != expected_previous_hash
+        {
+            error!(
+                expected_height = block_height.get(),
+                actual_height = header.height().get(),
+                expected_previous_hash = ?expected_previous_hash,
+                actual_previous_hash = ?header.prev_block_hash(),
+                block_index,
+                "Loaded block lineage mismatched the canonical journal"
+            );
+            self.poison_corrupt_canonical_read(
+                block_index,
+                "loaded block height or parent mismatches the canonical journal",
             );
             return None;
         }
@@ -13057,12 +13375,12 @@ impl Kura {
                 (Ok(index), Ok(Some(hash)))
                     if !index.is_evicted() && index.length > 0 && hash == expected_hash =>
                 {
-                    if let Some(mut data) = self.block_data.try_lock()
-                        && data.get(block_index).is_some_and(|(hash, cached)| {
-                            *hash == expected_hash && cached.is_none()
-                        })
-                    {
-                        data[block_index].1 = Some(Arc::clone(&block_arc));
+                    if let Some(mut data) = self.block_data.try_lock() {
+                        let _ = data.cache_body_if_hash(
+                            block_index,
+                            expected_hash,
+                            Arc::clone(&block_arc),
+                        );
                     }
                 }
                 (Err(error), _) | (_, Err(error)) => {
@@ -13268,13 +13586,17 @@ impl Kura {
             }
             *self.merge_log.lock() = merge_log;
             let blocks_root = self.active_blocks_dir.lock().clone();
-            let mut durable_hashes = self
-                .block_data
-                .lock()
+            let block_data = self.block_data.lock();
+            let mut durable_hashes = block_data
+                .dense_entries()
+                .ok_or(Error::EmergencyFastAuxiliaryUnavailable {
+                    subsystem: "complete canonical history",
+                })?
                 .iter()
                 .take(block_count)
                 .map(|(hash, _)| *hash)
                 .collect::<Vec<_>>();
+            drop(block_data);
             {
                 let mut store = self.block_store.lock();
                 Self::reconcile_commit_manifests(&mut store, &blocks_root, &mut durable_hashes)?;
@@ -13283,7 +13605,7 @@ impl Kura {
                 &blocks_root,
                 &finalization_authority,
             )?;
-            let verified_finality = self.validate_v2_finality_inventory_on_startup()?;
+            let verified_finality = self.validate_v2_finality_inventory_on_startup(true)?;
             self.install_v2_startup_finality_verification_inventory(verified_finality);
             self.prune_retained_block_records_from_during_snapshot_finalization(
                 &blocks_root,
@@ -13297,7 +13619,6 @@ impl Kura {
             self.reconcile_merge_carriers_during_snapshot_finalization(&finalization_authority)?;
             self.refresh_v2_startup_replay_auxiliary_binding()?;
             self.refresh_disk_usage_bytes()?;
-            self.refresh_total_disk_usage_bytes()?;
             // Publish the immutable first-height context last. After this
             // point the same state-machine lock performs the infallible
             // Finalizing -> Authenticated assignment, so no fallible operation
@@ -13345,7 +13666,7 @@ impl Kura {
         if self.prune_recovery_is_required() {
             return false;
         }
-        if data.len() <= idx || data[idx].1.is_some() {
+        if data.len() <= idx || data.cached_body(idx).is_some() {
             return false;
         }
         drop(data);
@@ -13824,6 +14145,9 @@ impl Kura {
     /// the active lane sidecar inventory cannot be captured or reconciled
     /// safely.
     pub fn refresh_v2_startup_replay_auxiliary_binding(&self) -> Result<()> {
+        if self.emergency_fast_startup_enabled() {
+            return Ok(());
+        }
         let blocks_dir = self.active_blocks_dir.lock().clone();
         let lane_auxiliary = self.capture_v2_startup_replay_lane_auxiliary_sidecars()?;
         let lane_auxiliary_directories = lane_auxiliary.keys().cloned().collect::<BTreeSet<_>>();
@@ -13890,6 +14214,7 @@ impl Kura {
     /// still report the lowest failing height deterministically.
     fn validate_v2_finality_inventory_on_startup(
         &self,
+        validate_live_bodies: bool,
     ) -> Result<V2StartupFinalityVerificationInventory> {
         use rayon::prelude::*;
         let started_at = Instant::now();
@@ -13995,7 +14320,7 @@ impl Kura {
                             &blocks_dir,
                             height,
                             canonical_hash,
-                            true,
+                            validate_live_bodies,
                         )?
                         .ok_or(Error::MissingRetainedBlockRecord { height })?;
                     if indexed_wire_lengths.get(block_index).copied()
@@ -14183,7 +14508,16 @@ impl Kura {
     /// Kura (notably focused tests and embedders) did not run normal open-time
     /// initialization, or when a prior identity check invalidated the cache.
     pub(crate) fn refresh_v2_startup_finality_verification(&self) -> Result<()> {
-        let inventory = self.validate_v2_finality_inventory_on_startup()?;
+        if self.emergency_fast_startup_enabled() {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "full startup finality refresh is disabled in emergency Fast mode",
+                ),
+                self.active_blocks_dir.lock().clone(),
+            ));
+        }
+        let inventory = self.validate_v2_finality_inventory_on_startup(true)?;
         self.install_v2_startup_finality_verification_inventory(inventory);
         self.refresh_v2_startup_replay_auxiliary_binding()?;
         Ok(())
@@ -14238,6 +14572,13 @@ impl Kura {
             .load(Ordering::Relaxed)
     }
     #[cfg(test)]
+    pub(crate) fn canonical_body_bytes_read_for_test(&self) -> u64 {
+        self.block_store
+            .lock()
+            .body_bytes_read
+            .load(Ordering::Relaxed)
+    }
+    #[cfg(test)]
     pub(crate) fn reset_startup_replay_historical_payload_reads_for_test(&self) {
         self.startup_replay_historical_payload_reads
             .store(0, Ordering::Relaxed);
@@ -14246,7 +14587,36 @@ impl Kura {
         &self,
         binding: &V2StartupReplayStorageBinding,
     ) -> Result<()> {
-        let inventory = binding.inventory.as_ref();
+        let V2StartupReplayStorageBinding::Strict(inventory) = binding else {
+            let V2StartupReplayStorageBinding::EmergencyFast(binding) = binding else {
+                unreachable!("startup replay binding variants are exhaustive");
+            };
+            let blocks_dir = self.active_blocks_dir.lock().clone();
+            let current_storage = self.canonical_block_store_metadata(&blocks_dir)?;
+            let boundary_tip_matches =
+                self.emergency_fast_replay_boundary_matches(binding.count, binding.tip_hash)?;
+            let current_storage_after_tip = self.canonical_block_store_metadata(&blocks_dir)?;
+            if !boundary_tip_matches
+                || !Self::canonical_block_store_metadata_unchanged(
+                    &binding.canonical_storage,
+                    &current_storage,
+                )
+                || !Self::canonical_block_store_metadata_unchanged(
+                    &current_storage,
+                    &current_storage_after_tip,
+                )
+            {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "Kura emergency Fast startup journal changed after replay planning",
+                    ),
+                    blocks_dir,
+                ));
+            }
+            return Ok(());
+        };
+        let inventory = inventory.as_ref();
         let blocks_dir = self.active_blocks_dir.lock().clone();
         let current_storage = self.canonical_block_store_metadata(&blocks_dir)?;
         let boundary_tip_matches =
@@ -14384,9 +14754,7 @@ impl Kura {
             };
             Arc::clone(inventory)
         };
-        let binding = V2StartupReplayStorageBinding {
-            inventory: Arc::clone(&inventory),
-        };
+        let binding = V2StartupReplayStorageBinding::Strict(Arc::clone(&inventory));
         if self
             .validate_v2_startup_replay_storage_binding_unlocked(&binding)
             .is_err()
@@ -17457,16 +17825,8 @@ impl Kura {
         }
         Ok(total)
     }
-    fn block_store_total_bytes_with_historical_budget(
-        blocks_dir: &Path,
-        historical_record_budget: &mut usize,
-        historical_byte_budget: &mut u64,
-    ) -> Result<u64> {
-        let mut total = Self::block_store_bytes_with_historical_budget(
-            blocks_dir,
-            historical_record_budget,
-            historical_byte_budget,
-        )?;
+    fn block_store_supplemental_bytes(blocks_dir: &Path) -> Result<u64> {
+        let mut total = 0u64;
         let da_dir = blocks_dir.join(DA_BLOCKS_DIR_NAME);
         total = total.saturating_add(Self::dir_file_bytes(&da_dir)?);
         for directory in [
@@ -17482,16 +17842,18 @@ impl Kura {
         }
         Ok(total)
     }
-    fn blocks_root_total_bytes(root: &Path, historical_byte_limit: u64) -> Result<u64> {
+    fn blocks_root_usage_bytes(root: &Path, historical_byte_limit: u64) -> Result<(u64, u64)> {
         if root.as_os_str().is_empty() {
-            return Ok(0);
+            return Ok((0, 0));
         }
         let entries = match std::fs::read_dir(root) {
             Ok(entries) => entries,
-            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(0),
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok((0, 0)),
             Err(err) => return Err(Error::IO(err, root.to_path_buf())),
         };
-        let mut total = Self::blocks_root_debug_file_bytes(root)?;
+        let debug_bytes = Self::blocks_root_debug_file_bytes(root)?;
+        let mut enforced = debug_bytes;
+        let mut total = debug_bytes;
         let mut historical_record_budget = HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS;
         let mut historical_byte_budget = historical_byte_limit;
         for entry in entries {
@@ -17501,14 +17863,18 @@ impl Kura {
                 .file_type()
                 .map_err(|err| Error::IO(err, path.clone()))?;
             if file_type.is_dir() {
-                total = total.saturating_add(Self::block_store_total_bytes_with_historical_budget(
+                let budgeted = Self::block_store_bytes_with_historical_budget(
                     &path,
                     &mut historical_record_budget,
                     &mut historical_byte_budget,
-                )?);
+                )?;
+                enforced = enforced.saturating_add(budgeted);
+                total = total
+                    .saturating_add(budgeted)
+                    .saturating_add(Self::block_store_supplemental_bytes(&path)?);
             }
         }
-        Ok(total)
+        Ok((enforced, total))
     }
     fn merge_root_bytes(root: &Path) -> Result<u64> {
         if root.as_os_str().is_empty() {
@@ -17618,27 +17984,16 @@ impl Kura {
         }
         Ok(total)
     }
-    fn kura_disk_usage_bytes(&self) -> Result<u64> {
+    fn kura_shared_disk_usage_bytes(&self) -> Result<u64> {
         if self.store_root.as_os_str().is_empty() {
             return Ok(0);
         }
-        let blocks_root = self.store_root.join("blocks");
         let merge_root = self.store_root.join("merge_ledger");
         let retired_root = self.store_root.join("retired");
-        let retired_blocks_root = retired_root.join("blocks");
         let retired_merge_root = retired_root.join("merge_ledger");
         let retired_geometry_root = retired_root.join("lane_geometry");
-        let historical_byte_limit = self.historical_autonomous_recovery_aggregate_byte_limit();
         let mut used = 0u64;
-        used = used.saturating_add(Self::blocks_root_bytes(
-            &blocks_root,
-            historical_byte_limit,
-        )?);
         used = used.saturating_add(Self::merge_root_bytes(&merge_root)?);
-        used = used.saturating_add(Self::blocks_root_bytes(
-            &retired_blocks_root,
-            historical_byte_limit,
-        )?);
         used = used.saturating_add(Self::merge_root_bytes(&retired_merge_root)?);
         used = used.saturating_add(Self::directory_tree_file_bytes(&retired_geometry_root)?);
         used = used.saturating_add(Self::directory_tree_file_bytes(
@@ -17682,69 +18037,43 @@ impl Kura {
         );
         Ok(used)
     }
-    fn kura_total_disk_usage_bytes(&self) -> Result<u64> {
+    fn kura_disk_usage_bytes(&self) -> Result<u64> {
         if self.store_root.as_os_str().is_empty() {
             return Ok(0);
         }
         let blocks_root = self.store_root.join("blocks");
-        let merge_root = self.store_root.join("merge_ledger");
-        let retired_root = self.store_root.join("retired");
-        let retired_blocks_root = retired_root.join("blocks");
-        let retired_merge_root = retired_root.join("merge_ledger");
-        let retired_geometry_root = retired_root.join("lane_geometry");
+        let retired_blocks_root = self.store_root.join("retired").join("blocks");
         let historical_byte_limit = self.historical_autonomous_recovery_aggregate_byte_limit();
-        let mut used = 0u64;
-        used = used.saturating_add(Self::blocks_root_total_bytes(
-            &blocks_root,
-            historical_byte_limit,
-        )?);
-        used = used.saturating_add(Self::merge_root_bytes(&merge_root)?);
-        used = used.saturating_add(Self::blocks_root_total_bytes(
-            &retired_blocks_root,
-            historical_byte_limit,
-        )?);
-        used = used.saturating_add(Self::merge_root_bytes(&retired_merge_root)?);
-        used = used.saturating_add(Self::directory_tree_file_bytes(&retired_geometry_root)?);
-        used = used.saturating_add(Self::directory_tree_file_bytes(
-            &self.store_root.join(MERGE_CARRIERS_DIR),
-        )?);
-        used = used.saturating_add(Self::directory_tree_file_bytes(
-            &self.store_root.join(PENDING_MERGE_ENTRIES_DIR),
-        )?);
-        used = used.saturating_add(Self::directory_tree_file_bytes(
-            &self.store_root.join(PENDING_QUEUE_PLAN_ADMISSIONS_DIR),
-        )?);
-        for journal_name in [
-            crate::query::index_status::QueryIndexJournal::JOURNAL_FILE,
-            crate::query::projection_checkpoint_journal::QueryProjectionCheckpointJournal::JOURNAL_FILE,
-        ] {
-            let path = self.store_root.join(journal_name);
-            used = used.saturating_add(Self::file_len_or_zero(&path)?);
-            used = used.saturating_add(Self::file_len_or_zero(
-                &path.with_extension("norito.tmp"),
-            )?);
+        let active = Self::blocks_root_bytes(&blocks_root, historical_byte_limit)?;
+        let retired = Self::blocks_root_bytes(&retired_blocks_root, historical_byte_limit)?;
+        Ok(active
+            .saturating_add(retired)
+            .saturating_add(self.kura_shared_disk_usage_bytes()?))
+    }
+    fn kura_disk_usage_bytes_with_total(&self) -> Result<(u64, u64)> {
+        if self.store_root.as_os_str().is_empty() {
+            return Ok((0, 0));
         }
-        used = used.saturating_add(Self::file_len_or_zero(&self.lane_geometry_journal_path())?);
-        used = used.saturating_add(Self::file_len_or_zero(
-            &self
-                .lane_geometry_journal_path()
-                .with_extension("norito.tmp"),
-        )?);
-        used = used.saturating_add(
-            Self::canonical_prune_intent_artifact_inventory(&self.store_root)?.tracked_bytes()?,
-        );
-        used = used.saturating_add(Self::file_len_or_zero(
-            &Self::autonomous_lifecycle_process_generation_path_for(&self.store_root),
-        )?);
-        used = used.saturating_add(Self::file_len_or_zero(
-            &Self::autonomous_lifecycle_process_generation_temp_path_for(&self.store_root),
-        )?);
-        used = used.saturating_add(
-            Self::autonomous_lifecycle_process_generation_publication_residue_bytes(
-                &self.store_root,
-            )?,
-        );
-        Ok(used)
+        let blocks_root = self.store_root.join("blocks");
+        let retired_blocks_root = self.store_root.join("retired").join("blocks");
+        let historical_byte_limit = self.historical_autonomous_recovery_aggregate_byte_limit();
+        let (active_enforced, active_total) =
+            Self::blocks_root_usage_bytes(&blocks_root, historical_byte_limit)?;
+        let (retired_enforced, retired_total) =
+            Self::blocks_root_usage_bytes(&retired_blocks_root, historical_byte_limit)?;
+        let shared = self.kura_shared_disk_usage_bytes()?;
+        Ok((
+            active_enforced
+                .saturating_add(retired_enforced)
+                .saturating_add(shared),
+            active_total
+                .saturating_add(retired_total)
+                .saturating_add(shared),
+        ))
+    }
+    fn kura_total_disk_usage_bytes(&self) -> Result<u64> {
+        self.kura_disk_usage_bytes_with_total()
+            .map(|(_, total)| total)
     }
     #[cfg(test)]
     fn remove_one_regular_file_below_for_tests(root: &Path) -> std::io::Result<bool> {
@@ -17823,11 +18152,7 @@ impl Kura {
         let mut accounting_complete = true;
         if retired_blocks_root.exists() {
             let historical_byte_limit = self.historical_autonomous_recovery_aggregate_byte_limit();
-            let sizes = Self::blocks_root_bytes(&retired_blocks_root, historical_byte_limit)
-                .and_then(|budget| {
-                    Self::blocks_root_total_bytes(&retired_blocks_root, historical_byte_limit)
-                        .map(|total| (budget, total))
-                });
+            let sizes = Self::blocks_root_usage_bytes(&retired_blocks_root, historical_byte_limit);
             match sizes {
                 Ok((budget, total)) => {
                     self.durable_mutation_authorized()?;
@@ -17903,6 +18228,11 @@ impl Kura {
         Ok(true)
     }
     fn pending_block_bytes_raw(&self, persisted_count: usize) -> Result<u64> {
+        if self.emergency_fast_startup_enabled() {
+            return Err(Error::EmergencyFastAuxiliaryUnavailable {
+                subsystem: "pending canonical block cache",
+            });
+        }
         #[cfg(test)]
         self.pending_budget_raw_scans
             .fetch_add(1, Ordering::Relaxed);
@@ -17910,7 +18240,12 @@ impl Kura {
             let data = self.block_data.lock();
             let start = persisted_count.min(data.len());
             let mut blocks = Vec::with_capacity(data.len().saturating_sub(start));
-            for (_, block) in data.iter().skip(start) {
+            let entries = data
+                .dense_entries()
+                .ok_or(Error::EmergencyFastAuxiliaryUnavailable {
+                    subsystem: "pending canonical block cache",
+                })?;
+            for (_, block) in entries.iter().skip(start) {
                 let block = block
                     .as_ref()
                     .expect("pending block missing from Kura memory cache");
@@ -18274,7 +18609,12 @@ impl Kura {
         {
             let data = self.block_data.lock();
             self.ensure_prune_recovery_not_required()?;
-            if Self::validate_top_replacement(data.as_slice(), height, height_usize, block_hash)? {
+            let complete_entries =
+                data.dense_entries()
+                    .ok_or(Error::EmergencyFastAuxiliaryUnavailable {
+                        subsystem: "canonical mutation",
+                    })?;
+            if Self::validate_top_replacement(complete_entries, height, height_usize, block_hash)? {
                 let chain_len = data.len();
                 drop(data);
                 self.ensure_existing_block_wire_matches(&block, height, block_hash)?;
@@ -18311,7 +18651,12 @@ impl Kura {
         let write_guard = self.lock_block_store_for_write();
         let mut data = self.block_data.lock();
         self.ensure_prune_recovery_not_required()?;
-        if Self::validate_top_replacement(data.as_slice(), height, height_usize, block_hash)? {
+        let complete_entries =
+            data.dense_entries()
+                .ok_or(Error::EmergencyFastAuxiliaryUnavailable {
+                    subsystem: "canonical mutation",
+                })?;
+        if Self::validate_top_replacement(complete_entries, height, height_usize, block_hash)? {
             let chain_len = data.len();
             drop(data);
             self.ensure_existing_block_wire_matches(&block, height, block_hash)?;
@@ -21281,8 +21626,17 @@ impl Kura {
             return;
         }
         // (Genesis block is used in metrics to get genesis timestamp.)
-        for entry in block_data.iter_mut().take(limit).skip(1) {
-            entry.1 = None;
+        match block_data {
+            BlockData::Dense(entries) => {
+                for entry in entries.iter_mut().take(limit).skip(1) {
+                    entry.1 = None;
+                }
+            }
+            BlockData::Deferred { entries, .. } => {
+                for entry in entries.range_mut(1..limit).map(|(_, entry)| entry) {
+                    entry.1 = None;
+                }
+            }
         }
     }
     /// Returns count of blocks Kura currently holds
@@ -21329,6 +21683,169 @@ impl Kura {
             return Err(Error::HashesFileHeightMismatch);
         }
         Ok(ExactReplayBoundary { count, hashes })
+    }
+    /// Return whether this process deliberately skipped historical startup audits.
+    pub const fn emergency_fast_startup_enabled(&self) -> bool {
+        self.auxiliary_history_deferred
+    }
+    /// Read the one canonical hash needed to bind a restored snapshot in emergency Fast mode.
+    ///
+    /// The durable count and requested boundary hash are captured under the canonical-chain and
+    /// block-store locks. This deliberately avoids materializing or rereading the historical hash
+    /// prefix; Strict startup is responsible for validating every retained height later.
+    pub(crate) fn emergency_fast_snapshot_boundary(
+        &self,
+        snapshot_height: usize,
+    ) -> Result<(usize, Option<HashOf<BlockHeader>>)> {
+        if !self.emergency_fast_startup_enabled() {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "emergency Fast snapshot boundary requested after Strict startup",
+                ),
+                self.active_blocks_dir.lock().clone(),
+            ));
+        }
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        self.ensure_canonical_storage_not_poisoned()?;
+        let mut store = self.block_store.lock();
+        let count = store.read_exact_durable_index_count()?;
+        let requested_height = u64::try_from(snapshot_height)?;
+        let boundary_hash = if requested_height == 0 || requested_height > count {
+            None
+        } else {
+            store
+                .read_block_hashes(requested_height.saturating_sub(1), 1)?
+                .first()
+                .copied()
+        };
+        if (requested_height > 0 && requested_height <= count && boundary_hash.is_none())
+            || store.read_exact_durable_index_count()? != count
+        {
+            return Err(Error::HashesFileHeightMismatch);
+        }
+        Ok((usize::try_from(count)?, boundary_hash))
+    }
+    /// Map the exact durable hash prefix used by emergency Fast state reads.
+    ///
+    /// The mapping is copy-on-write and read-only, so startup neither copies
+    /// the complete journal nor permits State to mutate it. Kura's exclusive
+    /// store lock keeps the mapped file from being truncated by another node
+    /// process; this Fast process never starts a writer.
+    pub(crate) fn emergency_fast_snapshot_hash_mapping(
+        &self,
+        snapshot_height: usize,
+    ) -> Result<Option<ReadOnlyMmap>> {
+        if !self.emergency_fast_startup_enabled() {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "emergency Fast hash mapping requested after Strict startup",
+                ),
+                self.active_blocks_dir.lock().clone(),
+            ));
+        }
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        self.ensure_canonical_storage_not_poisoned()?;
+        let mut store = self.block_store.lock();
+        let durable_count = store.read_exact_durable_index_count()?;
+        if usize::try_from(durable_count)? != snapshot_height {
+            return Err(Error::HashesFileHeightMismatch);
+        }
+        if snapshot_height == 0 {
+            return Ok(None);
+        }
+        let byte_len = snapshot_height
+            .checked_mul(Hash::LENGTH)
+            .ok_or(Error::HashesFileHeightMismatch)?;
+        let hashes_path = store.path_to_blockchain.join(HASHES_FILE_NAME);
+        let hashes_file = store.hashes_file.as_mut().ok_or_else(|| {
+            Error::IO(
+                std::io::Error::new(
+                    ErrorKind::NotFound,
+                    "emergency Fast hash journal is not open read-only",
+                ),
+                hashes_path,
+            )
+        })?;
+        let file_len = hashes_file.try_io(|file| file.metadata().map(|metadata| metadata.len()))?;
+        let mapping = hashes_file
+            .try_io(|file| ReadOnlyMmap::copy_read_only_with_file_len(file, byte_len, file_len))?;
+        Ok(Some(mapping))
+    }
+    /// Mint the lightweight canonical-journal binding used by emergency Fast replay planning.
+    ///
+    /// This captures no finality, checkpoint, manifest, retained-block, or lane-sidecar
+    /// inventory. It only prevents the journal trusted by Fast mode from changing between
+    /// planning and active-height recovery.
+    pub(crate) fn emergency_fast_startup_replay_binding(
+        &self,
+    ) -> Result<V2StartupReplayStorageBinding> {
+        if !self.emergency_fast_startup_enabled() {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "emergency Fast replay binding requested after Strict startup",
+                ),
+                self.active_blocks_dir.lock().clone(),
+            ));
+        }
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        self.ensure_canonical_storage_not_poisoned()?;
+        let blocks_dir = self.active_blocks_dir.lock().clone();
+        let canonical_storage = self.canonical_block_store_metadata(&blocks_dir)?;
+        let (count, tip_hash) = self.emergency_fast_replay_boundary()?;
+        let current_storage = self.canonical_block_store_metadata(&blocks_dir)?;
+        if !Self::canonical_block_store_metadata_unchanged(&canonical_storage, &current_storage)
+            || !self.emergency_fast_replay_boundary_matches(count, tip_hash)?
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "Kura emergency Fast startup journal changed while replay was planned",
+                ),
+                blocks_dir,
+            ));
+        }
+        Ok(V2StartupReplayStorageBinding::EmergencyFast(Arc::new(
+            EmergencyFastStartupReplayBinding {
+                count,
+                tip_hash,
+                canonical_storage: current_storage,
+            },
+        )))
+    }
+    /// Capture the Fast replay boundary with one count and one terminal hash read.
+    fn emergency_fast_replay_boundary(&self) -> Result<(u64, Option<HashOf<BlockHeader>>)> {
+        self.ensure_canonical_storage_not_poisoned()?;
+        let mut store = self.block_store.lock();
+        let count = store.read_exact_durable_index_count()?;
+        let tip_hash = if count == 0 {
+            None
+        } else {
+            store
+                .read_block_hashes(count.saturating_sub(1), 1)?
+                .first()
+                .copied()
+        };
+        if store.read_exact_durable_index_count()? != count || (count == 0) != tip_hash.is_none() {
+            return Err(Error::HashesFileHeightMismatch);
+        }
+        Ok((count, tip_hash))
+    }
+    /// Recheck the lightweight Fast boundary without rereading the historical hash vector.
+    fn emergency_fast_replay_boundary_matches(
+        &self,
+        expected_count: u64,
+        expected_tip_hash: Option<HashOf<BlockHeader>>,
+    ) -> Result<bool> {
+        Ok(self.emergency_fast_replay_boundary()? == (expected_count, expected_tip_hash))
     }
     /// Recheck an audited replay boundary with O(1) journal reads.
     ///
@@ -21402,6 +21919,9 @@ impl Kura {
             || self.canonical_storage_poisoned.load(Ordering::Acquire)
         {
             return None;
+        }
+        if self.emergency_fast_startup_enabled() {
+            return self.get_durable_block_hash(height);
         }
         let data = self.block_data.lock();
         if self.prune_recovery_is_required() {
@@ -21511,7 +22031,13 @@ impl Kura {
         let shared = current.min(target);
         let bootstrap_lineage_hash = bootstrap_lineage.map(snapshot_bootstrap_lineage_digest);
         let mut rewrite_from = current;
-        for (idx, (existing, _)) in block_data.iter().enumerate().take(shared) {
+        let complete_entries =
+            block_data
+                .dense_entries()
+                .ok_or(Error::EmergencyFastAuxiliaryUnavailable {
+                    subsystem: "complete canonical history",
+                })?;
+        for (idx, (existing, _)) in complete_entries.iter().enumerate().take(shared) {
             let actual = snapshot_hashes[idx];
             if *existing == actual {
                 continue;
@@ -21993,9 +22519,9 @@ impl V2StartupFinalityVerificationSession<'_> {
     /// rechecked it under this session's mutation guards, so minting the
     /// binding is an O(1) `Arc` clone rather than a third historical scan.
     pub(crate) fn storage_binding(&self) -> Result<V2StartupReplayStorageBinding> {
-        Ok(V2StartupReplayStorageBinding {
-            inventory: Arc::clone(&self.inventory),
-        })
+        Ok(V2StartupReplayStorageBinding::Strict(Arc::clone(
+            &self.inventory,
+        )))
     }
 }
 fn snapshot_bootstrap_lineage_digest(record: &SnapshotV2BootstrapRecord) -> Hash {
@@ -33008,6 +33534,11 @@ impl Kura {
     where
         F: FnMut(u64) -> Result<u64, String>,
     {
+        if self.auxiliary_history_deferred {
+            return Err(Error::EmergencyFastAuxiliaryUnavailable {
+                subsystem: "autonomous-lane latest-route pointers",
+            });
+        }
         if limit == 0 {
             return Ok(Vec::new());
         }
@@ -36109,6 +36640,31 @@ impl Kura {
         };
         (confirmed == artifact && !self.prune_recovery_is_required()).then_some(artifact)
     }
+    /// Checked latest Native AMX receipt lookup for consensus callers.
+    ///
+    /// Emergency Fast startup deliberately does not rebuild the latest-receipt index. Returning a
+    /// plain `None` in that state would misrepresent unknown durable history as an empty route.
+    pub(crate) fn checked_latest_native_amx_participant_application_receipt_matching(
+        &self,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_incarnation: Hash,
+        accept: impl FnMut(&NativeAmxParticipantApplicationReceiptArtifact) -> bool,
+    ) -> Result<Option<NativeAmxParticipantApplicationReceiptArtifact>> {
+        if self.auxiliary_history_deferred {
+            return Err(Error::EmergencyFastAuxiliaryUnavailable {
+                subsystem: "Native AMX latest-receipt index",
+            });
+        }
+        Ok(
+            self.latest_native_amx_participant_application_receipt_matching(
+                lane_id,
+                dataspace_id,
+                lane_incarnation,
+                accept,
+            ),
+        )
+    }
     /// Revalidate the receipt fields available without its manifest against
     /// authenticated finality and the durable canonical block identity.
     ///
@@ -39014,6 +39570,7 @@ impl BlockStore {
         self.drop_cached_handles();
         self.path_to_blockchain = path;
         self.da_blocks_dir = self.path_to_blockchain.join(DA_BLOCKS_DIR_NAME);
+        self.fast_prevalidated_count = None;
         self.fsync.clear();
     }
     /// Create a new block store in `path`.
@@ -39039,6 +39596,9 @@ impl BlockStore {
             read_scratch: Vec::new(),
             data_mmap: None,
             data_mmap_len: 0,
+            #[cfg(test)]
+            body_bytes_read: AtomicU64::new(0),
+            fast_prevalidated_count: None,
             commit_marker_count: 0,
             commit_marker_pending: None,
             deferred_da_recovery_fault: None,
@@ -41314,6 +41874,172 @@ impl BlockStore {
         }
         Ok(candidate)
     }
+    /// Validate the committed journal prefix before ordinary startup is allowed to mutate it.
+    ///
+    /// Fast mode never initializes or repairs storage. The store must already carry an exact stable
+    /// commit marker and every required canonical file. Entries and bytes beyond that marker are
+    /// unpublished crash suffixes and remain untouched for the next Strict restart to reconcile.
+    fn preflight_fast_durable_prefix(&mut self) -> Result<u64> {
+        if self.path_to_blockchain.as_os_str().is_empty() {
+            self.fast_prevalidated_count = Some(0);
+            return Ok(0);
+        }
+        let root_metadata = std::fs::symlink_metadata(&self.path_to_blockchain)
+            .map_err(|error| Error::IO(error, self.path_to_blockchain.clone()))?;
+        if root_metadata.file_type().is_symlink() || !root_metadata.file_type().is_dir() {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "Kura canonical block root is not a direct directory",
+                ),
+                self.path_to_blockchain.clone(),
+            ));
+        }
+        let invalid = |path: PathBuf, reason: &'static str| {
+            Error::IO(std::io::Error::new(ErrorKind::InvalidData, reason), path)
+        };
+        for path in [
+            self.commit_marker_path().with_extension("norito.tmp"),
+            self.da_block_rewrite_stage_path(),
+            self.eviction_compaction_stage_path(),
+            self.verified_snapshot_tail_marker_path(),
+            self.path_to_blockchain
+                .join(CANONICAL_ASSOCIATION_STAGE_FILE_NAME),
+            Kura::retained_block_rewrite_staging_dir_for(&self.path_to_blockchain),
+        ] {
+            match std::fs::symlink_metadata(&path) {
+                Ok(_) => {
+                    return Err(invalid(
+                        path,
+                        "Kura fast init requires strict recovery of a pending storage stage",
+                    ));
+                }
+                Err(error) if error.kind() == ErrorKind::NotFound => {}
+                Err(error) => return Err(Error::IO(error, path)),
+            }
+        }
+
+        let marker_path = self.commit_marker_path();
+        let marker_bytes = Self::read_required_bounded_commit_marker_bytes(
+            &marker_path,
+            "Kura fast init requires a stable block commit marker",
+        )?;
+        let marker =
+            norito::decode_canonical::<BlockStoreCommitMarker>(&marker_bytes).map_err(|_| {
+                invalid(
+                    marker_path.clone(),
+                    "Kura fast init requires a canonical block commit marker",
+                )
+            })?;
+        if marker.version != BlockStoreCommitMarker::VERSION
+            || (marker.count == 0) != marker.tip_hash.is_none()
+        {
+            return Err(invalid(
+                marker_path,
+                "Kura fast init found an invalid block commit marker",
+            ));
+        }
+
+        let required_index_len = marker.count.checked_mul(BlockIndex::SIZE).ok_or_else(|| {
+            invalid(
+                self.path_to_blockchain.join(INDEX_FILE_NAME),
+                "Kura fast init index prefix length overflows",
+            )
+        })?;
+        let required_hashes_len =
+            marker
+                .count
+                .checked_mul(SIZE_OF_BLOCK_HASH)
+                .ok_or_else(|| {
+                    invalid(
+                        self.path_to_blockchain.join(HASHES_FILE_NAME),
+                        "Kura fast init hash prefix length overflows",
+                    )
+                })?;
+        let required_file_len = |path: &Path, required: u64| -> Result<u64> {
+            let metadata = std::fs::symlink_metadata(path)
+                .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+            if metadata.file_type().is_symlink()
+                || !metadata.file_type().is_file()
+                || metadata.len() < required
+            {
+                return Err(invalid(
+                    path.to_path_buf(),
+                    "Kura fast init found a missing, linked, or truncated canonical journal",
+                ));
+            }
+            Ok(metadata.len())
+        };
+        let index_path = self.path_to_blockchain.join(INDEX_FILE_NAME);
+        let hashes_path = self.path_to_blockchain.join(HASHES_FILE_NAME);
+        let data_path = self.path_to_blockchain.join(DATA_FILE_NAME);
+        let _index_len = required_file_len(&index_path, required_index_len)?;
+        let _hashes_len = required_file_len(&hashes_path, required_hashes_len)?;
+        let data_len = required_file_len(&data_path, 0)?;
+
+        if marker.count > 0 {
+            let mut hashes_file = std::fs::File::open(&hashes_path)
+                .map_err(|error| Error::IO(error, hashes_path.clone()))?;
+            hashes_file
+                .seek(SeekFrom::Start(
+                    marker.count.saturating_sub(1) * SIZE_OF_BLOCK_HASH,
+                ))
+                .map_err(|error| Error::IO(error, hashes_path.clone()))?;
+            let mut tip_bytes = [0_u8; Hash::LENGTH];
+            hashes_file
+                .read_exact(&mut tip_bytes)
+                .map_err(|error| Error::IO(error, hashes_path.clone()))?;
+            let actual_tip =
+                HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(tip_bytes));
+            if marker.tip_hash != Some(actual_tip) {
+                return Err(invalid(
+                    hashes_path,
+                    "Kura fast init commit marker tip mismatches the hash journal",
+                ));
+            }
+        }
+
+        if marker.count > 0 {
+            let mut index_file = std::fs::File::open(&index_path)
+                .map_err(|error| Error::IO(error, index_path.clone()))?;
+            index_file
+                .seek(SeekFrom::Start(
+                    marker.count.saturating_sub(1) * BlockIndex::SIZE,
+                ))
+                .map_err(|error| Error::IO(error, index_path.clone()))?;
+            let mut buffer = [0_u8; core::mem::size_of::<u64>()];
+            let index = BlockIndex::read(&mut index_file, &mut buffer).map_err(|_| {
+                invalid(
+                    index_path.clone(),
+                    "Kura fast init could not read the committed tip index",
+                )
+            })?;
+            if index.length == 0 || index.length > STRICT_INIT_MAX_BLOCK_BYTES {
+                return Err(invalid(
+                    index_path,
+                    "Kura fast init found a zero or oversized committed tip length",
+                ));
+            }
+            if !index.is_evicted() {
+                let end = index.start.checked_add(index.length).ok_or_else(|| {
+                    invalid(
+                        data_path.clone(),
+                        "Kura fast init committed tip range overflows",
+                    )
+                })?;
+                if end > data_len {
+                    return Err(invalid(
+                        data_path,
+                        "Kura fast init committed tip range exceeds the data journal",
+                    ));
+                }
+            }
+        }
+        self.commit_marker_count = marker.count;
+        self.commit_marker_pending = None;
+        self.fast_prevalidated_count = Some(marker.count);
+        Ok(marker.count)
+    }
     /// Validate the finalized canonical prefix without opening any file for writing.
     ///
     /// `create_files_if_they_do_not_exist` performs commit-marker reconciliation,
@@ -41731,6 +42457,8 @@ impl BlockStore {
                 data_len: self.data_mmap_len,
             });
         }
+        #[cfg(test)]
+        self.body_bytes_read.fetch_add(length, Ordering::Relaxed);
         let len_usize: usize = length.try_into()?;
         let start_usize: usize = start.try_into()?;
         let end_usize = start_usize + len_usize;
@@ -42075,6 +42803,9 @@ impl BlockStore {
         start_location_in_data_file: u64,
         dest_buffer: &mut [u8],
     ) -> Result<()> {
+        #[cfg(test)]
+        self.body_bytes_read
+            .fetch_add(u64::try_from(dest_buffer.len())?, Ordering::Relaxed);
         let data_file = self.ensure_data_file()?;
         data_file.try_io(|file| {
             file.seek(SeekFrom::Start(start_location_in_data_file))?;
@@ -42342,6 +43073,64 @@ impl BlockStore {
         self.commit_marker_count = marker.count;
         self.commit_marker_pending = None;
         Ok(index_count)
+    }
+    /// Open the prefix accepted by [`Self::preflight_fast_durable_prefix`] read-only.
+    ///
+    /// Fast mode leaves all published and unpublished bytes untouched. A later Strict restart owns
+    /// journal-tail reconciliation and any required file creation.
+    fn open_fast_prevalidated_files_read_only(&mut self) -> Result<()> {
+        let count = self.fast_prevalidated_count.ok_or_else(|| {
+            Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "Kura Fast files were opened without committed-prefix preflight",
+                ),
+                self.path_to_blockchain.clone(),
+            )
+        })?;
+        self.data_file = Some(FileWrap::open_read_only(
+            self.path_to_blockchain.join(DATA_FILE_NAME),
+        )?);
+        self.index_file = Some(FileWrap::open_read_only(
+            self.path_to_blockchain.join(INDEX_FILE_NAME),
+        )?);
+        self.hashes_file = Some(FileWrap::open_read_only(
+            self.path_to_blockchain.join(HASHES_FILE_NAME),
+        )?);
+
+        let marker_path = self.commit_marker_path();
+        let marker = match Self::read_bounded_commit_marker_bytes(&marker_path)? {
+            Some(bytes) => norito::decode_canonical::<BlockStoreCommitMarker>(&bytes)
+                .map_err(Error::NoritoFrame)?,
+            None => {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::NotFound,
+                        "Kura Fast committed-prefix marker disappeared after preflight",
+                    ),
+                    marker_path,
+                ));
+            }
+        };
+        if marker.version != BlockStoreCommitMarker::VERSION
+            || marker.count != count
+            || (marker.count == 0) != marker.tip_hash.is_none()
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "Kura Fast committed-prefix marker changed after preflight",
+                ),
+                marker_path,
+            ));
+        }
+
+        self.commit_marker_count = count;
+        self.commit_marker_pending = None;
+        if self.read_exact_durable_index_count()? != count {
+            return Err(Error::HashesFileHeightMismatch);
+        }
+        Ok(())
     }
     /// Create the index and data files if they do not
     /// already exist.

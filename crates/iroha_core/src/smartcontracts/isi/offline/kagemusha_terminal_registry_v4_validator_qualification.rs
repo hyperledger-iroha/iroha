@@ -2,7 +2,7 @@ use super::VerifiedKagemushaV4RuntimeEffectiveConfigV1;
 use iroha_crypto::{Algorithm, KeyPair, PublicKey};
 use iroha_data_model::{
     NetworkId,
-    isi::{Instruction as _, SetParameter},
+    isi::SetParameter,
     offline::{
         KAGEMUSHA_V4_ACTIVATION_VALIDATOR_COUNT,
         KAGEMUSHA_V4_CATALOG_REVALIDATION_MAX_CLOCK_SKEW_MS,

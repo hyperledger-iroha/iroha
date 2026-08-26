@@ -205,6 +205,38 @@ mod tests {
             "path and context equality cannot substitute for move-only instance ownership"
         );
     }
+    #[test]
+    fn emergency_fast_body_store_skips_inventory_and_rejects_writes() {
+        let root = TempDir::new().expect("temporary emergency body store");
+        let (context, keys) = context_and_keys();
+        let expected_directory = root
+            .path()
+            .join(hex::encode(context.id().0.as_ref()));
+        let mut store = V2BodyStore::open_emergency_fast_read_only(
+            root.path(),
+            context.clone(),
+            BlockSignaturePolicy::RotatingLeader,
+        )
+        .expect("open inert emergency body store");
+        assert!(
+            !expected_directory.exists(),
+            "emergency open must not create or inventory the context directory"
+        );
+
+        let (body, manifest) = body_and_manifest(&context, &keys, None);
+        let final_path = store.path_for(manifest.round, manifest.subject);
+        std::fs::create_dir_all(final_path.parent().unwrap()).expect("create ignored directory");
+        let sentinel = b"untouched Strict-recovery body";
+        std::fs::write(&final_path, sentinel).expect("write ignored final body");
+        assert!(matches!(
+            store.store(manifest, body),
+            Err(V2BodyStoreError::EmergencyFastReadOnly)
+        ));
+        assert_eq!(
+            std::fs::read(final_path).expect("reread ignored final body"),
+            sentinel
+        );
+    }
     fn store_with_promoted_terminal_outcomes(
         directory: &Path,
         context: &wire::HeightContext,

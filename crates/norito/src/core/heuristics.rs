@@ -136,57 +136,36 @@ pub fn compress_auto(payload: Vec<u8>) -> std::io::Result<(Compression, Vec<u8>)
     match select_compression_for_len(payload.len()) {
         CompressionPlan::None => Ok((Compression::None, payload)),
         CompressionPlan::GpuZstd { level: _level } => {
-            #[cfg(all(
-                feature = "compression",
-                feature = "gpu-compression",
-                not(target_arch = "wasm32")
-            ))]
+            #[cfg(all(feature = "compression", feature = "gpu-compression"))]
             {
                 let out = super::gpu_zstd::encode_all(payload, _level)?;
                 Ok((Compression::Zstd, out))
             }
-            #[cfg(all(
-                feature = "compression",
-                not(feature = "gpu-compression"),
-                not(target_arch = "wasm32")
-            ))]
+            #[cfg(all(feature = "compression", not(feature = "gpu-compression")))]
             {
                 // GPU path requested, but GPU compression is not compiled in: fall back to CPU zstd
                 let out = zstd::encode_all(std::io::Cursor::new(payload), get().zstd_level_large)?;
                 Ok((Compression::Zstd, out))
             }
-            #[cfg(any(not(feature = "compression"), target_arch = "wasm32"))]
+            #[cfg(not(feature = "compression"))]
             {
                 // Compression fully disabled: degrade gracefully with no compression
                 Ok((Compression::None, payload))
             }
         }
         CompressionPlan::CpuZstd { level } => {
-            #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
+            #[cfg(feature = "compression")]
             {
                 let out = zstd::encode_all(std::io::Cursor::new(payload), level)?;
                 Ok((Compression::Zstd, out))
             }
-            #[cfg(any(not(feature = "compression"), target_arch = "wasm32"))]
+            #[cfg(not(feature = "compression"))]
             {
                 let _ = level;
                 Ok((Compression::None, payload))
             }
         }
     }
-}
-/// Compute layout flags for a payload size estimate.
-///
-/// Norito v1 uses a fixed layout; size-based toggles are not applied.
-pub fn select_layout_flags_for_size(len_estimate: usize) -> u8 {
-    let h = get();
-    select_layout_flags_for_size_with(&h, len_estimate)
-}
-/// Compute adaptive layout flag bits for a given payload size using the provided
-/// heuristics, without mutating global overrides.
-pub fn select_layout_flags_for_size_with(h: &Heuristics, len_estimate: usize) -> u8 {
-    let _ = (h, len_estimate);
-    super::default_encode_flags()
 }
 #[cfg(test)]
 mod tests {

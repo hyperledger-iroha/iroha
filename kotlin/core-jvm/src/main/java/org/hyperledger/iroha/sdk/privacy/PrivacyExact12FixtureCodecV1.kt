@@ -245,7 +245,6 @@ object PrivacyExact12FixtureCodecV1 {
         val decoder = NoritoDecoder(
             decodedHeader.payload,
             decodedHeader.header.flags,
-            decodedHeader.header.minor,
         )
         val bundle = BundleAdapter.decode(decoder)
         require(decoder.remaining() == 0) { "exact-12 fixture contains trailing payload data" }
@@ -487,7 +486,6 @@ object PrivacyExact12FixtureCodecV1 {
         val child = NoritoDecoder(
             decoder.readBytes(encodedLength.toInt()),
             decoder.flags,
-            decoder.flagsHint,
         )
         val declaredLength = child.readLength(false)
         require(declaredLength in 1L..maximum.toLong()) { "$fieldName byte length is invalid" }
@@ -536,7 +534,7 @@ object PrivacyExact12FixtureCodecV1 {
         length: Int,
         fieldName: String,
     ): T {
-        val child = NoritoDecoder(decoder.readBytes(length), decoder.flags, decoder.flagsHint)
+        val child = NoritoDecoder(decoder.readBytes(length), decoder.flags)
         val value = adapter.decode(child)
         require(child.remaining() == 0) { "$fieldName contains trailing or unknown data" }
         return value

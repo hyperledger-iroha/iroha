@@ -234,38 +234,6 @@ extension ToriiClient {
     }
 
     @discardableResult
-    public func listProverReports(
-        filter: ToriiProverReportsFilter? = nil,
-        completion: @escaping (Result<[ToriiProverReport], Swift.Error>) -> Void
-    ) -> Task<Void, Never> {
-        runTask(completion) { try await self.listProverReports(filter: filter) }
-    }
-
-    @discardableResult
-    public func getProverReport(
-        id: String,
-        completion: @escaping (Result<ToriiProverReport, Swift.Error>) -> Void
-    ) -> Task<Void, Never> {
-        runTask(completion) { try await self.getProverReport(id: id) }
-    }
-
-    @discardableResult
-    public func deleteProverReport(
-        id: String,
-        completion: @escaping (Result<Void, Swift.Error>) -> Void
-    ) -> Task<Void, Never> {
-        runTask(completion) { try await self.deleteProverReport(id: id) }
-    }
-
-    @discardableResult
-    public func countProverReports(
-        filter: ToriiProverReportsFilter? = nil,
-        completion: @escaping (Result<UInt64, Swift.Error>) -> Void
-    ) -> Task<Void, Never> {
-        runTask(completion) { try await self.countProverReports(filter: filter) }
-    }
-
-    @discardableResult
     public func fetchContractManifest(
         codeHashHex: String,
         completion: @escaping (Result<ToriiContractManifestRecord, Swift.Error>) -> Void

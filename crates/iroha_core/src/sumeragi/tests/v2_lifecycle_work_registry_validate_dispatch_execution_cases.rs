@@ -2388,7 +2388,8 @@ fn recovered_ready_validate_plural_open_fixture() {
         .expect("wrong recovered Validate ordinal");
     assert!(matches!(
         executor.release_validate_retry_lifecycle_ordinal(selected_key, wrong_ordinal),
-        Err(EffectExecutorError::Contract(reason)) if reason.contains("ordinal")
+        Err(crate::sumeragi::v2_effects::EffectExecutorError::Contract(reason))
+            if reason.contains("ordinal")
     ));
     assert_eq!(
         executor.recovered_durable_validate_retry_keys_for_test(),

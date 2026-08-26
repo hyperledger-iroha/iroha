@@ -639,11 +639,7 @@ fn ensure_world_state_start_shape(
             "ordinary peer adapter requires bounded query counting".to_owned(),
         ));
     }
-    let peer_source = if let Some(query_box) = super::legacy_query_box(start) {
-        legacy_peer_source_shape(query_box)
-    } else {
-        canonical_peer_source_shape(start, query_limits)?
-    };
+    let peer_source = canonical_peer_source_shape(start, query_limits)?;
     if !peer_source {
         // TODO: Add query-specific borrowed adapters for the remaining 36
         // world producers. The three Kura producers additionally require an
@@ -662,21 +658,6 @@ fn ensure_world_state_start_shape(
         ));
     }
     ensure_iterable_params(&start.params, mode, query_limits, limits)
-}
-fn legacy_peer_source_shape(
-    query_box: &iroha_data_model::query::QueryBox<iroha_data_model::query::QueryOutputBatchBox>,
-) -> bool {
-    let Some(erased) =
-        iroha_data_model::query::iter_query_inner::<iroha_data_model::peer::PeerId>(query_box)
-    else {
-        return false;
-    };
-    super::decode_iter_query_payload_exact::<iroha_data_model::query::peer::prelude::FindPeers>(
-        erased.payload(),
-    )
-    .is_some()
-        && erased.predicate().is_pass()
-        && erased.selector().iter().next().is_none()
 }
 fn canonical_peer_source_shape(
     start: &iroha_data_model::query::QueryWithParams,
@@ -1524,6 +1505,11 @@ mod tests {
             QueryWithParams::new(&query, params).expect("peer query type has a canonical mapping");
         QueryRequest::Start(query)
     }
+    fn peer_params() -> QueryParams {
+        let mut params = QueryParams::default();
+        params.fetch_size = FetchSize::new(Some(nonzero!(16_u64)));
+        params
+    }
     #[test]
     fn singular_source_admission_audit_covers_all_96_variants() {
         assert_eq!(SINGULAR_SOURCE_ADMISSION_AUDIT.len(), 96);
@@ -1855,13 +1841,13 @@ mod tests {
             .with_count_mode(QueryCountMode::Bounded)
             .with_ordinary_execution_limits(ordinary);
         ensure_request_admitted(
-            &peer_start(QueryParams::default()),
+            &peer_start(peer_params()),
             OrdinaryCursorMode::Ephemeral,
             query_limits,
             ordinary,
         )
         .expect("the exact peer pass-through shape must be admitted");
-        let mut offset = QueryParams::default();
+        let mut offset = peer_params();
         offset.pagination = Pagination::new(None, 1);
         assert!(matches!(
             ensure_request_admitted(
@@ -1874,7 +1860,7 @@ mod tests {
         ));
         assert!(matches!(
             ensure_request_admitted(
-                &peer_start(QueryParams::default()),
+                &peer_start(peer_params()),
                 OrdinaryCursorMode::Ephemeral,
                 QueryLimits::new(16).with_ordinary_execution_limits(ordinary),
                 ordinary,
@@ -1883,7 +1869,7 @@ mod tests {
         ));
         assert!(matches!(
             ensure_request_admitted(
-                &peer_start(QueryParams::default()),
+                &peer_start(peer_params()),
                 OrdinaryCursorMode::Stored,
                 query_limits,
                 ordinary,

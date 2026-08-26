@@ -9,10 +9,7 @@ use crate::{
     account::{AccountController, AccountId, MultisigPolicy},
     asset::AssetDefinitionId,
     events::data::prelude::AssetBatchTransferOutcome,
-    isi::{
-        CustomInstruction, ExecuteTrigger, InstructionBox, OpaqueInstruction,
-        privacy::SubmitPrivacyProofV1,
-    },
+    isi::{CustomInstruction, ExecuteTrigger, InstructionBox, privacy::SubmitPrivacyProofV1},
     metadata::Metadata,
     name::Name,
     nexus::FeeSponsorProgramId,
@@ -866,7 +863,7 @@ static TX_SEQUENCE_NAME: LazyLock<Name> =
 /// Domain separator for the canonical first-release privacy transaction intent.
 pub const PRIVACY_TRANSACTION_INTENT_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha.privacy.transaction-intent-digest.v1";
-/// Dynamic or opaque executable path excluded from the V1 privacy intent projection.
+/// Dynamic executable path excluded from the V1 privacy intent projection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrivacyTransactionIntentUnsupportedPathV1 {
     /// A deployed contract call can enqueue instructions not present in the signed payload.
@@ -881,8 +878,6 @@ pub enum PrivacyTransactionIntentUnsupportedPathV1 {
     CustomInstruction,
     /// A by-call trigger can execute instructions outside the signed payload.
     ExecuteTrigger,
-    /// An opaque instruction has no locally auditable typed payload.
-    OpaqueInstruction,
 }
 /// Failure to derive or validate a canonical V1 privacy transaction intent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -896,8 +891,8 @@ pub enum PrivacyTransactionIntentErrorV1 {
         /// Observed direct submission count.
         count: u64,
     },
-    /// The payload uses a dynamic or opaque path excluded from the V1 projection.
-    #[error("privacy transaction intent contains an unsupported dynamic or opaque path")]
+    /// The payload uses a dynamic path excluded from the V1 projection.
+    #[error("privacy transaction intent contains an unsupported dynamic path")]
     UnsupportedPath {
         /// Exact excluded path.
         path: PrivacyTransactionIntentUnsupportedPathV1,
@@ -948,13 +943,7 @@ impl<'a> PrivacyTransactionIntentScan<'a> {
             self.first_submission.get_or_insert(submission);
             return;
         }
-        if let Some(opaque) = instruction.as_any().downcast_ref::<OpaqueInstruction>() {
-            self.unsupported_path
-                .get_or_insert(PrivacyTransactionIntentUnsupportedPathV1::OpaqueInstruction);
-            if opaque.wire_id() == SubmitPrivacyProofV1::WIRE_ID {
-                self.privacy_in_unsupported_path = true;
-            }
-        } else if instruction
+        if instruction
             .as_any()
             .downcast_ref::<CustomInstruction>()
             .is_some()
@@ -975,10 +964,6 @@ impl<'a> PrivacyTransactionIntentScan<'a> {
             .as_any()
             .downcast_ref::<SubmitPrivacyProofV1>()
             .is_some()
-            || instruction
-                .as_any()
-                .downcast_ref::<OpaqueInstruction>()
-                .is_some_and(|opaque| opaque.wire_id() == SubmitPrivacyProofV1::WIRE_ID)
         {
             self.privacy_in_unsupported_path = true;
         }
@@ -1248,8 +1233,8 @@ impl TransactionPayload {
     /// Validate and borrow an optional direct privacy submission for runtime admission.
     ///
     /// Ordinary non-privacy transactions return `Ok(None)`. A typed submission hidden in a proved
-    /// overlay or an opaque instruction bearing the privacy wire id fails closed. When one direct
-    /// submission exists, every V1 projection and derived-field rule is enforced.
+    /// overlay fails closed. When one direct submission exists, every V1 projection and
+    /// derived-field rule is enforced.
     ///
     /// # Errors
     ///

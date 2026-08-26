@@ -1,6 +1,5 @@
 #[test]
 fn enforce_axt_policy_rejects_zero_snapshot_manifest_root() {
-    crate::test_alias::ensure();
     let dsid = DataSpaceId::new(20);
     let lane = LaneId::new(1);
     let handle_manifest_root = [0x90; 32];
@@ -67,7 +66,6 @@ fn enforce_axt_policy_rejects_zero_snapshot_manifest_root() {
 }
 #[test]
 fn snapshot_policy_accepts_base_plus_one_across_envelopes_but_rejects_gap() {
-    crate::test_alias::ensure();
     let dsid = DataSpaceId::new(20);
     let lane = LaneId::new(2);
     let manifest_root = [0x90; 32];
@@ -188,7 +186,6 @@ fn establish_authenticated_axt_ledger_time(state: &State, creation_time_ms: u64)
 
 #[test]
 fn hydrate_axt_state_installs_one_consistent_state_snapshot() {
-    crate::test_alias::ensure();
     let dsid = DataSpaceId::UNIVERSAL;
     let lane = LaneId::new(0);
     let manifest_root = [0x6A; 32];

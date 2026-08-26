@@ -305,7 +305,7 @@ mod tests {
     fn instruction_vtable_frame_matches_canonical_concrete_bytes() {
         let concrete = Log::new(Level::INFO, "vtable frame parity".to_owned());
         let boxed = InstructionBox::from(concrete.clone());
-        let inner = super::super::peel_instruction_box(&*boxed);
+        let inner = &*boxed;
         let expected = norito::encode_canonical(&concrete).expect("canonical concrete frame");
         let mut actual = Vec::new();
         inner

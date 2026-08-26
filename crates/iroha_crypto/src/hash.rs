@@ -1,5 +1,4 @@
 use crate::{ParseError, hex_decode};
-#[cfg(not(feature = "ffi_import"))]
 use blake2::{
     Blake2b,
     digest::{Digest, consts::U32},
@@ -12,9 +11,7 @@ use mv::json::JsonKeyCodec;
 use norito::json::{self, FastJsonWrite, JsonDeserialize};
 #[cfg(feature = "json")]
 use norito::literal;
-#[cfg(not(feature = "ffi_import"))]
 use sha2::Sha256;
-#[cfg(not(feature = "ffi_import"))]
 use sha3::Keccak256;
 use std::{borrow::ToOwned as _, format, hash, marker::PhantomData, str::FromStr, string::String};
 /// Hash of Iroha entities. Currently supports only blake2b-32.
@@ -54,13 +51,11 @@ impl Hash {
     }
 }
 /// Compute raw SHA-256 bytes without Iroha hash marker semantics.
-#[cfg(not(feature = "ffi_import"))]
 #[must_use]
 pub fn sha256(bytes: impl AsRef<[u8]>) -> [u8; Hash::LENGTH] {
     Sha256::digest(bytes.as_ref()).into()
 }
 /// Compute raw BLAKE3-256 bytes without Iroha hash marker semantics.
-#[cfg(not(feature = "ffi_import"))]
 #[must_use]
 pub fn blake3_256(bytes: impl AsRef<[u8]>) -> [u8; Hash::LENGTH] {
     *blake3::hash(bytes.as_ref()).as_bytes()
@@ -75,7 +70,6 @@ pub fn blake3_256(bytes: impl AsRef<[u8]>) -> [u8; Hash::LENGTH] {
 ///
 /// Returns the reader's I/O error, or [`std::io::ErrorKind::InvalidData`] when
 /// the observed byte count overflows or exceeds `max_bytes`.
-#[cfg(not(feature = "ffi_import"))]
 pub fn sha256_reader_bounded(
     mut reader: impl std::io::Read,
     max_bytes: u64,
@@ -108,7 +102,6 @@ pub fn sha256_reader_bounded(
     Ok((hasher.finalize().into(), total))
 }
 /// Compute raw Keccak-256 bytes without Iroha hash marker semantics.
-#[cfg(not(feature = "ffi_import"))]
 #[must_use]
 pub fn keccak256(bytes: impl AsRef<[u8]>) -> [u8; Hash::LENGTH] {
     Keccak256::digest(bytes.as_ref()).into()
@@ -487,15 +480,15 @@ impl<T: IntoSchema> IntoSchema for HashOf<T> {
         }
     }
 }
-// Provide slice-based decoding for HashOf<T> so it can be used inside
-// packed sequences and option fields with Norito's strict-safe path.
+// Provide slice-based decoding for HashOf<T> so it can be used inside packed
+// sequences and option fields on Norito's bounded decode path.
 impl<'a, T> norito::core::DecodeFromSlice<'a> for HashOf<T> {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let (hash, used) = <Hash as norito::core::DecodeFromSlice>::decode_from_slice(bytes)?;
         Ok((HashOf(hash, PhantomData), used))
     }
 }
-#[cfg(any(feature = "ffi_export", feature = "ffi_import"))]
+#[cfg(feature = "ffi_export")]
 mod ffi {
     //! Manual implementations of FFI related functionality
     use super::*;

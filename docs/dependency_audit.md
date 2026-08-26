@@ -61,8 +61,11 @@ Recommendations:
 Notes:
 - `cargo tree -d` shows expected duplicate major versions (`bitflags` 1/2, multiple `ring`), not by itself a security risk but increases build surface.
 - No typosquat-like crates were observed; all names and sources resolve to well-known ecosystem crates or internal workspace members.
-- Experimental: added `iroha_crypto` feature `bls-backend-blstrs` to begin migrating BLS to a blstrs‑only backend (removes dependence on arkworks when enabled). Default remains `w3f-bls` to avoid behavior/encoding changes. Alignment plan:
-  - Add round-trip fixtures in `crates/iroha_crypto/tests/bls_backend_compat.rs` that derive keys once and assert equality across both backends, covering `SecretKey`, `PublicKey`, and signature aggregation.
+- BLS signatures use one `w3f-bls` implementation. The experimental
+  `bls-backend-blstrs` adapter was removed because it duplicated the public-key
+  and secret-key surface while delegating signing, verification, and key
+  derivation back to `w3f-bls`. The `blstrs` dependency remains in use by the
+  threshold-BLS and timed-OVN protocols for direct curve arithmetic.
 
 Follow-ups (proposed work items):
 - Keep the Serde guardrails in CI (`scripts/check_no_direct_serde.sh`, `scripts/deny_serde_json.sh`) so new production usages cannot be introduced.

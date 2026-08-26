@@ -1188,7 +1188,7 @@ fn decode_bundle_payload<T>(
     generated_at: u64,
 ) -> Result<T, ValidationOutcomeV1>
 where
-    T: for<'decode> norito::NoritoDeserialize<'decode>,
+    T: norito::NoritoSerialize + for<'decode> norito::NoritoDeserialize<'decode>,
 {
     norito::decode_from_bytes::<T>(payload.bytes).map_err(|error| {
         bundle_decode_error(

@@ -1341,6 +1341,23 @@ fn kura_disk_usage_includes_temp_and_debug_files() {
     assert_eq!(updated, base.saturating_add(extra));
 }
 #[test]
+fn combined_blocks_root_scan_separates_enforced_and_total_only_bytes() {
+    let temp_dir = TempDir::new().expect("create temp dir");
+    let blocks_root = temp_dir.path().join("blocks");
+    let blocks_dir = blocks_root.join("lane_0000000000");
+    std::fs::create_dir_all(&blocks_dir).expect("create block store");
+    std::fs::write(blocks_dir.join(DATA_FILE_NAME), [0u8; 11]).expect("write budgeted block bytes");
+    let retained_dir = blocks_dir.join(RETAINED_BLOCKS_DIR_NAME);
+    std::fs::create_dir_all(&retained_dir).expect("create retained block directory");
+    std::fs::write(retained_dir.join("accounting.norito"), [0u8; 7])
+        .expect("write total-only retained bytes");
+
+    let (enforced, total) = Kura::blocks_root_usage_bytes(&blocks_root, u64::MAX)
+        .expect("scan enforced and total usage together");
+    assert_eq!(enforced, 11);
+    assert_eq!(total, 18);
+}
+#[test]
 fn purge_retired_segments_removes_retired_dir() {
     let temp_dir = TempDir::new().expect("create temp dir");
     let kura_cfg = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
@@ -2010,7 +2027,7 @@ fn startup_repairs_each_block_first_merge_publication_crash_window() {
             .expect("simulate canonical block commit before in-memory publication");
         drop(write_guard);
         if published_merge_parts >= 1 {
-            kura.append_merge_entry(&entry)
+            kura.append_merge_entry_for_test(&entry)
                 .expect("simulate merge-log publication");
         }
         if published_merge_parts >= 2 {
@@ -2273,11 +2290,11 @@ fn merge_log_rejects_oversized_entry() {
 fn merge_log_respects_cache_capacity() {
     let kura = Kura::blank_kura_for_testing();
     *kura.merge_log.lock() = MergeLedgerLog::in_memory(2);
-    kura.append_merge_entry(&sample_merge_entry(1))
+    kura.append_merge_entry_for_test(&sample_merge_entry(1))
         .expect("append entry1");
-    kura.append_merge_entry(&sample_merge_entry(2))
+    kura.append_merge_entry_for_test(&sample_merge_entry(2))
         .expect("append entry2");
-    kura.append_merge_entry(&sample_merge_entry(3))
+    kura.append_merge_entry_for_test(&sample_merge_entry(3))
         .expect("append entry3");
     let snapshot = kura.merge_ledger_snapshot();
     assert_eq!(snapshot.len(), 2);
@@ -2285,6 +2302,7 @@ fn merge_log_respects_cache_capacity() {
     assert_eq!(snapshot[1].epoch_id, 3);
     assert_eq!(
         kura.merge_ledger_latest_snapshot(1)
+            .expect("read bounded merge snapshot")
             .iter()
             .map(|entry| entry.epoch_id)
             .collect::<Vec<_>>(),
@@ -2293,13 +2311,18 @@ fn merge_log_respects_cache_capacity() {
     );
     assert_eq!(
         kura.merge_ledger_latest_snapshot(2)
+            .expect("read bounded merge snapshot")
             .iter()
             .map(|entry| entry.epoch_id)
             .collect::<Vec<_>>(),
         vec![3, 2],
         "bounded diagnostics suffixes are newest-first and deterministic"
     );
-    assert!(kura.merge_ledger_latest_snapshot(0).is_empty());
+    assert!(
+        kura.merge_ledger_latest_snapshot(0)
+            .expect("read empty bounded merge snapshot")
+            .is_empty()
+    );
 }
 #[test]
 fn merge_log_append_rejects_canonical_storage_poison_without_effects() {
@@ -2307,7 +2330,7 @@ fn merge_log_append_rejects_canonical_storage_poison_without_effects() {
     kura.canonical_storage_poisoned
         .store(true, Ordering::Release);
     assert!(matches!(
-        kura.append_merge_entry(&sample_merge_entry(1)),
+        kura.append_merge_entry_for_test(&sample_merge_entry(1)),
         Err(Error::CanonicalStoragePoisoned)
     ));
     assert!(

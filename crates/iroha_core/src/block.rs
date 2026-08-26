@@ -9346,9 +9346,9 @@ pub(crate) mod valid {
             else {
                 return false;
             };
-            if state
+            let latest_receipt = match state
                 .kura()
-                .latest_native_amx_participant_application_receipt_matching(
+                .checked_latest_native_amx_participant_application_receipt_matching(
                     descriptor.lane_id,
                     descriptor.dataspace_id,
                     descriptor.lane_incarnation,
@@ -9356,11 +9356,13 @@ pub(crate) mod valid {
                         receipt.participant_proposal.descriptor.proposal_height
                             <= descriptor.proposal_height
                     },
-                )
-                .is_some_and(|receipt| {
-                    receipt.participant_proposal.descriptor.lane_block_height >= previous_height
-                })
-            {
+                ) {
+                Ok(receipt) => receipt,
+                Err(_) => return false,
+            };
+            if latest_receipt.is_some_and(|receipt| {
+                receipt.participant_proposal.descriptor.lane_block_height >= previous_height
+            }) {
                 return false;
             }
             state
@@ -9522,9 +9524,9 @@ pub(crate) mod valid {
                     exact_current_slot = true;
                 }
             }
-            if state
+            let latest_receipt = state
                 .kura()
-                .latest_native_amx_participant_application_receipt_matching(
+                .checked_latest_native_amx_participant_application_receipt_matching(
                     descriptor.lane_id,
                     descriptor.dataspace_id,
                     descriptor.lane_incarnation,
@@ -9533,10 +9535,14 @@ pub(crate) mod valid {
                             <= descriptor.proposal_height
                     },
                 )
-                .is_some_and(|receipt| {
-                    receipt.participant_proposal.descriptor.lane_block_height >= lane_block_height
-                })
-            {
+                .map_err(|_| {
+                    slot_error(
+                        "cannot validate Native AMX slot while emergency Fast auxiliary history is unavailable",
+                    )
+                })?;
+            if latest_receipt.is_some_and(|receipt| {
+                receipt.participant_proposal.descriptor.lane_block_height >= lane_block_height
+            }) {
                 return Err(slot_error(
                     "conflicts with an applied Native AMX participant slot",
                 ));

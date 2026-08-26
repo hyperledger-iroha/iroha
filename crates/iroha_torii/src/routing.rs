@@ -241,12 +241,6 @@ use sorafs_manifest::{
     },
     validate_manifest,
 };
-#[allow(dead_code)]
-fn _json_helper_sanity() {
-    let _ = json_object(vec![("foo", json_value(&1u64))]);
-    let _ = json_object(vec![("bar", json_value(&2u64))]);
-    let _ = norito::json::to_json_pretty(&json_object(vec![("baz", json_value(&3u64))])).unwrap();
-}
 #[allow(clippy::redundant_pub_crate)]
 pub(crate) fn conversion_error(message: String) -> Error {
     Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -539,7 +533,6 @@ mod pagination_tests {
     }
 }
 include!("routing/pagination_ordering.rs");
-include!("routing/legacy_streaming_page.rs");
 app_api_items! {
 struct PageResult<T> {
     items: Vec<T>,
@@ -586,64 +579,7 @@ fn normalize_app_generic_count_mode(
     let count_mode = app_count_mode(envelope.count_mode.as_deref(), endpoint);
     envelope.count_mode = Some(count_mode.label().to_owned());
 }
-fn collect_page_streaming_bounded<K, T, I>(
-    iter: I,
-    offset: u64,
-    limit: Option<u64>,
-    cap: Option<u64>,
-) -> PageResult<T>
-where
-    I: IntoIterator<Item = (K, T)>,
-    K: Ord,
-{
-    let offset_usize = if offset > usize::MAX as u64 {
-        usize::MAX
-    } else {
-        offset as usize
-    };
-    let limit_usize = limit
-        .filter(|&lim| lim > 0)
-        .map(|lim| cap.map_or(lim, |c| lim.min(c)))
-        .or(cap)
-        .map(|lim| lim.min(usize::MAX as u64) as usize);
-    let take = limit_usize.unwrap_or(usize::MAX);
-    let probe_cap = offset_usize.saturating_add(take).saturating_add(1);
-    let mut seq: usize = 0;
-    let mut heap: BinaryHeap<PageEntry<K, T>> = BinaryHeap::new();
-    let mut collected: Vec<PageEntry<K, T>> = Vec::new();
-    let bounded = probe_cap != usize::MAX;
-    for (key, item) in iter.into_iter() {
-        let entry = PageEntry { key, seq, item };
-        seq = seq.wrapping_add(1);
-        if bounded {
-            heap.push(entry);
-            if heap.len() > probe_cap {
-                heap.pop();
-            }
-        } else {
-            collected.push(entry);
-        }
-    }
-    let mut entries = if bounded { heap.into_vec() } else { collected };
-    entries.sort_by(|a, b| match a.key.cmp(&b.key) {
-        Ordering::Equal => a.seq.cmp(&b.seq),
-        ord => ord,
-    });
-    let skip = offset_usize.min(entries.len());
-    let has_more = entries.len().saturating_sub(skip) > take;
-    let items = entries
-        .into_iter()
-        .skip(skip)
-        .take(take)
-        .map(|entry| entry.item)
-        .collect();
-    PageResult {
-        items,
-        total: None,
-        has_more,
-    }
-}
-fn collect_page_streaming_for_mode<K, T, I>(
+fn collect_page_streaming<K, T, I>(
     iter: I,
     offset: u64,
     limit: Option<u64>,
@@ -654,19 +590,81 @@ where
     I: IntoIterator<Item = (K, T)>,
     K: Ord,
 {
-    match count_mode {
-        AppCountMode::Bounded => collect_page_streaming_bounded(iter, offset, limit, cap),
-        AppCountMode::Exact => {
-            let (items, total) = collect_page_streaming(iter, offset, limit, cap);
-            let returned_until =
-                offset.saturating_add(u64::try_from(items.len()).unwrap_or(u64::MAX));
-            PageResult {
-                items,
-                total: Some(total),
-                has_more: u64::try_from(total).unwrap_or(u64::MAX) > returned_until,
+    let offset_usize = usize::try_from(offset).unwrap_or(usize::MAX);
+    let effective_limit = match limit {
+        Some(limit) => Some(cap.map_or(limit, |cap| limit.min(cap))),
+        None => cap,
+    };
+    let limit_usize = effective_limit.map(|limit| usize::try_from(limit).unwrap_or(usize::MAX));
+    let take = limit_usize.unwrap_or(usize::MAX);
+    let mut iter = iter.into_iter();
+    if take == 0 && count_mode == AppCountMode::Bounded {
+        return PageResult {
+            items: Vec::new(),
+            total: None,
+            has_more: iter.nth(offset_usize).is_some(),
+        };
+    }
+    let retained_capacity = offset_usize.checked_add(take);
+    let mut matched = 0_usize;
+    let mut seq: usize = 0;
+    let mut heap: BinaryHeap<PageEntry<K, T>> = BinaryHeap::new();
+    let mut collected: Vec<PageEntry<K, T>> = Vec::new();
+    for (key, item) in iter {
+        matched = matched.saturating_add(1);
+        let entry = PageEntry { key, seq, item };
+        seq = seq.saturating_add(1);
+        if retained_capacity == Some(0) {
+            continue;
+        }
+        if let Some(capacity) = retained_capacity {
+            heap.push(entry);
+            if heap.len() > capacity {
+                heap.pop();
             }
+        } else {
+            collected.push(entry);
         }
     }
+    let mut entries = if retained_capacity.is_some() {
+        heap.into_vec()
+    } else {
+        collected
+    };
+    entries.sort_by(|a, b| match a.key.cmp(&b.key) {
+        Ordering::Equal => a.seq.cmp(&b.seq),
+        ord => ord,
+    });
+    let skip = offset_usize.min(entries.len());
+    let items: Vec<T> = entries
+        .into_iter()
+        .skip(skip)
+        .take(take)
+        .map(|entry| entry.item)
+        .collect();
+    let returned_until = offset.saturating_add(u64::try_from(items.len()).unwrap_or(u64::MAX));
+    PageResult {
+        items,
+        total: (count_mode == AppCountMode::Exact).then_some(matched),
+        has_more: u64::try_from(matched).unwrap_or(u64::MAX) > returned_until,
+    }
+}
+fn collect_exact_page_streaming<K, T, I>(
+    iter: I,
+    offset: u64,
+    limit: Option<u64>,
+    cap: Option<u64>,
+) -> (Vec<T>, usize)
+where
+    I: IntoIterator<Item = (K, T)>,
+    K: Ord,
+{
+    let page = collect_page_streaming(iter, offset, limit, cap, AppCountMode::Exact);
+    (
+        page.items,
+        page.total
+            .expect("exact-count pagination always records the matched total"),
+    )
 }
 fn collect_ordered_page_bounded<K, T, I>(
     mut iter: I,
@@ -1079,8 +1077,8 @@ fn insert_bounded_page_metadata<T>(top: &mut norito::json::Map, page: &PageResul
 mod streaming_pager_tests {
     use super::{
         AppCountMode, MultiSortKey, SortKeyComponent, app_query_limits, app_transaction_count_mode,
-        collect_ordered_page_bounded, collect_page_linear, collect_page_streaming,
-        enforce_app_pagination,
+        collect_exact_page_streaming, collect_ordered_page_bounded, collect_page_linear,
+        collect_page_streaming, enforce_app_pagination,
     };
     use std::{cell::Cell, rc::Rc};
     routing_test! { sync omitted_count_mode_is_bounded
@@ -1113,29 +1111,50 @@ mod streaming_pager_tests {
         ));
     }
     routing_test! { sync collects_expected_page_with_limit
-        let (items, total) = collect_page_streaming((0..10).map(|i| (i, i)), 2, Some(3), None);
+        let (items, total) =
+            collect_exact_page_streaming((0..10).map(|i| (i, i)), 2, Some(3), None);
         assert_eq!(total, 10);
         assert_eq!(items, vec![2, 3, 4]);
     }
     routing_test! { sync respects_large_offset
-        let (items, total) = collect_page_streaming((0..5).map(|i| (i, i)), 10, Some(2), None);
+        let (items, total) =
+            collect_exact_page_streaming((0..5).map(|i| (i, i)), 10, Some(2), None);
         assert_eq!(total, 5);
         assert!(items.is_empty());
     }
     routing_test! { sync collects_all_when_limit_absent
-        let (items, total) = collect_page_streaming((0..3).map(|i| (i, i)), 1, None, None);
+        let (items, total) =
+            collect_exact_page_streaming((0..3).map(|i| (i, i)), 1, None, None);
         assert_eq!(total, 3);
         assert_eq!(items, vec![1, 2]);
     }
     routing_test! { sync omitted_limit_respects_page_cap
-        let (items, total) = collect_page_streaming((0..10).map(|i| (i, i)), 2, None, Some(3));
+        let (items, total) =
+            collect_exact_page_streaming((0..10).map(|i| (i, i)), 2, None, Some(3));
         assert_eq!(total, 10);
         assert_eq!(items, vec![2, 3, 4]);
     }
     routing_test! { sync explicit_zero_limit_returns_empty_page
-        let (items, total) = collect_page_streaming((0..3).map(|i| (i, i)), 0, Some(0), Some(3));
+        let (items, total) =
+            collect_exact_page_streaming((0..3).map(|i| (i, i)), 0, Some(0), Some(3));
         assert_eq!(total, 3);
         assert!(items.is_empty());
+    }
+    routing_test! { sync bounded_zero_limit_is_not_replaced_by_the_server_cap
+        let visited = Cell::new(0_usize);
+        let page = collect_page_streaming(
+            (0..3)
+                .inspect(|_| visited.set(visited.get() + 1))
+                .map(|i| (i, i)),
+            0,
+            Some(0),
+            Some(3),
+            AppCountMode::Bounded,
+        );
+        assert!(page.items.is_empty());
+        assert_eq!(page.total, None);
+        assert!(page.has_more);
+        assert_eq!(visited.get(), 1, "bounded empty pages need only one probe");
     }
     routing_test! { sync ordered_bounded_page_stops_after_one_probe
         let visited = Cell::new(0_usize);
@@ -1172,14 +1191,14 @@ mod streaming_pager_tests {
                 "beta-1",
             ),
         ];
-        let (items, total) = collect_page_streaming(data, 0, None, None);
+        let (items, total) = collect_exact_page_streaming(data, 0, None, None);
         assert_eq!(total, 3);
         assert_eq!(items, vec!["alpha-3", "alpha-2", "beta-1"]);
     }
     routing_test! { sync preserves_insertion_order_when_keys_equal
         let key = MultiSortKey::new(vec![SortKeyComponent::asc("same".to_string())]);
         let data = vec![(key.clone(), 1usize), (key.clone(), 2usize), (key, 3usize)];
-        let (items, _) = collect_page_streaming(data, 0, None, None);
+        let (items, _) = collect_exact_page_streaming(data, 0, None, None);
         assert_eq!(items, vec![1, 2, 3]);
     }
     routing_test! { sync linear_collects_expected_window
@@ -1377,7 +1396,7 @@ pub struct RecordSoranetPrivacyShareDto {
 pub struct AliasResolveRequestDto {
     pub alias: String,
 }
-(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)
+(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, norito::derive::NoritoSerialize)
 pub struct AssetAliasResolveRequestDto {
     pub alias: String,
 }
@@ -2244,7 +2263,7 @@ pub struct RamLfeProgramPolicyListDto {
     pub total: u64,
     pub items: Vec<RamLfeProgramPolicySummaryDto>,
 }
-(Debug, norito::derive::NoritoDeserialize)
+(Debug, norito::derive::NoritoDeserialize, norito::derive::NoritoSerialize)
 /// Execute one RAM-LFE program from a BFV-encrypted input.
 pub struct RamLfeExecuteRequestDto {
     pub encrypted_input: String,
@@ -2402,7 +2421,7 @@ pub struct IdentifierPolicyListDto {
     pub total: u64,
     pub items: Vec<IdentifierPolicySummaryDto>,
 }
-(Debug, norito::derive::NoritoDeserialize)
+(Debug, norito::derive::NoritoDeserialize, norito::derive::NoritoSerialize)
 /// Resolve an encrypted identifier under one policy namespace.
 pub struct IdentifierResolveRequestDto {
     pub policy_id: String,
@@ -4263,7 +4282,7 @@ pub async fn handle_list_vk(
                     (id.clone(), rec.clone()),
                 )
             });
-        collect_page_streaming(iter, offset, limit, Some(pagination.cap))
+        collect_exact_page_streaming(iter, offset, limit, Some(pagination.cap))
     } else {
         let iter = world
             .verifying_keys()
@@ -4283,7 +4302,7 @@ pub async fn handle_list_vk(
                     (id.clone(), rec.clone()),
                 )
             });
-        collect_page_streaming(iter, offset, limit, Some(pagination.cap))
+        collect_exact_page_streaming(iter, offset, limit, Some(pagination.cap))
     };
     // Build JSON
     let body = if q.ids_only.unwrap_or(false) {
@@ -4324,9 +4343,12 @@ pub async fn handle_list_vk(
 include!("routing/signed_query_execution.rs");
 // ---------------------- Iroha Connect (feature-gated) ----------------------
 #[cfg(feature = "connect")]
-#[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::NoritoSerialize,
+)]
 #[norito(deny_unknown_fields)]
-#[allow(dead_code)]
 /// Request body for creating a Connect session.
 pub struct ConnectSessionRequest {
     /// Client-provided session id (canonical base64url without padding).
@@ -4367,7 +4389,6 @@ pub struct ConnectSessionResponse {
 }
 #[cfg(feature = "connect")]
 /// POST /v1/connect/session — create or validate a session and return a deeplink URI.
-#[allow(dead_code)]
 pub async fn handle_connect_session(
     network_id: iroha_data_model::NetworkId,
     NoritoJson(req): NoritoJson<ConnectSessionRequest>,
@@ -4884,7 +4905,12 @@ pub async fn handle_get_proof(
         bytes,
     })
 }
-#[derive(Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::NoritoSerialize,
+)]
 #[norito(deny_unknown_fields)]
 /// Canonical signed-query envelope for `FindProofRecordById`.
 pub struct ProofFindByIdQueryDto {
@@ -10710,6 +10736,7 @@ pub fn accept_transaction_for_ingress(
     tx: impl Into<TransactionEntrypoint>,
     telemetry: &MaybeTelemetry,
 ) -> Result<iroha_core::tx::AcceptedTransaction<'static>> {
+    reject_emergency_fast_transaction_ingress(state.as_ref())?;
     #[cfg(not(feature = "telemetry"))]
     let _ = telemetry;
     #[cfg(feature = "telemetry")]
@@ -10849,6 +10876,7 @@ pub fn accept_decoded_signed_transaction_for_ingress_with_precheck(
     single_ed25519_prechecked: bool,
     precheck_rejection: Option<AcceptTransactionFail>,
 ) -> Result<iroha_core::tx::AcceptedTransaction<'static>> {
+    reject_emergency_fast_transaction_ingress(state.as_ref())?;
     #[cfg(not(feature = "telemetry"))]
     let _ = telemetry;
     #[cfg(feature = "telemetry")]
@@ -10972,6 +11000,7 @@ pub(crate) fn reject_ingress_if_queue_capacity_saturated(
     if incoming_tx_count == 0 {
         return Ok(());
     }
+    reject_emergency_fast_transaction_ingress(state)?;
     let pressure = {
         let block_time = state.sumeragi_block_cadence();
         queue.refresh_pressure_budget_from_block_time(block_time)
@@ -11009,6 +11038,16 @@ pub(crate) fn reject_ingress_if_queue_capacity_saturated(
             capacity: pressure.capacity,
         },
     })
+}
+fn reject_emergency_fast_transaction_ingress(state: &CoreState) -> Result<()> {
+    if state.emergency_fast_startup_enabled() {
+        return Err(Error::AppServiceUnavailable {
+            code: "emergency_fast_transaction_ingress_disabled",
+            message: "transaction admission and validation are disabled in emergency Fast mode; restart in Strict mode before submitting transactions"
+                .to_owned(),
+        });
+    }
+    Ok(())
 }
 pub(crate) fn push_accepted_transaction_for_ingress_with_routing_plan(
     queue: Arc<Queue>,
@@ -29432,9 +29471,8 @@ mod multisig_native_norito_dto_tests {
     fn bare_payload_with_flags<T: NoritoSerialize>(
         value: &T,
         flags: u8,
-        flags_hint: u8,
     ) -> Vec<u8> {
-        let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags_hint);
+        let _guard = norito::core::DecodeFlagsGuard::enter(flags);
         let _sequential = norito::core::SequentialOverrideGuard::enter();
         let mut payload = Vec::new();
         norito::core::serialize_to_buffer(value, &mut payload).expect("serialize bare payload");
@@ -29474,8 +29512,7 @@ mod multisig_native_norito_dto_tests {
         };
         let bytes = norito::to_bytes(&request).expect("encode request");
         let view = norito::core::from_bytes_view(&bytes).expect("payload view");
-        let selector_payload =
-            bare_payload_with_flags(&request.selector, view.flags(), view.flags_hint());
+        let selector_payload = bare_payload_with_flags(&request.selector, view.flags());
         assert_eq!(
             view.as_bytes().get(..selector_payload.len()),
             Some(selector_payload.as_slice()),
@@ -33504,7 +33541,26 @@ fn extend_account_history_index(
     }
     index
 }
-fn account_history_index_snapshot(state: &CoreState) -> Arc<AccountHistoryIndex> {
+fn reject_emergency_fast_history_index(state: &CoreState) -> Result<()> {
+    reject_emergency_fast_unbounded_history(state, false, "lazy application history index")
+}
+fn reject_emergency_fast_unbounded_history(
+    state: &CoreState,
+    bounded: bool,
+    surface: &'static str,
+) -> Result<()> {
+    if !bounded && state.emergency_fast_startup_enabled() {
+        return Err(Error::AppServiceUnavailable {
+            code: "emergency_fast_history_unavailable",
+            message: format!(
+                "{surface} requires a historical Kura scan that emergency Fast mode deliberately disables; provide an exact numeric block height where supported or restart in Strict mode"
+            ),
+        });
+    }
+    Ok(())
+}
+fn account_history_index_snapshot(state: &CoreState) -> Result<Arc<AccountHistoryIndex>> {
+    reject_emergency_fast_history_index(state)?;
     let cache_key = account_history_index_cache_key(state);
     if let Some(existing) = ACCOUNT_HISTORY_INDEX
         .read()
@@ -33512,13 +33568,13 @@ fn account_history_index_snapshot(state: &CoreState) -> Arc<AccountHistoryIndex>
         .as_ref()
         .filter(|index| index.cache_key == cache_key)
     {
-        return Arc::clone(existing);
+        return Ok(Arc::clone(existing));
     }
     let mut guard = ACCOUNT_HISTORY_INDEX
         .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(existing) = guard.as_ref().filter(|index| index.cache_key == cache_key) {
-        return Arc::clone(existing);
+        return Ok(Arc::clone(existing));
     }
     let rebuilt = if let Some(previous) = guard.as_ref() {
         if account_history_cache_extends_append_only(previous.as_ref(), state, &cache_key) {
@@ -33530,7 +33586,7 @@ fn account_history_index_snapshot(state: &CoreState) -> Arc<AccountHistoryIndex>
         Arc::new(build_account_history_index(state, cache_key))
     };
     *guard = Some(Arc::clone(&rebuilt));
-    rebuilt
+    Ok(rebuilt)
 }
 fn contract_activity_insert_index(
     index: &mut std::collections::HashMap<String, Vec<usize>>,
@@ -34474,7 +34530,8 @@ fn extend_contract_event_index(
     index.cache_key = next_key;
     index
 }
-fn contract_activity_index_snapshot(state: &CoreState) -> Arc<ContractActivityIndex> {
+fn contract_activity_index_snapshot(state: &CoreState) -> Result<Arc<ContractActivityIndex>> {
+    reject_emergency_fast_history_index(state)?;
     let cache_key = contract_activity_index_cache_key(state);
     if let Some(existing) = CONTRACT_ACTIVITY_INDEX
         .read()
@@ -34482,7 +34539,7 @@ fn contract_activity_index_snapshot(state: &CoreState) -> Arc<ContractActivityIn
         .and_then(|guard| guard.clone())
     {
         if existing.cache_key == cache_key {
-            return existing;
+            return Ok(existing);
         }
     }
     let rebuilt = if let Some(existing) = CONTRACT_ACTIVITY_INDEX
@@ -34505,14 +34562,15 @@ fn contract_activity_index_snapshot(state: &CoreState) -> Arc<ContractActivityIn
     if let Ok(mut guard) = CONTRACT_ACTIVITY_INDEX.write() {
         if let Some(existing) = guard.as_ref() {
             if existing.cache_key == cache_key {
-                return Arc::clone(existing);
+                return Ok(Arc::clone(existing));
             }
         }
         *guard = Some(Arc::clone(&rebuilt));
     }
-    rebuilt
+    Ok(rebuilt)
 }
-fn contract_event_index_snapshot(state: &CoreState) -> Arc<ContractEventIndex> {
+fn contract_event_index_snapshot(state: &CoreState) -> Result<Arc<ContractEventIndex>> {
+    reject_emergency_fast_history_index(state)?;
     let cache_key = contract_event_index_cache_key(state);
     if let Some(existing) = CONTRACT_EVENT_INDEX
         .read()
@@ -34520,7 +34578,7 @@ fn contract_event_index_snapshot(state: &CoreState) -> Arc<ContractEventIndex> {
         .and_then(|guard| guard.clone())
     {
         if existing.cache_key == cache_key {
-            return existing;
+            return Ok(existing);
         }
     }
     let rebuilt = if let Some(existing) = CONTRACT_EVENT_INDEX
@@ -34543,13 +34601,37 @@ fn contract_event_index_snapshot(state: &CoreState) -> Arc<ContractEventIndex> {
     if let Ok(mut guard) = CONTRACT_EVENT_INDEX.write() {
         if let Some(existing) = guard.as_ref() {
             if existing.cache_key == cache_key {
-                return Arc::clone(existing);
+                return Ok(Arc::clone(existing));
             }
         }
         *guard = Some(Arc::clone(&rebuilt));
     }
-    rebuilt
+    Ok(rebuilt)
 }
+#[cfg(all(test, feature = "app_api"))]
+routing_test! { sync emergency_fast_history_guard_precedes_every_lazy_full_index_build {
+    let source = include_str!("routing.rs");
+    for function in [
+        "fn account_history_index_snapshot",
+        "fn contract_activity_index_snapshot",
+        "fn contract_event_index_snapshot",
+    ] {
+        let body = source
+            .split_once(function)
+            .unwrap_or_else(|| panic!("missing {function}"))
+            .1;
+        let guard = body
+            .find("reject_emergency_fast_history_index(state)?")
+            .unwrap_or_else(|| panic!("missing Fast guard in {function}"));
+        let cache_key = body
+            .find("let cache_key")
+            .unwrap_or_else(|| panic!("missing cache key in {function}"));
+        assert!(
+            guard < cache_key,
+            "{function} must reject Fast mode before consulting or rebuilding its process-global history cache"
+        );
+    }
+} }
 fn intersect_contract_activity_positions(left: &[usize], right: &[usize]) -> Vec<usize> {
     let mut merged = Vec::with_capacity(left.len().min(right.len()));
     let mut left_index = 0usize;
@@ -37318,7 +37400,7 @@ pub async fn handle_v1_account_transactions_with_policy(
                 MultiSortKey::new(comps)
             };
             let iter = projections.into_iter().map(|p| (sort_key(&p), p));
-            collect_page_streaming_for_mode(
+            collect_page_streaming(
                 iter,
                 pagination.offset,
                 pagination.limit,
@@ -37814,7 +37896,7 @@ pub async fn handle_v1_account_history_get_with_policy(
                 .clamp_fetch_size(None)?
                 .map(|value| value.min(pagination.cap))
         };
-        let snapshot = account_history_index_snapshot(state.as_ref());
+        let snapshot = account_history_index_snapshot(state.as_ref())?;
         let account_key = account_id.to_string();
         let positions = snapshot
             .by_account
@@ -37998,7 +38080,7 @@ pub async fn handle_v1_contracts_activity_get(
     let count_mode = app_count_mode(params.count_mode.as_deref(), ENDPOINT_CONTRACTS_ACTIVITY);
     let page = {
         let limits = app_query_limits();
-        let index = contract_activity_index_snapshot(state.as_ref());
+        let index = contract_activity_index_snapshot(state.as_ref())?;
         let pagination = enforce_app_pagination(
             params.limit,
             params.offset,
@@ -38063,7 +38145,7 @@ pub async fn handle_v1_contracts_events_get(
     let count_mode = app_count_mode(params.count_mode.as_deref(), ENDPOINT_CONTRACTS_EVENTS);
     let page = {
         let limits = app_query_limits();
-        let index = contract_event_index_snapshot(state.as_ref());
+        let index = contract_event_index_snapshot(state.as_ref())?;
         let pagination =
             enforce_app_pagination(params.limit, params.offset, cap, ENDPOINT_CONTRACTS_EVENTS)?;
         let fetch_cap = if count_mode == AppCountMode::Exact {
@@ -48121,7 +48203,7 @@ fn load_swap_fill_rollup(
         }
         cursor = cursor.saturating_sub(1);
     }
-    let index = contract_event_index_snapshot(state.as_ref());
+    let index = contract_event_index_snapshot(state.as_ref())?;
     let mut swap_events: Vec<ContractEventProjection> = index
         .items
         .iter()
@@ -49098,7 +49180,7 @@ pub async fn handle_v1_contracts_rollups_uranai_markets_history_get(
         params.count_mode.as_deref(),
         ENDPOINT_CONTRACTS_ROLLUPS_URANAI_MARKETS_HISTORY,
     );
-    let index = contract_event_index_snapshot(state.as_ref());
+    let index = contract_event_index_snapshot(state.as_ref())?;
     Ok(infallible_pretty_json_response(
         &uranai_market_history_rollup_to_json_value(
             index.as_ref(),
@@ -49125,7 +49207,7 @@ pub async fn handle_v1_contracts_rollups_trader_activity_get(
         params.count_mode.as_deref(),
         ENDPOINT_CONTRACTS_ROLLUPS_TRADER_ACTIVITY,
     );
-    let index = contract_event_index_snapshot(state.as_ref());
+    let index = contract_event_index_snapshot(state.as_ref())?;
     let (items, total) = collect_trader_activity_page(index.as_ref(), &params, pagination);
     let page = page_result_from_counted_items(items, total, params.offset, count_mode);
     let activity_items = page
@@ -49183,7 +49265,7 @@ pub async fn handle_v1_contracts_rollups_trader_account_get(
         cap,
         ENDPOINT_CONTRACTS_ROLLUPS_TRADER_ACCOUNT,
     )?;
-    let index = contract_event_index_snapshot(state.as_ref());
+    let index = contract_event_index_snapshot(state.as_ref())?;
     let (activity_projections, _) =
         collect_trader_activity_page(index.as_ref(), &activity_params, pagination);
     let activity_items = activity_projections
@@ -49226,7 +49308,7 @@ async fn handle_v1_contracts_rollups_module_get(
     let cap = app_query_page_cap(&state);
     let pagination = enforce_app_pagination(params.limit, params.offset, cap, endpoint)?;
     let count_mode = app_count_mode(params.count_mode.as_deref(), endpoint);
-    let index = contract_event_index_snapshot(state.as_ref());
+    let index = contract_event_index_snapshot(state.as_ref())?;
     let (items, total) = collect_trader_activity_page(index.as_ref(), &params, pagination);
     let page = page_result_from_counted_items(items, total, params.offset, count_mode);
     let activity_items = page
@@ -50667,7 +50749,7 @@ pub async fn handle_v1_account_permissions_with_policy(
             },
         ));
     }
-    let page = collect_page_streaming_for_mode(
+    let page = collect_page_streaming(
         canonical_permissions.into_iter(),
         pagination.offset,
         pagination.limit,
@@ -50744,7 +50826,7 @@ pub async fn handle_v1_account_assets_with_policy(
         asset_filter.as_ref(),
         scope_filter.as_ref(),
     );
-    let page = collect_page_streaming_for_mode(
+    let page = collect_page_streaming(
         projected_assets
             .into_iter()
             .map(|projected| ((), projected)),
@@ -50808,7 +50890,7 @@ pub async fn handle_v1_repo_agreements(
             Some((key, projection))
         }
     });
-    let page = collect_page_streaming_for_mode(
+    let page = collect_page_streaming(
         mapped_iter,
         pagination.offset,
         pagination.limit,
@@ -50880,7 +50962,7 @@ pub async fn handle_v1_repo_agreements_query(
             Some((key, projection))
         }
     });
-    let page = collect_page_streaming_for_mode(
+    let page = collect_page_streaming(
         mapped_iter,
         pagination.offset,
         pagination.limit,
@@ -52996,6 +53078,11 @@ fn faucet_pow_recent_claims(
     faucet: &iroha_config::parameters::actual::ToriiFaucet,
     anchor_height: u64,
 ) -> Result<u64> {
+    reject_emergency_fast_unbounded_history(
+        app.state.as_ref(),
+        false,
+        "faucet proof-of-work claim history",
+    )?;
     if faucet.pow_adaptive_lookback_blocks == 0
         || faucet.pow_adaptive_claims_per_extra_bit == 0
         || faucet.pow_adaptive_max_extra_bits == 0
@@ -54278,7 +54365,7 @@ pub async fn handle_v1_accounts(
             Some((key, projected))
         }
     });
-    let page = collect_page_streaming_for_mode(
+    let page = collect_page_streaming(
         mapped_iter,
         pagination.offset,
         pagination.limit,
@@ -54393,7 +54480,7 @@ pub async fn handle_v1_accounts_query(
             let key = account_sort_key(&account, &selectors);
             Some((key, projected))
         });
-        collect_page_streaming_for_mode(
+        collect_page_streaming(
             mapped_iter,
             pagination.offset,
             pagination.limit,
@@ -55147,7 +55234,7 @@ pub async fn handle_v1_space_directory_manifests(
         });
         match count_mode {
             AppCountMode::Exact => {
-                let (items, total) = collect_page_streaming(
+                let (items, total) = collect_exact_page_streaming(
                     iter,
                     offset,
                     Some(limit),
@@ -56459,7 +56546,7 @@ mod asset_definitions_query_tests {
         let older_key = asset_definition_sort_key(&older, &selectors);
         let newer_key = asset_definition_sort_key(&newer, &selectors);
         assert!(newer_key < older_key, "newer binding must sort first");
-        let (items, total) = collect_page_streaming(
+        let (items, total) = collect_exact_page_streaming(
             vec![(older_key, "older"), (newer_key, "newer")],
             0,
             None,
@@ -56955,6 +57042,11 @@ pub async fn handle_v1_explorer_transactions(
 ) -> Result<AxResponse, Error> {
     let started = std::time::Instant::now();
     let response = (|| -> Result<AxResponse, Error> {
+        reject_emergency_fast_unbounded_history(
+            state.as_ref(),
+            block.is_some(),
+            "explorer transaction history",
+        )?;
         let max_height = state.committed_height() as u64;
         record_account_literal_selection(&telemetry, ENDPOINT_EXPLORER_TRANSACTIONS);
         if let Some(block_height) = block {
@@ -57009,6 +57101,11 @@ pub async fn handle_v1_explorer_transactions_latest(
 ) -> Result<AxResponse, Error> {
     let started = std::time::Instant::now();
     let response = (|| -> Result<AxResponse, Error> {
+        reject_emergency_fast_unbounded_history(
+            state.as_ref(),
+            block.is_some(),
+            "explorer latest-transaction history",
+        )?;
         let max_height = state.committed_height() as u64;
         record_account_literal_selection(&telemetry, ENDPOINT_EXPLORER_TRANSACTIONS_LATEST);
         if let Some(block_height) = block {
@@ -57064,6 +57161,11 @@ pub async fn handle_v1_explorer_instructions(
 ) -> Result<AxResponse, Error> {
     let started = std::time::Instant::now();
     let response = (|| -> Result<AxResponse, Error> {
+        reject_emergency_fast_unbounded_history(
+            state.as_ref(),
+            query.block.is_some(),
+            "explorer instruction history",
+        )?;
         let max_height = state.committed_height() as u64;
         record_account_literal_selection(&telemetry, ENDPOINT_EXPLORER_INSTRUCTIONS);
         let ExplorerInstructionQuery {
@@ -57127,6 +57229,11 @@ pub async fn handle_v1_explorer_instructions_latest(
 ) -> Result<AxResponse, Error> {
     let started = std::time::Instant::now();
     let response = (|| -> Result<AxResponse, Error> {
+        reject_emergency_fast_unbounded_history(
+            state.as_ref(),
+            query.block.is_some(),
+            "explorer latest-instruction history",
+        )?;
         let max_height = state.committed_height() as u64;
         record_account_literal_selection(&telemetry, ENDPOINT_EXPLORER_INSTRUCTIONS_LATEST);
         let ExplorerInstructionQuery {
@@ -57183,6 +57290,11 @@ pub async fn handle_v1_explorer_transaction_detail(
 ) -> Result<AxResponse, Error> {
     let started = std::time::Instant::now();
     let response = (|| -> Result<AxResponse, Error> {
+        reject_emergency_fast_unbounded_history(
+            state.as_ref(),
+            false,
+            "explorer transaction detail",
+        )?;
         let max_height = state.committed_height() as u64;
         record_account_literal_selection(&telemetry, ENDPOINT_EXPLORER_TRANSACTION_DETAIL);
         let dto = find_transaction_detail(state.as_ref(), max_height, identifier)?;
@@ -57204,6 +57316,11 @@ pub async fn handle_v1_explorer_instruction_detail(
 ) -> Result<AxResponse, Error> {
     let started = std::time::Instant::now();
     let response = (|| -> Result<AxResponse, Error> {
+        reject_emergency_fast_unbounded_history(
+            state.as_ref(),
+            false,
+            "explorer instruction detail",
+        )?;
         let max_height = state.committed_height() as u64;
         record_account_literal_selection(&telemetry, ENDPOINT_EXPLORER_INSTRUCTION_DETAIL);
         let dto = find_instruction_detail(state.as_ref(), max_height, hash, index)?;
@@ -58085,6 +58202,11 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
     state: Arc<CoreState>,
     definition_id: AssetDefinitionId,
 ) -> Result<AxResponse, Error> {
+    reject_emergency_fast_unbounded_history(
+        state.as_ref(),
+        false,
+        "explorer asset econometrics",
+    )?;
     use iroha_data_model::{
         isi::{BurnBox, MintBox, TransferAssetBatch, TransferBox},
         transaction::executable::Executable,
@@ -59219,6 +59341,11 @@ pub async fn handle_v1_explorer_block_detail(
     let started = std::time::Instant::now();
     let response = (|| -> Result<AxResponse, Error> {
         let lookup = parse_block_identifier(&identifier)?;
+        reject_emergency_fast_unbounded_history(
+            state.as_ref(),
+            matches!(&lookup, ExplorerBlockIdentifier::Height(_)),
+            "explorer block hash lookup",
+        )?;
         let dto = match lookup {
             ExplorerBlockIdentifier::Height(height) => state
                 .block_by_height(height)
@@ -59889,7 +60016,7 @@ pub async fn handle_v1_assets_definitions(
             Some((key, projected))
         }
     });
-    let page = collect_page_streaming_for_mode(
+    let page = collect_page_streaming(
         mapped_iter,
         pagination.offset,
         pagination.limit,
@@ -59997,7 +60124,7 @@ pub async fn handle_v1_assets_definitions_query(
             Some((key, projected))
         }
     });
-    let page = collect_page_streaming_for_mode(
+    let page = collect_page_streaming(
         mapped_iter,
         pagination.offset,
         pagination.limit,
@@ -61169,7 +61296,7 @@ pub async fn handle_v1_nfts(
             Some((key, projected))
         }
     });
-    let page = collect_page_streaming_for_mode(
+    let page = collect_page_streaming(
         mapped_iter,
         pagination.offset,
         pagination.limit,
@@ -61241,7 +61368,7 @@ pub async fn handle_v1_nfts_query(
             Some((key, projected))
         }
     });
-    let page = collect_page_streaming_for_mode(
+    let page = collect_page_streaming(
         mapped_iter,
         pagination.offset,
         pagination.limit,
@@ -61396,7 +61523,7 @@ pub async fn handle_v1_rwas(
             Some((key, item))
         }
     });
-    let page = collect_page_streaming_for_mode(
+    let page = collect_page_streaming(
         mapped_iter,
         pagination.offset,
         pagination.limit,
@@ -61461,7 +61588,7 @@ pub async fn handle_v1_rwas_query(
             Some((key, item))
         }
     });
-    let page = collect_page_streaming_for_mode(
+    let page = collect_page_streaming(
         mapped_iter,
         pagination.offset,
         pagination.limit,
@@ -61933,7 +62060,7 @@ pub async fn handle_v1_subscription_plans(
             },
         ));
     }
-    let page = collect_page_streaming_for_mode(
+    let page = collect_page_streaming(
         items_with_keys,
         pagination.offset,
         pagination.limit,
@@ -62169,7 +62296,7 @@ pub async fn handle_v1_subscriptions(
             },
         ));
     }
-    let page = collect_page_streaming_for_mode(
+    let page = collect_page_streaming(
         items_with_keys,
         pagination.offset,
         pagination.limit,
@@ -62782,7 +62909,7 @@ pub async fn handle_v1_account_assets_query_with_policy(
             Some((key, projected))
         }
     });
-    let page = collect_page_streaming_for_mode(
+    let page = collect_page_streaming(
         mapped_iter,
         pagination.offset,
         pagination.limit,

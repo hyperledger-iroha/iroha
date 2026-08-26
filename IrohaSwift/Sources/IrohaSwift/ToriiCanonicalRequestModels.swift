@@ -89,55 +89,6 @@ public struct ToriiQueryEnvelope: Codable, Sendable, Equatable {
   }
 }
 
-extension KeyedDecodingContainer {
-  fileprivate func decodeStringArrayIfPresent(forKey key: Key) throws -> [String] {
-    try decodeIfPresent([String].self, forKey: key) ?? []
-  }
-
-  fileprivate func decodeFlexibleUInt64(forKey key: Key) throws -> UInt64 {
-    if let direct = try? decode(UInt64.self, forKey: key) {
-      return direct
-    }
-    if let signed = try? decode(Int64.self, forKey: key),
-      signed >= 0
-    {
-      return UInt64(signed)
-    }
-    if let rendered = try? decode(String.self, forKey: key) {
-      let trimmed = rendered.trimmingCharacters(in: .whitespacesAndNewlines)
-      if let parsed = UInt64(trimmed) {
-        return parsed
-      }
-    }
-    throw DecodingError.dataCorruptedError(
-      forKey: key,
-      in: self,
-      debugDescription: "\(key.stringValue) must be an unsigned integer")
-  }
-
-  fileprivate func decodeFlexibleUInt8(forKey key: Key) throws -> UInt8 {
-    let value = try decodeFlexibleUInt64(forKey: key)
-    guard value <= UInt64(UInt8.max) else {
-      throw DecodingError.dataCorruptedError(
-        forKey: key,
-        in: self,
-        debugDescription: "\(key.stringValue) exceeds UInt8")
-    }
-    return UInt8(value)
-  }
-
-  fileprivate func decodeFlexibleUInt16(forKey key: Key) throws -> UInt16 {
-    let value = try decodeFlexibleUInt64(forKey: key)
-    guard value <= UInt64(UInt16.max) else {
-      throw DecodingError.dataCorruptedError(
-        forKey: key,
-        in: self,
-        debugDescription: "\(key.stringValue) exceeds UInt16")
-    }
-    return UInt16(value)
-  }
-}
-
 public struct ToriiCanonicalRequestAuth: Sendable, Equatable {
   public var accountId: String
   public var privateKey: Data

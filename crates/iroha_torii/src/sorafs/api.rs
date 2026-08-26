@@ -8196,7 +8196,7 @@ fn read_bounded_governance_dag_file(
 }
 fn decode_canonical_governance_dag_value<T>(bytes: &[u8], label: &str) -> Result<T, Response>
 where
-    for<'de> T: norito::NoritoDeserialize<'de>,
+    for<'de> T: norito::NoritoDeserialize<'de> + norito::NoritoSerialize,
     T: norito::NoritoSerialize,
 {
     let maximum = bytes.len().max(1);
@@ -21726,6 +21726,7 @@ fn decode_moderation_model_registry_manifest<T>(
 ) -> Result<T, Response>
 where
     for<'de> T: norito::NoritoDeserialize<'de>,
+    T: norito::NoritoSerialize,
 {
     let bytes = match BASE64_STANDARD.decode(manifest_b64.as_bytes()) {
         Ok(bytes) => bytes,
@@ -42606,7 +42607,7 @@ mod advert_tests {
             alpn_ids: vec!["h2".to_owned()],
             report: Vec::new(),
         };
-        let (vrf_public, vrf_private) = iroha_crypto::BlsNormal::keypair(
+        let (vrf_public, vrf_private) = iroha_crypto::BlsNormal::try_keypair(
             iroha_crypto::KeyGenOption::UseSeed(provider_id.to_vec()),
         )
         .expect("derive provider VRF fixture key");

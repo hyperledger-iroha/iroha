@@ -2954,6 +2954,14 @@ def test_proposal_backed_legacy_governance_methods_are_retired() -> None:
     assert not hasattr(ToriiClient, "enact_proposal")
 
 
+def test_first_release_exports_exclude_retired_type_aliases() -> None:
+    import iroha_torii_client.client as client_module
+
+    for name in ("GovernanceProposalStatus", "OfflineLanePrivacyWitnessJson"):
+        assert name not in client_module.__all__
+        assert not hasattr(client_module, name)
+
+
 def _governance_locks_payload(amount: Any) -> Dict[str, Any]:
     return {
         "found": True,
@@ -3658,8 +3666,8 @@ def test_mock_server_allows_sumeragi_fixture_override() -> None:
         base_url = server.base_url.rstrip("/")
         fixtures = {
             "status": {"protocol_version": 4, "height": 42},
+            "diagnostics": {"tx_queue_depth": 3},
             "leader": {"leader_index": 2},
-            "telemetry": {"availability": {"total_votes_ingested": 7}},
         }
         response = requests.post(
             f"{base_url}/__mock__/sumeragi/config",
@@ -3672,6 +3680,15 @@ def test_mock_server_allows_sumeragi_fixture_override() -> None:
             response = requests.get(f"{base_url}/v1/sumeragi/{endpoint}", timeout=5.0)
             response.raise_for_status()
             assert response.json() == expected
+
+        response = requests.post(
+            f"{base_url}/__mock__/sumeragi/config",
+            json={"telemetry": {"availability": {"total_votes_ingested": 7}}},
+            timeout=5.0,
+        )
+        assert response.status_code == 400
+        response = requests.get(f"{base_url}/v1/sumeragi/telemetry", timeout=5.0)
+        assert response.status_code == 404
 
         response = requests.post(
             f"{base_url}/__mock__/sumeragi/config",
@@ -4148,7 +4165,11 @@ def test_sumeragi_endpoint_methods_reject_swapped_payload_contracts() -> None:
     for endpoint, response, error_type, message in sumeragi_exact_json_response_cases():
         session = RecordingSession()
         session.queue(response)
-        client = ToriiClient("http://node.test", session=session)
+        client = ToriiClient(
+            "http://node.test",
+            session=session,
+            operator_signing_context=_operator_context(),
+        )
         with pytest.raises(error_type, match=message):
             getattr(client, f"get_sumeragi_{endpoint}")()
         assert response.was_closed is True, endpoint

@@ -237,6 +237,14 @@ impl OperatorAuthError {
             "persist_failed",
         )
     }
+    fn credential_state_unavailable() -> Self {
+        Self::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "operator_webauthn_state_unavailable",
+            "operator credential state is unavailable",
+            "credential_state_unavailable",
+        )
+    }
     fn random_bytes_failure(message: impl Into<String>) -> Self {
         Self::new(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -482,35 +490,33 @@ impl OperatorAuth {
             .as_ref()
             .ok_or_else(OperatorAuthError::webauthn_disabled)
     }
-    fn credentials_read(&self) -> RwLockReadGuard<'_, Vec<StoredCredential>> {
-        match self.credentials.read() {
-            Ok(guard) => guard,
-            Err(poisoned) => {
-                iroha_logger::warn!("operator credentials lock poisoned; using last known values");
-                poisoned.into_inner()
-            }
-        }
+    fn credentials_read(
+        &self,
+    ) -> Result<RwLockReadGuard<'_, Vec<StoredCredential>>, OperatorAuthError> {
+        self.credentials.read().map_err(|_| {
+            iroha_logger::error!("operator credentials lock poisoned; failing closed");
+            OperatorAuthError::credential_state_unavailable()
+        })
     }
-    fn credentials_write(&self) -> RwLockWriteGuard<'_, Vec<StoredCredential>> {
-        match self.credentials.write() {
-            Ok(guard) => guard,
-            Err(poisoned) => {
-                iroha_logger::warn!("operator credentials lock poisoned; using last known values");
-                poisoned.into_inner()
-            }
-        }
+    fn credentials_write(
+        &self,
+    ) -> Result<RwLockWriteGuard<'_, Vec<StoredCredential>>, OperatorAuthError> {
+        self.credentials.write().map_err(|_| {
+            iroha_logger::error!("operator credentials lock poisoned; failing closed");
+            OperatorAuthError::credential_state_unavailable()
+        })
     }
-    fn has_credentials(&self) -> bool {
-        !self.credentials_read().is_empty()
+    fn has_credentials(&self) -> Result<bool, OperatorAuthError> {
+        Ok(!self.credentials_read()?.is_empty())
     }
     fn token_allowed_for_operator(&self) -> bool {
         matches!(self.token_fallback, OperatorTokenFallback::Always)
     }
-    fn token_allowed_for_bootstrap(&self) -> bool {
+    fn token_allowed_for_bootstrap(&self) -> Result<bool, OperatorAuthError> {
         match self.token_fallback {
-            OperatorTokenFallback::Always => true,
-            OperatorTokenFallback::Bootstrap => !self.has_credentials(),
-            OperatorTokenFallback::Disabled => false,
+            OperatorTokenFallback::Always => Ok(true),
+            OperatorTokenFallback::Bootstrap => Ok(!self.has_credentials()?),
+            OperatorTokenFallback::Disabled => Ok(false),
         }
     }
     async fn check_common(
@@ -596,7 +602,7 @@ impl OperatorAuth {
                 return Ok(ctx);
             }
         }
-        if self.token_allowed_for_bootstrap() {
+        if self.token_allowed_for_bootstrap()? {
             match self.check_token(headers) {
                 TokenCheck::Valid(_) => return Ok(ctx),
                 TokenCheck::Missing => {
@@ -670,7 +676,7 @@ impl OperatorAuth {
             ]));
         }
         let mut exclude_credentials = Vec::new();
-        for credential in self.credentials_read().iter() {
+        for credential in self.credentials_read()?.iter() {
             exclude_credentials.push(json_object(vec![
                 json_entry("type", "public-key"),
                 json_entry("id", encode_b64url(&credential.id)),
@@ -790,7 +796,7 @@ impl OperatorAuth {
             self.record_failure(ctx, ACTION_LOGIN_OPTIONS, err.metric_label());
         })?;
         self.prune_challenges();
-        let credentials = self.credentials_read();
+        let credentials = self.credentials_read()?;
         if credentials.is_empty() {
             let err = OperatorAuthError::no_credentials();
             self.record_failure(ctx, ACTION_LOGIN_OPTIONS, err.metric_label());
@@ -873,7 +879,7 @@ impl OperatorAuth {
             parse_auth_data_assertion(&input.authenticator_data, policy).inspect_err(|err| {
                 self.record_failure(ctx, ACTION_LOGIN_VERIFY, err.metric_label());
             })?;
-        let mut credentials = self.credentials_write();
+        let mut credentials = self.credentials_write()?;
         let Some(pos) = credentials
             .iter()
             .position(|entry| entry.id == input.raw_id)
@@ -882,7 +888,7 @@ impl OperatorAuth {
             self.record_failure(ctx, ACTION_LOGIN_VERIFY, err.metric_label());
             return Err(err);
         };
-        let credential = credentials.get_mut(pos).expect("position valid");
+        let credential = credentials.get(pos).expect("position valid");
         let client_hash = Sha256::digest(&input.client_data_json);
         let mut signed_bytes =
             Vec::with_capacity(input.authenticator_data.len() + client_hash.as_slice().len());
@@ -905,12 +911,12 @@ impl OperatorAuth {
             self.record_failure(ctx, ACTION_LOGIN_VERIFY, err.metric_label());
             return Err(err);
         }
-        credential.sign_count = auth_data.sign_count;
-        let updated = credentials.clone();
-        drop(credentials);
+        let mut updated = credentials.clone();
+        updated[pos].sign_count = auth_data.sign_count;
         persist_credentials(&self.credentials_path, &updated).inspect_err(|err| {
             self.record_failure(ctx, ACTION_LOGIN_VERIFY, err.metric_label());
         })?;
+        *credentials = updated;
         let outcome = self
             .issue_session_with_rng(&input.raw_id, policy.session_ttl, rng)
             .inspect_err(|err| {
@@ -943,7 +949,7 @@ impl OperatorAuth {
         })
     }
     fn upsert_credential(&self, credential: StoredCredential) -> Result<usize, OperatorAuthError> {
-        let mut credentials = self.credentials_write();
+        let mut credentials = self.credentials_write()?;
         let mut updated = credentials.clone();
         if let Some(pos) = updated.iter().position(|entry| entry.id == credential.id) {
             updated[pos] = credential;
@@ -1820,7 +1826,7 @@ mod tests {
         assert!(!origin_allowed("https://example.com:444", &allowed));
     }
     #[test]
-    fn credentials_lock_recovers_from_poison() {
+    fn credentials_lock_fails_closed_after_poison() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let config = base_operator_auth_config(
             OperatorTokenFallback::Always,
@@ -1835,7 +1841,7 @@ mod tests {
         );
         let auth = build_operator_auth(config, HashSet::new(), tempdir.path());
         {
-            let mut creds = auth.credentials_write();
+            let mut creds = auth.credentials_write().expect("credential lock");
             creds.push(StoredCredential {
                 id: vec![1, 2, 3],
                 public_key: vec![4, 5, 6],
@@ -1848,7 +1854,10 @@ mod tests {
             let _guard = auth.credentials.write().expect("lock");
             panic!("poison");
         }));
-        assert!(auth.has_credentials());
+        let err = auth
+            .has_credentials()
+            .expect_err("poisoned credential state must fail closed");
+        assert_eq!(err.code, "operator_webauthn_state_unavailable");
     }
     #[test]
     fn rate_per_minute_to_per_sec_rounds_up() {
@@ -1897,13 +1906,15 @@ mod tests {
             vec![OperatorWebAuthnAlgorithm::Es256],
         );
         let auth = build_operator_auth(config, HashSet::new(), tempdir.path());
-        auth.credentials_write().push(StoredCredential {
-            id: vec![1, 2, 3],
-            public_key: Vec::new(),
-            alg: OperatorWebAuthnAlgorithm::Es256,
-            sign_count: 0,
-            created_at_ms: 0,
-        });
+        auth.credentials_write()
+            .expect("credential lock")
+            .push(StoredCredential {
+                id: vec![1, 2, 3],
+                public_key: Vec::new(),
+                alg: OperatorWebAuthnAlgorithm::Es256,
+                sign_count: 0,
+                created_at_ms: 0,
+            });
         let ctx = AuthContext {
             key: "authentication-rng".to_owned(),
         };
@@ -2173,6 +2184,69 @@ mod tests {
             .webauthn_finish_registration(&ctx, &payload)
             .expect("rollover registration");
         assert_eq!(outcome.credentials_total, 2);
+    }
+    #[test]
+    fn authentication_counter_changes_only_after_persistence_succeeds() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let config = base_operator_auth_config(
+            OperatorTokenFallback::Bootstrap,
+            OperatorTokenSource::OperatorTokens,
+            vec!["bootstrap".to_owned()],
+            OperatorAuthLockout::default(),
+            vec![OperatorWebAuthnAlgorithm::Es256],
+        );
+        let mut auth = build_operator_auth(config, HashSet::new(), tempdir.path());
+        let signing_key = SigningKey::random(&mut OsRng);
+        let credential_id = random_bytes(16).expect("credential id");
+        auth.credentials_write()
+            .expect("credential lock")
+            .push(StoredCredential {
+                id: credential_id.clone(),
+                public_key: signing_key
+                    .verifying_key()
+                    .to_encoded_point(false)
+                    .as_bytes()
+                    .to_vec(),
+                alg: OperatorWebAuthnAlgorithm::Es256,
+                sign_count: 1,
+                created_at_ms: 0,
+            });
+        let ctx = AuthContext {
+            key: "persistence-failure".to_owned(),
+        };
+        let options = auth
+            .webauthn_authentication_options(&ctx)
+            .expect("login options");
+        let challenge = extract_challenge(&options);
+        let policy = auth.webauthn_policy().expect("policy");
+        let authenticator_data = build_auth_data_assertion(policy, 2);
+        let client_data_json = build_client_data(&challenge, "https://example.com", "webauthn.get");
+        let client_hash = Sha256::digest(&client_data_json);
+        let mut signed_bytes =
+            Vec::with_capacity(authenticator_data.len() + client_hash.as_slice().len());
+        signed_bytes.extend_from_slice(&authenticator_data);
+        signed_bytes.extend_from_slice(&client_hash);
+        let signature: p256::ecdsa::Signature = signing_key.sign(&signed_bytes);
+        let payload = build_assertion_payload(
+            &credential_id,
+            &client_data_json,
+            &authenticator_data,
+            signature.to_der().as_bytes(),
+        );
+        let blocked_parent = tempdir.path().join("not-a-directory");
+        fs::write(&blocked_parent, b"block directory creation").expect("blocker file");
+        auth.credentials_path = blocked_parent.join(CREDENTIALS_FILENAME);
+
+        let err = match auth.webauthn_finish_authentication(&ctx, &payload) {
+            Ok(_) => panic!("credential persistence must fail"),
+            Err(err) => err,
+        };
+        assert_eq!(err.code, "operator_webauthn_persist_failed");
+        assert_eq!(
+            auth.credentials_read().expect("credential lock")[0].sign_count,
+            1,
+            "failed persistence must not advance the in-memory signature counter"
+        );
     }
     #[tokio::test]
     async fn operator_auth_accepts_operator_token_when_fallback_always() {

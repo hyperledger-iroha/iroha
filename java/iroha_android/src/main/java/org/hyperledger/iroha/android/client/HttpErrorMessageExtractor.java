@@ -166,7 +166,7 @@ final class HttpErrorMessageExtractor {
       final Integer firstSize = encodedSizes.get(0);
       if (firstSize != null) {
         final NoritoDecoder child =
-            new NoritoDecoder(decoder.readBytes(firstSize), decoder.flags(), decoder.flagsHint());
+            new NoritoDecoder(decoder.readBytes(firstSize), decoder.flags());
         final Optional<String> value = optionalString.decode(child);
         if (child.remaining() != 0) {
           throw new IllegalArgumentException("Packed reject_code field did not consume all bytes");

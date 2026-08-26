@@ -1,6 +1,5 @@
 // Production V4 parent-proof parsing and the shared BGH19 lineage fold.
 
-#[cfg(not(feature = "kagemusha-generation-memory-lab"))]
 fn verify_ordinary_parent<'chip, C>(
     loader: &DeferredLoader<'chip, C>,
     succinct_vk: &IpaSuccinctVerifyingKey<C>,

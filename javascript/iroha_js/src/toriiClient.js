@@ -1319,7 +1319,7 @@ export function decodePdpCommitmentHeader(headers) {
 
 /**
  * Torii HTTP client for typed queries, transaction submission, status
- * inspection, event streams, attachments, and prover reports.
+ * inspection, event streams, and attachments.
  *
  * Request and response validation follows the canonical Norito-backed data
  * model exposed by this package.
@@ -8556,51 +8556,6 @@ export class ToriiClient {
   }
 
   /**
-   * List prover reports with optional filters.
-   * @param {Record<string, unknown>} filters
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<ReadonlyArray<ToriiProverReport>>}
-   * @throws When the server projection omits report fields (e.g. `ids_only=true`).
-   */
-  async listProverReports(filters = {}, options = {}) {
-    const normalizedFilters = ToriiClient._encodeProverFilters(filters);
-    const { signal } = normalizeSignalOnlyOption(options, "listProverReports");
-    const response = await this._request("GET", "/v1/zk/prover/reports", {
-      params: normalizedFilters,
-      signal,
-    });
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    return normalizeProverReportList(payload, normalizedFilters, "prover reports response");
-  }
-
-  /**
-   * Iterate prover reports with offset-based pagination and typed projections.
-   * @param {ToriiProverReportFilters} [filters]
-   * @param {PaginationIteratorOptions & {signal?: AbortSignal}} [options]
-   * @returns {AsyncGenerator<ToriiProverReport | string | ToriiProverReportMessageSummary, void, unknown>}
-   */
-  iterateProverReports(filters = {}, options = {}) {
-    const fetchPage = async (pageOptions = {}) => {
-      const { signal, ...rest } = pageOptions ?? {};
-      const pageFilters = { ...filters, ...rest };
-      const result = await this.listProverReports(pageFilters, { signal });
-      if (result.kind === "ids") {
-        return { items: result.ids ?? [] };
-      }
-      if (result.kind === "messages") {
-        return { items: result.messages ?? [] };
-      }
-      return { items: result.reports ?? [] };
-    };
-    return this._iterateOffsetIterable(
-      fetchPage,
-      options,
-      PROVER_REPORT_ITERATOR_OPTION_KEYS,
-    );
-  }
-
-  /**
    * Fetch operator-only Connect aggregate status (`GET /v1/connect/status/aggregate`).
    * Requires the immutable exact-network operator signing context configured on this client.
    * Returns null when Connect is disabled on the node.
@@ -10009,43 +9964,6 @@ export class ToriiClient {
   }
 
   /**
-   * Fetch a single prover report.
-   * @param {string} reportId
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<ToriiProverReport>}
-   */
-  async getProverReport(reportId, options = {}) {
-    const normalizedId = requireNonEmptyString(reportId, "reportId");
-    const { signal } = normalizeSignalOnlyOption(options, "getProverReport");
-    const response = await this._request(
-      "GET",
-      `/v1/zk/prover/reports/${encodeURIComponent(normalizedId)}`,
-      { signal },
-    );
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    if (!payload) {
-      throw new Error("prover report response missing JSON body");
-    }
-    return normalizeProverReportRecord(payload, "prover report response");
-  }
-
-  /**
-   * Delete a prover report by id.
-   * @param {string} reportId
-   */
-  async deleteProverReport(reportId, options = {}) {
-    const normalizedId = requireNonEmptyString(reportId, "reportId");
-    const { signal } = normalizeSignalOnlyOption(options, "deleteProverReport");
-    const response = await this._request(
-      "DELETE",
-      `/v1/zk/prover/reports/${encodeURIComponent(normalizedId)}`,
-      { signal },
-    );
-    await this._expectStatus(response, [204, 404]);
-  }
-
-  /**
    * Submit an ISO 20022 pacs.008 message (`POST /v1/iso20022/pacs008`).
    * @param {ArrayBufferView | ArrayBuffer | Buffer | string} message XML payload
    * @param {{contentType?: string, profile?: string, signal?: AbortSignal}} [options]
@@ -10123,7 +10041,6 @@ export class ToriiClient {
       "pollIntervalMs",
       "maxAttempts",
       "resolveOnAcceptedWithoutTransaction",
-      "resolveOnAccepted",
       "onPoll",
       "signal",
       "retryProfile",
@@ -10153,35 +10070,15 @@ export class ToriiClient {
         : ToriiClient._normalizeUnsignedInteger(resolvedOptions.maxAttempts, "wait.maxAttempts", {
             allowZero: false,
           });
-    const resolveAlias = resolvedOptions.resolveOnAccepted;
-    const resolveCanonical = resolvedOptions.resolveOnAcceptedWithoutTransaction;
-    if (resolveCanonical !== undefined && typeof resolveCanonical !== "boolean") {
+    const resolveOnAcceptedWithoutTransaction =
+      resolvedOptions.resolveOnAcceptedWithoutTransaction ?? false;
+    if (typeof resolveOnAcceptedWithoutTransaction !== "boolean") {
       throw createValidationError(
         ValidationErrorCode.INVALID_OBJECT,
         "wait.resolveOnAcceptedWithoutTransaction must be a boolean",
         `${optionPath}.resolveOnAcceptedWithoutTransaction`,
       );
     }
-    if (resolveAlias !== undefined && typeof resolveAlias !== "boolean") {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_OBJECT,
-        "wait.resolveOnAccepted must be a boolean",
-        `${optionPath}.resolveOnAccepted`,
-      );
-    }
-    if (
-      resolveCanonical !== undefined &&
-      resolveAlias !== undefined &&
-      resolveCanonical !== resolveAlias
-    ) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_OBJECT,
-        "wait.resolveOnAccepted and wait.resolveOnAcceptedWithoutTransaction must match when both are provided",
-        `${optionPath}.resolveOnAccepted`,
-      );
-    }
-    const resolveOnAccepted =
-      resolveCanonical !== undefined ? resolveCanonical : resolveAlias ?? false;
     let retryProfile;
     if (resolvedOptions.retryProfile !== undefined && resolvedOptions.retryProfile !== null) {
       retryProfile = requireNonEmptyString(
@@ -10227,7 +10124,12 @@ export class ToriiClient {
         // eslint-disable-next-line no-await-in-loop
         await onPoll({ attempt, status: lastStatus });
       }
-      if (ToriiClient._isIsoStatusTerminal(lastStatus, resolveOnAccepted)) {
+      if (
+        ToriiClient._isIsoStatusTerminal(
+          lastStatus,
+          resolveOnAcceptedWithoutTransaction,
+        )
+      ) {
         return lastStatus;
       }
       if (attempt < maxAttempts) {
@@ -10393,29 +10295,6 @@ export class ToriiClient {
     return kind === "pacs.009"
       ? this.submitIsoPacs009(xml, submissionOptions)
       : this.submitIsoPacs008(xml, submissionOptions);
-  }
-
-  /**
-   * Count prover reports with optional filters.
-   * @param {Record<string, unknown>} filters
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<number>}
-   */
-  async countProverReports(filters = {}, options = {}) {
-    const normalizedFilters = ToriiClient._encodeProverFilters(filters);
-    const { signal } = normalizeSignalOnlyOption(options, "countProverReports");
-    const response = await this._request("GET", "/v1/zk/prover/reports/count", {
-      params: normalizedFilters,
-      signal,
-    });
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    if (!payload || typeof payload.count === "undefined") {
-      throw new Error("invalid prover count payload");
-    }
-    return ToriiClient._normalizeUnsignedInteger(payload.count, "prover count", {
-      allowZero: true,
-    });
   }
 
   async _request(method, path, options = {}) {
@@ -11242,56 +11121,6 @@ export class ToriiClient {
       }
     }
     return this._extractRejectCodeFromDetails(bodyJson?.details);
-  }
-
-  static _encodeProverFilters(filters) {
-    if (filters === undefined || filters === null) {
-      return {};
-    }
-    const record = ToriiClient._requirePlainObject(filters, "prover filters");
-    const params = {};
-    for (const [rawKey, rawValue] of Object.entries(record)) {
-      if (rawValue === undefined || rawValue === null) {
-        continue;
-      }
-      const entry = PROVER_FILTER_ALIAS_MAP.get(rawKey);
-      if (!entry) {
-        throw createValidationError(
-          ValidationErrorCode.INVALID_OBJECT,
-          `unknown prover filter '${rawKey}'`,
-          `proverFilters.${rawKey}`,
-        );
-      }
-      const { key, spec } = entry;
-      if (spec.type === "boolean") {
-        const flag = normalizeProverFilterBoolean(rawValue, `proverFilters.${rawKey}`);
-        if (flag) {
-          params[key] = true;
-        }
-        continue;
-      }
-      if (spec.type === "string") {
-        params[key] = normalizeProverFilterString(rawValue, `proverFilters.${rawKey}`);
-        continue;
-      }
-      if (spec.type === "integer") {
-        params[key] = ToriiClient._normalizeUnsignedInteger(
-          rawValue,
-          `proverFilters.${rawKey}`,
-          { allowZero: Boolean(spec.allowZero) },
-        );
-        continue;
-      }
-      if (spec.type === "enum") {
-        params[key] = normalizeProverFilterEnum(
-          rawValue,
-          `proverFilters.${rawKey}`,
-          spec.values,
-        );
-        continue;
-      }
-    }
-    return params;
   }
 
   async _submitSorafsOrderbookTransaction(path, route, signedTransaction, options, context) {
@@ -18340,63 +18169,6 @@ function normalizeUaidManifestEntry(value, context) {
   };
 }
 
-function normalizeProverFilterBoolean(value, name) {
-  if (typeof value === "boolean") {
-    return value;
-  }
-  if (typeof value === "number") {
-    if (value === 1) {
-      return true;
-    }
-    if (value === 0) {
-      return false;
-    }
-  }
-  if (typeof value === "string") {
-    const normalized = value.trim().toLowerCase();
-    if (normalized === "true" || normalized === "1" || normalized === "yes") {
-      return true;
-    }
-    if (normalized === "false" || normalized === "0" || normalized === "no") {
-      return false;
-    }
-  }
-  throw new TypeError(`${name} must be a boolean`);
-}
-
-function normalizeProverFilterString(value, name) {
-  if (typeof value !== "string") {
-    throw new TypeError(`${name} must be a string`);
-  }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    throw new TypeError(`${name} must be a non-empty string`);
-  }
-  return trimmed;
-}
-
-function normalizeProverFilterEnum(value, name, allowed) {
-  const normalized = normalizeProverFilterString(value, name).toLowerCase();
-  if (!allowed.includes(normalized)) {
-    throw new TypeError(`${name} must be one of: ${allowed.join(", ")}`);
-  }
-  return normalized;
-}
-
-function isTruthyFilter(filters, key) {
-  if (!filters || typeof filters !== "object") {
-    return false;
-  }
-  if (key in filters) {
-    return Boolean(filters[key]);
-  }
-  const camelKey = key.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
-  if (camelKey in filters) {
-    return Boolean(filters[camelKey]);
-  }
-  return false;
-}
-
 function extractExtraFields(record, recognizedKeys) {
   const extra = {};
   for (const [key, value] of Object.entries(record)) {
@@ -18479,42 +18251,6 @@ function monotonicTimestamp() {
   }
   return Date.now();
 }
-
-const PROVER_FILTER_DEFINITIONS = {
-  ok_only: { type: "boolean", aliases: ["okOnly"] },
-  failed_only: { type: "boolean", aliases: ["failedOnly"] },
-  errors_only: { type: "boolean", aliases: ["errorsOnly"] },
-  ids_only: { type: "boolean", aliases: ["idsOnly"] },
-  messages_only: { type: "boolean", aliases: ["messagesOnly"] },
-  latest: { type: "boolean", aliases: ["latest"] },
-  content_type: { type: "string", aliases: ["contentType"] },
-  has_tag: { type: "string", aliases: ["hasTag"] },
-  id: { type: "string", aliases: ["id"] },
-  limit: { type: "integer", aliases: ["limit"], allowZero: false },
-  offset: { type: "integer", aliases: ["offset"], allowZero: true },
-  since_ms: { type: "integer", aliases: ["sinceMs"], allowZero: true },
-  before_ms: { type: "integer", aliases: ["beforeMs"], allowZero: true },
-  order: { type: "enum", aliases: ["order"], values: ["asc", "desc"] },
-};
-
-const PROVER_FILTER_ALIAS_MAP = (() => {
-  const map = new Map();
-  for (const [key, spec] of Object.entries(PROVER_FILTER_DEFINITIONS)) {
-    map.set(key, { key, spec });
-    const aliases = Array.isArray(spec.aliases) ? spec.aliases : [];
-    for (const alias of aliases) {
-      map.set(alias, { key, spec });
-    }
-  }
-  return map;
-})();
-const PROVER_REPORT_ITERATOR_OPTION_KEYS = (() => {
-  const keys = new Set(["pageSize", "maxItems", "limit", "offset", "signal"]);
-  for (const key of PROVER_FILTER_ALIAS_MAP.keys()) {
-    keys.add(key);
-  }
-  return keys;
-})();
 
 async function* readBodyChunks(body) {
   if (!body) {
@@ -32310,107 +32046,6 @@ function decodeVerifyingKeyDraftBase64(
   return decoded;
 }
 
-function normalizeProverReportList(payload, filters, context) {
-  if (payload == null) {
-    return { kind: "reports", reports: [] };
-  }
-  if (!Array.isArray(payload)) {
-    throw new TypeError(`${context} must be an array`);
-  }
-  if (payload.length === 0) {
-    return { kind: "reports", reports: [] };
-  }
-  const idsOnlyRequested = isTruthyFilter(filters, "ids_only");
-  const messagesOnlyRequested = isTruthyFilter(filters, "messages_only");
-  const first = payload[0];
-  if (typeof first === "string") {
-    if (!idsOnlyRequested) {
-      throw new Error(
-        "Torii returned id-only prover report projection; pass { ids_only: true } to listProverReports to consume this payload",
-      );
-    }
-    payload.forEach((value, index) =>
-      requireNonEmptyString(value, `${context}[${index}]`),
-    );
-    return { kind: "ids", ids: payload.slice() };
-  }
-  if (
-    isPlainObject(first) &&
-    Object.keys(first).every((key) => key === "id" || key === "error")
-  ) {
-    if (!messagesOnlyRequested) {
-      throw new Error(
-        "Torii returned message-only prover report projection; pass { messages_only: true } to listProverReports to consume this payload",
-      );
-    }
-    const messages = payload.map((entry, index) => {
-      const record = ensureRecord(entry, `${context}[${index}]`);
-      return {
-        id: requireNonEmptyString(record.id, `${context}[${index}].id`),
-        error:
-          record.error === undefined || record.error === null
-            ? null
-            : requireNonEmptyString(record.error, `${context}[${index}].error`),
-      };
-    });
-    return { kind: "messages", messages };
-  }
-  return {
-    kind: "reports",
-    reports: payload.map((entry, index) =>
-      normalizeProverReportRecord(entry, `${context}[${index}]`),
-    ),
-  };
-}
-
-function normalizeProverReportRecord(value, context) {
-  const record = ensureRecord(value, context);
-  const id = requireNonEmptyString(record.id, `${context}.id`);
-  const ok = requireBooleanLike(record.ok, `${context}.ok`);
-  const error =
-    record.error === undefined || record.error === null
-      ? null
-      : requireNonEmptyString(record.error, `${context}.error`);
-  const contentType = requireNonEmptyString(
-    record.content_type,
-    `${context}.content_type`,
-  );
-  const size = ToriiClient._normalizeUnsignedInteger(record.size, `${context}.size`, {
-    allowZero: true,
-  });
-  const createdMs = ToriiClient._normalizeUnsignedInteger(
-    record.created_ms,
-    `${context}.created_ms`,
-    { allowZero: true },
-  );
-  const processedMs = ToriiClient._normalizeUnsignedInteger(
-    record.processed_ms,
-    `${context}.processed_ms`,
-    { allowZero: true },
-  );
-  const latencyMs = ToriiClient._normalizeUnsignedInteger(
-    record.latency_ms ?? 0,
-    `${context}.latency_ms`,
-    { allowZero: true },
-  );
-  const zkTags = record.zk1_tags;
-  const normalizedTags =
-    zkTags === undefined || zkTags === null
-      ? null
-      : parseStringArray(zkTags, `${context}.zk1_tags`);
-  return {
-    id,
-    ok,
-    error,
-    content_type: contentType,
-    size,
-    created_ms: createdMs,
-    processed_ms: processedMs,
-    latency_ms: latencyMs,
-    zk1_tags: normalizedTags,
-  };
-}
-
 function normalizeSumeragiEvidenceListResponse(payload) {
   const record = ensureRecord(payload, "sumeragi evidence response");
   const rawItems = record.items;
@@ -34604,13 +34239,19 @@ function identifierCanonicalExactString(value, context) {
   ]);
 }
 
-function identifierCanonicalByteVec(bytes) {
+function identifierCanonicalByteElements(bytes, lengthContext) {
   const payload = Buffer.from(bytes);
-  const parts = [identifierCanonicalU64(payload.length, "byteVec.length")];
-  for (const byte of payload) {
-    parts.push(identifierCanonicalCompactLength(1), Buffer.from([byte]));
+  const encoded = Buffer.allocUnsafe(8 + payload.length * 2);
+  identifierCanonicalU64(payload.length, lengthContext).copy(encoded, 0);
+  for (let index = 0; index < payload.length; index += 1) {
+    encoded[8 + index * 2] = 1;
+    encoded[9 + index * 2] = payload[index];
   }
-  return Buffer.concat(parts);
+  return encoded;
+}
+
+function identifierCanonicalByteVec(bytes) {
+  return identifierCanonicalByteElements(bytes, "byteVec.length");
 }
 
 function identifierCanonicalRawByteVec(bytes) {
@@ -34743,12 +34384,7 @@ function identifierAlgorithmTagForCurveId(curve, context) {
 }
 
 function identifierCanonicalConstVecU8(bytes) {
-  const payload = Buffer.from(bytes);
-  const parts = [identifierCanonicalU64(payload.length, "ConstVec<u8>.length")];
-  for (const byte of payload) {
-    parts.push(identifierCanonicalSizedField(Buffer.from([byte])));
-  }
-  return Buffer.concat(parts);
+  return identifierCanonicalByteElements(bytes, "ConstVec<u8>.length");
 }
 
 function identifierPublicKeyPayload(controller, context) {

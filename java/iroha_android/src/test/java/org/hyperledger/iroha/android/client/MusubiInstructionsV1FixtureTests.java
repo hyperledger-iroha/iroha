@@ -1609,7 +1609,7 @@ public final class MusubiInstructionsV1FixtureTests {
 
   private static NoritoDecoder canonicalDecoder(final byte[] payload) {
     return new NoritoDecoder(
-        payload, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION);
+        payload, NoritoCodec.DEFAULT_FLAGS);
   }
 
   private static byte[] readField(final NoritoDecoder decoder, final String field) {

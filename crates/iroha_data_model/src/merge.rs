@@ -1016,6 +1016,7 @@ mod tests {
     }
     fn assert_canonical_decoder_rejects_invalid_wire<T>(encoded: &[u8], fixture: &str)
     where
+        T: norito::NoritoSerialize,
         for<'de> T: norito::NoritoDeserialize<'de>,
     {
         for prefix_len in 0..encoded.len() {

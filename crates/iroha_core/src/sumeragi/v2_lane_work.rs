@@ -3076,7 +3076,9 @@ pub(crate) struct V2LaneWorkAdapter {
     queue_plan_admission_handoff_cursor: usize,
     merge_entries: BTreeMap<MergeKey, PendingMerge>,
     merge_claims: BTreeMap<(u64, u64, wire::ValidatorIndex), Hash>,
-    merge_signing_guard: MergeSigningGuard,
+    /// Durable local merge-signing authority. Non-voting adapters never open
+    /// or mutate this namespace.
+    merge_signing_guard: Option<MergeSigningGuard>,
     merge_sidecars: MergeSidecarTransport,
     /// Lazily verified requester identities from the exact durable
     /// predecessor context. Historical serving may authenticate an older
@@ -3654,17 +3656,23 @@ impl V2LaneWorkAdapter {
         {
             return Err(V2LaneWorkError::ExecutionPolicyMismatch);
         }
-        let committed_merge_epoch = state
-            .merge_ledger()
-            .latest()
-            .map_or(0, |entry| entry.epoch_id);
-        let merge_signing_guard = MergeSigningGuard::open_with_committed_frontier(
-            &kura.store_root(),
-            committed_merge_epoch,
-            state_height,
-            limits.merge_signing_guard_limits,
-        )
-        .map_err(|error| V2LaneWorkError::SigningGuard(error.to_string()))?;
+        let merge_signing_guard = if voting_enabled {
+            let committed_merge_epoch = state
+                .merge_ledger()
+                .latest()
+                .map_or(0, |entry| entry.epoch_id);
+            Some(
+                MergeSigningGuard::open_with_committed_frontier(
+                    &kura.store_root(),
+                    committed_merge_epoch,
+                    state_height,
+                    limits.merge_signing_guard_limits,
+                )
+                .map_err(|error| V2LaneWorkError::SigningGuard(error.to_string()))?,
+            )
+        } else {
+            None
+        };
         let native_signing_guard = if voting_enabled
             && local_peer.public_key().try_algorithm().ok() == Some(Algorithm::BlsNormal)
         {
@@ -3830,11 +3838,17 @@ impl V2LaneWorkAdapter {
         } else {
             adapter.context.height.saturating_sub(1)
         };
-        adapter
-            .kura
-            .prune_finalized_pending_certified_merge_entries(finalized_cleanup_height)
-            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
-        adapter.ensure_globally_applied_lane_receipts_durable()?;
+        if adapter.kura.emergency_fast_startup_enabled() {
+            iroha_logger::warn!(
+                "emergency Fast startup deferred pending-merge cleanup and lane receipt repair checks until a Strict restart"
+            );
+        } else {
+            adapter
+                .kura
+                .prune_finalized_pending_certified_merge_entries(finalized_cleanup_height)
+                .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
+            adapter.ensure_globally_applied_lane_receipts_durable()?;
+        }
         construction.complete();
         Ok(adapter)
     }
@@ -13293,6 +13307,12 @@ impl V2LaneWorkAdapter {
         LaneRelayEnvelope::lane_qc_mode_tag_for(lane_id, dataspace_id, &context_tag)
     }
     fn hydrate_canonical_lane_artifacts(&mut self) -> Result<(), V2LaneWorkError> {
+        if self.kura.emergency_fast_startup_enabled() {
+            // Fast mode deliberately keeps Queue reservation quarantine closed, so no local lane
+            // session can consume the history omitted here. A Strict restart rebuilds and
+            // reconciles the complete durable inventory before reopening that gate.
+            return Ok(());
+        }
         let active_routes = self
             .state
             .consensus_lane_routes_at_height(self.context.height);
@@ -15528,6 +15548,16 @@ impl V2LaneWorkAdapter {
         signer: wire::ValidatorIndex,
         bls_sig: Vec<u8>,
     ) -> Result<MergeCommitteeSignature, V2LaneWorkError> {
+        if !self.voting_enabled {
+            return Err(V2LaneWorkError::SigningGuard(
+                "non-voting lane work has no merge-signing authority".to_owned(),
+            ));
+        }
+        let signing_guard = self.merge_signing_guard.as_ref().ok_or_else(|| {
+            V2LaneWorkError::SigningGuard(
+                "voting lane work lacks its merge-signing authority".to_owned(),
+            )
+        })?;
         let leader = self.context.leader(key.view);
         let leader_candidate_body = if signer == leader {
             let signing_context = MergeSigningContextV1 {
@@ -15537,8 +15567,7 @@ impl V2LaneWorkAdapter {
                 parent_hash: candidate.carrier_parent_hash,
                 validator_set_hash: self.frozen_validator_set_hash(),
             };
-            let Some((durable_digest, durable_candidate, durable_bytes)) = self
-                .merge_signing_guard
+            let Some((durable_digest, durable_candidate, durable_bytes)) = signing_guard
                 .authorized_candidate(&signing_context)
                 .map_err(|error| V2LaneWorkError::SigningGuard(error.to_string()))?
             else {
@@ -15579,6 +15608,16 @@ impl V2LaneWorkAdapter {
         signer: wire::ValidatorIndex,
         message_digest: Hash,
     ) -> Result<(), MergeSidecarError> {
+        if !self.voting_enabled {
+            return Err(MergeSidecarError::SigningGuard(
+                "non-voting lane work has no merge-signing authority".to_owned(),
+            ));
+        }
+        let signing_guard = self.merge_signing_guard.as_ref().ok_or_else(|| {
+            MergeSidecarError::SigningGuard(
+                "voting lane work lacks its merge-signing authority".to_owned(),
+            )
+        })?;
         let Some(expected_parent) = self
             .context
             .parent_commit_qc
@@ -15620,9 +15659,8 @@ impl V2LaneWorkAdapter {
             validator_set_hash: self.frozen_validator_set_hash(),
         };
         if signer != leader {
-            let Some((durable_digest, durable_candidate, durable_bytes)) = self
-                .merge_signing_guard
-                .authorized_candidate(&durable_context)?
+            let Some((durable_digest, durable_candidate, durable_bytes)) =
+                signing_guard.authorized_candidate(&durable_context)?
             else {
                 return Err(MergeSidecarError::LocalSigningEquivocation);
             };
@@ -15652,8 +15690,7 @@ impl V2LaneWorkAdapter {
         {
             return Err(MergeSidecarError::LocalSigningEquivocation);
         }
-        if self
-            .merge_signing_guard
+        if signing_guard
             .authorized_digest(&durable_context)?
             .is_some_and(|authorized| authorized != message_digest)
         {
@@ -15699,13 +15736,17 @@ impl V2LaneWorkAdapter {
         }
         self.validate_merge_candidate_for_active_round(candidate, &parent_header, active_view)
             .map_err(MergeSidecarError::SigningGuard)?;
-        self.merge_signing_guard
-            .authorize(durable_context, message_digest, candidate)?;
+        signing_guard.authorize(durable_context, message_digest, candidate)?;
         self.merge_claims.entry(claim_key).or_insert(message_digest);
         Ok(())
     }
     fn refresh_merge_candidates(&mut self, active_view: wire::View) -> Result<(), V2LaneWorkError> {
         self.queue_plan_admission_handoff_retry_required = false;
+        if !self.voting_enabled {
+            self.merge_entries.clear();
+            self.merge_claims.clear();
+            return Ok(());
+        }
         let carrier_protected = self
             .retained_merge_carrier_state
             .is_some_and(|(_, locked, decided)| locked.is_some() || decided.is_some());
@@ -15760,8 +15801,12 @@ impl V2LaneWorkAdapter {
             parent_hash: expected_parent,
             validator_set_hash,
         };
-        let authorized_candidate = self
-            .merge_signing_guard
+        let signing_guard = self.merge_signing_guard.as_ref().ok_or_else(|| {
+            V2LaneWorkError::SigningGuard(
+                "voting lane work lacks its merge-signing authority".to_owned(),
+            )
+        })?;
+        let authorized_candidate = signing_guard
             .authorized_candidate(&signing_context)
             .map_err(|error| V2LaneWorkError::SigningGuard(error.to_string()))?;
         let authorized_digest = authorized_candidate.as_ref().map(|(digest, _, _)| *digest);
@@ -15926,6 +15971,9 @@ impl V2LaneWorkAdapter {
         signature: MergeCommitteeSignature,
         active_view: wire::View,
     ) -> Result<V2LaneIngressOutcome, V2LaneWorkError> {
+        if !self.voting_enabled {
+            return Ok(V2LaneIngressOutcome::Rejected);
+        }
         if signature.view != active_view
             || self.pre_apply_unlocked_merge_view() != Some(active_view)
             || !self.merge_parent_frontier_is_exact()
@@ -15980,8 +16028,12 @@ impl V2LaneWorkAdapter {
                 parent_hash: candidate.carrier_parent_hash,
                 validator_set_hash: self.frozen_validator_set_hash(),
             };
-            if let Some((durable_digest, durable_candidate, durable_bytes)) = self
-                .merge_signing_guard
+            let signing_guard = self.merge_signing_guard.as_ref().ok_or_else(|| {
+                V2LaneWorkError::SigningGuard(
+                    "voting lane work lacks its merge-signing authority".to_owned(),
+                )
+            })?;
+            if let Some((durable_digest, durable_candidate, durable_bytes)) = signing_guard
                 .authorized_candidate(&signing_context)
                 .map_err(|error| V2LaneWorkError::SigningGuard(error.to_string()))?
                 && (durable_digest != signature.message_digest
@@ -16007,7 +16059,7 @@ impl V2LaneWorkAdapter {
                     "authenticated merge leader equivocated after volatile admission".to_owned(),
                 ));
             }
-            self.merge_signing_guard
+            signing_guard
                 .authorize(signing_context, signature.message_digest, &candidate)
                 .map_err(|error| V2LaneWorkError::SigningGuard(error.to_string()))?;
             let key = MergeKey {

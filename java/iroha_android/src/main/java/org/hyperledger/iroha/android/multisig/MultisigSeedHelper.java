@@ -126,7 +126,7 @@ public final class MultisigSeedHelper {
       throw new IllegalArgumentException("Sized field payload too large");
     }
     final byte[] payload = decoder.readBytes((int) length);
-    final NoritoDecoder child = new NoritoDecoder(payload, decoder.flags(), decoder.flagsHint());
+    final NoritoDecoder child = new NoritoDecoder(payload, decoder.flags());
     final T value = adapter.decode(child);
     if (child.remaining() != 0) {
       throw new IllegalArgumentException("Trailing bytes after sized field payload");

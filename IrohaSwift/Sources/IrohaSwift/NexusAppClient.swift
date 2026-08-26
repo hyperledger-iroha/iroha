@@ -393,10 +393,7 @@ public struct SwiftNexusTransactionCodec: NexusTransactionCodec {
     private static func encodeSignature(_ signature: Data) -> Data {
         var writer = CompactNoritoWriter()
         writer.writeUInt64LE(UInt64(signature.count))
-        for byte in signature {
-            writer.writeLength(1)
-            writer.writeUInt8(byte)
-        }
+        writer.writeByteFields(signature)
         return writer.data
     }
 }
@@ -926,10 +923,7 @@ private enum SwiftNexusTransferPayloadEncoder {
 
     private static func encodeAssetDefinitionAddress(_ bytes: Data) -> Data {
         var writer = CompactNoritoWriter()
-        for byte in bytes {
-            writer.writeLength(1)
-            writer.writeUInt8(byte)
-        }
+        writer.writeByteFields(bytes)
         return writer.data
     }
 

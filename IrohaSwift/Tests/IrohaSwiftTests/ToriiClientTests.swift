@@ -272,7 +272,7 @@ private func mutateFirstNativeAmxQcBody(
     }
 }
 
-private final class StubGatewayFetcher: SorafsGatewayFetching, @unchecked Sendable {
+final class StubGatewayFetcher: SorafsGatewayFetching, @unchecked Sendable {
     var capturedPlan: ToriiJSONValue?
     var capturedProviders: [SorafsGatewayProvider]?
     var capturedOptions: SorafsGatewayFetchOptions?
@@ -2098,7 +2098,7 @@ final class ToriiClientTests: XCTestCase {
                                            statusCode: 200,
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
-            return (response, self.ramLfeExecuteResponseJSON())
+            return (response, ramLfeExecuteResponseJSON())
         }
 
         let response = try await makeClient().executeRamLfeProgram(
@@ -2172,7 +2172,7 @@ final class ToriiClientTests: XCTestCase {
                                            statusCode: 200,
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
-            return (response, self.ramLfeReceiptVerifyResponseJSON())
+            return (response, ramLfeReceiptVerifyResponseJSON())
         }
 
         let response = try await makeClient().verifyRamLfeReceipt(
@@ -16962,118 +16962,6 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         waitForExpectations(timeout: 1)
     }
 
-    func testListProverReportsAppliesFilterAndDecodes() {
-        let expectation = expectation(description: "list prover reports")
-        StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/zk/prover/reports")
-            let comps = request.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false) }
-            let items = comps?.queryItems ?? []
-            let dict = Dictionary(uniqueKeysWithValues: items.map { ($0.name, $0.value ?? "") })
-            XCTAssertEqual(dict["ok_only"], "true")
-            XCTAssertEqual(dict["content_type"], "application/json")
-            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
-            let body = """
-            [{"id":"abc","ok":true,"content_type":"application/json","size":10,"created_ms":1,"processed_ms":2,"latency_ms":1,"zk1_tags":["TEST"]}]
-            """.data(using: .utf8)!
-            return (response, body)
-        }
-
-        var filter = ToriiProverReportsFilter()
-        filter.okOnly = true
-        filter.contentType = "application/json"
-
-        makeClient().listProverReports(filter: filter) { result in
-            switch result {
-            case .success(let reports):
-                XCTAssertEqual(reports.count, 1)
-                XCTAssertEqual(reports.first?.zk1_tags ?? [], ["TEST"])
-            case .failure(let error):
-                XCTFail("unexpected error: \(error)")
-            }
-            expectation.fulfill()
-        }
-
-        waitForExpectations(timeout: 1)
-    }
-
-    func testCountProverReportsRejectsFractionalCount() {
-        let expectation = expectation(description: "count prover reports")
-        StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/zk/prover/reports/count")
-            let response = HTTPURLResponse(url: request.url!,
-                                           statusCode: 200,
-                                           httpVersion: nil,
-                                           headerFields: ["Content-Type": "application/json"])!
-            let body = """
-            {"count":1.5}
-            """.data(using: .utf8)!
-            return (response, body)
-        }
-
-        makeClient().countProverReports { result in
-            switch result {
-            case .success:
-                XCTFail("expected failure for fractional count")
-            case .failure(let error):
-                guard case ToriiClientError.invalidPayload = error else {
-                    XCTFail("unexpected error: \(error)")
-                    break
-                }
-            }
-            expectation.fulfill()
-        }
-
-        waitForExpectations(timeout: 1)
-    }
-
-    func testGetProverReportEncodesId() {
-        let expectation = expectation(description: "get prover report")
-        let reportId = "report/1"
-        StubURLProtocol.handler = { request in
-            // URL.path always returns decoded path. Check absoluteString to verify encoding.
-            XCTAssertTrue(request.url!.absoluteString.contains("/v1/zk/prover/reports/report%2F1"))
-            let response = HTTPURLResponse(url: request.url!,
-                                           statusCode: 200,
-                                           httpVersion: nil,
-                                           headerFields: ["Content-Type": "application/json"])!
-            let body = """
-            {"id":"report/1","ok":true,"content_type":"application/json","size":10,"created_ms":1,"processed_ms":2}
-            """.data(using: .utf8)!
-            return (response, body)
-        }
-
-        makeClient().getProverReport(id: reportId) { result in
-            switch result {
-            case .success(let report):
-                XCTAssertEqual(report.id, reportId)
-            case .failure(let error):
-                XCTFail("unexpected error: \(error)")
-            }
-            expectation.fulfill()
-        }
-        waitForExpectations(timeout: 1)
-    }
-
-    func testDeleteProverReportEncodesId() {
-        let expectation = expectation(description: "delete prover report")
-        let reportId = "report/1"
-        StubURLProtocol.handler = { request in
-            // URL.path always returns decoded path. Check absoluteString to verify encoding.
-            XCTAssertTrue(request.url!.absoluteString.contains("/v1/zk/prover/reports/report%2F1"))
-            XCTAssertEqual(request.httpMethod, "DELETE")
-            let response = HTTPURLResponse(url: request.url!, statusCode: 204, httpVersion: nil, headerFields: nil)!
-            return (response, Data())
-        }
-
-        makeClient().deleteProverReport(id: reportId) { result in
-            if case let .failure(error) = result {
-                XCTFail("unexpected error: \(error)")
-            }
-            expectation.fulfill()
-        }
-        waitForExpectations(timeout: 1)
-    }
-
     func testGetAttachmentEncodesId() {
         let expectation = expectation(description: "get attachment")
         let attachmentId = "abc/def"
@@ -19606,50 +19494,51 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
     func testGovernanceGetIdentifiersRejectAliasesBeforeTransportDispatch() async throws {
         let client = makeClient()
         let proposalId = String(repeating: "ab", count: 32)
+        let auth = canonicalReadAuth
         let invalidCalls: [(String, () async throws -> Void)] = [
             ("uppercase proposal", {
-                _ = try await client.getGovernanceProposal(idHex: proposalId.uppercased(), canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceProposal(idHex: proposalId.uppercased(), canonicalAuth: auth)
             }),
             ("prefixed proposal", {
-                _ = try await client.getGovernanceProposal(idHex: "0x\(proposalId)", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceProposal(idHex: "0x\(proposalId)", canonicalAuth: auth)
             }),
             ("padded proposal", {
-                _ = try await client.getGovernanceProposal(idHex: " \(proposalId)", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceProposal(idHex: " \(proposalId)", canonicalAuth: auth)
             }),
             ("slash proposal", {
-                _ = try await client.getGovernanceProposal(idHex: "proposal/segment", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceProposal(idHex: "proposal/segment", canonicalAuth: auth)
             }),
             ("padded referendum", {
-                _ = try await client.getGovernanceReferendum(id: " ref-1", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceReferendum(id: " ref-1", canonicalAuth: auth)
             }),
             ("internal referendum whitespace", {
-                _ = try await client.getGovernanceReferendum(id: "ref 1", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceReferendum(id: "ref 1", canonicalAuth: auth)
             }),
             ("slash referendum", {
-                _ = try await client.getGovernanceReferendum(id: "ref/1", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceReferendum(id: "ref/1", canonicalAuth: auth)
             }),
             ("leading-dot referendum", {
-                _ = try await client.getGovernanceReferendum(id: ".hidden", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceReferendum(id: ".hidden", canonicalAuth: auth)
             }),
             ("percent referendum", {
-                _ = try await client.getGovernanceReferendum(id: "ref%31", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceReferendum(id: "ref%31", canonicalAuth: auth)
             }),
             ("unicode referendum", {
-                _ = try await client.getGovernanceReferendum(id: "投票", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceReferendum(id: "投票", canonicalAuth: auth)
             }),
             ("tally tab", {
-                _ = try await client.getGovernanceTally(id: "ref\t1", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceTally(id: "ref\t1", canonicalAuth: auth)
             }),
             ("overlong tally", {
                 _ = try await client.getGovernanceTally(
-                    id: String(repeating: "a", count: 129), canonicalAuth: canonicalReadAuth
+                    id: String(repeating: "a", count: 129), canonicalAuth: auth
                 )
             }),
             ("locks control", {
-                _ = try await client.getGovernanceLocks(referendumId: "ref\u{0000}1", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceLocks(referendumId: "ref\u{0000}1", canonicalAuth: auth)
             }),
             ("locks unicode whitespace", {
-                _ = try await client.getGovernanceLocks(referendumId: "ref\u{2003}1", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceLocks(referendumId: "ref\u{2003}1", canonicalAuth: auth)
             }),
         ]
         var dispatched = false

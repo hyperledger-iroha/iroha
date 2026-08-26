@@ -49,7 +49,7 @@ public final class IdentifierReceiptCanonicalEncoder {
   static IdentifierResolutionPayload decodePayload(
       final byte[] encoded, final int chainDiscriminant) {
     final NoritoDecoder decoder =
-        new NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION);
+        new NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS);
     final String policyId =
         decodePolicyId(decodeSizedField(decoder, PassthroughBytesAdapter.INSTANCE, "payload.policy_id"));
     final IdentifierResolutionExecutionPayload execution =
@@ -74,8 +74,7 @@ public final class IdentifierReceiptCanonicalEncoder {
         TransferWirePayloadEncoder.decodeAccountIdPayload(
             decodeSizedField(decoder, PassthroughBytesAdapter.INSTANCE, "payload.account_id"),
             chainDiscriminant,
-            decoder.flags(),
-            decoder.flagsHint());
+            decoder.flags());
     if (decoder.remaining() != 0) {
       throw new IllegalArgumentException("Trailing bytes after identifier receipt payload");
     }
@@ -114,7 +113,7 @@ public final class IdentifierReceiptCanonicalEncoder {
 
   static IdentifierReceiptAttestation decodeAttestation(final byte[] encoded) {
     final NoritoDecoder decoder =
-        new NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION);
+        new NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS);
     final long tag = decoder.readUInt(32);
     final IdentifierReceiptAttestation attestation;
     if (tag == 0L) {
@@ -151,7 +150,7 @@ public final class IdentifierReceiptCanonicalEncoder {
 
   private static String decodePolicyId(final byte[] encoded) {
     final NoritoDecoder decoder =
-        new NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION);
+        new NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS);
     final String kind = decodeSizedField(decoder, STRING_ADAPTER, "payload.policy_id.kind");
     final String rule = decodeSizedField(decoder, STRING_ADAPTER, "payload.policy_id.rule");
     if (decoder.remaining() != 0) {
@@ -211,7 +210,7 @@ public final class IdentifierReceiptCanonicalEncoder {
 
   private static IdentifierResolutionExecutionPayload decodeExecution(final byte[] encoded) {
     final NoritoDecoder decoder =
-        new NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION);
+        new NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS);
     final String programId =
         decodeProgramId(
             decodeSizedField(decoder, PassthroughBytesAdapter.INSTANCE, "payload.execution.program_id"));
@@ -297,7 +296,7 @@ public final class IdentifierReceiptCanonicalEncoder {
 
   private static RamLfeOutputOpening decodeOutputOpening(final byte[] encoded) {
     final NoritoDecoder decoder =
-        new NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION);
+        new NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS);
     final RamLfeOutputOpeningPayload payload =
         decodeOutputOpeningPayload(
             decodeSizedField(decoder, PassthroughBytesAdapter.INSTANCE, "payload.opening.payload"));
@@ -350,7 +349,7 @@ public final class IdentifierReceiptCanonicalEncoder {
 
   private static RamLfeOutputOpeningPayload decodeOutputOpeningPayload(final byte[] encoded) {
     final NoritoDecoder decoder =
-        new NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION);
+        new NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS);
     final String programId =
         decodeProgramId(
             decodeSizedField(
@@ -411,7 +410,7 @@ public final class IdentifierReceiptCanonicalEncoder {
 
   private static String decodeProgramId(final byte[] encoded) {
     final NoritoDecoder decoder =
-        new NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION);
+        new NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS);
     final String programId = decodeSizedField(decoder, STRING_ADAPTER, "program_id");
     if (decoder.remaining() != 0) {
       throw new IllegalArgumentException("Trailing bytes after program_id");
@@ -489,7 +488,7 @@ public final class IdentifierReceiptCanonicalEncoder {
   private static String decodeOpaqueHash(
       final byte[] encoded, final String prefix, final String field) {
     final NoritoDecoder decoder =
-        new NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION);
+        new NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS);
     final long length = decoder.readLength((decoder.flags() & NoritoHeader.COMPACT_LEN) != 0);
     if (length != 32L) {
       throw new IllegalArgumentException(field + " must contain 32 bytes");
@@ -586,7 +585,7 @@ public final class IdentifierReceiptCanonicalEncoder {
       throw new IllegalArgumentException(fieldName + " payload too large");
     }
     final byte[] payload = decoder.readBytes((int) length);
-    final NoritoDecoder child = new NoritoDecoder(payload, decoder.flags(), decoder.flagsHint());
+    final NoritoDecoder child = new NoritoDecoder(payload, decoder.flags());
     final T value = adapter.decode(child);
     if (child.remaining() != 0) {
       throw new IllegalArgumentException("Trailing bytes after " + fieldName + " payload");

@@ -65,6 +65,10 @@ const MAX_TRANSACTION_OWNER_BYTES = 16 * 1024;
 const MAX_CLEANUP_MARKER_BYTES = 128 * 1024;
 const MAX_CLEANUP_ENTRIES = 32;
 const MAX_CHECKSUM_MANIFEST_BYTES = 1024 * 1024;
+// A cold debug build derives and validates the complete privacy profile catalog,
+// including the ZK-X509 fixed-algebraic schedules, in this subprocess. Keep the
+// probe bounded while allowing that fail-closed check to finish unoptimized.
+const NATIVE_BINDING_PROBE_TIMEOUT_MS = 120_000;
 const UUID_V4_SOURCE =
   "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
 const UUID_V4_PATTERN = new RegExp(`^${UUID_V4_SOURCE}$`, "u");
@@ -483,7 +487,7 @@ if (
       cwd: repoRoot,
       encoding: "utf8",
       env: process.env,
-      timeout: 30_000,
+      timeout: NATIVE_BINDING_PROBE_TIMEOUT_MS,
       windowsHide: true,
       maxBuffer: 64 * 1024,
     },

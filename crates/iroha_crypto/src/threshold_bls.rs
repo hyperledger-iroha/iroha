@@ -38,12 +38,10 @@
 //! agreement, retirement of dealer contributions and proof nonces, and key
 //! rotation. [`AdaptiveThresholdBlsPublicTranscript::ensure_adaptive_protocol_ready`]
 //! attests only that these public cryptographic checks ran; it is not a theorem
-//! certificate or an operational release approval. The older
-//! [`ThresholdBlsPublicTranscript`] lacks even that evidence and remains fail
-//! closed for this readiness check.
+//! certificate or an operational release approval.
 
 use core::{fmt, marker::PhantomData};
-use std::{collections::HashSet, vec::Vec};
+use std::vec::Vec;
 
 use blstrs::{G1Affine, G1Projective, G2Affine, G2Prepared, G2Projective, Scalar};
 use group::{Curve as _, Group as _, ff::Field as _, prime::PrimeCurveAffine as _};
@@ -85,7 +83,6 @@ pub const TLE_RELEASE_SIGNATURE_DST_V1: &[u8] =
 
 const SESSION_DOMAIN_V1: &[u8] = b"iroha.threshold-bls.session.v1\0";
 const MESSAGE_DOMAIN_V1: &[u8] = b"iroha.threshold-bls.message.v1\0";
-const PUBLIC_TRANSCRIPT_DOMAIN_V1: &[u8] = b"iroha.threshold-bls.public-transcript.v1\0";
 const BEACON_SEED_SALT_V1: &[u8] = b"iroha.threshold-bls.beacon-seed.salt.v1\0";
 const BEACON_SEED_INFO_V1: &[u8] = b"iroha.threshold-bls.beacon-seed.hkdf-sha256.v1\0";
 const ADAPTIVE_PARAMETERS_DOMAIN_V1: &[u8] = b"iroha.threshold-bls.adaptive-parameters.v1\0";
@@ -157,12 +154,6 @@ pub enum ThresholdBlsError {
     /// A participant index was zero or outside the frozen committee.
     #[error("threshold-BLS participant index is outside the frozen committee")]
     InvalidParticipantIndex,
-    /// Public shares were not the complete canonical index sequence `1..=n`.
-    #[error("threshold-BLS public shares must contain each canonical index exactly once")]
-    NonCanonicalShareSet,
-    /// Two public shares named the same frozen participant identity.
-    #[error("threshold-BLS public transcript contains a duplicate participant")]
-    DuplicateParticipant,
     /// A key, share, or signature was created for another session.
     #[error("threshold-BLS object is bound to another session")]
     SessionMismatch,
@@ -172,9 +163,6 @@ pub enum ThresholdBlsError {
     /// The caller requested a public share which is not in the frozen transcript.
     #[error("threshold-BLS public share is not in the frozen transcript")]
     UnknownParticipant,
-    /// The transcript lacks the complete triple-generator DKG/signing evidence.
-    #[error("legacy threshold-BLS transcript lacks verified adaptive DKG evidence")]
-    AdaptiveProtocolNotReady,
     /// HKDF expansion failed for a fixed-size output.
     #[error("threshold-BLS HKDF expansion failed")]
     HkdfExpand,
@@ -431,82 +419,6 @@ impl<P: ThresholdBlsPurpose> ThresholdBlsPublicKey<P> {
     }
 }
 
-/// Public key share for one frozen participant and typed session.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ThresholdBlsPublicShare<P: ThresholdBlsPurpose> {
-    session_id: [u8; 32],
-    index: u16,
-    participant_hash: [u8; 32],
-    bytes: [u8; THRESHOLD_BLS_PUBLIC_KEY_BYTES],
-    marker: PhantomData<P>,
-}
-
-impl<P: ThresholdBlsPurpose> fmt::Debug for ThresholdBlsPublicShare<P> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("ThresholdBlsPublicShare")
-            .field("purpose", &P::ROLE_TAG)
-            .field("session_id", &hex::encode(self.session_id))
-            .field("index", &self.index)
-            .field("participant_hash", &hex::encode(self.participant_hash))
-            .field("bytes", &hex::encode(self.bytes))
-            .finish()
-    }
-}
-
-impl<P: ThresholdBlsPurpose> ThresholdBlsPublicShare<P> {
-    /// Parse and bind one public verification share.
-    ///
-    /// Committee-range validation happens when the share enters a full public
-    /// transcript, because the share itself does not carry `n`.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ThresholdBlsError`] for index zero, zero bindings, or an invalid G2 point.
-    pub fn from_bytes(
-        session_id: [u8; 32],
-        index: u16,
-        participant_hash: [u8; 32],
-        bytes: &[u8],
-    ) -> Result<Self, ThresholdBlsError> {
-        if index == 0 {
-            return Err(ThresholdBlsError::InvalidParticipantIndex);
-        }
-        if is_zero(&session_id) || is_zero(&participant_hash) {
-            return Err(ThresholdBlsError::ZeroBinding);
-        }
-        let encoded: [u8; THRESHOLD_BLS_PUBLIC_KEY_BYTES] = bytes
-            .try_into()
-            .map_err(|_| ThresholdBlsError::InvalidPublicKey)?;
-        decode_g2(&encoded)?;
-        Ok(Self {
-            session_id,
-            index,
-            participant_hash,
-            bytes: encoded,
-            marker: PhantomData,
-        })
-    }
-
-    /// Return the fixed one-based DKG participant index.
-    #[must_use]
-    pub const fn index(&self) -> u16 {
-        self.index
-    }
-
-    /// Return the frozen participant-identity hash.
-    #[must_use]
-    pub const fn participant_hash(&self) -> &[u8; 32] {
-        &self.participant_hash
-    }
-
-    /// Return the canonical compressed G2 verification-share encoding.
-    #[must_use]
-    pub const fn as_bytes(&self) -> &[u8; THRESHOLD_BLS_PUBLIC_KEY_BYTES] {
-        &self.bytes
-    }
-}
-
 /// A canonical G1 final signature bound to one typed session.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ThresholdBlsSignature<P: ThresholdBlsPurpose> {
@@ -557,70 +469,6 @@ impl<P: ThresholdBlsPurpose> ThresholdBlsSignature<P> {
     #[must_use]
     pub const fn session_id(&self) -> &[u8; 32] {
         &self.session_id
-    }
-}
-
-/// One canonical G1 signature share bound to a fixed participant index.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ThresholdBlsSignatureShare<P: ThresholdBlsPurpose> {
-    session_id: [u8; 32],
-    index: u16,
-    bytes: [u8; THRESHOLD_BLS_SIGNATURE_BYTES],
-    marker: PhantomData<P>,
-}
-
-impl<P: ThresholdBlsPurpose> fmt::Debug for ThresholdBlsSignatureShare<P> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("ThresholdBlsSignatureShare")
-            .field("purpose", &P::ROLE_TAG)
-            .field("session_id", &hex::encode(self.session_id))
-            .field("index", &self.index)
-            .field("bytes", &hex::encode(self.bytes))
-            .finish()
-    }
-}
-
-impl<P: ThresholdBlsPurpose> ThresholdBlsSignatureShare<P> {
-    /// Parse one canonical signature share.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ThresholdBlsError`] for index zero, a zero session binding,
-    /// or an invalid G1 point.
-    pub fn from_bytes(
-        session_id: [u8; 32],
-        index: u16,
-        bytes: &[u8],
-    ) -> Result<Self, ThresholdBlsError> {
-        if index == 0 {
-            return Err(ThresholdBlsError::InvalidParticipantIndex);
-        }
-        if is_zero(&session_id) {
-            return Err(ThresholdBlsError::ZeroBinding);
-        }
-        let encoded: [u8; THRESHOLD_BLS_SIGNATURE_BYTES] = bytes
-            .try_into()
-            .map_err(|_| ThresholdBlsError::InvalidSignature)?;
-        decode_g1(&encoded)?;
-        Ok(Self {
-            session_id,
-            index,
-            bytes: encoded,
-            marker: PhantomData,
-        })
-    }
-
-    /// Return the immutable one-based participant index.
-    #[must_use]
-    pub const fn index(&self) -> u16 {
-        self.index
-    }
-
-    /// Return the canonical compressed G1 signature-share encoding.
-    #[must_use]
-    pub const fn as_bytes(&self) -> &[u8; THRESHOLD_BLS_SIGNATURE_BYTES] {
-        &self.bytes
     }
 }
 
@@ -1198,8 +1046,8 @@ impl<P: ThresholdBlsPurpose> DasRenRevealedShare<P> {
 
 /// One composite triple-generator verification share in an adaptive transcript.
 ///
-/// Unlike [`ThresholdBlsPublicShare`], these bytes encode `g^s h^r v^u`, not
-/// just `g^s`; they must only be used with the adaptive partial proof verifier.
+/// These bytes encode `g^s h^r v^u`, rather than only `g^s`; they must only be
+/// used with the adaptive partial proof verifier.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AdaptiveThresholdBlsPublicShare<P: ThresholdBlsPurpose> {
     parameters_digest: [u8; 32],
@@ -1828,172 +1676,6 @@ impl<P: ThresholdBlsPurpose> AdaptiveThresholdBlsSecretShare<P> {
     }
 }
 
-/// Fully validated public transcript for one typed threshold-BLS session.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ThresholdBlsPublicTranscript<P: ThresholdBlsPurpose> {
-    session: ThresholdBlsSession<P>,
-    group_public_key: ThresholdBlsPublicKey<P>,
-    public_shares: Vec<ThresholdBlsPublicShare<P>>,
-    dkg_contribution_hash: [u8; 32],
-    transcript_hash: [u8; 32],
-}
-
-impl<P: ThresholdBlsPurpose> ThresholdBlsPublicTranscript<P> {
-    /// Validate and construct a canonical complete public transcript.
-    ///
-    /// Shares must be ordered exactly by index and cover `1..=n`. This
-    /// prohibits duplicate or remapped indices instead of normalizing an
-    /// ambiguous remote representation.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ThresholdBlsError`] for session mismatches, malformed share
-    /// sets, duplicate participants, or a zero DKG contribution hash.
-    pub fn new(
-        session: ThresholdBlsSession<P>,
-        group_public_key: ThresholdBlsPublicKey<P>,
-        public_shares: Vec<ThresholdBlsPublicShare<P>>,
-        dkg_contribution_hash: [u8; 32],
-    ) -> Result<Self, ThresholdBlsError> {
-        if is_zero(&dkg_contribution_hash) {
-            return Err(ThresholdBlsError::ZeroBinding);
-        }
-        if group_public_key.session_id != *session.session_id() {
-            return Err(ThresholdBlsError::SessionMismatch);
-        }
-        if public_shares.len() != usize::from(session.committee_size()) {
-            return Err(ThresholdBlsError::NonCanonicalShareSet);
-        }
-        let mut participants = HashSet::with_capacity(public_shares.len());
-        for (offset, share) in public_shares.iter().enumerate() {
-            let expected_index = u16::try_from(offset + 1)
-                .map_err(|_| ThresholdBlsError::InvalidParticipantIndex)?;
-            if share.index != expected_index {
-                return Err(ThresholdBlsError::NonCanonicalShareSet);
-            }
-            if share.session_id != *session.session_id() {
-                return Err(ThresholdBlsError::SessionMismatch);
-            }
-            if !participants.insert(share.participant_hash) {
-                return Err(ThresholdBlsError::DuplicateParticipant);
-            }
-        }
-        let transcript_hash = compute_public_transcript_hash(
-            &session,
-            &group_public_key,
-            &public_shares,
-            &dkg_contribution_hash,
-        );
-        Ok(Self {
-            session,
-            group_public_key,
-            public_shares,
-            dkg_contribution_hash,
-            transcript_hash,
-        })
-    }
-
-    /// Return the immutable typed session.
-    #[must_use]
-    pub const fn session(&self) -> &ThresholdBlsSession<P> {
-        &self.session
-    }
-
-    /// Return the canonical group public key.
-    #[must_use]
-    pub const fn group_public_key(&self) -> &ThresholdBlsPublicKey<P> {
-        &self.group_public_key
-    }
-
-    /// Return the complete canonically indexed verification-share list.
-    #[must_use]
-    pub fn public_shares(&self) -> &[ThresholdBlsPublicShare<P>] {
-        &self.public_shares
-    }
-
-    /// Return the caller-supplied hash of all canonical DKG contributions.
-    #[must_use]
-    pub const fn dkg_contribution_hash(&self) -> &[u8; 32] {
-        &self.dkg_contribution_hash
-    }
-
-    /// Return the deterministic hash of this public transcript.
-    #[must_use]
-    pub const fn transcript_hash(&self) -> &[u8; 32] {
-        &self.transcript_hash
-    }
-
-    /// Verify one signature share against the frozen participant public share.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ThresholdBlsError`] for a session/index mismatch, invalid
-    /// payload, or failed BLS pairing.
-    pub fn verify_signature_share(
-        &self,
-        payload: &[u8],
-        signature_share: &ThresholdBlsSignatureShare<P>,
-    ) -> Result<(), ThresholdBlsError> {
-        if signature_share.session_id != *self.session.session_id() {
-            return Err(ThresholdBlsError::SessionMismatch);
-        }
-        let share = self
-            .public_shares
-            .get(usize::from(signature_share.index.saturating_sub(1)))
-            .filter(|share| share.index == signature_share.index)
-            .ok_or(ThresholdBlsError::UnknownParticipant)?;
-        let message = self.session.signing_message(payload)?;
-        verify_signature::<P>(&share.bytes, &message, &signature_share.bytes)
-    }
-
-    /// Verify one final signature against the session group public key.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ThresholdBlsError`] for an invalid transcript binding or pairing.
-    pub fn verify_final_signature(
-        &self,
-        payload: &[u8],
-        signature: &ThresholdBlsSignature<P>,
-    ) -> Result<(), ThresholdBlsError> {
-        self.group_public_key
-            .verify_payload(&self.session, payload, signature)
-    }
-
-    /// Fail closed because this legacy transcript carries no adaptive DKG evidence.
-    ///
-    /// Public point validation is not an activation certificate. In particular,
-    /// it cannot establish qualified-set agreement, complaint correctness,
-    /// bias resistance, erasure, or the Das--Ren correlated-share invariants.
-    /// Use [`AdaptiveThresholdBlsPublicTranscript`] for the verified path.
-    ///
-    /// # Errors
-    ///
-    /// Always returns [`ThresholdBlsError::AdaptiveProtocolNotReady`] for this legacy type.
-    pub const fn ensure_adaptive_protocol_ready(&self) -> Result<(), ThresholdBlsError> {
-        Err(ThresholdBlsError::AdaptiveProtocolNotReady)
-    }
-}
-
-impl ThresholdBlsPublicTranscript<BeaconPurpose> {
-    /// Verify a finalized beacon signature and derive its unique public seed.
-    ///
-    /// The seed depends on the final group signature, session transcript, and
-    /// exact framed message, never on a signer bitmap or reconstruction subset.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ThresholdBlsError`] when signature verification or HKDF fails.
-    pub fn finalized_seed(
-        &self,
-        payload: &[u8],
-        signature: &ThresholdBlsSignature<BeaconPurpose>,
-    ) -> Result<[u8; 32], ThresholdBlsError> {
-        self.verify_final_signature(payload, signature)?;
-        derive_beacon_seed(&self.session, &self.transcript_hash, payload, signature)
-    }
-}
-
 fn validate_participant_index<P: ThresholdBlsPurpose>(
     session: &ThresholdBlsSession<P>,
     index: u16,
@@ -2218,27 +1900,6 @@ fn derive_beacon_seed(
     hkdf.expand(BEACON_SEED_INFO_V1, &mut seed)
         .map_err(|_| ThresholdBlsError::HkdfExpand)?;
     Ok(seed)
-}
-
-fn compute_public_transcript_hash<P: ThresholdBlsPurpose>(
-    session: &ThresholdBlsSession<P>,
-    group_public_key: &ThresholdBlsPublicKey<P>,
-    public_shares: &[ThresholdBlsPublicShare<P>],
-    dkg_contribution_hash: &[u8; 32],
-) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update(PUBLIC_TRANSCRIPT_DOMAIN_V1);
-    let mut session_bytes = Vec::new();
-    session.write_canonical(&mut session_bytes);
-    hasher.update(session_bytes);
-    hasher.update(group_public_key.bytes);
-    hasher.update(dkg_contribution_hash);
-    for share in public_shares {
-        hasher.update(share.index.to_be_bytes());
-        hasher.update(share.participant_hash);
-        hasher.update(share.bytes);
-    }
-    hasher.finalize().into()
 }
 
 pub(crate) fn hash_message_to_g1<P: ThresholdBlsPurpose>(message: &[u8]) -> G1Affine {
@@ -2534,129 +2195,6 @@ mod tests {
         assert_eq!(
             key.verify_payload(&other_session, b"pulse", &signature),
             Err(ThresholdBlsError::SessionMismatch)
-        );
-    }
-
-    #[test]
-    fn transcript_rejects_duplicate_indices_participants_and_session_mix() {
-        let session = session::<BeaconPurpose>();
-        let group_key = key(&session, 7);
-        let shares = (1_u16..=4)
-            .map(|index| {
-                let share_key = key(&session, u64::from(index) + 10);
-                ThresholdBlsPublicShare::from_bytes(
-                    *session.session_id(),
-                    index,
-                    binding(index as u8 + 20),
-                    share_key.as_bytes(),
-                )
-                .expect("share")
-            })
-            .collect::<Vec<_>>();
-        assert!(
-            ThresholdBlsPublicTranscript::new(session, group_key, shares.clone(), binding(50))
-                .is_ok()
-        );
-
-        let mut duplicate_index = shares.clone();
-        duplicate_index[1].index = 1;
-        assert_eq!(
-            ThresholdBlsPublicTranscript::new(session, group_key, duplicate_index, binding(50)),
-            Err(ThresholdBlsError::NonCanonicalShareSet)
-        );
-
-        let mut duplicate_participant = shares.clone();
-        duplicate_participant[1].participant_hash = duplicate_participant[0].participant_hash;
-        assert_eq!(
-            ThresholdBlsPublicTranscript::new(
-                session,
-                group_key,
-                duplicate_participant,
-                binding(50)
-            ),
-            Err(ThresholdBlsError::DuplicateParticipant)
-        );
-
-        let mut wrong_session = shares;
-        wrong_session[0].session_id = binding(99);
-        assert_eq!(
-            ThresholdBlsPublicTranscript::new(session, group_key, wrong_session, binding(50)),
-            Err(ThresholdBlsError::SessionMismatch)
-        );
-    }
-
-    #[test]
-    fn public_transcript_verifies_shares_but_adaptive_gate_stays_closed() {
-        let session = session::<BeaconPurpose>();
-        let group_key = key(&session, 7);
-        let share_scalars = [11_u64, 12, 13, 14];
-        let shares = share_scalars
-            .iter()
-            .enumerate()
-            .map(|(offset, scalar)| {
-                let index = u16::try_from(offset + 1).expect("index");
-                let share_key = key(&session, *scalar);
-                ThresholdBlsPublicShare::from_bytes(
-                    *session.session_id(),
-                    index,
-                    binding(index as u8 + 20),
-                    share_key.as_bytes(),
-                )
-                .expect("share")
-            })
-            .collect::<Vec<_>>();
-        let transcript = ThresholdBlsPublicTranscript::new(session, group_key, shares, binding(50))
-            .expect("transcript");
-        let message = transcript
-            .session()
-            .signing_message(b"pulse")
-            .expect("message");
-        let share_signature = (hash_message_to_g1::<BeaconPurpose>(&message)
-            * Scalar::from(11_u64))
-        .to_affine()
-        .to_compressed();
-        let share_signature = ThresholdBlsSignatureShare::from_bytes(
-            *transcript.session().session_id(),
-            1,
-            &share_signature,
-        )
-        .expect("signature share");
-        assert_eq!(
-            transcript.verify_signature_share(b"pulse", &share_signature),
-            Ok(())
-        );
-        assert_eq!(
-            transcript.ensure_adaptive_protocol_ready(),
-            Err(ThresholdBlsError::AdaptiveProtocolNotReady)
-        );
-    }
-
-    #[test]
-    fn finalized_beacon_seed_requires_a_valid_signature() {
-        let session = session::<BeaconPurpose>();
-        let group_key = key(&session, 7);
-        let shares = (1_u16..=4)
-            .map(|index| {
-                let share_key = key(&session, u64::from(index) + 10);
-                ThresholdBlsPublicShare::from_bytes(
-                    *session.session_id(),
-                    index,
-                    binding(index as u8 + 20),
-                    share_key.as_bytes(),
-                )
-                .expect("share")
-            })
-            .collect();
-        let transcript = ThresholdBlsPublicTranscript::new(session, group_key, shares, binding(50))
-            .expect("transcript");
-        let signature = sign(transcript.session(), 7, b"pulse-42");
-        let seed = transcript
-            .finalized_seed(b"pulse-42", &signature)
-            .expect("seed");
-        assert_ne!(seed, [0; 32]);
-        assert_eq!(
-            transcript.finalized_seed(b"pulse-43", &signature),
-            Err(ThresholdBlsError::SignatureMismatch)
         );
     }
 

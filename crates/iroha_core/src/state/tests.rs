@@ -7,7 +7,6 @@ use core::{
 };
 use iroha_config::{
     base::WithOrigin,
-    kura::InitMode,
     parameters::actual::{DaManifestPolicy, Kura as KuraConfig, LaneConfig as RuntimeLaneConfig},
 };
 #[cfg(feature = "sm")]
@@ -1748,6 +1747,16 @@ fn deserialize_state_snapshot_value_with_kura(
 }
 fn deserialize_state_snapshot_value(value: norito::json::Value) -> Result<State, json::Error> {
     deserialize_state_snapshot_value_with_kura(value, Kura::blank_kura_for_testing())
+}
+fn deserialize_state_snapshot_value_emergency_fast(state: &State) -> Result<State, json::Error> {
+    let input = norito::json::to_json(state)?;
+    deserialize::KuraSeed {
+        kura: Kura::blank_emergency_fast_kura_for_testing(),
+        query_handle: LiveQueryStore::start_test(),
+        #[cfg(feature = "telemetry")]
+        telemetry: crate::telemetry::StateTelemetry::default(),
+    }
+    .into_state_from_json_str_emergency_fast(&input)
 }
 fn install_axt_counter_for_test(state: &State, dataspace: DataSpaceId, next: u64, generation: u64) {
     let record = AxtHandleCounterRecord::try_from_parts(next, generation)
@@ -4021,7 +4030,7 @@ use crate::{
 };
 fn strict_kura_config_for_testing(store_root: std::path::PathBuf) -> KuraConfig {
     KuraConfig {
-        init_mode: InitMode::Strict,
+        init_mode: iroha_config::kura::InitMode::Strict,
         store_dir: WithOrigin::inline(store_root),
         max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
         blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
@@ -15349,7 +15358,7 @@ state_test! { sync apply_lane_geometry_updates_relabels_kura_storage
     let_row! { initial_catalog = LaneCatalog::new( lane_count, vec![LaneConfig { alias: "Alpha Lane".to_string(), ..LaneConfig::default() }], ) .expect("initial catalog") };
     let initial_config = RuntimeLaneConfig::from_catalog(&initial_catalog);
     let_row! { lane_entry = initial_config .entry(LaneId::SINGLE) .expect("lane entry exists") };
-    let_row! { kura_cfg = KuraConfig { init_mode: InitMode::Strict, store_dir: WithOrigin::inline(store_root.clone()), max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES, blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY, debug_output_new_blocks: false, merge_ledger_cache_capacity: iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY, fsync_mode: iroha_config::kura::FsyncMode::Batched, fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL, lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION, replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY, } };
+    let_row! { kura_cfg = KuraConfig { init_mode: iroha_config::kura::InitMode::Strict, store_dir: WithOrigin::inline(store_root.clone()), max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES, blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY, debug_output_new_blocks: false, merge_ledger_cache_capacity: iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY, fsync_mode: iroha_config::kura::FsyncMode::Batched, fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL, lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION, replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY, } };
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &initial_config).expect("init kura");
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
@@ -27900,7 +27909,7 @@ state_test! { sync missing_insert_block_does_not_hydrate_staged_verified_lane_re
 fn state_journal_test_kura(store_root: &std::path::Path) -> Arc<Kura> {
     let_row! { catalog = LaneCatalog::new(nonzero!(1_u32), vec![LaneConfig::default()]).expect("lane catalog") };
     let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
-    let_row! { kura_cfg = KuraConfig { init_mode: InitMode::Strict, store_dir: WithOrigin::inline(store_root.to_path_buf()), max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES, blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY, debug_output_new_blocks: false, merge_ledger_cache_capacity: iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY, fsync_mode: iroha_config::kura::FsyncMode::Batched, fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL, lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION, replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY, } };
+    let_row! { kura_cfg = KuraConfig { init_mode: iroha_config::kura::InitMode::Strict, store_dir: WithOrigin::inline(store_root.to_path_buf()), max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES, blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY, debug_output_new_blocks: false, merge_ledger_cache_capacity: iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY, fsync_mode: iroha_config::kura::FsyncMode::Batched, fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL, lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION, replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY, } };
     Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &lane_config)
         .expect("initialize journal test Kura")
         .0
@@ -35150,6 +35159,20 @@ state_test! { sync replication_order_completion_snapshot_anchors_match_committed
         "unexpected completion-anchor height error: {error}"
     );
 }
+state_test! { sync emergency_fast_snapshot_defers_replication_order_completion_anchor_scan
+    let (world, _, order_id) = sample_snapshot_approved_pin_world();
+    let mut state = snapshot_state_from_world(world);
+    let replication_orders = state.world.replication_orders.view();
+    let mut order = replication_orders
+        .get(&order_id)
+        .cloned()
+        .expect("snapshot completed replication order");
+    drop(replication_orders);
+    order.provider_completions[0].finalized_anchor.block_hash = [0xE8; 32];
+    state.world.replication_orders.insert(order_id, order);
+    deserialize_state_snapshot_value_emergency_fast(&state)
+        .expect("emergency Fast restore must defer the completion-anchor prefix scan");
+}
 state_test! { sync automatic_replication_snapshot_rejects_oversubscribed_capacity
     let (mut world, _, _) = sample_snapshot_approved_pin_world();
     let second_digest = ManifestDigest::new([0xD4; 32]);
@@ -38175,6 +38198,29 @@ state_test! { sync vpn_lease_projection_rejects_a_foreign_exact_network
     validate_vpn_lease_network(&local, &local_network).expect("local VPN lease network");
     let_row! { error = validate_vpn_lease_network(&foreign, &local_network) .expect_err("foreign VPN lease must fail exact-network restoration") };
     assert!(error.contains("different exact network"));
+}
+state_test! { sync emergency_fast_snapshot_index_finalization_defers_vpn_network_validation
+    let_row! { operator_key = KeyPair::try_from_seed(vec![0x93; 32], Algorithm::Ed25519) .expect("deterministic VPN operator key") };
+    let_row! { foreign_network = NetworkId::from_genesis_hash( HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xFD; Hash::LENGTH])), ) };
+    let foreign = indexed_settled_vpn_lease(
+        &foreign_network,
+        &*ALICE_ID,
+        2,
+        1,
+        &operator_key,
+    );
+    let kura = crate::kura::Kura::blank_kura_for_testing();
+    let query = crate::query::store::LiveQueryStore::start_test();
+    let mut state = State::new_for_testing(World::default(), kura, query);
+    state.world.vpn_leases.insert(foreign.lease_id, foreign);
+
+    let error = state
+        .finalize_snapshot_derived_state_indexes(false)
+        .expect_err("Strict snapshot restore must validate every retained VPN network");
+    assert!(error.contains("different exact network"));
+    state
+        .finalize_snapshot_derived_state_indexes(true)
+        .expect("emergency Fast snapshot restore must defer the VPN semantic scan");
 }
 state_test! { sync governance_lock_test_mutator_replaces_removes_and_rolls_back_expiry_index
     let world = World::default();

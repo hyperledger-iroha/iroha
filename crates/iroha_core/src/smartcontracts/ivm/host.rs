@@ -12734,7 +12734,6 @@ mod pointer_abi_tests {
     }
     #[test]
     fn authorized_deployed_binders_capture_exact_state_backed_root_authorization() {
-        crate::test_alias::ensure();
         let authority = ALICE_ID.clone();
         let state = contract_test_state(&authority);
         let contract_address = install_contract(
@@ -12837,7 +12836,6 @@ seiyaku StateBackedBinding {
     }
     #[test]
     fn authorized_view_binding_rejects_effect_syscalls_before_input_decode() {
-        crate::test_alias::ensure();
         let authority = ALICE_ID.clone();
         let state = contract_test_state(&authority);
         let contract_address = install_contract(
@@ -13260,7 +13258,6 @@ seiyaku ReadOnlyBinding {
     }
     #[test]
     fn authorized_deployed_binders_reject_forgery_and_clear_stale_provenance() {
-        crate::test_alias::ensure();
         let authority = ALICE_ID.clone();
         let state = contract_test_state(&authority);
         let legitimate_address = install_contract(
@@ -13537,7 +13534,6 @@ seiyaku PrivilegedBinding {
     }
     #[test]
     fn tlv_decode_valid_account_id() {
-        crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(50_000_000);
         // Prepare a valid TLV for a canonical encoded AccountId at INPUT_START.
         let acc: AccountId = fixture_account("alice");
@@ -13551,7 +13547,6 @@ seiyaku PrivilegedBinding {
     }
     #[test]
     fn json_tlv_rejects_invalid_norito_payload() {
-        crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(1_000_000);
         let mut payload = norito_blob(&Json::new("hello"));
         if let Some(first) = payload.first_mut() {
@@ -13568,7 +13563,6 @@ seiyaku PrivilegedBinding {
     }
     #[test]
     fn json_tlv_decodes_norito_payload() {
-        crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(1_000_000);
         let expected = Json::new("hello");
         let payload = norito_blob(&expected);
@@ -13580,7 +13574,6 @@ seiyaku PrivilegedBinding {
     }
     #[test]
     fn tlv_decode_invalid_hash_rejected() {
-        crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(1_000_000);
         let acc: AccountId = fixture_account("alice");
         let payload = norito::to_bytes(&acc).expect("encode account id");
@@ -13599,7 +13592,6 @@ seiyaku PrivilegedBinding {
     }
     #[test]
     fn pointer_from_norito_wrong_type_is_rejected() {
-        crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(10_000);
         let authority = ALICE_ID.clone();
         let mut host = CoreHost::new(authority);
@@ -13619,7 +13611,6 @@ seiyaku PrivilegedBinding {
     }
     #[test]
     fn load_state_value_roundtrips_wrapped_account_pointer_via_pointer_from_norito() {
-        crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(10_000);
         let authority = ALICE_ID.clone();
         let mut host = CoreHost::new(authority);
@@ -13639,7 +13630,6 @@ seiyaku PrivilegedBinding {
     }
     #[test]
     fn load_state_value_roundtrips_wrapped_asset_pointer_via_pointer_from_norito() {
-        crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(10_000);
         let authority = ALICE_ID.clone();
         let mut host = CoreHost::new(authority);
@@ -13661,7 +13651,6 @@ seiyaku PrivilegedBinding {
     }
     #[test]
     fn load_state_value_rejects_oversized_raw_payload() {
-        crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(10_000);
         let stored = vec![0u8; ivm::syscalls::STATE_MAX_VALUE_BYTES + 1];
         let err =
@@ -13670,7 +13659,6 @@ seiyaku PrivilegedBinding {
     }
     #[test]
     fn load_state_value_wraps_raw_norito_payload_into_norito_bytes_tlv() {
-        crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(10_000);
         let expected = vec![1_u8, 2, 3, 4, 5];
         let stored = norito::to_bytes(&expected).expect("encode raw state value");
@@ -13685,7 +13673,6 @@ seiyaku PrivilegedBinding {
     }
     #[test]
     fn axt_gas_bills_reused_proof_payload_for_each_decode() {
-        crate::test_alias::ensure();
         let dsid = DataSpaceId::new(3);
         let descriptor = axt::AxtDescriptor {
             dsids: vec![dsid],
@@ -13797,7 +13784,6 @@ seiyaku PrivilegedBinding {
     }
     #[test]
     fn axt_verify_ds_proof_rejects_unanchored_fastpq_without_state_or_cache_mutation() {
-        crate::test_alias::ensure();
         let dsid = DataSpaceId::new(3);
         let manifest_root = [0xAB; 32];
         let descriptor = axt::AxtDescriptor {
@@ -13865,7 +13851,6 @@ seiyaku PrivilegedBinding {
 
     #[test]
     fn axt_verify_ds_proof_rejects_opaque_carrier_before_valid_cache_hit() {
-        crate::test_alias::ensure();
         let dsid = DataSpaceId::new(103);
         let manifest_root = [0xA3; 32];
         let descriptor = axt::AxtDescriptor {
@@ -13914,7 +13899,6 @@ seiyaku PrivilegedBinding {
 
     #[test]
     fn axt_proof_validation_rejects_oversized_payload_before_decode() {
-        crate::test_alias::ensure();
         let dsid = DataSpaceId::new(104);
         let manifest_root = [0xA4; 32];
         let snapshot = make_policy_snapshot(dsid, manifest_root, 5);
@@ -13938,7 +13922,6 @@ seiyaku PrivilegedBinding {
 
     #[test]
     fn axt_verify_ds_proof_rejects_mutated_outer_expiry_on_cache_hit() {
-        crate::test_alias::ensure();
         let dsid = DataSpaceId::new(31);
         let manifest_root = [0x31; 32];
         let descriptor = axt::AxtDescriptor {
@@ -14027,7 +14010,6 @@ seiyaku PrivilegedBinding {
     }
     #[test]
     fn axt_verify_ds_proof_rejects_undeclared_dataspace() {
-        crate::test_alias::ensure();
         let dsid = DataSpaceId::new(3);
         let other = DataSpaceId::new(4);
         let manifest_root = [0xAB; 32];
@@ -14060,7 +14042,6 @@ seiyaku PrivilegedBinding {
     }
     #[test]
     fn axt_verify_ds_proof_records_raw_expiry() {
-        crate::test_alias::ensure();
         let dsid = DataSpaceId::new(8);
         let manifest_root = [0x21; 32];
         let descriptor = axt::AxtDescriptor {
@@ -14096,7 +14077,6 @@ seiyaku PrivilegedBinding {
     }
     #[test]
     fn axt_verify_ds_proof_cache_tracks_slot_and_manifest_root() {
-        crate::test_alias::ensure();
         let dsid = DataSpaceId::new(7);
         let manifest_root = [0x11; 32];
         let descriptor = axt::AxtDescriptor {
@@ -14161,7 +14141,6 @@ seiyaku PrivilegedBinding {
     }
     #[test]
     fn axt_touch_rejects_manifest_prefix_violation_with_context() {
-        crate::test_alias::ensure();
         let dsid = DataSpaceId::new(5);
         let manifest_root = [0x22; 32];
         let descriptor = axt::AxtDescriptor {
@@ -14200,7 +14179,6 @@ seiyaku PrivilegedBinding {
     }
     #[test]
     fn axt_use_asset_handle_rejects_zero_handle_era() {
-        crate::test_alias::ensure();
         let dsid = DataSpaceId::new(12);
         let manifest_root = [0x44; 32];
         let descriptor = axt::AxtDescriptor {
@@ -14290,7 +14268,6 @@ seiyaku PrivilegedBinding {
     }
     #[test]
     fn axt_use_asset_handle_rejects_invalid_manifest_root_length() {
-        crate::test_alias::ensure();
         let dsid = DataSpaceId::new(13);
         let manifest_root = [0x45; 32];
         let descriptor = axt::AxtDescriptor {
@@ -14377,7 +14354,6 @@ seiyaku PrivilegedBinding {
     }
     #[test]
     fn axt_use_asset_handle_rejects_invalid_binding_length() {
-        crate::test_alias::ensure();
         let dsid = DataSpaceId::new(14);
         let manifest_root = [0x46; 32];
         let descriptor = axt::AxtDescriptor {
@@ -14464,7 +14440,6 @@ seiyaku PrivilegedBinding {
     #[cfg(feature = "telemetry")]
     #[test]
     fn axt_proof_cache_metrics_refresh_on_manifest_rotation() {
-        crate::test_alias::ensure();
         let dsid = DataSpaceId::new(27);
         let manifest_root = [0x10; 32];
         let descriptor = axt::AxtDescriptor {
@@ -14536,7 +14511,6 @@ seiyaku PrivilegedBinding {
     #[cfg(feature = "telemetry")]
     #[test]
     fn axt_handle_reject_hints_exposed_via_telemetry() {
-        crate::test_alias::ensure();
         let dsid = DataSpaceId::new(31);
         let manifest_root = [0xCC; 32];
         let descriptor = axt::AxtDescriptor {
@@ -14630,7 +14604,6 @@ seiyaku PrivilegedBinding {
     }
     #[test]
     fn axt_reject_context_refreshes_minima_after_policy_update() {
-        crate::test_alias::ensure();
         let dsid = DataSpaceId::new(37);
         let manifest_root = [0xDD; 32];
         let descriptor = axt::AxtDescriptor {
@@ -14725,7 +14698,6 @@ seiyaku PrivilegedBinding {
     }
     #[test]
     fn axt_verify_ds_proof_rejects_expired_and_supports_clear() {
-        crate::test_alias::ensure();
         let dsid = DataSpaceId::new(11);
         let manifest_root = [0x33; 32];
         let descriptor = axt::AxtDescriptor {
@@ -14777,7 +14749,6 @@ seiyaku PrivilegedBinding {
     }
     #[test]
     fn axt_proof_cache_reused_across_envelopes_in_same_slot() {
-        crate::test_alias::ensure();
         let dsid = DataSpaceId::new(12);
         let manifest_root = [0x44; 32];
         let snapshot = make_policy_snapshot(dsid, manifest_root, 20);
@@ -14807,7 +14778,6 @@ seiyaku PrivilegedBinding {
     }
     #[test]
     fn axt_timing_change_without_snapshot_clears_defensive_cache_state() {
-        crate::test_alias::ensure();
         let dsid = DataSpaceId::new(22);
         let descriptor = axt::AxtDescriptor {
             dsids: vec![dsid],
@@ -14840,7 +14810,6 @@ seiyaku PrivilegedBinding {
     }
     #[test]
     fn rejected_axt_timing_change_is_fully_non_mutating() {
-        crate::test_alias::ensure();
         let dsid = DataSpaceId::new(23);
         let mut snapshot = make_policy_snapshot(dsid, [0x23; 32], 20);
         let expected_version = snapshot.version;
@@ -14889,7 +14858,6 @@ seiyaku PrivilegedBinding {
     }
     #[test]
     fn axt_proof_cache_snapshot_exposes_entries() {
-        crate::test_alias::ensure();
         let dsid = DataSpaceId::new(21);
         let manifest_root = [0x77; 32];
         let snapshot = make_policy_snapshot(dsid, manifest_root, 15);
@@ -14921,7 +14889,6 @@ seiyaku PrivilegedBinding {
     }
     #[test]
     fn axt_proof_cache_evicted_when_slot_changes_between_envelopes() {
-        crate::test_alias::ensure();
         let dsid = DataSpaceId::new(13);
         let manifest_root = [0x55; 32];
         let snapshot = make_policy_snapshot(dsid, manifest_root, 30);
@@ -14950,7 +14917,6 @@ seiyaku PrivilegedBinding {
     }
     #[test]
     fn axt_proof_cache_respects_ttl_slots() {
-        crate::test_alias::ensure();
         let dsid = DataSpaceId::new(14);
         let manifest_root = [0x66; 32];
         let snapshot = make_policy_snapshot(dsid, manifest_root, 5);
@@ -14992,7 +14958,6 @@ seiyaku PrivilegedBinding {
     include!("host/axt_persistent_budget_tests.rs");
     #[test]
     fn axt_replay_ledger_from_state_rejects_reuse() {
-        crate::test_alias::ensure();
         let dsid = DataSpaceId::new(21);
         let lane = LaneId::new(2);
         let manifest_root = [0x99; 32];
@@ -15094,7 +15059,6 @@ seiyaku PrivilegedBinding {
     }
     #[test]
     fn axt_replay_ledger_scopes_identical_handle_tuple_by_dataspace() {
-        crate::test_alias::ensure();
         let ds_a = DataSpaceId::new(31);
         let ds_b = DataSpaceId::new(32);
         let lane = LaneId::new(1);
@@ -15197,7 +15161,6 @@ seiyaku PrivilegedBinding {
     }
     #[test]
     fn axt_replay_ledger_records_retention_floor() {
-        crate::test_alias::ensure();
         let dsid = DataSpaceId::new(23);
         let lane = LaneId::new(1);
         let manifest_root = [0x44; 32];
@@ -15283,7 +15246,6 @@ seiyaku PrivilegedBinding {
     }
     #[test]
     fn axt_replay_ledger_rejects_reuse_with_short_retain_until_slot() {
-        crate::test_alias::ensure();
         let dsid = DataSpaceId::new(24);
         let lane = LaneId::new(1);
         let manifest_root = [0x33; 32];
@@ -15377,7 +15339,6 @@ seiyaku PrivilegedBinding {
     }
     #[test]
     fn axt_replay_ledger_prunes_stale_entries_on_hydrate() {
-        crate::test_alias::ensure();
         let dsid = DataSpaceId::new(22);
         let lane = LaneId::new(3);
         let manifest_root = [0x77; 32];
@@ -16127,7 +16088,6 @@ seiyaku PrivilegedBinding {
     }
     #[test]
     fn register_peer_syscall_queues_instruction() {
-        crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(1_000);
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority);
@@ -16144,7 +16104,6 @@ seiyaku PrivilegedBinding {
     }
     #[test]
     fn register_peer_syscall_accepts_object_peer() {
-        crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(1_000);
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority);
@@ -16174,7 +16133,6 @@ seiyaku PrivilegedBinding {
     }
     #[test]
     fn unregister_peer_syscall_queues_instruction() {
-        crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(1_000);
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority);
@@ -16310,7 +16268,6 @@ seiyaku PrivilegedBinding {
     }
     #[test]
     fn create_role_syscall_queues_instruction_alias() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         assert_create_role_syscall_queues_instruction(authority);
     }
@@ -16407,7 +16364,6 @@ seiyaku PrivilegedBinding {
     }
     #[test]
     fn add_signatory_syscall_queues_instruction() {
-        crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(1_000);
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority);
@@ -16426,7 +16382,6 @@ seiyaku PrivilegedBinding {
     }
     #[test]
     fn remove_signatory_syscall_queues_instruction() {
-        crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(1_000);
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority);
@@ -16445,7 +16400,6 @@ seiyaku PrivilegedBinding {
     }
     #[test]
     fn remove_signatory_syscall_accepts_object_public_key() {
-        crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(1_000);
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority);
@@ -16469,7 +16423,6 @@ seiyaku PrivilegedBinding {
     }
     #[test]
     fn set_account_quorum_syscall_queues_instruction() {
-        crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(1_000);
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority);
@@ -16514,7 +16467,6 @@ seiyaku PrivilegedBinding {
     }
     #[test]
     fn create_trigger_syscall_object_spec_queues_instruction() {
-        crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(1_000);
         let authority = ALICE_ID.clone();
         let mut host = CoreHost::new(authority.clone());
@@ -16556,7 +16508,6 @@ seiyaku PrivilegedBinding {
     }
     #[test]
     fn create_trigger_syscall_object_spec_defaults_metadata_and_filter() {
-        crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(1_000);
         let authority = ALICE_ID.clone();
         let mut host = CoreHost::new(authority.clone());
@@ -16608,7 +16559,6 @@ seiyaku PrivilegedBinding {
     }
     #[test]
     fn create_trigger_syscall_rejects_mismatched_filter_authority() {
-        crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(1_000);
         let action_authority = ALICE_ID.clone();
         let filter_authority = BOB_ID.clone();
@@ -16740,7 +16690,6 @@ seiyaku PrivilegedBinding {
     }
     #[test]
     fn mint_asset_syscall_returns_metered_gas() {
-        crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(1_000);
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority.clone());
@@ -16831,7 +16780,6 @@ seiyaku PrivilegedBinding {
     }
     #[test]
     fn mint_asset_syscall_accepts_allocated_heap_quantity_tlv() {
-        crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(1_000);
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority.clone());
@@ -16904,7 +16852,6 @@ seiyaku PrivilegedBinding {
     }
     #[test]
     fn unknown_syscall_is_rejected_by_policy() {
-        crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(10_000);
         let mut host = CoreHost::new(fixture_account("alice"));
         // Pick a syscall number outside allowed/known ranges.
@@ -16917,7 +16864,6 @@ seiyaku PrivilegedBinding {
     }
     #[test]
     fn tlv_wrong_type_id_is_rejected() {
-        crate::test_alias::ensure();
         // Build a program that calls SYSCALL_NFT_SET_METADATA and pass a TLV with wrong type for key
         let mut vm = IVM::new(1_000_000);
         let owner: AccountId = fixture_account("alice");
@@ -16979,7 +16925,6 @@ seiyaku PrivilegedBinding {
     }
     #[test]
     fn tlv_wrong_version_or_hash_is_rejected() {
-        crate::test_alias::ensure();
         // Build a TLV with wrong version and with wrong hash and ensure validator rejects
         let mut vm = IVM::new(0);
         let owner: AccountId = fixture_account("alice");
@@ -17934,7 +17879,6 @@ seiyaku OuterCaller {
     #[test]
     #[allow(clippy::too_many_lines)]
     fn subscription_bill_fixed_plan_transfers_and_reschedules() {
-        crate::test_alias::ensure();
         let provider = fixture_account_in_domain("acme", "commerce");
         let subscriber = fixture_account_in_domain("alice", "users");
         let plan_id: AssetDefinitionId =
@@ -18166,7 +18110,6 @@ seiyaku OuterCaller {
     #[test]
     #[allow(clippy::too_many_lines)]
     fn subscription_usage_recording_and_billing_use_nominal_quantities() {
-        crate::test_alias::ensure();
         let provider = fixture_account_in_domain("acme", "commerce");
         let subscriber = fixture_account_in_domain("alice", "users");
         let plan_id: AssetDefinitionId =
@@ -18386,7 +18329,6 @@ seiyaku OuterCaller {
     }
     #[test]
     fn subscription_plan_metadata_rejects_negative_usage_unit_price() {
-        crate::test_alias::ensure();
         let provider = fixture_account_in_domain("acme", "commerce");
         let plan_id: AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -18459,7 +18401,6 @@ seiyaku OuterCaller {
     #[test]
     #[allow(clippy::too_many_lines)]
     fn subscription_bill_failed_reschedules_and_records_invoice() {
-        crate::test_alias::ensure();
         let provider = fixture_account_in_domain("acme", "commerce");
         let subscriber = fixture_account_in_domain("alice", "users");
         let plan_id: AssetDefinitionId =
@@ -18645,7 +18586,6 @@ seiyaku OuterCaller {
     #[test]
     #[allow(clippy::too_many_lines)]
     fn subscription_bill_suspends_after_max_failures() {
-        crate::test_alias::ensure();
         let provider = fixture_account_in_domain("acme", "commerce");
         let subscriber = fixture_account_in_domain("alice", "users");
         let plan_id: AssetDefinitionId =
@@ -19119,7 +19059,6 @@ seiyaku OuterCaller {
     }
     #[test]
     fn by_call_bytes_param_can_coexist_with_canonical_asset_operation() {
-        crate::test_alias::ensure();
         let authority = (*ALICE_ID).clone();
         let source = r#"
 seiyaku BurnWithMemo {
@@ -20077,7 +20016,6 @@ seiyaku OpaqueInstructionSubmission {
     }
     #[test]
     fn get_authority_allocates_in_input_bump() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority.clone());
         let mut vm = IVM::new(1_000_000);
@@ -20095,7 +20033,6 @@ seiyaku OpaqueInstructionSubmission {
     }
     #[test]
     fn get_authority_spills_to_owned_heap_after_input_exhaustion() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority.clone());
         let mut vm = IVM::new(1_000_000);
@@ -20114,7 +20051,6 @@ seiyaku OpaqueInstructionSubmission {
     }
     #[test]
     fn current_time_syscall_uses_block_time() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority);
         host.set_block_time_ms(1_717_171_717_000);
@@ -20129,7 +20065,6 @@ seiyaku OpaqueInstructionSubmission {
     }
     #[test]
     fn resolve_account_alias_syscall_reads_current_alias_binding() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let merchant_account_id: AccountId = fixture_account("bob");
         let replacement_account_id: AccountId = fixture_account("carol");
@@ -20213,7 +20148,6 @@ seiyaku OpaqueInstructionSubmission {
     }
     #[test]
     fn resolve_account_alias_syscall_rejects_invalid_alias_literal_without_trimming() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let domain = Domain::new(fixture_domain_id()).build(&authority);
         let authority_account = Account::new(authority.clone()).build(&authority);
@@ -20244,7 +20178,6 @@ seiyaku OpaqueInstructionSubmission {
     }
     #[test]
     fn resolve_account_alias_syscall_requires_authoritative_alias_binding() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let merchant_account_id: AccountId = fixture_account("bob");
         let domain = Domain::new(fixture_domain_id()).build(&authority);
@@ -20288,7 +20221,6 @@ seiyaku OpaqueInstructionSubmission {
     }
     #[test]
     fn resolve_account_alias_syscall_requires_dataspace_permission() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let merchant_account_id: AccountId = fixture_account("bob");
         let domain = Domain::new(fixture_domain_id()).build(&authority);
@@ -20332,7 +20264,6 @@ seiyaku OpaqueInstructionSubmission {
     }
     #[test]
     fn resolve_account_alias_syscall_reads_current_domain_qualified_binding() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let merchant_account_id: AccountId = fixture_account("bob");
         let replacement_account_id: AccountId = fixture_account("carol");
@@ -20460,7 +20391,6 @@ seiyaku OpaqueInstructionSubmission {
     }
     #[test]
     fn resolve_account_alias_syscall_requires_domain_permission_for_domain_qualified_alias() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let merchant_account_id: AccountId = fixture_account("bob");
         let payment_asset_definition_id: AssetDefinitionId = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
@@ -20567,7 +20497,6 @@ seiyaku OpaqueInstructionSubmission {
     }
     #[test]
     fn resolve_account_alias_syscall_accepts_domain_permission_without_dataspace_permission() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let merchant_account_id: AccountId = fixture_account("bob");
         let payment_asset_definition_id: AssetDefinitionId = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
@@ -20676,7 +20605,6 @@ seiyaku OpaqueInstructionSubmission {
     }
     #[test]
     fn call_contract_syscall_returns_schema_bound_typed_norito_record() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let state = contract_test_state(&authority);
         let caller_contract = install_contract(
@@ -20774,7 +20702,6 @@ seiyaku Callee {
     }
     #[test]
     fn call_contract_quantity2_returns_exact_quantity() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let state = contract_test_state(&authority);
         let caller_contract = install_contract(
@@ -20826,7 +20753,6 @@ seiyaku Callee {
     }
     #[test]
     fn call_contract_quantity2_rejects_wrong_argument_schema_without_output() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let state = contract_test_state(&authority);
         let caller_contract = install_contract(
@@ -20873,7 +20799,6 @@ seiyaku Callee {
     }
     #[test]
     fn call_contract_quantity2_rolls_back_state_on_wrong_return_schema() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let state = contract_test_state(&authority);
         let caller_contract = install_contract(
@@ -21146,7 +21071,6 @@ seiyaku Callee {
     }
     #[test]
     fn repeated_nested_calls_reuse_prepared_artifact_and_warmed_runtime() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let state = contract_test_state(&authority);
         let caller_contract = install_contract(
@@ -21227,7 +21151,6 @@ seiyaku Callee {
     }
     #[test]
     fn live_contract_view_never_falls_back_to_a_stale_binding_snapshot() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let populated_state = contract_test_state(&authority);
         let contract = install_contract(
@@ -21262,7 +21185,6 @@ seiyaku Callee {
     include!("host/nested_contract_state_and_rollback_tests.rs");
     #[test]
     fn dispatched_call_contract_spends_reserved_gas_and_returns_output() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let state = contract_test_state(&authority);
         let caller_contract = install_contract(
@@ -21321,7 +21243,6 @@ seiyaku Callee {
     }
     #[test]
     fn dispatched_call_contract_unaffordable_child_leaks_no_output_or_state() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let state = contract_test_state(&authority);
         let caller_contract = install_contract(
@@ -21390,7 +21311,6 @@ seiyaku Callee {
     }
     #[test]
     fn dispatched_call_contract_child_failure_rolls_back_and_charges_child_gas() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let state = contract_test_state(&authority);
         let caller_contract = install_contract(
@@ -21463,7 +21383,6 @@ seiyaku Callee {
     }
     #[test]
     fn call_contract_syscall_enforces_callee_entrypoint_permission() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let state = contract_test_state(&authority);
         let caller_contract = install_contract(
@@ -21528,7 +21447,6 @@ seiyaku Callee {
     }
     #[test]
     fn call_contract_syscall_rejects_runtime_managed_lifecycle_entrypoints() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let state = contract_test_state(&authority);
         let caller_contract = install_contract(
@@ -21572,7 +21490,6 @@ seiyaku Lifecycle {
     }
     #[test]
     fn call_contract_syscall_rejects_other_entrypoints_while_hajimari_is_pending() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let state = contract_test_state(&authority);
         let caller_contract = install_contract(
@@ -21616,7 +21533,6 @@ seiyaku AwaitingHajimari {
     }
     #[test]
     fn call_contract_syscall_sets_nested_authority_to_caller_contract_subject() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let state = contract_test_state(&authority);
         let caller_contract = install_contract(
@@ -21665,7 +21581,6 @@ seiyaku Callee {
     }
     #[test]
     fn call_contract_typed_views_return_exact_norito_values() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let state = contract_test_state(&authority);
         let asset_definition = AssetDefinitionId::derive_from_components(
@@ -21724,7 +21639,6 @@ seiyaku Callee {
     }
     #[test]
     fn call_contract_typed_view_preserves_account_identity_without_coercion() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let mismatched_account: AccountId = fixture_account("bob");
         let state = contract_test_state(&authority);
@@ -21761,7 +21675,6 @@ seiyaku Callee {
     }
     #[test]
     fn registered_manifest_cannot_relabel_effectful_entrypoint_as_view() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let state = contract_test_state(&authority);
         let caller = install_contract(
@@ -21864,7 +21777,6 @@ seiyaku EffectfulView {
     }
     #[test]
     fn contract_view_of_persisted_account_state_returns_account_tlv() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let state = contract_test_state(&authority);
         let source = r#"
@@ -21940,7 +21852,6 @@ seiyaku StoredAccountView {
     }
     #[test]
     fn call_contract_syscall_unit_return_uses_canonical_stack_policy() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let state = contract_test_state(&authority);
         let caller_contract = install_contract(
@@ -22009,7 +21920,6 @@ seiyaku Callee {
     }
     #[test]
     fn call_contract_syscall_rolls_back_failed_nested_state_mutation() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let state = contract_test_state(&authority);
         let caller_contract = install_contract(
@@ -22063,7 +21973,6 @@ seiyaku Callee {
     }
     #[test]
     fn call_contract_syscall_rolls_back_when_return_encoding_fails() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let state = contract_test_state(&authority);
         let caller_contract = install_contract(
@@ -22183,7 +22092,6 @@ seiyaku Callee {
     }
     #[test]
     fn call_contract_syscall_accepts_only_exact_public_norito_argument_records() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let state = contract_test_state(&authority);
         let caller_contract = install_contract(
@@ -22354,7 +22262,6 @@ seiyaku Callee {
     }
     #[test]
     fn call_contract_syscall_checks_affordability_before_state_lookup_or_decode() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let contract_address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
@@ -22414,7 +22321,6 @@ seiyaku Callee {
     }
     #[test]
     fn call_contract_syscall_preserves_root_and_nested_transfer_authorities_in_artifacts() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
             fixture_domain_id(),
@@ -23190,7 +23096,6 @@ seiyaku Callee {
         }
     }
     fn run_alias_contract_case(case_index: usize) {
-        crate::test_alias::ensure();
         let case = &ALIAS_CONTRACT_CASES.cases[case_index];
         assert_eq!(case.id, ALIAS_CONTRACT_CASE_IDS[case_index]);
         let fixture = build_alias_contract_case_state(case);
@@ -23290,7 +23195,6 @@ seiyaku Callee {
     }
     #[test]
     fn host_execution_artifacts_apply_queued_uses_queued_authority_snapshot() {
-        crate::test_alias::ensure();
         let outer_authority = fixture_account("alice");
         let nested_authority = fixture_account("bob");
         let recipient = fixture_account("carol");
@@ -23371,7 +23275,6 @@ seiyaku Callee {
     }
     #[test]
     fn host_execution_artifacts_reject_foreign_durable_path_before_any_write() {
-        crate::test_alias::ensure();
         let authority = fixture_account("alice");
         let state = contract_test_state(&authority);
         let contract_address = install_contract(
@@ -23435,7 +23338,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn identical_queued_artifacts_do_not_reuse_call_hash_across_committed_fragments() {
-        crate::test_alias::ensure();
         let authority = fixture_account("alice");
         let queued = vec![QueuedInstruction {
             instruction: InstructionBox::from(Log::new(
@@ -23488,7 +23390,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn backend_label_prefers_stored_vk_backend_and_prefix() {
-        crate::test_alias::ensure();
         let id = VerifyingKeyId::new("halo2/ipa", "test_circuit");
         let mut rec = VerifyingKeyRecord::new_with_owner(
             1,
@@ -23514,7 +23415,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn set_verifying_keys_accepts_keyless_record_backend_from_registry_key() {
-        crate::test_alias::ensure();
         let mut host = CoreHost::new(fixture_account("alice"));
         let commitment = [0x77; 32];
         let mut rec = active_vk_record(
@@ -23536,7 +23436,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn zk_snapshot_hydration_separates_exact_native_kagemusha_v4_pairs_from_open_verify() {
-        crate::test_alias::ensure();
         for cancelled in [false, true] {
             let (world, native_ids, generic_id, generic_commitment) =
                 world_with_native_kagemusha_v4_pair_and_generic_vk(cancelled);
@@ -23618,7 +23517,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn zk_snapshot_hydration_rejects_malformed_kagemusha_v4_near_matches() {
-        crate::test_alias::ensure();
         for corruption in ["metadata", "missing_ep", "misindexed"] {
             let (mut world, native_ids, generic_id, _) =
                 world_with_native_kagemusha_v4_pair_and_generic_vk(false);
@@ -23678,12 +23576,11 @@ seiyaku DurableOwner {
     }
     #[test]
     fn zk_snapshot_hydration_does_not_exempt_allowed_same_backend_lookalike() {
-        crate::test_alias::ensure();
         let backend = iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4;
         let lookalike_id = VerifyingKeyId::new(
             backend,
             format!(
-                "v5-{}-not-a-release-digest",
+                "unrelated-{}-not-a-release-digest",
                 iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4
             ),
         );
@@ -23725,82 +23622,7 @@ seiyaku DurableOwner {
         assert!(host.prepared_verifying_keys.is_empty());
     }
     #[test]
-    fn zk_snapshot_hydration_rejects_v5_release_records_before_generic_hydration() {
-        crate::test_alias::ensure();
-        let manifest_sha256 = [0xB5; 32];
-        let owner =
-            iroha_data_model::offline::kagemusha_recursive_spend_verifier_owner_manifest_id_v5(
-                manifest_sha256,
-            );
-        let mut world = World::new();
-        for (parity, circuit_id, curve, key_byte) in [
-            (
-                iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq,
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFIER_CURVE_V4,
-                0x91,
-            ),
-            (
-                iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEp,
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFIER_CURVE_V4,
-                0x92,
-            ),
-        ] {
-            let id = iroha_data_model::offline::kagemusha_recursive_spend_verifier_key_id_v5(
-                parity,
-                manifest_sha256,
-            );
-            let key = VerifyingKeyBox::new(
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4
-                    .to_owned(),
-                vec![key_byte; 32],
-            );
-            let mut record = VerifyingKeyRecord::new_with_owner(
-                8,
-                circuit_id,
-                Some(owner.clone()),
-                iroha_data_model::offline::KAGEMUSHA_VERIFIER_NAMESPACE,
-                BackendTag::Halo2IpaPasta,
-                curve,
-                [key_byte.wrapping_add(1); 32],
-                crate::zk::hash_vk(&key),
-            );
-            record.vk_len = u32::try_from(key.bytes.len()).expect("bounded V5 fixture");
-            record.max_proof_bytes = 65_536;
-            record.activation_height = Some(20);
-            record.key = Some(key);
-            record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
-            world
-                .verifying_keys_by_circuit
-                .insert((record.circuit_id.clone(), record.version), id.clone());
-            world.verifying_keys.insert(id, record);
-        }
-
-        let state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        );
-        let view = state.view();
-        let error = crate::smartcontracts::isi::offline::exact_kagemusha_v4_native_verifier_ids_for_hydration(
-            view.world(),
-        )
-        .expect_err("V5 is protocol-owned but has no production native hydration path");
-        assert!(error.contains("Kagemusha V5 release verifier"));
-
-        let mut host = CoreHost::new(fixture_account("alice"));
-        assert_eq!(
-            host.set_zk_snapshots_from_world(view.world(), &view.zk),
-            Err(ivm::VMError::NoritoInvalid),
-            "exact V5 records must fail before generic OpenVerify hydration"
-        );
-        assert!(host.verifying_keys.is_empty());
-        assert!(host.prepared_verifying_keys.is_empty());
-    }
-    #[test]
     fn load_vk_record_any_namespace_uses_keyless_registry_backend() {
-        crate::test_alias::ensure();
         let mut host = CoreHost::new(fixture_account("alice"));
         let commitment = [0x78; 32];
         let mut rec = active_vk_record(
@@ -23827,7 +23649,6 @@ seiyaku DurableOwner {
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn set_verifying_keys_rejects_malformed_halo2_material_during_rehydration() {
-        crate::test_alias::ensure();
         let backend = "halo2/ipa";
         let mut vk_bytes = b"ZK1\0CID1".to_vec();
         vk_bytes.extend_from_slice(&u32::MAX.to_le_bytes());
@@ -23855,7 +23676,6 @@ seiyaku DurableOwner {
     #[cfg(feature = "zk-stark")]
     #[test]
     fn set_verifying_keys_rejects_weak_stark_parameters_during_rehydration() {
-        crate::test_alias::ensure();
         let backend = "stark/fri/sha256-goldilocks";
         let circuit_id = "stark/fri/sha256-goldilocks:weak-rehydrated-key";
         let payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
@@ -23888,7 +23708,6 @@ seiyaku DurableOwner {
     #[cfg(feature = "zk-halo2-ipa")]
     #[test]
     fn prepared_vk_index_shares_records_and_caches_ipa_metadata() {
-        crate::test_alias::ensure();
         let mut host = CoreHost::new(fixture_account("alice"));
         let backend = "halo2/ipa";
         let vk_bytes = canonical_ivm_execution_vk_bytes();
@@ -23922,7 +23741,6 @@ seiyaku DurableOwner {
     #[cfg(feature = "zk-halo2-ipa")]
     #[test]
     fn prepared_vk_index_rejects_missing_schedule_duplicates_and_updates_atomically() {
-        crate::test_alias::ensure();
         let backend = "halo2/ipa";
         let circuit_id = crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID;
         let vk_bytes = canonical_ivm_execution_vk_bytes();
@@ -23987,7 +23805,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn set_verifying_keys_rejects_malformed_circuit_ids() {
-        crate::test_alias::ensure();
         let invalid_circuit_ids = [
             ("empty", " "),
             ("uppercase", "halo2/ipa:Transfer"),
@@ -24040,7 +23857,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn set_verifying_keys_rejects_reserved_privacy_ids_during_state_rehydration() {
-        crate::test_alias::ensure();
         let active = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0.canonical_label();
         let retired = PRIVACY_RETIRED_PROTOCOL_LABELS_V1[0];
         for (case, circuit_id) in [("active", active), ("retired", retired)] {
@@ -24105,7 +23921,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn set_verifying_keys_rejects_malformed_registry_ids() {
-        crate::test_alias::ensure();
         const OVERSIZED_VERIFYING_KEY_FIELD_BYTES: usize = 257;
         let invalid_registry_ids = [
             ("blank-backend", " ", "vk"),
@@ -24187,7 +24002,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn set_verifying_keys_rejects_registry_backend_tag_mismatches() {
-        crate::test_alias::ensure();
         for (label, registry_backend, record_backend, circuit_id) in [
             (
                 "stark-registry-halo2-record",
@@ -24223,7 +24037,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn set_verifying_keys_rejects_zero_commitment_or_schema_hash() {
-        crate::test_alias::ensure();
         for (label, zero_commitment, zero_schema_hash, keyless) in [
             ("keyless-zero-commitment", true, false, true),
             ("stored-key-zero-schema-hash", false, true, false),
@@ -24262,7 +24075,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn set_verifying_keys_rejects_malformed_record_metadata() {
-        crate::test_alias::ensure();
         #[derive(Clone, Copy)]
         enum Field {
             Namespace,
@@ -24394,7 +24206,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn set_verifying_keys_rejects_trusted_setup_backend_labels() {
-        crate::test_alias::ensure();
         for backend in [
             "halo2/kzg",
             "halo2/ipa:KZG",
@@ -24423,7 +24234,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn set_verifying_keys_rejects_developer_only_backend_labels() {
-        crate::test_alias::ensure();
         for backend in [
             "debug/halo2/ipa",
             "halo2/debug",
@@ -24454,7 +24264,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn set_verifying_keys_rejects_protocol_names_as_backend_labels() {
-        crate::test_alias::ensure();
         for backend in [
             "halo2/ipa/orchard",
             "halo2/ipa:zcash-orchard",
@@ -24488,7 +24297,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn set_verifying_keys_rejects_readiness_claim_and_unsupported_backend_labels() {
-        crate::test_alias::ensure();
         for (backend, backend_tag) in [
             ("halo2/ipa:production-ready", BackendTag::Halo2IpaPasta),
             ("halo2/ipa:mainnet-complete", BackendTag::Halo2IpaPasta),
@@ -24523,7 +24331,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn state_syscall_works_without_access_logging() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let mut host = local_contract_host(authority);
         let mut vm = IVM::new(10_000);
@@ -24552,7 +24359,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn state_set_budget_exhaustion_traps_without_staging_a_write() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let mut host = local_contract_host(authority);
         host.restrict_output_limits(HostOutputLimits::new(0, u64::MAX));
@@ -24646,7 +24452,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn state_syscalls_cannot_forge_delete_or_disclose_queue_plan_admission_marker() {
-        crate::test_alias::ensure();
         let marker: StatePath = format!(
             "queue_plan_admission_v2_{}_{}",
             "ab".repeat(Hash::LENGTH),
@@ -24722,7 +24527,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn state_syscalls_cannot_forge_delete_or_disclose_merge_lane_frontier() {
-        crate::test_alias::ensure();
         let frontier: StatePath = format!("merge_lane_frontier_v1_7_11_{}", "ab".repeat(32))
             .parse()
             .expect("frontier marker key");
@@ -24896,7 +24700,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn verified_relay_contract_state_is_readable_but_not_generically_mutable() {
-        crate::test_alias::ensure();
         let path: StatePath = format!("pkdeploy_verified_lane_relay_1_2_3_{}", "cd".repeat(32))
             .parse()
             .expect("verified relay state key");
@@ -24961,7 +24764,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn verified_fee_sponsor_state_is_readable_but_not_generically_mutable() {
-        crate::test_alias::ensure();
         let paths = [
             format!(
                 "{VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX}_{}",
@@ -25028,7 +24830,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn contract_address_bytes_roundtrip_through_typed_durable_state() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let contract_address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
@@ -25130,7 +24931,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn production_typed_state_map_scans_and_writes_validate_cntr() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let contract_address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
@@ -25253,7 +25053,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn contract_reads_but_cannot_mutate_consensus_validation_fee_credit() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let contract_address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
@@ -25369,7 +25168,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn encode_decode_int_syscalls_roundtrip() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority);
         let mut vm = IVM::new(10_000);
@@ -25442,7 +25240,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn state_syscall_logs_access_when_enabled() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let contract = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
@@ -25497,7 +25294,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn state_syscall_reads_world_snapshot() {
-        crate::test_alias::ensure();
         let mut world = World::new();
         let path: StatePath = "counter".parse().unwrap();
         let value_bytes = norito::to_bytes(&1_u64).expect("encode state value");
@@ -25526,7 +25322,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn state_syscall_reads_live_query_state_without_eager_snapshot() {
-        crate::test_alias::ensure();
         let mut world = World::new();
         let path: StatePath = "counter".parse().unwrap();
         let value_bytes = norito::to_bytes(&7_u64).expect("encode state value");
@@ -25574,7 +25369,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn state_keys_uses_scoped_ordered_range_amid_large_unrelated_state() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let contract = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
@@ -25691,7 +25485,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn state_has_and_len_borrow_values_amid_large_unrelated_state() {
-        crate::test_alias::ensure();
         let target: StatePath = "target/large".parse().expect("target state key");
         let target_value = vec![0xc3; 512 * 1024];
         let mut world = World::new();
@@ -25740,7 +25533,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn state_get_preflights_gas_before_world_state_output() {
-        crate::test_alias::ensure();
         let mut world = World::new();
         let path: StatePath = "large".parse().expect("state key");
         world
@@ -25796,7 +25588,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn state_syscall_reads_world_snapshot_spills_to_heap_when_input_fills() {
-        crate::test_alias::ensure();
         let mut world = World::new();
         let path: StatePath = "counter".parse().unwrap();
         let expected = vec![0xA5; 96];
@@ -25835,7 +25626,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn state_syscall_unscoped_overlay_overrides_base_value_without_context() {
-        crate::test_alias::ensure();
         let mut world = World::new();
         let path: StatePath = "counter".parse().unwrap();
         world.smart_contract_state.insert(
@@ -25896,7 +25686,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn state_syscall_unscoped_delete_shadows_base_value_without_context() {
-        crate::test_alias::ensure();
         let mut world = World::new();
         let path: StatePath = "counter".parse().unwrap();
         world.smart_contract_state.insert(
@@ -25934,7 +25723,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn generic_ivm_host_rejects_all_durable_state_access() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         for prefix in [
             "sc",
@@ -25999,7 +25787,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn lifecycle_completion_tombstone_tracks_the_physical_marker_read() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let contract_address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
@@ -26043,7 +25830,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn state_syscall_reads_scoped_overlay_spills_to_heap_when_input_fills() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority.clone());
         host.set_local_contract_debug_execution();
@@ -26107,7 +25893,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn state_syscall_ignores_unscoped_value_when_scoped_value_exists() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let path: StatePath = "counter".parse().unwrap();
         let contract = ContractAddress::derive(
@@ -26174,7 +25959,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn state_keys_syscall_strips_scope_and_applies_tombstones() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let contract = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
@@ -26278,7 +26062,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn state_syscall_scoped_overlay_overrides_scoped_base_without_touching_unscoped_state() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let path: StatePath = "counter".parse().unwrap();
         let contract = ContractAddress::derive(
@@ -26369,7 +26152,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn state_syscall_scoped_delete_never_tombstones_unscoped_state() {
-        crate::test_alias::ensure();
         let path: StatePath = "counter".parse().unwrap();
         let authority: AccountId = fixture_account("alice");
         let contract = ContractAddress::derive(
@@ -26432,7 +26214,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn state_syscall_isolates_paths_by_contract_runtime_context() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority.clone());
         host.set_local_contract_debug_execution();
@@ -26550,7 +26331,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn state_syscall_does_not_read_unscoped_key_when_scoped_key_is_missing() {
-        crate::test_alias::ensure();
         let mut world = World::new();
         let path: StatePath = "counter".parse().unwrap();
         let value_bytes = norito::to_bytes(&7_u64).expect("encode unscoped sentinel");
@@ -26594,7 +26374,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn vrf_epoch_seed_syscall_ignores_retired_commit_reveal_snapshot() {
-        crate::test_alias::ensure();
         let mut world = World::new();
         world.vrf_epochs.insert(
             7,
@@ -26702,7 +26481,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn vrf_epoch_seed_syscall_reports_missing_without_fallback() {
-        crate::test_alias::ensure();
         let world = World::new();
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -26740,7 +26518,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn vrf_epoch_seed_quote_matches_malformed_and_wrong_type_error_responses() {
-        crate::test_alias::ensure();
         let host = CoreHost::new(fixture_account("alice"));
         for (pointer_type, payload) in [
             (PointerType::Blob, vec![0x01, 0x02, 0x03]),
@@ -26765,7 +26542,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn zk_vote_tally_syscall_reads_world_snapshot() {
-        crate::test_alias::ensure();
         let mut world = World::new();
         let mut election = ElectionState::default();
         election.options = 3;
@@ -26827,7 +26603,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn zk_vote_tally_syscall_rejects_noncanonical_selector_without_publishing_response() {
-        crate::test_alias::ensure();
         let mut host = CoreHost::new(fixture_account("alice"));
         let mut vm = IVM::new(10_000);
         let request = ivm::zk_verify::VoteGetTallyRequest {
@@ -26848,7 +26623,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn zk_election_snapshot_rejects_invalid_shapes_without_replacement() {
-        crate::test_alias::ensure();
         let mut host = CoreHost::new(fixture_account("alice"));
         let mut valid = BTreeMap::new();
         valid.insert("valid".to_string(), (1, false, vec![0]));
@@ -26927,7 +26701,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn zk_snapshot_hydration_rejects_invalid_election_selector_without_partial_replacement() {
-        crate::test_alias::ensure();
         let mut host = CoreHost::new(fixture_account("alice"));
 
         let prior_asset = AssetDefinitionId::derive_from_components(
@@ -27002,7 +26775,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn zk_snapshot_hydration_enforces_v1_election_boundaries() {
-        crate::test_alias::ensure();
         for (options, tally_len, valid) in [
             (0, 0, false),
             (64, 0, false),
@@ -27076,7 +26848,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn from_state_hydrates_zk_snapshots() {
-        crate::test_alias::ensure();
         let mut world = World::new();
         let mut parameters = world.parameters.block();
         parameters.get_mut().smart_contract.max_output_items =
@@ -27188,7 +26959,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn zk_roots_snapshot_uses_profile_empty_root_and_rejects_drift_atomically() {
-        crate::test_alias::ensure();
         let asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("zkprofile", "universal").expect("domain"),
             "asset".parse().expect("asset name"),
@@ -27242,7 +27012,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn zk_roots_prepare_reserves_gas_at_history_cap_and_maximal_request() {
-        crate::test_alias::ensure();
         let authority = fixture_account("alice");
         let asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("zkquote", "universal").expect("domain"),
@@ -27298,7 +27067,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn state_syscall_flushes_to_wsv() {
-        crate::test_alias::ensure();
         let world = World::new();
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -27558,7 +27326,6 @@ seiyaku DurableOwner {
     include!("host/zk_verification_tests.rs");
     #[test]
     fn input_publish_tlv_is_forwarded_to_default_host() {
-        crate::test_alias::ensure();
         // Build a minimal program that calls INPUT_PUBLISH_TLV and then HALT
         let mut vm = IVM::new(10_000);
         let owner: AccountId = fixture_account("alice");
@@ -27607,7 +27374,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn get_public_input_uses_wsv_registry_and_charges_gas() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let name: Name = "pub_key".parse().unwrap();
         let payload = b"hello".to_vec();
@@ -27650,7 +27416,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn get_public_input_uses_programmatic_setters() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let name: Name = "pub_key".parse().unwrap();
         let payload = b"hello".to_vec();
@@ -27681,7 +27446,6 @@ seiyaku DurableOwner {
     }
     #[test]
     fn get_public_input_exposes_trigger_event_args() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let args = Json::from(norito::json!({
             "kind": "asset_change",
@@ -27724,7 +27488,6 @@ seiyaku DurableOwner {
             EntrypointArgumentRecordV1, EntrypointValueAtomV1,
             MAX_ENTRYPOINT_ARGUMENT_RECORD_BYTES, entrypoint_argument_schema_hash_v1,
         };
-        crate::test_alias::ensure();
         let (program, _) = ivm::KotodamaCompiler::new()
             .compile_source_with_manifest(
                 r#"
@@ -27913,7 +27676,6 @@ seiyaku PreparedBoundaryArguments {
     }
     #[test]
     fn get_public_input_missing_name_is_error() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let name: Name = "missing".parse().unwrap();
         let mut host = CoreHost::new(authority);
@@ -27931,7 +27693,6 @@ seiyaku PreparedBoundaryArguments {
     }
     #[test]
     fn get_public_input_preflights_exact_gas_before_guest_output() {
-        crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let name: Name = "large_public_input".parse().expect("public input name");
         let tlv = make_tlv(PointerType::Blob as u16, &[0xabu8; 128]);

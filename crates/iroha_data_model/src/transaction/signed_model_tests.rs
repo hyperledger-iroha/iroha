@@ -908,18 +908,6 @@ fn assert_privacy_dynamic_dispatch_paths_rejected() {
         "an ordinary trigger instruction has no privacy binding",
     );
 }
-fn assert_opaque_privacy_instruction_rejected() {
-    let submission = draft_privacy_submission();
-    let framed = norito::to_bytes(&submission).expect("framed privacy instruction");
-    let opaque = OpaqueInstruction::from_framed(SubmitPrivacyProofV1::WIRE_ID, &framed)
-        .expect("opaque privacy instruction fixture");
-    let payload = privacy_payload_with_executable(vec![InstructionBox::from(opaque)].into());
-    assert_privacy_binding_rejects_path(
-        &payload,
-        PrivacyTransactionIntentUnsupportedPathV1::OpaqueInstruction,
-        "opaque privacy wire id must fail closed",
-    );
-}
 fn assert_canonical_privacy_intent_kat(
     payload: &TransactionPayload,
     expected: PrivacyTransactionIntentDigestV1,
@@ -1130,10 +1118,9 @@ fn privacy_transaction_intent_requires_one_direct_typed_submission() {
     );
 }
 #[test]
-fn privacy_transaction_intent_rejects_dynamic_and_opaque_paths() {
+fn privacy_transaction_intent_rejects_dynamic_paths() {
     assert_privacy_ivm_paths_rejected();
     assert_privacy_dynamic_dispatch_paths_rejected();
-    assert_opaque_privacy_instruction_rejected();
 }
 #[test]
 fn privacy_transaction_intent_projection_breaks_the_derived_digest_cycle_exactly() {

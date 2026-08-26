@@ -575,7 +575,7 @@ fn strict_init_kura() {
     let temp_dir = TempDir::new().unwrap();
     Kura::open_test_kura_with_configured_lane_config(
         &Config {
-            init_mode: InitMode::Strict,
+            init_mode: iroha_config::kura::InitMode::Strict,
             store_dir: iroha_config::base::WithOrigin::inline(
                 temp_dir.path().to_str().unwrap().into(),
             ),
@@ -612,7 +612,7 @@ fn kura_not_miss_replace_block() {
     {
         let (kura, block_count) = Kura::open_test_kura_with_configured_lane_config(
             &Config {
-                init_mode: InitMode::Strict,
+                init_mode: iroha_config::kura::InitMode::Strict,
                 store_dir: iroha_config::base::WithOrigin::inline(
                     temp_dir.path().to_str().unwrap().into(),
                 ),
@@ -653,7 +653,7 @@ fn get_block_caches_loaded_block() {
     populate_store(&temp_dir, block_count);
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
         &Config {
-            init_mode: InitMode::Strict,
+            init_mode: iroha_config::kura::InitMode::Strict,
             store_dir: iroha_config::base::WithOrigin::inline(
                 temp_dir.path().to_str().unwrap().into(),
             ),
@@ -700,7 +700,7 @@ fn transaction_index_completes_after_lazy_loading_reopened_blocks() {
         .expect("canonical test block has a transaction");
     let (kura, block_count) = Kura::open_test_kura_with_configured_lane_config(
         &Config {
-            init_mode: InitMode::Strict,
+            init_mode: iroha_config::kura::InitMode::Strict,
             store_dir: iroha_config::base::WithOrigin::inline(
                 temp_dir.path().to_str().unwrap().into(),
             ),
@@ -922,6 +922,7 @@ fn drop_persisted_blocks_keeps_genesis_and_recent_blocks() {
     Kura::drop_persisted_blocks(&mut block_data, 2, 2);
     assert_eq!(
         block_data
+            .as_slice()
             .iter()
             .filter(|(_, block)| block.is_some())
             .count(),
@@ -972,7 +973,7 @@ fn get_block_returns_none_when_data_missing() {
     populate_store(&temp_dir, 3);
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
         &Config {
-            init_mode: InitMode::Strict,
+            init_mode: iroha_config::kura::InitMode::Strict,
             store_dir: iroha_config::base::WithOrigin::inline(
                 temp_dir.path().to_str().unwrap().into(),
             ),
@@ -1003,7 +1004,7 @@ fn eviction_requires_remote_replicas() {
     populate_store(&temp_dir, 4);
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
         &KuraConfig {
-            init_mode: InitMode::Strict,
+            init_mode: iroha_config::kura::InitMode::Strict,
             store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
             max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: NonZeroUsize::new(1).expect("non-zero"),

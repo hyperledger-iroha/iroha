@@ -70,23 +70,10 @@ public final class UaidJsonParser {
                   "uaid portfolio.dataspaces[" + i + "].accounts[" + j + "].assets[" + k + "]");
           final String assetPath =
               "uaid portfolio.dataspaces[" + i + "].accounts[" + j + "].assets[" + k + "]";
-          final Object assetDefinition = pick(asset, "asset_definition_id", "assetDefinitionId");
-          if (assetDefinition != null) {
-            assets.add(
-                new UaidPortfolioAsset(
-                    asString(pick(asset, "asset_id", "assetId"), assetPath + ".asset_id"),
-                    asString(assetDefinition, assetPath + ".asset_definition_id"),
-                    NumericV1.decodeQuantityJsonValue(asset.get("quantity")).toString()));
-            continue;
-          }
           assets.add(
-              UaidPortfolioAsset.legacy(
-                  asString(
-                      asset.get("asset"),
-                      assetPath + ".asset"),
-                  asString(
-                      asset.get("scope"),
-                      assetPath + ".scope"),
+              new UaidPortfolioAsset(
+                  asString(asset.get("asset_id"), assetPath + ".asset_id"),
+                  asString(asset.get("asset_definition_id"), assetPath + ".asset_definition_id"),
                   NumericV1.decodeQuantityJsonValue(asset.get("quantity")).toString()));
         }
         accountsList.add(new UaidPortfolioAccount(accountId, label, assets));
@@ -235,15 +222,6 @@ public final class UaidJsonParser {
       throw new IllegalStateException("optional UAID response string field must be a string");
     }
     return string;
-  }
-
-  private static Object pick(final Map<String, Object> object, final String... keys) {
-    for (final String key : keys) {
-      if (object.containsKey(key)) {
-        return object.get(key);
-      }
-    }
-    return null;
   }
 
   private static long asLong(final Object value, final String path) {

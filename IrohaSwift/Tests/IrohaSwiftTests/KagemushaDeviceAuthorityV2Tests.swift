@@ -36,8 +36,8 @@ final class KagemushaDeviceAuthorityV2Tests: XCTestCase {
         wrongPrefix[0] = 0x06
         var offCurve = Self.generator
         offCurve.replaceSubrange(33..<65, with: Data(repeating: 0, count: 32))
-        let compressed = try P256.Signing.PublicKey(x963Representation: Self.generator)
-            .compressedRepresentation
+        var compressed = Data([0x03]) // The generator's y coordinate is odd.
+        compressed.append(Self.generator[1..<33])
         for malformed in [
             Data(),
             Data(Self.generator.prefix(64)),

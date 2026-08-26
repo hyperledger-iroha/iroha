@@ -7,7 +7,7 @@ use crate::{
     account::AccountId,
     block::{BlockHeader, SignedBlock, proofs::TrustedBlockProofAnchor},
     bridge::BridgeFinalityVerifier,
-    isi::{Instruction as _, offline::RecordKagemushaTairaCanaryV4},
+    isi::offline::RecordKagemushaTairaCanaryV4,
     metadata::Metadata,
     prelude::Name,
     query::CommittedTransaction,

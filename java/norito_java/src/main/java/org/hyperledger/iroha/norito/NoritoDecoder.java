@@ -11,28 +11,18 @@ import java.util.Arrays;
 public final class NoritoDecoder {
   private final ByteBuffer buffer;
   private final int flags;
-  private final int flagsHint;
 
   public NoritoDecoder(byte[] data, int flags) {
-    this(data, flags, NoritoHeader.MINOR_VERSION);
+    this(ByteBuffer.wrap(Arrays.copyOf(data, data.length)), flags);
   }
 
-  public NoritoDecoder(byte[] data, int flags, int flagsHint) {
-    this(ByteBuffer.wrap(Arrays.copyOf(data, data.length)), flags, flagsHint);
-  }
-
-  public NoritoDecoder(ByteBuffer data, int flags, int flagsHint) {
+  public NoritoDecoder(ByteBuffer data, int flags) {
     this.buffer = data.slice().order(ByteOrder.LITTLE_ENDIAN);
     this.flags = flags;
-    this.flagsHint = flagsHint;
   }
 
   public int flags() {
     return flags;
-  }
-
-  public int flagsHint() {
-    return flagsHint;
   }
 
   public boolean compactLenActive() {

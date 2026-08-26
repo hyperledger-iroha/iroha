@@ -3,20 +3,20 @@ import XCTest
 @testable import IrohaSwift
 
 final class ExactCertificateCardinalityTests: XCTestCase {
-    private let hash =
+    private let hashLiteral =
         "hash:8F3BF00C1044E5A52CC20C0B914403FA7A8DCA29636504BA565FE3C1B646EACB#DD4A"
 
     private func payload(signerCount: Int, laneManifest: Any? = NSNull()) throws -> Data {
         let round: [String: Any] = [
-            "context_id": [hash], "height": 1, "view": 0,
+            "context_id": [hashLiteral], "height": 1, "view": 0,
         ]
         let subject: [String: Any] = [
-            "parent_block_hash": NSNull(), "block_hash": hash, "payload_hash": hash,
+            "parent_block_hash": NSNull(), "block_hash": hashLiteral, "payload_hash": hashLiteral,
         ]
         var commitment: [String: Any] = [
-            "parent_state_root": hash,
-            "post_state_root": hash,
-            "ordinary_writes_root": hash,
+            "parent_state_root": hashLiteral,
+            "post_state_root": hashLiteral,
+            "ordinary_writes_root": hashLiteral,
             "topup_anchor_count": 0,
             "native_amx_application_manifest_version": 1,
             "native_amx_application_manifest_root":
@@ -24,7 +24,7 @@ final class ExactCertificateCardinalityTests: XCTestCase {
             "native_amx_application_manifest_count": 0,
             "merge_carrier": NSNull(),
             "executed_block_wire_len": 1,
-            "executed_block_wire_hash": hash,
+            "executed_block_wire_hash": hashLiteral,
         ]
         if let laneManifest { commitment["lane_finality_manifest"] = laneManifest }
         return try JSONSerialization.data(withJSONObject: [
@@ -51,12 +51,12 @@ final class ExactCertificateCardinalityTests: XCTestCase {
             )
         }
         XCTAssertNil(try decode().certificate.executionCommitment.laneFinalityManifest)
-        let lane = ["root": hash, "leaf_count": 1] as [String: Any]
+        let lane = ["root": hashLiteral, "leaf_count": 1] as [String: Any]
         let parsedLane = try decode(lane).certificate.executionCommitment.laneFinalityManifest
-        XCTAssertEqual(parsedLane?.root, hash)
+        XCTAssertEqual(parsedLane?.root, hashLiteral)
         XCTAssertEqual(parsedLane?.leafCount, 1)
-        for invalid: Any? in [nil, ["leaf_count": 1], ["root": hash, "leaf_count": 0],
-                              ["root": hash, "leaf_count": 1025]] {
+        for invalid: Any? in [nil, ["leaf_count": 1], ["root": hashLiteral, "leaf_count": 0],
+                              ["root": hashLiteral, "leaf_count": 1025]] {
             XCTAssertThrowsError(try decode(invalid))
         }
         _ = try JSONDecoder().decode(

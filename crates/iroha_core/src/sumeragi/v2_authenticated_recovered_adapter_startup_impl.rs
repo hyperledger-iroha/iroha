@@ -523,11 +523,18 @@ impl AuthenticatedRecoveredAdapterStartup {
                     ProductionLifecycleOwnerStartupErrorKindV1::BodyStore(error),
                 )
             })?;
-        let (payload_store, recovered_payloads) =
+        let payload_store_open = if body_store.emergency_read_only() {
+            super::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1::open_emergency_fast_read_only(
+                serve_payload_root,
+                verified.context(),
+            )
+        } else {
             super::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1::open(
                 serve_payload_root,
                 verified.context(),
             )
+        };
+        let (payload_store, recovered_payloads) = payload_store_open
             .map_err(|error| {
                 ProductionLifecycleOwnerStartupErrorV1::new(
                     ProductionLifecycleOwnerStartupErrorKindV1::ServeStore(error),
@@ -606,11 +613,18 @@ impl AuthenticatedRecoveredAdapterStartup {
                     ProductionLifecycleOwnerStartupErrorKindV1::BodyStore(error),
                 )
             })?;
-        let (payload_store, recovered_payloads) =
+        let payload_store_open = if body_store.emergency_read_only() {
+            super::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1::open_emergency_fast_read_only(
+                serve_payload_root,
+                verified.context(),
+            )
+        } else {
             super::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1::open(
                 serve_payload_root,
                 verified.context(),
             )
+        };
+        let (payload_store, recovered_payloads) = payload_store_open
             .map_err(|error| {
                 ProductionLifecycleOwnerStartupErrorV1::new(
                     ProductionLifecycleOwnerStartupErrorKindV1::ServeStore(error),

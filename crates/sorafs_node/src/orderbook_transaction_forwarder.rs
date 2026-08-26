@@ -615,9 +615,8 @@ pub struct OrderbookTransactionForwarder {
     store: Option<Arc<AtomicCheckpointStore>>,
 }
 impl OrderbookTransactionForwarder {
-    /// Construct a non-persistent forwarder for focused composition tests.
-    #[cfg(test)]
-    fn in_memory(
+    /// Construct a non-persistent forwarder for emergency-disabled startup and tests.
+    pub(crate) fn in_memory(
         policy: OrderbookTransactionForwarderPolicyV1,
     ) -> Result<Self, OrderbookTransactionForwarderError> {
         policy.validate()?;

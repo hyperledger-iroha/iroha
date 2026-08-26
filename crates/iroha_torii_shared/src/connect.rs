@@ -233,19 +233,11 @@ fn encode_connect_frame_payload(frame: &ConnectFrameV1) -> Result<Vec<u8>, Error
     payload.extend(kind);
     Ok(payload)
 }
-#[inline]
-fn disable_packed_struct_layout_for_connect() {
-    #[cfg(debug_assertions)]
-    {
-        norito::disable_packed_struct_layout();
-    }
-}
 /// Encode a Connect frame without a Norito header using the canonical layout flags.
 ///
 /// # Errors
 /// Returns [`Error`] if serialization fails or the layout flags are invalid.
 pub fn encode_connect_frame_bare(frame: &ConnectFrameV1) -> Result<Vec<u8>, Error> {
-    disable_packed_struct_layout_for_connect();
     encode_connect_frame_payload(frame)
 }
 /// Encode a Connect frame with a Norito header using the canonical layout flags.
@@ -253,7 +245,6 @@ pub fn encode_connect_frame_bare(frame: &ConnectFrameV1) -> Result<Vec<u8>, Erro
 /// # Errors
 /// Returns [`Error`] if serialization fails or header framing cannot be generated.
 pub fn encode_connect_frame_framed(frame: &ConnectFrameV1) -> Result<Vec<u8>, Error> {
-    disable_packed_struct_layout_for_connect();
     let payload = encode_connect_frame_payload(frame)?;
     norito::core::frame_bare_with_header_flags::<ConnectFrameV1>(&payload, CONNECT_LAYOUT_FLAGS)
 }
@@ -262,8 +253,7 @@ pub fn encode_connect_frame_framed(frame: &ConnectFrameV1) -> Result<Vec<u8>, Er
 /// # Errors
 /// Returns [`Error`] if decoding fails or the flags do not match the canonical layout.
 pub fn decode_connect_frame_bare(bytes: &[u8]) -> Result<ConnectFrameV1, Error> {
-    disable_packed_struct_layout_for_connect();
-    let _flags = DecodeFlagsGuard::enter_with_hint(CONNECT_LAYOUT_FLAGS, CONNECT_LAYOUT_FLAGS);
+    let _flags = DecodeFlagsGuard::enter(CONNECT_LAYOUT_FLAGS);
     decode_connect_frame_payload(bytes)
 }
 /// Decode a header-framed Connect frame using the canonical layout flags.
@@ -271,7 +261,6 @@ pub fn decode_connect_frame_bare(bytes: &[u8]) -> Result<ConnectFrameV1, Error> 
 /// # Errors
 /// Returns [`Error`] if decoding fails or the length prefix is inconsistent.
 pub fn decode_connect_frame_framed(bytes: &[u8]) -> Result<ConnectFrameV1, Error> {
-    disable_packed_struct_layout_for_connect();
     let header_flags = *bytes.get(Header::SIZE - 1).ok_or(Error::LengthMismatch)?;
     ensure_connect_layout(header_flags)?;
     let view = norito::core::from_bytes_view(bytes)?;
@@ -285,7 +274,6 @@ pub fn decode_connect_frame_framed(bytes: &[u8]) -> Result<ConnectFrameV1, Error
 /// # Errors
 /// Returns [`Error`] if serialization fails or produces non-Connect layout flags.
 pub fn encode_connect_envelope_framed(envelope: &EnvelopeV1) -> Result<Vec<u8>, Error> {
-    disable_packed_struct_layout_for_connect();
     let _flags = DecodeFlagsGuard::enter(CONNECT_LAYOUT_FLAGS);
     let (payload, flags) = norito::codec::encode_with_header_flags(envelope);
     ensure_connect_layout(flags)?;
@@ -297,7 +285,6 @@ pub fn encode_connect_envelope_framed(envelope: &EnvelopeV1) -> Result<Vec<u8>, 
 /// Returns [`Error`] if the header is missing, advertises non-Connect layout
 /// flags, or the payload does not decode as [`EnvelopeV1`].
 pub fn decode_connect_envelope_framed(bytes: &[u8]) -> Result<EnvelopeV1, Error> {
-    disable_packed_struct_layout_for_connect();
     let header_flags = *bytes.get(Header::SIZE - 1).ok_or(Error::LengthMismatch)?;
     ensure_connect_layout(header_flags)?;
     norito::core::decode_from_bytes::<EnvelopeV1>(bytes)
@@ -476,7 +463,7 @@ fn decode_field_with_len<T: Decode + Encode>(
     label: &'static str,
 ) -> Result<T, Error> {
     let slice = read_slice(body, *offset, len)?;
-    let _flags = DecodeFlagsGuard::enter_with_hint(CONNECT_LAYOUT_FLAGS, CONNECT_LAYOUT_FLAGS);
+    let _flags = DecodeFlagsGuard::enter(CONNECT_LAYOUT_FLAGS);
     let (value, used) = norito::core::decode_field_canonical::<T>(slice)
         .map_err(|err| Error::Message(format!("{label} decode failed: {err}")))?;
     if used != len {
@@ -678,7 +665,7 @@ fn decode_frame_kind_payload(bytes: &[u8]) -> Result<(FrameKind, usize), Error> 
     Err(Error::invalid_tag("FrameKind", tag_u8))
 }
 fn decode_raw_bytes_field(bytes: &[u8]) -> Result<Vec<u8>, Error> {
-    let _flags = DecodeFlagsGuard::enter_with_hint(CONNECT_LAYOUT_FLAGS, CONNECT_LAYOUT_FLAGS);
+    let _flags = DecodeFlagsGuard::enter(CONNECT_LAYOUT_FLAGS);
     let (len, used) = norito::core::read_len_from_slice(bytes)?;
     let end = used.checked_add(len).ok_or(Error::LengthMismatch)?;
     if end != bytes.len() {
@@ -1101,7 +1088,6 @@ mod tests {
     }
     #[test]
     fn frame_kind_roundtrip_header_framed() -> Result<(), Error> {
-        norito::disable_packed_struct_layout();
         let fk = FrameKind::Control(sample_approve_control());
         let payload = encode_frame_kind_payload(&fk)?;
         let framed = norito::core::frame_bare_with_header_flags::<FrameKind>(
@@ -1115,7 +1101,6 @@ mod tests {
     }
     #[test]
     fn frame_kind_roundtrip_payload_decode() {
-        norito::disable_packed_struct_layout();
         let fk = FrameKind::Control(ConnectControlV1::Ping { nonce: 7 });
         let payload = encode_frame_kind_payload(&fk).expect("encode");
         let framed =
@@ -1128,7 +1113,6 @@ mod tests {
     }
     #[test]
     fn connect_control_roundtrip_header() {
-        norito::disable_packed_struct_layout();
         let ctrl = sample_approve_control();
         let payload = encode_connect_control_payload(&ctrl).expect("encode control");
         let framed = norito::core::frame_bare_with_header_flags::<ConnectControlV1>(
@@ -1144,7 +1128,6 @@ mod tests {
     }
     #[test]
     fn array_encoding_layout() {
-        norito::disable_packed_struct_layout();
         let arr = [0xABu8; 32];
         let framed = norito::to_bytes(&arr).expect("encode array");
         let view = norito::core::from_bytes_view(&framed).expect("view");
@@ -1191,7 +1174,7 @@ mod tests {
         let envelope_bytes = encode_connect_envelope_framed(&envelope).expect("encode envelope");
         let packed_flags =
             norito::core::header_flags::PACKED_STRUCT | norito::core::header_flags::COMPACT_LEN;
-        let _ambient = DecodeFlagsGuard::enter_with_hint(packed_flags, packed_flags);
+        let _ambient = DecodeFlagsGuard::enter(packed_flags);
         let before = norito::core::effective_decode_flags();
         assert_eq!(
             decode_connect_frame_framed(&frame_bytes).expect("decode framed"),

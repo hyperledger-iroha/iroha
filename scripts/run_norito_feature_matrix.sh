@@ -4,7 +4,7 @@ set -euo pipefail
 # Local runner for the Norito feature matrix (subset of CI).
 #
 # Usage: scripts/run_norito_feature_matrix.sh [--fast] [--downstream [crate]]
-#  --fast             Run a small subset: layout=both_on only; compact on/off
+#  --fast             Run only the canonical node codec surface
 #  --downstream <cr>  Also run `cargo test -p <cr>` after each Norito run (default: iroha_data_model)
 
 FAST=0
@@ -24,50 +24,24 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-BASE_FEATURES=(derive compression json columnar)
-
-layouts=(both_on no_packed_seq no_packed_struct none)
-compacts=(true false)
+feature_sets=(base-codec,compression node-codec)
 
 if [[ $FAST -eq 1 ]]; then
-  layouts=(both_on)
+  feature_sets=(node-codec)
 fi
 
 run_case() {
-  local layout="$1" compact="$2"
-  local features=("${BASE_FEATURES[@]}")
-  if [[ "$compact" == "true" ]]; then
-    features+=(compact-len)
-  fi
-  case "$layout" in
-    both_on)
-      features+=(packed-seq packed-struct)
-      ;;
-    no_packed_seq)
-      features+=(packed-struct)
-      ;;
-    no_packed_struct)
-      features+=(packed-seq)
-      ;;
-    none)
-      ;;
-    *)
-      echo "Unknown layout: $layout" >&2; return 1;;
-  esac
-  local feature_str
-  feature_str=$(IFS=,; echo "${features[*]}")
-  echo "==> norito: layout=$layout compact=$compact features=[$feature_str]"
-  cargo test -p norito --no-default-features --features "$feature_str" -- --nocapture
+  local features="$1"
+  echo "==> norito: features=[$features]"
+  cargo test -p norito --no-default-features --features "$features" -- --nocapture
   if [[ $DOWNSTREAM -eq 1 ]]; then
     echo "==> downstream smoke: $DOWNSTREAM_CRATE"
     cargo test -p "$DOWNSTREAM_CRATE" -- --nocapture
   fi
 }
 
-for layout in "${layouts[@]}"; do
-  for compact in "${compacts[@]}"; do
-    run_case "$layout" "$compact"
-  done
+for features in "${feature_sets[@]}"; do
+  run_case "$features"
 done
 
 echo "norito feature matrix: OK"

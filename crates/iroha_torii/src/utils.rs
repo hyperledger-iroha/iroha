@@ -1903,6 +1903,7 @@ pub mod extractors {
     }
     impl<T> SupportsNoritoDecode for T
     where
+        T: norito::NoritoSerialize,
         for<'a> T: NoritoDeserialize<'a>,
     {
         fn decode_norito(bytes: &[u8]) -> Result<Self, norito::Error> {

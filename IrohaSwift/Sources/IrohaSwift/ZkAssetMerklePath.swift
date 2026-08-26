@@ -951,9 +951,3 @@ enum StrictJSONDuplicateKeyRejector {
         }
     }
 }
-
-extension ToriiClient: ZkAssetMerklePathProvider {
-    public func getMerklePaths(asset: String, commitments: [Data]) async throws -> [ZkAssetMerklePath] {
-        try await getZkAssetMerklePaths(asset: asset, commitments: commitments)
-    }
-}

@@ -402,7 +402,7 @@ where
         ncore::BinarySequenceLayout::LengthPrefixed
     };
     let plan = ncore::plan_binary_sequence(bytes, flags, layout)?;
-    let _guard = ncore::DecodeFlagsGuard::enter_with_hint(flags, flags);
+    let _guard = ncore::DecodeFlagsGuard::enter(flags);
     let mut items = Vec::new();
     items
         .try_reserve(plan.spans.len())
@@ -712,7 +712,7 @@ where
     if plan.used != decode_bytes.len() {
         return Err(ncore::Error::LengthMismatch);
     }
-    let _guard = ncore::DecodeFlagsGuard::enter_with_hint(flags, flags);
+    let _guard = ncore::DecodeFlagsGuard::enter(flags);
     let mut items = Vec::new();
     items
         .try_reserve(plan.spans.len())
@@ -807,7 +807,7 @@ where
             core::any::type_name::<T>()
         );
     }
-    let guard = ncore::DecodeFlagsGuard::enter_with_hint(flags, flags);
+    let guard = ncore::DecodeFlagsGuard::enter(flags);
     let mut cursor = std::io::Cursor::new(decode_bytes);
     let decode_result = <Vec<T> as norito::codec::Decode>::decode(&mut cursor);
     drop(guard);
@@ -947,7 +947,7 @@ where
     // which expects NRT0 header. The bytes here are raw ConstVec content, not
     // NRT0-framed data.
     let flags = ncore::effective_decode_flags().unwrap_or_else(ncore::default_encode_flags);
-    let guard = ncore::DecodeFlagsGuard::enter_with_hint(flags, flags);
+    let guard = ncore::DecodeFlagsGuard::enter(flags);
     let mut cursor = std::io::Cursor::new(bytes);
     let result = <Vec<T> as norito::codec::Decode>::decode(&mut cursor).ok();
     drop(guard);
@@ -979,7 +979,7 @@ where
                 vec.len()
             );
         }
-        let _guard = ncore::DecodeFlagsGuard::enter_with_hint(flags, flags);
+        let _guard = ncore::DecodeFlagsGuard::enter(flags);
         ncore::write_seq_len(&mut reencoded, vec.len() as u64)?;
         if ncore::packed_seq_enabled_for_flags(flags) {
             #[cfg(debug_assertions)]
@@ -1385,12 +1385,12 @@ mod tests {
         assert_eq!(decoded.as_ref(), bytes.as_slice());
     }
     #[test]
-    fn legacy_unpacked_byte_const_vec_uses_fixed_length_words() {
+    fn fixed_v1_byte_const_vec_uses_fixed_length_words() {
         let _guard = ncore::DecodeFlagsGuard::enter(0);
         let bytes = vec![0xA1_u8, 0xB2];
         let value = ConstVec::from(bytes.clone());
         let mut encoded = Vec::new();
-        ncore::serialize_to_buffer(&value, &mut encoded).expect("serialize legacy const vec");
+        ncore::serialize_to_buffer(&value, &mut encoded).expect("serialize fixed V1 const vec");
         let mut expected = Vec::new();
         expected.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
         for byte in bytes {
@@ -1409,11 +1409,10 @@ mod tests {
         assert_eq!(json, "[3,5,8]");
         assert_eq!(decoded.into_vec(), vec![3, 5, 8]);
     }
-    #[cfg(feature = "compact-len")]
     #[test]
     fn packed_seq_matches_vec_layout() {
         let flags = ncore::header_flags::PACKED_SEQ | ncore::header_flags::COMPACT_LEN;
-        let _guard = ncore::DecodeFlagsGuard::enter_with_hint(flags, flags);
+        let _guard = ncore::DecodeFlagsGuard::enter(flags);
         let items = vec![vec![1u8, 2, 3], vec![4u8, 5]];
         let const_vec = ConstVec::from(items.clone());
         let const_bytes = const_vec.encode();
@@ -1426,9 +1425,6 @@ mod tests {
     }
     #[test]
     fn packed_seq_payload_requires_flags() {
-        if !cfg!(feature = "packed-seq") {
-            return;
-        }
         let value = ConstVec::from(vec![1_u8, 2, 3]);
         let flags = ncore::header_flags::PACKED_SEQ;
         let mut packed = Vec::new();
@@ -1530,11 +1526,11 @@ mod tests {
     #[test]
     fn packed_seq_roundtrip_alignment() {
         let flags = ncore::header_flags::PACKED_SEQ;
-        let encode_guard = ncore::DecodeFlagsGuard::enter_with_hint(flags, flags);
+        let encode_guard = ncore::DecodeFlagsGuard::enter(flags);
         let items = ConstVec::from(vec![1_u128, 2, 3, 4, 5]);
         let encoded = items.encode();
         drop(encode_guard);
-        let decode_guard = ncore::DecodeFlagsGuard::enter_with_hint(flags, flags);
+        let decode_guard = ncore::DecodeFlagsGuard::enter(flags);
         let decoded = norito::codec::decode_adaptive::<ConstVec<u128>>(&encoded)
             .expect("packed seq roundtrip");
         drop(decode_guard);
@@ -1620,7 +1616,7 @@ mod tests {
         let const_vec = ConstVec::from(elements.clone());
         let (mut payload, flags) = codec::encode_with_header_flags(&const_vec);
         {
-            let _guard = ncore::DecodeFlagsGuard::enter_with_hint(flags, flags);
+            let _guard = ncore::DecodeFlagsGuard::enter(flags);
             let (_, hdr) = ncore::read_seq_len_slice(&payload).expect("sequence header");
             payload[..hdr].fill(0);
         }
