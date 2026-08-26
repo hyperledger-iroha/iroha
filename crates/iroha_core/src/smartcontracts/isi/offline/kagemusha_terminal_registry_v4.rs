@@ -12,6 +12,14 @@ use super::{Error, StateTransaction, kagemusha_v2_marker, labeled_invariant};
         not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
     )
 ))]
+use crate::zk::kagemusha_artifact_v4::kagemusha_artifact_descriptor_v4;
+#[cfg(any(
+    test,
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
 use crate::zk::kagemusha_recursion_adapter::{
     KAGEMUSHA_PK_STREAM_AUTHENTICATION_BUFFER_BYTES_V5, kagemusha_artifact_encoding_sizes_v4,
 };
@@ -36,7 +44,6 @@ use crate::zk::{
     kagemusha_artifact_source_v4::{
         KagemushaQualifiedArtifactSourceV4, KagemushaQualifiedParityMetadataV4,
     },
-    kagemusha_artifact_v4::kagemusha_artifact_descriptor_v4,
     kagemusha_v2::KagemushaPastaCycleOpaqueVerifierV4,
 };
 use iroha_crypto::Hash;
@@ -64,6 +71,17 @@ use iroha_data_model::offline::{
     KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_EVIDENCE_BYTES_V1,
     KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROMOTION_BYTES_V4,
 };
+#[cfg(any(
+    test,
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
+use iroha_data_model::offline::{
+    KagemushaPastaCycleArtifactKindV4, KagemushaRecursiveSpendReleaseAttestationV4,
+    KagemushaRecursiveSpendReleasePolicyV1,
+};
 use iroha_data_model::{
     confidential::ConfidentialStatus,
     offline::{
@@ -71,12 +89,10 @@ use iroha_data_model::{
         KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4,
         KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4,
         KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4, KAGEMUSHA_VERIFIER_NAMESPACE,
-        KagemushaAuthenticatedReleaseV4, KagemushaPastaCycleArtifactKindV4,
-        KagemushaPastaCycleArtifactV4, KagemushaPastaCycleParityV1,
-        KagemushaRecursiveSpendArtifactBindingV4, KagemushaRecursiveSpendArtifactManifestV4,
-        KagemushaRecursiveSpendReleaseActivationV4, KagemushaRecursiveSpendReleaseAttestationV4,
-        KagemushaRecursiveSpendReleasePolicyV1, KagemushaStepCircuitParamsV4,
-        kagemusha_recursive_spend_verifier_owner_manifest_id_v4,
+        KagemushaAuthenticatedReleaseV4, KagemushaPastaCycleArtifactV4,
+        KagemushaPastaCycleParityV1, KagemushaRecursiveSpendArtifactBindingV4,
+        KagemushaRecursiveSpendArtifactManifestV4, KagemushaRecursiveSpendReleaseActivationV4,
+        KagemushaStepCircuitParamsV4, kagemusha_recursive_spend_verifier_owner_manifest_id_v4,
         kagemusha_recursive_spend_verifier_public_inputs_schema_hash_v4,
     },
     proof::{VerifyingKeyBox, VerifyingKeyRecord},

@@ -1,5 +1,16 @@
 use super::VerifiedKagemushaV4RuntimeEffectiveConfigV1;
 use iroha_crypto::{Algorithm, KeyPair, PublicKey};
+#[cfg(any(
+    test,
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
+use iroha_data_model::offline::{
+    KAGEMUSHA_V4_VALIDATOR_QUALIFICATION_SEAL_BODY_SCHEMA, KagemushaV4PromotionBindingV1,
+    KagemushaV4RuntimeEffectiveConfigProjectionV1, KagemushaV4ValidatorQualificationSealBodyV1,
+};
 use iroha_data_model::{
     NetworkId,
     isi::SetParameter,
@@ -8,11 +19,9 @@ use iroha_data_model::{
         KAGEMUSHA_V4_CATALOG_REVALIDATION_MAX_CLOCK_SKEW_MS,
         KAGEMUSHA_V4_CATALOG_REVALIDATION_RECEIPT_MAX_BYTES,
         KAGEMUSHA_V4_PROMOTION_RECEIPT_VERSION, KAGEMUSHA_V4_PROMOTION_RESERVATION_MAX_BYTES,
-        KAGEMUSHA_V4_VALIDATOR_QUALIFICATION_MAX_LIFETIME_MS,
-        KAGEMUSHA_V4_VALIDATOR_QUALIFICATION_SEAL_BODY_SCHEMA, KagemushaExactBytesDigestV1,
-        KagemushaV4PromotionBindingV1, KagemushaV4PromotionReservationV1,
-        KagemushaV4RuntimeEffectiveConfigProjectionV1, KagemushaV4ValidatorQualificationSealBodyV1,
-        KagemushaV4ValidatorQualificationSealV1, OfflineDeviceAttestationPolicy,
+        KAGEMUSHA_V4_VALIDATOR_QUALIFICATION_MAX_LIFETIME_MS, KagemushaExactBytesDigestV1,
+        KagemushaV4PromotionReservationV1, KagemushaV4ValidatorQualificationSealV1,
+        OfflineDeviceAttestationPolicy,
     },
     parameter::{
         Parameter,
