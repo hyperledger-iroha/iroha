@@ -2789,7 +2789,8 @@ for (required_filter, retired_filter, label) in (('cargo test -p iroha_data_mode
     'cargo test -p iroha_kagami --bin kagami retired_backing_filter', 'ordered Taira backing')):
     expect_static_mutation(WORKFLOW, required_filter, retired_filter, f'reject a missing {label} workflow filter', (required_filter,))
 for required_filter in KAGEMUSHA_RELEASE_RUST_TEST_FILTERS:
-    expect_static_mutation(WORKFLOW, f'- run: {required_filter}', f'# - run: {required_filter}',
+    workflow_filter = f'"{required_filter}"' if ":: " in required_filter else required_filter
+    expect_static_mutation(WORKFLOW, f'- run: {workflow_filter}', f'# - run: {workflow_filter}',
         'reject a missing Kagemusha release Rust filter', (required_filter,))
 for required_path in KAGEMUSHA_RELEASE_PYTHON_TEST_PATHS:
     expect_static_mutation(WORKFLOW, required_path, f'# {required_path}',
