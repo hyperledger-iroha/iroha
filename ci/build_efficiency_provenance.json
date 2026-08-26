@@ -57,15 +57,15 @@
       "tree": "f7c0a5b889dffc76f5aec821bc35cd20472178d4"
     },
     "signed_lock_anchor": {
-      "commit": "69dc60078fbeb015ad3da0987aaa823373fd0fc4",
+      "commit": "ea6823ce1fe06be1c41b4bf7fc381abb72a719a6",
       "parents": [
-        "6ab89267ff378f45135db8313ad444952d5b7fbe"
+        "4929b4cb21cad00ed0e354d7ad470ff080fd5806"
       ],
       "rust": {
-        "lines": 5312666,
-        "paths": 4851
+        "lines": 5312342,
+        "paths": 4849
       },
-      "tree": "c8af1a5a708132779aecfe5578afbb25ed0838f4"
+      "tree": "878eb1f3eb4285dc76e76728b3e40b1e7fb7f56c"
     },
     "source_budget_baseline": {
       "commit": "cd05eebfc07c9742734b9d684394c4fe89cdb7c5",
@@ -256,11 +256,11 @@
       "kind": "openpgp_v4_issuer_structure"
     },
     "source_file_budget": {
-      "blob": "3d068ae6a28c01c2cfb9e87e05ef691b0b0d40c8",
+      "blob": "4de55358d459938f2cdb8ac6618db416497cb00e",
       "bytes": 13132,
       "mode": "100644",
       "path": "ci/source_file_budget.json",
-      "sha256": "592c9a2e9aae4ee4a2a04683e733138d6777bf8e31f059fca8d8b4dca28c017a"
+      "sha256": "fbdfd61306eba11eea6897a070489bba21945ab75d7a1a149c6e43ccb6b16b4a"
     }
   },
   "source_budget": {

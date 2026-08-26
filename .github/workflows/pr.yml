@@ -188,7 +188,7 @@ jobs:
         run: >-
           python3 -I -S scripts/check_source_file_budget.py
           --base-ref "${{ github.event.pull_request.base.sha }}"
-          --accepted-ref 69dc60078fbeb015ad3da0987aaa823373fd0fc4
+          --accepted-ref ea6823ce1fe06be1c41b4bf7fc381abb72a719a6
       - name: Install pinned router-test dependency
         run: python3 -m pip install --disable-pip-version-check pytest==9.0.3
       - name: Verify exhaustive Rust lane ownership
