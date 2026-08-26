@@ -53,7 +53,7 @@ const PRIVATE_UPLOADED_MODEL_AUTO_ORDER_DOMAIN_V1 =
   PRIVATE_UPLOADED_MODEL_UTF8_ENCODER.encode("sorafs:auto-replication-order:v1");
 const PRIVATE_UPLOADED_MODEL_SUBMISSION_PHASES = new Set([
   "awaiting_output_durability",
-  "output_pin_submitted",
+  "prepare_submitted",
   "receipt_submitted",
   "committed",
 ]);
@@ -87,8 +87,11 @@ const PRIVATE_UPLOADED_MODEL_RECEIPT_FIELDS = [
   "output_recipient",
   "request_commitment",
   "result_commitment",
+  "authorization_claim_block_height",
+  "authorization_claim_epoch",
   "emitted_sequence",
   "emitted_block_height",
+  "emitted_epoch",
 ];
 const PRIVATE_UPLOADED_MODEL_ARTIFACT_FIELDS = [
   "schema_version",
@@ -1311,13 +1314,41 @@ function normalizePrivateUploadedModelReceipt(value, field) {
     receipt.emitted_block_height,
     `${field}.emitted_block_height`,
   );
-  const coordinatesAreZero =
-    privateUnsignedIsZero(emittedSequence) && privateUnsignedIsZero(emittedBlockHeight);
-  const coordinatesArePositive =
-    privateUnsignedIsPositive(emittedSequence) && privateUnsignedIsPositive(emittedBlockHeight);
+  const emittedEpoch = normalizePrivateWireU64(
+    receipt.emitted_epoch,
+    `${field}.emitted_epoch`,
+  );
+  const authorizationClaimBlockHeight = normalizePrivateWireU64(
+    receipt.authorization_claim_block_height,
+    `${field}.authorization_claim_block_height`,
+  );
+  const authorizationClaimEpoch = normalizePrivateWireU64(
+    receipt.authorization_claim_epoch,
+    `${field}.authorization_claim_epoch`,
+  );
+  const ledgerCoordinates = [
+    authorizationClaimBlockHeight,
+    authorizationClaimEpoch,
+    emittedSequence,
+    emittedBlockHeight,
+    emittedEpoch,
+  ];
+  const coordinatesAreZero = ledgerCoordinates.every(privateUnsignedIsZero);
+  const coordinatesArePositive = ledgerCoordinates.every(privateUnsignedIsPositive);
   if (!coordinatesAreZero && !coordinatesArePositive) {
     throw new TypeError(
-      `${field}.emitted_sequence and emitted_block_height must both be zero or both be positive`,
+      `${field} ledger coordinates must all be zero or all be positive`,
+    );
+  }
+  if (
+    coordinatesArePositive
+    && (
+      BigInt(emittedBlockHeight) < BigInt(authorizationClaimBlockHeight)
+      || BigInt(emittedEpoch) < BigInt(authorizationClaimEpoch)
+    )
+  ) {
+    throw new TypeError(
+      `${field} emission coordinates must not precede authorization claim coordinates`,
     );
   }
   const runtimeVersion = normalizePrivateExactString(
@@ -1390,8 +1421,11 @@ function normalizePrivateUploadedModelReceipt(value, field) {
       receipt.result_commitment,
       `${field}.result_commitment`,
     ),
+    authorization_claim_block_height: authorizationClaimBlockHeight,
+    authorization_claim_epoch: authorizationClaimEpoch,
     emitted_sequence: emittedSequence,
     emitted_block_height: emittedBlockHeight,
+    emitted_epoch: emittedEpoch,
   });
 }
 
@@ -1469,7 +1503,7 @@ export function normalizeSoracloudPrivateUploadedModelExecuteResponse(payload) {
         response.transaction_hash,
         `${field}.transaction_hash`,
       );
-  const hashRequired = phase === "output_pin_submitted" || phase === "receipt_submitted";
+  const hashRequired = phase === "prepare_submitted" || phase === "receipt_submitted";
   if (hashRequired !== (transactionHash !== null)) {
     throw new TypeError(
       hashRequired
@@ -1479,8 +1513,11 @@ export function normalizeSoracloudPrivateUploadedModelExecuteResponse(payload) {
   }
   const receipt = normalizePrivateUploadedModelReceipt(response.receipt, `${field}.receipt`);
   const assignedReceipt =
-    privateUnsignedIsPositive(receipt.emitted_sequence)
-    && privateUnsignedIsPositive(receipt.emitted_block_height);
+    privateUnsignedIsPositive(receipt.authorization_claim_block_height)
+    && privateUnsignedIsPositive(receipt.authorization_claim_epoch)
+    && privateUnsignedIsPositive(receipt.emitted_sequence)
+    && privateUnsignedIsPositive(receipt.emitted_block_height)
+    && privateUnsignedIsPositive(receipt.emitted_epoch);
   if ((phase === "committed") !== assignedReceipt) {
     throw new TypeError(
       phase === "committed"

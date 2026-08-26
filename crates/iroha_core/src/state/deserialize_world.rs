@@ -70,6 +70,8 @@ struct SoracloudInrouPersistedStateV1<'a> {
     runtime_receipts: &'a Storage<Hash, SoraRuntimeReceiptV1>,
     private_uploaded_model_execution_receipts:
         &'a Storage<Hash, SoraPrivateUploadedModelExecutionReceiptV1>,
+    private_uploaded_model_execution_claims:
+        &'a Storage<(String, String), SoraPrivateUploadedModelExecutionClaimV1>,
 }
 
 impl SoracloudInrouPersistedStateV1<'_> {
@@ -4030,7 +4032,288 @@ impl SoracloudInrouPersistedStateV1<'_> {
         let decryption_request_records = self.decryption_request_records.view();
         let pin_manifests = self.pin_manifests.view();
         let replication_orders = self.replication_orders.view();
-        let mut consumed_private_decryption_requests = std::collections::BTreeSet::new();
+        let private_execution_claims = self.private_uploaded_model_execution_claims.view();
+        for (key, claim) in private_execution_claims.iter() {
+            claim.validate().map_err(|error| {
+                invalid_soracloud_state(
+                    "soracloud_private_uploaded_model_execution_claims",
+                    error.to_string(),
+                )
+            })?;
+            let receipt = &claim.receipt;
+            let expected_key = (
+                receipt.service_name.as_ref().to_owned(),
+                receipt.decryption_request_id.clone(),
+            );
+            if key != &expected_key {
+                return Err(invalid_soracloud_state(
+                    "soracloud_private_uploaded_model_execution_claims",
+                    "storage key must match the embedded service_name and decryption_request_id",
+                ));
+            }
+
+            let bundle = uploaded_model_bundles
+                .get(&(
+                    receipt.service_name.as_ref().to_owned(),
+                    receipt.model_id.clone(),
+                    receipt.weight_version.clone(),
+                ))
+                .ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_private_uploaded_model_execution_claims",
+                        "prepared private execution must reference an authoritative uploaded-model bundle",
+                    )
+                })?;
+            if bundle.runtime_format
+                != iroha_data_model::soracloud::SoraUploadedModelRuntimeFormatV1::DeterministicQuantizedCpuV1
+                || bundle.sorafs_manifest_digest != receipt.model_manifest_digest
+                || bundle.bundle_root != receipt.model_bundle_root
+                || bundle.decryption_policy_ref != receipt.policy_id
+            {
+                return Err(invalid_soracloud_state(
+                    "soracloud_private_uploaded_model_execution_claims",
+                    "prepared private execution must exactly match its deterministic uploaded-model bundle and policy",
+                ));
+            }
+            let service_revision = service_revisions
+                .get(&(
+                    receipt.service_name.as_ref().to_owned(),
+                    receipt.service_version.clone(),
+                ))
+                .ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_private_uploaded_model_execution_claims",
+                        "prepared private execution must reference a retained service revision",
+                    )
+                })?;
+            if service_revision.service.service_name != receipt.service_name
+                || service_revision.service.service_version != receipt.service_version
+                || !service_revision
+                    .container
+                    .capabilities
+                    .allow_model_inference
+            {
+                return Err(invalid_soracloud_state(
+                    "soracloud_private_uploaded_model_execution_claims",
+                    "prepared private execution service revision must admit uploaded-model inference",
+                ));
+            }
+
+            let release = decryption_request_records.get(key).ok_or_else(|| {
+                invalid_soracloud_state(
+                    "soracloud_private_uploaded_model_execution_claims",
+                    "prepared private execution must reference an authoritative decryption request",
+                )
+            })?;
+            if release.service_name != receipt.service_name
+                || release.service_version != receipt.service_version
+                || release.request.request_id != receipt.decryption_request_id
+                || release.request.policy_name.as_ref() != receipt.policy_id
+                || release.request.ciphertext_commitment != receipt.input_artifact.artifact_hash
+            {
+                return Err(invalid_soracloud_state(
+                    "soracloud_private_uploaded_model_execution_claims",
+                    "prepared private execution must exactly match its committed decryption authorization",
+                ));
+            }
+            let release_event = service_audit_events.get(&release.sequence).ok_or_else(|| {
+                invalid_soracloud_state(
+                    "soracloud_private_uploaded_model_execution_claims",
+                    "prepared private execution decryption authorization must retain its exact audit event",
+                )
+            })?;
+            let release_expires_at_height = release_event
+                .block_height
+                .checked_add(u64::from(release.request.requested_ttl_blocks.get()))
+                .ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_private_uploaded_model_execution_claims",
+                        "prepared private execution authorization expiry height overflows",
+                    )
+                })?;
+            if claim.claimed_block_height < release_event.block_height
+                || claim.claimed_block_height >= release_expires_at_height
+            {
+                return Err(invalid_soracloud_state(
+                    "soracloud_private_uploaded_model_execution_claims",
+                    "claim block height must fall inside its decryption-authorization window",
+                ));
+            }
+            let release_epoch = release_event.block_timestamp_ms / 1_000;
+            if claim.claimed_epoch < release_epoch
+                || claim.claimed_block_height == release_event.block_height
+                    && claim.claimed_epoch != release_epoch
+            {
+                return Err(invalid_soracloud_state(
+                    "soracloud_private_uploaded_model_execution_claims",
+                    "claim epoch must not precede its decryption authorization and must equal the release epoch when both occur in the same block",
+                ));
+            }
+
+            let require_exact_pin =
+                |artifact: &iroha_data_model::soracloud::SoraPrivateModelArtifactRefV1| {
+                    let pin = pin_manifests
+                        .get(&artifact.sorafs_manifest_digest)
+                        .ok_or_else(|| {
+                            invalid_soracloud_state(
+                                "soracloud_private_uploaded_model_execution_claims",
+                                format!(
+                                    "prepared private `{}` artifact must reference a retained SoraFS pin record",
+                                    artifact.artifact_role
+                                ),
+                            )
+                        })?;
+                    if pin.digest != artifact.sorafs_manifest_digest
+                        || pin.root_cid != artifact.sorafs_root_cid
+                        || pin.content_length != artifact.ciphertext_bytes
+                        || pin.submitted_epoch > claim.claimed_epoch
+                    {
+                        return Err(invalid_soracloud_state(
+                            "soracloud_private_uploaded_model_execution_claims",
+                            format!(
+                                "prepared private `{}` artifact must exactly match its SoraFS pin record submitted by the claim epoch",
+                                artifact.artifact_role
+                            ),
+                        ));
+                    }
+                    Ok(pin)
+                };
+            let dependency_pin_was_live_at_claim = |pin: &PinManifestRecord| {
+                pin.approved_epoch
+                    .is_some_and(|approved_epoch| approved_epoch <= claim.claimed_epoch)
+                    && pin.policy.retention_epoch > claim.claimed_epoch
+                    && match pin.status {
+                        PinStatus::Approved(approved_epoch) => {
+                            approved_epoch <= claim.claimed_epoch
+                        }
+                        PinStatus::Retired(retired_epoch) => {
+                            // Lifecycle epochs have one-second resolution. A claim followed by
+                            // retirement later in the same block/second is reachable, so equality
+                            // cannot prove that retirement preceded the claim.
+                            retired_epoch >= claim.claimed_epoch
+                        }
+                        PinStatus::Pending => false,
+                    }
+            };
+            let model_pin = pin_manifests
+                .get(&bundle.sorafs_manifest_digest)
+                .ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_private_uploaded_model_execution_claims",
+                        "prepared private execution model bundle must reference a retained SoraFS pin record",
+                    )
+                })?;
+            if model_pin.digest != bundle.sorafs_manifest_digest
+                || model_pin.content_length != bundle.ciphertext_bytes
+                || model_pin.submitted_epoch > claim.claimed_epoch
+                || !dependency_pin_was_live_at_claim(model_pin)
+            {
+                return Err(invalid_soracloud_state(
+                    "soracloud_private_uploaded_model_execution_claims",
+                    "prepared private execution model pin does not prove it was approved, live, and retained at the claim epoch",
+                ));
+            }
+            let input_pin = require_exact_pin(&receipt.input_artifact)?;
+            if !dependency_pin_was_live_at_claim(input_pin) {
+                return Err(invalid_soracloud_state(
+                    "soracloud_private_uploaded_model_execution_claims",
+                    "prepared private input pin does not prove it was approved, live, and retained at the claim epoch",
+                ));
+            }
+            let output_pin = require_exact_pin(&receipt.output_artifact)?;
+            if output_pin.submitted_by != receipt.attesting_validator.validator_account_id
+                || !dependency_pin_was_live_at_claim(output_pin)
+            {
+                return Err(invalid_soracloud_state(
+                    "soracloud_private_uploaded_model_execution_claims",
+                    "prepared private output pin was not attester-owned, approved, live, and retained at the claim epoch",
+                ));
+            }
+            let output_order = replication_orders
+                .get(&receipt.output_replication_order_id)
+                .ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_private_uploaded_model_execution_claims",
+                        "prepared private output pin is missing its deterministic automatic replication order",
+                    )
+                })?;
+            let output_order_label = hex::encode(output_order.order_id.as_bytes());
+            if output_order.issued_epoch > claim.claimed_epoch {
+                return Err(invalid_soracloud_state(
+                    "soracloud_private_uploaded_model_execution_claims",
+                    "prepared private output automatic replication order was issued after the claim epoch",
+                ));
+            }
+            match output_order.status {
+                ReplicationOrderStatus::Pending
+                    if claim.claimed_epoch > output_order.deadline_epoch =>
+                {
+                    return Err(invalid_soracloud_state(
+                        "soracloud_private_uploaded_model_execution_claims",
+                        "prepared private output automatic replication order was already overdue at the claim epoch",
+                    ));
+                }
+                ReplicationOrderStatus::Expired(epoch)
+                | ReplicationOrderStatus::Cancelled(epoch)
+                    if epoch < claim.claimed_epoch =>
+                {
+                    return Err(invalid_soracloud_state(
+                        "soracloud_private_uploaded_model_execution_claims",
+                        "prepared private output automatic replication order was already terminal before the claim epoch",
+                    ));
+                }
+                ReplicationOrderStatus::Pending
+                | ReplicationOrderStatus::Completed(_)
+                | ReplicationOrderStatus::Expired(_)
+                | ReplicationOrderStatus::Cancelled(_) => {}
+            }
+            crate::smartcontracts::isi::sorafs::validate_stored_automatic_replication_order(
+                output_pin,
+                output_order,
+                &output_order_label,
+            )
+            .map_err(|error| {
+                invalid_soracloud_state(
+                    "soracloud_private_uploaded_model_execution_claims",
+                    format!("prepared private output automatic replication order is invalid: {error}"),
+                )
+            })?;
+            let minimum_order_retention_epoch = output_order
+                .deadline_epoch
+                .checked_add(
+                    iroha_data_model::soracloud::SORACLOUD_PRIVATE_OUTPUT_MIN_RETENTION_SECS_V1,
+                )
+                .ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_private_uploaded_model_execution_claims",
+                        "prepared private output replication-order recovery horizon overflows",
+                    )
+                })?;
+            if output_pin.policy.retention_epoch < minimum_order_retention_epoch {
+                return Err(invalid_soracloud_state(
+                    "soracloud_private_uploaded_model_execution_claims",
+                    "prepared private output pin does not retain the replication-order deadline plus receipt-recovery floor",
+                ));
+            }
+            let minimum_retention_epoch = claim
+                .claimed_epoch
+                .checked_add(
+                    iroha_data_model::soracloud::SORACLOUD_PRIVATE_OUTPUT_MIN_RETENTION_SECS_V1,
+                )
+                .ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_private_uploaded_model_execution_claims",
+                        "prepared private output retention epoch overflows",
+                    )
+                })?;
+            if output_pin.policy.retention_epoch < minimum_retention_epoch {
+                return Err(invalid_soracloud_state(
+                    "soracloud_private_uploaded_model_execution_claims",
+                    "prepared private output pin does not retain the minimum claim-time horizon",
+                ));
+            }
+        }
+
         for (key, receipt) in self.private_uploaded_model_execution_receipts.view().iter() {
             receipt.validate().map_err(|error| {
                 invalid_soracloud_state(
@@ -4049,170 +4332,69 @@ impl SoracloudInrouPersistedStateV1<'_> {
                 "soracloud_private_uploaded_model_execution_receipts",
                 receipt.emitted_sequence,
             )?;
-            let bundle = uploaded_model_bundles
-                .get(&(
-                    receipt.service_name.as_ref().to_owned(),
-                    receipt.model_id.clone(),
-                    receipt.weight_version.clone(),
-                ))
-                .ok_or_else(|| {
-                    invalid_soracloud_state(
-                        "soracloud_private_uploaded_model_execution_receipts",
-                        "private receipt must reference an authoritative uploaded-model bundle",
-                    )
-                })?;
-            if bundle.runtime_format
-                != iroha_data_model::soracloud::SoraUploadedModelRuntimeFormatV1::DeterministicQuantizedCpuV1
-                || bundle.sorafs_manifest_digest != receipt.model_manifest_digest
-                || bundle.bundle_root != receipt.model_bundle_root
-                || bundle.decryption_policy_ref != receipt.policy_id
-            {
-                return Err(invalid_soracloud_state(
-                    "soracloud_private_uploaded_model_execution_receipts",
-                    "private receipt must exactly match its deterministic uploaded-model bundle and policy",
-                ));
-            }
-            let service_revision = service_revisions
-                .get(&(
-                    receipt.service_name.as_ref().to_owned(),
-                    receipt.service_version.clone(),
-                ))
-                .ok_or_else(|| {
-                    invalid_soracloud_state(
-                        "soracloud_private_uploaded_model_execution_receipts",
-                        "private receipt must reference a retained service revision",
-                    )
-                })?;
-            if service_revision.service.service_name != receipt.service_name
-                || service_revision.service.service_version != receipt.service_version
-                || !service_revision
-                    .container
-                    .capabilities
-                    .allow_model_inference
-            {
-                return Err(invalid_soracloud_state(
-                    "soracloud_private_uploaded_model_execution_receipts",
-                    "private receipt service revision must admit uploaded-model inference",
-                ));
-            }
-
-            let release_key = (
+            let claim_key = (
                 receipt.service_name.as_ref().to_owned(),
                 receipt.decryption_request_id.clone(),
             );
-            let release = decryption_request_records
-                .get(&release_key)
-                .ok_or_else(|| {
-                    invalid_soracloud_state(
-                        "soracloud_private_uploaded_model_execution_receipts",
-                        "private receipt must reference an authoritative decryption request",
-                    )
-                })?;
-            release.validate().map_err(|error| {
+            let claim = private_execution_claims.get(&claim_key).ok_or_else(|| {
                 invalid_soracloud_state(
                     "soracloud_private_uploaded_model_execution_receipts",
-                    format!("private receipt decryption request is invalid: {error}"),
+                    "private receipt must reference its exact prepared authorization claim",
                 )
             })?;
-            if release.service_name != receipt.service_name
-                || release.service_version != receipt.service_version
-                || release.request.request_id != receipt.decryption_request_id
-                || release.request.policy_name.as_ref() != receipt.policy_id
-                || release.request.ciphertext_commitment != receipt.input_artifact.artifact_hash
+            let mut submission = receipt.clone();
+            submission.authorization_claim_block_height = 0;
+            submission.authorization_claim_epoch = 0;
+            submission.emitted_sequence = 0;
+            submission.emitted_block_height = 0;
+            submission.emitted_epoch = 0;
+            if claim.receipt != submission {
+                return Err(invalid_soracloud_state(
+                    "soracloud_private_uploaded_model_execution_receipts",
+                    "private receipt must exactly match its prepared authorization claim",
+                ));
+            }
+            if receipt.authorization_claim_block_height != claim.claimed_block_height
+                || receipt.authorization_claim_epoch != claim.claimed_epoch
             {
                 return Err(invalid_soracloud_state(
                     "soracloud_private_uploaded_model_execution_receipts",
-                    "private receipt must exactly match its committed decryption authorization",
+                    "private receipt must expose the exact prepared authorization claim coordinates",
                 ));
             }
+            let release = decryption_request_records
+                .get(&claim_key)
+                .expect("validated claim retained its authoritative decryption request");
             if receipt.emitted_sequence <= release.sequence {
                 return Err(invalid_soracloud_state(
                     "soracloud_private_uploaded_model_execution_receipts",
                     "private receipt sequence must be later than its decryption authorization",
                 ));
             }
-            let release_event = service_audit_events.get(&release.sequence).ok_or_else(|| {
-                invalid_soracloud_state(
-                    "soracloud_private_uploaded_model_execution_receipts",
-                    "private receipt decryption authorization must retain its exact audit event",
-                )
-            })?;
-            let release_expires_at_height = release_event
-                .block_height
-                .checked_add(u64::from(release.request.requested_ttl_blocks.get()))
-                .ok_or_else(|| {
-                    invalid_soracloud_state(
-                        "soracloud_private_uploaded_model_execution_receipts",
-                        "private receipt decryption-authorization expiry height overflows",
-                    )
-                })?;
-            if receipt.emitted_block_height < release_event.block_height
-                || receipt.emitted_block_height >= release_expires_at_height
-            {
-                return Err(invalid_soracloud_state(
-                    "soracloud_private_uploaded_model_execution_receipts",
-                    "private receipt block height must fall inside its decryption-authorization window",
-                ));
-            }
-            if !consumed_private_decryption_requests.insert(release_key) {
-                return Err(invalid_soracloud_state(
-                    "soracloud_private_uploaded_model_execution_receipts",
-                    "one committed decryption request must not authorize multiple private receipts",
-                ));
-            }
-
-            let require_exact_pin =
-                |artifact: &iroha_data_model::soracloud::SoraPrivateModelArtifactRefV1| {
-                    let pin = pin_manifests
-                        .get(&artifact.sorafs_manifest_digest)
-                        .ok_or_else(|| {
-                            invalid_soracloud_state(
-                                "soracloud_private_uploaded_model_execution_receipts",
-                                format!(
-                                    "private `{}` artifact must reference a retained SoraFS pin record",
-                                    artifact.artifact_role
-                                ),
-                            )
-                        })?;
-                    if pin.digest != artifact.sorafs_manifest_digest
-                        || pin.root_cid != artifact.sorafs_root_cid
-                        || pin.content_length != artifact.ciphertext_bytes
-                    {
-                        return Err(invalid_soracloud_state(
-                            "soracloud_private_uploaded_model_execution_receipts",
-                            format!(
-                                "private `{}` artifact must exactly match its SoraFS pin record",
-                                artifact.artifact_role
-                            ),
-                        ));
-                    }
-                    Ok(())
-                };
-            let model_pin = pin_manifests
-                .get(&bundle.sorafs_manifest_digest)
-                .ok_or_else(|| {
-                    invalid_soracloud_state(
-                        "soracloud_private_uploaded_model_execution_receipts",
-                        "private receipt model bundle must reference a retained SoraFS pin record",
-                    )
-                })?;
-            if model_pin.digest != bundle.sorafs_manifest_digest
-                || model_pin.content_length != bundle.ciphertext_bytes
-            {
-                return Err(invalid_soracloud_state(
-                    "soracloud_private_uploaded_model_execution_receipts",
-                    "private receipt model bundle must exactly match its SoraFS pin record",
-                ));
-            }
-            require_exact_pin(&receipt.input_artifact)?;
-            require_exact_pin(&receipt.output_artifact)?;
             let output_pin = pin_manifests
                 .get(&receipt.output_artifact.sorafs_manifest_digest)
-                .expect("exact output pin was required immediately above");
-            if output_pin.submitted_by != receipt.attesting_validator.validator_account_id {
+                .expect("validated claim retained its exact output pin");
+            let durability =
+                crate::soracloud_runtime::validate_soracloud_private_output_durability_records_v1(
+                    Some(output_pin),
+                    replication_orders.get(&receipt.output_replication_order_id),
+                    receipt,
+                    receipt.emitted_epoch,
+                )
+                .map_err(|message| {
+                    invalid_soracloud_state(
+                        "soracloud_private_uploaded_model_execution_receipts",
+                        message,
+                    )
+                })?;
+            if durability
+                != crate::soracloud_runtime::SoracloudPrivateOutputDurabilityStatusV1::Ready
+            {
                 return Err(invalid_soracloud_state(
                     "soracloud_private_uploaded_model_execution_receipts",
-                    "private output artifact pin submitter must equal the attesting validator",
+                    format!(
+                        "private output was not durably replicated at receipt commit: {durability:?}"
+                    ),
                 ));
             }
             let replication_order = replication_orders
@@ -6818,6 +7000,10 @@ fn parse_world(
         "soracloud_private_uploaded_model_execution_receipts",
     )?;
     let capacity_declarations = take_required(&mut map, "capacity_declarations")?;
+    let soracloud_private_uploaded_model_execution_claims = take_required(
+        &mut map,
+        "soracloud_private_uploaded_model_execution_claims",
+    )?;
     let pin_manifests = take_required(&mut map, "pin_manifests")?;
     let replication_orders = take_required(&mut map, "replication_orders")?;
     SoracloudInrouPersistedStateV1 {
@@ -6856,6 +7042,7 @@ fn parse_world(
         runtime_receipts: &soracloud_runtime_receipts,
         private_uploaded_model_execution_receipts:
             &soracloud_private_uploaded_model_execution_receipts,
+        private_uploaded_model_execution_claims: &soracloud_private_uploaded_model_execution_claims,
     }
     .validate()?;
     let provider_owners = take_required(&mut map, "provider_owners")?;
@@ -7096,6 +7283,7 @@ fn parse_world(
         soracloud_mailbox_messages,
         soracloud_runtime_receipts,
         soracloud_private_uploaded_model_execution_receipts,
+        soracloud_private_uploaded_model_execution_claims,
         capacity_declarations,
         capacity_fee_ledger: Storage::default(),
         capacity_disputes: Storage::default(),
@@ -7171,10 +7359,11 @@ fn parse_world(
     };
     {
         let world_view = world.view();
-        for (_receipt_id, receipt) in world_view
-            .soracloud_private_uploaded_model_execution_receipts()
+        for (_claim_key, claim) in world_view
+            .soracloud_private_uploaded_model_execution_claims()
             .iter()
         {
+            let receipt = &claim.receipt;
             let bundle = world_view
                 .soracloud_uploaded_model_bundles()
                 .get(&(
@@ -7184,8 +7373,8 @@ fn parse_world(
                 ))
                 .ok_or_else(|| {
                     invalid_soracloud_state(
-                        "soracloud_private_uploaded_model_execution_receipts",
-                        "private receipt must reference an authoritative uploaded-model bundle",
+                        "soracloud_private_uploaded_model_execution_claims",
+                        "prepared private execution must reference an authoritative uploaded-model bundle",
                     )
                 })?;
             crate::soracloud_runtime::validate_finalized_soracloud_uploaded_model_release(
@@ -7193,10 +7382,7 @@ fn parse_world(
                 bundle,
             )
             .map_err(|error| {
-                invalid_soracloud_state(
-                    "soracloud_private_uploaded_model_execution_receipts",
-                    error,
-                )
+                invalid_soracloud_state("soracloud_private_uploaded_model_execution_claims", error)
             })?;
         }
     }
@@ -7552,6 +7738,16 @@ fn build_state(
     {
         return Err(MergeLedgerCommitError::ExecutionStatePublication(
             "restored private uploaded-model receipt belongs to another network".to_owned(),
+        ));
+    }
+    if world
+        .soracloud_private_uploaded_model_execution_claims
+        .view()
+        .iter()
+        .any(|(_, claim)| claim.receipt.network_id != network_id)
+    {
+        return Err(MergeLedgerCommitError::ExecutionStatePublication(
+            "restored private uploaded-model execution claim belongs to another network".to_owned(),
         ));
     }
     let streaming_storage_paths = StreamingStoragePaths::default();

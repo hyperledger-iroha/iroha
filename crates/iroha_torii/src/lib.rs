@@ -29822,6 +29822,7 @@ fn soracloud_local_read_error_response(
 ) -> Response {
     let status = match error.kind {
         SoracloudRuntimeExecutionErrorKind::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
+        SoracloudRuntimeExecutionErrorKind::Conflict => StatusCode::CONFLICT,
         SoracloudRuntimeExecutionErrorKind::InvalidRequest => StatusCode::BAD_REQUEST,
         SoracloudRuntimeExecutionErrorKind::Internal => StatusCode::INTERNAL_SERVER_ERROR,
     };
@@ -29835,6 +29836,17 @@ fn soracloud_local_read_error_response(
             );
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         })
+}
+#[cfg(all(test, feature = "app_api"))]
+#[test]
+fn soracloud_local_read_conflict_maps_to_http_conflict() {
+    let response = soracloud_local_read_error_response(
+        iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Conflict,
+            "terminal Soracloud local-read fixture",
+        ),
+    );
+    assert_eq!(response.status(), StatusCode::CONFLICT);
 }
 #[cfg(feature = "app_api")]
 fn soracloud_public_runtime_unavailable(message: impl Into<String>) -> Response {

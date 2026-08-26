@@ -29,8 +29,11 @@ public final class SoracloudPrivateUploadedModelExecutionReceipt {
   private final SoracloudUploadedModelEncryptionRecipient outputRecipient;
   private final String requestCommitment;
   private final String resultCommitment;
+  private final BigInteger authorizationClaimBlockHeight;
+  private final BigInteger authorizationClaimEpoch;
   private final BigInteger emittedSequence;
   private final BigInteger emittedBlockHeight;
+  private final BigInteger emittedEpoch;
 
   public SoracloudPrivateUploadedModelExecutionReceipt(
       final long schemaVersion,
@@ -54,8 +57,11 @@ public final class SoracloudPrivateUploadedModelExecutionReceipt {
       final SoracloudUploadedModelEncryptionRecipient outputRecipient,
       final String requestCommitment,
       final String resultCommitment,
+      final BigInteger authorizationClaimBlockHeight,
+      final BigInteger authorizationClaimEpoch,
       final BigInteger emittedSequence,
-      final BigInteger emittedBlockHeight) {
+      final BigInteger emittedBlockHeight,
+      final BigInteger emittedEpoch) {
     SoracloudPrivateModelValidation.requireSchemaVersion(schemaVersion, "schemaVersion");
     this.schemaVersion = schemaVersion;
     this.networkId = SoracloudPrivateModelValidation.requireNetworkId(networkId, "networkId");
@@ -110,9 +116,17 @@ public final class SoracloudPrivateUploadedModelExecutionReceipt {
     this.resultCommitment =
         SoracloudPrivateModelValidation.requireSoracloudHash(
             resultCommitment, "resultCommitment");
-    SoracloudPrivateModelValidation.requireCoordinatePair(emittedSequence, emittedBlockHeight);
+    SoracloudPrivateModelValidation.requireLedgerCoordinates(
+        authorizationClaimBlockHeight,
+        authorizationClaimEpoch,
+        emittedSequence,
+        emittedBlockHeight,
+        emittedEpoch);
+    this.authorizationClaimBlockHeight = authorizationClaimBlockHeight;
+    this.authorizationClaimEpoch = authorizationClaimEpoch;
     this.emittedSequence = emittedSequence;
     this.emittedBlockHeight = emittedBlockHeight;
+    this.emittedEpoch = emittedEpoch;
   }
 
   public long schemaVersion() { return schemaVersion; }
@@ -160,11 +174,20 @@ public final class SoracloudPrivateUploadedModelExecutionReceipt {
 
   public String resultCommitment() { return resultCommitment; }
 
+  /** Unsigned 64-bit block height at which consensus froze the execution authorization. */
+  public BigInteger authorizationClaimBlockHeight() { return authorizationClaimBlockHeight; }
+
+  /** Unsigned 64-bit consensus Unix-seconds epoch at which authorization was frozen. */
+  public BigInteger authorizationClaimEpoch() { return authorizationClaimEpoch; }
+
   /** Unsigned 64-bit ledger sequence, represented without signed narrowing. */
   public BigInteger emittedSequence() { return emittedSequence; }
 
   /** Unsigned 64-bit block height, represented without signed narrowing. */
   public BigInteger emittedBlockHeight() { return emittedBlockHeight; }
+
+  /** Unsigned 64-bit consensus Unix-seconds epoch, represented without signed narrowing. */
+  public BigInteger emittedEpoch() { return emittedEpoch; }
 
   private static byte[] canonicalManifestDigest(final byte[] value) {
     if (value == null || value.length != 32) {

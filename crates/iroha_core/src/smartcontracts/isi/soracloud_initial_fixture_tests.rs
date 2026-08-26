@@ -1252,8 +1252,11 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
         output_commitment: Hash::new(b"output-commitment"),
         request_commitment: Hash::prehashed([0; 32]),
         result_commitment: Hash::prehashed([0; 32]),
+        authorization_claim_block_height: 0,
+        authorization_claim_epoch: 0,
         emitted_sequence: 0,
         emitted_block_height: 0,
+        emitted_epoch: 0,
     };
     let (_private_output_manifest_payload, private_output_manifest_digest) =
         private_artifact_manifest_fixture(0xD3, private_receipt.output_artifact.ciphertext_bytes);

@@ -44,8 +44,11 @@ public final class SoracloudPrivateUploadedModelJsonParser {
           "output_recipient",
           "request_commitment",
           "result_commitment",
+          "authorization_claim_block_height",
+          "authorization_claim_epoch",
           "emitted_sequence",
-          "emitted_block_height");
+          "emitted_block_height",
+          "emitted_epoch");
   private static final Set<String> ARTIFACT_FIELDS =
       fields(
           "schema_version",
@@ -193,6 +196,15 @@ public final class SoracloudPrivateUploadedModelJsonParser {
         unsigned64Integer(root.get("emitted_sequence"), context + ".emitted_sequence");
     final BigInteger emittedBlockHeight =
         unsigned64Integer(root.get("emitted_block_height"), context + ".emitted_block_height");
+    final BigInteger emittedEpoch =
+        unsigned64Integer(root.get("emitted_epoch"), context + ".emitted_epoch");
+    final BigInteger authorizationClaimBlockHeight =
+        unsigned64Integer(
+            root.get("authorization_claim_block_height"),
+            context + ".authorization_claim_block_height");
+    final BigInteger authorizationClaimEpoch =
+        unsigned64Integer(
+            root.get("authorization_claim_epoch"), context + ".authorization_claim_epoch");
     final SoracloudPrivateModelArtifactRef outputArtifact =
         parseArtifact(
             expectObject(root.get("output_artifact"), context + ".output_artifact"),
@@ -240,8 +252,11 @@ public final class SoracloudPrivateUploadedModelJsonParser {
             context + ".output_recipient"),
         requiredHash(root.get("request_commitment"), context + ".request_commitment"),
         requiredHash(root.get("result_commitment"), context + ".result_commitment"),
+        authorizationClaimBlockHeight,
+        authorizationClaimEpoch,
         emittedSequence,
-        emittedBlockHeight);
+        emittedBlockHeight,
+        emittedEpoch);
   }
 
   private static SoracloudPrivateModelArtifactRef parseArtifact(
@@ -418,8 +433,8 @@ public final class SoracloudPrivateUploadedModelJsonParser {
   }
 
   private static boolean asBoolean(final Object value, final String path) {
-    if (value instanceof Boolean bool) {
-      return bool.booleanValue();
+    if (value instanceof Boolean) {
+      return ((Boolean) value).booleanValue();
     }
     throw new IllegalStateException(path + " must be a boolean");
   }

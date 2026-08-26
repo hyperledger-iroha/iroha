@@ -43,8 +43,9 @@ const BASE_EXECUTE_TRIGGER: u64 = 220;
 const BASE_UPGRADE: u64 = 2_000;
 const BASE_LOG: u64 = 8;
 const BASE_CUSTOM: u64 = 128;
-const BASE_REGISTER_PIN_MANIFEST: u64 = BASE_REGISTER;
+const BASE_SORACLOUD_PRIVATE_EXECUTION_PREPARE: u64 = BASE_REGISTER + BASE_CUSTOM;
 const BASE_SORACLOUD_PRIVATE_EXECUTION_RECEIPT: u64 = BASE_CUSTOM;
+const BASE_REGISTER_PIN_MANIFEST: u64 = BASE_REGISTER;
 const BASE_REGISTER_SMART_CONTRACT: u64 = 320;
 const BASE_KAIGI_CREATE: u64 = 420;
 const BASE_KAIGI_JOIN: u64 = 180;
@@ -228,6 +229,14 @@ fn gas_for_register_pin_manifest(manifest_bytes: usize) -> u64 {
         PER_BYTE_PIN_MANIFEST.saturating_mul(u64::try_from(manifest_bytes).unwrap_or(u64::MAX)),
     )
 }
+fn gas_for_soracloud_private_execution_receipt() -> u64 {
+    BASE_SORACLOUD_PRIVATE_EXECUTION_RECEIPT
+}
+fn gas_for_soracloud_private_execution_prepare(manifest_bytes: usize) -> u64 {
+    BASE_SORACLOUD_PRIVATE_EXECUTION_PREPARE.saturating_add(
+        PER_BYTE_PIN_MANIFEST.saturating_mul(u64::try_from(manifest_bytes).unwrap_or(u64::MAX)),
+    )
+}
 /// Compute gas for a single instruction using a simple schedule.
 #[allow(clippy::too_many_lines)]
 pub fn meter_instruction(instr: &InstructionBox) -> u64 {
@@ -394,11 +403,16 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
     if let Some(register) = any.downcast_ref::<dm_isi::sorafs::RegisterPinManifest>() {
         return gas_for_register_pin_manifest(register.manifest_payload.len());
     }
+    if let Some(prepare) =
+        any.downcast_ref::<dm_isi::soracloud::PrepareSoracloudPrivateUploadedModelExecution>()
+    {
+        return gas_for_soracloud_private_execution_prepare(prepare.output_manifest_payload.len());
+    }
     if any
         .downcast_ref::<dm_isi::soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt>()
         .is_some()
     {
-        return BASE_SORACLOUD_PRIVATE_EXECUTION_RECEIPT;
+        return gas_for_soracloud_private_execution_receipt();
     }
     // Fallback: charge based on Norito-encoded size of the instruction payload
     // This ensures determinism for unknown/custom instructions under custom executors.
@@ -498,12 +512,18 @@ mod tests {
         assert_eq!(large - small, 4095);
     }
     #[test]
-    fn private_execution_split_preserves_the_combined_base_cost() {
-        let manifest_gas = gas_for_register_pin_manifest(4096);
+    fn private_execution_receipt_commit_has_fixed_nonzero_gas() {
         assert_eq!(
-            manifest_gas + BASE_SORACLOUD_PRIVATE_EXECUTION_RECEIPT,
-            BASE_REGISTER + BASE_CUSTOM + 4096
+            gas_for_soracloud_private_execution_receipt(),
+            BASE_SORACLOUD_PRIVATE_EXECUTION_RECEIPT
         );
+    }
+    #[test]
+    fn private_execution_prepare_gas_is_manifest_size_sensitive() {
+        let small = gas_for_soracloud_private_execution_prepare(32);
+        let large = gas_for_soracloud_private_execution_prepare(4_096);
+        assert!(small > BASE_SORACLOUD_PRIVATE_EXECUTION_PREPARE);
+        assert!(large > small);
     }
     #[test]
     fn batch_meter_sums_items() {

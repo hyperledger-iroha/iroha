@@ -1298,6 +1298,28 @@ impl PartialOrd for RecordSoracloudRuntimeReceipt {
         Some(encoded_order(self, other))
     }
 }
+/// Atomically ensure an encrypted output pin and freeze one authorized private execution.
+///
+/// Consensus canonical-decodes `output_manifest_payload`, requires it to describe the receipt's
+/// exact output artifact, registers it when absent (including the normal fee and governance
+/// path), or accepts an exact live existing pin. It then persists an immutable authorization
+/// claim while the decryption release and validator attester are active. Exact retries are
+/// idempotent.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+pub struct PrepareSoracloudPrivateUploadedModelExecution {
+    /// Canonical `SoraFS` ManifestV1 payload for the encrypted output artifact.
+    pub output_manifest_payload: Vec<u8>,
+    /// Full immutable receipt submission to freeze before asynchronous replication.
+    pub receipt: SoraPrivateUploadedModelExecutionReceiptV1,
+}
+impl crate::seal::Instruction for PrepareSoracloudPrivateUploadedModelExecution {}
+impl PartialOrd for PrepareSoracloudPrivateUploadedModelExecution {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(encoded_order(self, other))
+    }
+}
 /// Persist an authoritative private execution receipt for an already durable output manifest.
 ///
 /// This runtime-owned ledger projection requires the transaction authority to be the receipt's
@@ -1707,6 +1729,10 @@ impl_soracloud_decode_from_slice!(RecordSoracloudRuntimeReceipt {
 impl_soracloud_decode_from_slice!(ApplySoracloudOrderedMailboxResult {
     result: SoraOrderedMailboxResultV1,
 });
+impl_soracloud_decode_from_slice!(PrepareSoracloudPrivateUploadedModelExecution {
+    output_manifest_payload: Vec<u8>,
+    receipt: SoraPrivateUploadedModelExecutionReceiptV1,
+});
 impl_soracloud_decode_from_slice!(RecordSoracloudPrivateUploadedModelExecutionReceipt {
     receipt: SoraPrivateUploadedModelExecutionReceiptV1,
 });
@@ -1825,8 +1851,11 @@ mod tests {
                 output_recipient: output_recipient(),
                 request_commitment: Hash::prehashed([0; 32]),
                 result_commitment: Hash::prehashed([0; 32]),
+                authorization_claim_block_height: 1,
+                authorization_claim_epoch: 1,
                 emitted_sequence: 1,
                 emitted_block_height: 1,
+                emitted_epoch: 1,
             };
         receipt.request_commitment =
             crate::soracloud::derive_soracloud_private_model_request_commitment_v1(&receipt);
@@ -1919,6 +1948,16 @@ mod tests {
             replica_slot: 1,
             replica_accounted_egress_bytes: 4096,
             finalize_reporter: false,
+        });
+        let mut submission = private_uploaded_model_execution_receipt().receipt;
+        submission.authorization_claim_block_height = 0;
+        submission.authorization_claim_epoch = 0;
+        submission.emitted_sequence = 0;
+        submission.emitted_block_height = 0;
+        submission.emitted_epoch = 0;
+        assert_slice_roundtrip(PrepareSoracloudPrivateUploadedModelExecution {
+            output_manifest_payload: vec![1, 2, 3],
+            receipt: submission,
         });
         assert_slice_roundtrip(private_uploaded_model_execution_receipt());
     }

@@ -454,16 +454,20 @@ fn sample_private_uploaded_model_execution_receipt() -> SoraPrivateUploadedModel
         attesting_validator: sample_validator_execution_host(0x30),
         input_artifact: sample_private_model_artifact_ref("input", 0x11),
         output_artifact: sample_private_model_artifact_ref("output", 0x22),
-        output_replication_order_id: derive_sorafs_auto_replication_order_id_v1(
-            &ManifestDigest::new([0x22; 32]),
-        ),
+        output_replication_order_id:
+            crate::sorafs::pin_registry::derive_sorafs_auto_replication_order_id_v1(
+                &ManifestDigest::new([0x22; 32]),
+            ),
         input_commitment: sample_hash(0x41),
         output_commitment: sample_hash(0x42),
         output_recipient: sample_uploaded_model_encryption_recipient(),
         request_commitment: Hash::prehashed([0; 32]),
         result_commitment: Hash::prehashed([0; 32]),
+        authorization_claim_block_height: 2,
+        authorization_claim_epoch: 2,
         emitted_sequence: 7,
         emitted_block_height: 3,
+        emitted_epoch: 3,
     };
     receipt.request_commitment = derive_soracloud_private_model_request_commitment_v1(&receipt);
     receipt.result_commitment = derive_soracloud_private_model_result_commitment_v1(&receipt);

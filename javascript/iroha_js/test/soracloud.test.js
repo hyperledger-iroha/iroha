@@ -186,8 +186,11 @@ function validPrivateExecutionReceipt(overrides = {}) {
     output_recipient: validPrivateWireRecipient(),
     request_commitment: privateHashLiteral(11),
     result_commitment: privateHashLiteral(13),
+    authorization_claim_block_height: 0,
+    authorization_claim_epoch: 0,
     emitted_sequence: 0,
     emitted_block_height: 0,
+    emitted_epoch: 0,
     ...overrides,
   };
 }
@@ -1992,7 +1995,7 @@ test("buildSoracloudPrivateUploadedModelReceiptQuery preserves genuine option om
 test("normalizeSoracloudPrivateUploadedModelExecuteResponse accepts every exact phase shape", () => {
   for (const [submissionPhase, transactionHash] of [
     ["awaiting_output_durability", null],
-    ["output_pin_submitted", privateHashLiteral(27)],
+    ["prepare_submitted", privateHashLiteral(27)],
     ["receipt_submitted", privateHashLiteral(29)],
   ]) {
     const normalized = normalizeSoracloudPrivateUploadedModelExecuteResponse(
@@ -2003,8 +2006,11 @@ test("normalizeSoracloudPrivateUploadedModelExecuteResponse accepts every exact 
     );
     assert.equal(normalized.submission_phase, submissionPhase);
     assert.equal(normalized.transaction_hash, transactionHash);
+    assert.equal(normalized.receipt.authorization_claim_block_height, 0);
+    assert.equal(normalized.receipt.authorization_claim_epoch, 0);
     assert.equal(normalized.receipt.emitted_sequence, 0);
     assert.equal(normalized.receipt.emitted_block_height, 0);
+    assert.equal(normalized.receipt.emitted_epoch, 0);
     assert.ok(Object.isFrozen(normalized));
     assert.ok(Object.isFrozen(normalized.status));
     assert.ok(Object.isFrozen(normalized.status.bundle));
@@ -2013,8 +2019,11 @@ test("normalizeSoracloudPrivateUploadedModelExecuteResponse accepts every exact 
   }
 
   const committedReceipt = validPrivateExecutionReceipt({
+    authorization_claim_block_height: U64_MAX,
+    authorization_claim_epoch: U64_MAX,
     emitted_sequence: U64_MAX,
     emitted_block_height: U64_MAX,
+    emitted_epoch: U64_MAX,
   });
   const committed = normalizeSoracloudPrivateUploadedModelExecuteResponse(
     validPrivateExecuteResponse({
@@ -2025,8 +2034,11 @@ test("normalizeSoracloudPrivateUploadedModelExecuteResponse accepts every exact 
   );
   assert.equal(committed.submission_phase, "committed");
   assert.equal(committed.transaction_hash, null);
+  assert.equal(committed.receipt.authorization_claim_block_height, U64_MAX);
+  assert.equal(committed.receipt.authorization_claim_epoch, U64_MAX);
   assert.equal(committed.receipt.emitted_sequence, U64_MAX);
   assert.equal(committed.receipt.emitted_block_height, U64_MAX);
+  assert.equal(committed.receipt.emitted_epoch, U64_MAX);
 });
 
 test("normalizeSoracloudPrivateUploadedModelExecutionReceipt enforces the tagged automatic order ID", () => {
@@ -2054,14 +2066,17 @@ test("normalizeSoracloudPrivateUploadedModelExecuteResponse rejects phase and le
       transaction_hash: privateHashLiteral(27),
     }),
     validPrivateExecuteResponse({
-      submission_phase: "output_pin_submitted",
+      submission_phase: "prepare_submitted",
       transaction_hash: null,
     }),
     validPrivateExecuteResponse({
       submission_phase: "receipt_submitted",
       receipt: validPrivateExecutionReceipt({
+        authorization_claim_block_height: 1,
+        authorization_claim_epoch: 1,
         emitted_sequence: 1,
         emitted_block_height: 1,
+        emitted_epoch: 1,
       }),
     }),
     validPrivateExecuteResponse({
@@ -2148,24 +2163,72 @@ test("normalizeSoracloudPrivateUploadedModelExecuteResponse enforces exact neste
 });
 
 test("private uploaded-model response normalizers require lossless u64 inputs", () => {
-  for (const emittedSequence of [Number(U64_MAX), U64_MAX.toString()]) {
-    const receipt = validPrivateExecutionReceipt({
-      emitted_sequence: emittedSequence,
-      emitted_block_height: U64_MAX,
-    });
+  const coordinateFields = [
+    "authorization_claim_block_height",
+    "authorization_claim_epoch",
+    "emitted_sequence",
+    "emitted_block_height",
+    "emitted_epoch",
+  ];
+  for (const coordinate of coordinateFields) {
+    for (const invalid of [Number(U64_MAX), U64_MAX.toString()]) {
+      assert.throws(
+        () => normalizeSoracloudPrivateUploadedModelExecutionReceipt(
+          validPrivateExecutionReceipt({ [coordinate]: invalid }),
+        ),
+        new RegExp(`${coordinate} must be a lossless unsigned integer`, "u"),
+      );
+    }
+  }
+
+  for (const coordinate of coordinateFields) {
+    assert.throws(
+      () => normalizeSoracloudPrivateUploadedModelExecutionReceipt(
+        validPrivateExecutionReceipt({ [coordinate]: 1 }),
+      ),
+      /ledger coordinates must all be zero or all be positive/,
+    );
+  }
+});
+
+test("private uploaded-model receipts require every ledger coordinate in canonical order", () => {
+  const coordinateFields = [
+    "authorization_claim_block_height",
+    "authorization_claim_epoch",
+    "emitted_sequence",
+    "emitted_block_height",
+    "emitted_epoch",
+  ];
+  for (const coordinate of coordinateFields) {
+    const receipt = validPrivateExecutionReceipt();
+    delete receipt[coordinate];
     assert.throws(
       () => normalizeSoracloudPrivateUploadedModelExecutionReceipt(receipt),
-      /emitted_sequence must be a lossless unsigned integer/,
+      new RegExp(`${coordinate} is required`, "u"),
     );
   }
 
-  assert.throws(
-    () =>
-      normalizeSoracloudPrivateUploadedModelExecutionReceipt(
-        validPrivateExecutionReceipt({ emitted_sequence: 0, emitted_block_height: 1 }),
-      ),
-    /must both be zero or both be positive/,
-  );
+  for (const receipt of [
+    validPrivateExecutionReceipt({
+      authorization_claim_block_height: 2,
+      authorization_claim_epoch: 1,
+      emitted_sequence: 1,
+      emitted_block_height: 1,
+      emitted_epoch: 1,
+    }),
+    validPrivateExecutionReceipt({
+      authorization_claim_block_height: 1,
+      authorization_claim_epoch: 2,
+      emitted_sequence: 1,
+      emitted_block_height: 1,
+      emitted_epoch: 1,
+    }),
+  ]) {
+    assert.throws(
+      () => normalizeSoracloudPrivateUploadedModelExecutionReceipt(receipt),
+      /emission coordinates must not precede authorization claim coordinates/,
+    );
+  }
 });
 
 test("assembleSoracloudHfDeployRequest rejects inherited model and lease draft fields", () => {

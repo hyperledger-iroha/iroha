@@ -7,7 +7,9 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 import org.bouncycastle.crypto.params.X25519PrivateKeyParameters
 import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.address.MultisigMemberPayload
@@ -59,8 +61,11 @@ class SoracloudPrivateUploadedModelJsonParserTest {
         assertEquals(List(32) { 51 }, response.outputArtifact.sorafsManifestDigest)
         assertEquals("recipient-key", response.receipt.outputRecipient.keyId)
         assertEquals(32, response.receipt.outputRecipient.publicKeyBytes().size)
+        assertEquals(BigInteger.ZERO, response.receipt.authorizationClaimBlockHeight)
+        assertEquals(BigInteger.ZERO, response.receipt.authorizationClaimEpoch)
         assertEquals(BigInteger.ZERO, response.receipt.emittedSequence)
         assertEquals(BigInteger.ZERO, response.receipt.emittedBlockHeight)
+        assertEquals(BigInteger.ZERO, response.receipt.emittedEpoch)
     }
 
     @Test
@@ -219,8 +224,11 @@ class SoracloudPrivateUploadedModelJsonParserTest {
             parsed.receipt,
             modelManifestDigest = receiptManifestSource,
             outputReplicationOrderId = replicationOrderSource,
+            authorizationClaimBlockHeight = BigInteger.ONE,
+            authorizationClaimEpoch = BigInteger.ONE,
             emittedSequence = BigInteger.ONE,
             emittedBlockHeight = BigInteger.ONE,
+            emittedEpoch = BigInteger.ONE,
         )
         receiptManifestSource[0] = 99
         replicationOrderSource[0] = 99
@@ -230,6 +238,13 @@ class SoracloudPrivateUploadedModelJsonParserTest {
         assertEquals(receipt, receiptCopy)
         assertEquals(receipt.hashCode(), receiptCopy.hashCode())
         assertEquals(receipt.toString(), receiptCopy.toString())
+        assertNotEquals(
+            receipt,
+            copyReceipt(receipt, emittedSequence = BigInteger.valueOf(2L)),
+        )
+        assertTrue("authorizationClaimBlockHeight=1" in receipt.toString())
+        assertTrue("authorizationClaimEpoch=1" in receipt.toString())
+        assertTrue("emittedEpoch=1" in receipt.toString())
         assertFailsWith<IllegalArgumentException> {
             copyReceipt(
                 receipt,
@@ -272,8 +287,11 @@ class SoracloudPrivateUploadedModelJsonParserTest {
             executeResponseJson()
                 .replace("\"submission_phase\": \"receipt_submitted\"", "\"submission_phase\": \"committed\"")
                 .replace("\"transaction_hash\": \"$TRANSACTION_HASH\"", "\"transaction_hash\": null")
+                .replace("\"authorization_claim_block_height\": 0", "\"authorization_claim_block_height\": 499")
+                .replace("\"authorization_claim_epoch\": 0", "\"authorization_claim_epoch\": 1699999900")
                 .replace("\"emitted_sequence\": 0", "\"emitted_sequence\": 17")
                 .replace("\"emitted_block_height\": 0", "\"emitted_block_height\": 501")
+                .replace("\"emitted_epoch\": 0", "\"emitted_epoch\": 1700000000")
                 .bytes()
         )
 
@@ -282,8 +300,11 @@ class SoracloudPrivateUploadedModelJsonParserTest {
             response.submissionPhase,
         )
         assertNull(response.transactionHash)
+        assertEquals(BigInteger.valueOf(499L), response.receipt.authorizationClaimBlockHeight)
+        assertEquals(BigInteger.valueOf(1_699_999_900L), response.receipt.authorizationClaimEpoch)
         assertEquals(BigInteger.valueOf(17L), response.receipt.emittedSequence)
         assertEquals(BigInteger.valueOf(501L), response.receipt.emittedBlockHeight)
+        assertEquals(BigInteger.valueOf(1_700_000_000L), response.receipt.emittedEpoch)
     }
 
     @Test
@@ -303,19 +324,19 @@ class SoracloudPrivateUploadedModelJsonParserTest {
         )
         assertNull(awaiting.transactionHash)
 
-        val pinSubmitted = SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+        val prepareSubmitted = SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
             executeResponseJson()
                 .replace(
                     "\"submission_phase\": \"receipt_submitted\"",
-                    "\"submission_phase\": \"output_pin_submitted\"",
+                    "\"submission_phase\": \"prepare_submitted\"",
                 )
                 .bytes()
         )
         assertEquals(
-            SoracloudPrivateUploadedModelSubmissionPhase.OUTPUT_PIN_SUBMITTED,
-            pinSubmitted.submissionPhase,
+            SoracloudPrivateUploadedModelSubmissionPhase.PREPARE_SUBMITTED,
+            prepareSubmitted.submissionPhase,
         )
-        assertEquals(TRANSACTION_HASH, pinSubmitted.transactionHash)
+        assertEquals(TRANSACTION_HASH, prepareSubmitted.transactionHash)
     }
 
     @Test
@@ -324,13 +345,19 @@ class SoracloudPrivateUploadedModelJsonParserTest {
             executeResponseJson()
                 .replace("\"submission_phase\": \"receipt_submitted\"", "\"submission_phase\": \"committed\"")
                 .replace("\"transaction_hash\": \"$TRANSACTION_HASH\"", "\"transaction_hash\": null")
+                .replace("\"authorization_claim_block_height\": 0", "\"authorization_claim_block_height\": $U64_MAX")
+                .replace("\"authorization_claim_epoch\": 0", "\"authorization_claim_epoch\": $U64_MAX")
                 .replace("\"emitted_sequence\": 0", "\"emitted_sequence\": $U64_MAX")
                 .replace("\"emitted_block_height\": 0", "\"emitted_block_height\": $U64_MAX")
+                .replace("\"emitted_epoch\": 0", "\"emitted_epoch\": $U64_MAX")
                 .bytes()
         )
 
+        assertEquals(U64_MAX, committedAtU64Max.receipt.authorizationClaimBlockHeight)
+        assertEquals(U64_MAX, committedAtU64Max.receipt.authorizationClaimEpoch)
         assertEquals(U64_MAX, committedAtU64Max.receipt.emittedSequence)
         assertEquals(U64_MAX, committedAtU64Max.receipt.emittedBlockHeight)
+        assertEquals(U64_MAX, committedAtU64Max.receipt.emittedEpoch)
         assertFailsWith<IllegalArgumentException> {
             copyReceipt(
                 committedAtU64Max.receipt,
@@ -343,12 +370,35 @@ class SoracloudPrivateUploadedModelJsonParserTest {
                 emittedBlockHeight = BigInteger.ZERO,
             )
         }
+        assertFailsWith<IllegalArgumentException> {
+            copyReceipt(
+                committedAtU64Max.receipt,
+                authorizationClaimBlockHeight = U64_MAX.add(BigInteger.ONE),
+            )
+        }
 
         for (invalid in listOf("-1", "1.0", "1e0", U64_MAX.add(BigInteger.ONE).toString())) {
             assertFailsWith<IllegalStateException> {
                 SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
                     executeResponseJson()
                         .replace("\"emitted_sequence\": 0", "\"emitted_sequence\": $invalid")
+                        .bytes()
+                )
+            }
+            assertFailsWith<IllegalStateException> {
+                SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+                    executeResponseJson()
+                        .replace(
+                            "\"authorization_claim_epoch\": 0",
+                            "\"authorization_claim_epoch\": $invalid",
+                        )
+                        .bytes()
+                )
+            }
+            assertFailsWith<IllegalStateException> {
+                SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+                    executeResponseJson()
+                        .replace("\"emitted_epoch\": 0", "\"emitted_epoch\": $invalid")
                         .bytes()
                 )
             }
@@ -372,8 +422,11 @@ class SoracloudPrivateUploadedModelJsonParserTest {
                 {
                   "schema_version": 1,
                   "receipts": [${receiptJson()
+                      .replace("\"authorization_claim_block_height\": 0", "\"authorization_claim_block_height\": 499")
+                      .replace("\"authorization_claim_epoch\": 0", "\"authorization_claim_epoch\": 1699999900")
                       .replace("\"emitted_sequence\": 0", "\"emitted_sequence\": 17")
-                      .replace("\"emitted_block_height\": 0", "\"emitted_block_height\": 501")}],
+                      .replace("\"emitted_block_height\": 0", "\"emitted_block_height\": 501")
+                      .replace("\"emitted_epoch\": 0", "\"emitted_epoch\": 1700000000")}],
                   "total": 3,
                   "returned_items": 1,
                   "remaining_items": 2,
@@ -445,7 +498,10 @@ class SoracloudPrivateUploadedModelJsonParserTest {
         assertFailsWith<IllegalStateException> {
             SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
                 executeResponseJson()
-                    .replace("\"transaction_hash\": \"$TRANSACTION_HASH\"", "\"transaction_hash\": null")
+                    .replace(
+                        "\"transaction_hash\": \"$TRANSACTION_HASH\"",
+                        "\"transaction_hash\": null",
+                    )
                     .bytes()
             )
         }
@@ -464,7 +520,7 @@ class SoracloudPrivateUploadedModelJsonParserTest {
                 executeResponseJson()
                     .replace(
                         "\"submission_phase\": \"receipt_submitted\"",
-                        "\"submission_phase\": \"output_pin_submitted\"",
+                        "\"submission_phase\": \"prepare_submitted\"",
                     )
                     .replace("\"transaction_hash\": \"$TRANSACTION_HASH\"", "\"transaction_hash\": null")
                     .bytes()
@@ -514,7 +570,28 @@ class SoracloudPrivateUploadedModelJsonParserTest {
         assertFailsWith<IllegalStateException> {
             SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
                 executeResponseJson()
+                    .replace(Regex("\\s*\"authorization_claim_block_height\": 0,"), "")
+                    .bytes()
+            )
+        }
+        assertFailsWith<IllegalStateException> {
+            SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+                executeResponseJson()
+                    .replace(Regex("\\s*\"authorization_claim_epoch\": 0,"), "")
+                    .bytes()
+            )
+        }
+        assertFailsWith<IllegalStateException> {
+            SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+                executeResponseJson()
                     .replace(Regex(",\\s*\"emitted_block_height\": 0"), "")
+                    .bytes()
+            )
+        }
+        assertFailsWith<IllegalStateException> {
+            SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+                executeResponseJson()
+                    .replace(Regex(",\\s*\"emitted_epoch\": 0"), "")
                     .bytes()
             )
         }
@@ -1053,6 +1130,16 @@ class SoracloudPrivateUploadedModelJsonParserTest {
         assertFailsWith<IllegalStateException> {
             SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
                 executeResponseJson()
+                    .replace(
+                        "\"authorization_claim_block_height\": 0",
+                        "\"authorization_claim_block_height\": -1",
+                    )
+                    .bytes()
+            )
+        }
+        assertFailsWith<IllegalStateException> {
+            SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+                executeResponseJson()
                     .replace("\"emitted_sequence\": 0", "\"emitted_sequence\": -1")
                     .bytes()
             )
@@ -1063,6 +1150,27 @@ class SoracloudPrivateUploadedModelJsonParserTest {
                     .replace("\"emitted_block_height\": 0", "\"emitted_block_height\": -1")
                     .bytes()
             )
+        }
+        assertFailsWith<IllegalStateException> {
+            SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+                executeResponseJson()
+                    .replace("\"emitted_epoch\": 0", "\"emitted_epoch\": -1")
+                    .bytes()
+            )
+        }
+        val finalized = executeResponseJson()
+            .replace(
+                "\"submission_phase\": \"receipt_submitted\"",
+                "\"submission_phase\": \"committed\"",
+            )
+            .replace("\"transaction_hash\": \"$TRANSACTION_HASH\"", "\"transaction_hash\": null")
+            .replace("\"authorization_claim_block_height\": 0", "\"authorization_claim_block_height\": 502")
+            .replace("\"authorization_claim_epoch\": 0", "\"authorization_claim_epoch\": 1700000001")
+            .replace("\"emitted_sequence\": 0", "\"emitted_sequence\": 17")
+            .replace("\"emitted_block_height\": 0", "\"emitted_block_height\": 501")
+            .replace("\"emitted_epoch\": 0", "\"emitted_epoch\": 1700000000")
+        assertFailsWith<IllegalStateException> {
+            SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(finalized.bytes())
         }
         assertFailsWith<IllegalStateException> {
             SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
@@ -1136,8 +1244,11 @@ class SoracloudPrivateUploadedModelJsonParserTest {
         serviceVersion: String = source.serviceVersion,
         modelId: String = source.modelId,
         weightVersion: String = source.weightVersion,
+        authorizationClaimBlockHeight: BigInteger = source.authorizationClaimBlockHeight,
+        authorizationClaimEpoch: BigInteger = source.authorizationClaimEpoch,
         emittedSequence: BigInteger = source.emittedSequence,
         emittedBlockHeight: BigInteger = source.emittedBlockHeight,
+        emittedEpoch: BigInteger = source.emittedEpoch,
     ): SoracloudPrivateUploadedModelExecutionReceipt =
         SoracloudPrivateUploadedModelExecutionReceipt(
             schemaVersion = source.schemaVersion,
@@ -1161,8 +1272,11 @@ class SoracloudPrivateUploadedModelJsonParserTest {
             outputRecipient = source.outputRecipient,
             requestCommitment = source.requestCommitment,
             resultCommitment = source.resultCommitment,
+            authorizationClaimBlockHeight = authorizationClaimBlockHeight,
+            authorizationClaimEpoch = authorizationClaimEpoch,
             emittedSequence = emittedSequence,
             emittedBlockHeight = emittedBlockHeight,
+            emittedEpoch = emittedEpoch,
         )
 
     private fun receiptListJson(
@@ -1193,11 +1307,20 @@ class SoracloudPrivateUploadedModelJsonParserTest {
         emittedBlockHeight: Long,
     ): String = receiptJson()
         .replace("\"receipt_id\": \"$RECEIPT_ID\"", "\"receipt_id\": \"$receiptId\"")
+        .replace(
+            "\"authorization_claim_block_height\": 0",
+            "\"authorization_claim_block_height\": $emittedBlockHeight",
+        )
+        .replace(
+            "\"authorization_claim_epoch\": 0",
+            "\"authorization_claim_epoch\": $emittedBlockHeight",
+        )
         .replace("\"emitted_sequence\": 0", "\"emitted_sequence\": $emittedSequence")
         .replace(
             "\"emitted_block_height\": 0",
             "\"emitted_block_height\": $emittedBlockHeight",
         )
+        .replace("\"emitted_epoch\": 0", "\"emitted_epoch\": $emittedBlockHeight")
 
     private fun executeResponseJson(): String =
         """
@@ -1322,8 +1445,11 @@ class SoracloudPrivateUploadedModelJsonParserTest {
               },
               "request_commitment": "$REQUEST_COMMITMENT",
               "result_commitment": "$RESULT_COMMITMENT",
+              "authorization_claim_block_height": 0,
+              "authorization_claim_epoch": 0,
               "emitted_sequence": 0,
-              "emitted_block_height": 0
+              "emitted_block_height": 0,
+              "emitted_epoch": 0
             }
         """.trimIndent()
 

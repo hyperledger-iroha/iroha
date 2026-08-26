@@ -14262,20 +14262,36 @@ export interface SoracloudPrivateUploadedModelExecutionReceiptV1 {
   readonly output_recipient: SoracloudPrivateEncryptionRecipientV1;
   readonly request_commitment: string;
   readonly result_commitment: string;
+  readonly authorization_claim_block_height: SoracloudPrivateUploadedModelU64;
+  readonly authorization_claim_epoch: SoracloudPrivateUploadedModelU64;
   readonly emitted_sequence: SoracloudPrivateUploadedModelU64;
   readonly emitted_block_height: SoracloudPrivateUploadedModelU64;
+  readonly emitted_epoch: SoracloudPrivateUploadedModelU64;
 }
 
 export type SoracloudPrivateUnassignedExecutionReceiptV1 =
-  Omit<SoracloudPrivateUploadedModelExecutionReceiptV1, "emitted_sequence" | "emitted_block_height">
-  & Readonly<{ emitted_sequence: 0; emitted_block_height: 0 }>;
+  Omit<
+    SoracloudPrivateUploadedModelExecutionReceiptV1,
+    | "authorization_claim_block_height"
+    | "authorization_claim_epoch"
+    | "emitted_sequence"
+    | "emitted_block_height"
+    | "emitted_epoch"
+  >
+  & Readonly<{
+    authorization_claim_block_height: 0;
+    authorization_claim_epoch: 0;
+    emitted_sequence: 0;
+    emitted_block_height: 0;
+    emitted_epoch: 0;
+  }>;
 
 export type SoracloudPrivateAssignedExecutionReceiptV1 =
   SoracloudPrivateUploadedModelExecutionReceiptV1;
 
 export type SoracloudPrivateUploadedModelSubmissionPhaseV1 =
   | "awaiting_output_durability"
-  | "output_pin_submitted"
+  | "prepare_submitted"
   | "receipt_submitted"
   | "committed";
 
@@ -14295,7 +14311,7 @@ export type SoracloudPrivateUploadedModelExecuteResponseV1 =
         receipt: SoracloudPrivateUnassignedExecutionReceiptV1;
       }>
     | Readonly<{
-        submission_phase: "output_pin_submitted" | "receipt_submitted";
+        submission_phase: "prepare_submitted" | "receipt_submitted";
         transaction_hash: string;
         receipt: SoracloudPrivateUnassignedExecutionReceiptV1;
       }>

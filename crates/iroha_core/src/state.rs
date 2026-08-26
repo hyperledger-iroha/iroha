@@ -149,10 +149,11 @@ use iroha_data_model::{
         SoraInrouReplicaRuntimeStateV1, SoraInrouServicePlacementRecordV1,
         SoraModelArtifactAuditEventV1, SoraModelArtifactRecordV1, SoraModelHostCapabilityRecordV1,
         SoraModelHostViolationEvidenceRecordV1, SoraModelRegistryV1, SoraModelWeightAuditEventV1,
-        SoraModelWeightVersionRecordV1, SoraPrivateUploadedModelExecutionReceiptV1,
-        SoraRuntimeReceiptV1, SoraServiceAuditEventV1, SoraServiceDeploymentStateV1,
-        SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1, SoraServiceStateEntryV1,
-        SoraTrainingJobAuditEventV1, SoraTrainingJobRecordV1, SoraUploadedModelBundleV1,
+        SoraModelWeightVersionRecordV1, SoraPrivateUploadedModelExecutionClaimV1,
+        SoraPrivateUploadedModelExecutionReceiptV1, SoraRuntimeReceiptV1, SoraServiceAuditEventV1,
+        SoraServiceDeploymentStateV1, SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1,
+        SoraServiceStateEntryV1, SoraTrainingJobAuditEventV1, SoraTrainingJobRecordV1,
+        SoraUploadedModelBundleV1,
     },
     soradns::{
         DirectoryId, DirectoryRotationPolicyV1, PendingDirectoryDraftV1, ResolverDirectoryRecordV1,
@@ -1062,6 +1063,7 @@ macro_rules! with_world_overlay_fields {
             soracloud_mailbox_messages,
             soracloud_runtime_receipts,
             soracloud_private_uploaded_model_execution_receipts,
+            soracloud_private_uploaded_model_execution_claims,
             capacity_declarations,
             capacity_fee_ledger,
             capacity_disputes,
@@ -4275,6 +4277,9 @@ pub struct World {
     /// Private uploaded-model execution receipts keyed by deterministic receipt id.
     pub(crate) soracloud_private_uploaded_model_execution_receipts:
         Storage<Hash, SoraPrivateUploadedModelExecutionReceiptV1>,
+    /// Prepared private executions keyed by `(service_name, decryption_request_id)`.
+    pub(crate) soracloud_private_uploaded_model_execution_claims:
+        Storage<(String, String), SoraPrivateUploadedModelExecutionClaimV1>,
     /// Capacity declarations keyed by provider identifier.
     pub(crate) capacity_declarations: Storage<ProviderId, CapacityDeclarationRecord>,
     /// Aggregated fee ledger entries per provider.
@@ -4986,6 +4991,9 @@ pub struct WorldBlock<'world> {
     /// Private uploaded-model execution receipts keyed by receipt id.
     pub(crate) soracloud_private_uploaded_model_execution_receipts:
         StorageBlock<'world, Hash, SoraPrivateUploadedModelExecutionReceiptV1>,
+    /// Prepared private executions keyed by `(service_name, decryption_request_id)`.
+    pub(crate) soracloud_private_uploaded_model_execution_claims:
+        StorageBlock<'world, (String, String), SoraPrivateUploadedModelExecutionClaimV1>,
     /// Capacity declarations keyed by provider identifier.
     pub(crate) capacity_declarations: StorageBlock<'world, ProviderId, CapacityDeclarationRecord>,
     /// Capacity fee ledger entries per provider.
@@ -5647,6 +5655,7 @@ impl WorldBlock<'_> {
             soracloud_mailbox_messages,
             soracloud_runtime_receipts,
             soracloud_private_uploaded_model_execution_receipts,
+            soracloud_private_uploaded_model_execution_claims,
             capacity_declarations,
             capacity_fee_ledger,
             capacity_disputes,
@@ -6312,6 +6321,13 @@ pub struct WorldTransaction<'block, 'world> {
     /// Private uploaded-model execution receipts keyed by receipt id.
     pub(crate) soracloud_private_uploaded_model_execution_receipts:
         StorageTransaction<'block, 'world, Hash, SoraPrivateUploadedModelExecutionReceiptV1>,
+    /// Prepared private executions keyed by `(service_name, decryption_request_id)`.
+    pub(crate) soracloud_private_uploaded_model_execution_claims: StorageTransaction<
+        'block,
+        'world,
+        (String, String),
+        SoraPrivateUploadedModelExecutionClaimV1,
+    >,
     /// Capacity declarations keyed by provider identifier.
     pub(crate) capacity_declarations:
         StorageTransaction<'block, 'world, ProviderId, CapacityDeclarationRecord>,
@@ -8411,6 +8427,9 @@ pub struct WorldView<'world> {
     /// Private uploaded-model execution receipts keyed by receipt id.
     pub(crate) soracloud_private_uploaded_model_execution_receipts:
         StorageView<'world, Hash, SoraPrivateUploadedModelExecutionReceiptV1>,
+    /// Prepared private executions keyed by `(service_name, decryption_request_id)`.
+    pub(crate) soracloud_private_uploaded_model_execution_claims:
+        StorageView<'world, (String, String), SoraPrivateUploadedModelExecutionClaimV1>,
     /// Capacity declarations keyed by provider identifier.
     pub(crate) capacity_declarations: StorageView<'world, ProviderId, CapacityDeclarationRecord>,
     /// Capacity fee ledger entries per provider.
@@ -16958,11 +16977,23 @@ impl World {
     ) -> &mut Storage<Hash, SoraPrivateUploadedModelExecutionReceiptV1> {
         &mut self.soracloud_private_uploaded_model_execution_receipts
     }
+    /// Provides mutable access to prepared private executions for tests and API scaffolding.
+    pub fn soracloud_private_uploaded_model_execution_claims_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<(String, String), SoraPrivateUploadedModelExecutionClaimV1> {
+        &mut self.soracloud_private_uploaded_model_execution_claims
+    }
     /// Provides mutable access to SoraFS pin manifests for tests and API scaffolding.
     pub fn pin_manifests_mut_for_testing(
         &mut self,
     ) -> &mut Storage<ManifestDigest, PinManifestRecord> {
         &mut self.pin_manifests
+    }
+    /// Provides mutable access to SoraFS replication orders for tests and API scaffolding.
+    pub fn replication_orders_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<ReplicationOrderId, ReplicationOrderRecord> {
+        &mut self.replication_orders
     }
     /// Creates a [`World`] with these [`Domain`]s and [`Peer`]s.
     pub fn with<D, A, Ad>(domains: D, accounts: A, asset_definitions: Ad) -> Self
@@ -18766,6 +18797,9 @@ macro_rules! world_ro_accessors {
             /// Private uploaded-model execution receipts keyed by receipt id (read-only).
             storage soracloud_private_uploaded_model_execution_receipts:
                 Hash => SoraPrivateUploadedModelExecutionReceiptV1;
+            /// Prepared private executions keyed by service and decryption request (read-only).
+            storage soracloud_private_uploaded_model_execution_claims:
+                (String, String) => SoraPrivateUploadedModelExecutionClaimV1;
         );
     };
     (agreements_and_lanes, $mode:ident) => {
@@ -20275,6 +20309,7 @@ impl<'world> WorldBlock<'world> {
             soracloud_mailbox_messages,
             soracloud_runtime_receipts,
             soracloud_private_uploaded_model_execution_receipts,
+            soracloud_private_uploaded_model_execution_claims,
             capacity_declarations,
             capacity_fee_ledger,
             capacity_disputes,
@@ -20433,6 +20468,7 @@ impl<'world> WorldBlock<'world> {
         soracloud_mailbox_messages.commit();
         soracloud_runtime_receipts.commit();
         soracloud_private_uploaded_model_execution_receipts.commit();
+        soracloud_private_uploaded_model_execution_claims.commit();
         capacity_disputes.commit();
         capacity_fee_ledger.commit();
         capacity_declarations.commit();
@@ -22143,6 +22179,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             soracloud_mailbox_messages,
             soracloud_runtime_receipts,
             soracloud_private_uploaded_model_execution_receipts,
+            soracloud_private_uploaded_model_execution_claims,
             capacity_declarations,
             capacity_fee_ledger,
             capacity_disputes,
@@ -22351,6 +22388,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         soracloud_mailbox_messages.apply();
         soracloud_runtime_receipts.apply();
         soracloud_private_uploaded_model_execution_receipts.apply();
+        soracloud_private_uploaded_model_execution_claims.apply();
         capacity_disputes.apply();
         capacity_fee_ledger.apply();
         capacity_declarations.apply();

@@ -333,6 +333,7 @@ impl_direct_instruction_box!(crate::isi::soracloud::ReportSoracloudServiceLeaseU
 impl_direct_instruction_box!(crate::isi::soracloud::RecordSoracloudMailboxMessage);
 impl_direct_instruction_box!(crate::isi::soracloud::RecordSoracloudRuntimeReceipt);
 impl_direct_instruction_box!(crate::isi::soracloud::ApplySoracloudOrderedMailboxResult);
+impl_direct_instruction_box!(crate::isi::soracloud::PrepareSoracloudPrivateUploadedModelExecution);
 impl_direct_instruction_box!(
     crate::isi::soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt
 );
@@ -2985,11 +2986,12 @@ pub mod prelude {
         social::{CancelTwitterEscrow, ClaimTwitterFollowReward, SendToTwitter},
         soracloud::{
             AdvanceSoracloudRollout, ApplySoracloudOrderedMailboxResult, DeploySoracloudService,
-            MutateSoracloudState, RecordSoracloudAgentAutonomyExecution,
-            RecordSoracloudDecryptionRequest, RecordSoracloudMailboxMessage,
-            RecordSoracloudPrivateUploadedModelExecutionReceipt, RecordSoracloudRuntimeReceipt,
-            ReportSoracloudServiceLeaseUsage, RollbackSoracloudService, RunSoracloudFheJob,
-            SetSoracloudRuntimeState, UpgradeSoracloudService,
+            MutateSoracloudState, PrepareSoracloudPrivateUploadedModelExecution,
+            RecordSoracloudAgentAutonomyExecution, RecordSoracloudDecryptionRequest,
+            RecordSoracloudMailboxMessage, RecordSoracloudPrivateUploadedModelExecutionReceipt,
+            RecordSoracloudRuntimeReceipt, ReportSoracloudServiceLeaseUsage,
+            RollbackSoracloudService, RunSoracloudFheJob, SetSoracloudRuntimeState,
+            UpgradeSoracloudService,
         },
         soradns::{
             AddReleaseSigner, PublishDirectory, RemoveReleaseSigner, RevokeResolver,

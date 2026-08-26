@@ -100,6 +100,7 @@ use iroha_data_model::{
         SORA_MODEL_ARTIFACT_AUDIT_EVENT_VERSION_V1, SORA_MODEL_ARTIFACT_RECORD_VERSION_V1,
         SORA_MODEL_HOST_VIOLATION_EVIDENCE_RECORD_VERSION_V1, SORA_MODEL_REGISTRY_VERSION_V1,
         SORA_MODEL_WEIGHT_AUDIT_EVENT_VERSION_V1, SORA_MODEL_WEIGHT_VERSION_RECORD_VERSION_V1,
+        SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_CLAIM_VERSION_V1,
         SORA_SERVICE_AUDIT_EVENT_VERSION_V1, SORA_SERVICE_CONFIG_ENTRY_VERSION_V1,
         SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
         SORA_SERVICE_LEASE_MAX_EGRESS_BYTES_PER_REPORTER_BLOCK_V1,
@@ -153,15 +154,15 @@ use iroha_data_model::{
         SoraModelHostViolationEvidenceRecordV1, SoraModelHostViolationKindV1,
         SoraModelProvenanceKindV1, SoraModelProvenanceRefV1, SoraModelRegistryV1,
         SoraModelWeightActionV1, SoraModelWeightAuditEventV1, SoraModelWeightVersionRecordV1,
-        SoraPrivateModelArtifactRefV1, SoraPrivateUploadedModelExecutionReceiptV1,
-        SoraRolloutStageV1, SoraRuntimeExecutionHostV1, SoraRuntimeReceiptV1,
-        SoraServiceAuditEventV1, SoraServiceConfigEntryV1, SoraServiceConfigMutationV1,
-        SoraServiceDeploymentStateV1, SoraServiceExactCurrentRevisionPreconditionV1,
-        SoraServiceExecutionPlaneV1, SoraServiceHandlerClassV1, SoraServiceHealthStatusV1,
-        SoraServiceLeaseEgressCheckpointV1, SoraServiceLeaseReporterAssignmentV1,
-        SoraServiceLeaseReportingEpochRolloverV1, SoraServiceLeaseStateV1,
-        SoraServiceLeaseStatusV1, SoraServiceLeaseUsageAuditV1, SoraServiceLeaseVolumeStateV1,
-        SoraServiceLifecycleActionV1, SoraServiceMailboxMessageV1,
+        SoraPrivateModelArtifactRefV1, SoraPrivateUploadedModelExecutionClaimV1,
+        SoraPrivateUploadedModelExecutionReceiptV1, SoraRolloutStageV1, SoraRuntimeExecutionHostV1,
+        SoraRuntimeReceiptV1, SoraServiceAuditEventV1, SoraServiceConfigEntryV1,
+        SoraServiceConfigMutationV1, SoraServiceDeploymentStateV1,
+        SoraServiceExactCurrentRevisionPreconditionV1, SoraServiceExecutionPlaneV1,
+        SoraServiceHandlerClassV1, SoraServiceHealthStatusV1, SoraServiceLeaseEgressCheckpointV1,
+        SoraServiceLeaseReporterAssignmentV1, SoraServiceLeaseReportingEpochRolloverV1,
+        SoraServiceLeaseStateV1, SoraServiceLeaseStatusV1, SoraServiceLeaseUsageAuditV1,
+        SoraServiceLeaseVolumeStateV1, SoraServiceLifecycleActionV1, SoraServiceMailboxMessageV1,
         SoraServiceMutationPreconditionV1, SoraServiceRolloutStateV1, SoraServiceRuntimeStateV1,
         SoraServiceSecretEntryV1, SoraServiceSecretMutationV1, SoraServiceStateEntryV1,
         SoraStateEncryptionV1, SoraStateMutationOperationV1, SoraTrainingJobActionV1,
@@ -215,7 +216,7 @@ use iroha_data_model::{
         soracloud_fhe_public_key_proof_open_verify_bounds,
         soracloud_fhe_public_key_proof_public_inputs_schema_hash_v1,
     },
-    sorafs::pin_registry::{PinStatus, StorageClass},
+    sorafs::pin_registry::{PinStatus, ReplicationOrderStatus, StorageClass},
     zk::{BackendTag, OpenVerifyEnvelope, OpenVerifyEnvelopeBounds, StarkFriOpenProofV1},
 };
 use iroha_primitives::{
@@ -6360,36 +6361,41 @@ pub(crate) fn write_soracloud_runtime_receipt(
         .insert(receipt.receipt_id, receipt);
     Ok(())
 }
-pub(crate) fn write_soracloud_private_uploaded_model_execution_receipt(
+pub(crate) fn prepare_soracloud_private_uploaded_model_execution_claim(
     state_transaction: &mut StateTransaction<'_, '_>,
-    mut receipt: SoraPrivateUploadedModelExecutionReceiptV1,
+    receipt: SoraPrivateUploadedModelExecutionReceiptV1,
 ) -> Result<(), InstructionExecutionError> {
     receipt
         .validate_submission()
         .map_err(|err| invalid_parameter(err.to_string()))?;
 
-    // Exact retries are a no-op even if the referenced artifacts were retired after the
-    // original execution. The persisted sequence is ledger-owned and is the only field a
-    // submission cannot reproduce.
+    let claim_key = (
+        receipt.service_name.as_ref().to_owned(),
+        receipt.decryption_request_id.clone(),
+    );
+    // Exact retries remain a no-op after authorization, pins, or placement later retire.
     if let Some(existing) = state_transaction
         .world
-        .soracloud_private_uploaded_model_execution_receipts
-        .get(&receipt.receipt_id)
+        .soracloud_private_uploaded_model_execution_claims
+        .get(&claim_key)
     {
-        let mut expected = receipt;
-        expected.emitted_sequence = existing.emitted_sequence;
-        expected.emitted_block_height = existing.emitted_block_height;
-        if existing == &expected {
+        existing.validate().map_err(|error| {
+            InstructionExecutionError::InvariantViolation(
+                format!("existing private execution claim is invalid: {error}").into(),
+            )
+        })?;
+        if existing.receipt == receipt {
             return Ok(());
         }
         return Err(InstructionExecutionError::InvariantViolation(
             format!(
-                "private receipt id `{}` is already bound to different execution evidence",
-                existing.receipt_id
+                "decryption request `{}` for service `{}` already has a different prepared private execution",
+                receipt.decryption_request_id, receipt.service_name
             )
             .into(),
         ));
     }
+    let claimed_epoch = state_transaction.block_unix_timestamp_ms() / 1_000;
 
     let bundle_key = (
         receipt.service_name.as_ref().to_owned(),
@@ -6439,6 +6445,36 @@ pub(crate) fn write_soracloud_private_uploaded_model_execution_receipt(
     )
     .map_err(|error| InstructionExecutionError::InvariantViolation(error.into()))?;
     require_active_sorafs_uploaded_model_pin(state_transaction, bundle)?;
+    let model_pin = state_transaction
+        .world
+        .pin_manifests
+        .get(&bundle.sorafs_manifest_digest)
+        .expect("active uploaded-model pin was resolved above");
+    match model_pin.status {
+        PinStatus::Approved(approval_epoch) if approval_epoch <= claimed_epoch => {}
+        PinStatus::Approved(approval_epoch) => {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "uploaded-model SoraFS pin approval epoch {approval_epoch} is after claim epoch {claimed_epoch}"
+                )
+                .into(),
+            ));
+        }
+        PinStatus::Pending | PinStatus::Retired(_) => {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "uploaded-model SoraFS pin changed lifecycle state during claim validation".into(),
+            ));
+        }
+    }
+    if model_pin.policy.retention_epoch <= claimed_epoch {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "uploaded-model SoraFS pin retention epoch {} is not live at claim epoch {claimed_epoch}",
+                model_pin.policy.retention_epoch
+            )
+            .into(),
+        ));
+    }
     let service_revision_key = (
         receipt.service_name.as_ref().to_owned(),
         receipt.service_version.clone(),
@@ -6583,6 +6619,17 @@ pub(crate) fn write_soracloud_private_uploaded_model_execution_receipt(
         ));
     }
 
+    if state_transaction
+        .world
+        .soracloud_private_uploaded_model_execution_receipts
+        .get(&receipt.receipt_id)
+        .is_some()
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "private execution receipt exists without its required prepared claim".into(),
+        ));
+    }
+
     let require_artifact_pin =
         |artifact: &SoraPrivateModelArtifactRefV1| -> Result<(), InstructionExecutionError> {
             let pin = state_transaction
@@ -6599,7 +6646,16 @@ pub(crate) fn write_soracloud_private_uploaded_model_execution_receipt(
                     )
                 })?;
             match pin.status {
-                PinStatus::Approved(_) => {}
+                PinStatus::Approved(approval_epoch) if approval_epoch <= claimed_epoch => {}
+                PinStatus::Approved(approval_epoch) => {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "private `{}` artifact SoraFS pin approval epoch {approval_epoch} is after claim epoch {claimed_epoch}",
+                            artifact.artifact_role
+                        )
+                        .into(),
+                    ));
+                }
                 PinStatus::Pending => {
                     return Err(InstructionExecutionError::InvariantViolation(
                         format!(
@@ -6619,6 +6675,15 @@ pub(crate) fn write_soracloud_private_uploaded_model_execution_receipt(
                     ));
                 }
             }
+            if pin.policy.retention_epoch <= claimed_epoch {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "private `{}` artifact SoraFS pin retention epoch {} is not live at claim epoch {claimed_epoch}",
+                        artifact.artifact_role, pin.policy.retention_epoch
+                    )
+                    .into(),
+                ));
+            }
             if pin.digest != artifact.sorafs_manifest_digest
                 || pin.root_cid != artifact.sorafs_root_cid
                 || pin.content_length != artifact.ciphertext_bytes
@@ -6634,10 +6699,208 @@ pub(crate) fn write_soracloud_private_uploaded_model_execution_receipt(
             Ok(())
         };
     require_artifact_pin(&receipt.input_artifact)?;
+    let output_pin = state_transaction
+        .world
+        .pin_manifests
+        .get(&receipt.output_artifact.sorafs_manifest_digest)
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "prepared private output pin is not registered".into(),
+            )
+        })?;
+    if output_pin.digest != receipt.output_artifact.sorafs_manifest_digest
+        || output_pin.root_cid != receipt.output_artifact.sorafs_root_cid
+        || output_pin.content_length != receipt.output_artifact.ciphertext_bytes
+        || output_pin.submitted_by != receipt.attesting_validator.validator_account_id
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "prepared private output artifact does not exactly match its attester-owned SoraFS pin"
+                .into(),
+        ));
+    }
+    match output_pin.status {
+        PinStatus::Approved(approval_epoch) if approval_epoch <= claimed_epoch => {}
+        PinStatus::Approved(approval_epoch) => {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "prepared private output pin approval epoch {approval_epoch} is after claim epoch {claimed_epoch}"
+                )
+                .into(),
+            ));
+        }
+        PinStatus::Pending => {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "prepared private output pin is not approved at the claim epoch".into(),
+            ));
+        }
+        PinStatus::Retired(epoch) => {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!("prepared private output pin retired at epoch {epoch}").into(),
+            ));
+        }
+    }
+    let minimum_retention_epoch = claimed_epoch
+        .checked_add(iroha_data_model::soracloud::SORACLOUD_PRIVATE_OUTPUT_MIN_RETENTION_SECS_V1)
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "private output claim retention epoch overflowed".into(),
+            )
+        })?;
+    if output_pin.policy.retention_epoch < minimum_retention_epoch {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "private output SoraFS pin retention epoch {} is below claim requirement {minimum_retention_epoch}",
+                output_pin.policy.retention_epoch
+            )
+            .into(),
+        ));
+    }
+    let replication_order = state_transaction
+        .world
+        .replication_orders
+        .get(&receipt.output_replication_order_id)
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "approved private output pin is missing its deterministic automatic replication order"
+                    .into(),
+            )
+        })?;
+    let order_label = hex::encode(replication_order.order_id.as_bytes());
+    let minimum_order_retention_epoch = replication_order
+        .deadline_epoch
+        .checked_add(iroha_data_model::soracloud::SORACLOUD_PRIVATE_OUTPUT_MIN_RETENTION_SECS_V1)
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "private output automatic replication order receipt-recovery floor overflowed"
+                    .into(),
+            )
+        })?;
+    if output_pin.policy.retention_epoch < minimum_order_retention_epoch {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "private output SoraFS pin retention epoch {} is below automatic replication order {order_label} receipt-recovery floor {minimum_order_retention_epoch}",
+                output_pin.policy.retention_epoch
+            )
+            .into(),
+        ));
+    }
+    match replication_order.status {
+        ReplicationOrderStatus::Pending if claimed_epoch > replication_order.deadline_epoch => {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "private output automatic replication order {order_label} is still pending after deadline {} at claim epoch {claimed_epoch}",
+                    replication_order.deadline_epoch
+                )
+                .into(),
+            ));
+        }
+        ReplicationOrderStatus::Completed(completion_epoch) if completion_epoch > claimed_epoch => {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "private output automatic replication order {order_label} completed at future epoch {completion_epoch} after claim epoch {claimed_epoch}"
+                )
+                .into(),
+            ));
+        }
+        ReplicationOrderStatus::Expired(expiration_epoch) => {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "private output automatic replication order {order_label} expired at epoch {expiration_epoch} and cannot back a new execution claim"
+                )
+                .into(),
+            ));
+        }
+        ReplicationOrderStatus::Cancelled(cancellation_epoch) => {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "private output automatic replication order {order_label} was cancelled at epoch {cancellation_epoch} and cannot back a new execution claim"
+                )
+                .into(),
+            ));
+        }
+        ReplicationOrderStatus::Pending | ReplicationOrderStatus::Completed(_) => {}
+    }
+    crate::smartcontracts::isi::sorafs::validate_stored_automatic_replication_order(
+        output_pin,
+        replication_order,
+        &order_label,
+    )?;
+    let claim = SoraPrivateUploadedModelExecutionClaimV1 {
+        schema_version: SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_CLAIM_VERSION_V1,
+        receipt,
+        claimed_block_height: execution_height,
+        claimed_epoch,
+    };
+    claim
+        .validate()
+        .map_err(|err| invalid_parameter(err.to_string()))?;
+    state_transaction
+        .world
+        .soracloud_private_uploaded_model_execution_claims
+        .insert(claim_key, claim);
+    Ok(())
+}
+pub(crate) fn write_soracloud_private_uploaded_model_execution_receipt(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    mut receipt: SoraPrivateUploadedModelExecutionReceiptV1,
+) -> Result<(), InstructionExecutionError> {
+    receipt
+        .validate_submission()
+        .map_err(|err| invalid_parameter(err.to_string()))?;
+
+    // Exact retries are a no-op even after the claim's authorization-time dependencies retire.
+    if let Some(existing) = state_transaction
+        .world
+        .soracloud_private_uploaded_model_execution_receipts
+        .get(&receipt.receipt_id)
+    {
+        let mut expected = receipt;
+        expected.authorization_claim_block_height = existing.authorization_claim_block_height;
+        expected.authorization_claim_epoch = existing.authorization_claim_epoch;
+        expected.emitted_sequence = existing.emitted_sequence;
+        expected.emitted_block_height = existing.emitted_block_height;
+        expected.emitted_epoch = existing.emitted_epoch;
+        if existing == &expected {
+            return Ok(());
+        }
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "private receipt id `{}` is already bound to different execution evidence",
+                existing.receipt_id
+            )
+            .into(),
+        ));
+    }
+
+    let claim_key = (
+        receipt.service_name.as_ref().to_owned(),
+        receipt.decryption_request_id.clone(),
+    );
+    let claim = state_transaction
+        .world
+        .soracloud_private_uploaded_model_execution_claims
+        .get(&claim_key)
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "private execution receipt has no prepared authorization claim".into(),
+            )
+        })?;
+    claim.validate().map_err(|err| {
+        InstructionExecutionError::InvariantViolation(
+            format!("prepared private execution claim is invalid: {err}").into(),
+        )
+    })?;
+    if claim.receipt != receipt {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "private execution receipt does not exactly match its prepared claim".into(),
+        ));
+    }
+
+    let receipt_epoch = state_transaction.block_unix_timestamp_ms() / 1_000;
     let durability = crate::soracloud_runtime::validate_soracloud_private_output_durability_v1(
         &state_transaction.world,
         &receipt,
-        state_transaction.block_unix_timestamp_ms() / 1_000,
+        receipt_epoch,
     )
     .map_err(|message| InstructionExecutionError::InvariantViolation(message.into()))?;
     if durability != crate::soracloud_runtime::SoracloudPrivateOutputDurabilityStatusV1::Ready {
@@ -6646,35 +6909,141 @@ pub(crate) fn write_soracloud_private_uploaded_model_execution_receipt(
         ));
     }
 
-    if state_transaction
-        .world
-        .soracloud_private_uploaded_model_execution_receipts
-        .iter()
-        .any(|(_, existing)| {
-            existing.service_name == receipt.service_name
-                && existing.decryption_request_id == receipt.decryption_request_id
-        })
-    {
-        return Err(InstructionExecutionError::InvariantViolation(
-            format!(
-                "decryption request `{}` for service `{}` already has an authoritative private execution receipt",
-                receipt.decryption_request_id, receipt.service_name
-            )
-            .into(),
-        ));
-    }
-
+    receipt.authorization_claim_block_height = claim.claimed_block_height;
+    receipt.authorization_claim_epoch = claim.claimed_epoch;
     receipt.emitted_sequence = next_soracloud_audit_sequence(state_transaction)?;
-    receipt.emitted_block_height = execution_height;
+    receipt.emitted_block_height = state_transaction.block_height();
+    receipt.emitted_epoch = receipt_epoch;
     receipt
         .validate()
         .map_err(|err| invalid_parameter(err.to_string()))?;
-
     ensure_soracloud_sequence_is_next(state_transaction, receipt.emitted_sequence)?;
     state_transaction
         .world
         .soracloud_private_uploaded_model_execution_receipts
         .insert(receipt.receipt_id, receipt);
+    Ok(())
+}
+fn decode_soracloud_private_output_manifest(
+    output_manifest_payload: &[u8],
+    receipt: &SoraPrivateUploadedModelExecutionReceiptV1,
+) -> Result<sorafs_manifest::ManifestV1, InstructionExecutionError> {
+    if output_manifest_payload.is_empty()
+        || output_manifest_payload.len() > sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES
+    {
+        return Err(invalid_parameter(format!(
+            "private output manifest payload has {} bytes; expected 1..={}",
+            output_manifest_payload.len(),
+            sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES
+        ))
+        .into());
+    }
+    let manifest = sorafs_manifest::decode_manifest_v1_canonical(output_manifest_payload).map_err(
+        |error| invalid_parameter(format!("invalid private output ManifestV1: {error}")),
+    )?;
+    let digest = iroha_data_model::sorafs::pin_registry::ManifestDigest::from_manifest(&manifest)
+        .map_err(|error| {
+        invalid_parameter(format!(
+            "failed to derive private output manifest digest: {error}"
+        ))
+    })?;
+    let root_cid =
+        iroha_data_model::sorafs::pin_registry::ManifestRootCid::try_from_slice(&manifest.root_cid)
+            .map_err(|error| {
+                invalid_parameter(format!("invalid private output root CID: {error}"))
+            })?;
+    if digest != receipt.output_artifact.sorafs_manifest_digest
+        || root_cid != receipt.output_artifact.sorafs_root_cid
+        || manifest.content_length != receipt.output_artifact.ciphertext_bytes
+        || receipt.output_replication_order_id
+            != iroha_data_model::sorafs::pin_registry::derive_sorafs_auto_replication_order_id_v1(
+                &digest,
+            )
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "private output manifest digest, root CID, content length, or deterministic replication order does not match the prepared receipt"
+                .into(),
+        ));
+    }
+    Ok(manifest)
+}
+
+fn require_soracloud_private_output_pin_matches_manifest(
+    pin: &iroha_data_model::sorafs::pin_registry::PinManifestRecord,
+    manifest: &sorafs_manifest::ManifestV1,
+    authority: &AccountId,
+    consensus_epoch: u64,
+) -> Result<(), InstructionExecutionError> {
+    crate::soracloud_runtime::validate_soracloud_private_output_pin_for_prepare_v1(
+        pin,
+        manifest,
+        authority,
+        consensus_epoch,
+    )
+    .map_err(|error| InstructionExecutionError::InvariantViolation(error.into()))
+}
+
+fn ensure_soracloud_private_output_pin(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    authority: &AccountId,
+    output_manifest_payload: Vec<u8>,
+    manifest: &sorafs_manifest::ManifestV1,
+) -> Result<(), InstructionExecutionError> {
+    let digest = iroha_data_model::sorafs::pin_registry::ManifestDigest::from_manifest(manifest)
+        .map_err(|error| {
+            invalid_parameter(format!(
+                "failed to derive private output manifest digest: {error}"
+            ))
+        })?;
+    if state_transaction.world.pin_manifests.get(&digest).is_none() {
+        iroha_data_model::isi::sorafs::RegisterPinManifest::new(
+            output_manifest_payload,
+            None,
+            None,
+        )
+        .execute(authority, state_transaction)?;
+    }
+    let pin = state_transaction
+        .world
+        .pin_manifests
+        .get(&digest)
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "private output pin registration did not persist its exact manifest".into(),
+            )
+        })?;
+    require_soracloud_private_output_pin_matches_manifest(
+        pin,
+        manifest,
+        authority,
+        state_transaction.block_unix_timestamp_ms() / 1_000,
+    )
+}
+
+fn require_active_soracloud_private_execution_attester(
+    authority: &AccountId,
+    receipt: &SoraPrivateUploadedModelExecutionReceiptV1,
+    state_transaction: &StateTransaction<'_, '_>,
+) -> Result<(), InstructionExecutionError> {
+    require_active_public_lane_validator(authority, state_transaction)?;
+    let attester = &receipt.attesting_validator;
+    let validator_key = (attester.lane_id, authority.clone());
+    let exact_active_attester = state_transaction
+        .world
+        .public_lane_validators
+        .get(&validator_key)
+        .is_some_and(|record| {
+            crate::state::public_lane_validator_record_matches_key(&validator_key, record)
+                && record.status == PublicLaneValidatorStatus::Active
+                && record.peer_id.to_string() == attester.peer_id
+                && state_transaction.is_lane_active_for_authority(attester.lane_id)
+        });
+    if !exact_active_attester {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "private execution attester must exactly match the authority's active public-lane validator record"
+                .into(),
+        ));
+    }
     Ok(())
 }
 /// Apply an authoritative Soracloud service-state mutation using the active binding contract.
@@ -18676,6 +19045,85 @@ impl Execute for isi::RecordSoracloudRuntimeReceipt {
         write_soracloud_runtime_receipt(state_transaction, self.receipt)
     }
 }
+impl Execute for isi::PrepareSoracloudPrivateUploadedModelExecution {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), InstructionExecutionError> {
+        let Self {
+            output_manifest_payload,
+            receipt,
+        } = self;
+        receipt
+            .validate_submission()
+            .map_err(|error| invalid_parameter(error.to_string()))?;
+        if receipt.network_id != *state_transaction.network_id() {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "private uploaded-model receipt belongs to another network".into(),
+            ));
+        }
+        if receipt.attesting_validator.validator_account_id != *authority {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "private uploaded-model receipt attesting_validator must equal the transaction authority"
+                .into(),
+            ));
+        }
+        // Decode and bind the canonical output evidence even for retries so a caller cannot use an
+        // already prepared request as an idempotency key for different manifest bytes.
+        let manifest =
+            decode_soracloud_private_output_manifest(&output_manifest_payload, &receipt)?;
+        let claim_key = (
+            receipt.service_name.as_ref().to_owned(),
+            receipt.decryption_request_id.clone(),
+        );
+        if let Some(existing) = state_transaction
+            .world
+            .soracloud_private_uploaded_model_execution_claims
+            .get(&claim_key)
+        {
+            existing.validate().map_err(|error| {
+                InstructionExecutionError::InvariantViolation(
+                    format!("existing private execution claim is invalid: {error}").into(),
+                )
+            })?;
+            if existing.receipt == receipt {
+                return Ok(());
+            }
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "decryption request `{}` for service `{}` already has a different prepared private execution",
+                    receipt.decryption_request_id, receipt.service_name
+                )
+                .into(),
+            ));
+        }
+
+        if state_transaction
+            .gov
+            .sorafs_pin_policy
+            .require_council_signatures
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "private uploaded-model execution requires permissionless automatic output-pin approval; council-gated approval cannot bound claim recovery"
+                    .into(),
+            ));
+        }
+        require_active_soracloud_private_execution_attester(
+            authority,
+            &receipt,
+            state_transaction,
+        )?;
+        ensure_soracloud_private_output_pin(
+            state_transaction,
+            authority,
+            output_manifest_payload,
+            &manifest,
+        )?;
+        prepare_soracloud_private_uploaded_model_execution_claim(state_transaction, receipt)
+    }
+}
+
 impl Execute for isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
     fn execute(
         self,
@@ -18693,35 +19141,6 @@ impl Execute for isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
             return Err(InstructionExecutionError::InvariantViolation(
                 "private uploaded-model receipt attesting_validator must equal the transaction authority"
                 .into(),
-            ));
-        }
-        if state_transaction
-            .world
-            .soracloud_private_uploaded_model_execution_receipts
-            .get(&receipt.receipt_id)
-            .is_some()
-        {
-            return write_soracloud_private_uploaded_model_execution_receipt(
-                state_transaction,
-                receipt,
-            );
-        }
-        require_active_public_lane_validator(authority, state_transaction)?;
-        let validator_key = (attester.lane_id, authority.clone());
-        let exact_active_attester = state_transaction
-            .world
-            .public_lane_validators
-            .get(&validator_key)
-            .is_some_and(|record| {
-                crate::state::public_lane_validator_record_matches_key(&validator_key, record)
-                    && record.status == PublicLaneValidatorStatus::Active
-                    && record.peer_id.to_string() == attester.peer_id
-                    && state_transaction.is_lane_active_for_authority(attester.lane_id)
-            });
-        if !exact_active_attester {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "private uploaded-model receipt attesting_validator must exactly match the authority's active public-lane validator record"
-                    .into(),
             ));
         }
         write_soracloud_private_uploaded_model_execution_receipt(state_transaction, receipt)

@@ -902,6 +902,12 @@ mod tests {
             operation_response_schema_ref(execute, "202", "private uploaded-model execute",),
             "#/components/schemas/PrivateUploadedModelExecuteAcceptedResponse"
         );
+        assert_eq!(
+            execute["responses"]["202"]["description"].as_str(),
+            Some(
+                "Encrypted output durably ingested. Prepare atomically ensures its approved paid pin and freezes authorization; Receipt follows only after replication quorum"
+            )
+        );
         assert_strict_object_schema(
             schemas,
             "PrivateUploadedModelExecuteRequest",
@@ -965,7 +971,7 @@ mod tests {
             submission_phases,
             BTreeSet::from([
                 "awaiting_output_durability",
-                "output_pin_submitted",
+                "prepare_submitted",
                 "receipt_submitted",
                 "committed",
             ])
@@ -976,7 +982,7 @@ mod tests {
         assert_eq!(response_variants.len(), 4);
         for (phase, requires_hash, assigned_receipt) in [
             ("awaiting_output_durability", false, false),
-            ("output_pin_submitted", true, false),
+            ("prepare_submitted", true, false),
             ("receipt_submitted", true, false),
             ("committed", false, true),
         ] {
@@ -1001,7 +1007,13 @@ mod tests {
                 );
             }
             let receipt = &variant["properties"]["receipt"];
-            for coordinate in ["emitted_sequence", "emitted_block_height"] {
+            for coordinate in [
+                "authorization_claim_block_height",
+                "authorization_claim_epoch",
+                "emitted_sequence",
+                "emitted_block_height",
+                "emitted_epoch",
+            ] {
                 let coordinate_schema = &receipt["properties"][coordinate];
                 if assigned_receipt {
                     assert_eq!(coordinate_schema["minimum"].as_u64(), Some(1));
@@ -1022,7 +1034,7 @@ mod tests {
             accepted_phases,
             BTreeSet::from([
                 "awaiting_output_durability",
-                "output_pin_submitted",
+                "prepare_submitted",
                 "receipt_submitted",
             ])
         );
@@ -1063,8 +1075,11 @@ mod tests {
                 "output_recipient",
                 "request_commitment",
                 "result_commitment",
+                "authorization_claim_block_height",
+                "authorization_claim_epoch",
                 "emitted_sequence",
                 "emitted_block_height",
+                "emitted_epoch",
             ],
             &[],
         );
@@ -1076,6 +1091,25 @@ mod tests {
             ),
             "#/components/schemas/ReplicationOrderId"
         );
+        for coordinate in [
+            "authorization_claim_block_height",
+            "authorization_claim_epoch",
+            "emitted_epoch",
+        ] {
+            let property =
+                &component_properties(schemas, "SoraPrivateUploadedModelExecutionReceiptV1")
+                    [coordinate];
+            assert_eq!(
+                property.get("format").and_then(Value::as_str),
+                Some("uint64"),
+                "{coordinate} must retain its unsigned 64-bit wire format"
+            );
+            assert_eq!(
+                property.get("minimum").and_then(Value::as_u64),
+                Some(0),
+                "{coordinate} must admit the zero submission sentinel"
+            );
+        }
         assert_strict_object_schema(
             schemas,
             "SoraPrivateModelArtifactRefV1",

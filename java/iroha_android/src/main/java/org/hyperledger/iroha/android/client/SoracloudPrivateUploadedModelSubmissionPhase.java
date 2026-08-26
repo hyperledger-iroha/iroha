@@ -5,8 +5,8 @@ public enum SoracloudPrivateUploadedModelSubmissionPhase {
   /** Encrypted output exists, but its durability transaction has not been submitted. */
   AWAITING_OUTPUT_DURABILITY("awaiting_output_durability"),
 
-  /** The output pin transaction has been submitted. */
-  OUTPUT_PIN_SUBMITTED("output_pin_submitted"),
+  /** The preparation transaction has been submitted. */
+  PREPARE_SUBMITTED("prepare_submitted"),
 
   /** The durable-output receipt transaction has been submitted. */
   RECEIPT_SUBMITTED("receipt_submitted"),
@@ -33,21 +33,21 @@ public enum SoracloudPrivateUploadedModelSubmissionPhase {
     switch (canonical) {
       case "awaiting_output_durability":
         return AWAITING_OUTPUT_DURABILITY;
-      case "output_pin_submitted":
-        return OUTPUT_PIN_SUBMITTED;
+      case "prepare_submitted":
+        return PREPARE_SUBMITTED;
       case "receipt_submitted":
         return RECEIPT_SUBMITTED;
       case "committed":
         return COMMITTED;
       default:
         throw new IllegalArgumentException(
-            "submissionPhase must equal awaiting_output_durability, output_pin_submitted, "
+            "submissionPhase must equal awaiting_output_durability, prepare_submitted, "
                 + "receipt_submitted, or committed");
     }
   }
 
   boolean requiresTransactionHash() {
-    return this == OUTPUT_PIN_SUBMITTED || this == RECEIPT_SUBMITTED;
+    return this == PREPARE_SUBMITTED || this == RECEIPT_SUBMITTED;
   }
 
   boolean requiresAssignedReceipt() {

@@ -22,8 +22,9 @@ object SoracloudPrivateUploadedModelJsonParser {
         "weight_version", "runtime_version", "model_manifest_digest", "model_bundle_root",
         "policy_id", "decryption_request_id", "attesting_validator", "input_artifact",
         "output_artifact", "output_replication_order_id", "input_commitment", "output_commitment",
-        "output_recipient",
-        "request_commitment", "result_commitment", "emitted_sequence", "emitted_block_height",
+        "output_recipient", "request_commitment", "result_commitment",
+        "authorization_claim_block_height", "authorization_claim_epoch", "emitted_sequence",
+        "emitted_block_height", "emitted_epoch",
     )
     private val ARTIFACT_FIELDS = setOf(
         "schema_version", "sorafs_manifest_digest", "sorafs_root_cid", "artifact_hash",
@@ -126,8 +127,11 @@ object SoracloudPrivateUploadedModelJsonParser {
             val path = "soracloud private receipt list.receipts[$i]"
             val receipt = parseReceipt(expectObject(receiptValues[i], path), path)
             check(
-                receipt.emittedSequence > BigInteger.ZERO &&
-                    receipt.emittedBlockHeight > BigInteger.ZERO
+                receipt.authorizationClaimBlockHeight > BigInteger.ZERO &&
+                    receipt.authorizationClaimEpoch > BigInteger.ZERO &&
+                    receipt.emittedSequence > BigInteger.ZERO &&
+                    receipt.emittedBlockHeight > BigInteger.ZERO &&
+                    receipt.emittedEpoch > BigInteger.ZERO
             ) {
                 "$path must have positive ledger coordinates"
             }
@@ -197,11 +201,38 @@ object SoracloudPrivateUploadedModelJsonParser {
             root["emitted_block_height"],
             "$context.emitted_block_height",
         )
+        val emittedEpoch = unsigned64Integer(
+            root["emitted_epoch"],
+            "$context.emitted_epoch",
+        )
+        val authorizationClaimBlockHeight = unsigned64Integer(
+            root["authorization_claim_block_height"],
+            "$context.authorization_claim_block_height",
+        )
+        val authorizationClaimEpoch = unsigned64Integer(
+            root["authorization_claim_epoch"],
+            "$context.authorization_claim_epoch",
+        )
         check(
-            (emittedSequence == BigInteger.ZERO && emittedBlockHeight == BigInteger.ZERO) ||
-                (emittedSequence > BigInteger.ZERO && emittedBlockHeight > BigInteger.ZERO)
+            (authorizationClaimBlockHeight == BigInteger.ZERO &&
+                authorizationClaimEpoch == BigInteger.ZERO &&
+                emittedSequence == BigInteger.ZERO &&
+                emittedBlockHeight == BigInteger.ZERO &&
+                emittedEpoch == BigInteger.ZERO) ||
+                (authorizationClaimBlockHeight > BigInteger.ZERO &&
+                    authorizationClaimEpoch > BigInteger.ZERO &&
+                    emittedSequence > BigInteger.ZERO &&
+                    emittedBlockHeight > BigInteger.ZERO &&
+                    emittedEpoch > BigInteger.ZERO)
         ) {
-            "$context ledger coordinates must both be zero or both be positive"
+            "$context ledger coordinates must all be zero or all be positive"
+        }
+        check(
+            authorizationClaimBlockHeight == BigInteger.ZERO ||
+                (emittedBlockHeight >= authorizationClaimBlockHeight &&
+                    emittedEpoch >= authorizationClaimEpoch)
+        ) {
+            "$context emission coordinates must not precede authorization claim coordinates"
         }
         val outputArtifact = parseArtifact(
             expectObject(root["output_artifact"], "$context.output_artifact"),
@@ -255,8 +286,11 @@ object SoracloudPrivateUploadedModelJsonParser {
             ),
             requestCommitment = hashLiteral(root["request_commitment"], "$context.request_commitment"),
             resultCommitment = hashLiteral(root["result_commitment"], "$context.result_commitment"),
+            authorizationClaimBlockHeight = authorizationClaimBlockHeight,
+            authorizationClaimEpoch = authorizationClaimEpoch,
             emittedSequence = emittedSequence,
             emittedBlockHeight = emittedBlockHeight,
+            emittedEpoch = emittedEpoch,
         )
     }
 
@@ -550,7 +584,11 @@ object SoracloudPrivateUploadedModelJsonParser {
         receipt: SoracloudPrivateUploadedModelExecutionReceipt,
     ) {
         val assigned =
-            receipt.emittedSequence > BigInteger.ZERO && receipt.emittedBlockHeight > BigInteger.ZERO
+            receipt.authorizationClaimBlockHeight > BigInteger.ZERO &&
+                receipt.authorizationClaimEpoch > BigInteger.ZERO &&
+                receipt.emittedSequence > BigInteger.ZERO &&
+                receipt.emittedBlockHeight > BigInteger.ZERO &&
+                receipt.emittedEpoch > BigInteger.ZERO
         val required = SoracloudPrivateUploadedModelSubmissionPhase
             .requiresAssignedReceipt(submissionPhase)
         check(required == assigned) {
@@ -559,7 +597,7 @@ object SoracloudPrivateUploadedModelJsonParser {
                     "for `committed`"
             } else {
                 "soracloud private execute response.receipt must use zero ledger coordinates for " +
-                    "`${submissionPhase.wireValue}`"
+                "`${submissionPhase.wireValue}`"
             }
         }
     }

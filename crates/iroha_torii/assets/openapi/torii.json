@@ -26289,11 +26289,12 @@
             "$ref": "#/components/schemas/PrivateUploadedModelExecuteResponse"
           },
           {
+            "additionalProperties": false,
             "properties": {
               "submission_phase": {
                 "enum": [
                   "awaiting_output_durability",
-                  "output_pin_submitted",
+                  "prepare_submitted",
                   "receipt_submitted"
                 ],
                 "type": "string"
@@ -26312,6 +26313,7 @@
             "$ref": "#/components/schemas/PrivateUploadedModelExecuteResponse"
           },
           {
+            "additionalProperties": false,
             "properties": {
               "submission_phase": {
                 "const": "committed",
@@ -26369,10 +26371,24 @@
         "additionalProperties": false,
         "oneOf": [
           {
+            "additionalProperties": false,
             "properties": {
               "receipt": {
+                "additionalProperties": false,
                 "properties": {
+                  "authorization_claim_block_height": {
+                    "const": 0,
+                    "type": "integer"
+                  },
+                  "authorization_claim_epoch": {
+                    "const": 0,
+                    "type": "integer"
+                  },
                   "emitted_block_height": {
+                    "const": 0,
+                    "type": "integer"
+                  },
+                  "emitted_epoch": {
                     "const": 0,
                     "type": "integer"
                   },
@@ -26382,8 +26398,11 @@
                   }
                 },
                 "required": [
+                  "authorization_claim_block_height",
+                  "authorization_claim_epoch",
                   "emitted_sequence",
-                  "emitted_block_height"
+                  "emitted_block_height",
+                  "emitted_epoch"
                 ],
                 "type": "object"
               },
@@ -26403,10 +26422,24 @@
             "type": "object"
           },
           {
+            "additionalProperties": false,
             "properties": {
               "receipt": {
+                "additionalProperties": false,
                 "properties": {
+                  "authorization_claim_block_height": {
+                    "const": 0,
+                    "type": "integer"
+                  },
+                  "authorization_claim_epoch": {
+                    "const": 0,
+                    "type": "integer"
+                  },
                   "emitted_block_height": {
+                    "const": 0,
+                    "type": "integer"
+                  },
+                  "emitted_epoch": {
                     "const": 0,
                     "type": "integer"
                   },
@@ -26416,13 +26449,16 @@
                   }
                 },
                 "required": [
+                  "authorization_claim_block_height",
+                  "authorization_claim_epoch",
                   "emitted_sequence",
-                  "emitted_block_height"
+                  "emitted_block_height",
+                  "emitted_epoch"
                 ],
                 "type": "object"
               },
               "submission_phase": {
-                "const": "output_pin_submitted",
+                "const": "prepare_submitted",
                 "type": "string"
               },
               "transaction_hash": {
@@ -26437,10 +26473,24 @@
             "type": "object"
           },
           {
+            "additionalProperties": false,
             "properties": {
               "receipt": {
+                "additionalProperties": false,
                 "properties": {
+                  "authorization_claim_block_height": {
+                    "const": 0,
+                    "type": "integer"
+                  },
+                  "authorization_claim_epoch": {
+                    "const": 0,
+                    "type": "integer"
+                  },
                   "emitted_block_height": {
+                    "const": 0,
+                    "type": "integer"
+                  },
+                  "emitted_epoch": {
                     "const": 0,
                     "type": "integer"
                   },
@@ -26450,8 +26500,11 @@
                   }
                 },
                 "required": [
+                  "authorization_claim_block_height",
+                  "authorization_claim_epoch",
                   "emitted_sequence",
-                  "emitted_block_height"
+                  "emitted_block_height",
+                  "emitted_epoch"
                 ],
                 "type": "object"
               },
@@ -26471,10 +26524,27 @@
             "type": "object"
           },
           {
+            "additionalProperties": false,
             "properties": {
               "receipt": {
+                "additionalProperties": false,
                 "properties": {
+                  "authorization_claim_block_height": {
+                    "format": "uint64",
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "authorization_claim_epoch": {
+                    "format": "uint64",
+                    "minimum": 1,
+                    "type": "integer"
+                  },
                   "emitted_block_height": {
+                    "format": "uint64",
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "emitted_epoch": {
                     "format": "uint64",
                     "minimum": 1,
                     "type": "integer"
@@ -26486,8 +26556,11 @@
                   }
                 },
                 "required": [
+                  "authorization_claim_block_height",
+                  "authorization_claim_epoch",
                   "emitted_sequence",
-                  "emitted_block_height"
+                  "emitted_block_height",
+                  "emitted_epoch"
                 ],
                 "type": "object"
               },
@@ -26626,7 +26699,7 @@
       "PrivateUploadedModelSubmissionPhaseV1": {
         "enum": [
           "awaiting_output_durability",
-          "output_pin_submitted",
+          "prepare_submitted",
           "receipt_submitted",
           "committed"
         ],
@@ -35116,10 +35189,25 @@
           "attesting_validator": {
             "$ref": "#/components/schemas/SoraRuntimeDeterministicValidatorHostV1"
           },
+          "authorization_claim_block_height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "authorization_claim_epoch": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "decryption_request_id": {
             "type": "string"
           },
           "emitted_block_height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "emitted_epoch": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -35210,8 +35298,11 @@
           "output_recipient",
           "request_commitment",
           "result_commitment",
+          "authorization_claim_block_height",
+          "authorization_claim_epoch",
           "emitted_sequence",
-          "emitted_block_height"
+          "emitted_block_height",
+          "emitted_epoch"
         ],
         "type": "object"
       },
@@ -73843,7 +73934,7 @@
                 }
               }
             },
-            "description": "Encrypted output durably ingested and the typed output-pin-then-receipt submission phase returned"
+            "description": "Encrypted output durably ingested. Prepare atomically ensures its approved paid pin and freezes authorization; Receipt follows only after replication quorum"
           }
         },
         "summary": "Execute a private uploaded model.",
