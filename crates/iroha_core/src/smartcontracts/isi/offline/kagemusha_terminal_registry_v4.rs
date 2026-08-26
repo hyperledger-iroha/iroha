@@ -3198,6 +3198,7 @@ fn ensure_activation_record(
         || record.commitment != qualified.verifying_key_commitment()
         || u64::from(record.vk_len) != qualified.processed_verifying_key_len()
         || record.max_proof_bytes != manifest.max_proof_bytes
+        || activation_record_has_unbound_auxiliary_metadata(record)
         || record.activation_height != Some(manifest.activation_height)
         // Release withdrawal ends issuance, not terminal verification. Keeping
         // the verifier record active prevents already-issued escrow from being
@@ -3225,6 +3226,12 @@ fn ensure_activation_record(
         ));
     }
     Ok(())
+}
+
+fn activation_record_has_unbound_auxiliary_metadata(record: &VerifyingKeyRecord) -> bool {
+    record.gas_schedule_id.is_some()
+        || record.metadata_uri_cid.is_some()
+        || record.vk_bytes_cid.is_some()
 }
 #[cfg(test)]
 #[path = "kagemusha_terminal_registry_v4/candidate_profile.rs"]
@@ -4667,6 +4674,31 @@ mod tests {
         let error = activation_manifest_sha256(&step_eq, &retired)
             .expect_err("a retired owner namespace must fail closed");
         assert!(error.contains("owner namespace is invalid"));
+    }
+    #[test]
+    fn activation_records_reject_unbound_auxiliary_metadata() {
+        let canonical = verifier_record_for_manifest([0x63; 32]);
+        assert!(!activation_record_has_unbound_auxiliary_metadata(
+            &canonical
+        ));
+
+        for locator in ["gas schedule", "metadata URI", "verifier-key URI"] {
+            let mut substituted = canonical.clone();
+            match locator {
+                "gas schedule" => substituted.gas_schedule_id = Some("other-gas".to_owned()),
+                "metadata URI" => {
+                    substituted.metadata_uri_cid = Some("ipfs://other-metadata".to_owned());
+                }
+                "verifier-key URI" => {
+                    substituted.vk_bytes_cid = Some("ipfs://other-verifier".to_owned());
+                }
+                _ => unreachable!("fixed locator cases"),
+            }
+            assert!(
+                activation_record_has_unbound_auxiliary_metadata(&substituted),
+                "{locator} must not enter a release-bound activation record"
+            );
+        }
     }
     #[cfg(all(
         unix,

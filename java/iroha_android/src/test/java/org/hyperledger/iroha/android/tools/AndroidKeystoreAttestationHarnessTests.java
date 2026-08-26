@@ -1,15 +1,22 @@
 package org.hyperledger.iroha.android.tools;
 
+import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.security.cert.CertificateFactory;
+import java.security.cert.X509Certificate;
+import java.util.Arrays;
 import java.util.Base64;
+import java.util.Collections;
 import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 import org.hyperledger.iroha.android.crypto.keystore.attestation.AttestationResult;
+import org.hyperledger.iroha.android.crypto.keystore.attestation.AttestationVerificationException;
+import org.hyperledger.iroha.android.crypto.keystore.attestation.AndroidAttestationRevocationTestFixtures;
 
 public final class AndroidKeystoreAttestationHarnessTests {
 
@@ -47,6 +54,7 @@ public final class AndroidKeystoreAttestationHarnessTests {
           + "FxdGTgtauVtYo24deQ==");
 
   private static final byte[] STRONGBOX_CHALLENGE = decodeHex("4145454245");
+  private static final String EVALUATION_TIME_MILLIS = "1764547200000";
 
   private AndroidKeystoreAttestationHarnessTests() {}
 
@@ -57,6 +65,10 @@ public final class AndroidKeystoreAttestationHarnessTests {
     verifiesBundleUsingTrustRootZip();
     verifiesMockHuaweiFixtureBundle();
     verifiesMockOspBundleZipOnly();
+    rejectsMissingChallenge();
+    rejectsMissingRevocationSnapshot();
+    rejectsStaleRevocationSnapshot();
+    rejectsRevokedLeafCertificate();
     System.out.println("[IrohaAndroid] AndroidKeystoreAttestationHarnessTests passed");
   }
 
@@ -81,12 +93,12 @@ public final class AndroidKeystoreAttestationHarnessTests {
     final Path output = tempDir.resolve("result.json");
     final AndroidKeystoreAttestationHarness.Result result =
         AndroidKeystoreAttestationHarness.run(
-            new String[] {
+            withGovernedRevocation(new String[] {
               "--bundle-dir", bundleDir.toString(),
               "--trust-root", rootPem.toString(),
               "--require-strongbox",
               "--output", output.toString()
-            });
+            }));
 
     assert "strongbox-alias".equals(result.alias()) : "Alias should match bundle metadata";
     assert result.strongBoxAttestation() : "StrongBox attestation expected";
@@ -122,11 +134,11 @@ public final class AndroidKeystoreAttestationHarnessTests {
 
     final AndroidKeystoreAttestationHarness.Result result =
         AndroidKeystoreAttestationHarness.run(
-            new String[] {
+            withGovernedRevocation(new String[] {
               "--bundle-dir", bundleDir.toString(),
               "--trust-root-dir", rootsDir.toString(),
               "--require-strongbox"
-            });
+            }));
 
     assert "directory-alias".equals(result.alias())
         : "Alias should match bundle metadata when using trust-root directories";
@@ -159,11 +171,11 @@ public final class AndroidKeystoreAttestationHarnessTests {
 
     final AndroidKeystoreAttestationHarness.Result result =
         AndroidKeystoreAttestationHarness.run(
-            new String[] {
+            withGovernedRevocation(new String[] {
               "--bundle-dir", bundleDir.toString(),
               "--trust-root-dir", rootsDir.toString(),
               "--require-strongbox"
-            });
+            }));
 
     assert "directory-zip-alias".equals(result.alias())
         : "Alias should match bundle metadata when scanning trust-root ZIP directories";
@@ -196,11 +208,11 @@ public final class AndroidKeystoreAttestationHarnessTests {
 
     final AndroidKeystoreAttestationHarness.Result result =
         AndroidKeystoreAttestationHarness.run(
-            new String[] {
+            withGovernedRevocation(new String[] {
               "--bundle-dir", bundleDir.toString(),
               "--trust-root-bundle", bundleZip.toString(),
               "--require-strongbox"
-            });
+            }));
 
     assert "zip-alias".equals(result.alias()) : "Alias should reuse bundle metadata when zipped";
     assert result.chainLength() == 2 : "Zip bundles should not change chain depth";
@@ -211,10 +223,10 @@ public final class AndroidKeystoreAttestationHarnessTests {
     final Path bundleDir = fixtureBundle("mock_huawei");
     final AndroidKeystoreAttestationHarness.Result result =
         AndroidKeystoreAttestationHarness.run(
-            new String[] {
+            withGovernedRevocation(new String[] {
               "--bundle-dir", bundleDir.toString(),
               "--require-strongbox"
-            });
+            }));
 
     assert "mock-huawei-strongbox".equals(result.alias())
         : "Fixture alias should match mock_huawei bundle";
@@ -234,9 +246,9 @@ public final class AndroidKeystoreAttestationHarnessTests {
 
     final AndroidKeystoreAttestationHarness.Result result =
         AndroidKeystoreAttestationHarness.run(
-            new String[] {
+            withGovernedRevocation(new String[] {
               "--bundle-dir", tempDir.toString(),
-            });
+            }));
 
     assert "mock-osp-keymint".equals(result.alias())
         : "Fixture alias should match mock_osp bundle";
@@ -249,8 +261,133 @@ public final class AndroidKeystoreAttestationHarnessTests {
         : "Challenge value should mirror challenge.hex contents";
   }
 
+  private static void rejectsMissingChallenge() throws Exception {
+    final Path bundleDir = createStrongBoxBundle(false);
+    assertHarnessFails(
+        () ->
+            AndroidKeystoreAttestationHarness.run(
+                withGovernedRevocation(
+                    new String[] {"--bundle-dir", bundleDir.toString()})));
+  }
+
+  private static void rejectsMissingRevocationSnapshot() throws Exception {
+    final Path bundleDir = createStrongBoxBundle(true);
+    assertHarnessFails(
+        () ->
+            AndroidKeystoreAttestationHarness.run(
+                new String[] {"--bundle-dir", bundleDir.toString()}));
+  }
+
+  private static void rejectsStaleRevocationSnapshot() throws Exception {
+    final Path bundleDir = createStrongBoxBundle(true);
+    assertHarnessFails(
+        () ->
+            AndroidKeystoreAttestationHarness.run(
+                withGovernedRevocation(
+                    new String[] {"--bundle-dir", bundleDir.toString()},
+                    "1764547199000",
+                    "1",
+                    EVALUATION_TIME_MILLIS)));
+  }
+
+  private static void rejectsRevokedLeafCertificate() throws Exception {
+    final Path bundleDir = createStrongBoxBundle(true);
+    final X509Certificate leaf =
+        (X509Certificate)
+            CertificateFactory.getInstance("X.509")
+                .generateCertificate(new ByteArrayInputStream(STRONGBOX_CERT));
+    assertHarnessFails(
+        () ->
+            AndroidKeystoreAttestationHarness.run(
+                withGovernedRevocation(
+                    new String[] {"--bundle-dir", bundleDir.toString()},
+                    EVALUATION_TIME_MILLIS,
+                    "86400",
+                    EVALUATION_TIME_MILLIS,
+                    Collections.singletonList(leaf.getSerialNumber().toString(16)))));
+  }
+
+  private static Path createStrongBoxBundle(final boolean includeChallenge) throws Exception {
+    final Path bundleDir = Files.createTempDirectory("attestation-negative-test");
+    Files.writeString(
+        bundleDir.resolve("chain.pem"),
+        toPem("CERTIFICATE", STRONGBOX_CERT) + toPem("CERTIFICATE", ROOT_CERT),
+        StandardCharsets.US_ASCII);
+    Files.writeString(bundleDir.resolve("alias.txt"), "strongbox-alias", StandardCharsets.UTF_8);
+    if (includeChallenge) {
+      Files.writeString(
+          bundleDir.resolve("challenge.hex"), "4145454245", StandardCharsets.UTF_8);
+    }
+    Files.writeString(
+        bundleDir.resolve("trust_root_fixture.pem"),
+        toPem("CERTIFICATE", ROOT_CERT),
+        StandardCharsets.US_ASCII);
+    return bundleDir;
+  }
+
+  private static void assertHarnessFails(final HarnessCall call) throws Exception {
+    boolean threw = false;
+    try {
+      call.run();
+    } catch (final IllegalArgumentException | AttestationVerificationException expected) {
+      threw = true;
+    }
+    assert threw : "Attestation harness must fail closed";
+  }
+
+  @FunctionalInterface
+  private interface HarnessCall {
+    void run() throws Exception;
+  }
+
   private static byte[] decodeBase64(final String value) {
     return Base64.getDecoder().decode(value);
+  }
+
+  private static String[] withGovernedRevocation(final String[] arguments) throws Exception {
+    return withGovernedRevocation(
+        arguments, EVALUATION_TIME_MILLIS, "86400", EVALUATION_TIME_MILLIS);
+  }
+
+  private static String[] withGovernedRevocation(
+      final String[] arguments,
+      final String responseDateMillis,
+      final String cacheMaxAgeSeconds,
+      final String evaluationTimeMillis) throws Exception {
+    return withGovernedRevocation(
+        arguments,
+        responseDateMillis,
+        cacheMaxAgeSeconds,
+        evaluationTimeMillis,
+        Collections.emptyList());
+  }
+
+  private static String[] withGovernedRevocation(
+      final String[] arguments,
+      final String responseDateMillis,
+      final String cacheMaxAgeSeconds,
+      final String evaluationTimeMillis,
+      final java.util.List<String> serials) throws Exception {
+    final byte[] snapshot =
+        AndroidAttestationRevocationTestFixtures.canonicalSnapshot(
+            Long.parseLong(responseDateMillis),
+            null,
+            Long.parseLong(cacheMaxAgeSeconds),
+            serials,
+            Collections.emptyList());
+    final Path snapshotPath = Files.createTempFile("android-revocation-snapshot", ".txt");
+    Files.write(snapshotPath, snapshot);
+    final String[] governed =
+        new String[] {
+          "--revocation-snapshot", snapshotPath.toString(),
+          "--revocation-snapshot-sha256",
+              AndroidAttestationRevocationTestFixtures.hex(
+                  AndroidAttestationRevocationTestFixtures.sha256(snapshot)),
+          "--evaluation-time-ms", evaluationTimeMillis
+        };
+    final String[] combined = Arrays.copyOf(arguments, arguments.length + governed.length);
+    System.arraycopy(governed, 0, combined, arguments.length, governed.length);
+    return combined;
   }
 
   private static byte[] decodeHex(final String hex) {

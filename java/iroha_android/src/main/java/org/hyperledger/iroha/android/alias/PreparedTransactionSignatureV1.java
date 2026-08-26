@@ -48,6 +48,33 @@ public final class PreparedTransactionSignatureV1 {
     return transcript.toByteArray();
   }
 
+  /** Returns the exact transcript authenticated by a faucet prepared envelope. */
+  public static byte[] faucetPrepared(final AccountFaucetPreparedTransactionV1 envelope) {
+    final ByteArrayOutputStream transcript =
+        base(envelope.schema(), envelope.operation(), envelope.binding());
+    field(transcript, "claim.account_id", envelope.claim().accountId());
+    field(
+        transcript,
+        "claim.pow_anchor_height",
+        envelope.claim().powAnchorHeight().toString());
+    field(transcript, "claim.pow_nonce_hex", envelope.claim().powNonceHex());
+    field(transcript, "semantic_hash_hex", envelope.semanticHashHex());
+    field(transcript, "account_id", envelope.accountId());
+    field(transcript, "asset_definition_id", envelope.assetDefinitionId());
+    field(transcript, "asset_id", envelope.assetId());
+    field(transcript, "amount", envelope.amount().toString());
+    field(transcript, "transaction_hash_hex", envelope.transactionHashHex());
+    field(
+        transcript,
+        "signed_transaction_wire_sha256",
+        envelope.signedTransactionWireSha256());
+    field(
+        transcript,
+        "signed_transaction_wire",
+        decodeLowerHex(envelope.signedTransactionWireHex()));
+    return transcript.toByteArray();
+  }
+
   /** Returns the Iroha BLAKE2b-256 digest signed by the prepared-result authority. */
   public static byte[] digest(final byte[] transcript) {
     return IrohaHash.prehash(transcript);

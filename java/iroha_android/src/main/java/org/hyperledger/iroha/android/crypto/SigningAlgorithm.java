@@ -55,9 +55,7 @@ public enum SigningAlgorithm {
       return SECP256K1;
     }
     if ("mldsa".equals(normalized)
-        || "mldsa65".equals(normalized)
-        || "mldsa44".equals(normalized)
-        || "mldsa87".equals(normalized)) {
+        || "mldsa65".equals(normalized)) {
       return ML_DSA;
     }
     if ("blsnormal".equals(normalized) || "bls12381g1".equals(normalized)) {

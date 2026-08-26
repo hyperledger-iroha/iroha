@@ -64,9 +64,19 @@ impl ExclusiveLedgerLock {
 }
 fn has_reserved_lock_suffix(path: &Path) -> bool {
     path.file_name().is_some_and(|file_name| {
+        if let Some(file_name) = file_name.to_str() {
+            // Case-insensitive filesystems can apply Unicode case mappings in
+            // addition to ASCII folding (for example, Kelvin sign U+212A maps
+            // to `k` on the default macOS filesystem).
+            return file_name
+                .trim_end_matches(['.', ' '])
+                .to_lowercase()
+                .ends_with(".lock");
+        }
         let bytes = file_name.as_encoded_bytes();
-        // Win32 normalizes terminal spaces and dots for non-verbatim paths, so
-        // `foo.lock.` can name the same file as `foo.lock`.
+        // Preserve the ASCII check for non-UTF-8 Unix names. Win32 normalizes
+        // terminal spaces and dots for non-verbatim paths, so `foo.lock.` can
+        // name the same file as `foo.lock`.
         let normalized_len = bytes
             .iter()
             .rposition(|byte| !matches!(byte, b'.' | b' '))
@@ -142,6 +152,7 @@ mod tests {
             "other.LoCk",
             "windows.lock.",
             "windows.LOCK ... ",
+            "unicode.locK",
         ] {
             assert!(has_reserved_lock_suffix(Path::new(path)));
             let error = ExclusiveLedgerLock::acquire(Path::new(path))

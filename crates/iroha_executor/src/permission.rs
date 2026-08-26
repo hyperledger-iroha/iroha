@@ -250,16 +250,20 @@ impl AnyPermission {
                 | Self::CanManageFxCorridors(_)
         )
     }
-    /// Exact account-read holders may use their grant but cannot propagate it: only the
-    /// account named by the token controls its lifecycle. Exact asset-definition-alias holders
-    /// likewise cannot bypass the asset-owner plus namespace-authority grant rule. Genesis-only
-    /// roots are non-delegable after bootstrap.
+    /// Exact holders may use these grants but cannot propagate them: their dedicated owner or
+    /// manager roots retain lifecycle control. Exact asset-definition-alias holders likewise
+    /// cannot bypass the asset-owner plus namespace-authority grant rule. Genesis-only roots are
+    /// non-delegable after bootstrap.
     fn is_holder_delegable(&self) -> bool {
         !self.is_genesis_only()
             && !matches!(
                 self,
                 Self::CanReadAccountData(_)
+                    | Self::CanResolveAccountAlias(_)
                     | Self::CanIssueSoranetVpnQuote(_)
+                    | Self::CanExecuteSettlement(_)
+                    | Self::CanSetFxCorridorPolicy(_)
+                    | Self::CanManageFeeSponsorProgram(_)
                     | Self::DpnAdmin(_)
                     | Self::DpnUser(_)
                     | Self::DpnInori(_)
@@ -1958,7 +1962,8 @@ mod tests {
         },
         peer::CanManagePeers,
         query::{CanReadAccountData, CanReadAllLedgerData, CanReadRestrictedDataspace},
-        settlement::CanExecuteSettlement,
+        sccp::CanProposeSccpRouteGovernance,
+        settlement::{CanExecuteSettlement, CanSetFxCorridorPolicy},
         smart_contract::CanInvokeContractEntrypoint,
         soranet::{CanIssueSoranetVpnQuote, CanManageSoranetVpnQuoteIssuers},
     };
@@ -2207,6 +2212,49 @@ mod tests {
                 .expect_err("unrelated authority must not grant consent"),
             ValidationFail::NotPermitted(_)
         ));
+    }
+    #[test]
+    fn exact_leaf_holders_cannot_bypass_dedicated_delegation_roots() {
+        let holder = make_account_id();
+        let root = make_other_account_id();
+        let context = make_context(&holder, 2);
+        let asset_definition = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("fixture", "universal").expect("asset domain"),
+            "rose".parse().expect("asset name"),
+        );
+        let permissions = vec![
+            AnyPermission::CanResolveAccountAlias(CanResolveAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::new(10)),
+            }),
+            AnyPermission::CanExecuteSettlement(CanExecuteSettlement {
+                debited_asset: AssetId::new(asset_definition, root.clone()),
+                settlement_id: "holder_bypass".parse().expect("settlement id"),
+                intent_hash: Hash::new(b"holder-only settlement consent"),
+            }),
+            AnyPermission::CanSetFxCorridorPolicy(CanSetFxCorridorPolicy {
+                policy_id: "holder_only_policy".parse().expect("policy id"),
+            }),
+            AnyPermission::CanManageFeeSponsorProgram(CanManageFeeSponsorProgram { sponsor: root }),
+        ];
+        for permission in permissions {
+            let name = PermissionObject::from(permission.clone()).name().to_owned();
+            assert!(
+                !permission.is_holder_delegable(),
+                "{name} must retain its dedicated lifecycle root"
+            );
+            let previous = test_override::replace_permissions(vec![permission.clone().into()]);
+            let grant = permission.validate_grant(&holder, &context, &Iroha);
+            let revoke = permission.validate_revoke(&holder, &context, &Iroha);
+            test_override::replace_permissions(previous);
+            assert!(
+                matches!(grant, Err(ValidationFail::NotPermitted(_))),
+                "an exact {name} holder unexpectedly delegated it: {grant:?}"
+            );
+            assert!(
+                matches!(revoke, Err(ValidationFail::NotPermitted(_))),
+                "an exact {name} holder unexpectedly revoked it: {revoke:?}"
+            );
+        }
     }
     #[test]
     fn vpn_quote_issuer_leaf_requires_manager_delegation() {
@@ -2468,6 +2516,7 @@ mod tests {
             PermissionObject::from(CanEnrollFeeSponsorProgram {
                 program_id: make_fee_sponsor_program_id(authority.clone(), "retail"),
             }),
+            PermissionObject::from(CanProposeSccpRouteGovernance),
         ];
         for raw in permissions {
             let name = raw.name().to_owned();

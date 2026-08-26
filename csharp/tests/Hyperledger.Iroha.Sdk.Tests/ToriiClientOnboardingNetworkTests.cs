@@ -37,6 +37,7 @@ public sealed partial class ToriiClientTests
                 IdempotencyKey = new string('b', 64),
                 ExecutionExpiresAtUnixMilliseconds = ulong.MaxValue,
             },
+            PreparedAccountFeePayment,
             AccountOnboardingToken,
             OnboardingFixtureAuthority,
             NetworkId.Parse(AlternateNetworkId),

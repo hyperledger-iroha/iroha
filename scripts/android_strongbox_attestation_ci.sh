@@ -6,7 +6,7 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/android_strongbox_attestation_ci.sh [--bundles-root PATH] [--summary-out PATH]
+Usage: scripts/android_strongbox_attestation_ci.sh [options]
 
 Verify every attestation bundle under the specified root (default: artifacts/android/attestation),
 write per-bundle logs/results, and emit an aggregated JSON summary for governance evidence.
@@ -15,6 +15,12 @@ Options:
   --bundles-root PATH   Override the root directory that contains attestation bundles.
   --summary-out PATH    Override where the aggregated summary JSON is written. Defaults to
                         <bundles-root>/summary.json.
+  --revocation-snapshot PATH
+                        Canonical domain-separated governed V1 snapshot (required).
+  --revocation-snapshot-sha256 HEX
+                        Separately trusted SHA-256 of that exact snapshot (required).
+  --evaluation-time-ms MS
+                        Explicit verification time within the freshness window (required).
   -h, --help            Show this message.
 USAGE
 }
@@ -22,6 +28,9 @@ USAGE
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 BUNDLES_ROOT="${REPO_ROOT}/artifacts/android/attestation"
 SUMMARY_OUT=""
+REVOCATION_SNAPSHOT=""
+REVOCATION_SNAPSHOT_SHA256=""
+EVALUATION_TIME_MS=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -31,6 +40,18 @@ while [[ $# -gt 0 ]]; do
       ;;
     --summary-out)
       SUMMARY_OUT="$2"
+      shift 2
+      ;;
+    --revocation-snapshot)
+      REVOCATION_SNAPSHOT="$2"
+      shift 2
+      ;;
+    --revocation-snapshot-sha256)
+      REVOCATION_SNAPSHOT_SHA256="$2"
+      shift 2
+      ;;
+    --evaluation-time-ms)
+      EVALUATION_TIME_MS="$2"
       shift 2
       ;;
     -h|--help)
@@ -44,6 +65,19 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ -z "${REVOCATION_SNAPSHOT}" \
+    || -z "${REVOCATION_SNAPSHOT_SHA256}" \
+    || -z "${EVALUATION_TIME_MS}" ]]; then
+  echo "[attestation-ci] canonical governed revocation snapshot, trusted commitment, and evaluation time are required" >&2
+  usage >&2
+  exit 1
+fi
+
+if [[ ! -f "${REVOCATION_SNAPSHOT}" || -L "${REVOCATION_SNAPSHOT}" ]]; then
+  echo "[attestation-ci] revocation snapshot must be a regular non-symlink file" >&2
+  exit 1
+fi
 
 HARNESS_SCRIPT="${REPO_ROOT}/scripts/android_keystore_attestation.sh"
 if [[ ! -x "${HARNESS_SCRIPT}" ]]; then
@@ -218,7 +252,14 @@ for bundle in "${BUNDLE_DIRS[@]}"; do
   fi
 
   echo "[attestation-ci] verifying ${bundle_rel}"
-  args=("--bundle-dir" "${bundle}" "--require-strongbox" "--output" "${result_path}")
+  args=(
+    "--bundle-dir" "${bundle}"
+    "--require-strongbox"
+    "--output" "${result_path}"
+    "--revocation-snapshot" "${REVOCATION_SNAPSHOT}"
+    "--revocation-snapshot-sha256" "${REVOCATION_SNAPSHOT_SHA256}"
+    "--evaluation-time-ms" "${EVALUATION_TIME_MS}"
+  )
   if ((${#roots[@]} > 0)); then
     for root in "${roots[@]}"; do
       args+=("--trust-root" "${root}")

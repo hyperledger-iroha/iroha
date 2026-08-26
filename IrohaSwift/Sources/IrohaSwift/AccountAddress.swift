@@ -148,6 +148,7 @@ public struct AccountAddress {
         guard header.classId.rawValue == canonicalHeader.classId.rawValue else {
             throw AccountAddressError.unsupportedAddressFormat
         }
+        try controller.validatePublicKeys()
         return AccountAddress(
             header: header,
             controller: controller,
@@ -445,7 +446,26 @@ private enum ControllerPayload {
         if let expected = curve.expectedPublicKeyLength, publicKey.count != expected {
             throw AccountAddressError.invalidPublicKey
         }
+        try validatePublicKey(curve: curve, publicKey: publicKey)
         return publicKey
+    }
+
+    static func validatePublicKey(curve: CurveId, publicKey: Data) throws {
+        if curve == .ed25519,
+           !Ed25519PublicKeyAdmission.isValidPublicKey(publicKey) {
+            throw AccountAddressError.invalidPublicKey
+        }
+    }
+
+    func validatePublicKeys() throws {
+        switch self {
+        case let .singleKey(curve, publicKey):
+            try Self.validatePublicKey(curve: curve, publicKey: publicKey)
+        case let .multiSig(_, _, members):
+            for member in members {
+                try Self.validatePublicKey(curve: member.curve, publicKey: member.publicKey)
+            }
+        }
     }
 
     func encode(into buffer: inout Data) throws {
@@ -1748,6 +1768,10 @@ public final class MultisigPolicyBuilder {
 
         let payloadMembers = try members.map { descriptor -> ControllerPayload.MultisigMember in
             let curve = try curveId(for: descriptor.algorithm)
+            try ControllerPayload.validatePublicKey(
+                curve: curve,
+                publicKey: descriptor.publicKey
+            )
             return ControllerPayload.MultisigMember(curve: curve,
                                                     weight: descriptor.weight,
                                                     publicKey: descriptor.publicKey)

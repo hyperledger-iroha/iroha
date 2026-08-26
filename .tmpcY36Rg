@@ -1,0 +1,9 @@
+{
+                "mode": "Entry",
+                "listen": "127.0.0.1:0",
+                "vpn": {
+                    "enabled": true,
+                    "helper_ticket_issuer_public_key_path": "/run/secrets/vpn-helper-ticket-issuer-public-key.hex",
+                    "backend_bootstrap_secret_path": "/run/secrets/vpn-backend-bootstrap.hex"
+                }
+            }

@@ -38,9 +38,11 @@ public sealed class ReplicationOrderInstructionTests
             deadlineEpoch: 28);
 
         Assert.Equal(
-            "iroha_data_model::isi::sorafs::IssueReplicationOrder",
+            "iroha.instruction.v1::sorafs::IssueReplicationOrder",
             instruction.WireId);
-        Assert.Equal(instruction.WireId, instruction.TypeName);
+        Assert.Equal(
+            "iroha_data_model::isi::sorafs::IssueReplicationOrder",
+            instruction.TypeName);
         Assert.Equal(OrderId, instruction.OrderId);
         Assert.Equal(Convert.ToBase64String(fixture), instruction.OrderPayloadBase64);
 
@@ -103,7 +105,7 @@ public sealed class ReplicationOrderInstructionTests
         var fields = new FixedFieldReader(instruction.EncodePayload(context));
 
         Assert.Equal(
-            "iroha_data_model::isi::sorafs::CompleteReplicationOrder",
+            "iroha.instruction.v1::sorafs::CompleteReplicationOrder",
             instruction.WireId);
         Assert.Equal(Convert.FromHexString(OrderId), ReadIdentifier(fields.ReadField()));
         Assert.Equal(Convert.FromHexString(ProviderId), ReadIdentifier(fields.ReadField()));
@@ -175,7 +177,7 @@ public sealed class ReplicationOrderInstructionTests
         var fields = new FixedFieldReader(instruction.EncodePayload(context));
 
         Assert.Equal(
-            "iroha_data_model::isi::sorafs::ExpireReplicationOrder",
+            "iroha.instruction.v1::sorafs::ExpireReplicationOrder",
             instruction.WireId);
         Assert.Equal(Convert.FromHexString(OrderId), ReadIdentifier(fields.ReadField()));
         Assert.Equal(29ul, BinaryPrimitives.ReadUInt64LittleEndian(fields.ReadField()));

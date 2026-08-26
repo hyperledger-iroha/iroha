@@ -1283,6 +1283,7 @@ fn disabling_zk_mode_scrubs_private_stack_spills() {
     vm.set_register(1, Memory::STACK_START);
     vm.set_register(2, 0xCAFE_BABE_DEAD_BEEF);
     vm.registers.set_tag(2, true);
+    vm.set_register(7, 0x1234_5678);
     vm.execute_instruction(Instruction::Store {
         rs: 2,
         addr_reg: 1,
@@ -1291,6 +1292,54 @@ fn disabling_zk_mode_scrubs_private_stack_spills() {
     .unwrap();
     vm.set_zk_mode(false);
     assert_eq!(vm.load_u64(Memory::STACK_START).unwrap(), 0);
+    assert_eq!(vm.register(2), 0);
+    assert!(!vm.registers.tag(2));
+    assert_eq!(vm.register(7), 0x1234_5678);
+    assert!(!vm.registers.tag(7));
+}
+#[test]
+fn raw_code_load_scrubs_private_registers_and_preserves_public_arguments() {
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_zk_mode(true);
+    vm.set_register(2, 0xCAFE_BABE_DEAD_BEEF);
+    vm.registers.set_tag(2, true);
+    vm.set_register(7, 0x1234_5678);
+
+    vm.load_code(&encoding::wide::encode_halt().to_le_bytes())
+        .expect("replace the ZK program with raw public code");
+
+    assert_eq!(vm.register(2), 0);
+    assert!(!vm.registers.tag(2));
+    assert_eq!(vm.register(7), 0x1234_5678);
+    assert!(!vm.registers.tag(7));
+}
+#[test]
+fn artifact_load_scrubs_private_registers_and_preserves_public_arguments() {
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_zk_mode(true);
+    vm.set_register(2, 0xCAFE_BABE_DEAD_BEEF);
+    vm.registers.set_tag(2, true);
+    vm.set_register(7, 0x1234_5678);
+    let mut artifact = ProgramMetadata::default().encode();
+    artifact.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
+
+    vm.load_program(&artifact)
+        .expect("replace the ZK program with a public artifact");
+
+    assert_eq!(vm.register(2), 0);
+    assert!(!vm.registers.tag(2));
+    assert_eq!(vm.register(7), 0x1234_5678);
+    assert!(!vm.registers.tag(7));
+}
+#[test]
+fn non_zk_run_rejects_injected_private_register_state() {
+    let mut vm = IVM::new(u64::MAX);
+    vm.load_code(&encoding::wide::encode_halt().to_le_bytes())
+        .expect("load public code");
+    vm.set_register(2, 0xCAFE_BABE_DEAD_BEEF);
+    vm.registers.set_tag(2, true);
+
+    assert_eq!(vm.run(), Err(VMError::PrivacyViolation));
 }
 #[test]
 fn runtime_template_restores_private_stack_tags_with_their_bytes() {

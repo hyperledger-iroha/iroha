@@ -1282,10 +1282,7 @@ fn decode_instruction_from_borrowed_pair(
 /// # Errors
 /// Returns `norito::Error` if the wire identifier is not registered or framing fails for the
 /// payload. Concrete Rust type names are not accepted as aliases.
-pub fn frame_instruction_payload(
-    wire_id: &str,
-    payload: &[u8],
-) -> Result<Vec<u8>, norito::Error> {
+pub fn frame_instruction_payload(wire_id: &str, payload: &[u8]) -> Result<Vec<u8>, norito::Error> {
     let entry = {
         let registry = instruction_registry();
         registry.entry_for_wire_id(wire_id).copied()

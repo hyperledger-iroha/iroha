@@ -54,6 +54,7 @@ def response(status: int, payload: object | None = None) -> requests.Response:
     result = requests.Response()
     result.status_code = status
     result._content = b"" if payload is None else json.dumps(payload).encode("utf-8")
+    result._content_consumed = True
     if payload is not None:
         result.headers["Content-Type"] = "application/json"
     return result
@@ -141,6 +142,13 @@ def test_kaigi_relay_summary_rejects_lossy_or_out_of_range_timestamps(
 def test_kaigi_relay_summary_requires_a_32_byte_fingerprint() -> None:
     with pytest.raises(ValueError, match="64 lowercase hex characters"):
         KaigiRelaySummary.from_payload(relay_summary_payload(hpke_fingerprint_hex="ab"))
+
+
+def test_kaigi_relay_summary_requires_the_iroha_hash_marker() -> None:
+    with pytest.raises(ValueError, match="Iroha Hash marker bit"):
+        KaigiRelaySummary.from_payload(
+            relay_summary_payload(hpke_fingerprint_hex="aa" * 32)
+        )
 
 
 @pytest.mark.parametrize(
@@ -303,6 +311,36 @@ def test_kaigi_relay_health_rejects_impossible_current_status_total() -> None:
         )
 
 
+def test_kaigi_relay_health_requires_strictly_sorted_domains() -> None:
+    with pytest.raises(ValueError, match="strictly sorted by domain"):
+        KaigiRelayHealthSnapshot.from_payload(
+            {
+                "healthy_total": 0,
+                "degraded_total": 0,
+                "unavailable_total": 0,
+                "reports_total": 3,
+                "registrations_total": 3,
+                "failovers_total": 3,
+                "domains": [
+                    {
+                        "domain": "zeta",
+                        "registrations_total": 1,
+                        "manifest_updates_total": 0,
+                        "failovers_total": 1,
+                        "health_reports_total": 1,
+                    },
+                    {
+                        "domain": "alpha",
+                        "registrations_total": 2,
+                        "manifest_updates_total": 0,
+                        "failovers_total": 2,
+                        "health_reports_total": 2,
+                    },
+                ],
+            }
+        )
+
+
 def assert_exact_signature(call: dict[str, Any], target: str) -> None:
     headers = call["headers"]
     timestamp = headers["x-iroha-operator-timestamp-ms"]
@@ -419,6 +457,7 @@ def test_kaigi_diagnostics_sign_exact_network_targets_once() -> None:
         assert call["url"] == f"https://torii.example{target}"
         assert call["data"] == b""
         assert call["allow_redirects"] is False
+        assert call["stream"] is True
         assert_exact_signature(call, target)
 
 

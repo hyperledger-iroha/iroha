@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import copy
 import hashlib
+import inspect
 import json
 from decimal import Decimal
 from pathlib import Path
@@ -60,6 +61,8 @@ from iroha_python.tx import (
 CANONICAL_GENESIS_HASH = bytes([0xA5]) * 32
 NETWORK_ID = NetworkId.from_bytes(CANONICAL_GENESIS_HASH)
 FEE_PAYMENT = authority_fee_payment(charge_limits=[])
+FAUCET_ASSET_DEFINITION_ID = "4rPeAP6jAjiLVZThZYwwPRBuQagt"
+FAUCET_AMOUNT = "100"
 VK_LOCAL_SIGNING_CONTEXT = LocalSigningContext(NETWORK_ID)
 TRANSACTION_LOCAL_SIGNING_CONTEXT = LocalSigningContext(NETWORK_ID)
 
@@ -349,7 +352,7 @@ def prepared_onboarding() -> dict[str, object]:
         "transaction_hash_hex": "23" * 32,
         "signed_transaction_wire_hex": "0102",
         "signed_transaction_wire_sha256": "33" * 32,
-        "fee_payment": {"kind": "authority"},
+        "fee_payment": copy.deepcopy(FEE_PAYMENT),
         "server_signature": "44" * 64,
     }
 
@@ -367,15 +370,35 @@ def prepared_faucet() -> dict[str, object]:
         "claim": claim,
         "semantic_hash_hex": "55" * 32,
         "account_id": ONBOARDING_ACCOUNT_ID,
-        "asset_definition_id": "xor#sora",
-        "asset_id": f"xor#sora#{ONBOARDING_ACCOUNT_ID}",
-        "amount": "100",
+        "asset_definition_id": FAUCET_ASSET_DEFINITION_ID,
+        "asset_id": f"{FAUCET_ASSET_DEFINITION_ID}#{ONBOARDING_ACCOUNT_ID}",
+        "amount": FAUCET_AMOUNT,
         "transaction_hash_hex": "67" * 32,
         "signed_transaction_wire_hex": "0304",
         "signed_transaction_wire_sha256": "77" * 32,
-        "fee_payment": {"kind": "authority"},
+        "fee_payment": copy.deepcopy(FEE_PAYMENT),
         "server_signature": "88" * 64,
     }
+
+
+def test_faucet_prepared_transcript_uses_direct_required_pow_values() -> None:
+    prepared = prepared_faucet()
+    transcript = client_module._prepared_signature_transcript(
+        prepared,
+        "prepared faucet transcript",
+    )
+
+    assert client_module._prepared_signature_field("claim.pow_anchor_height", "7") in transcript
+    assert (
+        client_module._prepared_signature_field(
+            "claim.pow_nonce_hex",
+            "0000000000000000",
+        )
+        in transcript
+    )
+    assert b"some:7" not in transcript
+    assert b"some:0000000000000000" not in transcript
+    assert b"none" not in transcript
 
 
 def test_prepared_transaction_rejects_hash_without_iroha_marker() -> None:
@@ -532,6 +555,55 @@ def test_prepared_transaction_v1_shared_golden_authenticates_inner_context() -> 
                 )
 
 
+@pytest.mark.parametrize(
+    ("field", "invalid"),
+    [
+        ("pow_anchor_height", None),
+        ("pow_anchor_height", 0),
+        ("pow_nonce_hex", None),
+        ("pow_nonce_hex", ""),
+        ("pow_nonce_hex", "AA"),
+    ],
+)
+def test_prepared_faucet_native_context_rejects_optional_pow_claim(
+    field: str,
+    invalid: object,
+) -> None:
+    fixture_path = (
+        Path(__file__).resolve().parents[3]
+        / "fixtures"
+        / "prepared_transactions"
+        / "prepared_transaction_signature_v1.json"
+    )
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    vector = next(
+        vector for vector in fixture["vectors"] if vector["name"] == "faucet_prepared"
+    )
+    prepared = vector["response"]
+    claim = copy.deepcopy(prepared["claim"])
+    assert isinstance(claim, dict)
+    claim[field] = invalid
+    operation_context = {
+        "claim": claim,
+        "account_id": prepared["account_id"],
+        "asset_definition_id": prepared["asset_definition_id"],
+        "asset_id": prepared["asset_id"],
+        "amount": prepared["amount"],
+    }
+
+    with pytest.raises(ValueError):
+        crypto_module.verify_prepared_transaction_context_v1(
+            bytes.fromhex(prepared["signed_transaction_wire_hex"]),
+            NetworkId.parse(vector["network_id"]),
+            vector["signer_account_id"],
+            json.dumps(prepared["binding"], sort_keys=True, separators=(",", ":")),
+            prepared["operation"],
+            prepared["semantic_hash_hex"],
+            json.dumps(prepared["fee_payment"], sort_keys=True, separators=(",", ":")),
+            json.dumps(operation_context, sort_keys=True, separators=(",", ":")),
+        )
+
+
 def test_account_onboarding_is_explicit_plan_prepare_submit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -580,6 +652,7 @@ def test_account_onboarding_is_explicit_plan_prepare_submit(
     prepare = client.prepare_account_onboarding(
         onboarding_token=ONBOARDING_TOKEN,
         binding=prepared_binding("onboarding"),
+        fee_payment=FEE_PAYMENT,
         receipt=receipt,
         expected_request=onboarding_request(),
         expected_authority=ONBOARDING_ACCOUNT_ID,
@@ -588,6 +661,7 @@ def test_account_onboarding_is_explicit_plan_prepare_submit(
     submit = client.submit_prepared_account_onboarding(
         onboarding_token=ONBOARDING_TOKEN,
         prepared=prepared,
+        expected_fee_payment=FEE_PAYMENT,
         expected_request=onboarding_request(),
         expected_authority=ONBOARDING_ACCOUNT_ID,
         network_id=NETWORK_ID,
@@ -609,6 +683,7 @@ def test_account_onboarding_is_explicit_plan_prepare_submit(
         "schema": "iroha.accounts.onboard.prepare.v1",
         "binding": prepared_binding("onboarding"),
         "receipt": receipt,
+        "fee_payment": FEE_PAYMENT,
     }
     assert json.loads(session.calls[2]["data"]) == prepared
     for call in session.calls:
@@ -1043,6 +1118,7 @@ def test_onboarding_prepare_rejects_malformed_route_token_before_dispatch(
         client.prepare_account_onboarding(
             onboarding_token=token,  # type: ignore[arg-type]
             binding=prepared_binding("onboarding"),
+            fee_payment=FEE_PAYMENT,
             receipt={"body": {}},
             expected_request=onboarding_request(),
             expected_authority=ONBOARDING_ACCOUNT_ID,
@@ -1171,6 +1247,17 @@ def test_prepared_account_mutations_require_explicit_trust_pins() -> None:
     assert session.calls == []
 
 
+def test_faucet_policy_pins_have_no_defaults() -> None:
+    for method in (
+        ToriiClient.prepare_account_faucet_registration,
+        ToriiClient.prepare_account_faucet,
+        ToriiClient.submit_prepared_account_faucet,
+    ):
+        parameters = inspect.signature(method).parameters
+        for name in ("expected_asset_definition_id", "expected_amount"):
+            assert parameters[name].default is inspect.Parameter.empty
+
+
 def test_prepared_account_submissions_reject_expired_forward_binding() -> None:
     session = OnboardingSession([])
     client = ToriiClient("https://torii.example", session=session)
@@ -1187,6 +1274,7 @@ def test_prepared_account_submissions_reject_expired_forward_binding() -> None:
         client.submit_prepared_account_onboarding(
             onboarding_token=ONBOARDING_TOKEN,
             prepared=onboarding,
+            expected_fee_payment=FEE_PAYMENT,
             expected_request=onboarding_request(),
             expected_authority=ONBOARDING_ACCOUNT_ID,
             network_id=NETWORK_ID,
@@ -1194,6 +1282,35 @@ def test_prepared_account_submissions_reject_expired_forward_binding() -> None:
     with pytest.raises(ValueError, match="expired"):
         client.submit_prepared_account_faucet(
             faucet,
+            expected_fee_payment=FEE_PAYMENT,
+            expected_asset_definition_id=FAUCET_ASSET_DEFINITION_ID,
+            expected_amount=FAUCET_AMOUNT,
+            expected_authority=ONBOARDING_ACCOUNT_ID,
+            network_id=NETWORK_ID,
+        )
+    assert session.calls == []
+
+
+def test_prepared_account_submissions_reject_independent_fee_substitution() -> None:
+    session = OnboardingSession([])
+    client = ToriiClient("https://torii.example", session=session)
+    substituted = authority_fee_payment(charge_limits=[], gas_limit=1)
+
+    with pytest.raises(ValueError, match="independent selection"):
+        client.submit_prepared_account_onboarding(
+            onboarding_token=ONBOARDING_TOKEN,
+            prepared=prepared_onboarding(),
+            expected_fee_payment=substituted,
+            expected_request=onboarding_request(),
+            expected_authority=ONBOARDING_ACCOUNT_ID,
+            network_id=NETWORK_ID,
+        )
+    with pytest.raises(ValueError, match="independent selection"):
+        client.submit_prepared_account_faucet(
+            prepared_faucet(),
+            expected_fee_payment=substituted,
+            expected_asset_definition_id=FAUCET_ASSET_DEFINITION_ID,
+            expected_amount=FAUCET_AMOUNT,
             expected_authority=ONBOARDING_ACCOUNT_ID,
             network_id=NETWORK_ID,
         )
@@ -1236,6 +1353,7 @@ def test_prepared_submit_rejects_legacy_or_aggregate_envelopes_before_dispatch()
         client.submit_prepared_account_onboarding(
             onboarding_token=ONBOARDING_TOKEN,
             prepared=legacy,
+            expected_fee_payment=FEE_PAYMENT,
             expected_request=onboarding_request(),
             expected_authority=ONBOARDING_ACCOUNT_ID,
             network_id=NETWORK_ID,
@@ -1245,6 +1363,7 @@ def test_prepared_submit_rejects_legacy_or_aggregate_envelopes_before_dispatch()
         client.submit_prepared_account_onboarding(
             onboarding_token=ONBOARDING_TOKEN,
             prepared=aggregate,
+            expected_fee_payment=FEE_PAYMENT,
             expected_request=onboarding_request(),
             expected_authority=ONBOARDING_ACCOUNT_ID,
             network_id=NETWORK_ID,
@@ -1271,16 +1390,24 @@ def test_account_faucet_is_explicit_prepare_then_exact_submit(
             ),
         ]
     )
+    authentication_contexts: list[str] = []
+
+    def authenticate(*_: object, **kwargs: object) -> None:
+        authentication_contexts.append(str(kwargs["context"]))
+
     monkeypatch.setattr(
         client_module,
         "_verify_prepared_transaction_authentication_v1",
-        lambda *_, **__: None,
+        authenticate,
     )
     client = ToriiClient("https://torii.example", session=session)
 
     prepare = client.prepare_account_faucet(
         ONBOARDING_ACCOUNT_ID,
         binding=prepared_binding("faucet"),
+        fee_payment=FEE_PAYMENT,
+        expected_asset_definition_id=FAUCET_ASSET_DEFINITION_ID,
+        expected_amount=FAUCET_AMOUNT,
         expected_authority=ONBOARDING_ACCOUNT_ID,
         network_id=NETWORK_ID,
         pow_anchor_height=7,
@@ -1288,6 +1415,9 @@ def test_account_faucet_is_explicit_prepare_then_exact_submit(
     )
     submit = client.submit_prepared_account_faucet(
         prepared,
+        expected_fee_payment=FEE_PAYMENT,
+        expected_asset_definition_id=FAUCET_ASSET_DEFINITION_ID,
+        expected_amount=FAUCET_AMOUNT,
         expected_authority=ONBOARDING_ACCOUNT_ID,
         network_id=NETWORK_ID,
     )
@@ -1301,9 +1431,202 @@ def test_account_faucet_is_explicit_prepare_then_exact_submit(
         "schema": "iroha.accounts.faucet.prepare.v1",
         "binding": prepared_binding("faucet"),
         "claim": prepared["claim"],
+        "fee_payment": FEE_PAYMENT,
     }
     assert json.loads(session.calls[1]["data"]) == prepared
     assert all(call["allow_redirects"] is False for call in session.calls)
+    assert authentication_contexts == [
+        "prepare_account_faucet.response",
+        "submit_prepared_account_faucet.prepared",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("field", "substituted", "message"),
+    [
+        ("asset_definition_id", "usd#sora", "asset_definition_id differs"),
+        ("amount", "101", "amount differs"),
+    ],
+)
+def test_faucet_prepare_rejects_independent_policy_substitution(
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    substituted: str,
+    message: str,
+) -> None:
+    prepared = prepared_faucet()
+    prepared[field] = substituted
+    if field == "asset_definition_id":
+        prepared["asset_id"] = f"{substituted}#{ONBOARDING_ACCOUNT_ID}"
+    session = OnboardingSession([response(200, prepared)])
+    monkeypatch.setattr(
+        client_module,
+        "_verify_prepared_transaction_authentication_v1",
+        lambda *_, **__: None,
+    )
+    client = ToriiClient("https://torii.example", session=session)
+
+    with pytest.raises(ValueError, match=message):
+        client.prepare_account_faucet(
+            ONBOARDING_ACCOUNT_ID,
+            binding=prepared_binding("faucet"),
+            fee_payment=FEE_PAYMENT,
+            expected_asset_definition_id=FAUCET_ASSET_DEFINITION_ID,
+            expected_amount=FAUCET_AMOUNT,
+            expected_authority=ONBOARDING_ACCOUNT_ID,
+            network_id=NETWORK_ID,
+            pow_anchor_height=7,
+            pow_nonce_hex="0000000000000000",
+        )
+
+    assert [call["path"] for call in session.calls] == ["/v1/accounts/faucet/prepare"]
+
+
+@pytest.mark.parametrize(
+    ("field", "substituted", "message"),
+    [
+        ("asset_definition_id", "usd#sora", "asset_definition_id differs"),
+        ("amount", "101", "amount differs"),
+    ],
+)
+def test_faucet_submit_rejects_independent_policy_substitution_before_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    substituted: str,
+    message: str,
+) -> None:
+    prepared = prepared_faucet()
+    prepared[field] = substituted
+    if field == "asset_definition_id":
+        prepared["asset_id"] = f"{substituted}#{ONBOARDING_ACCOUNT_ID}"
+    session = OnboardingSession([])
+    monkeypatch.setattr(
+        client_module,
+        "_verify_prepared_transaction_authentication_v1",
+        lambda *_, **__: None,
+    )
+    client = ToriiClient("https://torii.example", session=session)
+
+    with pytest.raises(ValueError, match=message):
+        client.submit_prepared_account_faucet(
+            prepared,
+            expected_fee_payment=FEE_PAYMENT,
+            expected_asset_definition_id=FAUCET_ASSET_DEFINITION_ID,
+            expected_amount=FAUCET_AMOUNT,
+            expected_authority=ONBOARDING_ACCOUNT_ID,
+            network_id=NETWORK_ID,
+        )
+
+    assert session.calls == []
+
+
+@pytest.mark.parametrize(
+    ("expected_asset_definition_id", "expected_amount"),
+    [
+        ("", FAUCET_AMOUNT),
+        (f" {FAUCET_ASSET_DEFINITION_ID}", FAUCET_AMOUNT),
+        ("xor#sora", FAUCET_AMOUNT),
+        ("4rPeAP6jAjiLVZThZYwwPRBuQagu", FAUCET_AMOUNT),
+        (FAUCET_ASSET_DEFINITION_ID, "0"),
+        (FAUCET_ASSET_DEFINITION_ID, "-1"),
+        (FAUCET_ASSET_DEFINITION_ID, "01"),
+        (FAUCET_ASSET_DEFINITION_ID, 100),
+    ],
+)
+def test_faucet_prepare_rejects_invalid_independent_policy_before_dispatch(
+    expected_asset_definition_id: object,
+    expected_amount: object,
+) -> None:
+    session = OnboardingSession([])
+    client = ToriiClient("https://torii.example", session=session)
+
+    with pytest.raises((TypeError, ValueError)):
+        client.prepare_account_faucet(
+            ONBOARDING_ACCOUNT_ID,
+            binding=prepared_binding("faucet"),
+            fee_payment=FEE_PAYMENT,
+            expected_asset_definition_id=expected_asset_definition_id,  # type: ignore[arg-type]
+            expected_amount=expected_amount,  # type: ignore[arg-type]
+            expected_authority=ONBOARDING_ACCOUNT_ID,
+            network_id=NETWORK_ID,
+            pow_anchor_height=7,
+            pow_nonce_hex="0000000000000000",
+        )
+
+    assert session.calls == []
+
+
+def test_faucet_registration_rejects_invalid_policy_before_puzzle_dispatch() -> None:
+    session = OnboardingSession([])
+    client = ToriiClient("https://torii.example", session=session)
+
+    with pytest.raises(ValueError, match="positive exact quantity"):
+        client.prepare_account_faucet_registration(
+            ONBOARDING_ACCOUNT_ID,
+            binding=prepared_binding("faucet"),
+            fee_payment=FEE_PAYMENT,
+            expected_asset_definition_id=FAUCET_ASSET_DEFINITION_ID,
+            expected_amount="0",
+            expected_authority=ONBOARDING_ACCOUNT_ID,
+            network_id=NETWORK_ID,
+        )
+
+    assert session.calls == []
+
+
+def test_faucet_registration_rejects_explicit_empty_puzzle_without_dispatch() -> None:
+    session = OnboardingSession([])
+    client = ToriiClient("https://torii.example", session=session)
+
+    with pytest.raises(TypeError, match="exactly the V1 fields"):
+        client.prepare_account_faucet_registration(
+            ONBOARDING_ACCOUNT_ID,
+            binding=prepared_binding("faucet"),
+            fee_payment=FEE_PAYMENT,
+            expected_asset_definition_id=FAUCET_ASSET_DEFINITION_ID,
+            expected_amount=FAUCET_AMOUNT,
+            expected_authority=ONBOARDING_ACCOUNT_ID,
+            network_id=NETWORK_ID,
+            puzzle={},
+        )
+
+    assert session.calls == []
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid"),
+    [
+        ("pow_anchor_height", None),
+        ("pow_anchor_height", 0),
+        ("pow_nonce_hex", None),
+        ("pow_nonce_hex", ""),
+        ("pow_nonce_hex", "0"),
+        ("pow_nonce_hex", "AA"),
+        ("pow_nonce_hex", "00" * 33),
+    ],
+)
+def test_faucet_submit_rejects_optional_or_noncanonical_pow_before_dispatch(
+    field: str,
+    invalid: object,
+) -> None:
+    prepared = prepared_faucet()
+    claim = prepared["claim"]
+    assert isinstance(claim, dict)
+    claim[field] = invalid
+    session = OnboardingSession([])
+    client = ToriiClient("https://torii.example", session=session)
+
+    with pytest.raises((TypeError, ValueError)):
+        client.submit_prepared_account_faucet(
+            prepared,
+            expected_fee_payment=FEE_PAYMENT,
+            expected_asset_definition_id=FAUCET_ASSET_DEFINITION_ID,
+            expected_amount=FAUCET_AMOUNT,
+            expected_authority=ONBOARDING_ACCOUNT_ID,
+            network_id=NETWORK_ID,
+        )
+
+    assert session.calls == []
 
 
 @pytest.mark.parametrize(
@@ -1311,8 +1634,10 @@ def test_account_faucet_is_explicit_prepare_then_exact_submit(
     [
         ("merchant@universal", 7, "00"),
         (ONBOARDING_ACCOUNT_ID, True, "00"),
+        (ONBOARDING_ACCOUNT_ID, None, "00"),
         (ONBOARDING_ACCOUNT_ID, 0, "00"),
         (ONBOARDING_ACCOUNT_ID, 1 << 64, "00"),
+        (ONBOARDING_ACCOUNT_ID, 7, None),
         (ONBOARDING_ACCOUNT_ID, 7, ""),
         (ONBOARDING_ACCOUNT_ID, 7, "0"),
         (ONBOARDING_ACCOUNT_ID, 7, "AA"),
@@ -1331,6 +1656,9 @@ def test_faucet_prepare_rejects_noncanonical_claim_before_dispatch(
         client.prepare_account_faucet(
             account_id,  # type: ignore[arg-type]
             binding=prepared_binding("faucet"),
+            fee_payment=FEE_PAYMENT,
+            expected_asset_definition_id=FAUCET_ASSET_DEFINITION_ID,
+            expected_amount=FAUCET_AMOUNT,
             expected_authority=ONBOARDING_ACCOUNT_ID,
             network_id=NETWORK_ID,
             pow_anchor_height=anchor,  # type: ignore[arg-type]
@@ -1338,6 +1666,84 @@ def test_faucet_prepare_rejects_noncanonical_claim_before_dispatch(
         )
 
     assert session.calls == []
+
+
+@pytest.mark.parametrize(
+    "fee_payment",
+    [
+        {},
+        {"payer": "authority"},
+        {"payer": "legacy", "value": {"charge_limits": [], "gas_limit": None}},
+        {
+            "payer": "authority",
+            "value": {"charge_limits": [], "gas_limit": 0},
+        },
+    ],
+)
+def test_faucet_prepare_rejects_noncanonical_fee_intent_before_dispatch(
+    fee_payment: object,
+) -> None:
+    session = OnboardingSession([])
+    client = ToriiClient("https://torii.example", session=session)
+
+    with pytest.raises((TypeError, ValueError)):
+        client.prepare_account_faucet(
+            ONBOARDING_ACCOUNT_ID,
+            binding=prepared_binding("faucet"),
+            fee_payment=fee_payment,  # type: ignore[arg-type]
+            expected_asset_definition_id=FAUCET_ASSET_DEFINITION_ID,
+            expected_amount=FAUCET_AMOUNT,
+            expected_authority=ONBOARDING_ACCOUNT_ID,
+            network_id=NETWORK_ID,
+            pow_anchor_height=7,
+            pow_nonce_hex="0000000000000000",
+        )
+    assert session.calls == []
+
+
+def test_fee_intent_v1_requires_canonical_asset_addresses_and_exact_quantities() -> None:
+    intent = authority_fee_payment(
+        charge_limits=[
+            {
+                "kind": "nexus",
+                "asset_definition_id": FAUCET_ASSET_DEFINITION_ID,
+                "max_amount": "1.25",
+            }
+        ]
+    )
+    copied = client_module._copy_fee_payment_intent_v1(intent, "fixture.fee_payment")
+    assert copied["value"]["charge_limits"][0]["max_amount"] == "1.25"
+
+    for invalid in ("xor#sora", FAUCET_ASSET_DEFINITION_ID[:-1] + "A"):
+        with pytest.raises(ValueError, match="canonical asset definition address"):
+            authority_fee_payment(
+                charge_limits=[
+                    {
+                        "kind": "nexus",
+                        "asset_definition_id": invalid,
+                        "max_amount": "1.25",
+                    }
+                ]
+            )
+
+
+def test_fee_intent_v1_requires_canonical_sponsor_account() -> None:
+    sponsored = {
+        "payer": "sponsor",
+        "value": {
+            "program_id": {"sponsor": ONBOARDING_ACCOUNT_ID, "name": "reset"},
+            "program_revision": 1,
+            "charge_limits": [],
+            "gas_limit": None,
+        },
+    }
+    assert (
+        client_module._copy_fee_payment_intent_v1(sponsored, "fixture.fee_payment")
+        == sponsored
+    )
+    sponsored["value"]["program_id"]["sponsor"] = "merchant@universal"
+    with pytest.raises(ValueError, match="canonical I105 account id"):
+        client_module._copy_fee_payment_intent_v1(sponsored, "fixture.fee_payment")
 
 
 def test_faucet_submit_rejects_claim_body_and_wrong_binding_kind() -> None:
@@ -1351,6 +1757,9 @@ def test_faucet_submit_rejects_claim_body_and_wrong_binding_kind() -> None:
                 "pow_anchor_height": 7,
                 "pow_nonce_hex": "0000000000000000",
             },
+            expected_fee_payment=FEE_PAYMENT,
+            expected_asset_definition_id=FAUCET_ASSET_DEFINITION_ID,
+            expected_amount=FAUCET_AMOUNT,
             expected_authority=ONBOARDING_ACCOUNT_ID,
             network_id=NETWORK_ID,
         )
@@ -1359,6 +1768,9 @@ def test_faucet_submit_rejects_claim_body_and_wrong_binding_kind() -> None:
     with pytest.raises(ValueError, match="kind must be 'faucet'"):
         client.submit_prepared_account_faucet(
             wrong_kind,
+            expected_fee_payment=FEE_PAYMENT,
+            expected_asset_definition_id=FAUCET_ASSET_DEFINITION_ID,
+            expected_amount=FAUCET_AMOUNT,
             expected_authority=ONBOARDING_ACCOUNT_ID,
             network_id=NETWORK_ID,
         )

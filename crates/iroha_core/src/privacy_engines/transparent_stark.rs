@@ -13,6 +13,8 @@
 //! perform the complete FRI terminal-degree check.
 use rand::TryRngCore;
 use sha2::{Digest as _, Sha256};
+use std::collections::BTreeMap;
+#[cfg(test)]
 use std::collections::BTreeSet;
 use thiserror::Error;
 use zeroize::Zeroize as _;
@@ -34,6 +36,8 @@ const QUERY_INDEX_DOMAIN_V1: &[u8] = b"iroha:privacy:transparent-stark:query-ind
 const GRINDING_DOMAIN_V1: &[u8] = b"iroha:privacy:transparent-stark:grinding:v1";
 /// Fixed rejection budget for canonical field and transcript sampling.
 pub(crate) const MAX_FIELD_REJECTION_ATTEMPTS_V1: u64 = 16;
+/// Fixed rejection budget for each unbiased query-index range sample.
+const MAX_QUERY_INDEX_REJECTION_ATTEMPTS_V1: u64 = 256;
 /// Degree of the compiled Goldilocks extension.
 pub(crate) const GOLDILOCKS_FP4_DEGREE_V1: usize = 4;
 /// Canonical encoded size of one quartic-extension value.
@@ -1202,29 +1206,56 @@ pub(crate) fn derive_unique_query_indices_v1(
     {
         return Err(TransparentStarkErrorV1::InvalidDomain);
     }
-    let max_attempts = domain_size
-        .checked_mul(2)
-        .ok_or(TransparentStarkErrorV1::InvalidDomain)?;
     let mut indices = Vec::new();
     indices
         .try_reserve_exact(query_count)
         .map_err(|_| TransparentStarkErrorV1::AllocationFailure)?;
-    let mut seen = BTreeSet::new();
-    for counter in 0..max_attempts {
-        let counter =
-            u64::try_from(counter).map_err(|_| TransparentStarkErrorV1::QuerySamplingExhausted)?;
-        let digest = sha256_frame_v1(QUERY_INDEX_DOMAIN_V1, &[seed, &counter.to_be_bytes()])?;
+    // A sparse swap table implements the first `query_count` steps of a Fisher--Yates shuffle
+    // without allocating the complete domain. This gives every ordered set of distinct indices
+    // the same probability and cannot exhibit coupon-collector exhaustion for dense queries.
+    let mut swaps = BTreeMap::new();
+    let mut counter = 0_u64;
+    for query_number in 0..query_count {
+        let remaining = domain_size
+            .checked_sub(query_number)
+            .ok_or(TransparentStarkErrorV1::InvalidDomain)?;
+        let offset = derive_bounded_query_offset_v1(seed, &mut counter, remaining)?;
+        let draw = query_number
+            .checked_add(offset)
+            .ok_or(TransparentStarkErrorV1::InvalidDomain)?;
+        let selected = swaps.get(&draw).copied().unwrap_or(draw);
+        let replacement = swaps.get(&query_number).copied().unwrap_or(query_number);
+        swaps.insert(draw, replacement);
+        indices.push(selected);
+    }
+    Ok(indices)
+}
+fn derive_bounded_query_offset_v1(
+    seed: &[u8; 32],
+    counter: &mut u64,
+    bound: usize,
+) -> Result<usize, TransparentStarkErrorV1> {
+    if bound == 0 {
+        return Err(TransparentStarkErrorV1::InvalidDomain);
+    }
+    let bound = bound as u128;
+    let source_space = u128::from(u64::MAX) + 1;
+    let acceptance_limit = source_space - source_space % bound;
+    for _ in 0..MAX_QUERY_INDEX_REJECTION_ATTEMPTS_V1 {
+        let encoded_counter = counter.to_be_bytes();
+        let digest = sha256_frame_v1(QUERY_INDEX_DOMAIN_V1, &[seed, &encoded_counter])?;
+        *counter = counter
+            .checked_add(1)
+            .ok_or(TransparentStarkErrorV1::QuerySamplingExhausted)?;
         let raw = u64::from_be_bytes(
             digest[..8]
                 .try_into()
                 .expect("SHA-256 prefix is exactly eight bytes"),
         );
-        let index = (raw as usize) & (domain_size - 1);
-        if seen.insert(index) {
-            indices.push(index);
-            if indices.len() == query_count {
-                return Ok(indices);
-            }
+        let raw = u128::from(raw);
+        if raw < acceptance_limit {
+            return usize::try_from(raw % bound)
+                .map_err(|_| TransparentStarkErrorV1::InvalidDomain);
         }
     }
     Err(TransparentStarkErrorV1::QuerySamplingExhausted)
@@ -2145,6 +2176,28 @@ mod tests {
             first.iter().copied().collect::<BTreeSet<_>>().len(),
             first.len()
         );
+    }
+    #[test]
+    fn dense_query_sampling_succeeds_for_the_former_zero_seed_exhaustion() {
+        assert_eq!(
+            derive_unique_query_indices_v1(&[0; 32], 2, 2).expect("dense queries"),
+            vec![0, 1]
+        );
+    }
+    #[test]
+    fn query_indices_remain_unique_and_in_range_through_full_domains() {
+        for domain_size in [1, 2, 4, 8, 16, 64, 256] {
+            for query_count in [1, domain_size.div_ceil(2), domain_size] {
+                let indices = derive_unique_query_indices_v1(&[0xa5; 32], domain_size, query_count)
+                    .expect("valid query shape");
+                assert_eq!(indices.len(), query_count);
+                assert!(indices.iter().all(|index| *index < domain_size));
+                assert_eq!(
+                    indices.iter().copied().collect::<BTreeSet<_>>().len(),
+                    query_count
+                );
+            }
+        }
     }
     #[test]
     fn fri_terminal_check_rejects_high_degree_values() {

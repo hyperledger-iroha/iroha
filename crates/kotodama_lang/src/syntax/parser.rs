@@ -109,7 +109,7 @@ fn parse_program_internal(
     } else {
         match crate::parser::validate_nesting(source, budget, &lowered_tokens) {
             Ok(()) => {
-                let parsed = crate::parser::parse_with_syntax(source, &lowered_tokens);
+                let parsed = crate::parser::parse_with_syntax(source, budget, &lowered_tokens);
                 let (program, sourced_program, ast_facts) =
                     parsed.spanned.map_or((None, None, None), |spanned| {
                         if produce_plain_program {
@@ -177,6 +177,12 @@ fn parse_program_internal(
 #[must_use]
 pub fn parse(source: &SourceFile, budget: FrontendBudget) -> ParseOutput {
     let output = parse_program(source, budget);
+    if let Some(program) = output.program {
+        crate::ast::drop_program_iterative(program);
+    }
+    if let Some(program) = output.sourced_program {
+        crate::ast::drop_program_iterative(program);
+    }
     ParseOutput {
         tree: output.tree,
         diagnostics: output.diagnostics,
@@ -327,7 +333,7 @@ mod tests {
         let lossless = lexed.tokens.clone();
         let tokens = crate::lexer::lower_lexed(&source, FrontendBudget::v1(), lexed)
             .expect("lower significant token view");
-        let mut parsed = crate::parser::parse_with_syntax(&source, &tokens);
+        let mut parsed = crate::parser::parse_with_syntax(&source, FrontendBudget::v1(), &tokens);
         let missing_offset =
             u32::try_from(text.find(')').expect("parameter close")).expect("source budget");
         assert!(parsed.missing.iter().any(|missing| {

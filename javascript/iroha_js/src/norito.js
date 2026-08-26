@@ -279,14 +279,14 @@ const UPLOAD_SMART_CONTRACT_CODE_CHUNK_WIRE_ID = "iroha_data_model::isi::smart_c
 const FINALIZE_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID = "iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload";
 const CANCEL_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID = "iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload";
 const REMOVE_SMART_CONTRACT_BYTES_WIRE_ID = "iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes";
-const CREATE_KAIGI_WIRE_ID = "iroha_data_model::isi::kaigi::CreateKaigi";
-const JOIN_KAIGI_WIRE_ID = "iroha_data_model::isi::kaigi::JoinKaigi";
-const LEAVE_KAIGI_WIRE_ID = "iroha_data_model::isi::kaigi::LeaveKaigi";
-const END_KAIGI_WIRE_ID = "iroha_data_model::isi::kaigi::EndKaigi";
-const RECORD_KAIGI_USAGE_WIRE_ID = "iroha_data_model::isi::kaigi::RecordKaigiUsage";
-const SET_KAIGI_RELAY_MANIFEST_WIRE_ID = "iroha_data_model::isi::kaigi::SetKaigiRelayManifest";
-const REGISTER_KAIGI_RELAY_WIRE_ID = "iroha_data_model::isi::kaigi::RegisterKaigiRelay";
-const REPORT_KAIGI_RELAY_HEALTH_WIRE_ID = "iroha_data_model::isi::kaigi::ReportKaigiRelayHealth";
+const CREATE_KAIGI_WIRE_ID = "iroha.instruction.v1::kaigi::CreateKaigi";
+const JOIN_KAIGI_WIRE_ID = "iroha.instruction.v1::kaigi::JoinKaigi";
+const LEAVE_KAIGI_WIRE_ID = "iroha.instruction.v1::kaigi::LeaveKaigi";
+const END_KAIGI_WIRE_ID = "iroha.instruction.v1::kaigi::EndKaigi";
+const RECORD_KAIGI_USAGE_WIRE_ID = "iroha.instruction.v1::kaigi::RecordKaigiUsage";
+const SET_KAIGI_RELAY_MANIFEST_WIRE_ID = "iroha.instruction.v1::kaigi::SetKaigiRelayManifest";
+const REGISTER_KAIGI_RELAY_WIRE_ID = "iroha.instruction.v1::kaigi::RegisterKaigiRelay";
+const REPORT_KAIGI_RELAY_HEALTH_WIRE_ID = "iroha.instruction.v1::kaigi::ReportKaigiRelayHealth";
 const KAIGI_WIRE_IDS = new Set([
   CREATE_KAIGI_WIRE_ID,
   JOIN_KAIGI_WIRE_ID,
@@ -325,14 +325,18 @@ const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({
   [ISSUE_REPLICATION_ORDER_WIRE_ID]: ISSUE_REPLICATION_ORDER_WIRE_ID,
   [COMPLETE_REPLICATION_ORDER_WIRE_ID]: COMPLETE_REPLICATION_ORDER_WIRE_ID,
   [EXPIRE_REPLICATION_ORDER_WIRE_ID]: EXPIRE_REPLICATION_ORDER_WIRE_ID,
-  [CREATE_KAIGI_WIRE_ID]: CREATE_KAIGI_WIRE_ID,
-  [JOIN_KAIGI_WIRE_ID]: JOIN_KAIGI_WIRE_ID,
-  [LEAVE_KAIGI_WIRE_ID]: LEAVE_KAIGI_WIRE_ID,
-  [END_KAIGI_WIRE_ID]: END_KAIGI_WIRE_ID,
-  [RECORD_KAIGI_USAGE_WIRE_ID]: RECORD_KAIGI_USAGE_WIRE_ID,
-  [SET_KAIGI_RELAY_MANIFEST_WIRE_ID]: SET_KAIGI_RELAY_MANIFEST_WIRE_ID,
-  [REGISTER_KAIGI_RELAY_WIRE_ID]: REGISTER_KAIGI_RELAY_WIRE_ID,
-  [REPORT_KAIGI_RELAY_HEALTH_WIRE_ID]: REPORT_KAIGI_RELAY_HEALTH_WIRE_ID,
+  [CREATE_KAIGI_WIRE_ID]: "iroha_data_model::isi::kaigi::CreateKaigi",
+  [JOIN_KAIGI_WIRE_ID]: "iroha_data_model::isi::kaigi::JoinKaigi",
+  [LEAVE_KAIGI_WIRE_ID]: "iroha_data_model::isi::kaigi::LeaveKaigi",
+  [END_KAIGI_WIRE_ID]: "iroha_data_model::isi::kaigi::EndKaigi",
+  [RECORD_KAIGI_USAGE_WIRE_ID]:
+    "iroha_data_model::isi::kaigi::RecordKaigiUsage",
+  [SET_KAIGI_RELAY_MANIFEST_WIRE_ID]:
+    "iroha_data_model::isi::kaigi::SetKaigiRelayManifest",
+  [REGISTER_KAIGI_RELAY_WIRE_ID]:
+    "iroha_data_model::isi::kaigi::RegisterKaigiRelay",
+  [REPORT_KAIGI_RELAY_HEALTH_WIRE_ID]:
+    "iroha_data_model::isi::kaigi::ReportKaigiRelayHealth",
   [PROPOSE_DEPLOY_CONTRACT_WIRE_ID]: PROPOSE_DEPLOY_CONTRACT_WIRE_ID,
   [CAST_ZK_BALLOT_WIRE_ID]: CAST_ZK_BALLOT_WIRE_ID,
   [CAST_PLAIN_BALLOT_WIRE_ID]: CAST_PLAIN_BALLOT_WIRE_ID,

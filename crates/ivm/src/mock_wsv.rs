@@ -1812,9 +1812,8 @@ impl WsvHost {
             schema: self.schema.clone(),
         }
     }
-    fn restore_state(&mut self, snapshot: &WsvHostSnapshot) {
+    fn restore_state(&mut self, snapshot: &WsvHostSnapshot) -> Result<(), VMError> {
         self.wsv = snapshot.wsv.clone();
-        self.wsv.sc_flush().expect("restore durable state snapshot");
         self.caller = snapshot.caller.clone();
         self.account_map = snapshot.account_map.clone();
         self.asset_map = snapshot.asset_map.clone();
@@ -1838,6 +1837,7 @@ impl WsvHost {
         self.tx_active = snapshot.tx_active;
         self.schema = snapshot.schema.clone();
         self.refresh_axt_policy();
+        self.wsv.sc_flush()
     }
     /// Configure Halo2 verification limits for this host.
     pub fn with_zk_halo2_config(mut self, cfg: crate::host::ZkHalo2Config) -> Self {
@@ -4723,8 +4723,7 @@ impl IVMHost for WsvHost {
     }
     fn restore(&mut self, snapshot: &dyn Any) -> bool {
         if let Some(saved) = snapshot.downcast_ref::<WsvHostSnapshot>() {
-            self.restore_state(saved);
-            true
+            self.restore_state(saved).is_ok()
         } else {
             false
         }

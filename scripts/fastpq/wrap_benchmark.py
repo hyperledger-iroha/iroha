@@ -534,7 +534,7 @@ def filter_metric_samples(
     if not device_class:
         return samples
     filtered = [sample for sample in samples if sample["labels"].get("device_class") == device_class]
-    return filtered or samples
+    return filtered
 
 
 def summarize_metric_entries(

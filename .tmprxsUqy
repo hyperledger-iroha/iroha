@@ -1,0 +1,15 @@
+
+            {
+                "mode": "Middle",
+                "listen": "127.0.0.1:0",
+                "privacy": {
+                    "bucket_secs": 90,
+                    "min_handshakes": 8,
+                    "flush_delay_buckets": 2,
+                    "force_flush_buckets": 4,
+                    "max_completed_buckets": 12,
+                    "expected_shares": 3,
+                    "event_buffer_capacity": 2048
+                }
+            }
+        

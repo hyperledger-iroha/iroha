@@ -416,7 +416,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RemoveSmartContractBytes {
 mod tests {
     use super::*;
     use crate::isi::test_support::{
-assert_registry_decodes_registered_type as assert_registry_decodes, assert_slice_roundtrip,
+        assert_registry_decodes_registered_type as assert_registry_decodes, assert_slice_roundtrip,
     };
     use crate::{
         account::AccountId,
@@ -539,17 +539,35 @@ assert_registry_decodes_registered_type as assert_registry_decodes, assert_slice
         );
     }
     #[test]
-fn smart_contract_code_registry_decodes_canonical_wire_ids() {
+    fn smart_contract_code_registry_decodes_canonical_wire_ids() {
         let registry = crate::isi::InstructionRegistry::new()
-.register_with_id_slice::<RegisterSmartContractCode>("iroha.instruction.v1::smart_contract_code::RegisterSmartContractCode")
-            .register_with_id_slice::<DeactivateContractInstance>("iroha.instruction.v1::smart_contract_code::DeactivateContractInstance")
-            .register_with_id_slice::<ActivateContractInstance>("iroha.instruction.v1::smart_contract_code::ActivateContractInstance")
-            .register_with_id_slice::<CommitContractDeployment>("iroha.instruction.v1::smart_contract_code::CommitContractDeployment")
-            .register_with_id_slice::<RegisterSmartContractBytes>("iroha.instruction.v1::smart_contract_code::RegisterSmartContractBytes")
-            .register_with_id_slice::<UploadSmartContractCodeChunk>("iroha.instruction.v1::smart_contract_code::UploadSmartContractCodeChunk")
-            .register_with_id_slice::<FinalizeSmartContractCodeUpload>("iroha.instruction.v1::smart_contract_code::FinalizeSmartContractCodeUpload")
-            .register_with_id_slice::<CancelSmartContractCodeUpload>("iroha.instruction.v1::smart_contract_code::CancelSmartContractCodeUpload")
-            .register_with_id_slice::<RemoveSmartContractBytes>("iroha.instruction.v1::smart_contract_code::RemoveSmartContractBytes");
+            .register_with_id_slice::<RegisterSmartContractCode>(
+                "iroha.instruction.v1::smart_contract_code::RegisterSmartContractCode",
+            )
+            .register_with_id_slice::<DeactivateContractInstance>(
+                "iroha.instruction.v1::smart_contract_code::DeactivateContractInstance",
+            )
+            .register_with_id_slice::<ActivateContractInstance>(
+                "iroha.instruction.v1::smart_contract_code::ActivateContractInstance",
+            )
+            .register_with_id_slice::<CommitContractDeployment>(
+                "iroha.instruction.v1::smart_contract_code::CommitContractDeployment",
+            )
+            .register_with_id_slice::<RegisterSmartContractBytes>(
+                "iroha.instruction.v1::smart_contract_code::RegisterSmartContractBytes",
+            )
+            .register_with_id_slice::<UploadSmartContractCodeChunk>(
+                "iroha.instruction.v1::smart_contract_code::UploadSmartContractCodeChunk",
+            )
+            .register_with_id_slice::<FinalizeSmartContractCodeUpload>(
+                "iroha.instruction.v1::smart_contract_code::FinalizeSmartContractCodeUpload",
+            )
+            .register_with_id_slice::<CancelSmartContractCodeUpload>(
+                "iroha.instruction.v1::smart_contract_code::CancelSmartContractCodeUpload",
+            )
+            .register_with_id_slice::<RemoveSmartContractBytes>(
+                "iroha.instruction.v1::smart_contract_code::RemoveSmartContractBytes",
+            );
         assert_registry_decodes(
             &registry,
             RegisterSmartContractCode {

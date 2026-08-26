@@ -13,10 +13,16 @@ import kotlin.test.assertTrue
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
 import org.bouncycastle.crypto.signers.Ed25519Signer
 import org.hyperledger.iroha.sdk.address.AccountAddress
+import org.hyperledger.iroha.sdk.alias.AccountFaucetClaimV1
+import org.hyperledger.iroha.sdk.alias.AccountFaucetPolicyV1
+import org.hyperledger.iroha.sdk.alias.AccountFaucetPreparedTransactionV1
 import org.hyperledger.iroha.sdk.alias.AccountOnboardingCurrentStateV1
 import org.hyperledger.iroha.sdk.alias.AccountOnboardingPlanReceiptV1
 import org.hyperledger.iroha.sdk.alias.AccountOnboardingPlanRequestV1
+import org.hyperledger.iroha.sdk.alias.AccountOnboardingPrepareResponseV1
+import org.hyperledger.iroha.sdk.alias.AccountOnboardingPreparedTransactionV1
 import org.hyperledger.iroha.sdk.alias.AccountOnboardingProofRequiredPrepareResponseV1
+import org.hyperledger.iroha.sdk.alias.PreparedTransactionSubmitResponseV1
 import org.hyperledger.iroha.sdk.alias.TairaPublicResetMutationBindingV1
 import org.hyperledger.iroha.sdk.client.ClientResponse
 import org.hyperledger.iroha.sdk.client.IrohaClient
@@ -819,6 +825,25 @@ class NexusAppClientTest {
     ) : IrohaClient {
         var submittedHash: String? = null
 
+        override fun planSponsoredAccountOnboarding(
+            request: AccountOnboardingPlanRequestV1,
+            onboardingToken: String,
+            expectedAuthority: String,
+            expectedNetworkId: NetworkId,
+        ): CompletableFuture<AccountOnboardingPlanReceiptV1> =
+            throw AssertionError("account onboarding is not used by this test fake")
+
+        override fun prepareSponsoredAccountOnboarding(
+            request: AccountOnboardingPlanRequestV1,
+            receipt: AccountOnboardingPlanReceiptV1,
+            binding: TairaPublicResetMutationBindingV1,
+            feePayment: FeePaymentIntent,
+            onboardingToken: String,
+            expectedAuthority: String,
+            expectedNetworkId: NetworkId,
+        ): CompletableFuture<AccountOnboardingPrepareResponseV1> =
+            throw AssertionError("account onboarding is not used by this test fake")
+
         override fun verifyAccountOnboardingCurrentState(
             proofRequired: AccountOnboardingProofRequiredPrepareResponseV1,
             request: AccountOnboardingPlanRequestV1,
@@ -829,6 +854,33 @@ class NexusAppClientTest {
             canonicalAuth: ToriiCanonicalRequestAuth,
         ): CompletableFuture<AccountOnboardingCurrentStateV1> =
             throw AssertionError("account onboarding is not used by this test fake")
+
+        override fun submitPreparedAccountOnboarding(
+            request: AccountOnboardingPlanRequestV1,
+            prepared: AccountOnboardingPreparedTransactionV1,
+            expectedFeePayment: FeePaymentIntent,
+            onboardingToken: String,
+            expectedAuthority: String,
+            expectedNetworkId: NetworkId,
+        ): CompletableFuture<PreparedTransactionSubmitResponseV1> =
+            throw AssertionError("account onboarding is not used by this test fake")
+
+        override fun prepareAccountFaucetTransaction(
+            claim: AccountFaucetClaimV1,
+            binding: TairaPublicResetMutationBindingV1,
+            feePayment: FeePaymentIntent,
+            policy: AccountFaucetPolicyV1,
+            expectedNetworkId: NetworkId,
+        ): CompletableFuture<AccountFaucetPreparedTransactionV1> =
+            throw AssertionError("account faucet is not used by this test fake")
+
+        override fun submitPreparedAccountFaucetTransaction(
+            prepared: AccountFaucetPreparedTransactionV1,
+            expectedFeePayment: FeePaymentIntent,
+            policy: AccountFaucetPolicyV1,
+            expectedNetworkId: NetworkId,
+        ): CompletableFuture<PreparedTransactionSubmitResponseV1> =
+            throw AssertionError("account faucet is not used by this test fake")
 
         override fun submitTransaction(transaction: SignedTransaction): CompletableFuture<ClientResponse> {
             submitFailure?.let {

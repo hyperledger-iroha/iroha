@@ -1,0 +1,11 @@
+
+            {
+                "mode": "Entry",
+                "listen": "127.0.0.1:0",
+                "congestion": {
+                    "max_circuits_per_client": 4,
+                    "max_active_circuits": 32,
+                    "handshake_cooldown_millis": 750
+                }
+            }
+        

@@ -95,11 +95,11 @@ public enum ContractAddressV1 {
             payload.append(address)
             withUnsafeBytes(of: &counterBE) { payload.append(contentsOf: $0) }
             let candidate = IrohaHash.hash(payload)
-            let account = try AccountAddress.fromAccount(
-                publicKey: candidate,
-                algorithm: "ed25519"
-            )
             do {
+                let account = try AccountAddress.fromAccount(
+                    publicKey: candidate,
+                    algorithm: "ed25519"
+                )
                 guard let rendered = try bridge.renderAccountAddress(
                     canonicalBytes: account.canonicalBytes(),
                     networkPrefix: networkPrefix

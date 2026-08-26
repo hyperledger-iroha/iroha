@@ -3743,9 +3743,13 @@ pub mod zk {
 }
 /// Sumeragi (consensus) defaults
 pub mod sumeragi {
+    use iroha_config_base::util::Bytes;
     use iroha_crypto::Algorithm;
     use iroha_data_model::{
-        block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT, merge::MAX_MERGE_LEDGER_ENTRY_BYTES,
+        block::consensus_v2::{
+            MAX_DA_ENCODED_PAYLOAD_BYTES, MAX_EXECUTED_BLOCK_WIRE_BYTES, MAX_VALIDATORS_PER_HEIGHT,
+        },
+        merge::MAX_MERGE_LEDGER_ENTRY_BYTES,
     };
     use nonzero_ext::nonzero;
     use std::{
@@ -3764,6 +3768,12 @@ pub mod sumeragi {
     pub const BLOCK_MAX_TRANSACTIONS: NonZeroUsize = nonzero!(512_usize);
     /// Maximum canonical block-body size in bytes.
     pub const BLOCK_MAX_PAYLOAD_BYTES: NonZeroUsize = nonzero!(16_usize * 1024 * 1024);
+    /// Smallest per-height durable-body budget that can hold one maximum
+    /// checksummed frame plus conservative envelope headroom.
+    pub const BODY_STORE_MIN_BYTES_PER_HEIGHT: u64 =
+        MAX_EXECUTED_BLOCK_WIRE_BYTES + MAX_DA_ENCODED_PAYLOAD_BYTES + 1024 * 1024;
+    /// Aggregate final body-frame bytes retained for one active height.
+    pub const BODY_STORE_MAX_BYTES_PER_HEIGHT: Bytes<u64> = Bytes(1024 * 1024 * 1024);
     /// Proposal queue scan budget relative to the transaction limit.
     pub const PROPOSAL_QUEUE_SCAN_MULTIPLIER: NonZeroUsize = nonzero!(4_usize);
     /// Serialized reducer command FIFO capacity.

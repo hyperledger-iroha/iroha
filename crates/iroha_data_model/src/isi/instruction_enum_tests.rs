@@ -179,8 +179,8 @@ fn record_sccp_registry_decode_accepts_misaligned_framed_payload() {
     misaligned.extend_from_slice(&framed);
     let decoded =
         InstructionRegistry::decode(&registry, RECORD_SCCP_MESSAGE_WIRE_ID, &misaligned[1..])
-        .expect("constructor not found in decode map")
-        .expect("decode misaligned framed payload");
+            .expect("constructor not found in decode map")
+            .expect("decode misaligned framed payload");
     assert_eq!(Instruction::id(&*decoded), name);
     assert_eq!(Instruction::dyn_encode(&*decoded), payload);
 }
@@ -202,8 +202,7 @@ fn frame_payload_accepts_non_static_wire_id() {
     let log = Log::new(Level::INFO, "framed".to_string());
     let payload = log.encode();
     let wire_id = Log::WIRE_ID.to_owned();
-    let framed =
-        frame_instruction_payload(&wire_id, &payload).expect("frame instruction payload");
+    let framed = frame_instruction_payload(&wire_id, &payload).expect("frame instruction payload");
     let decoded: Log = norito::decode_from_bytes(&framed).expect("decode framed payload");
     assert_eq!(decoded, log);
 }

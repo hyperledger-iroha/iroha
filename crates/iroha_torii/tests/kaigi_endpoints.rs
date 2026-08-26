@@ -572,7 +572,7 @@ async fn kaigi_relay_detail_rejects_invalid_relay_path_literal() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     assert_eq!(
         resp.headers().get(CONTENT_TYPE),
-        Some(&HeaderValue::from_static(NORITO_MIME_TYPE))
+        Some(&HeaderValue::from_static(JSON_CONTENT_TYPE))
     );
 }
 #[tokio::test]
@@ -589,7 +589,7 @@ async fn kaigi_relay_detail_returns_not_found_for_unregistered_relay() {
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     assert_eq!(
         resp.headers().get(CONTENT_TYPE),
-        Some(&HeaderValue::from_static(NORITO_MIME_TYPE))
+        Some(&HeaderValue::from_static(JSON_CONTENT_TYPE))
     );
 }
 #[tokio::test]

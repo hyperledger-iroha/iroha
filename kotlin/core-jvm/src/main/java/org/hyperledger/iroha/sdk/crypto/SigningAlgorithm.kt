@@ -32,9 +32,7 @@ enum class SigningAlgorithm(
                     || normalized == "secp"
                     || normalized == "secpk1" -> SECP256K1
                 normalized == "mldsa"
-                    || normalized == "mldsa65"
-                    || normalized == "mldsa44"
-                    || normalized == "mldsa87" -> ML_DSA
+                    || normalized == "mldsa65" -> ML_DSA
                 normalized == "blsnormal"
                     || normalized == "bls12381g1" -> BLS_NORMAL
                 normalized == "blssmall"

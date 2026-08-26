@@ -2697,6 +2697,37 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                 any("authenticated revocation status" in error for error in errors), errors
             )
 
+    def test_android_attestation_rejects_every_authenticated_revoked_tbs(self) -> None:
+        metadata = android_attestation_metadata("pixel8-revoked-tbs")
+        challenge = device_lab.derive_kagemusha_strongbox_challenge_v1(metadata)
+        chain = test_android_attestation_chain(
+            challenge,
+            metadata["app_package_name"],
+            bytes.fromhex(metadata["app_signing_certificate_sha256"]),
+            chain_kind="rkp",
+        )
+        certificates = device_lab._decode_attestation_certificate_chain("chain.pem", chain)
+        authority = device_lab._ANDROID_EVIDENCE_AUTHORITY
+        assert authority is not None
+        receipt_payload = authority["attestation_status_capture_receipt"]["payload"]
+        original_tbs = receipt_payload["android_sdk_revoked_tbs_sha256"]
+        for certificate in certificates:
+            try:
+                receipt_payload["android_sdk_revoked_tbs_sha256"] = [
+                    device_lab._x509_certificate_tbs_sha256(certificate)
+                ]
+                errors: list[str] = []
+                self.assertIsNone(
+                    device_lab._validate_android_attestation_certificate_chain(
+                        "attestation/chain.pem", chain, metadata, errors
+                    )
+                )
+            finally:
+                receipt_payload["android_sdk_revoked_tbs_sha256"] = original_tbs
+            self.assertTrue(
+                any("certificate TBS digest" in error for error in errors), errors
+            )
+
     def test_candidate_causal_stream_rejects_unrelated_valid_digests(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             slot = Path(temp) / "pixel8-causal"

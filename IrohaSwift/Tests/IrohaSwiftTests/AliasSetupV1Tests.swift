@@ -3,9 +3,13 @@ import XCTest
 @testable import IrohaSwift
 
 final class AliasSetupV1Tests: XCTestCase {
+    private func validEd25519PublicKey(seed: UInt8) throws -> Data {
+        try Keypair(privateKeyBytes: Data(repeating: seed, count: 32)).publicKey
+    }
+
     func testAliasPlanBodiesRejectRetiredChainAliasesAndNonCanonicalNetworkIds() throws {
         let authority = try AccountAddress
-            .fromAccount(publicKey: Data(repeating: 0x18, count: 32))
+            .fromAccount(publicKey: validEd25519PublicKey(seed: 0x18))
             .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
         let anchor = try AliasPlanAnchorV1(
             blockHeight: 1,
@@ -102,7 +106,7 @@ final class AliasSetupV1Tests: XCTestCase {
 
     func testAccountAliasIntentPreservesTairaTargetAccount() throws {
         let target = try AccountAddress
-            .fromAccount(publicKey: Data(repeating: 0x17, count: 32))
+            .fromAccount(publicKey: validEd25519PublicKey(seed: 0x17))
             .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
         let intent = try AliasAccountIntentV1(
             alias: ResolvedAccountAliasV1(
@@ -508,8 +512,8 @@ final class AliasSetupV1Tests: XCTestCase {
 
     func testLifecycleBuildersNeverCarryLeaseExpiryInBindingChanges() throws {
         let alias = try ResolvedAccountAliasV1(canonicalName: "merchant@paynet", dataspaceId: 7)
-        let oldAccount = try AccountId.makeI105(publicKey: Data(repeating: 0x21, count: 32))
-        let newAccount = try AccountId.makeI105(publicKey: Data(repeating: 0x22, count: 32))
+        let oldAccount = try AccountId.makeI105(publicKey: validEd25519PublicKey(seed: 0x21))
+        let newAccount = try AccountId.makeI105(publicKey: validEd25519PublicKey(seed: 0x22))
         let rebind = try RebindAccountAlias(
             alias: alias,
             expectedTargetAccount: oldAccount,
@@ -532,7 +536,7 @@ final class AliasSetupV1Tests: XCTestCase {
     }
 
     func testLifecyclePlanVerifiesRenewalAndExactAutoRenewNoOp() throws {
-        let authority = try AccountId.makeI105(publicKey: Data(repeating: 0x31, count: 32))
+        let authority = try AccountId.makeI105(publicKey: validEd25519PublicKey(seed: 0x31))
         let alias = try ResolvedAccountAliasV1(canonicalName: "merchant@paynet", dataspaceId: 7)
         let guardValue = try AliasQuoteGuardV1(
             expectedPolicyVersion: 2,

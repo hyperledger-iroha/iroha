@@ -87,9 +87,12 @@ are rejected as ambient authority too. The lightweight client has no pipeline
 recovery, policy, or proof-retention method; no replacement API is invented for
 those absent surfaces. Typed Kaigi responses require Torii's exact fields and
 integer spellings, and relay details bind the decoded HPKE key to its advertised
-fingerprint. Kaigi list and health also fail closed at Torii's hard relay
-diagnostic cap rather than materializing an unbounded registry; the relay SSE
-handshake remains a separate streaming protocol.
+marked fingerprint. Each relay snapshot is streamed through a 64 MiB
+post-transfer byte bound, decoded as strict UTF-8 JSON with unique object keys,
+and closed on every outcome. Kaigi list and health also require Torii's
+canonical ordering and fail closed at the hard relay diagnostic cap rather than
+materializing an unbounded registry; the relay SSE handshake remains a separate
+streaming protocol.
 
 ## Tenant-scoped ZK attachments
 

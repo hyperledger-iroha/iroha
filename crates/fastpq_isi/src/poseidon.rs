@@ -220,8 +220,13 @@ impl PoseidonSponge {
         self.finalised = false;
     }
     /// Absorb a single field element into the sponge.
+    ///
+    /// # Panics
+    ///
+    /// Panics after the sponge has been finalised by [`Self::squeeze_element`]. Call
+    /// [`Self::reset`] before absorbing a new message.
     pub fn absorb(&mut self, element: u64) {
-        debug_assert!(
+        assert!(
             !self.finalised,
             "cannot absorb into a finalised sponge; start a new instance"
         );
@@ -237,6 +242,11 @@ impl PoseidonSponge {
         }
     }
     /// Absorb a slice of field elements into the sponge.
+    ///
+    /// # Panics
+    ///
+    /// Panics after the sponge has been finalised by [`Self::squeeze_element`]. Call
+    /// [`Self::reset`] before absorbing a new message.
     pub fn absorb_slice(&mut self, elements: &[u64]) {
         for &element in elements {
             self.absorb(element);
@@ -390,6 +400,14 @@ mod tests {
         let first = sponge.squeeze_element();
         let second = sponge.squeeze_element();
         assert_ne!(first, second);
+    }
+    #[test]
+    #[should_panic(expected = "cannot absorb into a finalised sponge")]
+    fn absorb_after_squeeze_is_rejected_in_all_build_profiles() {
+        let mut sponge = PoseidonSponge::new();
+        sponge.absorb(1);
+        let _ = sponge.squeeze_element();
+        sponge.absorb(2);
     }
     #[test]
     fn field_addition_matches_reference() {

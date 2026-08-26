@@ -1619,22 +1619,86 @@ fn stark_fri_backend_hash_policy_v1(backend: &str) -> Option<StarkFriBackendHash
     }
 }
 #[cfg(feature = "zk-stark")]
-#[derive(Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Eq, Ord, PartialEq, PartialOrd)]
 struct StarkVerifyingKeyCacheKeyV1 {
     backend: String,
     circuit_id: String,
     vk_hash: [u8; 32],
 }
 #[cfg(feature = "zk-stark")]
-type StarkVerifyingKeyCacheV1 = std::sync::Mutex<
-    std::collections::BTreeMap<
-        StarkVerifyingKeyCacheKeyV1,
-        crate::zk_stark::StarkFriVerifyingKeyV1,
-    >,
+type StarkVerifyingKeyCacheMapV1 = std::collections::BTreeMap<
+    StarkVerifyingKeyCacheKeyV1,
+    crate::zk_stark::StarkFriVerifyingKeyV1,
 >;
+#[cfg(feature = "zk-stark")]
+type StarkVerifyingKeyCacheV1 = std::sync::Mutex<StarkVerifyingKeyCacheMapV1>;
+#[cfg(feature = "zk-stark")]
+const STARK_VERIFYING_KEY_CACHE_CAPACITY_V1: usize = 512;
 #[cfg(feature = "zk-stark")]
 static STARK_VERIFYING_KEY_CACHE_V1: std::sync::OnceLock<StarkVerifyingKeyCacheV1> =
     std::sync::OnceLock::new();
+#[cfg(feature = "zk-stark")]
+fn insert_stark_verifying_key_cache_v1(
+    cache: &mut StarkVerifyingKeyCacheMapV1,
+    key: StarkVerifyingKeyCacheKeyV1,
+    payload: crate::zk_stark::StarkFriVerifyingKeyV1,
+) -> crate::zk_stark::StarkFriVerifyingKeyV1 {
+    if let Some(cached) = cache.get(&key) {
+        return cached.clone();
+    }
+    // Validation can run inside a transaction that later rolls back. Bound the
+    // process-local accelerator so rejected callbacks cannot grow it without limit.
+    while cache.len() >= STARK_VERIFYING_KEY_CACHE_CAPACITY_V1 {
+        let Some(evicted) = cache.keys().next().cloned() else {
+            break;
+        };
+        cache.remove(&evicted);
+    }
+    cache.insert(key, payload.clone());
+    payload
+}
+#[cfg(all(test, feature = "zk-stark"))]
+mod stark_verifying_key_cache_tests {
+    use super::*;
+
+    fn payload(circuit_id: String) -> crate::zk_stark::StarkFriVerifyingKeyV1 {
+        crate::zk_stark::StarkFriVerifyingKeyV1 {
+            version: 1,
+            circuit_id,
+            n_log2: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            blowup_log2: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+            fold_arity: 2,
+            queries: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
+            merkle_arity: 2,
+            hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
+        }
+    }
+
+    #[test]
+    fn rejected_transaction_cache_warming_is_bounded() {
+        let mut cache = StarkVerifyingKeyCacheMapV1::new();
+        for index in 0..=STARK_VERIFYING_KEY_CACHE_CAPACITY_V1 {
+            let circuit_id = format!("circuit-{index:04}");
+            let key = StarkVerifyingKeyCacheKeyV1 {
+                backend: "stark/fri/sha256-goldilocks".to_owned(),
+                circuit_id: circuit_id.clone(),
+                vk_hash: [u8::try_from(index % 256).expect("bounded byte"); 32],
+            };
+            insert_stark_verifying_key_cache_v1(&mut cache, key, payload(circuit_id));
+        }
+
+        assert_eq!(cache.len(), STARK_VERIFYING_KEY_CACHE_CAPACITY_V1);
+        assert!(
+            cache.keys().all(|key| key.circuit_id != "circuit-0000"),
+            "deterministic eviction must remove the lowest cache key"
+        );
+        assert!(
+            cache.keys().any(|key| key.circuit_id
+                == format!("circuit-{STARK_VERIFYING_KEY_CACHE_CAPACITY_V1:04}")),
+            "the newest validated key must be cached"
+        );
+    }
+}
 /// Decode and validate a canonical STARK/FRI V1 verifier key for one registry binding.
 ///
 /// The returned value is the typed, bounded material that proof verification
@@ -1695,7 +1759,9 @@ pub(crate) fn validate_stark_fri_verifying_key_v1(
     let mut guard = cache
         .lock()
         .map_err(|_| "STARK/FRI verifier-key cache lock poisoned".to_owned())?;
-    Ok(guard.entry(cache_key).or_insert(payload).clone())
+    Ok(insert_stark_verifying_key_cache_v1(
+        &mut guard, cache_key, payload,
+    ))
 }
 fn stark_open_verify_circuit_id_uses_reserved_proof_family(circuit_id: &str) -> bool {
     let trimmed = circuit_id.trim();
@@ -4233,7 +4299,7 @@ mod pow5_depth {
     }
 }
 /// Batch-local deduplication cache keyed by proof hash.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct DedupCache {
     seen: BTreeSet<[u8; 32]>,
 }

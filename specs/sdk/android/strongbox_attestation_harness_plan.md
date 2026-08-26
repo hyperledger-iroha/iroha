@@ -19,7 +19,7 @@ Related roadmap item: AND2 — Plan StrongBox attestation harness
 | Component | Responsibility | Sources |
 |-----------|----------------|---------|
 | **On-device capture API** | Provision aliases, request attestation chains, and surface challenges through `IrohaKeyManager` + `KeyProvider` helpers. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/IrohaKeyManager.java`; `java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/keystore/KeystoreKeyProvider.java`; `specs/sdk/android/key_management.md` |
-| **Verification library** | Parse the Android Keymaster extension, enforce challenge binding, and classify security levels. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/keystore/attestation/AttestationVerifier.java` |
+| **Verification library** | Parse the Android Keymaster extension, enforce mandatory challenge binding, evaluate the chain at an explicit time, reject governed revoked serials/TBS hashes, and classify security levels. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/keystore/attestation/AttestationVerifier.java` |
 | **CLI harness + wrapper script** | Build the verifier, load bundles, inject trust roots, and emit JSON summaries for archives. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/tools/AndroidKeystoreAttestationHarness.java`; `scripts/android_keystore_attestation.sh` |
 | **Lab/CI runner** | Walk archived bundles, enforce StrongBox-only policy, create reports, and annotate Buildkite runs. | `scripts/android_strongbox_attestation_ci.sh`; `scripts/android_strongbox_attestation_report.py`; `.buildkite/android-strongbox-attestation.yml` |
 | **Readiness artefacts** | Track device matrix, bundle format, and compliance evidence so audits re-run reproductions. | `specs/sdk/android/readiness/android_strongbox_device_matrix.md`; `specs/sdk/android/readiness/android_strongbox_attestation_bundle.md`; `specs/compliance/android/` |
@@ -32,7 +32,7 @@ Related roadmap item: AND2 — Plan StrongBox attestation harness
 2. **Challenge orchestration**
    - The capture helper app (lab build) derives a 32-byte random challenge, encodes it as uppercase hex, and writes `challenge.hex`. The same value is passed to `IrohaKeyManager.generateAttestation(...)` so the verifier can detect tampering.
 3. **Attestation export**
-   - `AndroidKeystoreAttestationHarness` ingests either `chain.pem` or individual DER files plus trust roots and runs `AttestationVerifier`.
+   - `AndroidKeystoreAttestationHarness` ingests either `chain.pem` or individual DER files plus trust roots, a non-empty challenge, an explicit evaluation time, and the current governed revocation snapshot before running `AttestationVerifier`.
    - Successful runs print a one-line summary and, when `--output` is supplied, persist `result.json` containing alias, attestation/keymaster level, StrongBox boolean, and chain length.
 4. **Bundle layout**
 - Device lab operators follow the canonical structure documented in `specs/sdk/android/readiness/android_strongbox_attestation_bundle.md` (`chain.pem`, `challenge.hex`, `alias.txt`, `trust_root_*.pem`, optional `notes.md`).
@@ -41,7 +41,7 @@ Related roadmap item: AND2 — Plan StrongBox attestation harness
   so labs do not need to keep parallel directories in secure storage.
    - Bundles live under `artifacts/android/attestation/<fleet-tag>/<YYYY-MM-DD>/` so `scripts/android_strongbox_attestation_ci.sh` can auto-discover them.
 5. **Verification loop**
-   - `scripts/android_keystore_attestation.sh` compiles the verifier with JDK 21+, injects trust roots, enforces `--require-strongbox`, and emits JSON summaries used by CI, the readiness archive, and compliance evidence logs.
+   - `scripts/android_keystore_attestation.sh` compiles the verifier with JDK 21+, injects trust roots, requires the governed snapshot digest/date/max-age and evaluation time, enforces `--require-strongbox`, and emits JSON summaries used by CI, the readiness archive, and compliance evidence logs.
 - **Lab rehearsal bundles:** Use `scripts/android_generate_mock_attestation_bundles.sh` (backed by `scripts/android_mock_attestation_der.py`) to mint deterministic mock bundles for every fleet tag when physical hardware is unavailable. The script emits a shared mock root (`trust_root_mock.pem`), Norito-aligned challenges, and notes so CI can exercise the harness end-to-end before real captures arrive.
 
 ## 4. Alias Lifecycle Hooks
@@ -57,7 +57,7 @@ Related roadmap item: AND2 — Plan StrongBox attestation harness
 - **Buildkite lane:** `.buildkite/android-strongbox-attestation.yml` triggers two steps:
   1. `scripts/android_strongbox_attestation_ci.sh` finds bundles and runs the harness with `--require-strongbox`.
   2. `scripts/android_strongbox_attestation_report.py --report-path artifacts/android/attestation/report.txt` emits a summary that is attached to the Buildkite annotation and archived in `specs/compliance/android/evidence_log.csv`.
-- **Gating policy:** The CI job fails if any bundle lacks trust roots, produces a non-STRONGBOX security level, or misses `result.json`. Device lab ops receive Slack notifications (per `specs/android_runbook.md` Section 7) when the pipeline fails.
+- **Gating policy:** The CI job fails if any bundle lacks trust roots or a challenge, the supplied governed status snapshot is absent/stale, any presented certificate or configured anchor is revoked, the result is non-STRONGBOX, or `result.json` is missing. Device lab ops receive Slack notifications (per `specs/android_runbook.md` Section 7) when the pipeline fails.
 - **Log retention:** Bundle directories store `result.json` plus `trust_root_*.pem` so auditors can re-run the harness offline. Reports reference Buildkite job IDs and are cross-linked from `specs/compliance/android/jp/strongbox_attestation.md`.
 - **Verification log:** Each manual execution of the harness is recorded in `specs/sdk/android/readiness/android_strongbox_attestation_run_log.md` with date, executor, and outcome so AND2 status reviews have auditable evidence between CI runs.
 

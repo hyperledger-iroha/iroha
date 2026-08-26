@@ -652,13 +652,21 @@ The helper connects only to
 content transformation, bounds the body and serial inventory, and checks
 `Date`, `Age`, `Cache-Control`, `Expires`, and optional `Last-Modified` as one
 fresh cache contract. It publishes create-new mode-`0600` `status.json`,
-`snapshot.json`, and `capture-receipt.json` files beneath a mode-`0700`
+`snapshot.json`, `android-sdk-revocation-snapshot-v1.txt`, and
+`capture-receipt.json` files beneath a mode-`0700`
 owner-controlled directory. The Android evidence validator re-derives the
 snapshot and receipt from the exact pinned status bytes and headers and rejects
 it once stale. TLS retrieval and the unsigned receipt do not grant consensus
 authority: the promotion controller/governance signature binds the reviewed
 snapshot into the policy. Consensus validates only that deterministic governed
 state and never fetches the network.
+
+The SDK snapshot is a strict printable-ASCII, domain-separated V1 encoding of
+the exact payload digest, freshness metadata, sorted non-valid serials, and
+sorted supplemental TBS digests. Java/Kotlin SDK construction requires its
+exact bytes plus a SHA-256 commitment obtained from the separately
+authenticated governance record; supplying both from the same untrusted path
+does not establish governance authority.
 
 Validators repeat policy validation at the activation block's actual
 timestamp. The exact-network escrow is materialized by Core from the live

@@ -2,6 +2,24 @@ use ivm::{IVM, encoding, field, instruction};
 mod common;
 use common::assemble_zk;
 const HALT: [u8; 4] = encoding::wide::encode_halt().to_le_bytes();
+const GOLDILOCKS_MODULUS: u128 = 0xffff_ffff_0000_0001;
+
+fn reference_add(a: u64, b: u64) -> u64 {
+    ((u128::from(a) % GOLDILOCKS_MODULUS + u128::from(b) % GOLDILOCKS_MODULUS) % GOLDILOCKS_MODULUS)
+        as u64
+}
+
+fn reference_sub(a: u64, b: u64) -> u64 {
+    let a = u128::from(a) % GOLDILOCKS_MODULUS;
+    let b = u128::from(b) % GOLDILOCKS_MODULUS;
+    ((a + GOLDILOCKS_MODULUS - b) % GOLDILOCKS_MODULUS) as u64
+}
+
+fn reference_mul(a: u64, b: u64) -> u64 {
+    ((u128::from(a) % GOLDILOCKS_MODULUS) * (u128::from(b) % GOLDILOCKS_MODULUS)
+        % GOLDILOCKS_MODULUS) as u64
+}
+
 #[test]
 fn test_field_arithmetic() {
     let mut vm = IVM::new(u64::MAX);
@@ -21,14 +39,57 @@ fn test_field_arithmetic() {
     let prog = assemble_zk(&prog, 32);
     vm.load_program(&prog).unwrap();
     vm.run().expect("field ops");
-    let expected_add = field::add(base, 5);
+    let expected_add = reference_add(base, 5);
     assert_eq!(vm.register(3), expected_add);
-    let expected_sub = field::sub(expected_add, 5);
+    let expected_sub = reference_sub(expected_add, 5);
     assert_eq!(vm.register(4), expected_sub);
-    let expected_mul = field::mul(expected_sub, 5);
+    let expected_mul = reference_mul(expected_sub, 5);
     assert_eq!(vm.register(5), expected_mul);
     let inv = field::inv(5).unwrap();
     assert_eq!(vm.register(6), inv);
+}
+
+#[test]
+fn field_opcodes_reduce_arbitrary_register_values() {
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_register(1, u64::MAX);
+    vm.set_register(2, u64::MAX);
+    let program = [
+        encoding::wide::encode_rr(instruction::wide::zk::FADD, 3, 1, 2),
+        encoding::wide::encode_rr(instruction::wide::zk::FSUB, 4, 0, 1),
+        encoding::wide::encode_rr(instruction::wide::zk::FMUL, 5, 1, 2),
+        encoding::wide::encode_halt(),
+    ]
+    .into_iter()
+    .flat_map(u32::to_le_bytes)
+    .collect::<Vec<_>>();
+    let program = assemble_zk(&program, 16);
+    vm.load_program(&program).unwrap();
+    vm.run().expect("field operations over raw register values");
+
+    assert_eq!(vm.register(3), reference_add(u64::MAX, u64::MAX));
+    assert_eq!(vm.register(4), reference_sub(0, u64::MAX));
+    assert_eq!(vm.register(5), reference_mul(u64::MAX, u64::MAX));
+}
+
+#[test]
+fn field_inverse_rejects_noncanonical_zero() {
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_register(
+        1,
+        u64::try_from(GOLDILOCKS_MODULUS).expect("Goldilocks modulus fits in one register"),
+    );
+    let program = [
+        encoding::wide::encode_rr(instruction::wide::zk::FINV, 2, 1, 0),
+        encoding::wide::encode_halt(),
+    ]
+    .into_iter()
+    .flat_map(u32::to_le_bytes)
+    .collect::<Vec<_>>();
+    let program = assemble_zk(&program, 16);
+    vm.load_program(&program).unwrap();
+
+    assert_eq!(vm.run(), Err(ivm::VMError::AssertionFailed));
 }
 #[test]
 fn test_assert_range() {

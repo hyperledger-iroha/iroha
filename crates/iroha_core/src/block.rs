@@ -11636,15 +11636,8 @@ pub(crate) mod valid {
                 header: block.header(),
                 status: BlockStatus::Approved,
             }));
-            let mut transaction = state_block.transaction();
-            transaction
-                .execute_pipeline_triggers(deterministic_pipeline_events)
-                .map_err(|reason| {
-                    BlockValidationError::ExecutionContextInvalid(format!(
-                        "pipeline trigger execution failed: {reason}"
-                    ))
-                })?;
-            transaction.apply();
+            let _pipeline_outcomes =
+                state_block.execute_pipeline_triggers_isolated(deterministic_pipeline_events);
             Ok(())
         }
         /// Validate each transaction in the block, apply resulting state changes,

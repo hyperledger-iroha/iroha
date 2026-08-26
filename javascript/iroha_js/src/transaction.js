@@ -1031,10 +1031,14 @@ export async function quoteAndSignTransaction(client, input, options = {}) {
     accountId: draftInput.authority,
     privateKey,
   };
-  const quote = await client.quoteFees(draft, {
-    canonicalAuth,
-    signal: options.signal,
-  });
+  const quote = ToriiClient._validateFeeQuoteForDraft(
+    draft,
+    await client.quoteFees(draft, {
+      canonicalAuth,
+      signal: options.signal,
+    }),
+    "quoteAndSignTransaction fee quote",
+  );
   const signed = signQuotedTransactionPayload({
     networkId: draftInput.networkId,
     payload: draft,
@@ -2567,13 +2571,17 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
   });
   const feeQuotePayloadJson = feeQuoteDraft.payloadJson;
   const feeQuoteAttachmentJson = feeQuoteDraft.attachmentJson;
-  const feeQuote = await client.quoteFees(feeQuoteDraft, {
-    canonicalAuth: {
-      accountId: authority,
-      privateKey,
-    },
-    ...(signal === undefined ? {} : { signal }),
-  });
+  const feeQuote = ToriiClient._validateFeeQuoteForDraft(
+    feeQuoteDraft,
+    await client.quoteFees(feeQuoteDraft, {
+      canonicalAuth: {
+        accountId: authority,
+        privateKey,
+      },
+      ...(signal === undefined ? {} : { signal }),
+    }),
+    "submitIvmProvedContractCall fee quote",
+  );
   throwIfSubmissionAborted(signal);
   const built = signQuotedIvmProvedTransactionPayload({
     networkId,

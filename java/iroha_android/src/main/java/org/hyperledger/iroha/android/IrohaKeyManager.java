@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.android;
 
 import java.security.KeyPair;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -589,13 +590,14 @@ public final class IrohaKeyManager {
   /**
    * Verifies attestation material produced by hardware-backed providers for {@code alias}.
    *
-   * <p>The first provider that returns a non-empty attestation result is treated as authoritative.
-   * Providers that do not expose attestation simply return an empty optional.
+   * <p>The first provider that returns a non-empty attestation result supplies the certificate
+   * material, which this manager independently re-verifies and binds to the provider's currently
+   * loaded alias key before returning it. Providers that do not expose attestation simply return an
+   * empty optional.
    *
    * @param alias alias whose attestation should be verified
    * @param verifier verifier configured with trusted roots and policy expectations
-   * @param expectedChallenge optional challenge value that must match the attested payload when
-   *     provided
+   * @param expectedChallenge required non-empty challenge that must match the attested payload
    * @return the attestation verification result when available, or an empty optional when no
    *     attestation is recorded for {@code alias}
    * @throws AttestationVerificationException when attestation verification fails for the alias
@@ -605,13 +607,59 @@ public final class IrohaKeyManager {
       throws AttestationVerificationException {
     Objects.requireNonNull(alias, "alias");
     Objects.requireNonNull(verifier, "verifier");
+    if (expectedChallenge == null || expectedChallenge.length == 0) {
+      throw new AttestationVerificationException(
+          "Expected attestation challenge must be non-empty");
+    }
+    final byte[] challenge = expectedChallenge.clone();
     for (final KeyProvider provider : providers) {
       try {
         final Optional<AttestationResult> result =
-            provider.verifyAttestation(alias, verifier, expectedChallenge);
+            provider.verifyAttestation(alias, verifier, challenge.clone());
         if (result.isPresent()) {
-          keystoreTelemetry.recordResult(alias, provider.metadata(), result.get());
-          return result;
+          final AttestationResult authoritativeResult;
+          try {
+            final KeyAttestation.Builder attestationBuilder =
+                KeyAttestation.builder().setAlias(alias);
+            for (final java.security.cert.X509Certificate certificate :
+                result.get().certificateChain()) {
+              attestationBuilder.addCertificate(certificate);
+            }
+            authoritativeResult = verifier.verify(attestationBuilder.build(), challenge);
+          } catch (final AttestationVerificationException ex) {
+            throw ex;
+          } catch (final RuntimeException ex) {
+            throw new AttestationVerificationException(
+                "Provider returned malformed attestation certificates", ex);
+          }
+          if (!MessageDigest.isEqual(
+              challenge, authoritativeResult.attestationChallenge())) {
+            throw new AttestationVerificationException("Attestation challenge mismatch");
+          }
+          final Optional<KeyPair> loadedKey;
+          try {
+            loadedKey = provider.load(alias);
+          } catch (final KeyManagementException | RuntimeException ex) {
+            throw new AttestationVerificationException(
+                "Failed to load the attested alias key", ex);
+          }
+          if (loadedKey == null || !loadedKey.isPresent() || loadedKey.get().getPublic() == null) {
+            throw new AttestationVerificationException(
+                "Attested alias key is unavailable");
+          }
+          final byte[] aliasPublicKey = loadedKey.get().getPublic().getEncoded();
+          final java.security.PublicKey attestedLeafKey =
+              authoritativeResult.leafCertificate().getPublicKey();
+          final byte[] attestedPublicKey =
+              attestedLeafKey == null ? null : attestedLeafKey.getEncoded();
+          if (aliasPublicKey == null
+              || attestedPublicKey == null
+              || !MessageDigest.isEqual(aliasPublicKey, attestedPublicKey)) {
+            throw new AttestationVerificationException(
+                "Attested leaf public key does not match the alias key");
+          }
+          keystoreTelemetry.recordResult(alias, provider.metadata(), authoritativeResult);
+          return Optional.of(authoritativeResult);
         }
       } catch (final AttestationVerificationException ex) {
         keystoreTelemetry.recordFailure(alias, provider.metadata(), ex.getMessage());
@@ -622,7 +670,8 @@ public final class IrohaKeyManager {
   }
 
   /**
-   * Convenience overload that verifies attestation without enforcing a challenge match.
+   * Retained for binary compatibility; always fails closed because authentication requires a
+   * challenge.
    *
    * @param alias alias whose attestation should be verified
    * @param verifier verifier configured with trusted roots and policy expectations
@@ -823,11 +872,16 @@ public final class IrohaKeyManager {
         final AttestationVerifier verifier,
         final byte[] expectedChallenge)
         throws AttestationVerificationException {
+      if (expectedChallenge == null || expectedChallenge.length == 0) {
+        throw new AttestationVerificationException(
+            "Expected attestation challenge must be non-empty");
+      }
       return Optional.empty();
     }
 
     /**
-     * Convenience overload that validates attestation without an explicit challenge.
+     * Retained for binary compatibility; always fails closed because authentication requires a
+     * challenge.
      *
      * <p>The default implementation delegates to the three-argument overload.
      */

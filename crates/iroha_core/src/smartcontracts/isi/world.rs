@@ -42,7 +42,9 @@ pub mod isi {
         asset::{
             CanBurnAsset, CanBurnAssetWithDefinition, CanMintAssetToAccount,
             CanMintAssetWithDefinition, CanModifyAssetMetadata,
-            CanModifyAssetMetadataWithDefinition, CanTransferAsset, CanTransferAssetWithDefinition,
+            CanModifyAssetMetadataWithDefinition, CanSetAssetHoldingLimit,
+            CanSetAssetTransferAvailability, CanSetAssetTransferDailyLimit, CanTransferAsset,
+            CanTransferAssetWithDefinition,
         },
         asset_definition::{
             AssetDefinitionAliasPermissionScope, CanManageAssetDefinitionAlias,
@@ -57,10 +59,14 @@ pub mod isi {
             CanProposeContractDeployment, CanProposeRuntimeUpgrade, CanRecordCitizenService,
             CanRestituteGovernanceLock, CanSlashGovernanceLock, CanSubmitGovernanceBallot,
         },
-        nexus::{CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram},
+        nexus::{
+            CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram,
+            CanPublishSpaceDirectoryManifestForAccountDomain,
+        },
         nft::{CanModifyNftMetadata, CanRegisterNft, CanTransferNft, CanUnregisterNft},
         peer::CanManageLaneRelayEmergency,
         sccp::CanProposeSccpRouteGovernance,
+        settlement::CanExecuteSettlement,
         smart_contract::CanRegisterSmartContractCode,
     };
     use std::{
@@ -11006,6 +11012,18 @@ pub mod isi {
             ..crate::state::SccpVerifierWorkV1::default()
         })
     }
+    fn sccp_bsc_native_verifier_work(
+        estimate: iroha_sccp::BscNativeFinalityWorkEstimateV1,
+    ) -> crate::state::SccpVerifierWorkV1 {
+        crate::state::SccpVerifierWorkV1 {
+            native_headers: u64::from(estimate.continuation_headers),
+            native_header_bytes: u64::from(estimate.framed_header_bytes),
+            secp256k1_recoveries: u64::from(estimate.secp256k1_recoveries),
+            bls_aggregate_checks: u64::from(estimate.bls_aggregate_checks_upper_bound),
+            bls_signer_contributions: u64::from(estimate.bls_signer_contributions_upper_bound),
+            ..crate::state::SccpVerifierWorkV1::default()
+        }
+    }
     fn sccp_native_verifier_work(
         decoded: &iroha_sccp::SccpNativeInboundMessageProofV1,
         encoded_envelope_len: usize,
@@ -11051,25 +11069,7 @@ pub mod isi {
                             "SCCP BSC native proof exceeds verifier work bounds: {error:?}"
                         ))
                     })?;
-                // The governed anchor can validate active, pending, and header-embedded
-                // 64-validator rosters. Across the admitted 1,004-header interval at most two
-                // continuation epoch rosters can also be decoded. Attestation contributions are
-                // already covered by the estimator's 64-per-header term, so five extra rosters
-                // conservatively cover all independent public-key validation passes.
-                let bls_signer_contributions =
-                    u64::from(estimate.bls_signer_contributions_upper_bound)
-                        .checked_add(5 * 64)
-                        .ok_or_else(|| {
-                            invalid_bridge_proof("SCCP BSC BLS work estimate overflow")
-                        })?;
-                Ok(crate::state::SccpVerifierWorkV1 {
-                    native_headers: u64::from(estimate.continuation_headers),
-                    native_header_bytes: u64::from(estimate.framed_header_bytes),
-                    secp256k1_recoveries: u64::from(estimate.secp256k1_recoveries),
-                    bls_aggregate_checks: u64::from(estimate.bls_aggregate_checks_upper_bound),
-                    bls_signer_contributions,
-                    ..crate::state::SccpVerifierWorkV1::default()
-                })
+                Ok(sccp_bsc_native_verifier_work(estimate))
             }
             SccpNativeSourceProofV1::SolanaAgave(_) => {
                 sccp_solana_native_verifier_work(encoded_envelope_len)
@@ -12441,6 +12441,18 @@ pub mod isi {
                         )
                     })?;
                 let route = &payload.lanes[lane_index].routes[route_index];
+                if matches!(
+                    route.source_identity.emitter,
+                    iroha_data_model::bridge::SccpSourceEmitterV1::Tron(_)
+                ) {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "registered TRON SCCP route revisions cannot be removed because their immutable addresses remain replay boundaries"
+                                .to_owned(),
+                        ),
+                    )
+                    .into());
+                }
                 if route.activation != iroha_data_model::bridge::SccpRouteActivationV1::Staged
                     || sccp_route_has_durable_history(route, state_transaction)?
                 {
@@ -17542,6 +17554,7 @@ pub mod isi {
         permission: &Permission,
         domain_id: &DomainId,
         asset_definition_ids: &BTreeSet<AssetDefinitionId>,
+        domain_dataspace: Option<DataSpaceId>,
     ) -> bool {
         let asset_definition_matches_domain = |asset_definition: &AssetDefinitionId| -> bool {
             asset_definition_ids.contains(asset_definition)
@@ -17629,6 +17642,27 @@ pub mod isi {
         if let Ok(permission) = CanModifyAssetMetadata::try_from(permission) {
             return asset_definition_matches_domain(permission.asset.definition());
         }
+        if let Ok(permission) = CanSetAssetTransferAvailability::try_from(permission) {
+            return asset_definition_matches_domain(&permission.asset_definition);
+        }
+        if let Ok(permission) = CanSetAssetTransferDailyLimit::try_from(permission) {
+            return asset_definition_matches_domain(&permission.asset_definition)
+                || domain_dataspace.is_some_and(|dataspace| {
+                    permission.account_dataspace == dataspace
+                        && permission.account_domain.name() == domain_id.name()
+                });
+        }
+        if let Ok(permission) = CanSetAssetHoldingLimit::try_from(permission) {
+            return asset_definition_matches_domain(&permission.asset_definition);
+        }
+        if let Ok(permission) = CanExecuteSettlement::try_from(permission) {
+            return asset_definition_matches_domain(permission.debited_asset.definition());
+        }
+        if let Ok(permission) =
+            CanPublishSpaceDirectoryManifestForAccountDomain::try_from(permission)
+        {
+            return &permission.domain == domain_id;
+        }
         if let Ok(permission) = CanRegisterNft::try_from(permission) {
             return &permission.domain == domain_id;
         }
@@ -17647,6 +17681,7 @@ pub mod isi {
         state_transaction: &mut StateTransaction<'_, '_>,
         domain_id: &DomainId,
         asset_definition_ids: &BTreeSet<AssetDefinitionId>,
+        domain_dataspace: Option<DataSpaceId>,
     ) {
         let account_ids: Vec<AccountId> = state_transaction
             .world
@@ -17661,7 +17696,12 @@ pub mod isi {
                 .get(&account_id)
                 .is_some_and(|permissions| {
                     permissions.iter().any(|permission| {
-                        is_permission_domain_associated(permission, domain_id, asset_definition_ids)
+                        is_permission_domain_associated(
+                            permission,
+                            domain_id,
+                            asset_definition_ids,
+                            domain_dataspace,
+                        )
                     })
                 });
             if !should_remove {
@@ -17673,7 +17713,12 @@ pub mod isi {
                 .get_mut(&account_id)
             {
                 permissions.retain(|permission| {
-                    !is_permission_domain_associated(permission, domain_id, asset_definition_ids)
+                    !is_permission_domain_associated(
+                        permission,
+                        domain_id,
+                        asset_definition_ids,
+                        domain_dataspace,
+                    )
                 });
                 permissions.is_empty()
             } else {
@@ -17700,7 +17745,12 @@ pub mod isi {
                 .get(&role_id)
                 .is_some_and(|role| {
                     role.permissions().any(|permission| {
-                        is_permission_domain_associated(permission, domain_id, asset_definition_ids)
+                        is_permission_domain_associated(
+                            permission,
+                            domain_id,
+                            asset_definition_ids,
+                            domain_dataspace,
+                        )
                     })
                 });
             if !should_remove {
@@ -17709,7 +17759,12 @@ pub mod isi {
             let impacted_accounts = state_transaction.accounts_with_role(&role_id);
             if let Some(role) = state_transaction.world.roles.get_mut(&role_id) {
                 role.permissions.retain(|permission| {
-                    !is_permission_domain_associated(permission, domain_id, asset_definition_ids)
+                    !is_permission_domain_associated(
+                        permission,
+                        domain_id,
+                        asset_definition_ids,
+                        domain_dataspace,
+                    )
                 });
                 role.permission_epochs
                     .retain(|permission, _| role.permissions.contains(permission));
@@ -17953,10 +18008,16 @@ pub mod isi {
                     .into());
                 }
             }
+            let domain_dataspace = state_transaction
+                .nexus
+                .dataspace_catalog
+                .by_alias(domain_id.dataspace().as_ref())
+                .map(|entry| entry.id);
             remove_domain_associated_permissions(
                 state_transaction,
                 &domain_id,
                 &remove_asset_definitions,
+                domain_dataspace,
             );
             state_transaction
                 .world
@@ -21180,6 +21241,26 @@ pub mod isi {
                 }
             );
         });
+        world_test!(bsc_native_verifier_work_uses_complete_sccp_estimate {
+            let estimate = iroha_sccp::BscNativeFinalityWorkEstimateV1 {
+                continuation_headers: 11,
+                framed_header_bytes: 12,
+                secp256k1_recoveries: 13,
+                bls_aggregate_checks_upper_bound: 14,
+                bls_signer_contributions_upper_bound: 15,
+            };
+            assert_eq!(
+                sccp_bsc_native_verifier_work(estimate),
+                crate::state::SccpVerifierWorkV1 {
+                    native_headers: 11,
+                    native_header_bytes: 12,
+                    secp256k1_recoveries: 13,
+                    bls_aggregate_checks: 14,
+                    bls_signer_contributions: 15,
+                    ..crate::state::SccpVerifierWorkV1::default()
+                }
+            );
+        });
         fn test_active_eth_registry() -> crate::state::SccpOnChainRegistryV1 {
             let (_, source_identity, trust_anchor) =
                 iroha_sccp::sccp_native_ethereum_inbound_test_fixture_v1();
@@ -21207,6 +21288,123 @@ pub mod isi {
                 }],
             }
         }
+        fn test_staged_tron_registry() -> crate::state::SccpOnChainRegistryV1 {
+            use iroha_data_model::bridge::{
+                SccpDestinationDeploymentV1, SccpGovernedLaneV1, SccpLaneIdV1, SccpNetworkV1,
+                SccpSourceEmitterV1, SccpSourceIdentityV1, SccpTronDestinationDeploymentV1,
+                SccpTronSourceEmitterV1,
+            };
+
+            let mut route = iroha_sccp::sccp_exact_evm_governed_route_test_fixture_v1(
+                SccpNetworkV1::EthereumMainnet,
+                iroha_data_model::bridge::SccpRouteActivationV1::Staged,
+            );
+            let SccpDestinationDeploymentV1::Evm(evm) = route.destination else {
+                panic!("exact EVM fixture must carry an EVM deployment")
+            };
+            let deployment = SccpTronDestinationDeploymentV1 {
+                token_address: evm.token_address,
+                token_code_hash: evm.token_code_hash,
+                verifier_address: evm.verifier_address,
+                verifier_code_hash: evm.verifier_code_hash,
+                verifying_key: evm.verifying_key,
+                verifier_key_hash: evm.verifier_key_hash,
+                outbound_proof_policy: evm.outbound_proof_policy,
+                route_address: evm.route_address,
+                route_code_hash: evm.route_code_hash,
+                taira_to_token_multiplier: evm.taira_to_token_multiplier,
+            };
+            let lane = SccpLaneIdV1 {
+                source: SccpNetworkV1::TronMainnet,
+                target: SccpNetworkV1::SoraTaira,
+            };
+            route.lane_id = lane;
+            route.route_id = iroha_sccp::SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1.to_owned();
+            route.destination = SccpDestinationDeploymentV1::Tron(deployment);
+            let route_config_hash = route
+                .destination
+                .route_configuration_hash(
+                    route.lane_id,
+                    &route.route_id,
+                    &route.asset_key,
+                    route.revision,
+                    route.settlement.payload_amount_scale,
+                )
+                .expect("exact staged TRON route configuration");
+            route.source_identity = SccpSourceIdentityV1 {
+                lane,
+                emitter: SccpSourceEmitterV1::Tron(SccpTronSourceEmitterV1 {
+                    address: deployment.route_address,
+                    runtime_code_hash: deployment.route_code_hash,
+                    route_config_hash,
+                }),
+            };
+            route
+                .validate_with_anchor(None)
+                .expect("exact staged TRON route must validate without an active anchor");
+            crate::state::SccpOnChainRegistryV1 {
+                version: 1,
+                lanes: vec![SccpGovernedLaneV1 {
+                    lane_id: lane,
+                    native_trust_anchors: Vec::new(),
+                    current_native_trust_anchor_hash: None,
+                    routes: vec![route],
+                }],
+            }
+        }
+        world_test!(registered_staged_tron_route_cannot_be_removed {
+            blank_state_transaction!(state, block, state_block, stx);
+            stx.chain_id =
+                iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
+            let registry = test_staged_tron_registry();
+            let key = registry.lanes[0].routes[0].key();
+            stx.sccp_registry = crate::state::ValidatedSccpRegistryV1::try_from_wire(registry)
+                .expect("exact staged TRON registry");
+            let before = stx.sccp_registry.to_wire();
+
+            let error = apply_sccp_route_governance_action(
+                bridge::SccpRouteGovernanceActionV1::Remove(key.clone()),
+                &mut stx,
+            )
+            .expect_err("a registered TRON address must remain a permanent replay boundary");
+
+            assert_err!(
+                format!("{error:?}"),
+                "immutable addresses remain replay boundaries",
+                "{error:?}"
+            );
+            assert_eq!(stx.sccp_registry.to_wire(), before);
+            assert!(stx.sccp_registry.route(&key).is_some());
+        });
+        world_test!(never_used_staged_evm_route_remains_removable {
+            blank_state_transaction!(state, block, state_block, stx);
+            stx.chain_id =
+                iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
+            let route = iroha_sccp::sccp_exact_evm_governed_route_test_fixture_v1(
+                iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet,
+                iroha_data_model::bridge::SccpRouteActivationV1::Staged,
+            );
+            let key = route.key();
+            let registry = crate::state::SccpOnChainRegistryV1 {
+                version: 1,
+                lanes: vec![iroha_data_model::bridge::SccpGovernedLaneV1 {
+                    lane_id: route.lane_id,
+                    native_trust_anchors: Vec::new(),
+                    current_native_trust_anchor_hash: None,
+                    routes: vec![route],
+                }],
+            };
+            stx.sccp_registry = crate::state::ValidatedSccpRegistryV1::try_from_wire(registry)
+                .expect("exact staged EVM registry");
+
+            apply_sccp_route_governance_action(
+                bridge::SccpRouteGovernanceActionV1::Remove(key),
+                &mut stx,
+            )
+            .expect("a never-used staged EVM route remains removable");
+
+            assert!(stx.sccp_registry.to_wire().lanes.is_empty());
+        });
         world_test!(old_sccp_destination_exempts_age_window_but_not_exact_finality_range {
             let finality_height = 7;
             let mut proof = BridgeProof {
@@ -27897,30 +28095,49 @@ seiyaku GovernanceLifecycle {
             let (bob_id, _) = gen_account_in(&owner_domain);
             Register::account(new_account_in_domain(&bob_id))
                 .expect_execute(&ALICE_ID, &mut stx, "register bob account");
-            let permission: Permission = CanModifyDomainMetadata {
-                domain: domain_id.clone(),
+            let permissions = [
+                Permission::from(CanModifyDomainMetadata {
+                    domain: domain_id.clone(),
+                }),
+                Permission::from(CanSetAssetTransferDailyLimit {
+                    asset_definition: AssetDefinitionId::derive_from_components(
+                        owner_domain.clone(),
+                        "surviving".parse().expect("asset name"),
+                    ),
+                    account_domain: domain_id.name().clone().into(),
+                    account_dataspace: DataSpaceId::UNIVERSAL,
+                }),
+                Permission::from(CanPublishSpaceDirectoryManifestForAccountDomain {
+                    dataspace: DataSpaceId::UNIVERSAL,
+                    domain: domain_id.clone(),
+                }),
+            ];
+            for permission in &permissions {
+                Grant::account_permission(permission.clone(), bob_id.clone())
+                    .expect_execute(&ALICE_ID, &mut stx, "grant permission to bob");
             }
-            .into();
-            Grant::account_permission(permission.clone(), bob_id.clone())
-                .expect_execute(&ALICE_ID, &mut stx, "grant permission to bob");
             let role_id: RoleId = "KINGDOM_ADMIN".parse().expect("role id parses");
             Register::role(Role::new(role_id.clone(), ALICE_ID.clone()))
                 .expect_execute(&ALICE_ID, &mut stx, "register role");
-            Grant::role_permission(permission.clone(), role_id.clone())
-                .expect_execute(&ALICE_ID, &mut stx, "grant permission to role");
+            for permission in &permissions {
+                Grant::role_permission(permission.clone(), role_id.clone())
+                    .expect_execute(&ALICE_ID, &mut stx, "grant permission to role");
+            }
             Grant::account_role(role_id.clone(), bob_id.clone())
                 .expect_execute(&ALICE_ID, &mut stx, "grant role to bob");
             assert!(
                 stx.world
                     .account_permissions
                     .get(&bob_id)
-                    .is_some_and(|perms| perms.contains(&permission)),
-                "bob should have permission before unregister"
+                    .is_some_and(|held| permissions.iter().all(|permission| held.contains(permission))),
+                "bob should have permissions before unregister"
             );
             let role = stx.world.roles.get(&role_id).expect("role should exist");
             assert!(
-                role.permissions().any(|perm| perm == &permission),
-                "role should have permission before unregister"
+                permissions
+                    .iter()
+                    .all(|permission| role.permissions().any(|held| held == permission)),
+                "role should have permissions before unregister"
             );
             Unregister::domain(domain_id.clone())
                 .expect_execute(&ALICE_ID, &mut stx, "unregister domain");
@@ -27928,16 +28145,20 @@ seiyaku GovernanceLifecycle {
                 !stx.world
                     .account_permissions
                     .get(&bob_id)
-                    .is_some_and(|perms| perms.contains(&permission)),
-                "bob permission should be removed"
+                    .is_some_and(|held| permissions.iter().any(|permission| held.contains(permission))),
+                "bob permissions should be removed"
             );
             let role = stx.world.roles.get(&role_id).expect("role should exist");
             assert!(
-                !role.permissions().any(|perm| perm == &permission),
-                "role permission should be removed"
+                permissions
+                    .iter()
+                    .all(|permission| !role.permissions().any(|held| held == permission)),
+                "role permissions should be removed"
             );
             assert!(
-                !role.permission_epochs().contains_key(&permission),
+                permissions
+                    .iter()
+                    .all(|permission| !role.permission_epochs().contains_key(permission)),
                 "permission epochs should be pruned"
             );
         });

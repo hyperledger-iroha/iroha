@@ -67,6 +67,40 @@ fn hold_message_reports_pdng() {
     assert_eq!(status.hold_reason_code(), Some("PDNG"));
 }
 #[test]
+fn terminal_public_mutators_do_not_regress_records() {
+    let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+        .expect("cfg")
+        .expect("enabled");
+
+    assert!(runtime.check_and_record_message("settled-terminal"));
+    runtime.mark_accepted("settled-terminal", "tx-settled-terminal");
+    assert!(runtime.mark_settled("settled-terminal", SystemTime::now()));
+    assert!(!runtime.mark_hold("settled-terminal", Some("PDNG")));
+    assert!(!runtime.mark_queued("settled-terminal"));
+    assert!(!runtime.mark_rejected(
+        "settled-terminal",
+        Some("late rejection".to_owned()),
+        Some("RJCT"),
+    ));
+    let settled = runtime.mark_accepted("settled-terminal", "tx-replacement");
+    assert_eq!(settled.pacs002_code(), "ACSC");
+    assert_eq!(settled.transaction_hash(), Some("tx-settled-terminal"));
+
+    assert!(runtime.check_and_record_message("rejected-terminal"));
+    assert!(runtime.mark_rejected(
+        "rejected-terminal",
+        Some("definitive rejection".to_owned()),
+        Some("BE01"),
+    ));
+    assert!(!runtime.mark_hold("rejected-terminal", Some("PDNG")));
+    assert!(!runtime.mark_queued("rejected-terminal"));
+    assert!(!runtime.mark_settled("rejected-terminal", SystemTime::now()));
+    let rejected = runtime.mark_accepted("rejected-terminal", "tx-late-success");
+    assert_eq!(rejected.pacs002_code(), "RJCT");
+    assert_eq!(rejected.rejection_reason_code(), Some("BE01"));
+    assert_eq!(rejected.transaction_hash(), None);
+}
+#[test]
 fn change_message_reports_acwc() {
     let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
         .expect("cfg")
@@ -226,6 +260,65 @@ fn lifecycle_pacs002_settles_known_original() {
     );
 }
 #[test]
+fn lifecycle_profile_mismatch_does_not_mutate_original() {
+    let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+        .expect("cfg")
+        .expect("enabled");
+    record_original(&runtime, "profile-original", "pacs.008");
+    runtime.mark_accepted("profile-original", "tx-profile-original");
+    let parsed = parse_message(
+        "pacs.002",
+        b"MsgId=profile-status\nOrgnlMsgId=profile-original\nTxSts=ACSC",
+    )
+    .expect("pacs.002 parsed");
+    let lifecycle_metadata = IsoMessageMetadata::inbound(
+        "swift-cbpr-plus",
+        "pacs.002",
+        Some("swift.cbprplus.02".to_owned()),
+        Some("profile-status-biz".to_owned()),
+        None,
+        "profile-status-payload".to_owned(),
+        "snapshot".to_owned(),
+        false,
+    );
+    assert!(runtime.check_and_record_inbound("profile-status", lifecycle_metadata));
+    let outcome = runtime
+        .apply_inbound_lifecycle_message("profile-status", "pacs.002", &parsed)
+        .expect("lifecycle recorded");
+    assert_eq!(outcome.action(), "ignored_profile_mismatch");
+    assert_eq!(
+        runtime
+            .message_status("profile-original")
+            .expect("original")
+            .pacs002_code(),
+        "ACSP"
+    );
+}
+#[test]
+fn lifecycle_does_not_settle_an_unqueued_original() {
+    let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+        .expect("cfg")
+        .expect("enabled");
+    record_original(&runtime, "in-flight-original", "pacs.008");
+    let parsed = parse_message(
+        "pacs.002",
+        b"MsgId=in-flight-status\nOrgnlMsgId=in-flight-original\nTxSts=ACSC",
+    )
+    .expect("pacs.002 parsed");
+    record_lifecycle(&runtime, "in-flight-status", "pacs.002");
+    let outcome = runtime
+        .apply_inbound_lifecycle_message("in-flight-status", "pacs.002", &parsed)
+        .expect("lifecycle recorded");
+    assert_eq!(outcome.action(), "ignored_in_flight");
+    assert_eq!(
+        runtime
+            .message_status("in-flight-original")
+            .expect("original")
+            .pacs002_code(),
+        "ACTC"
+    );
+}
+#[test]
 fn checked_in_pacs002_fixture_settles_known_original() {
     let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
         .expect("cfg")
@@ -335,7 +428,7 @@ fn lifecycle_pacs002_ignores_non_payment_original() {
     .expect("pacs.002 parsed");
     let lifecycle_id =
         Iso20022BridgeRuntime::lifecycle_message_id("pacs.002", &parsed).expect("lifecycle id");
-    assert!(runtime.check_and_record_message(&lifecycle_id));
+    record_lifecycle(&runtime, &lifecycle_id, "pacs.002");
     let outcome = runtime
         .apply_inbound_lifecycle_message(&lifecycle_id, "pacs.002", &parsed)
         .expect("lifecycle applied");
@@ -344,7 +437,7 @@ fn lifecycle_pacs002_ignores_non_payment_original() {
         Some("orig-status-securities")
     );
     assert!(outcome.referenced_message_known());
-    assert_eq!(outcome.action(), "ignored_profile_mismatch");
+    assert_eq!(outcome.action(), "ignored_message_family_mismatch");
     assert_eq!(
         runtime
             .message_status("orig-status-securities")
@@ -367,7 +460,7 @@ fn lifecycle_pacs004_marks_original_returned() {
     .expect("pacs.004 parsed");
     let lifecycle_id =
         Iso20022BridgeRuntime::lifecycle_message_id("pacs.004", &parsed).expect("lifecycle id");
-    assert!(runtime.check_and_record_message(&lifecycle_id));
+    record_lifecycle(&runtime, &lifecycle_id, "pacs.004");
     let outcome = runtime
         .apply_inbound_lifecycle_message(&lifecycle_id, "pacs.004", &parsed)
         .expect("lifecycle applied");
@@ -394,6 +487,60 @@ fn lifecycle_pacs004_marks_original_returned() {
     );
 }
 #[test]
+fn settled_original_ignores_late_pacs004_without_losing_success_evidence() {
+    let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+        .expect("cfg")
+        .expect("enabled");
+    record_original(&runtime, "settled-return", "pacs.008");
+    runtime.mark_accepted("settled-return", "tx-settled-return");
+    assert!(runtime.mark_settled("settled-return", SystemTime::now()));
+    let parsed = parse_message(
+        "pacs.004",
+        b"MsgId=late-return\nCreDtTm=2025-01-01T00:00:00Z\nOrgnlGrpInf/OrgnlMsgId=settled-return\nTxInf[0]/OrgnlInstrId=instr-1\nTxInf[0]/RtrdInstdAmt=10.00\nTxInf[0]/RtrdInstdAmtCcy=USD\nTxInf[0]/RtrdRsn/Cd=AC01",
+    )
+    .expect("pacs.004 parsed");
+    record_lifecycle(&runtime, "late-return", "pacs.004");
+    let outcome = runtime
+        .apply_inbound_lifecycle_message("late-return", "pacs.004", &parsed)
+        .expect("late lifecycle recorded");
+    assert_eq!(outcome.action(), "ignored_stale_transition");
+    let original = runtime
+        .message_status("settled-return")
+        .expect("settled original");
+    assert_eq!(original.status_label(), "Accepted");
+    assert_eq!(original.pacs002_code(), "ACSC");
+    assert_eq!(original.transaction_hash(), Some("tx-settled-return"));
+}
+#[test]
+fn rejected_original_ignores_late_success_status() {
+    let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+        .expect("cfg")
+        .expect("enabled");
+    record_original(&runtime, "rejected-status", "pacs.008");
+    assert!(runtime.mark_rejected(
+        "rejected-status",
+        Some("definitive rejection".to_owned()),
+        Some("BE01")
+    ));
+    let parsed = parse_message(
+        "pacs.002",
+        b"MsgId=late-success\nOrgnlMsgId=rejected-status\nTxSts=ACSC",
+    )
+    .expect("pacs.002 parsed");
+    record_lifecycle(&runtime, "late-success", "pacs.002");
+    let outcome = runtime
+        .apply_inbound_lifecycle_message("late-success", "pacs.002", &parsed)
+        .expect("late lifecycle recorded");
+    assert_eq!(outcome.action(), "ignored_stale_transition");
+    let original = runtime
+        .message_status("rejected-status")
+        .expect("rejected original");
+    assert_eq!(original.status_label(), "Rejected");
+    assert_eq!(original.pacs002_code(), "RJCT");
+    assert_eq!(original.rejection_reason_code(), Some("BE01"));
+    assert_eq!(original.detail(), Some("definitive rejection"));
+}
+#[test]
 fn checked_in_pacs004_fixture_marks_original_returned() {
     let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
         .expect("cfg")
@@ -405,7 +552,7 @@ fn checked_in_pacs004_fixture_marks_original_returned() {
     let lifecycle_id =
         Iso20022BridgeRuntime::lifecycle_message_id("pacs.004", &parsed).expect("lifecycle id");
     assert_eq!(lifecycle_id, "RETURN-FIXTURE-1");
-    assert!(runtime.check_and_record_message(&lifecycle_id));
+    record_lifecycle(&runtime, &lifecycle_id, "pacs.004");
     let outcome = runtime
         .apply_inbound_lifecycle_message(&lifecycle_id, "pacs.004", &parsed)
         .expect("lifecycle applied");
@@ -433,7 +580,7 @@ fn checked_in_pacs004_fixture_marks_original_returned() {
     );
 }
 #[test]
-fn lifecycle_camt056_marks_known_original_pending_cancellation() {
+fn lifecycle_camt056_marks_known_original_cancellation_requested() {
     let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
         .expect("cfg")
         .expect("enabled");
@@ -447,7 +594,7 @@ fn lifecycle_camt056_marks_known_original_pending_cancellation() {
     let lifecycle_id =
         Iso20022BridgeRuntime::lifecycle_message_id("camt.056", &parsed).expect("lifecycle id");
     assert_eq!(lifecycle_id, "cancel-2");
-    assert!(runtime.check_and_record_message(&lifecycle_id));
+    record_lifecycle(&runtime, &lifecycle_id, "camt.056");
     let outcome = runtime
         .apply_inbound_lifecycle_message(&lifecycle_id, "camt.056", &parsed)
         .expect("lifecycle applied");
@@ -459,8 +606,8 @@ fn lifecycle_camt056_marks_known_original_pending_cancellation() {
     let original = runtime
         .message_status("orig-cancel")
         .expect("original status");
-    assert_eq!(original.status_label(), "Pending");
-    assert_eq!(original.pacs002_code(), "PDNG");
+    assert_eq!(original.status_label(), "Accepted");
+    assert_eq!(original.pacs002_code(), "ACSP");
     assert_eq!(original.hold_reason_code(), Some("CUST"));
     assert!(
         original
@@ -480,7 +627,7 @@ fn lifecycle_camt056_marks_known_original_pending_cancellation() {
     );
 }
 #[test]
-fn checked_in_camt056_fixture_marks_original_pending_cancellation() {
+fn checked_in_camt056_fixture_marks_original_cancellation_requested() {
     let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
         .expect("cfg")
         .expect("enabled");
@@ -491,7 +638,7 @@ fn checked_in_camt056_fixture_marks_original_pending_cancellation() {
     let lifecycle_id =
         Iso20022BridgeRuntime::lifecycle_message_id("camt.056", &parsed).expect("lifecycle id");
     assert_eq!(lifecycle_id, "CANCEL-FIXTURE-1");
-    assert!(runtime.check_and_record_message(&lifecycle_id));
+    record_lifecycle(&runtime, &lifecycle_id, "camt.056");
     let outcome = runtime
         .apply_inbound_lifecycle_message(&lifecycle_id, "camt.056", &parsed)
         .expect("lifecycle applied");
@@ -503,8 +650,8 @@ fn checked_in_camt056_fixture_marks_original_pending_cancellation() {
     let original = runtime
         .message_status("CANCEL-ORIG-1")
         .expect("original status");
-    assert_eq!(original.status_label(), "Pending");
-    assert_eq!(original.pacs002_code(), "PDNG");
+    assert_eq!(original.status_label(), "Accepted");
+    assert_eq!(original.pacs002_code(), "ACSP");
     assert_eq!(original.hold_reason_code(), Some("CUST"));
     assert!(
         original
@@ -536,7 +683,7 @@ fn lifecycle_pacs004_ignores_non_payment_original() {
     .expect("pacs.004 parsed");
     let lifecycle_id =
         Iso20022BridgeRuntime::lifecycle_message_id("pacs.004", &parsed).expect("lifecycle id");
-    assert!(runtime.check_and_record_message(&lifecycle_id));
+    record_lifecycle(&runtime, &lifecycle_id, "pacs.004");
     let outcome = runtime
         .apply_inbound_lifecycle_message(&lifecycle_id, "pacs.004", &parsed)
         .expect("lifecycle applied");
@@ -545,7 +692,7 @@ fn lifecycle_pacs004_ignores_non_payment_original() {
         Some("orig-return-securities")
     );
     assert!(outcome.referenced_message_known());
-    assert_eq!(outcome.action(), "ignored_profile_mismatch");
+    assert_eq!(outcome.action(), "ignored_message_family_mismatch");
     let original = runtime
         .message_status("orig-return-securities")
         .expect("original status");
@@ -595,7 +742,7 @@ fn lifecycle_camt056_records_unknown_original_without_creating_it() {
     .expect("camt.056 parsed");
     let lifecycle_id =
         Iso20022BridgeRuntime::lifecycle_message_id("camt.056", &parsed).expect("lifecycle id");
-    assert!(runtime.check_and_record_message(&lifecycle_id));
+    record_lifecycle(&runtime, &lifecycle_id, "camt.056");
     let outcome = runtime
         .apply_inbound_lifecycle_message(&lifecycle_id, "camt.056", &parsed)
         .expect("lifecycle applied");
@@ -625,7 +772,7 @@ fn lifecycle_camt056_ignores_non_payment_original() {
     .expect("camt.056 parsed");
     let lifecycle_id =
         Iso20022BridgeRuntime::lifecycle_message_id("camt.056", &parsed).expect("lifecycle id");
-    assert!(runtime.check_and_record_message(&lifecycle_id));
+    record_lifecycle(&runtime, &lifecycle_id, "camt.056");
     let outcome = runtime
         .apply_inbound_lifecycle_message(&lifecycle_id, "camt.056", &parsed)
         .expect("lifecycle applied");
@@ -634,7 +781,7 @@ fn lifecycle_camt056_ignores_non_payment_original() {
         Some("orig-cancel-securities")
     );
     assert!(outcome.referenced_message_known());
-    assert_eq!(outcome.action(), "ignored_profile_mismatch");
+    assert_eq!(outcome.action(), "ignored_message_family_mismatch");
     let original = runtime
         .message_status("orig-cancel-securities")
         .expect("original status");
@@ -679,6 +826,7 @@ fn lifecycle_sese024_marks_prefixed_settlement_instruction_pending() {
         .expect("cfg")
         .expect("enabled");
     record_original(&runtime, "sese.023:settle-status", "sese.023");
+    assert!(runtime.mark_queued("sese.023:settle-status"));
     let parsed = parse_message(
         "sese.024",
         b"TxId=settle-status\nSttlmDt=2025-01-02\nSttlmSts=PEND\nRsnCd=NORE\nAddtlInf=awaiting matching",
@@ -687,7 +835,7 @@ fn lifecycle_sese024_marks_prefixed_settlement_instruction_pending() {
     let lifecycle_id =
         Iso20022BridgeRuntime::lifecycle_message_id("sese.024", &parsed).expect("lifecycle id");
     assert_eq!(lifecycle_id, "sese.024:settle-status");
-    assert!(runtime.check_and_record_message(&lifecycle_id));
+    record_lifecycle(&runtime, &lifecycle_id, "sese.024");
     let outcome = runtime
         .apply_inbound_lifecycle_message(&lifecycle_id, "sese.024", &parsed)
         .expect("lifecycle applied");
@@ -727,7 +875,7 @@ fn lifecycle_sese024_records_unknown_original_without_creating_it() {
     let lifecycle_id =
         Iso20022BridgeRuntime::lifecycle_message_id("sese.024", &parsed).expect("lifecycle id");
     assert_eq!(lifecycle_id, "sese.024:missing-status");
-    assert!(runtime.check_and_record_message(&lifecycle_id));
+    record_lifecycle(&runtime, &lifecycle_id, "sese.024");
     let outcome = runtime
         .apply_inbound_lifecycle_message(&lifecycle_id, "sese.024", &parsed)
         .expect("lifecycle applied");
@@ -760,7 +908,7 @@ fn lifecycle_sese024_ignores_non_settlement_original() {
     .expect("sese.024 parsed");
     let lifecycle_id =
         Iso20022BridgeRuntime::lifecycle_message_id("sese.024", &parsed).expect("lifecycle id");
-    assert!(runtime.check_and_record_message(&lifecycle_id));
+    record_lifecycle(&runtime, &lifecycle_id, "sese.024");
     let outcome = runtime
         .apply_inbound_lifecycle_message(&lifecycle_id, "sese.024", &parsed)
         .expect("lifecycle applied");
@@ -769,7 +917,7 @@ fn lifecycle_sese024_ignores_non_settlement_original() {
         Some("sese.023:settle-status-wrong-family")
     );
     assert!(outcome.referenced_message_known());
-    assert_eq!(outcome.action(), "ignored_profile_mismatch");
+    assert_eq!(outcome.action(), "ignored_message_family_mismatch");
     let original = runtime
         .message_status("sese.023:settle-status-wrong-family")
         .expect("original status");
@@ -811,6 +959,7 @@ fn lifecycle_sese025_confirms_prefixed_settlement_instruction() {
         .expect("cfg")
         .expect("enabled");
     record_original(&runtime, "sese.023:settle-1", "sese.023");
+    assert!(runtime.mark_queued("sese.023:settle-1"));
     let parsed = parse_message(
         "sese.025",
         b"TxId=settle-1\nSttlmDt=2025-01-02\nSttlmTpAndAddtlParams/SctiesMvmntTp=DELI\nSttlmTpAndAddtlParams/Pmt=APMT\nConfSts=ACCP\nSttlmQty=100\nSttlmAmt=25.00\nSttlmCcy=USD\nPlan/ExecutionOrder=DELIVERY_THEN_PAYMENT\nPlan/Atomicity=ALL_OR_NOTHING",
@@ -819,7 +968,7 @@ fn lifecycle_sese025_confirms_prefixed_settlement_instruction() {
     let lifecycle_id =
         Iso20022BridgeRuntime::lifecycle_message_id("sese.025", &parsed).expect("lifecycle id");
     assert_eq!(lifecycle_id, "sese.025:settle-1");
-    assert!(runtime.check_and_record_message(&lifecycle_id));
+    record_lifecycle(&runtime, &lifecycle_id, "sese.025");
     let outcome = runtime
         .apply_inbound_lifecycle_message(&lifecycle_id, "sese.025", &parsed)
         .expect("lifecycle applied");
@@ -847,7 +996,7 @@ fn lifecycle_sese025_ignores_non_settlement_original() {
     .expect("sese.025 parsed");
     let lifecycle_id =
         Iso20022BridgeRuntime::lifecycle_message_id("sese.025", &parsed).expect("lifecycle id");
-    assert!(runtime.check_and_record_message(&lifecycle_id));
+    record_lifecycle(&runtime, &lifecycle_id, "sese.025");
     let outcome = runtime
         .apply_inbound_lifecycle_message(&lifecycle_id, "sese.025", &parsed)
         .expect("lifecycle applied");
@@ -856,7 +1005,7 @@ fn lifecycle_sese025_ignores_non_settlement_original() {
         Some("sese.023:settle-wrong-family")
     );
     assert!(outcome.referenced_message_known());
-    assert_eq!(outcome.action(), "ignored_profile_mismatch");
+    assert_eq!(outcome.action(), "ignored_message_family_mismatch");
     assert_eq!(
         runtime
             .message_status("sese.023:settle-wrong-family")

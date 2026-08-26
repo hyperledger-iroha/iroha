@@ -7359,7 +7359,15 @@ impl Iroha {
         ),
         StartError,
     > {
+        let nts_params = iroha_core::time::Params::from(&config.nts);
         let emergency_fast = config.kura.init_mode == InitMode::Fast;
+        // A successful reservation publishes policy and ownership as one
+        // generation. Fast keeps the reservation without starting the sampler,
+        // so no concurrent in-process startup can replace its fallback policy.
+        let nts_reservation = iroha_core::time::reserve(nts_params).ok_or_else(|| {
+            Report::new(StartError::StartP2p)
+                .attach("network time service already has a process owner")
+        })?;
         if emergency_fast {
             iroha_logger::warn!(
                 "emergency Fast startup defers optional Kura-backed SoraFS runtimes and their archive qualification until a Strict restart"
@@ -10297,11 +10305,6 @@ impl Iroha {
             }
             .run(network_relay_shutdown),
         ));
-        // Fast is a bounded recovery surface; its network-time sampler is not
-        // needed while consensus and all mutable APIs remain offline.
-        if !emergency_fast {
-            iroha_core::time::start(network.clone(), iroha_core::time::Params::from(&config.nts));
-        }
         // Observer nodes are configured with `NodeRole::Observer`; Sumeragi suppresses
         // local consensus emissions in that case, so observers follow the chain and
         // serve queries without proposing or voting. Validators retain the full duties.
@@ -10344,6 +10347,21 @@ impl Iroha {
                 supervisor.monitor(child);
             }
         }
+        // Finalize NTS ownership only after every fallible startup preflight has
+        // succeeded. Otherwise an early return would detach a task and retain
+        // its process-singleton ownership across an in-process retry. Fast is a
+        // bounded recovery surface, so it holds policy ownership but leaves the
+        // sampler inert.
+        let nts_child = if emergency_fast {
+            iroha_core::time::hold_fallback_reserved(nts_reservation, supervisor.shutdown_signal())
+        } else {
+            iroha_core::time::start_reserved(
+                network.clone(),
+                nts_reservation,
+                supervisor.shutdown_signal(),
+            )
+        };
+        supervisor.monitor(nts_child);
         supervisor.shutdown_on_external_signal(shutdown_signal);
         Ok((
             Self {
@@ -15547,9 +15565,31 @@ mod tests {
         assert!(
             compact_source.contains("!emergency_fast&&telemetry_capabilities.metrics_enabled(),")
         );
-        assert!(compact_source.contains(
-            "if!emergency_fast{iroha_core::time::start(network.clone(),iroha_core::time::Params::from(&config.nts));}"
-        ));
+        assert!(
+            compact_source
+                .contains("letnts_reservation=iroha_core::time::reserve(nts_params).ok_or_else(")
+        );
+        assert!(
+            compact_source.contains(
+                "letnts_child=ifemergency_fast{iroha_core::time::hold_fallback_reserved("
+            )
+        );
+        assert!(
+            compact_source.contains(
+                "}else{iroha_core::time::start_reserved(network.clone(),nts_reservation,"
+            )
+        );
+        let nts_start = compact_source
+            .find("iroha_core::time::start_reserved(network.clone()")
+            .expect("NTS start");
+        let os_signal_preflight = compact_source
+            .find("setup_shutdown_on_os_signals()")
+            .expect("OS signal preflight");
+        let publication_preflight = compact_source
+            .find("build_and_start_injected_musubi_publication_private_service_v1")
+            .expect("private publication preflight");
+        assert!(nts_start > os_signal_preflight);
+        assert!(nts_start > publication_preflight);
     }
     #[test]
     fn emergency_fast_uses_inert_consensus_and_transaction_gossip_handles() {

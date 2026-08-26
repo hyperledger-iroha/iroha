@@ -40,7 +40,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SubmitAgendaProposal {
 mod tests {
     use super::*;
     use crate::isi::test_support::{
-assert_registry_decodes_registered_type as assert_registry_decodes, assert_slice_roundtrip,
+        assert_registry_decodes_registered_type as assert_registry_decodes, assert_slice_roundtrip,
     };
     use crate::ministry::{
         AGENDA_PROPOSAL_VERSION_V1, AgendaEvidenceAttachment, AgendaEvidenceKind,
@@ -89,9 +89,11 @@ assert_registry_decodes_registered_type as assert_registry_decodes, assert_slice
         });
     }
     #[test]
-fn ministry_registry_decodes_canonical_wire_id() {
-        let registry =
-crate::isi::InstructionRegistry::new().register_with_id_slice::<SubmitAgendaProposal>("iroha.instruction.v1::ministry::SubmitAgendaProposal");
+    fn ministry_registry_decodes_canonical_wire_id() {
+        let registry = crate::isi::InstructionRegistry::new()
+            .register_with_id_slice::<SubmitAgendaProposal>(
+                "iroha.instruction.v1::ministry::SubmitAgendaProposal",
+            );
         assert_registry_decodes(
             &registry,
             SubmitAgendaProposal {

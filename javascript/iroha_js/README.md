@@ -358,7 +358,10 @@ console.log(signed.quote.intent, signed.hash.toString("hex"));
 
 `quoteAndSignTransaction` freezes the exact unsigned payload, account-signs
 `POST /v1/fees/quote`, verifies that the returned intent retained the payer,
-exact program/revision, and gas bound, replaces only `fee_payment`, and signs.
+exact program/revision, and gas bound, and rejects any quote whose components,
+debit decision, or exact sponsor-capacity evidence is inconsistent. This check
+also runs for injected client implementations before the helper replaces only
+`fee_payment` and signs.
 Contract/IVM drafts require a positive `gasLimit`. The metadata keys
 `fee_sponsor`, `gas_asset_id`, and `gas_limit` are retired and rejected, and a
 sponsor rejection never falls back to the authority.
@@ -997,7 +1000,7 @@ const signature = signEd25519(message, privateKey);
 console.log(verifyEd25519(message, signature, publicKey)); // true
 console.log(SUPPORTED_CRYPTO_ALGORITHMS);
 
-// Native builds also expose generic helpers for secp256k1, ML-DSA,
+// Native builds also expose generic helpers for secp256k1, ML-DSA-65,
 // GOST R 34.10-2012 parameter sets, BLS normal/small, and SM2.
 const pqKeys = generateKeyPair({ algorithm: "ml-dsa" });
 const pqSignature = sign(message, pqKeys.privateKey, { algorithm: pqKeys.algorithm });
@@ -2497,7 +2500,7 @@ statuses and rejects padded or case-drifted spellings.
 
 The `SoranetPuzzleClient` helper talks to the optional
 `soranet-puzzle-service` microservice so SDK consumers can mint Argon2 tickets,
-inspect puzzle policy, and request ML-DSA admission tokens without reimplementing
+inspect puzzle policy, and request ML-DSA-65 admission tokens without reimplementing
 the HTTP transport. The client mirrors the JSON schema described in
 [`specs/soranet/puzzle_service_operations.md`](../../specs/soranet/puzzle_service_operations.md).
 

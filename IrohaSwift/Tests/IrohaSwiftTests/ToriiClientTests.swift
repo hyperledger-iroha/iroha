@@ -421,6 +421,10 @@ final class ToriiClientTests: XCTestCase {
         "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
     private let vpnRelayMldsa65PublicKeyHex = String(repeating: "ab", count: 1_952)
 
+    private func validEd25519PublicKey(seed: UInt8) throws -> Data {
+        try Keypair(privateKeyBytes: Data(repeating: seed, count: 32)).publicKey
+    }
+
     private var authority: String {
         try! Keypair(privateKeyBytes: canonicalSigningSeed)
             .accountId(networkPrefix: AccountId.defaultNetworkPrefix)
@@ -7594,7 +7598,7 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testGetAssetsPreservesTairaAccountDiscriminant() async throws {
         let accountId = try AccountAddress
-            .fromAccount(publicKey: Data(repeating: 0x61, count: 32))
+            .fromAccount(publicKey: validEd25519PublicKey(seed: 0x61))
             .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
         StubURLProtocol.handler = { request in
             self.assertDecodedPath(
@@ -8442,7 +8446,7 @@ final class ToriiClientTests: XCTestCase {
     }
 
     func testCanonicalMintDestinationStaysCanonical() throws {
-        let publicKey = Data(repeating: 0x44, count: 32)
+        let publicKey = try validEd25519PublicKey(seed: 0x44)
         let address = try AccountAddress.fromAccount(publicKey: publicKey, algorithm: "ed25519")
         let accountId = try address.toI105(networkPrefix: 0x02F1)
         let literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#\(accountId)"
@@ -8462,7 +8466,7 @@ final class ToriiClientTests: XCTestCase {
     }
 
     func testDecodeAccountIdReadsNoritoStringField() throws {
-        let publicKey = Data(repeating: 0x33, count: 32)
+        let publicKey = try validEd25519PublicKey(seed: 0x33)
         let address = try AccountAddress.fromAccount(publicKey: publicKey, algorithm: "ed25519")
         let accountId = try address.toI105(networkPrefix: 0x02F1)
         let encodedLength = withUnsafeBytes(of: UInt64(accountId.utf8.count).littleEndian) { Data($0) }
@@ -10629,6 +10633,19 @@ final class ToriiClientTests: XCTestCase {
         )
     }
 
+    private func faucetPolicy(
+        for prepared: ToriiAccountFaucetPreparedTransactionV1
+    ) throws -> ToriiAccountFaucetPolicyV1 {
+        let signer = try SigningKey.ed25519(
+            privateKey: Data(repeating: 0x61, count: 32)
+        )
+        return try ToriiAccountFaucetPolicyV1(
+            faucetAuthority: AccountId.makeI105(publicKey: signer.publicKey()),
+            assetDefinitionId: prepared.assetDefinitionId,
+            amount: KotodamaQuantity(prepared.amount)
+        )
+    }
+
     private func preparedTransactionWire(
         payload: Data,
         signer: SigningKey
@@ -10857,6 +10874,7 @@ final class ToriiClientTests: XCTestCase {
                 receipt,
                 request: substitutedRequest,
                 binding: binding,
+                feePayment: prepared.feePayment,
                 onboardingToken: onboardingToken,
                 expectedAuthority: receipt.body.authority,
                 expectedNetworkId: receipt.body.networkId,
@@ -10888,6 +10906,7 @@ final class ToriiClientTests: XCTestCase {
         do {
             _ = try await client.submitPreparedAccountOnboarding(
                 prepared,
+                expectedFeePayment: prepared.feePayment,
                 request: substitutedRequest,
                 onboardingToken: onboardingToken,
                 expectedAuthority: receipt.body.authority,
@@ -10975,9 +10994,10 @@ final class ToriiClientTests: XCTestCase {
                 )
                 XCTAssertEqual(decoded.binding, binding)
                 XCTAssertEqual(decoded.receipt, receipt)
+                XCTAssertEqual(decoded.feePayment, prepared.feePayment)
                 XCTAssertEqual(
                     Set(self.bodyJSON(from: request).keys),
-                    Set(["schema", "binding", "receipt"])
+                    Set(["schema", "binding", "receipt", "fee_payment"])
                 )
                 let response = HTTPURLResponse(
                     url: request.url!,
@@ -11021,6 +11041,7 @@ final class ToriiClientTests: XCTestCase {
             planned,
             request: intent,
             binding: binding,
+            feePayment: prepared.feePayment,
             onboardingToken: onboardingToken,
             expectedAuthority: receipt.body.authority,
             expectedNetworkId: receipt.body.networkId,
@@ -11038,6 +11059,7 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(reopened, prepared)
         let submitted = try await client.submitPreparedAccountOnboarding(
             reopened,
+            expectedFeePayment: prepared.feePayment,
             request: intent,
             onboardingToken: onboardingToken,
             expectedAuthority: receipt.body.authority,
@@ -11127,6 +11149,7 @@ final class ToriiClientTests: XCTestCase {
             receipt,
             request: intent,
             binding: binding,
+            feePayment: testFeePayment(),
             onboardingToken: onboardingToken,
             expectedAuthority: receipt.body.authority,
             expectedNetworkId: receipt.body.networkId,
@@ -11320,6 +11343,74 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
+    func testAccountFaucetClaimAndPolicyRejectInvalidFirstReleaseValues() throws {
+        let accountId = try canonicalOwnerLiteral()
+        XCTAssertThrowsError(
+            try ToriiAccountFaucetClaimV1(
+                accountId: accountId,
+                powAnchorHeight: 0,
+                powNonceHex: "00"
+            )
+        )
+        for nonce in ["", "0", "AA", "gg"] {
+            XCTAssertThrowsError(
+                try ToriiAccountFaucetClaimV1(
+                    accountId: accountId,
+                    powAnchorHeight: 1,
+                    powNonceHex: nonce
+                )
+            )
+        }
+        let validClaim = try ToriiAccountFaucetClaimV1(
+            accountId: accountId,
+            powAnchorHeight: 1,
+            powNonceHex: "00"
+        )
+        let claimObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(validClaim))
+                as? [String: Any]
+        )
+        for field in ["pow_anchor_height", "pow_nonce_hex"] {
+            var missing = claimObject
+            missing.removeValue(forKey: field)
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    ToriiAccountFaucetClaimV1.self,
+                    from: JSONSerialization.data(withJSONObject: missing)
+                )
+            )
+            var null = claimObject
+            null[field] = NSNull()
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    ToriiAccountFaucetClaimV1.self,
+                    from: JSONSerialization.data(withJSONObject: null)
+                )
+            )
+        }
+
+        let signer = try SigningKey.ed25519(
+            privateKey: Data(repeating: 0x61, count: 32)
+        )
+        let authority = try AccountId.makeI105(publicKey: signer.publicKey())
+        let assetDefinitionId = "4rPeAP6jAjiLVZThZYwwPRBuQagt"
+        XCTAssertThrowsError(
+            try ToriiAccountFaucetPolicyV1(
+                faucetAuthority: authority,
+                assetDefinitionId: assetDefinitionId,
+                amount: KotodamaQuantity("0")
+            )
+        )
+        XCTAssertThrowsError(
+            try ToriiAccountFaucetPolicyV1(
+                faucetAuthority: authority,
+                assetDefinitionId: "not-an-asset-definition",
+                amount: KotodamaQuantity("1")
+            )
+        )
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
     func testAccountFaucetPreparesPersistsAndSubmitsExactEnvelope() async throws {
         let claim = try ToriiAccountFaucetClaimV1(
             accountId: canonicalOwnerLiteral(),
@@ -11349,7 +11440,11 @@ final class ToriiClientTests: XCTestCase {
                         ToriiAccountFaucetPrepareRequestV1.self,
                         from: body
                     ),
-                    try ToriiAccountFaucetPrepareRequestV1(binding: binding, claim: claim)
+                    try ToriiAccountFaucetPrepareRequestV1(
+                        binding: binding,
+                        claim: claim,
+                        feePayment: prepared.feePayment
+                    )
                 )
                 let response = HTTPURLResponse(
                     url: request.url!,
@@ -11378,14 +11473,12 @@ final class ToriiClientTests: XCTestCase {
         }
 
         let client = makeClient()
-        let faucetSigner = try SigningKey.ed25519(
-            privateKey: Data(repeating: 0x61, count: 32)
-        )
-        let faucetAuthority = try AccountId.makeI105(publicKey: faucetSigner.publicKey())
+        let policy = try faucetPolicy(for: prepared)
         let preparedResult = try await client.prepareAccountFaucet(
             claim,
             binding: binding,
-            expectedAuthority: faucetAuthority,
+            feePayment: prepared.feePayment,
+            policy: policy,
             expectedNetworkId: TestNetworkIds.canonical
         )
         XCTAssertEqual(preparedResult, prepared)
@@ -11396,11 +11489,121 @@ final class ToriiClientTests: XCTestCase {
         )
         let submitted = try await client.submitPreparedAccountFaucet(
             reopened,
-            expectedAuthority: faucetAuthority,
+            expectedFeePayment: prepared.feePayment,
+            policy: policy,
             expectedNetworkId: TestNetworkIds.canonical
         )
         XCTAssertEqual(submitted, submitResult)
         XCTAssertEqual(requestCount, 2)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testPreparedAccountSubmitsRejectCallerFeeAndFaucetPolicySubstitutionBeforeDispatch() async throws {
+        let accountId = try canonicalOwnerLiteral()
+        let intent = try ToriiAccountOnboardingPlanRequest(
+            alias: "alice@universal",
+            accountId: accountId
+        )
+        let receipt = try onboardingPlanReceipt(request: intent)
+        let onboardingBinding = try preparedAccountBinding(
+            operation: .onboarding,
+            idempotencyByte: "22"
+        )
+        let onboarding = try preparedOnboardingTransaction(
+            receipt: receipt,
+            binding: onboardingBinding
+        )
+        let claim = try ToriiAccountFaucetClaimV1(
+            accountId: accountId,
+            powAnchorHeight: 42,
+            powNonceHex: "0a"
+        )
+        let faucetBinding = try preparedAccountBinding(
+            operation: .faucet,
+            idempotencyByte: "33"
+        )
+        let faucet = try preparedFaucetTransaction(claim: claim, binding: faucetBinding)
+        let policy = try faucetPolicy(for: faucet)
+        var requestCount = 0
+        StubURLProtocol.handler = { _ in
+            requestCount += 1
+            XCTFail("fee-substituted prepared envelope reached HTTP dispatch")
+            throw URLError(.badServerResponse)
+        }
+        let substitutedFee = testFeePayment(gasLimit: 1)
+
+        do {
+            _ = try await makeClient().submitPreparedAccountOnboarding(
+                onboarding,
+                expectedFeePayment: substitutedFee,
+                request: intent,
+                onboardingToken: onboardingToken,
+                expectedAuthority: receipt.body.authority,
+                expectedNetworkId: receipt.body.networkId,
+                bodyEncoder: encodeTestCanonicalOnboardingBody
+            )
+            XCTFail("onboarding submit accepted a substituted fee intent")
+        } catch {
+            guard case ToriiClientError.invalidResponse = error else {
+                return XCTFail("unexpected onboarding fee error: \(error)")
+            }
+        }
+
+        do {
+            _ = try await makeClient().submitPreparedAccountFaucet(
+                faucet,
+                expectedFeePayment: substitutedFee,
+                policy: policy,
+                expectedNetworkId: TestNetworkIds.canonical
+            )
+            XCTFail("faucet submit accepted a substituted fee intent")
+        } catch {
+            guard case ToriiClientError.invalidResponse = error else {
+                return XCTFail("unexpected faucet fee error: \(error)")
+            }
+        }
+
+        let substitutedAuthoritySigner = try SigningKey.ed25519(
+            privateKey: Data(repeating: 0x51, count: 32)
+        )
+        let substitutedAuthority = try ToriiAccountFaucetPolicyV1(
+            faucetAuthority: AccountId.makeI105(
+                publicKey: substitutedAuthoritySigner.publicKey()
+            ),
+            assetDefinitionId: faucet.assetDefinitionId,
+            amount: KotodamaQuantity(faucet.amount)
+        )
+        let substitutedAssetId = try XCTUnwrap(
+            AssetDefinitionAddressCodec.definitionLiteral(
+                uuidBytes: Data(repeating: 0xa5, count: 16)
+            )
+        )
+        let substitutedAsset = try ToriiAccountFaucetPolicyV1(
+            faucetAuthority: policy.faucetAuthority,
+            assetDefinitionId: substitutedAssetId,
+            amount: policy.amount
+        )
+        let substitutedAmount = try ToriiAccountFaucetPolicyV1(
+            faucetAuthority: policy.faucetAuthority,
+            assetDefinitionId: policy.assetDefinitionId,
+            amount: KotodamaQuantity("26")
+        )
+        for (label, substitutedPolicy) in [
+            ("authority", substitutedAuthority),
+            ("asset definition", substitutedAsset),
+            ("amount", substitutedAmount),
+        ] {
+            do {
+                _ = try await makeClient().submitPreparedAccountFaucet(
+                    faucet,
+                    expectedFeePayment: faucet.feePayment,
+                    policy: substitutedPolicy,
+                    expectedNetworkId: TestNetworkIds.canonical
+                )
+                XCTFail("faucet submit accepted a substituted \(label) policy")
+            } catch {}
+        }
+        XCTAssertEqual(requestCount, 0)
     }
 
     func testPreparedAccountProtocolRejectsEmptyInstructionExecutable() throws {
@@ -11487,10 +11690,46 @@ final class ToriiClientTests: XCTestCase {
                 with: JSONEncoder().encode(
                     ToriiAccountOnboardingPrepareRequestV1(
                         binding: binding,
-                        receipt: receipt
+                        receipt: receipt,
+                        feePayment: testFeePayment()
                     )
                 )
             ) as? [String: Any]
+        )
+        var missingOnboardingFee = openPrepare
+        missingOnboardingFee.removeValue(forKey: "fee_payment")
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiAccountOnboardingPrepareRequestV1.self,
+                from: JSONSerialization.data(withJSONObject: missingOnboardingFee)
+            )
+        )
+        let faucetBinding = try preparedAccountBinding(
+            operation: .faucet,
+            idempotencyByte: "33"
+        )
+        let faucetClaim = try ToriiAccountFaucetClaimV1(
+            accountId: accountId,
+            powAnchorHeight: 42,
+            powNonceHex: "0a"
+        )
+        var missingFaucetFee = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: JSONEncoder().encode(
+                    ToriiAccountFaucetPrepareRequestV1(
+                        binding: faucetBinding,
+                        claim: faucetClaim,
+                        feePayment: testFeePayment()
+                    )
+                )
+            ) as? [String: Any]
+        )
+        missingFaucetFee.removeValue(forKey: "fee_payment")
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiAccountFaucetPrepareRequestV1.self,
+                from: JSONSerialization.data(withJSONObject: missingFaucetFee)
+            )
         )
         openPrepare["legacy_apply"] = true
         XCTAssertThrowsError(
@@ -11615,6 +11854,7 @@ final class ToriiClientTests: XCTestCase {
                 receipt,
                 request: intent,
                 binding: expiredBinding,
+                feePayment: prepared.feePayment,
                 onboardingToken: onboardingToken,
                 expectedAuthority: receipt.body.authority,
                 expectedNetworkId: receipt.body.networkId,
@@ -11630,6 +11870,7 @@ final class ToriiClientTests: XCTestCase {
 
         let result = try await makeClient().submitPreparedAccountOnboarding(
             prepared,
+            expectedFeePayment: prepared.feePayment,
             request: intent,
             onboardingToken: onboardingToken,
             expectedAuthority: receipt.body.authority,
@@ -12441,6 +12682,7 @@ final class ToriiClientTests: XCTestCase {
                 headerFields: [
                     "Content-Type": "application/x-norito",
                     "Location": "/v1/offline/operations/\(operationId)",
+                    "Retry-After": "1",
                 ]
             )!
             return (response, responseBody)
@@ -12897,6 +13139,32 @@ final class ToriiClientTests: XCTestCase {
                 try reference(operationId: submittedOperationId, kind: .topUp),
                 ["Location": "/v1/offline/operations/\(submittedOperationId)"],
                 "Content-Type must be application/x-norito"
+            ),
+            (
+                try reference(operationId: submittedOperationId, kind: .topUp),
+                [
+                    "Content-Type": "application/x-norito",
+                    "Location": "/v1/offline/operations/\(submittedOperationId)",
+                ],
+                "Retry-After"
+            ),
+            (
+                try reference(operationId: submittedOperationId, kind: .topUp),
+                [
+                    "Content-Type": "application/x-norito",
+                    "Location": "/v1/offline/operations/\(submittedOperationId)",
+                    "Retry-After": "0",
+                ],
+                "Retry-After"
+            ),
+            (
+                try reference(operationId: submittedOperationId, kind: .topUp),
+                [
+                    "Content-Type": "application/x-norito",
+                    "Location": "/v1/offline/operations/\(submittedOperationId)",
+                    "Retry-After": String(repeating: "9", count: 10_000),
+                ],
+                "Retry-After"
             ),
         ]
 
@@ -14522,7 +14790,7 @@ final class ToriiClientHeaderTests: XCTestCase {
                   "capacities":[],
                   "decision":{
                     "status":"accepted",
-                    "value":{"debit_source":{"kind":"account","value":"\(self.authority)"}}
+                    "value":{"debit_source":{"kind":"account","value":"\(self.authority)"},"program_revision":null}
                   }
                 }
                 """.utf8
@@ -14536,6 +14804,415 @@ final class ToriiClientHeaderTests: XCTestCase {
         )
 
         XCTAssertEqual(quote.observation.nextBlockHeight, 1)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testFeeQuoteAllowsActiveAliasCanonicalAuthentication() async throws {
+        let alias = "alice@paynet"
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "X-Iroha-Account"), alias)
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (
+                response,
+                Data(
+                    """
+                    {
+                      "intent":{"payer":"authority","value":{"charge_limits":[],"gas_limit":null}},
+                      "observation":{"ledger_time_ms":1,"next_block_height":1,"route_dataspace_id":0},
+                      "components":[],
+                      "capacities":[],
+                      "decision":{"status":"accepted","value":{"debit_source":{"kind":"account","value":"\(self.authority)"},"program_revision":null}}
+                    }
+                    """.utf8
+                )
+            )
+        }
+        let aliasAuth = ToriiCanonicalRequestAuth(
+            accountId: alias,
+            privateKey: canonicalReadAuth.privateKey,
+            timestampMs: canonicalReadAuth.timestampMs,
+            nonce: canonicalReadAuth.nonce
+        )
+
+        let quote = try await makeClient().quoteFees(
+            unsignedPayload: try canonicalUnsignedFeePayload(),
+            canonicalAuth: aliasAuth
+        )
+
+        XCTAssertEqual(quote.intent, .authority(chargeLimits: [], gasLimit: nil))
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testFeeQuoteRejectsDuplicateResponseKeys() async throws {
+        let duplicateResponses = [
+            """
+            {
+              "intent":{"payer":"authority","value":{"charge_limits":[],"gas_limit":null}},
+              "observation":{"ledger_time_ms":1,"next_block_height":1,"route_dataspace_id":0},
+              "components":[],
+              "capacities":[],
+              "decision":{"status":"accepted","value":{"debit_source":{"kind":"account","value":"\(authority)"},"program_revision":null,"program_revision":null}}
+            }
+            """,
+            """
+            {
+              "intent":{"payer":"authority","value":{"charge_limits":[{"kind":{"kind":"nexus","value":null},"asset_definition_id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","max_amount":"1"}],"gas_limit":null}},
+              "observation":{"ledger_time_ms":1,"next_block_height":1,"route_dataspace_id":0},
+              "components":[{"kind":{"kind":"nexus","value":null},"asset_definition_id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","max_amount":"1","max_amount":"1"}],
+              "capacities":[],
+              "decision":{"status":"accepted","value":{"debit_source":{"kind":"account","value":"\(authority)"},"program_revision":null}}
+            }
+            """,
+            """
+            {
+              "intent":{"payer":"sponsor","value":{"program_id":{"sponsor":"\(authority)","name":"wallet_fx"},"program_revision":7,"charge_limits":[{"kind":{"kind":"nexus","value":null},"asset_definition_id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","max_amount":"1"}],"gas_limit":null}},
+              "observation":{"ledger_time_ms":1,"next_block_height":1,"route_dataspace_id":0},
+              "components":[{"kind":{"kind":"nexus","value":null},"asset_definition_id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","max_amount":"1"}],
+              "capacities":[{"asset_definition_id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","vault_balance":"1","reserve_floor":"0","block_remaining":"1","block_remaining":"1","program_epoch_remaining":"1","beneficiary_epoch_remaining":"1"}],
+              "decision":{"status":"accepted","value":{"debit_source":{"kind":"sponsor_program","value":{"sponsor":"\(authority)","name":"wallet_fx"}},"program_revision":7}}
+            }
+            """,
+        ]
+
+        for duplicateResponse in duplicateResponses {
+            StubURLProtocol.handler = { request in
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )!
+                return (response, Data(duplicateResponse.utf8))
+            }
+
+            await XCTAssertThrowsErrorAsync(
+                try await makeClient().quoteFees(
+                    unsignedPayload: try canonicalUnsignedFeePayload(),
+                    canonicalAuth: canonicalReadAuth
+                )
+            ) { error in
+                guard case let ToriiClientError.invalidPayload(message) = error else {
+                    return XCTFail("Expected invalidPayload, got \(error)")
+                }
+                XCTAssertTrue(message.contains("duplicate object keys"))
+            }
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testFeeQuoteResponseBodyLimitAppliesBeforeSuccessAndErrorHandling() async throws {
+        let maximumBytes = 65_536
+        let validQuote = Data(
+            """
+            {
+              "intent":{"payer":"authority","value":{"charge_limits":[],"gas_limit":null}},
+              "observation":{"ledger_time_ms":1,"next_block_height":1,"route_dataspace_id":0},
+              "components":[],
+              "capacities":[],
+              "decision":{"status":"accepted","value":{"debit_source":{"kind":"account","value":"\(authority)"},"program_revision":null}}
+            }
+            """.utf8
+        )
+        XCTAssertLessThan(validQuote.count, maximumBytes)
+
+        func body(padding validPrefix: Data, to count: Int) -> Data {
+            var body = validPrefix
+            body.append(Data(repeating: 0x20, count: count - body.count))
+            return body
+        }
+
+        func install(status: Int, body: Data) {
+            StubURLProtocol.handler = { request in
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: status,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )!
+                return (response, body)
+            }
+        }
+
+        install(status: 200, body: body(padding: validQuote, to: maximumBytes))
+        _ = try await makeClient().quoteFees(
+            unsignedPayload: try canonicalUnsignedFeePayload(),
+            canonicalAuth: canonicalReadAuth
+        )
+
+        install(status: 200, body: body(padding: validQuote, to: maximumBytes + 1))
+        await assertToriiInvalidPayload(contains: "response exceeded") {
+            _ = try await self.makeClient().quoteFees(
+                unsignedPayload: try self.canonicalUnsignedFeePayload(),
+                canonicalAuth: self.canonicalReadAuth
+            )
+        }
+
+        install(status: 400, body: Data(repeating: 0x20, count: maximumBytes))
+        do {
+            _ = try await makeClient().quoteFees(
+                unsignedPayload: try canonicalUnsignedFeePayload(),
+                canonicalAuth: canonicalReadAuth
+            )
+            XCTFail("exact-limit error response must reach status handling")
+        } catch let ToriiClientError.httpStatus(code, _, _) {
+            XCTAssertEqual(code, 400)
+        } catch {
+            XCTFail("unexpected exact-limit error: \(error)")
+        }
+
+        install(status: 400, body: Data(repeating: 0x20, count: maximumBytes + 1))
+        await assertToriiInvalidPayload(contains: "response exceeded") {
+            _ = try await self.makeClient().quoteFees(
+                unsignedPayload: try self.canonicalUnsignedFeePayload(),
+                canonicalAuth: self.canonicalReadAuth
+            )
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testFeeQuoteRequiresJsonResponseMediaType() async throws {
+        StubURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "text/plain"]
+            )!
+            return (
+                response,
+                Data(
+                    """
+                    {
+                      "intent":{"payer":"authority","value":{"charge_limits":[],"gas_limit":null}},
+                      "observation":{"ledger_time_ms":1,"next_block_height":1,"route_dataspace_id":0},
+                      "components":[],
+                      "capacities":[],
+                      "decision":{"status":"accepted","value":{"debit_source":{"kind":"account","value":"\(self.authority)"},"program_revision":null}}
+                    }
+                    """.utf8
+                )
+            )
+        }
+
+        await assertToriiInvalidPayload(contains: "response Content-Type") {
+            _ = try await self.makeClient().quoteFees(
+                unsignedPayload: try self.canonicalUnsignedFeePayload(),
+                canonicalAuth: self.canonicalReadAuth
+            )
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testFeeSponsorProgramLookupPinsControllerIdentityAndExactName() async throws {
+        let requested = try FeeSponsorProgramId(sponsor: authority, name: "wallet_fx")
+        let alternateSponsor = try exactCanonicalToriiAccountAddress(authority)
+            .address.toI105(networkPrefix: 369)
+
+        func installResponse(name: String) {
+            StubURLProtocol.handler = { request in
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )!
+                return (
+                    response,
+                    Data(
+                        """
+                        {
+                          "id":{"sponsor":"\(alternateSponsor)","name":"\(name)"},
+                          "payout_account":"\(self.authority)",
+                          "lifecycle":{"state":"active","value":null}
+                        }
+                        """.utf8
+                    )
+                )
+            }
+        }
+
+        installResponse(name: requested.name)
+        let program = try await makeClient().getFeeSponsorProgram(
+            id: requested,
+            canonicalAuth: canonicalReadAuth
+        )
+        XCTAssertEqual(program.id, requested)
+        XCTAssertEqual(program.id.sponsor, alternateSponsor)
+
+        installResponse(name: "other")
+        await assertToriiInvalidPayload(contains: "does not match the requested program") {
+            _ = try await self.makeClient().getFeeSponsorProgram(
+                id: requested,
+                canonicalAuth: self.canonicalReadAuth
+            )
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testFeeSponsorProgramLookupResponseBodyLimitAppliesBeforeStatusAndDecode() async throws {
+        let requested = try FeeSponsorProgramId(sponsor: authority, name: "wallet_fx")
+        let maximumBytes = 65_536
+        let validProgram = Data(
+            """
+            {
+              "id":{"sponsor":"\(authority)","name":"\(requested.name)"},
+              "payout_account":"\(authority)",
+              "lifecycle":{"state":"active","value":null}
+            }
+            """.utf8
+        )
+        XCTAssertLessThan(validProgram.count, maximumBytes)
+
+        func body(padding validPrefix: Data, to count: Int) -> Data {
+            var body = validPrefix
+            body.append(Data(repeating: 0x20, count: count - body.count))
+            return body
+        }
+
+        func install(status: Int, body: Data) {
+            StubURLProtocol.handler = { request in
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: status,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )!
+                return (response, body)
+            }
+        }
+
+        install(status: 200, body: body(padding: validProgram, to: maximumBytes))
+        _ = try await makeClient().getFeeSponsorProgram(
+            id: requested,
+            canonicalAuth: canonicalReadAuth
+        )
+
+        install(status: 200, body: body(padding: validProgram, to: maximumBytes + 1))
+        await assertToriiInvalidPayload(contains: "response exceeded") {
+            _ = try await self.makeClient().getFeeSponsorProgram(
+                id: requested,
+                canonicalAuth: self.canonicalReadAuth
+            )
+        }
+
+        install(status: 400, body: Data(repeating: 0x20, count: maximumBytes))
+        do {
+            _ = try await makeClient().getFeeSponsorProgram(
+                id: requested,
+                canonicalAuth: canonicalReadAuth
+            )
+            XCTFail("exact-limit error response must reach status handling")
+        } catch let ToriiClientError.httpStatus(code, _, _) {
+            XCTAssertEqual(code, 400)
+        } catch {
+            XCTFail("unexpected exact-limit error: \(error)")
+        }
+
+        install(status: 400, body: Data(repeating: 0x20, count: maximumBytes + 1))
+        await assertToriiInvalidPayload(contains: "response exceeded") {
+            _ = try await self.makeClient().getFeeSponsorProgram(
+                id: requested,
+                canonicalAuth: self.canonicalReadAuth
+            )
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testFeeSponsorProgramLookupRequiresOneJsonResponseMediaType() async throws {
+        let requested = try FeeSponsorProgramId(sponsor: authority, name: "wallet_fx")
+        let validProgram = Data(
+            """
+            {
+              "id":{"sponsor":"\(authority)","name":"\(requested.name)"},
+              "payout_account":"\(authority)",
+              "lifecycle":{"state":"active","value":null}
+            }
+            """.utf8
+        )
+        let invalidContentTypes: [String?] = [
+            nil,
+            "text/plain",
+            "application/json, application/json",
+            "application/json, text/plain",
+            "application/json; profile=\"a,b\"",
+            "application/json;",
+            "application/json; charset",
+            "application/json; profile=\"unterminated",
+            "application/jſon",
+            "applıcation/json",
+        ]
+
+        for contentType in invalidContentTypes {
+            StubURLProtocol.handler = { request in
+                let headers = contentType.map { ["Content-Type": $0] } ?? [:]
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: headers
+                )!
+                return (response, validProgram)
+            }
+
+            await assertToriiInvalidPayload(contains: "response Content-Type") {
+                _ = try await self.makeClient().getFeeSponsorProgram(
+                    id: requested,
+                    canonicalAuth: self.canonicalReadAuth
+                )
+            }
+        }
+
+        StubURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: [
+                    "Content-Type": "Application/JSON; charset=\"utf-8\"; note=\"é\""
+                ]
+            )!
+            return (response, validProgram)
+        }
+        let resolved = try await makeClient().getFeeSponsorProgram(
+            id: requested,
+            canonicalAuth: canonicalReadAuth
+        )
+        XCTAssertEqual(resolved.id, requested)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testFeeSponsorProgramLookupRejectsDuplicateResponseKeys() async throws {
+        let requested = try FeeSponsorProgramId(sponsor: authority, name: "wallet_fx")
+        let duplicateProgram = Data(
+            """
+            {
+              "id":{"sponsor":"\(authority)","name":"\(requested.name)","name":"\(requested.name)"},
+              "payout_account":"\(authority)",
+              "lifecycle":{"state":"active","value":null}
+            }
+            """.utf8
+        )
+        StubURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, duplicateProgram)
+        }
+
+        await assertToriiInvalidPayload(contains: "without duplicate object keys") {
+            _ = try await self.makeClient().getFeeSponsorProgram(
+                id: requested,
+                canonicalAuth: self.canonicalReadAuth
+            )
+        }
     }
 
     @available(iOS 15.0, macOS 12.0, *)

@@ -495,11 +495,11 @@ test("assembleSoracloudAppInfraRequest and instruction helpers use canonical man
   assert.deepEqual(request.deploy_services, []);
   assert.equal(
     deploySoracloudAppInfraInstruction(request.manifest, provenance).wire_id,
-    "iroha_data_model::isi::soracloud::DeploySoracloudAppInfra",
+    "iroha.instruction.v1::soracloud::DeploySoracloudAppInfra",
   );
   assert.equal(
     upgradeSoracloudAppInfraInstruction(request.manifest, provenance).wire_id,
-    "iroha_data_model::isi::soracloud::UpgradeSoracloudAppInfra",
+    "iroha.instruction.v1::soracloud::UpgradeSoracloudAppInfra",
   );
 });
 

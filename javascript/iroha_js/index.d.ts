@@ -112,6 +112,7 @@ export function normalizeKagemushaOperationReference(
     expectedOperationId: string;
     expectedKind: "top_up" | "redeem";
     location: string | null;
+    retryAfter: string | null;
   },
 ): KagemushaOperationReference;
 export function normalizeKagemushaOperationStatus(
@@ -1756,12 +1757,12 @@ export interface FeeSponsorProgram {
   id: FeeSponsorProgramId;
   payout_account: string;
   lifecycle: { state: FeeSponsorProgramLifecycleState; value: null };
-  active_revision?: number | null;
-  staged_revision?: number | null;
+  active_revision?: ToriiU64;
+  staged_revision?: ToriiU64;
   scheduled_activation?: {
-    revision: number;
-    activate_at_height: number;
-  } | null;
+    revision: ToriiU64;
+    activate_at_height: ToriiU64;
+  };
 }
 
 export interface NoritoFeeChargeKind {
@@ -1780,7 +1781,7 @@ export type NoritoFeePaymentIntent =
       payer: "authority";
       value: {
         charge_limits: ReadonlyArray<NoritoFeeChargeLimit>;
-        gas_limit?: number | null;
+        gas_limit: number | null;
       };
     }
   | {
@@ -1789,7 +1790,7 @@ export type NoritoFeePaymentIntent =
         program_id: FeeSponsorProgramId;
         program_revision: number;
         charge_limits: ReadonlyArray<NoritoFeeChargeLimit>;
-        gas_limit?: number | null;
+        gas_limit: number | null;
       };
     };
 
@@ -1802,7 +1803,7 @@ export interface FeeQuoteResponse {
   observation: {
     ledger_time_ms: number;
     next_block_height: number;
-    route_dataspace_id?: number | null;
+    route_dataspace_id: number;
   };
   components: ReadonlyArray<{
     kind: NoritoFeeChargeKind;
@@ -1819,10 +1820,15 @@ export interface FeeQuoteResponse {
   }>;
   decision: {
     status: "accepted";
-    value: {
-      debit_source: FeeDebitSource;
-      program_revision?: number | null;
-    };
+    value:
+      | {
+          debit_source: { kind: "account"; value: string };
+          program_revision: null;
+        }
+      | {
+          debit_source: { kind: "sponsor_program"; value: FeeSponsorProgramId };
+          program_revision: number;
+        };
   };
 }
 
@@ -6839,20 +6845,20 @@ export interface KaigiRelaySummary {
   bandwidth_class: number;
   hpke_fingerprint_hex: string;
   status?: KaigiRelayHealthStatus | null;
-  reported_at_ms?: number | null;
+  reported_at_ms?: ToriiU64 | null;
 }
 
 export interface KaigiRelaySummaryList {
-  total: number;
+  total: ToriiU64;
   items: ReadonlyArray<KaigiRelaySummary>;
 }
 
 export interface KaigiRelayDomainMetrics {
   domain: string;
-  registrations_total: number;
-  manifest_updates_total: number;
-  failovers_total: number;
-  health_reports_total: number;
+  registrations_total: ToriiU64;
+  manifest_updates_total: ToriiU64;
+  failovers_total: ToriiU64;
+  health_reports_total: ToriiU64;
 }
 
 export interface KaigiRelayDetail {
@@ -6865,12 +6871,12 @@ export interface KaigiRelayDetail {
 }
 
 export interface KaigiRelayHealthSnapshot {
-  healthy_total: number;
-  degraded_total: number;
-  unavailable_total: number;
-  reports_total: number;
-  registrations_total: number;
-  failovers_total: number;
+  healthy_total: ToriiU64;
+  degraded_total: ToriiU64;
+  unavailable_total: ToriiU64;
+  reports_total: ToriiU64;
+  registrations_total: ToriiU64;
+  failovers_total: ToriiU64;
   domains: ReadonlyArray<KaigiRelayDomainMetrics>;
 }
 
@@ -6892,7 +6898,7 @@ export interface KaigiRelayHealthEvent {
   domain: string;
   relay_id: string;
   status: KaigiRelayHealthStatus;
-  reported_at_ms: number;
+  reported_at_ms: ToriiU64;
   call: KaigiRelayEventCallRef;
 }
 
@@ -6923,39 +6929,43 @@ export interface KaigiCallView {
   title?: string | null;
   description?: string | null;
   max_participants?: number | null;
-  gas_rate_per_minute: number;
+  gas_rate_per_minute: ToriiU64;
   metadata: Record<string, unknown>;
-  scheduled_start_ms?: number | null;
-  privacy_mode: string;
-  room_policy: string;
+  scheduled_start_ms?: ToriiU64 | null;
+  privacy_mode: "transparent" | "private";
+  room_policy: "public" | "authenticated";
   relay_manifest?: Record<string, unknown> | null;
   roster_root_hex: string;
-  participant_count: number;
+  participant_count?: number | null;
   commitment_count: number;
   nullifier_count: number;
   usage_commitment_count: number;
-  status: string;
-  created_at_ms: number;
-  ended_at_ms?: number | null;
-  total_duration_ms: number;
-  total_billed_gas: number;
+  status: "active" | "ended";
+  created_at_ms: ToriiU64;
+  ended_at_ms?: ToriiU64 | null;
+  total_duration_ms: ToriiU64;
+  total_billed_gas: ToriiU64;
   segments_recorded: number;
+}
+
+export interface KaigiCallSignalMetadata extends Record<string, unknown> {
+  schema: "iroha-demo-kaigi-chain-signal/v1";
 }
 
 export interface KaigiCallSignal {
   entrypoint_hash: string;
   authority?: string | null;
-  timestamp_ms?: number | null;
+  timestamp_ms: ToriiU64;
   call_id: string;
   signal_kind: string;
   host_account_id?: string | null;
   participant_account_id?: string | null;
-  created_at_ms: number;
-  metadata: Record<string, unknown>;
+  created_at_ms: ToriiU64;
+  metadata: KaigiCallSignalMetadata;
 }
 
 export interface KaigiCallSignalsList {
-  total: number;
+  total: ToriiU64;
   items: ReadonlyArray<KaigiCallSignal>;
 }
 
@@ -6972,8 +6982,8 @@ export interface KaigiCallSignalsOptions {
 export interface KaigiCallRosterUpdatedEvent {
   kind: "roster_updated";
   call: KaigiCallEventRef;
-  privacy_mode: string;
-  participant_count: number;
+  privacy_mode: "transparent" | "private";
+  participant_count?: number | null;
   commitment_count: number;
   nullifier_count: number;
   roster_root_hex?: string | null;
@@ -6982,8 +6992,8 @@ export interface KaigiCallRosterUpdatedEvent {
 export interface KaigiCallEndedEvent {
   kind: "ended";
   call: KaigiCallEventRef;
-  status: string;
-  ended_at_ms: number;
+  status: "ended";
+  ended_at_ms: ToriiU64;
 }
 
 export type KaigiCallEventPayload =
@@ -7867,6 +7877,12 @@ export interface KaigiRelayManifestInput {
   expiryMs: NumericLike;
   hops: ReadonlyArray<KaigiRelayHopInput>;
 }
+
+/** Maximum relay hops accepted by the first-release Kaigi manifest. */
+export declare const KAIGI_RELAY_MANIFEST_MAX_HOPS_V1: 8;
+
+/** Maximum decoded bytes accepted for a Kaigi HPKE public key. */
+export declare const KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1: 4096;
 
 export interface KaigiParticipantCommitmentInput {
   commitment: ArrayBufferView | ArrayBuffer | Buffer | string;
@@ -10708,12 +10724,14 @@ export declare class ToriiBrowserClient {
   getSumeragiStatusTyped(options?: { signal?: AbortSignal }): Promise<ToriiSumeragiStatus>;
   getSumeragiDiagnostics(options?: Record<string, unknown>): Promise<Record<string, unknown>>;
   getSumeragiDiagnosticsTyped(options?: { signal?: AbortSignal }): Promise<ToriiSumeragiDiagnostics>;
-  listKaigiRelays(options?: Record<string, unknown>): Promise<unknown>;
+  listKaigiRelays(options?: { signal?: AbortSignal }): Promise<KaigiRelaySummaryList>;
   getKaigiRelay(
     relayId: string,
-    options?: Record<string, unknown>,
-  ): Promise<unknown>;
-  getKaigiRelaysHealth(options?: Record<string, unknown>): Promise<unknown>;
+    options?: { signal?: AbortSignal },
+  ): Promise<KaigiRelayDetail | null>;
+  getKaigiRelaysHealth(
+    options?: { signal?: AbortSignal },
+  ): Promise<KaigiRelayHealthSnapshot>;
   deployContract(
     request: Record<string, unknown>,
     options?: Record<string, unknown>,

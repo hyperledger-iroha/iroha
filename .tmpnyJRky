@@ -1,0 +1,5 @@
+{
+                "mode": "Entry",
+                "listen": "127.0.0.1:0",
+                "vpn": { "backend_bootstrap_secret_hex": "abababababababababababababababababababababababababababababababab" }
+            }

@@ -25,7 +25,7 @@ coverage before choosing an alias policy.
 | `IrohaKeyManager` | Registers providers, enforces security preferences, exposes metadata/attestation/export helpers. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/IrohaKeyManager.java` |
 | `SoftwareKeyProvider` | Deterministic Ed25519 generation, HKDF/AES-GCM exports, emulator/desktop fallback. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/SoftwareKeyProvider.java` |
 | `KeystoreKeyProvider` + `SystemAndroidKeystoreBackend` | Reflection-based bridge to Android Keystore / StrongBox with attestation support and automatic fallback to TEE/software when StrongBox is absent. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/keystore/SystemAndroidKeystoreBackend.java` |
-| `AttestationVerifier` | Validates StrongBox/TEE certificate chains and challenge bindings; shared with CLI tooling (`scripts/android_keystore_attestation.sh`). | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/keystore/attestation/AttestationVerifier.java` |
+| `AttestationVerifier` | Validates StrongBox/TEE certificate chains, mandatory challenge bindings, explicit evaluation time, and a fresh governed revocation snapshot; shared with CLI tooling (`scripts/android_keystore_attestation.sh`). | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/keystore/attestation/AttestationVerifier.java` |
 
 The default construction helpers cover the common cases:
 
@@ -139,7 +139,11 @@ attestation artefacts:
    `scripts/android_keystore_attestation.sh --bundle-dir <dir>` helper. The
    verifier enforces:
    - Certificate path to Google/Pixel roots (configurable for OEM deployments).
-   - Challenge binding (match against `--challenge` or recorded Norito manifest).
+   - A non-empty challenge binding (match against `--challenge-hex`,
+     `--challenge-file`, or the bundle's `challenge.hex`).
+   - A caller-supplied governed Android status snapshot that is fresh at the
+     explicit evaluation time and rejects every listed certificate serial or
+     TBS SHA-256 digest, including configured trust anchors.
    - Security level (StrongBox vs TEE) surfaced to telemetry dashboards.
 4. **Publish** the attestation digest inside the partner readiness pack defined
    in `specs/android_support_playbook.md#9-compliance--audit-artefacts`.
@@ -153,7 +157,9 @@ override workflow in `android_support_playbook.md#8-telemetry-redaction--observa
 > were minted when the alias was provisioned. `IrohaKeyManager.generateAttestation`
 > therefore returns that recorded chain and relies on
 > `AttestationVerifier` to compare the embedded challenge with the value you pass
-> to the helper. To refresh the challenge itself, delete and recreate the alias
+> to the helper. Verification without a non-empty expected challenge or without
+> a fresh governed revocation snapshot fails closed. To refresh the challenge
+> itself, delete and recreate the alias
 > with a new `KeyGenParameterSpec.Builder#setAttestationChallenge(...)` before
 > capturing a fresh bundle.
 

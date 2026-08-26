@@ -2783,6 +2783,9 @@ pub mod domain {
             AnyPermission::CanSetAssetHoldingLimit(permission) => {
                 asset_definition_matches_domain(&permission.asset_definition)
             }
+            AnyPermission::CanExecuteSettlement(permission) => {
+                asset_definition_matches_domain(permission.debited_asset.definition())
+            }
             AnyPermission::CanRegisterNft(permission) => &permission.domain == domain_id,
             AnyPermission::CanUnregisterNft(permission) => permission.nft.domain() == domain_id,
             AnyPermission::CanTransferNft(permission) => permission.nft.domain() == domain_id,
@@ -2824,7 +2827,6 @@ pub mod domain {
             | AnyPermission::CanUpgradeExecutor(_)
             | AnyPermission::CanRegisterSmartContractCode(_)
             | AnyPermission::CanInvokeContractEntrypoint(_)
-            | AnyPermission::CanExecuteSettlement(_)
             | AnyPermission::CanManageFxCorridors(_)
             | AnyPermission::CanSetFxCorridorPolicy(_)
             | AnyPermission::CanBindSorafsAlias(_)
@@ -3058,6 +3060,9 @@ pub mod account {
                 permission.account == *account_id
             }
             AnyPermission::CanSetAssetHoldingLimit(permission) => permission.account == *account_id,
+            AnyPermission::CanExecuteSettlement(permission) => {
+                permission.debited_asset.account() == account_id
+            }
             AnyPermission::CanRegisterTrigger(permission) => permission.authority == *account_id,
             AnyPermission::DpnAdmin(_)
             | AnyPermission::DpnUser(_)
@@ -3104,7 +3109,6 @@ pub mod account {
             | AnyPermission::CanManageRoles(_)
             | AnyPermission::CanUpgradeExecutor(_)
             | AnyPermission::CanRegisterSmartContractCode(_)
-            | AnyPermission::CanExecuteSettlement(_)
             | AnyPermission::CanManageFxCorridors(_)
             | AnyPermission::CanSetFxCorridorPolicy(_)
             | AnyPermission::CanBindSorafsAlias(_)
@@ -3361,6 +3365,9 @@ pub mod asset_definition {
             AnyPermission::CanSetAssetHoldingLimit(permission) => {
                 &permission.asset_definition == asset_definition_id
             }
+            AnyPermission::CanExecuteSettlement(permission) => {
+                permission.debited_asset.definition() == asset_definition_id
+            }
             AnyPermission::CanManageAssetDefinitionAlias(permission) => match permission.scope {
                 iroha_executor_data_model::permission::asset_definition::AssetDefinitionAliasPermissionScope::Alias(alias) => {
                     &alias.asset_definition_id == asset_definition_id
@@ -3410,7 +3417,6 @@ pub mod asset_definition {
             | AnyPermission::CanUpgradeExecutor(_)
             | AnyPermission::CanRegisterSmartContractCode(_)
             | AnyPermission::CanInvokeContractEntrypoint(_)
-            | AnyPermission::CanExecuteSettlement(_)
             | AnyPermission::CanManageFxCorridors(_)
             | AnyPermission::CanSetFxCorridorPolicy(_)
             | AnyPermission::CanBindSorafsAlias(_)
@@ -4457,7 +4463,6 @@ pub mod role {
         isi: &Register<Role>,
     ) {
         let role = isi.object();
-        let grant_role = &Grant::account_role(role.id().clone(), role.grant_to().clone());
         let mut new_role = Role::new(role.id().clone(), role.grant_to().clone());
         if is_reserved_multisig_role_id(role.id()) {
             deny!(
@@ -4484,7 +4489,8 @@ pub mod role {
             if let Err(err) = executor.host().submit(isi) {
                 deny!(executor, err);
             }
-            execute!(executor, grant_role);
+            // Core's `Register<Role>` execution atomically assigns the initial owner.
+            return;
         }
         deny!(executor, "Can't register role");
     }
@@ -4851,6 +4857,7 @@ pub mod trigger {
                 CanPublishSpaceDirectoryManifestForAccountDomain,
             },
             sccp::CanManageSccpGovernance,
+            settlement::CanExecuteSettlement,
             sorafs::{
                 CanBindSorafsAlias, CanCompleteSorafsReplicationOrder, CanDeclareSorafsCapacity,
                 CanFileSorafsCapacityDispute, CanIssueSorafsReplicationOrder,
@@ -5046,6 +5053,50 @@ pub mod trigger {
                 );
                 assert!(!is_permission_trigger_associated(&permission, &trigger_id));
             }
+        }
+        #[test]
+        fn settlement_consent_follows_account_definition_and_domain_lifecycles() {
+            let domain_id =
+                DomainId::try_new("settlement", "universal").expect("domain id must be valid");
+            let other_domain =
+                DomainId::try_new("other", "universal").expect("domain id must be valid");
+            let debited_account = sample_account_id(0x24, &domain_id);
+            let other_account = sample_account_id(0x25, &other_domain);
+            let asset_definition_id = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "cash".parse().expect("asset name"),
+            );
+            let permission =
+                Permission::from(AnyPermission::CanExecuteSettlement(CanExecuteSettlement {
+                    debited_asset: AssetId::new(
+                        asset_definition_id.clone(),
+                        debited_account.clone(),
+                    ),
+                    settlement_id: "cleanup_consent".parse().expect("settlement id"),
+                    intent_hash: Hash::new(b"cleanup-bound settlement consent"),
+                }));
+            assert!(account::is_permission_account_associated(
+                &permission,
+                &debited_account
+            ));
+            assert!(!account::is_permission_account_associated(
+                &permission,
+                &other_account
+            ));
+            assert!(asset_definition::is_permission_asset_definition_associated(
+                &permission,
+                &asset_definition_id
+            ));
+            assert!(domain::is_permission_domain_associated(
+                &permission,
+                &domain_id,
+                core::slice::from_ref(&asset_definition_id),
+            ));
+            assert!(!domain::is_permission_domain_associated(
+                &permission,
+                &other_domain,
+                &[],
+            ));
         }
         #[test]
         fn account_domain_manifest_and_program_associations_remain_independent() {

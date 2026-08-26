@@ -305,6 +305,8 @@ public sealed record class SetAssetKeyValueInstruction(
     JsonNode? Value)
     : TransactionInstruction
 {
+    private const string InstructionWireId =
+        "iroha.instruction.v1::transparent::SetAssetKeyValue";
     private const string InstructionTypeName = "iroha_data_model::isi::transparent::SetAssetKeyValue";
 
     private string accountId = TransactionEncodingContext.CanonicalizeAccountId(
@@ -324,7 +326,7 @@ public sealed record class SetAssetKeyValueInstruction(
         init => jsonValue = InstructionJsonPayload.Clone(value);
     }
 
-    internal override string WireId => InstructionTypeName;
+    internal override string WireId => InstructionWireId;
 
     internal override string TypeName => InstructionTypeName;
 
@@ -341,6 +343,8 @@ public sealed record class SetAssetKeyValueInstruction(
 public sealed record class RemoveAssetKeyValueInstruction(string AssetDefinitionId, string AccountId, string Key)
     : TransactionInstruction
 {
+    private const string InstructionWireId =
+        "iroha.instruction.v1::transparent::RemoveAssetKeyValue";
     private const string InstructionTypeName = "iroha_data_model::isi::transparent::RemoveAssetKeyValue";
 
     private string accountId = TransactionEncodingContext.CanonicalizeAccountId(
@@ -353,7 +357,7 @@ public sealed record class RemoveAssetKeyValueInstruction(string AssetDefinition
         init => accountId = TransactionEncodingContext.CanonicalizeAccountId(value, nameof(AccountId));
     }
 
-    internal override string WireId => InstructionTypeName;
+    internal override string WireId => InstructionWireId;
 
     internal override string TypeName => InstructionTypeName;
 

@@ -43,6 +43,7 @@ RUST_VALIDATION_SCHEMA = "sccp-release-lane-validation-v1"
 SIGNING_DOMAIN = b"iroha:sccp:release-evidence:v1\x00"
 BUNDLE_HASH_DOMAIN = b"iroha:sccp:release-bundle:v1\x00"
 VALIDATOR_BUILD_ID_DOMAIN = b"sccp:release-evidence-validator-build:v1\x00"
+PRODUCTION_VALIDATOR_FEATURES = ("dev-tools",)
 CIRCUIT_POLICY_SIGNING_DOMAIN = b"iroha:sccp:circuit-policy-audit:v1\x00"
 FORBIDDEN_ALGEBRAIC_SMOKE_VK = (
     "9ef8067d260532f88e60cfa4b458fe678fc46b9c242de18fc91ba646e0857fc4"
@@ -1568,8 +1569,8 @@ def _validate_validator_identity(value: Any) -> dict[str, Any]:
     features = _require_list(
         identity["enabled_features"], label="validator enabled_features"
     )
-    if features:
-        _fail("validator must use the exact production feature set []")
+    if tuple(features) != PRODUCTION_VALIDATOR_FEATURES:
+        _fail("validator must use the exact production feature set ['dev-tools']")
     profile = _require_id(identity["build_profile"], label="validator build_profile")
     if profile not in ("debug", "release"):
         _fail("validator build_profile must be exactly debug or release")

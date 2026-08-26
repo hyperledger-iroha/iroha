@@ -386,7 +386,7 @@ def current_synthetic_validator_identity() -> dict[str, object]:
         "protocol_version": 1,
         "crate_name": "iroha_sccp",
         "crate_version": common._workspace_crate_version(),
-        "enabled_features": [],
+        "enabled_features": ["dev-tools"],
         "build_profile": "release",
         "target_triple": "aarch64-apple-darwin",
         "rustc_version": (
@@ -1794,7 +1794,7 @@ def test_validator_build_identity_matches_rust_golden() -> None:
         "protocol_version": 1,
         "crate_name": "iroha_sccp",
         "crate_version": "2.0.0-rc.2.0",
-        "enabled_features": [],
+        "enabled_features": ["dev-tools"],
         "build_profile": "release",
         "target_triple": "aarch64-apple-darwin",
         "rustc_version": "rustc 1.93.1 (01f6ddf75 2026-02-11)",
@@ -1808,7 +1808,7 @@ def test_validator_build_identity_matches_rust_golden() -> None:
         "build_identity_hex": "08" * 32,
     }
     assert common.validator_build_identity_hex(identity) == (
-        "5f2fb61fb1622ae4e5a233f72f431cae8cb96c6ea64fde57bb130f3940344f9b"
+        "8ed0a7bfbff79b302fe1193ca51a992b65b7ab136862ecc871efcce391449414"
     )
 
 
@@ -1817,7 +1817,7 @@ def test_validator_build_attestation_rejects_placeholders_aliases_and_drift() ->
         "protocol_version": 1,
         "crate_name": "iroha_sccp",
         "crate_version": common._workspace_crate_version(),
-        "enabled_features": [],
+        "enabled_features": ["dev-tools"],
         "build_profile": "debug",
         "target_triple": "aarch64-apple-darwin",
         "rustc_version": "rustc 1.93.1 (01f6ddf75 2026-02-11)",
@@ -1844,7 +1844,12 @@ def test_validator_build_attestation_rejects_placeholders_aliases_and_drift() ->
     assert common._validate_validator_identity(copy.deepcopy(identity)) == identity
 
     mutations = (
+        lambda value: value.update(enabled_features=[]),
         lambda value: value.update(enabled_features=["test-fixtures"]),
+        lambda value: value.update(
+            enabled_features=["dev-tools", "test-fixtures"]
+        ),
+        lambda value: value.update(enabled_features=["dev-tools", "dev-tools"]),
         lambda value: value.update(build_profile=True),
         lambda value: value.update(target_triple="unknown-target-placeholder"),
         lambda value: value.update(
@@ -1895,7 +1900,7 @@ def test_validator_build_attestation_rejects_historical_bls_feature() -> None:
 
     with pytest.raises(
         common.SccpReleaseError,
-        match=r"exact production feature set \[\]",
+        match=r"exact production feature set \['dev-tools'\]",
     ):
         common._validate_validator_identity(identity)
 

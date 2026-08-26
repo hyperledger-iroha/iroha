@@ -214,7 +214,14 @@ from ._privacy_backends import (
     _require_production_verify_backend_label,
     _verifier_backend_registry_tag_v1,
 )
-from .address import AccountAddress, AccountAddressError, normalize_i105_discriminant
+from .address import (
+    AccountAddress,
+    AccountAddressError,
+    normalize_i105_discriminant,
+)
+from .address import (
+    require_canonical_asset_definition_id as _require_canonical_asset_definition_id,
+)
 from .connect import (
     ConnectSessionInfo,
     _connect_session_info_from_response,
@@ -369,6 +376,21 @@ ACCOUNT_FAUCET_POW_ALGORITHM = "scrypt-leading-zero-bits-v1"
 ACCOUNT_FAUCET_POW_DOMAIN_SEPARATOR = b"iroha:accounts:faucet:pow:v1"
 ACCOUNT_FAUCET_MAX_SCRYPT_ROMIX_BYTES = 64 * 1024 * 1024
 ACCOUNT_FAUCET_MAX_SCRYPT_PARALLELIZATION = 16
+ACCOUNT_FAUCET_PUZZLE_FIELDS_V1 = frozenset(
+    {
+        "algorithm",
+        "network_id",
+        "chain_discriminant",
+        "difficulty_bits",
+        "anchor_height",
+        "anchor_block_hash_hex",
+        "challenge_salt_hex",
+        "scrypt_log_n",
+        "scrypt_r",
+        "scrypt_p",
+        "max_anchor_age_blocks",
+    }
+)
 ACCOUNT_ONBOARDING_TOKEN_HEADER = "X-Iroha-Onboarding-Token"
 TAIRA_PUBLIC_RESET_MUTATION_BINDING_SCHEMA = (
     "iroha.taira.public-reset.mutation-binding.v1"
@@ -531,6 +553,104 @@ def _copy_taira_mutation_binding(
     return copy.deepcopy(dict(binding))
 
 
+def _copy_fee_payment_intent_v1(value: Any, context: str) -> Dict[str, Any]:
+    intent = _require_mapping(value, context)
+    if set(intent) != {"payer", "value"}:
+        raise TypeError(f"{context} must contain exactly payer and value")
+    payer = intent.get("payer")
+    if payer not in {"authority", "sponsor"}:
+        raise ValueError(f"{context}.payer must be exactly 'authority' or 'sponsor'")
+    payment = _require_mapping(intent.get("value"), f"{context}.value")
+    required_payment_fields = {"charge_limits", "gas_limit"}
+    if payer == "sponsor":
+        required_payment_fields |= {"program_id", "program_revision"}
+    if set(payment) != required_payment_fields:
+        raise TypeError(f"{context}.value does not contain the exact {payer} fee fields")
+
+    gas_limit = payment.get("gas_limit")
+    if gas_limit is not None and (
+        isinstance(gas_limit, bool)
+        or not isinstance(gas_limit, int)
+        or not 0 < gas_limit < 1 << 64
+    ):
+        raise ValueError(f"{context}.value.gas_limit must be null or a positive u64")
+
+    limits = payment.get("charge_limits")
+    if isinstance(limits, (str, bytes, bytearray)) or not isinstance(limits, Sequence):
+        raise TypeError(f"{context}.value.charge_limits must be an array")
+    previous_kind = -1
+    for index, limit_value in enumerate(limits):
+        limit_context = f"{context}.value.charge_limits[{index}]"
+        limit = _require_mapping(limit_value, limit_context)
+        if set(limit) != {"kind", "asset_definition_id", "max_amount"}:
+            raise TypeError(f"{limit_context} does not contain the exact V1 fields")
+        kind_value = _require_mapping(limit.get("kind"), f"{limit_context}.kind")
+        if set(kind_value) != {"kind", "value"} or kind_value.get("value") is not None:
+            raise TypeError(f"{limit_context}.kind is not an exact unit variant")
+        kind_literal = kind_value.get("kind")
+        kind = 0 if kind_literal == "nexus" else 1 if kind_literal == "pipeline_gas" else -1
+        if kind < 0 or kind <= previous_kind:
+            raise ValueError(
+                f"{context}.value.charge_limits must be unique and ordered nexus before pipeline_gas"
+            )
+        previous_kind = kind
+        _require_canonical_asset_definition_id(
+            limit.get("asset_definition_id"),
+            f"{limit_context}.asset_definition_id",
+        )
+        _require_positive_exact_quantity_text(
+            limit.get("max_amount"),
+            f"{limit_context}.max_amount",
+        )
+
+    if payer == "sponsor":
+        program_id = _require_mapping(payment.get("program_id"), f"{context}.value.program_id")
+        if set(program_id) != {"sponsor", "name"}:
+            raise TypeError(f"{context}.value.program_id must contain exactly sponsor and name")
+        _normalize_exact_any_i105_account_id(
+            program_id.get("sponsor"), f"{context}.value.program_id.sponsor"
+        )
+        _require_exact_non_empty_string(
+            program_id.get("name"), f"{context}.value.program_id.name"
+        )
+        revision = payment.get("program_revision")
+        if (
+            isinstance(revision, bool)
+            or not isinstance(revision, int)
+            or not 0 < revision < 1 << 64
+        ):
+            raise ValueError(f"{context}.value.program_revision must be a positive u64")
+    return copy.deepcopy(dict(intent))
+
+
+def _require_same_fee_payer_and_gas_bound_v1(
+    expected: Any,
+    actual: Any,
+    context: str,
+) -> Dict[str, Any]:
+    expected_intent = _copy_fee_payment_intent_v1(expected, f"{context}.expected")
+    actual_intent = _copy_fee_payment_intent_v1(actual, f"{context}.actual")
+    expected_payment = expected_intent["value"]
+    actual_payment = actual_intent["value"]
+    assert isinstance(expected_payment, Mapping)
+    assert isinstance(actual_payment, Mapping)
+    if (
+        expected_intent["payer"] != actual_intent["payer"]
+        or expected_payment["gas_limit"] != actual_payment["gas_limit"]
+        or (
+            expected_intent["payer"] == "sponsor"
+            and (
+                expected_payment["program_id"] != actual_payment["program_id"]
+                or expected_payment["program_revision"] != actual_payment["program_revision"]
+            )
+        )
+    ):
+        raise ValueError(
+            f"{context} fee payer, sponsor revision, or gas bound differs from the independent selection"
+        )
+    return expected_intent
+
+
 def _copy_prepared_taira_transaction(
     value: Any,
     *,
@@ -589,7 +709,7 @@ def _copy_prepared_taira_transaction(
     ):
         raise ValueError(f"{context}.signed_transaction_wire_hex must be non-empty lowercase hex")
     _require_exact_non_empty_string(prepared.get("account_id"), f"{context}.account_id")
-    _require_mapping(prepared.get("fee_payment"), f"{context}.fee_payment")
+    _copy_fee_payment_intent_v1(prepared.get("fee_payment"), f"{context}.fee_payment")
     signature = prepared.get("server_signature")
     if (
         not isinstance(signature, str)
@@ -711,16 +831,21 @@ def _prepared_signature_transcript(value: Mapping[str, Any], context: str) -> by
         claim = _require_mapping(value["claim"], f"{context}.claim")
         anchor = claim.get("pow_anchor_height")
         nonce = claim.get("pow_nonce_hex")
+        if isinstance(anchor, bool) or not isinstance(anchor, int) or not 0 < anchor < 1 << 64:
+            raise ValueError(f"{context}.claim.pow_anchor_height must be a positive u64")
+        if (
+            not isinstance(nonce, str)
+            or re.fullmatch(r"[0-9a-f]+", nonce) is None
+            or len(nonce) % 2 != 0
+            or not 2 <= len(nonce) <= 64
+        ):
+            raise ValueError(
+                f"{context}.claim.pow_nonce_hex must be 1..32 bytes of lowercase hex"
+            )
         for label, field_value in (
             ("claim.account_id", str(claim["account_id"])),
-            (
-                "claim.pow_anchor_height",
-                "none" if anchor is None else f"some:{anchor}",
-            ),
-            (
-                "claim.pow_nonce_hex",
-                "none" if nonce is None else f"some:{nonce}",
-            ),
+            ("claim.pow_anchor_height", str(anchor)),
+            ("claim.pow_nonce_hex", nonce),
             ("semantic_hash_hex", str(value["semantic_hash_hex"])),
             ("account_id", str(value["account_id"])),
             ("asset_definition_id", str(value["asset_definition_id"])),
@@ -1722,6 +1847,50 @@ def _canonical_quantity_text(value: Any, context: str) -> str:
     if len(value) > 155:
         raise ValueError(f"{context} exceeds the canonical V1 text bound")
     return str(NumericV1Codec.decode_quantity_json(value))
+
+
+def _require_positive_exact_quantity_text(value: Any, context: str) -> str:
+    quantity = _canonical_quantity_text(value, context)
+    if Decimal(quantity) <= 0:
+        raise ValueError(f"{context} must be a positive exact quantity")
+    return quantity
+
+
+def _copy_expected_faucet_policy_v1(
+    asset_definition_id: Any,
+    amount: Any,
+    context: str,
+) -> tuple[str, str]:
+    return (
+        _require_canonical_asset_definition_id(
+            asset_definition_id,
+            f"{context}.asset_definition_id",
+        ),
+        _require_positive_exact_quantity_text(amount, f"{context}.amount"),
+    )
+
+
+def _require_prepared_faucet_policy_v1(
+    prepared: Mapping[str, Any],
+    *,
+    expected_asset_definition_id: str,
+    expected_amount: str,
+    context: str,
+) -> None:
+    actual_asset_definition_id = _require_canonical_asset_definition_id(
+        prepared.get("asset_definition_id"),
+        f"{context}.asset_definition_id",
+    )
+    actual_amount = _require_positive_exact_quantity_text(
+        prepared.get("amount"),
+        f"{context}.amount",
+    )
+    if actual_asset_definition_id != expected_asset_definition_id:
+        raise ValueError(
+            f"{context}.asset_definition_id differs from the independent faucet policy"
+        )
+    if actual_amount != expected_amount:
+        raise ValueError(f"{context}.amount differs from the independent faucet policy")
 
 
 def _quantity_decimal(value: Any) -> Decimal:
@@ -4826,6 +4995,8 @@ def _require_kaigi_lower_hex_32(value: Any, context: str) -> str:
     literal = _require_kaigi_exact_string(value, context)
     if re.fullmatch(r"[0-9a-f]{64}", literal) is None:
         raise ValueError(f"{context} must contain exactly 64 lowercase hex characters")
+    if bytes.fromhex(literal)[-1] & 1 != 1:
+        raise ValueError(f"{context} must set the Iroha Hash marker bit")
     return literal
 
 
@@ -5185,6 +5356,8 @@ class KaigiRelayHealthSnapshot:
         domain_ids = [entry.domain for entry in domains]
         if len(set(domain_ids)) != len(domain_ids):
             raise ValueError("kaigi_relay_health.domains contains duplicate domains")
+        if any(previous >= current for previous, current in zip(domain_ids, domain_ids[1:])):
+            raise ValueError("kaigi_relay_health.domains must be strictly sorted by domain")
 
         def _resolve_counter(name: str) -> int:
             if name not in payload:
@@ -16517,13 +16690,10 @@ class ToriiClient(
     def list_kaigi_relays(self) -> Optional[Any]:
         """List registered Kaigi relays with exact-network operator authentication."""
 
-        response = self._operator_get(
+        return self._get_kaigi_relay_json_object(
             "/v1/kaigi/relays",
-            headers={"Accept": "application/json"},
             context="list_kaigi_relays",
         )
-        self._expect_status(response, (200,))
-        return self._maybe_json(response)
 
     def list_kaigi_relays_typed(self) -> KaigiRelaySummaryList:
         """Typed wrapper for :meth:`list_kaigi_relays`."""
@@ -16539,20 +16709,11 @@ class ToriiClient(
         """Fetch one relay diagnostic with exact-network operator authentication."""
 
         relay_literal = self._normalize_canonical_account_id(relay_id, "relay_id")
-        response = self._operator_get(
+        return self._get_kaigi_relay_json_object(
             f"/v1/kaigi/relays/{quote(relay_literal, safe='')}",
-            headers={"Accept": "application/json"},
             context="get_kaigi_relay",
+            allow_not_found=True,
         )
-        self._expect_status(response, (200, 404))
-        if response.status_code == 404:
-            return None
-        payload = self._maybe_json(response)
-        if payload is None:
-            raise RuntimeError("kaigi relay detail endpoint returned an empty success response")
-        if not isinstance(payload, Mapping):
-            raise TypeError("kaigi relay detail response must be an object")
-        return payload
 
     def get_kaigi_relay_typed(self, relay_id: str) -> Optional[KaigiRelayDetail]:
         """Typed wrapper for :meth:`get_kaigi_relay`."""
@@ -16565,13 +16726,10 @@ class ToriiClient(
     def get_kaigi_relays_health(self) -> Optional[Any]:
         """Fetch aggregate relay health with exact-network operator authentication."""
 
-        response = self._operator_get(
+        return self._get_kaigi_relay_json_object(
             "/v1/kaigi/relays/health",
-            headers={"Accept": "application/json"},
             context="get_kaigi_relays_health",
         )
-        self._expect_status(response, (200,))
-        return self._maybe_json(response)
 
     def get_kaigi_relays_health_typed(self) -> KaigiRelayHealthSnapshot:
         """Typed wrapper for :meth:`get_kaigi_relays_health`."""
@@ -18981,20 +19139,7 @@ class ToriiClient(
 
         if not isinstance(puzzle, Mapping):
             raise TypeError("account faucet puzzle must be an object")
-        puzzle_fields = {
-            "algorithm",
-            "network_id",
-            "chain_discriminant",
-            "difficulty_bits",
-            "anchor_height",
-            "anchor_block_hash_hex",
-            "challenge_salt_hex",
-            "scrypt_log_n",
-            "scrypt_r",
-            "scrypt_p",
-            "max_anchor_age_blocks",
-        }
-        if set(puzzle) != puzzle_fields:
+        if set(puzzle) != ACCOUNT_FAUCET_PUZZLE_FIELDS_V1:
             raise TypeError("account faucet puzzle must contain exactly the V1 fields")
         if (
             isinstance(max_nonce, bool)
@@ -19117,17 +19262,31 @@ class ToriiClient(
         account_id: str,
         *,
         binding: Mapping[str, Any],
+        fee_payment: Mapping[str, Any],
+        expected_asset_definition_id: str,
+        expected_amount: str,
         expected_authority: str,
         network_id: "NetworkId",
         puzzle: Optional[Mapping[str, Any]] = None,
         max_nonce: int = 1_000_000,
     ) -> requests.Response:
-        """Solve and prepare one faucet transaction without mutating ledger state."""
+        """Solve and prepare one faucet transaction under an independent exact policy."""
 
+        exact_asset_definition_id, exact_amount = _copy_expected_faucet_policy_v1(
+            expected_asset_definition_id,
+            expected_amount,
+            "prepare_account_faucet_registration.expected_policy",
+        )
         expected_network_id = _normalize_network_id(
             network_id, "prepare_account_faucet_registration.network_id"
         )
-        puzzle_payload = puzzle or self.get_account_faucet_puzzle()
+        puzzle_payload = (
+            self.get_account_faucet_puzzle() if puzzle is None else puzzle
+        )
+        if not isinstance(puzzle_payload, Mapping):
+            raise TypeError("account faucet puzzle must be an object")
+        if set(puzzle_payload) != ACCOUNT_FAUCET_PUZZLE_FIELDS_V1:
+            raise TypeError("account faucet puzzle must contain exactly the V1 fields")
         if puzzle_payload.get("network_id") != expected_network_id.literal:
             raise ValueError(
                 "prepare_account_faucet_registration puzzle network differs from the trust pin"
@@ -19140,6 +19299,9 @@ class ToriiClient(
         return self.prepare_account_faucet(
             account_id,
             binding=binding,
+            fee_payment=fee_payment,
+            expected_asset_definition_id=exact_asset_definition_id,
+            expected_amount=exact_amount,
             expected_authority=expected_authority,
             network_id=expected_network_id,
             pow_anchor_height=anchor_height,
@@ -19151,18 +19313,30 @@ class ToriiClient(
         account_id: str,
         *,
         binding: Mapping[str, Any],
+        fee_payment: Mapping[str, Any],
+        expected_asset_definition_id: str,
+        expected_amount: str,
         expected_authority: str,
         network_id: "NetworkId",
         pow_anchor_height: int,
         pow_nonce_hex: str,
     ) -> requests.Response:
-        """Validate a solved claim and return one authenticated exact transaction."""
+        """Return one authenticated transaction matching an independent exact faucet policy."""
 
+        exact_asset_definition_id, exact_amount = _copy_expected_faucet_policy_v1(
+            expected_asset_definition_id,
+            expected_amount,
+            "prepare_account_faucet.expected_policy",
+        )
         exact_binding = _copy_taira_mutation_binding(
             binding,
             expected_kind="faucet",
             context="prepare_account_faucet.binding",
             require_active=True,
+        )
+        exact_fee_payment = _copy_fee_payment_intent_v1(
+            fee_payment,
+            "prepare_account_faucet.fee_payment",
         )
         canonical_account_id = _normalize_exact_i105_account_id(
             account_id,
@@ -19199,6 +19373,7 @@ class ToriiClient(
                 "schema": ACCOUNT_FAUCET_PREPARE_SCHEMA,
                 "binding": exact_binding,
                 "claim": claim,
+                "fee_payment": exact_fee_payment,
             },
             allow_redirects=False,
         )
@@ -19214,10 +19389,21 @@ class ToriiClient(
             )
             if prepared["binding"] != exact_binding or prepared["claim"] != claim:
                 raise ValueError("prepare_account_faucet response differs from the exact request")
+            _require_same_fee_payer_and_gas_bound_v1(
+                exact_fee_payment,
+                prepared["fee_payment"],
+                "prepare_account_faucet.response",
+            )
             if prepared["account_id"] != canonical_account_id:
                 raise ValueError(
                     "prepare_account_faucet response account differs from the exact claim"
                 )
+            _require_prepared_faucet_policy_v1(
+                prepared,
+                expected_asset_definition_id=exact_asset_definition_id,
+                expected_amount=exact_amount,
+                context="prepare_account_faucet.response",
+            )
             _verify_prepared_transaction_authentication_v1(
                 prepared,
                 expected_authority=canonical_authority,
@@ -19230,15 +19416,28 @@ class ToriiClient(
         self,
         prepared: Mapping[str, Any],
         *,
+        expected_fee_payment: Mapping[str, Any],
+        expected_asset_definition_id: str,
+        expected_amount: str,
         expected_authority: str,
         network_id: "NetworkId",
     ) -> requests.Response:
-        """Submit only one server-authenticated exact faucet transaction."""
+        """Submit one authenticated transaction matching an independent exact faucet policy."""
 
+        exact_asset_definition_id, exact_amount = _copy_expected_faucet_policy_v1(
+            expected_asset_definition_id,
+            expected_amount,
+            "submit_prepared_account_faucet.expected_policy",
+        )
         exact_prepared = _copy_prepared_taira_transaction(
             prepared,
             expected_operation="faucet",
             context="submit_prepared_account_faucet.prepared",
+        )
+        _require_same_fee_payer_and_gas_bound_v1(
+            expected_fee_payment,
+            exact_prepared["fee_payment"],
+            "submit_prepared_account_faucet.prepared",
         )
         _copy_taira_mutation_binding(
             exact_prepared["binding"],
@@ -19250,6 +19449,12 @@ class ToriiClient(
             exact_prepared["account_id"],
             "submit_prepared_account_faucet.prepared.account_id",
             expected_discriminant=self._chain_discriminant,
+        )
+        _require_prepared_faucet_policy_v1(
+            exact_prepared,
+            expected_asset_definition_id=exact_asset_definition_id,
+            expected_amount=exact_amount,
+            context="submit_prepared_account_faucet.prepared",
         )
         canonical_authority = self._exact_account_identity_pin(
             expected_authority,
@@ -19359,6 +19564,7 @@ class ToriiClient(
         *,
         onboarding_token: str,
         binding: Mapping[str, Any],
+        fee_payment: Mapping[str, Any],
         receipt: Mapping[str, Any],
         expected_request: Mapping[str, Any],
         expected_authority: str,
@@ -19372,6 +19578,10 @@ class ToriiClient(
             expected_kind="onboarding",
             context="prepare_account_onboarding.binding",
             require_active=True,
+        )
+        exact_fee_payment = _copy_fee_payment_intent_v1(
+            fee_payment,
+            "prepare_account_onboarding.fee_payment",
         )
         canonical_authority = self._exact_account_identity_pin(
             expected_authority,
@@ -19403,6 +19613,7 @@ class ToriiClient(
                 "schema": ACCOUNT_ONBOARDING_PREPARE_SCHEMA,
                 "binding": exact_binding,
                 "receipt": exact_receipt,
+                "fee_payment": exact_fee_payment,
             },
             allow_retry=False,
             allow_redirects=False,
@@ -19423,6 +19634,11 @@ class ToriiClient(
                     raise ValueError(
                         "prepare_account_onboarding response differs from the exact request"
                     )
+                _require_same_fee_payer_and_gas_bound_v1(
+                    exact_fee_payment,
+                    prepared["fee_payment"],
+                    "prepare_account_onboarding.response",
+                )
                 body = _require_mapping(
                     exact_receipt["body"], "prepare_account_onboarding.receipt.body"
                 )
@@ -19664,6 +19880,7 @@ class ToriiClient(
         *,
         onboarding_token: str,
         prepared: Mapping[str, Any],
+        expected_fee_payment: Mapping[str, Any],
         expected_request: Mapping[str, Any],
         expected_authority: str,
         network_id: "NetworkId",
@@ -19675,6 +19892,11 @@ class ToriiClient(
             prepared,
             expected_operation="onboarding",
             context="submit_prepared_account_onboarding.prepared",
+        )
+        _require_same_fee_payer_and_gas_bound_v1(
+            expected_fee_payment,
+            exact_prepared["fee_payment"],
+            "submit_prepared_account_onboarding.prepared",
         )
         _copy_taira_mutation_binding(
             exact_prepared["binding"],

@@ -72,8 +72,9 @@ impl Q16 {
 impl fmt::Display for Q16 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let integer = self.0 >> 16;
-        let fraction = self.0 & 0xFFFF;
-        write!(f, "{}.{:05}", integer, (fraction * 100_000 + 0x7FFF) >> 16)
+        let fraction = u64::from(self.0 & 0xFFFF);
+        let decimal_fraction = (fraction * 100_000 + 0x8000) >> 16;
+        write!(f, "{integer}.{decimal_fraction:05}")
     }
 }
 /// Identifier of an observer profile approved by governance.
@@ -168,7 +169,7 @@ impl RegistryCreditSchedule {
     }
 }
 /// Positive attestation incentive applied to the subject account and registry.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode)]
 pub struct PositiveAttestationIncentive {
     /// Score boost applied per positive attestation.
     pub score_boost_per_attestation: Q16,
@@ -176,6 +177,42 @@ pub struct PositiveAttestationIncentive {
     pub max_score_boost: Q16,
     /// Registry reward schedule credited for positive attestations.
     pub registry_credit: RegistryCreditSchedule,
+}
+#[derive(Decode)]
+struct PositiveAttestationIncentiveWire {
+    score_boost_per_attestation: Q16,
+    max_score_boost: Q16,
+    registry_credit: RegistryCreditSchedule,
+}
+impl TryFrom<PositiveAttestationIncentiveWire> for PositiveAttestationIncentive {
+    type Error = PositiveAttestationError;
+
+    fn try_from(wire: PositiveAttestationIncentiveWire) -> Result<Self, Self::Error> {
+        Self::new(
+            wire.score_boost_per_attestation,
+            wire.max_score_boost,
+            wire.registry_credit,
+        )
+    }
+}
+impl<'de> norito::core::NoritoDeserialize<'de> for PositiveAttestationIncentive {
+    fn schema_hash() -> [u8; 16] {
+        <Self as norito::core::NoritoSerialize>::schema_hash()
+    }
+
+    fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
+        Self::try_deserialize(archived).expect("positive attestation incentive must be valid")
+    }
+
+    fn try_deserialize(
+        archived: &'de norito::core::Archived<Self>,
+    ) -> Result<Self, norito::core::Error> {
+        let wire =
+            <PositiveAttestationIncentiveWire as norito::core::NoritoDeserialize>::try_deserialize(
+                archived.cast(),
+            )?;
+        Self::try_from(wire).map_err(|error| norito::core::Error::Message(error.to_string()))
+    }
 }
 impl PositiveAttestationIncentive {
     /// Construct a new incentive after validating invariants.
@@ -209,16 +246,18 @@ impl PositiveAttestationIncentive {
             registry_credit,
         })
     }
-    /// Apply the incentive to `current` score given `attestations` positive receipts.
-    pub fn apply_boost(&self, current: Q16, attestations: u32) -> Q16 {
-        if attestations == 0 {
-            return current.min(self.max_score_boost);
+    /// Apply the incentive to the contribution already accumulated for this profile.
+    ///
+    /// Positive receipts never reduce an existing contribution, including malformed legacy
+    /// values that already exceed the configured cap.
+    pub fn apply_boost(&self, current_profile_boost: Q16, attestations: u32) -> Q16 {
+        if attestations == 0 || current_profile_boost >= self.max_score_boost {
+            return current_profile_boost;
         }
-        let capped_current = current.min(self.max_score_boost);
         let addition = self
             .score_boost_per_attestation
             .saturating_mul(attestations);
-        let boosted = capped_current.saturating_add(addition);
+        let boosted = current_profile_boost.saturating_add(addition);
         boosted.min(self.max_score_boost)
     }
 }
@@ -258,7 +297,7 @@ impl EvidenceHashAlgorithm {
     }
 }
 /// Commitment to a redacted evidence field.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode)]
 pub struct EvidenceFieldCommitment {
     /// Canonical JSON pointer-like path describing the redacted field.
     pub field_path: Vec<String>,
@@ -269,12 +308,50 @@ pub struct EvidenceFieldCommitment {
     /// Optional salted hash of the raw payload for replay protection.
     pub value_digest: Option<[u8; 32]>,
 }
+#[derive(Decode)]
+struct EvidenceFieldCommitmentWire {
+    field_path: Vec<String>,
+    commitment: [u8; 32],
+    blinding_salt: [u8; 32],
+    value_digest: Option<[u8; 32]>,
+}
+impl TryFrom<EvidenceFieldCommitmentWire> for EvidenceFieldCommitment {
+    type Error = EvidenceHashError;
+
+    fn try_from(wire: EvidenceFieldCommitmentWire) -> Result<Self, Self::Error> {
+        Self::new(
+            wire.field_path,
+            wire.commitment,
+            wire.blinding_salt,
+            wire.value_digest,
+        )
+    }
+}
+impl<'de> norito::core::NoritoDeserialize<'de> for EvidenceFieldCommitment {
+    fn schema_hash() -> [u8; 16] {
+        <Self as norito::core::NoritoSerialize>::schema_hash()
+    }
+
+    fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
+        Self::try_deserialize(archived).expect("evidence field commitment path must be valid")
+    }
+
+    fn try_deserialize(
+        archived: &'de norito::core::Archived<Self>,
+    ) -> Result<Self, norito::core::Error> {
+        let wire =
+            <EvidenceFieldCommitmentWire as norito::core::NoritoDeserialize>::try_deserialize(
+                archived.cast(),
+            )?;
+        Self::try_from(wire).map_err(|error| norito::core::Error::Message(error.to_string()))
+    }
+}
 impl EvidenceFieldCommitment {
     /// Construct a new field commitment ensuring the path is well-formed.
     ///
     /// # Errors
-    /// Returns [`EvidenceHashError`] when the supplied field path is empty, contains empty
-    /// segments, or otherwise violates bundle uniqueness constraints.
+    /// Returns [`EvidenceHashError`] when the supplied field path is empty or contains empty
+    /// segments.
     pub fn new<P>(
         field_path: P,
         commitment: [u8; 32],
@@ -285,12 +362,7 @@ impl EvidenceFieldCommitment {
         P: Into<Vec<String>>,
     {
         let path = field_path.into();
-        if path.is_empty() {
-            return Err(EvidenceHashError::EmptyFieldPath);
-        }
-        if path.iter().any(String::is_empty) {
-            return Err(EvidenceHashError::EmptyFieldSegment);
-        }
+        validate_evidence_field_path(&path)?;
         Ok(Self {
             field_path: path,
             commitment,
@@ -300,7 +372,7 @@ impl EvidenceFieldCommitment {
     }
 }
 /// Envelope containing the commitments for a redacted evidence payload.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode)]
 pub struct EvidenceHashBundle {
     /// Hashing algorithm applied to each field commitment.
     pub algorithm: EvidenceHashAlgorithm,
@@ -309,11 +381,47 @@ pub struct EvidenceHashBundle {
     /// Per-field commitments for every redacted value.
     pub redacted_fields: Vec<EvidenceFieldCommitment>,
 }
+#[derive(Decode)]
+struct EvidenceHashBundleWire {
+    algorithm: EvidenceHashAlgorithm,
+    payload_commitment: [u8; 32],
+    redacted_fields: Vec<EvidenceFieldCommitment>,
+}
+impl TryFrom<EvidenceHashBundleWire> for EvidenceHashBundle {
+    type Error = EvidenceHashError;
+
+    fn try_from(wire: EvidenceHashBundleWire) -> Result<Self, Self::Error> {
+        Self::new(
+            wire.algorithm,
+            wire.payload_commitment,
+            wire.redacted_fields,
+        )
+    }
+}
+impl<'de> norito::core::NoritoDeserialize<'de> for EvidenceHashBundle {
+    fn schema_hash() -> [u8; 16] {
+        <Self as norito::core::NoritoSerialize>::schema_hash()
+    }
+
+    fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
+        Self::try_deserialize(archived).expect("evidence hash bundle must be valid")
+    }
+
+    fn try_deserialize(
+        archived: &'de norito::core::Archived<Self>,
+    ) -> Result<Self, norito::core::Error> {
+        let wire = <EvidenceHashBundleWire as norito::core::NoritoDeserialize>::try_deserialize(
+            archived.cast(),
+        )?;
+        Self::try_from(wire).map_err(|error| norito::core::Error::Message(error.to_string()))
+    }
+}
 impl EvidenceHashBundle {
     /// Construct a bundle while checking invariants.
     ///
     /// # Errors
-    /// Returns [`EvidenceHashError`] when duplicate field paths are detected in the bundle.
+    /// Returns [`EvidenceHashError`] when a field path is malformed or duplicate paths are
+    /// detected in the bundle.
     pub fn new(
         algorithm: EvidenceHashAlgorithm,
         payload_commitment: [u8; 32],
@@ -323,6 +431,7 @@ impl EvidenceHashBundle {
         redacted_fields.sort_by(|a, b| a.field_path.cmp(&b.field_path));
         let mut last_path: Option<&[String]> = None;
         for field in &redacted_fields {
+            validate_evidence_field_path(&field.field_path)?;
             if last_path.is_some_and(|prev| prev == &field.field_path[..]) {
                 return Err(EvidenceHashError::DuplicateFieldPath);
             }
@@ -334,6 +443,15 @@ impl EvidenceHashBundle {
             redacted_fields,
         })
     }
+}
+fn validate_evidence_field_path(field_path: &[String]) -> Result<(), EvidenceHashError> {
+    if field_path.is_empty() {
+        return Err(EvidenceHashError::EmptyFieldPath);
+    }
+    if field_path.iter().any(String::is_empty) {
+        return Err(EvidenceHashError::EmptyFieldSegment);
+    }
+    Ok(())
 }
 /// Validation errors for evidence hashing bundles.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
@@ -349,12 +467,42 @@ pub enum EvidenceHashError {
     DuplicateFieldPath,
 }
 /// Band describing the fee multiplier applied to a given Hijiri risk range.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode)]
 pub struct FeeMultiplierBand {
     /// Inclusive upper bound for the risk score covered by this band.
     pub max_risk: Q16,
     /// Fee multiplier used when the band matches.
     pub multiplier: Q16,
+}
+#[derive(Decode)]
+struct FeeMultiplierBandWire {
+    max_risk: Q16,
+    multiplier: Q16,
+}
+impl TryFrom<FeeMultiplierBandWire> for FeeMultiplierBand {
+    type Error = FeePolicyError;
+
+    fn try_from(wire: FeeMultiplierBandWire) -> Result<Self, Self::Error> {
+        Self::new(wire.max_risk, wire.multiplier)
+    }
+}
+impl<'de> norito::core::NoritoDeserialize<'de> for FeeMultiplierBand {
+    fn schema_hash() -> [u8; 16] {
+        <Self as norito::core::NoritoSerialize>::schema_hash()
+    }
+
+    fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
+        Self::try_deserialize(archived).expect("fee multiplier band must be valid")
+    }
+
+    fn try_deserialize(
+        archived: &'de norito::core::Archived<Self>,
+    ) -> Result<Self, norito::core::Error> {
+        let wire = <FeeMultiplierBandWire as norito::core::NoritoDeserialize>::try_deserialize(
+            archived.cast(),
+        )?;
+        Self::try_from(wire).map_err(|error| norito::core::Error::Message(error.to_string()))
+    }
 }
 impl FeeMultiplierBand {
     /// Create a band while validating bounds and multiplier.
@@ -362,32 +510,68 @@ impl FeeMultiplierBand {
     /// # Errors
     /// Returns [`FeePolicyError`] when the upper bound is zero or the multiplier falls below 1.
     pub fn new(max_risk: Q16, multiplier: Q16) -> Result<Self, FeePolicyError> {
-        if max_risk.0 == 0 {
-            return Err(FeePolicyError::ZeroUpperBound);
-        }
-        if multiplier.0 < Q16::ONE.0 {
-            return Err(FeePolicyError::MultiplierBelowOne);
-        }
-        Ok(Self {
+        let band = Self {
             max_risk,
             multiplier,
-        })
+        };
+        band.validate()?;
+        Ok(band)
+    }
+    fn validate(&self) -> Result<(), FeePolicyError> {
+        if self.max_risk.0 == 0 {
+            return Err(FeePolicyError::ZeroUpperBound);
+        }
+        if self.multiplier.0 < Q16::ONE.0 {
+            return Err(FeePolicyError::MultiplierBelowOne);
+        }
+        Ok(())
     }
 }
 /// Deterministic fee policy mapping risk scores to fee multipliers.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode)]
 pub struct HijiriFeePolicy {
     /// Ordered bands covering `[0, 1]`.
     pub bands: Vec<FeeMultiplierBand>,
     /// Maximum multiplier allowed by policy.
     pub penalty_cap: Q16,
 }
+#[derive(Decode)]
+struct HijiriFeePolicyWire {
+    bands: Vec<FeeMultiplierBand>,
+    penalty_cap: Q16,
+}
+impl TryFrom<HijiriFeePolicyWire> for HijiriFeePolicy {
+    type Error = FeePolicyError;
+
+    fn try_from(wire: HijiriFeePolicyWire) -> Result<Self, Self::Error> {
+        Self::new(wire.bands, wire.penalty_cap)
+    }
+}
+impl<'de> norito::core::NoritoDeserialize<'de> for HijiriFeePolicy {
+    fn schema_hash() -> [u8; 16] {
+        <Self as norito::core::NoritoSerialize>::schema_hash()
+    }
+
+    fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
+        Self::try_deserialize(archived).expect("Hijiri fee policy must be valid")
+    }
+
+    fn try_deserialize(
+        archived: &'de norito::core::Archived<Self>,
+    ) -> Result<Self, norito::core::Error> {
+        let wire = <HijiriFeePolicyWire as norito::core::NoritoDeserialize>::try_deserialize(
+            archived.cast(),
+        )?;
+        Self::try_from(wire).map_err(|error| norito::core::Error::Message(error.to_string()))
+    }
+}
 impl HijiriFeePolicy {
-    /// Construct a new policy, ensuring bands are sorted and cover the full range.
+    /// Construct a new policy, sorting bands and ensuring they cover the full range.
     ///
     /// # Errors
-    /// Returns [`FeePolicyError`] when the supplied bands are empty, unsorted, exceed the penalty
-    /// cap, or fail to cover the entire `[0, 1]` interval.
+    /// Returns [`FeePolicyError`] when the supplied bands are empty, contain invalid or duplicate
+    /// bounds, use a multiplier below one, or fail to cover the entire `[0, 1]` interval.
+    /// Multipliers above `penalty_cap` are accepted and clamped when the policy is evaluated.
     pub fn new(
         mut bands: Vec<FeeMultiplierBand>,
         penalty_cap: Q16,
@@ -401,6 +585,7 @@ impl HijiriFeePolicy {
         bands.sort_by(|a, b| a.max_risk.cmp(&b.max_risk));
         let mut prev = Q16::ZERO;
         for band in &bands {
+            band.validate()?;
             if band.max_risk.0 <= prev.0 {
                 return Err(FeePolicyError::DescendingBounds);
             }
@@ -416,12 +601,24 @@ impl HijiriFeePolicy {
     }
     /// Return the multiplier for a given risk score.
     pub fn multiplier_for(&self, risk: Q16) -> Q16 {
+        // The public fields are retained for data-model compatibility, so evaluation of malformed
+        // in-memory values fails closed even though constructors and Norito decoding reject them.
+        let penalty_cap = if self.penalty_cap < Q16::ONE {
+            Q16::ONE
+        } else {
+            self.penalty_cap
+        };
         for band in &self.bands {
             if risk.0 <= band.max_risk.0 {
-                return band.multiplier.min(self.penalty_cap);
+                let multiplier = if band.multiplier < Q16::ONE {
+                    Q16::ONE
+                } else {
+                    band.multiplier
+                };
+                return multiplier.min(penalty_cap);
             }
         }
-        self.penalty_cap
+        penalty_cap
     }
     /// Apply the policy to a base fee expressed in Q16.
     pub fn apply(&self, base_fee: Q16, risk: Q16) -> Q16 {
@@ -461,6 +658,13 @@ mod tests {
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("test fixture random key generation should succeed")
     }
+    fn norito_roundtrip<T>(value: &T) -> T
+    where
+        T: Encode + Decode,
+    {
+        let encoded = value.encode();
+        T::decode(&mut encoded.as_slice()).expect("valid Hijiri value should round-trip")
+    }
     #[derive(Encode)]
     struct ForgedRegistryCreditSchedule {
         reward_account: AccountId,
@@ -473,6 +677,11 @@ mod tests {
         assert_eq!(value.saturating_mul(2).raw(), Q16::ONE.raw());
         let huge = Q16::from_raw(u32::MAX);
         assert_eq!(huge.saturating_mul(2).raw(), u32::MAX);
+    }
+    #[test]
+    fn q16_display_handles_the_full_fraction_range() {
+        assert_eq!(Q16::from_parts(0, u16::MAX).to_string(), "0.99998");
+        assert_eq!(Q16::from_raw(u32::MAX).to_string(), "65535.99998");
     }
     #[test]
     fn incentive_apply_respects_cap() {
@@ -494,6 +703,26 @@ mod tests {
         // Start at zero and apply five attestations; cap should clamp to 1.0.
         let boosted = incentive.apply_boost(Q16::ZERO, 5);
         assert_eq!(boosted, Q16::ONE);
+    }
+    #[test]
+    fn incentive_apply_never_reduces_an_existing_boost() {
+        let reward_account = {
+            let kp = checked_random_keypair();
+            AccountId::new(kp.public_key().clone())
+        };
+        let incentive = PositiveAttestationIncentive::new(
+            Q16::from_parts(0, 0x1000),
+            Q16::from_parts(0, 0x4000),
+            RegistryCreditSchedule {
+                reward_account,
+                reward_per_attestation: Quantity::from(1_u32),
+                settlement_period_rounds: 1,
+            },
+        )
+        .expect("valid incentive");
+        let existing = Q16::from_parts(0, 0x8000);
+        assert_eq!(incentive.apply_boost(existing, 0), existing);
+        assert_eq!(incentive.apply_boost(existing, 1), existing);
     }
     #[test]
     fn incentive_rewards_scale_linearly() {
@@ -570,6 +799,58 @@ mod tests {
         );
     }
     #[test]
+    fn norito_decode_rejects_invalid_positive_incentive() {
+        let forged = PositiveAttestationIncentive {
+            score_boost_per_attestation: Q16::ZERO,
+            max_score_boost: Q16::ZERO,
+            registry_credit: RegistryCreditSchedule {
+                reward_account: AccountId::new(checked_random_keypair().public_key().clone()),
+                reward_per_attestation: Quantity::from(0_u32),
+                settlement_period_rounds: 0,
+            },
+        };
+        let encoded = forged.encode();
+        assert!(
+            PositiveAttestationIncentive::decode(&mut encoded.as_slice()).is_err(),
+            "Norito decoding must enforce positive incentive invariants"
+        );
+    }
+    #[test]
+    fn norito_roundtrips_validated_hijiri_values() {
+        let band = FeeMultiplierBand::new(Q16::ONE, Q16::from_parts(2, 0))
+            .expect("valid fee multiplier band");
+        let policy = HijiriFeePolicy::new(vec![band], Q16::from_parts(3, 0))
+            .expect("valid Hijiri fee policy");
+        assert_eq!(norito_roundtrip(&policy), policy);
+
+        let field = EvidenceFieldCommitment::new(
+            vec!["details".to_owned(), "case_id".to_owned()],
+            [0x11; 32],
+            [0x22; 32],
+            Some([0x33; 32]),
+        )
+        .expect("valid field commitment");
+        let bundle = EvidenceHashBundle::new(
+            EvidenceHashAlgorithm::Poseidon2Goldilocks,
+            [0x44; 32],
+            vec![field],
+        )
+        .expect("valid evidence bundle");
+        assert_eq!(norito_roundtrip(&bundle), bundle);
+
+        let incentive = PositiveAttestationIncentive::new(
+            Q16::from_parts(0, 0x1000),
+            Q16::from_parts(0, 0x4000),
+            RegistryCreditSchedule {
+                reward_account: AccountId::new(checked_random_keypair().public_key().clone()),
+                reward_per_attestation: Quantity::from(1_u32),
+                settlement_period_rounds: 1,
+            },
+        )
+        .expect("valid positive attestation incentive");
+        assert_eq!(norito_roundtrip(&incentive), incentive);
+    }
+    #[test]
     fn evidence_field_commitment_validation() {
         let commitment = EvidenceFieldCommitment::new(
             vec!["details".to_string(), "case_id".to_string()],
@@ -598,6 +879,52 @@ mod tests {
         )
         .expect_err("duplicate paths must be rejected");
         assert_eq!(err, EvidenceHashError::DuplicateFieldPath);
+    }
+    #[test]
+    fn evidence_bundle_revalidates_public_field_paths() {
+        let empty_path = EvidenceFieldCommitment {
+            field_path: Vec::new(),
+            commitment: [0xAA; 32],
+            blinding_salt: [0xBB; 32],
+            value_digest: None,
+        };
+        let err = EvidenceHashBundle::new(
+            EvidenceHashAlgorithm::Poseidon2Goldilocks,
+            [0xCC; 32],
+            vec![empty_path],
+        )
+        .expect_err("public fields must not bypass empty-path validation");
+        assert_eq!(err, EvidenceHashError::EmptyFieldPath);
+
+        let empty_segment = EvidenceFieldCommitment {
+            field_path: vec!["details".to_owned(), String::new()],
+            commitment: [0xDD; 32],
+            blinding_salt: [0xEE; 32],
+            value_digest: None,
+        };
+        let err = EvidenceHashBundle::new(
+            EvidenceHashAlgorithm::Poseidon2Goldilocks,
+            [0xFF; 32],
+            vec![empty_segment],
+        )
+        .expect_err("public fields must not bypass empty-segment validation");
+        assert_eq!(err, EvidenceHashError::EmptyFieldSegment);
+    }
+    #[test]
+    fn norito_decode_rejects_duplicate_evidence_paths() {
+        let field =
+            EvidenceFieldCommitment::new(vec!["details".to_owned()], [0xA1; 32], [0xB1; 32], None)
+                .expect("valid field commitment");
+        let forged = EvidenceHashBundle {
+            algorithm: EvidenceHashAlgorithm::Poseidon2Goldilocks,
+            payload_commitment: [0xC1; 32],
+            redacted_fields: vec![field.clone(), field],
+        };
+        let encoded = forged.encode();
+        assert!(
+            EvidenceHashBundle::decode(&mut encoded.as_slice()).is_err(),
+            "Norito decoding must reject duplicate evidence paths"
+        );
     }
     #[test]
     fn evidence_bundle_sorts_paths() {
@@ -640,6 +967,40 @@ mod tests {
             policy.multiplier_for(Q16::from_parts(0, 0xF000)),
             Q16::from_parts(1, 0x4000)
         );
+    }
+    #[test]
+    fn fee_policy_revalidates_public_band_fields() {
+        let forged_band = FeeMultiplierBand {
+            max_risk: Q16::ONE,
+            multiplier: Q16::ZERO,
+        };
+        let err = HijiriFeePolicy::new(vec![forged_band], Q16::ONE)
+            .expect_err("public band fields must not bypass multiplier validation");
+        assert_eq!(err, FeePolicyError::MultiplierBelowOne);
+    }
+    #[test]
+    fn norito_decode_rejects_invalid_fee_band() {
+        let forged_band = FeeMultiplierBand {
+            max_risk: Q16::ONE,
+            multiplier: Q16::ZERO,
+        };
+        let encoded = forged_band.encode();
+        assert!(
+            FeeMultiplierBand::decode(&mut encoded.as_slice()).is_err(),
+            "Norito decoding must enforce fee-band invariants"
+        );
+    }
+    #[test]
+    fn malformed_public_fee_policy_cannot_discount_the_base_fee() {
+        let policy = HijiriFeePolicy {
+            bands: vec![FeeMultiplierBand {
+                max_risk: Q16::ONE,
+                multiplier: Q16::ZERO,
+            }],
+            penalty_cap: Q16::ZERO,
+        };
+        assert_eq!(policy.multiplier_for(Q16::ZERO), Q16::ONE);
+        assert_eq!(policy.apply(Q16::ONE, Q16::ZERO), Q16::ONE);
     }
     #[test]
     fn fee_policy_applies_penalty_cap() {

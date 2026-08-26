@@ -609,9 +609,14 @@ artefacts are captured for governance.
 - **Workflow:**
   1. Collect an attestation bundle on-device (alias, `challenge.hex`, and `chain.pem` with the
      leaf→root order) and copy it to the workstation.
-  2. Run `scripts/android_keystore_attestation.sh --bundle-dir <bundle> --trust-root <root.pem>
-     [--trust-root-dir <dir>] --require-strongbox --output <report.json>` using the appropriate
-     Google/Samsung root (directories allow you to load whole vendor bundles).
+  2. Capture the governed status with `scripts/capture_android_attestation_status.py`, passing each
+     reviewed supplemental TBS digest through its repeatable `--revoked-tbs-sha256` option. Run
+     `scripts/android_keystore_attestation.sh --bundle-dir <bundle> --trust-root <root.pem>
+     --revocation-snapshot <capture>/android-sdk-revocation-snapshot-v1.txt
+     --revocation-snapshot-sha256 <separately-trusted-governance-commitment>
+     --evaluation-time-ms <ms> --require-strongbox --output <report.json>` using the appropriate
+     Google/Samsung root. Obtain the commitment from the authenticated governance record, not by
+     hashing the operator-supplied snapshot during the same invocation.
   3. Archive the JSON summary alongside raw attestation material in
      `artifacts/android/attestation/<device-tag>/`.
 - **Bundle format:** Follow `specs/sdk/android/readiness/android_strongbox_attestation_bundle.md`
@@ -738,13 +743,16 @@ Sev 1/2 follow-ups and archive the evidence in `incident/<date>-android-*.md`.
 
 **Diagnostics**
 
-- **Bundle verification:** Run
-  `scripts/android_keystore_attestation.sh --bundle-dir <bundle> --trust-root <root.pem>`
+- **Bundle verification:** Run the harness with `--bundle-dir <bundle>`, the
+  vendor trust root, current governed snapshot digest/date/max-age and deny
+  lists, plus an explicit in-window `--evaluation-time-ms`
   on the archived attestation to confirm whether the failure is due to device
   misconfiguration or a policy change. Attach the generated `result.json`.
-- **Challenge regen:** Challenges are not cached. Each challenge request regenerates a fresh
-  attestation and caches by `(alias, challenge)`; challenge-less calls reuse the cache. Unsupported
-- **CI sweep:** Execute `scripts/android_strongbox_attestation_ci.sh` so every
+- **Challenge regen:** Each non-empty challenge request regenerates fresh
+  attestation material and caches it by `(alias, challenge)`. Verification
+  without a non-empty expected challenge fails closed.
+- **CI sweep:** Execute `scripts/android_strongbox_attestation_ci.sh` with the
+  same governed snapshot and explicit evaluation-time arguments so every
   stored bundle is revalidated; this guards against systemic issues introduced
   by new trust anchors.
 - **Device drill:** On hardware without StrongBox (or by forcing the emulator),

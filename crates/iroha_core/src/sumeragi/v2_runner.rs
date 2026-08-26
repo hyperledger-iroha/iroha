@@ -47,7 +47,7 @@ use super::{
     v2_block_sync::{
         CommitCertificateAdmissionError, V2BlockSyncDiscovery, V2BlockSyncError, V2BlockSyncServer,
     },
-    v2_body_store::{BlockSignaturePolicy, V2BodyStore},
+    v2_body_store::{BlockSignaturePolicy, V2BodyStore, V2BodyStoreCapacity},
     v2_candidate::{
         CandidateAssemblyOutcome, CandidateAttachments, CandidateLimits, CandidateParent,
         CandidateRequest, V2CandidateAssembler, candidate_block_has_proposal_work,

@@ -13,14 +13,21 @@ import stat
 import pytest
 
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "capture_android_attestation_status.py"
-SPEC = importlib.util.spec_from_file_location("capture_android_attestation_status", MODULE_PATH)
+MODULE_PATH = (
+    Path(__file__).resolve().parents[1] / "capture_android_attestation_status.py"
+)
+SPEC = importlib.util.spec_from_file_location(
+    "capture_android_attestation_status", MODULE_PATH
+)
 assert SPEC is not None and SPEC.loader is not None
 status_capture = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(status_capture)
 
 
 RESPONSE_DATE_MS = 1_800_000_000_000
+CANONICAL_VECTOR_SHA256 = (
+    "154efc56abd2b7e403c5a362147971a561acc95f7274238ae0c52af196501b03"
+)
 
 
 def _http_date(milliseconds: int) -> str:
@@ -62,18 +69,71 @@ def test_capture_derives_exact_consensus_snapshot_and_header_receipt() -> None:
     )
 
     assert snapshot["non_valid_serials"] == ["1", "a0"]
-    assert snapshot["payload_sha256"] == list(__import__("hashlib").sha256(payload).digest())
+    assert snapshot["payload_sha256"] == list(
+        __import__("hashlib").sha256(payload).digest()
+    )
     assert snapshot["last_modified_ms"] == RESPONSE_DATE_MS - 1_000
     assert receipt["source_url"] == status_capture.STATUS_URL
     assert receipt["snapshot"] == snapshot
+    sdk_snapshot = status_capture.canonical_android_sdk_revocation_snapshot(snapshot)
+    assert (
+        receipt["android_sdk_revocation_snapshot_sha256"]
+        == __import__("hashlib").sha256(sdk_snapshot).hexdigest()
+    )
+
+
+def test_sdk_snapshot_commitment_binds_metadata_and_both_deny_lists() -> None:
+    snapshot, receipt = status_capture.build_capture(
+        _payload(),
+        _headers(),
+        captured_at_ms=RESPONSE_DATE_MS + 30_000,
+        revoked_tbs_sha256=["22" * 32],
+    )
+    encoded = status_capture.canonical_android_sdk_revocation_snapshot(
+        snapshot, receipt["android_sdk_revoked_tbs_sha256"]
+    )
+    text = encoded.decode("ascii")
+    assert text.startswith(status_capture.ANDROID_SDK_SNAPSHOT_DOMAIN + "\n")
+    assert "serial=1\nserial=a0\n" in text
+    assert f"tbs_sha256={'22' * 32}\n" in text
+    original = __import__("hashlib").sha256(encoded).hexdigest()
+    for mutated in (
+        text.replace("serial=1", "serial=2"),
+        text.replace("cache_max_age_seconds=3600", "cache_max_age_seconds=3599"),
+        text.replace("22" * 32, "23" * 32),
+    ):
+        assert (
+            __import__("hashlib").sha256(mutated.encode("ascii")).hexdigest()
+            != original
+        )
+
+
+def test_sdk_snapshot_matches_java_and_kotlin_vector() -> None:
+    snapshot = {
+        "payload_sha256": [0x11] * 32,
+        "response_date_ms": 1_761_408_000_000,
+        "last_modified_ms": 1_761_407_999_000,
+        "cache_max_age_seconds": 60,
+        "non_valid_serials": ["a", "ff"],
+    }
+    encoded = status_capture.canonical_android_sdk_revocation_snapshot(
+        snapshot, ["22" * 32]
+    )
+    assert __import__("hashlib").sha256(encoded).hexdigest() == CANONICAL_VECTOR_SHA256
 
 
 @pytest.mark.parametrize(
     "headers,captured_at_ms",
     [
         (_headers(Age="3600"), RESPONSE_DATE_MS + 3_600_000),
-        (_headers(Expires=_http_date(RESPONSE_DATE_MS + 3_599_000)), RESPONSE_DATE_MS + 30_000),
-        (_headers(**{"Last-Modified": _http_date(RESPONSE_DATE_MS + 1_000)}), RESPONSE_DATE_MS + 30_000),
+        (
+            _headers(Expires=_http_date(RESPONSE_DATE_MS + 3_599_000)),
+            RESPONSE_DATE_MS + 30_000,
+        ),
+        (
+            _headers(**{"Last-Modified": _http_date(RESPONSE_DATE_MS + 1_000)}),
+            RESPONSE_DATE_MS + 30_000,
+        ),
         (_headers(Age="030"), RESPONSE_DATE_MS + 30_000),
     ],
 )
@@ -130,7 +190,9 @@ def test_fetch_status_uses_fixed_identity_encoded_https_request(monkeypatch) -> 
 
     monkeypatch.setattr(status_capture.ssl, "create_default_context", lambda: context)
     monkeypatch.setattr(status_capture.http.client, "HTTPSConnection", FakeConnection)
-    monkeypatch.setattr(status_capture.time, "time_ns", lambda: 1_800_000_030_000_000_000)
+    monkeypatch.setattr(
+        status_capture.time, "time_ns", lambda: 1_800_000_030_000_000_000
+    )
 
     actual_payload, actual_headers, captured_at_ms = status_capture.fetch_status()
 
@@ -169,17 +231,26 @@ def test_publish_capture_creates_owner_only_complete_directory(tmp_path: Path) -
     os.chmod(tmp_path, 0o700)
     target = tmp_path / "capture"
     payload = _payload()
-    snapshot = {"version": 1, "payload_sha256": [0] * 32}
-    receipt = {"version": 1, "snapshot": snapshot}
+    snapshot, receipt = status_capture.build_capture(
+        payload,
+        _headers(),
+        captured_at_ms=RESPONSE_DATE_MS + 30_000,
+    )
 
     status_capture.publish_capture(target, payload, snapshot, receipt)
 
     assert stat.S_IMODE(target.stat().st_mode) == 0o700
     assert (target / "status.json").read_bytes() == payload
-    assert (target / "snapshot.json").read_bytes() == status_capture._canonical_json(snapshot)
-    assert (target / "capture-receipt.json").read_bytes() == status_capture._canonical_json(
-        receipt
+    assert (target / "snapshot.json").read_bytes() == status_capture._canonical_json(
+        snapshot
     )
+    sdk_snapshot = status_capture.canonical_android_sdk_revocation_snapshot(snapshot)
+    assert (
+        target / status_capture.ANDROID_SDK_SNAPSHOT_FILE
+    ).read_bytes() == sdk_snapshot
+    assert (
+        target / "capture-receipt.json"
+    ).read_bytes() == status_capture._canonical_json(receipt)
     for path in target.iterdir():
         assert stat.S_IMODE(path.stat().st_mode) == 0o600
     with pytest.raises(status_capture.CaptureError):
@@ -203,17 +274,25 @@ def test_publish_capture_fsyncs_new_directory_entry_and_propagates_failure(
         status_capture.publish_capture(
             target,
             _payload(),
-            {"version": 1, "payload_sha256": [0] * 32},
-            {"version": 1},
+            *status_capture.build_capture(
+                _payload(),
+                _headers(),
+                captured_at_ms=RESPONSE_DATE_MS + 30_000,
+            ),
         )
     assert calls == [target, tmp_path]
 
 
-def test_main_publishes_only_validated_capture(monkeypatch, tmp_path: Path, capsys) -> None:
+def test_main_publishes_only_validated_capture(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
     payload = _payload()
     headers = _headers()
     snapshot = {"version": 1}
-    receipt = {"status_payload_sha256": "ab" * 32}
+    receipt = {
+        "status_payload_sha256": "ab" * 32,
+        "android_sdk_revocation_snapshot_sha256": "cd" * 32,
+    }
     published: list[tuple[Path, bytes, dict, dict]] = []
     monkeypatch.setattr(
         status_capture,
@@ -223,19 +302,21 @@ def test_main_publishes_only_validated_capture(monkeypatch, tmp_path: Path, caps
     monkeypatch.setattr(
         status_capture,
         "build_capture",
-        lambda actual_payload, actual_headers, *, captured_at_ms: (
-            snapshot,
-            receipt,
-        )
-        if (actual_payload, actual_headers, captured_at_ms)
-        == (payload, headers, RESPONSE_DATE_MS + 30_000)
-        else pytest.fail("main changed the captured response"),
+        lambda actual_payload, actual_headers, *, captured_at_ms, revoked_tbs_sha256: (
+            (
+                snapshot,
+                receipt,
+            )
+            if (actual_payload, actual_headers, captured_at_ms)
+            == (payload, headers, RESPONSE_DATE_MS + 30_000)
+            else pytest.fail("main changed the captured response")
+        ),
     )
     monkeypatch.setattr(
         status_capture,
         "publish_capture",
-        lambda output, actual_payload, actual_snapshot, actual_receipt: published.append(
-            (output, actual_payload, actual_snapshot, actual_receipt)
+        lambda output, actual_payload, actual_snapshot, actual_receipt: (
+            published.append((output, actual_payload, actual_snapshot, actual_receipt))
         ),
     )
     output = tmp_path / "new-capture"
@@ -246,6 +327,7 @@ def test_main_publishes_only_validated_capture(monkeypatch, tmp_path: Path, caps
     stdout = capsys.readouterr().out
     assert str(output) in stdout
     assert receipt["status_payload_sha256"] in stdout
+    assert receipt["android_sdk_revocation_snapshot_sha256"] in stdout
 
 
 @pytest.mark.parametrize(

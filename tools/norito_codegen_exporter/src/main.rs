@@ -119,6 +119,7 @@ macro_rules! for_each_instruction_type {
         $macro!(iroha_data_model::isi::kaigi::RecordKaigiUsage);
         $macro!(iroha_data_model::isi::kaigi::SetKaigiRelayManifest);
         $macro!(iroha_data_model::isi::kaigi::RegisterKaigiRelay);
+        $macro!(iroha_data_model::isi::kaigi::ReportKaigiRelayHealth);
         $macro!(iroha_data_model::isi::zk::RegisterZkAsset);
         $macro!(iroha_data_model::isi::zk::ScheduleConfidentialPolicyTransition);
         $macro!(iroha_data_model::isi::zk::CancelConfidentialPolicyTransition);
@@ -896,12 +897,27 @@ mod tests {
         );
     }
     #[test]
+    fn kaigi_relay_health_instruction_is_exported_with_canonical_wire_id() {
+        let specs = gather_instruction_specs(&instruction_registry::default(), None);
+        let spec = specs
+            .iter()
+            .find(|spec| {
+                spec.type_name
+                    == std::any::type_name::<iroha_data_model::isi::kaigi::ReportKaigiRelayHealth>()
+            })
+            .expect("Kaigi relay-health instruction must be exported");
+        assert_eq!(
+            spec.discriminant,
+            "iroha.instruction.v1::kaigi::ReportKaigiRelayHealth"
+        );
+    }
+    #[test]
     fn generic_privacy_types_are_absent_but_specialized_flows_remain_registered() {
         let registry = instruction_registry::default();
         let specs = gather_instruction_specs(&registry, None);
         assert_eq!(
             specs.len(),
-            110,
+            111,
             "first-release generated instruction count"
         );
         let governance_specs = specs

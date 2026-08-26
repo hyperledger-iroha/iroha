@@ -21,6 +21,34 @@
         ],
         "type": "object"
       },
+      "AccountAliasName": {
+        "additionalProperties": false,
+        "description": "Canonical component form of one account alias. The domain slot is mandatory and null only for a dataspace-root alias.",
+        "properties": {
+          "dataspace": {
+            "$ref": "#/components/schemas/CanonicalAliasSegment"
+          },
+          "domain": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CanonicalAliasSegment"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "label": {
+            "$ref": "#/components/schemas/CanonicalAliasSegment"
+          }
+        },
+        "required": [
+          "label",
+          "domain",
+          "dataspace"
+        ],
+        "type": "object"
+      },
       "AccountAliasLease": {
         "additionalProperties": false,
         "properties": {
@@ -82,6 +110,97 @@
           "grace_expires_at_ms",
           "redemption_expires_at_ms",
           "auto_renew_enabled"
+        ],
+        "type": "object"
+      },
+      "AccountOnboardingAliasIntentV1": {
+        "additionalProperties": false,
+        "description": "Exact account-alias intent embedded in a sponsored onboarding receipt.",
+        "properties": {
+          "intent": {
+            "additionalProperties": false,
+            "properties": {
+              "alias": {
+                "$ref": "#/components/schemas/ResolvedAccountAliasV1"
+              },
+              "provision": {
+                "$ref": "#/components/schemas/AccountOnboardingCreateProvisionV1"
+              },
+              "role": {
+                "$ref": "#/components/schemas/AccountOnboardingPrimaryAliasRoleV1"
+              },
+              "target_account": {
+                "$ref": "#/components/schemas/CanonicalAccountId"
+              }
+            },
+            "required": [
+              "alias",
+              "target_account",
+              "provision",
+              "role"
+            ],
+            "type": "object"
+          },
+          "kind": {
+            "const": "account_alias",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "intent"
+        ],
+        "type": "object"
+      },
+      "AccountOnboardingAliasTargetV1": {
+        "additionalProperties": false,
+        "description": "Exact account-alias target embedded in an onboarding lease quote.",
+        "properties": {
+          "kind": {
+            "const": "account_alias",
+            "type": "string"
+          },
+          "resource": {
+            "$ref": "#/components/schemas/ResolvedAccountAliasV1"
+          }
+        },
+        "required": [
+          "kind",
+          "resource"
+        ],
+        "type": "object"
+      },
+      "AccountOnboardingCreateProvisionV1": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "create",
+            "type": "string"
+          },
+          "value": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "kind",
+          "value"
+        ],
+        "type": "object"
+      },
+      "AccountOnboardingPrimaryAliasRoleV1": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "primary",
+            "type": "string"
+          },
+          "value": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "kind",
+          "value"
         ],
         "type": "object"
       },
@@ -197,18 +316,23 @@
         "additionalProperties": false,
         "properties": {
           "account_id": {
-            "type": "string"
+            "$ref": "#/components/schemas/CanonicalAccountId"
           },
           "pow_anchor_height": {
+            "format": "uint64",
+            "minimum": 1,
             "type": "integer"
           },
           "pow_nonce_hex": {
-            "pattern": "^[0-9a-f]*$",
+            "maxLength": 64,
+            "pattern": "^(?:[0-9a-f]{2})+$",
             "type": "string"
           }
         },
         "required": [
-          "account_id"
+          "account_id",
+          "pow_anchor_height",
+          "pow_nonce_hex"
         ],
         "type": "object"
       },
@@ -216,10 +340,13 @@
         "additionalProperties": false,
         "properties": {
           "binding": {
-            "$ref": "#/components/schemas/TairaPublicResetMutationBinding"
+            "$ref": "#/components/schemas/TairaPublicResetFaucetMutationBinding"
           },
           "claim": {
             "$ref": "#/components/schemas/AccountFaucetClaim"
+          },
+          "fee_payment": {
+            "$ref": "#/components/schemas/FeePaymentIntent"
           },
           "schema": {
             "const": "iroha.accounts.faucet.prepare.v1",
@@ -229,7 +356,8 @@
         "required": [
           "schema",
           "binding",
-          "claim"
+          "claim",
+          "fee_payment"
         ],
         "type": "object"
       },
@@ -237,25 +365,27 @@
         "additionalProperties": false,
         "properties": {
           "account_id": {
-            "type": "string"
+            "$ref": "#/components/schemas/CanonicalAccountId"
           },
           "amount": {
-            "$ref": "#/components/schemas/JsonValue"
+            "$ref": "#/components/schemas/Quantity"
           },
           "asset_definition_id": {
+            "minLength": 1,
             "type": "string"
           },
           "asset_id": {
+            "minLength": 1,
             "type": "string"
           },
           "binding": {
-            "$ref": "#/components/schemas/TairaPublicResetMutationBinding"
+            "$ref": "#/components/schemas/TairaPublicResetFaucetMutationBinding"
           },
           "claim": {
             "$ref": "#/components/schemas/AccountFaucetClaim"
           },
           "fee_payment": {
-            "$ref": "#/components/schemas/JsonValue"
+            "$ref": "#/components/schemas/FeePaymentIntent"
           },
           "operation": {
             "const": "faucet",
@@ -270,10 +400,10 @@
             "type": "string"
           },
           "server_signature": {
-            "$ref": "#/components/schemas/JsonValue"
+            "$ref": "#/components/schemas/CanonicalSignature"
           },
           "signed_transaction_wire_hex": {
-            "pattern": "^[0-9a-f]+$",
+            "pattern": "^(?:[0-9a-f]{2})+$",
             "type": "string"
           },
           "signed_transaction_wire_sha256": {
@@ -443,19 +573,86 @@
         ],
         "type": "object"
       },
+      "AccountOnboardingPlanBody": {
+        "additionalProperties": false,
+        "description": "Canonical V1 body committed and signed by a stateless sponsored-onboarding receipt.",
+        "properties": {
+          "acquisition": {
+            "$ref": "#/components/schemas/AliasLeaseAcquisitionV1"
+          },
+          "anchor": {
+            "$ref": "#/components/schemas/AliasPlanAnchorV1"
+          },
+          "authority": {
+            "$ref": "#/components/schemas/CanonicalAccountId"
+          },
+          "instructions": {
+            "items": {
+              "$ref": "#/components/schemas/AliasFramedInstructionV1"
+            },
+            "type": "array"
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
+          },
+          "owner_auto_renew_instruction": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AliasFramedInstructionV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "quote_guard": {
+            "$ref": "#/components/schemas/AliasQuoteGuardV1"
+          },
+          "request": {
+            "$ref": "#/components/schemas/AccountOnboardingPlanRequest"
+          },
+          "resource": {
+            "$ref": "#/components/schemas/AliasPlanResourceV1"
+          },
+          "valid_until_ms": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "version": {
+            "const": 1,
+            "format": "uint8",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "request",
+          "authority",
+          "network_id",
+          "anchor",
+          "resource",
+          "acquisition",
+          "quote_guard",
+          "instructions",
+          "owner_auto_renew_instruction",
+          "valid_until_ms"
+        ],
+        "type": "object"
+      },
       "AccountOnboardingPlanReceipt": {
         "additionalProperties": false,
         "properties": {
           "body": {
-            "description": "Canonical request, authority, chain/anchor, resolved intent, live disposition, guarded quote, exact server instruction frames, optional owner-signed auto-renew follow-up, and expiry.",
-            "type": "object"
+            "$ref": "#/components/schemas/AccountOnboardingPlanBody",
+            "description": "Canonical request, authority, chain/anchor, resolved intent, live disposition, guarded quote, exact server instruction frames, optional owner-signed auto-renew follow-up, and expiry."
           },
           "plan_hash": {
-            "description": "Domain-separated hash of the canonical Norito body.",
-            "type": "string"
+            "$ref": "#/components/schemas/Hash",
+            "description": "Domain-separated hash of the canonical Norito body."
           },
           "signature": {
-            "$ref": "#/components/schemas/JsonValue",
+            "$ref": "#/components/schemas/CanonicalSignature",
             "description": "Onboarding-authority signature over plan_hash."
           }
         },
@@ -471,28 +668,33 @@
         "properties": {
           "account_id": {
             "description": "Canonical domainless I105 AccountId.",
-            "type": "string"
+            "$ref": "#/components/schemas/CanonicalAccountId"
           },
           "alias": {
-            "description": "Canonical catalog-free alias `label@dataspace` or `label@domain.dataspace`.",
-            "type": "string"
+            "$ref": "#/components/schemas/CanonicalAccountAliasLiteral",
+            "description": "Canonical catalog-free alias `label@dataspace` or `label@domain.dataspace`."
           },
           "permissions": {
-            "description": "Optional names selected from configured additional_permissions.",
+            "description": "Mandatory V1 list of permission names selected from configured additional_permissions; an empty array requests none.",
             "items": {
+              "maxLength": 255,
+              "minLength": 1,
+              "pattern": "^[^\\s\\u0000-\\u001F\\u007F-\\u009F@#$]+$",
               "type": "string"
             },
             "type": "array"
           },
           "version": {
             "const": 1,
+            "format": "uint8",
             "type": "integer"
           }
         },
         "required": [
           "version",
           "alias",
-          "account_id"
+          "account_id",
+          "permissions"
         ],
         "type": "object"
       },
@@ -500,7 +702,10 @@
         "additionalProperties": false,
         "properties": {
           "binding": {
-            "$ref": "#/components/schemas/TairaPublicResetMutationBinding"
+            "$ref": "#/components/schemas/TairaPublicResetOnboardingMutationBinding"
+          },
+          "fee_payment": {
+            "$ref": "#/components/schemas/FeePaymentIntent"
           },
           "receipt": {
             "$ref": "#/components/schemas/AccountOnboardingPlanReceipt"
@@ -513,7 +718,8 @@
         "required": [
           "schema",
           "binding",
-          "receipt"
+          "receipt",
+          "fee_payment"
         ],
         "type": "object"
       },
@@ -521,19 +727,19 @@
         "additionalProperties": false,
         "properties": {
           "account_id": {
-            "type": "string"
+            "$ref": "#/components/schemas/CanonicalAccountId"
           },
           "alias": {
-            "type": "string"
+            "$ref": "#/components/schemas/CanonicalAccountAliasLiteral"
           },
           "binding": {
-            "$ref": "#/components/schemas/TairaPublicResetMutationBinding"
+            "$ref": "#/components/schemas/TairaPublicResetOnboardingMutationBinding"
           },
           "disposition": {
-            "$ref": "#/components/schemas/JsonValue"
+            "$ref": "#/components/schemas/AliasPlanDispositionV1"
           },
           "fee_payment": {
-            "$ref": "#/components/schemas/JsonValue"
+            "$ref": "#/components/schemas/FeePaymentIntent"
           },
           "operation": {
             "const": "onboarding",
@@ -551,10 +757,10 @@
             "type": "string"
           },
           "server_signature": {
-            "$ref": "#/components/schemas/JsonValue"
+            "$ref": "#/components/schemas/CanonicalSignature"
           },
           "signed_transaction_wire_hex": {
-            "pattern": "^[0-9a-f]+$",
+            "pattern": "^(?:[0-9a-f]{2})+$",
             "type": "string"
           },
           "signed_transaction_wire_sha256": {
@@ -587,16 +793,16 @@
         "additionalProperties": false,
         "properties": {
           "account_id": {
-            "type": "string"
+            "$ref": "#/components/schemas/CanonicalAccountId"
           },
           "alias": {
-            "type": "string"
+            "$ref": "#/components/schemas/CanonicalAccountAliasLiteral"
           },
           "binding": {
-            "$ref": "#/components/schemas/TairaPublicResetMutationBinding"
+            "$ref": "#/components/schemas/TairaPublicResetOnboardingMutationBinding"
           },
           "disposition": {
-            "$ref": "#/components/schemas/JsonValue"
+            "$ref": "#/components/schemas/AliasPlanDispositionV1"
           },
           "operation": {
             "const": "onboarding",
@@ -619,7 +825,7 @@
             "type": "string"
           },
           "server_signature": {
-            "$ref": "#/components/schemas/JsonValue"
+            "$ref": "#/components/schemas/CanonicalSignature"
           }
         },
         "required": [
@@ -2367,6 +2573,266 @@
           "request_id",
           "asset_definition",
           "amount"
+        ],
+        "type": "object"
+      },
+      "CanonicalAccountAliasLiteral": {
+        "description": "Canonical account alias in `label@dataspace` or `label@domain.dataspace` form. Runtime admission also verifies exact UTS-46/NFC canonicalization.",
+        "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)?$",
+        "type": "string"
+      },
+      "CanonicalAccountId": {
+        "description": "Exact canonical domainless I105 AccountId. Runtime admission verifies the complete I105 alphabet, checksum, controller encoding, and byte-for-byte canonical re-rendering.",
+        "minLength": 1,
+        "pattern": "^[^\\s\\u0000-\\u001F\\u007F-\\u009F]+$",
+        "type": "string"
+      },
+      "CanonicalAliasSegment": {
+        "description": "Canonical lowercase single-label UTS-46 alias segment. Runtime admission also verifies the exact normalization profile.",
+        "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$",
+        "type": "string"
+      },
+      "CanonicalSignature": {
+        "description": "Canonical Norito JSON signature payload as nonempty uppercase byte-aligned hexadecimal. Verification enforces the signer algorithm's exact length and rejects all-zero payloads.",
+        "minLength": 2,
+        "not": {
+          "pattern": "^0+$"
+        },
+        "pattern": "^(?:[0-9A-F]{2})+$",
+        "type": "string"
+      },
+      "ResolvedAccountAliasV1": {
+        "additionalProperties": false,
+        "description": "Canonical account-alias text components pinned to the numeric dataspace identifier consensus must revalidate.",
+        "properties": {
+          "canonical_name": {
+            "$ref": "#/components/schemas/AccountAliasName"
+          },
+          "dataspace_id": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "canonical_name",
+          "dataspace_id"
+        ],
+        "type": "object"
+      },
+      "AliasFramedInstructionV1": {
+        "additionalProperties": false,
+        "description": "One exact framed Norito instruction returned by the onboarding planner.",
+        "properties": {
+          "framed_payload": {
+            "items": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "wire_id": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "wire_id",
+          "framed_payload"
+        ],
+        "type": "object"
+      },
+      "AliasLeaseAcquisitionV1": {
+        "additionalProperties": false,
+        "description": "Lease terms used only when the planned account-alias resource remains absent.",
+        "properties": {
+          "pricing_class_hint": {
+            "oneOf": [
+              {
+                "format": "uint8",
+                "maximum": 255,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "term_years": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "term_years",
+          "pricing_class_hint"
+        ],
+        "type": "object"
+      },
+      "AliasLeaseQuoteV1": {
+        "additionalProperties": false,
+        "description": "Exact lease quote attached to an account-alias create plan.",
+        "properties": {
+          "exact_amount": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "expires_at_ms": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "grace_expires_at_ms": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "guard": {
+            "$ref": "#/components/schemas/AliasQuoteGuardV1"
+          },
+          "pricing_class": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "redemption_expires_at_ms": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "target": {
+            "$ref": "#/components/schemas/AccountOnboardingAliasTargetV1"
+          }
+        },
+        "required": [
+          "target",
+          "pricing_class",
+          "exact_amount",
+          "guard",
+          "expires_at_ms",
+          "grace_expires_at_ms",
+          "redemption_expires_at_ms"
+        ],
+        "type": "object"
+      },
+      "AliasPlanAnchorV1": {
+        "additionalProperties": false,
+        "description": "Committed world-state anchor used to classify the onboarding alias plan.",
+        "properties": {
+          "block_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "block_height": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "block_height",
+          "block_hash"
+        ],
+        "type": "object"
+      },
+      "AliasPlanDispositionV1": {
+        "additionalProperties": false,
+        "description": "Canonical externally tagged Norito JSON planner disposition.",
+        "properties": {
+          "kind": {
+            "enum": [
+              "no_op",
+              "repair",
+              "create",
+              "conflict"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "kind",
+          "value"
+        ],
+        "type": "object"
+      },
+      "AliasPlanResourceV1": {
+        "additionalProperties": false,
+        "description": "Exact account-alias resource, disposition, optional quote, and optional instruction index committed by the onboarding receipt.",
+        "properties": {
+          "disposition": {
+            "$ref": "#/components/schemas/AliasPlanDispositionV1"
+          },
+          "instruction_index": {
+            "oneOf": [
+              {
+                "format": "uint32",
+                "maximum": 4294967295,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "intent": {
+            "$ref": "#/components/schemas/AccountOnboardingAliasIntentV1"
+          },
+          "quote": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AliasLeaseQuoteV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "intent",
+          "disposition",
+          "quote",
+          "instruction_index"
+        ],
+        "type": "object"
+      },
+      "AliasQuoteGuardV1": {
+        "additionalProperties": false,
+        "description": "Policy, asset, amount, and expiry guard revalidated before onboarding submission.",
+        "properties": {
+          "expected_payment_asset": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "expected_policy_version": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_amount": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "valid_until_ms": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected_policy_version",
+          "expected_payment_asset",
+          "max_amount",
+          "valid_until_ms"
         ],
         "type": "object"
       },
@@ -8541,7 +9007,8 @@
             "additionalProperties": false,
             "properties": {
               "payer": {
-                "const": "authority"
+                "const": "authority",
+                "type": "string"
               },
               "value": {
                 "additionalProperties": false,
@@ -8578,7 +9045,8 @@
             "additionalProperties": false,
             "properties": {
               "payer": {
-                "const": "sponsor"
+                "const": "sponsor",
+                "type": "string"
               },
               "value": {
                 "additionalProperties": false,
@@ -8709,36 +9177,70 @@
                 "const": "accepted"
               },
               "value": {
-                "additionalProperties": false,
-                "properties": {
-                  "debit_source": {
+                "oneOf": [
+                  {
                     "additionalProperties": false,
                     "properties": {
-                      "kind": {
-                        "enum": [
-                          "account",
-                          "sponsor_program"
+                      "debit_source": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "const": "account",
+                            "type": "string"
+                          },
+                          "value": {
+                            "$ref": "#/components/schemas/CanonicalAccountId"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "value"
                         ],
-                        "type": "string"
+                        "type": "object"
                       },
-                      "value": {}
+                      "program_revision": {
+                        "type": "null"
+                      }
                     },
                     "required": [
-                      "kind",
-                      "value"
+                      "debit_source",
+                      "program_revision"
                     ],
                     "type": "object"
                   },
-                  "program_revision": {
-                    "format": "uint64",
-                    "minimum": 1,
-                    "type": "integer"
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "debit_source": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "const": "sponsor_program",
+                            "type": "string"
+                          },
+                          "value": {
+                            "$ref": "#/components/schemas/FeeSponsorProgramId"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "value"
+                        ],
+                        "type": "object"
+                      },
+                      "program_revision": {
+                        "format": "uint64",
+                        "minimum": 1,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "debit_source",
+                      "program_revision"
+                    ],
+                    "type": "object"
                   }
-                },
-                "required": [
-                  "debit_source"
-                ],
-                "type": "object"
+                ]
               }
             },
             "required": [
@@ -44533,12 +45035,45 @@
         ],
         "type": "object"
       },
+      "TairaPublicResetFaucetMutationBinding": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/TairaPublicResetMutationBinding"
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "faucet",
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "Canonical public-reset mutation binding specialized to the faucet operation."
+      },
+      "TairaPublicResetOnboardingMutationBinding": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/TairaPublicResetMutationBinding"
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "onboarding",
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "Canonical public-reset mutation binding specialized to the onboarding operation."
+      },
       "TairaPublicResetMutationBinding": {
         "additionalProperties": false,
         "properties": {
           "authorization_nonce": {
             "maxLength": 32,
             "minLength": 32,
+            "pattern": "^[a-z0-9_-]{32}$",
             "type": "string"
           },
           "authorization_sha256": {
@@ -44546,6 +45081,7 @@
             "type": "string"
           },
           "execution_expires_at_unix_ms": {
+            "format": "uint64",
             "minimum": 1,
             "type": "integer"
           },
@@ -44563,6 +45099,7 @@
           "phase": {
             "maxLength": 128,
             "minLength": 1,
+            "pattern": "^[a-z0-9_-]+$",
             "type": "string"
           },
           "schema": {

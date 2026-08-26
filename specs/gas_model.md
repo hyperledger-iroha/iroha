@@ -160,6 +160,30 @@ bounds, and every Norito decode limit. A change to any of those values or to
 the charge-point ordering therefore changes `ivm::gas::schedule_hash()` and is
 rejected by the signed peer handshake when validators disagree.
 
+## Direct signature-verification gas
+
+`ED25519VERIFY`, `ECDSAVERIFY`, and `DILITHIUMVERIFY` charge their opcode base
+plus one gas for every payload byte in the message, signature, and public-key
+TLVs:
+
+```text
+gas = opcode_base
+    + message_payload_bytes
+    + signature_payload_bytes
+    + public_key_payload_bytes
+```
+
+The VM validates the three public TLV ranges and debits the complete byte
+surcharge before checksum hashing or cryptographic verification. Operand roles
+are charged independently even when two or more registers alias the same TLV,
+because each role is validated independently. Malformed public pointers retain
+the historical boolean-failure behavior and consume only the fixed base; a
+private range always traps instead of being converted into a public result.
+
+The schedule descriptor commits formula version 1 and the per-payload-byte
+rate, so peers with different direct-signature metering derive different
+schedule hashes.
+
 ## Vector scaling and HTM retries
 
 - Vector ops (`VADD*`, `VAND`, `VXOR`, `VOR`, `VROT32`) scale with the logical

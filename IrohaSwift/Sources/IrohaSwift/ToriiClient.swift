@@ -21281,6 +21281,8 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     private let serverClockQueue = DispatchQueue(label: "org.hyperledger.iroha.torii.server-clock")
     private var observedServerClock: ObservedServerClock?
     private static let defaultListPageSize = 100
+    private static let feeQuoteResponseMaximumBytes = 64 * 1024
+    private static let feeSponsorProgramResponseMaximumBytes = 64 * 1024
     private static let sccpCapabilitiesResponseMaximumBytes = 64 * 1024
     private static let sccpRecentMessagesResponseMaximumBytes = 8 * 1024 * 1024
     private static let sccpDiscoveryResponseMaximumBytes = 64 * 1024 * 1024
@@ -22181,6 +22183,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         _ receipt: ToriiAccountOnboardingPlanReceipt,
         request originalRequest: ToriiAccountOnboardingPlanRequest,
         binding: ToriiTairaPublicResetMutationBindingV1,
+        feePayment: FeePaymentIntent,
         onboardingToken: String,
         expectedAuthority: String,
         expectedNetworkId: NetworkId,
@@ -22195,6 +22198,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                 receipt,
                 request: originalRequest,
                 binding: binding,
+                feePayment: feePayment,
                 onboardingToken: onboardingToken,
                 expectedAuthority: expectedAuthority,
                 expectedNetworkId: expectedNetworkId,
@@ -22237,6 +22241,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     @discardableResult
     public func submitPreparedAccountOnboarding(
         _ prepared: ToriiAccountOnboardingPreparedTransactionV1,
+        expectedFeePayment: FeePaymentIntent,
         request originalRequest: ToriiAccountOnboardingPlanRequest,
         onboardingToken: String,
         expectedAuthority: String,
@@ -22250,6 +22255,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         runTask(completion) {
             try await self.submitPreparedAccountOnboarding(
                 prepared,
+                expectedFeePayment: expectedFeePayment,
                 request: originalRequest,
                 onboardingToken: onboardingToken,
                 expectedAuthority: expectedAuthority,
@@ -22263,7 +22269,8 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     public func prepareAccountFaucet(
         _ claim: ToriiAccountFaucetClaimV1,
         binding: ToriiTairaPublicResetMutationBindingV1,
-        expectedAuthority: String,
+        feePayment: FeePaymentIntent,
+        policy: ToriiAccountFaucetPolicyV1,
         expectedNetworkId: NetworkId,
         completion: @escaping (
             Result<ToriiAccountFaucetPreparedTransactionV1, Swift.Error>
@@ -22273,7 +22280,8 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             try await self.prepareAccountFaucet(
                 claim,
                 binding: binding,
-                expectedAuthority: expectedAuthority,
+                feePayment: feePayment,
+                policy: policy,
                 expectedNetworkId: expectedNetworkId
             )
         }
@@ -22282,7 +22290,8 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     @discardableResult
     public func submitPreparedAccountFaucet(
         _ prepared: ToriiAccountFaucetPreparedTransactionV1,
-        expectedAuthority: String,
+        expectedFeePayment: FeePaymentIntent,
+        policy: ToriiAccountFaucetPolicyV1,
         expectedNetworkId: NetworkId,
         completion: @escaping (
             Result<ToriiPreparedTransactionSubmitResponseV1, Swift.Error>
@@ -22291,7 +22300,8 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         runTask(completion) {
             try await self.submitPreparedAccountFaucet(
                 prepared,
-                expectedAuthority: expectedAuthority,
+                expectedFeePayment: expectedFeePayment,
+                policy: policy,
                 expectedNetworkId: expectedNetworkId
             )
         }
@@ -22407,6 +22417,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         _ receipt: ToriiAccountOnboardingPlanReceipt,
         request originalRequest: ToriiAccountOnboardingPlanRequest,
         binding: ToriiTairaPublicResetMutationBindingV1,
+        feePayment: FeePaymentIntent,
         onboardingToken: String,
         expectedAuthority: String,
         expectedNetworkId: NetworkId,
@@ -22429,7 +22440,8 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         let exactOnboardingToken = try Self.validatedAccountOnboardingToken(onboardingToken)
         let prepareRequest = try ToriiAccountOnboardingPrepareRequestV1(
             binding: binding,
-            receipt: receipt
+            receipt: receipt,
+            feePayment: feePayment
         )
         let body = try JSONEncoder().encode(prepareRequest)
         let request = try makeRequest(
@@ -22463,6 +22475,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                 receipt: receipt,
                 binding: binding,
                 semanticHashHex: semanticHashHex,
+                expectedFeePayment: feePayment,
                 expectedAuthority: expectedAuthority,
                 expectedNetworkId: expectedNetworkId
             )
@@ -22588,6 +22601,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     /// Submits only a retained envelope whose receipt still matches the exact durable request.
     public func submitPreparedAccountOnboarding(
         _ prepared: ToriiAccountOnboardingPreparedTransactionV1,
+        expectedFeePayment: FeePaymentIntent,
         request originalRequest: ToriiAccountOnboardingPlanRequest,
         onboardingToken: String,
         expectedAuthority: String,
@@ -22610,6 +22624,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             receipt: prepared.receipt,
             binding: prepared.binding,
             semanticHashHex: semanticHashHex,
+            expectedFeePayment: expectedFeePayment,
             expectedAuthority: expectedAuthority,
             expectedNetworkId: expectedNetworkId
         )
@@ -22652,14 +22667,16 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     public func prepareAccountFaucet(
         _ claim: ToriiAccountFaucetClaimV1,
         binding: ToriiTairaPublicResetMutationBindingV1,
-        expectedAuthority: String,
+        feePayment: FeePaymentIntent,
+        policy: ToriiAccountFaucetPolicyV1,
         expectedNetworkId: NetworkId
     ) async throws -> ToriiAccountFaucetPreparedTransactionV1 {
         let nowMilliseconds = UInt64(Date().timeIntervalSince1970 * 1_000)
         try binding.validate(expectedOperation: .faucet, activeAtUnixMs: nowMilliseconds)
         let prepareRequest = try ToriiAccountFaucetPrepareRequestV1(
             binding: binding,
-            claim: claim
+            claim: claim,
+            feePayment: feePayment
         )
         let request = try makeRequest(
             path: "/v1/accounts/faucet/prepare",
@@ -22679,7 +22696,8 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         try result.validate(
             claim: claim,
             binding: binding,
-            expectedAuthority: expectedAuthority,
+            expectedFeePayment: feePayment,
+            policy: policy,
             expectedNetworkId: expectedNetworkId
         )
         return result
@@ -22687,13 +22705,15 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
 
     public func submitPreparedAccountFaucet(
         _ prepared: ToriiAccountFaucetPreparedTransactionV1,
-        expectedAuthority: String,
+        expectedFeePayment: FeePaymentIntent,
+        policy: ToriiAccountFaucetPolicyV1,
         expectedNetworkId: NetworkId
     ) async throws -> ToriiPreparedTransactionSubmitResponseV1 {
         try prepared.validate(
             claim: prepared.claim,
             binding: prepared.binding,
-            expectedAuthority: expectedAuthority,
+            expectedFeePayment: expectedFeePayment,
+            policy: policy,
             expectedNetworkId: expectedNetworkId
         )
         let request = try makeRequest(
@@ -25665,17 +25685,34 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             )
         }
         guard case let .string(authority)? = unsignedPayload["authority"],
-              authority == canonicalAuth.accountId else {
+              (try? exactCanonicalToriiAccountAddress(authority)) != nil else {
             throw ToriiClientError.invalidPayload(
-                "canonicalAuth.accountId must equal unsignedPayload.authority."
+                "unsignedPayload.authority must be an exact canonical I105 account id."
             )
+        }
+        if (try? exactCanonicalToriiAccountAddress(canonicalAuth.accountId)) != nil {
+            guard (try? toriiAccountIdsHaveSameIdentity(
+                authority,
+                canonicalAuth.accountId
+            )) == true else {
+                throw ToriiClientError.invalidPayload(
+                    "canonicalAuth.accountId must identify unsignedPayload.authority."
+                )
+            }
+        } else {
+            guard canonicalRequestAccountHeaderValue(canonicalAuth.accountId)
+                    == canonicalAuth.accountId else {
+                throw ToriiClientError.invalidPayload(
+                    "canonicalAuth.accountId must be an exact canonical I105 account id or active ASCII alias."
+                )
+            }
         }
         guard let feeValue = unsignedPayload["fee_payment"] else {
             throw ToriiClientError.invalidPayload(
                 "unsignedPayload.fee_payment must be an exact FeePaymentIntent object."
             )
         }
-        _ = try feeValue.decode(as: FeePaymentIntent.self)
+        let draftIntent = try feeValue.decode(as: FeePaymentIntent.self)
         guard case let .object(admissionIntent)? = unsignedPayload["admission_intent"],
               Set(admissionIntent.keys) == Set(["intent", "value"]),
               case let .string(intent)? = admissionIntent["intent"],
@@ -25735,8 +25772,20 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             body: body,
             canonicalAuth: canonicalAuth
         )
-        let data = try await data(for: request, acceptedStatus: 200..<201)
-        return try decodeJSON(FeeQuoteResponse.self, from: data)
+        let (data, response) = try await sendBoundedSccpResponse(
+            request,
+            context: "fee quote",
+            maximumBytes: Self.feeQuoteResponseMaximumBytes
+        )
+        try ensureStatus(response, equals: 200, responseBody: data)
+        try ensureResponseMediaType(response, equals: "application/json")
+        try rejectDuplicateJSONKeys(
+            data,
+            context: "fee quote response"
+        )
+        let quote = try decodeJSON(FeeQuoteResponse.self, from: data)
+        _ = try quote.applying(to: draftIntent, authority: authority)
+        return quote
     }
 
     /// Quote and replace only `fee_payment`, rejecting payer, revision, or gas substitution.
@@ -25748,11 +25797,17 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             throw ToriiClientError.invalidPayload("unsignedPayload.fee_payment is required.")
         }
         let draftIntent = try draftValue.decode(as: FeePaymentIntent.self)
+        guard case let .string(authority)? = unsignedPayload["authority"] else {
+            throw ToriiClientError.invalidPayload("unsignedPayload.authority is required.")
+        }
         let quote = try await quoteFees(
             unsignedPayload: unsignedPayload,
             canonicalAuth: canonicalAuth
         )
-        let quotedIntent = try quote.applying(to: draftIntent)
+        let quotedIntent = try quote.applying(
+            to: draftIntent,
+            authority: authority
+        )
         let quotedJSON = try JSONDecoder().decode(
             ToriiJSONValue.self,
             from: quotedIntent.canonicalJSONData()
@@ -25776,8 +25831,24 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             body: body,
             canonicalAuth: canonicalAuth
         )
-        let data = try await data(for: request, acceptedStatus: 200..<201)
-        return try decodeJSON(FeeSponsorProgram.self, from: data)
+        let (data, response) = try await sendBoundedSccpResponse(
+            request,
+            context: "fee sponsor program",
+            maximumBytes: Self.feeSponsorProgramResponseMaximumBytes
+        )
+        try ensureStatus(response, equals: 200, responseBody: data)
+        try ensureResponseMediaType(response, equals: "application/json")
+        try rejectDuplicateJSONKeys(
+            data,
+            context: "fee sponsor program response"
+        )
+        let program = try decodeJSON(FeeSponsorProgram.self, from: data)
+        guard program.id == id else {
+            throw ToriiClientError.invalidPayload(
+                "fee sponsor program response id does not match the requested program"
+            )
+        }
+        return program
     }
 
     public func fetchContractCodeBytes(codeHashHex: String, canonicalAuth: ToriiCanonicalRequestAuth) async throws -> ToriiContractCodeBytes {
@@ -25930,6 +26001,16 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         guard response.value(forHTTPHeaderField: "Location") == expectedStatusUri else {
             throw ToriiClientError.invalidPayload(
                 "Kagemusha operation Location must match the canonical status resource"
+            )
+        }
+        guard let retryAfter = response.value(forHTTPHeaderField: "Retry-After"),
+              !retryAfter.isEmpty,
+              retryAfter.utf8.count <= 20,
+              retryAfter.utf8.allSatisfy({ $0 >= UInt8(ascii: "0") && $0 <= UInt8(ascii: "9") }),
+              let retryAfterSeconds = UInt64(retryAfter),
+              retryAfterSeconds > 0 else {
+            throw ToriiClientError.invalidPayload(
+                "Kagemusha operation Retry-After must be a positive u64 delay in seconds"
             )
         }
         return reference
@@ -27997,15 +28078,101 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                 "response Content-Type must be \(expected)"
             )
         }
-        let mediaType = rawValue
-            .split(separator: ";", maxSplits: 1, omittingEmptySubsequences: false)[0]
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-        guard mediaType == expected else {
+        // Foundation comma-folds repeated Content-Type fields. Content-Type is a
+        // singleton representation header, so reject both repeated equal values
+        // and conflicting values instead of selecting one implicitly.
+        guard Self.isUnambiguousMediaType(rawValue, expected: expected) else {
             throw ToriiClientError.invalidPayload(
-                "response Content-Type must be \(expected)"
+                "response Content-Type must be one \(expected) media type"
             )
         }
+    }
+
+    private static func isUnambiguousMediaType(
+        _ rawValue: String,
+        expected: String
+    ) -> Bool {
+        var bytes: [UInt8] = []
+        bytes.reserveCapacity(rawValue.unicodeScalars.count)
+        for scalar in rawValue.unicodeScalars {
+            guard scalar.value <= UInt8.max else { return false }
+            bytes.append(UInt8(scalar.value))
+        }
+        guard !bytes.contains(UInt8(ascii: ",")) else { return false }
+
+        let expectedBytes = Array(expected.utf8)
+        var index = 0
+        func skipOWS() {
+            while index < bytes.count && (bytes[index] == 0x20 || bytes[index] == 0x09) {
+                index += 1
+            }
+        }
+        func isToken(_ byte: UInt8) -> Bool {
+            switch byte {
+            case 0x30...0x39, 0x41...0x5A, 0x61...0x7A,
+                 0x21, 0x23, 0x24, 0x25, 0x26, 0x27, 0x2A, 0x2B,
+                 0x2D, 0x2E, 0x5E, 0x5F, 0x60, 0x7C, 0x7E:
+                return true
+            default:
+                return false
+            }
+        }
+        func isQuotedText(_ byte: UInt8) -> Bool {
+            byte == 0x09 || (0x20...0x21).contains(byte)
+                || (0x23...0x5B).contains(byte) || (0x5D...0x7E).contains(byte)
+                || (0x80...0xFF).contains(byte)
+        }
+        func isQuotedPair(_ byte: UInt8) -> Bool {
+            byte == 0x09 || (0x20...0x7E).contains(byte) || (0x80...0xFF).contains(byte)
+        }
+
+        skipOWS()
+        guard index + expectedBytes.count <= bytes.count else { return false }
+        for offset in expectedBytes.indices {
+            let actual = bytes[index + offset]
+            let folded = (0x41...0x5A).contains(actual) ? actual + 0x20 : actual
+            guard folded == expectedBytes[offset] else { return false }
+        }
+        index += expectedBytes.count
+        skipOWS()
+        while index < bytes.count {
+            guard bytes[index] == UInt8(ascii: ";") else { return false }
+            index += 1
+            skipOWS()
+            let nameStart = index
+            while index < bytes.count && isToken(bytes[index]) { index += 1 }
+            guard index > nameStart,
+                  index < bytes.count,
+                  bytes[index] == UInt8(ascii: "=") else { return false }
+            index += 1
+            guard index < bytes.count else { return false }
+            if bytes[index] == UInt8(ascii: "\"") {
+                index += 1
+                var closed = false
+                while index < bytes.count {
+                    let byte = bytes[index]
+                    if byte == UInt8(ascii: "\"") {
+                        index += 1
+                        closed = true
+                        break
+                    }
+                    if byte == UInt8(ascii: "\\") {
+                        index += 1
+                        guard index < bytes.count, isQuotedPair(bytes[index]) else { return false }
+                    } else if !isQuotedText(byte) {
+                        return false
+                    }
+                    index += 1
+                }
+                guard closed else { return false }
+            } else {
+                let valueStart = index
+                while index < bytes.count && isToken(bytes[index]) { index += 1 }
+                guard index > valueStart else { return false }
+            }
+            skipOWS()
+        }
+        return true
     }
 
     private func data(for request: URLRequest,

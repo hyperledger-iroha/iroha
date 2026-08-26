@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.sdk.crypto.keystore
 
 import java.security.KeyPair
+import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 import org.hyperledger.iroha.sdk.crypto.KeyGenerationOutcome
 import org.hyperledger.iroha.sdk.crypto.KeyManagementException
@@ -140,7 +141,7 @@ class KeystoreKeyProvider @JvmOverloads constructor(
             ?: throw KeyManagementException(
                 "Attestation challenge is not supported by backend ${backend.name()}"
             )
-        return cacheAttestation(alias, normalizedChallenge, attestation)
+        return attestation
     }
 
     /**
@@ -154,25 +155,52 @@ class KeystoreKeyProvider @JvmOverloads constructor(
         verifier: AttestationVerifier,
         expectedChallenge: ByteArray?,
     ): AttestationResult? {
-        val challenge = expectedChallenge?.copyOf() ?: NO_CHALLENGE
+        if (expectedChallenge == null || expectedChallenge.isEmpty()) {
+            throw AttestationVerificationException(
+                "Expected attestation challenge must be non-empty"
+            )
+        }
+        val challenge = expectedChallenge.copyOf()
         val attestation = try {
-            fetchAttestation(alias, challenge)
+            fetchFreshAttestation(alias, challenge)
         } catch (_: KeyManagementException) {
             return null
         } ?: return null
         try {
-            return if (expectedChallenge == null) {
-                verifier.verify(attestation)
-            } else {
-                verifier.verify(attestation, expectedChallenge.copyOf())
+            val result = verifier.verify(attestation, challenge)
+            val loadedKey = try {
+                backend.load(alias)
+            } catch (ex: KeyManagementException) {
+                throw AttestationVerificationException(
+                    "Failed to load the attested alias key",
+                    ex,
+                )
+            } catch (ex: RuntimeException) {
+                throw AttestationVerificationException(
+                    "Failed to load the attested alias key",
+                    ex,
+                )
             }
+            val aliasPublicKey = loadedKey?.public?.encoded
+            val attestedPublicKey = result.leafCertificate.publicKey?.encoded
+            if (aliasPublicKey == null) {
+                throw AttestationVerificationException("Attested alias key is unavailable")
+            }
+            if (attestedPublicKey == null ||
+                !MessageDigest.isEqual(aliasPublicKey, attestedPublicKey)
+            ) {
+                throw AttestationVerificationException(
+                    "Attested leaf public key does not match the alias key"
+                )
+            }
+            return result
         } catch (ex: AttestationVerificationException) {
             evictAttestations(alias)
             throw ex
         }
     }
 
-    /** Verifies attestation without enforcing a challenge match. */
+    /** Retained for binary compatibility; always fails closed because a challenge is required. */
     @Throws(AttestationVerificationException::class)
     fun verifyAttestation(
         alias: String,
@@ -231,13 +259,17 @@ class KeystoreKeyProvider @JvmOverloads constructor(
 
     private fun fetchAttestation(alias: String, challenge: ByteArray?): KeyAttestation? {
         val normalized = challenge?.copyOf() ?: NO_CHALLENGE
+        if (normalized.isNotEmpty()) {
+            return backend.generateAttestation(alias, normalized)
+        }
         val cached = lookupCachedAttestation(alias, normalized)
         if (cached != null) return cached
-        if (normalized.isNotEmpty()) {
-            val generated = backend.generateAttestation(alias, normalized)
-            if (generated != null) return cacheAttestation(alias, normalized, generated)
-        }
         return backend.attestation(alias)?.let { cacheAttestation(alias, normalized, it) }
+    }
+
+    private fun fetchFreshAttestation(alias: String, challenge: ByteArray): KeyAttestation? {
+        evictAttestationEntry(alias, fingerprintChallenge(challenge))
+        return backend.generateAttestation(alias, challenge.copyOf())
     }
 
     private class CacheKey(val alias: String, challengeFingerprint: ByteArray) {

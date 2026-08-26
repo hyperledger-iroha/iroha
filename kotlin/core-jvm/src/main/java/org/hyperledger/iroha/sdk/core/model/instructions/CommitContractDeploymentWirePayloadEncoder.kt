@@ -12,7 +12,9 @@ import org.hyperledger.iroha.sdk.norito.TypeAdapter
 
 /** Encodes the atomic `CommitContractDeployment` standard transaction instruction. */
 object CommitContractDeploymentWirePayloadEncoder {
-    const val WIRE_NAME = "iroha_data_model::isi::smart_contract_code::CommitContractDeployment"
+    const val WIRE_NAME = "iroha.instruction.v1::smart_contract_code::CommitContractDeployment"
+    private const val SCHEMA_NAME =
+        "iroha_data_model::isi::smart_contract_code::CommitContractDeployment"
     private val U64_MAX = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
     private val stringAdapter = NoritoAdapters.stringAdapter()
     private val optionalU64 = NoritoAdapters.option(U64Adapter)
@@ -38,7 +40,10 @@ object CommitContractDeploymentWirePayloadEncoder {
                 exact(it, "expectedPreviousContractAddress")
             }),
         )
-        return InstructionBox.fromWirePayload(WIRE_NAME, NoritoCodec.encode(payload, WIRE_NAME, PayloadAdapter))
+        return InstructionBox.fromWirePayload(
+            WIRE_NAME,
+            NoritoCodec.encode(payload, SCHEMA_NAME, PayloadAdapter),
+        )
     }
 
     private fun exact(value: String, field: String): String {

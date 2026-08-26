@@ -1102,10 +1102,9 @@ fn gov_propose_deploy_against_mock() {
         manifest_provenance: None,
     }
     .into();
-    let wire_id = iroha_data_model::isi::Instruction::id(&*instruction).to_owned();
-    let payload = iroha_data_model::isi::Instruction::dyn_encode(&*instruction);
-    let framed = iroha_data_model::isi::frame_instruction_payload(&wire_id, &payload)
+    let (wire_id, framed) = iroha_data_model::isi::framed_instruction_payload(&instruction)
         .expect("frame deploy proposal instruction");
+    let wire_id = wire_id.to_owned();
     let payload_hex = hex::encode(framed);
     let mut config_payload_map = json::Map::new();
     config_payload_map.insert("referenda".to_string(), json::Value::Array(Vec::new()));

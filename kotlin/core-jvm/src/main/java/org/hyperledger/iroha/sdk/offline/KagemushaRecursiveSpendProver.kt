@@ -2240,13 +2240,36 @@ class KagemushaRecursiveSpendProver private constructor() {
         private fun peerArchivePadding(schema: String): Int = when (schema) {
             "iroha_data_model::offline::model::KagemushaRecipientPaymentRequestV2",
             "iroha_torii_shared::offline_api::OfflineRecipientReceiveOfferV2",
-            "iroha_data_model::offline::model::KagemushaRecursiveSpendPeerPaymentV4" -> 8
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendPeerPaymentV4",
+            "iroha.torii.v1.offline.top_up.request",
+            "iroha.torii.v1.offline.redeem.request" -> 8
             "iroha_data_model::offline::model::KagemushaReceiverAcknowledgementV2" -> 0
             else -> 0
         }
 
         private fun hex(digest: ByteArray): String = buildString(64) {
             for (octet in digest) append("%02x".format(octet.toInt() and 0xff))
+        }
+
+        private fun hasWellFormedUtf16(value: String): Boolean {
+            var index = 0
+            while (index < value.length) {
+                val character = value[index]
+                when {
+                    Character.isHighSurrogate(character) -> {
+                        if (
+                            index + 1 >= value.length ||
+                            !Character.isLowSurrogate(value[index + 1])
+                        ) {
+                            return false
+                        }
+                        index += 2
+                    }
+                    Character.isLowSurrogate(character) -> return false
+                    else -> index++
+                }
+            }
+            return true
         }
 
         @JvmStatic
@@ -3830,14 +3853,35 @@ class KagemushaRecursiveSpendProver private constructor() {
 
     enum class OperationKind { TOP_UP, REDEEM }
 
-    class OperationRejection(val code: String, val message: String)
+    class OperationRejection(val code: String, val message: String) {
+        init {
+            require(
+                code.length in 1..64 &&
+                    (code[0] in 'a'..'z' || code[0] in '0'..'9') &&
+                    code.all { it in 'a'..'z' || it in '0'..'9' || it == '_' },
+            ) { "rejection code must use the stable lowercase code grammar" }
+            require(
+                message.isNotEmpty() &&
+                    message == message.trim() &&
+                    message.none(Char::isISOControl) &&
+                    hasWellFormedUtf16(message) &&
+                    message.codePointCount(0, message.length) <= 1_024 &&
+                    message.toByteArray(Charsets.UTF_8).size <= 4_096,
+            ) { "rejection message must be bounded canonical text" }
+        }
+    }
 
     class FinalizedTopUp internal constructor(
         val anchor: TopUpAnchorV4,
         val finalityProof: TopUpFinalityProof,
         val finalizedBlockHeight: Long,
         val serverTimeMilliseconds: Long,
-    )
+    ) {
+        init {
+            require(finalizedBlockHeight > 0) { "finalizedBlockHeight must be positive" }
+            require(serverTimeMilliseconds > 0) { "serverTimeMilliseconds must be positive" }
+        }
+    }
 
     class OperationStatusProjection internal constructor(
         val state: OperationState,
@@ -3852,6 +3896,31 @@ class KagemushaRecursiveSpendProver private constructor() {
     ) {
         private val operationIdValue = requireDigest(operationId, "operationId")
         private val transactionHashValue = requireDigest(transactionHash, "transactionHash")
+
+        init {
+            when (state) {
+                OperationState.PENDING -> require(
+                    submittedAtMilliseconds != null && submittedAtMilliseconds > 0 &&
+                        finalizedBlockHeight == null && serverTimeMilliseconds == null &&
+                        finalizedTopUp == null && rejection == null,
+                ) { "pending operation status fields are invalid" }
+                OperationState.APPLIED -> require(
+                    submittedAtMilliseconds == null &&
+                        finalizedBlockHeight != null && finalizedBlockHeight > 0 &&
+                        serverTimeMilliseconds != null && serverTimeMilliseconds > 0 &&
+                        rejection == null &&
+                        ((kind == OperationKind.TOP_UP && finalizedTopUp != null &&
+                            finalizedTopUp.finalizedBlockHeight == finalizedBlockHeight &&
+                            finalizedTopUp.serverTimeMilliseconds == serverTimeMilliseconds) ||
+                            (kind == OperationKind.REDEEM && finalizedTopUp == null)),
+                ) { "applied operation status fields are invalid" }
+                OperationState.REJECTED -> require(
+                    submittedAtMilliseconds == null && finalizedBlockHeight == null &&
+                        serverTimeMilliseconds == null && finalizedTopUp == null &&
+                        rejection != null,
+                ) { "rejected operation status fields are invalid" }
+            }
+        }
 
         fun operationId(): ByteArray = operationIdValue.copyOf()
 
@@ -3881,6 +3950,32 @@ class KagemushaRecursiveSpendProver private constructor() {
                         value.all { it in '0'..'9' || it in 'a'..'f' },
                 ) { "operationId must be non-zero lowercase 32-byte hex" }
                 return value
+            }
+
+            private fun requireCommandResponseHeaders(
+                response: TransportResponse,
+                operationId: String,
+            ) {
+                val expectedLocation = "$OPERATIONS_PATH/$operationId"
+                check(response.headers["Location"] == listOf(expectedLocation)) {
+                    "Kagemusha Torii Location must match the canonical operation resource"
+                }
+                val retryAfterValues = response.headers["Retry-After"].orEmpty()
+                check(retryAfterValues.size == 1) {
+                    "Kagemusha Torii Retry-After must occur exactly once"
+                }
+                val retryAfter = retryAfterValues.single()
+                check(
+                    retryAfter.isNotEmpty() && retryAfter.length <= 20 &&
+                        retryAfter.all { it in '0'..'9' },
+                ) { "Kagemusha Torii Retry-After must be a positive u64 delay" }
+                val significant = retryAfter.dropWhile { it == '0' }
+                check(
+                    significant.isNotEmpty() &&
+                        (significant.length < 20 ||
+                            significant == "18446744073709551615" ||
+                            significant < "18446744073709551615"),
+                ) { "Kagemusha Torii Retry-After must be a positive u64 delay" }
             }
 
             private fun stripTrailingSlash(value: String): String = value.trimEnd('/')
@@ -4010,7 +4105,10 @@ class KagemushaRecursiveSpendProver private constructor() {
                     .setMaximumResponseBytes(MAX_TORII_RESPONSE_BYTES.toLong())
                     .build(),
                 202,
-            ).thenApply { OperationReference(it.body) }
+            ).thenApply {
+                requireCommandResponseHeaders(it, id)
+                OperationReference(it.body)
+            }
         }
 
         private fun execute(

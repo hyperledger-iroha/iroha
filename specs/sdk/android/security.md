@@ -40,7 +40,7 @@ the weekly AND2/AND6 governance sync.
 ## 3. Attestation Report Pipeline
 
 1. **Capture**
-   - Run `scripts/android_keystore_attestation.sh --bundle-dir artifacts/android/attestation/<fleet_tag>/<date> --alias <alias> --challenge $(scripts/android_strongbox_attestation_report.py challenge)` on each device.
+   - Run `scripts/android_keystore_attestation.sh --bundle-dir artifacts/android/attestation/<fleet_tag>/<date> --alias <alias> --challenge-hex <challenge> --revocation-snapshot <capture>/android-sdk-revocation-snapshot-v1.txt --revocation-snapshot-sha256 <separately-trusted-governance-commitment> --evaluation-time-ms <ms>` on each device. Generate the canonical snapshot with `scripts/capture_android_attestation_status.py`, adding reviewed TBS digests there; do not reconstruct its fields at the harness boundary or obtain the commitment from the same untrusted snapshot path.
    - Follow the bundle layout defined in
      `readiness/android_strongbox_attestation_bundle.md` (`chain.pem`,
      `challenge.hex`, `alias.txt`, `result.json`, optional `trust_root_*.pem`).
@@ -50,7 +50,8 @@ the weekly AND2/AND6 governance sync.
    - `scripts/android_strongbox_attestation_ci.sh --bundle-dir ...` is the
      offline-friendly guard used in Buildkite. It validates:
      - Certificate chain rooted in the vendor trust anchor.
-     - Challenge binding and expiration.
+     - Mandatory challenge binding plus certificate validity at the explicit evaluation time.
+     - Freshness of the governed offline status snapshot and serial/TBS-hash revocation for the full chain and configured anchors.
      - Security level (`STRONGBOX`, `TEE`, `SOFTWARE`) surfaced to telemetry.
    - Results feed into
      `readiness/android_strongbox_attestation_run_log.md` and the `torii_request`

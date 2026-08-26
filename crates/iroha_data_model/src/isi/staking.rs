@@ -573,9 +573,15 @@ mod slice_tests {
             .register_with_id_slice::<RegisterPublicLaneValidator>(
                 "iroha.instruction.v1::staking::RegisterPublicLaneValidator",
             )
-            .register_with_id_slice::<RebindPublicLaneValidatorPeer>("iroha.staking.rebind_public_lane_validator_peer")
-            .register_with_id_slice::<ActivatePublicLaneValidator>("iroha.staking.activate_public_lane_validator")
-            .register_with_id_slice::<ExitPublicLaneValidator>("iroha.staking.exit_public_lane_validator")
+            .register_with_id_slice::<RebindPublicLaneValidatorPeer>(
+                "iroha.staking.rebind_public_lane_validator_peer",
+            )
+            .register_with_id_slice::<ActivatePublicLaneValidator>(
+                "iroha.staking.activate_public_lane_validator",
+            )
+            .register_with_id_slice::<ExitPublicLaneValidator>(
+                "iroha.staking.exit_public_lane_validator",
+            )
             .register_with_id_slice::<CancelConsensusEvidencePenalty>(
                 "iroha.instruction.v1::staking::CancelConsensusEvidencePenalty",
             );
@@ -716,8 +722,8 @@ mod slice_tests {
         )
         .expect("frame forged bond");
         const WIRE_ID: &str = "iroha.instruction.v1::staking::BondPublicLaneStake";
-        let registry = crate::isi::InstructionRegistry::new()
-            .register_with_id::<BondPublicLaneStake>(WIRE_ID);
+        let registry =
+            crate::isi::InstructionRegistry::new().register_with_id::<BondPublicLaneStake>(WIRE_ID);
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             registry
                 .decode(WIRE_ID, &framed)

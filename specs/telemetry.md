@@ -53,8 +53,10 @@ Network time telemetry
 - `nts_fallback` (gauge) — 1 when NTS falls back to local time.
 - `nts_healthy` (gauge) — 1 when health thresholds pass and no fallback.
 - `nts_min_samples_ok` / `nts_offset_ok` / `nts_confidence_ok` (gauges) — per-check health flags.
-- `nts_rtt_ms_bucket{le="..."}` / `nts_rtt_ms_sum` / `nts_rtt_ms_count` — RTT histogram buckets (ms) and aggregates.
+- `nts_rtt_ms_bucket{le="..."}` / `nts_rtt_ms_sum` / `nts_rtt_ms_count` — cumulative RTT histogram buckets (ms, including `+Inf`) and aggregates.
 - `torii_nts_unhealthy_reject_total` (counter) — time-sensitive transactions rejected during admission because NTS is unhealthy.
+
+NTS status gauges and RTT counters are captured under one service lock per scrape, so one export cannot mix sampler generations.
 
 Runbook guidance
 - Alert when `max_over_time(nts_healthy[5m]) == 0` or `max_over_time(nts_fallback[5m]) > 0`; these indicate the time service is unsynchronized or missing samples.

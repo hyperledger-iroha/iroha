@@ -54,6 +54,21 @@ test("browser crypto normalizes all algorithm labels but only signs Ed25519 loca
       /unsupported crypto algorithm/,
       `${label} rejects Cyrillic aliases`,
     );
+    for (const algorithm of [
+      "mldsa44",
+      "ML-DSA-44",
+      "ML_DSA_87",
+      "Ml.DsA/44",
+      "ML-DSA-4-4",
+      "ML-DSA-４４",
+      "ML-DSA-８７",
+    ]) {
+      assert.throws(
+        () => crypto.normalizeCryptoAlgorithm(algorithm),
+        /unsupported crypto algorithm/,
+        `${label} must reject non-protocol suite alias ${algorithm}`,
+      );
+    }
   }
   assert.equal(generateKeyPair({ seed: Buffer.alloc(32, 7) }).algorithm, "ed25519");
   assert.throws(

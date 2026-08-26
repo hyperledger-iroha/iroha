@@ -95,7 +95,10 @@ pub enum SccpRouteGovernanceActionV1 {
     /// Append and select the next native source trust anchor without deleting history.
     #[codec(index = 4)]
     AdvanceTrustAnchor(SccpAdvanceLaneTrustAnchorV1),
-    /// Remove a never-used staged route.
+    /// Remove a never-used staged non-TRON route.
+    ///
+    /// Registered TRON routes remain retained because the immutable contract
+    /// address is part of the native replay boundary.
     #[codec(index = 5)]
     Remove(crate::bridge::SccpRouteKeyV1),
 }
@@ -830,7 +833,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RecordSccpMessage {
 mod tests {
     use super::*;
     use crate::isi::test_support::{
-assert_registry_decodes_registered_type as assert_registry_decodes, assert_slice_roundtrip,
+        assert_registry_decodes_registered_type as assert_registry_decodes, assert_slice_roundtrip,
     };
     use crate::{
         bridge::{
@@ -895,12 +898,20 @@ assert_registry_decodes_registered_type as assert_registry_decodes, assert_slice
         assert_slice_roundtrip(RecordSccpMessage::new(outbound_context(), vec![0xCA, 0xFE]));
     }
     #[test]
-fn bridge_registry_decodes_canonical_wire_ids() {
+    fn bridge_registry_decodes_canonical_wire_ids() {
         let registry = crate::isi::InstructionRegistry::new()
-.register_with_id_slice::<SubmitBridgeProof>("iroha.instruction.v1::bridge::SubmitBridgeProof")
-            .register_with_id_slice::<RecordBridgeReceipt>("iroha.instruction.v1::bridge::RecordBridgeReceipt")
-            .register_with_id_slice::<ApplySccpRouteGovernance>("iroha.instruction.v1::bridge::ApplySccpRouteGovernance")
-            .register_with_id_slice::<RecordSccpMessage>("iroha.instruction.v1::bridge::RecordSccpMessage");
+            .register_with_id_slice::<SubmitBridgeProof>(
+                "iroha.instruction.v1::bridge::SubmitBridgeProof",
+            )
+            .register_with_id_slice::<RecordBridgeReceipt>(
+                "iroha.instruction.v1::bridge::RecordBridgeReceipt",
+            )
+            .register_with_id_slice::<ApplySccpRouteGovernance>(
+                "iroha.instruction.v1::bridge::ApplySccpRouteGovernance",
+            )
+            .register_with_id_slice::<RecordSccpMessage>(
+                "iroha.instruction.v1::bridge::RecordSccpMessage",
+            );
         assert_registry_decodes(&registry, SubmitBridgeProof::new(proof()));
         assert_registry_decodes(&registry, RecordBridgeReceipt::new(receipt()));
         assert_registry_decodes(

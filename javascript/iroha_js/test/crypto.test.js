@@ -384,6 +384,13 @@ test("crypto algorithm labels reject unsupported and Unicode-confusable aliases"
       "ed\u200B25519",
       "\u0435d25519",
       "ml\uFF0Ddsa",
+      "mldsa44",
+      "ML-DSA-44",
+      "ML_DSA_87",
+      "Ml.DsA/44",
+      "ML-DSA-4-4",
+      "ML-DSA-４４",
+      "ML-DSA-８７",
       "gost3410-2012-512-paramset-\u0432",
     ]) {
       assert.throws(

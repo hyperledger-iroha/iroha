@@ -2107,7 +2107,10 @@ pub struct PowConfig {
     /// Optional signed token authentication layer.
     #[norito(default)]
     pub token: Option<TokenConfig>,
-    /// Replay filter enforcing nonce uniqueness for admission.
+    /// Retired descriptor replay-filter settings retained for config compatibility.
+    ///
+    /// Enabling this field is rejected because the only available descriptor is relay-static;
+    /// credential-specific replay protection is enforced by the durable ticket/token stores.
     #[norito(default)]
     pub replay_filter: ReplayFilterConfig,
     /// Emergency throttle applied when the relay is degraded.
@@ -2729,7 +2732,7 @@ impl GuardDirectoryConfig {
         self.pinning_proof_path.as_deref()
     }
 }
-/// Configuration for the blinded descriptor replay filter.
+/// Retired configuration for the blinded descriptor replay filter.
 #[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
 pub struct ReplayFilterConfig {
     /// Whether the replay filter is enforced during handshakes.
@@ -2789,7 +2792,17 @@ impl ReplayFilterConfig {
         if self.ttl_secs == 0 {
             self.ttl_secs = Self::default_ttl_secs();
         }
-        Ok(())
+        self.ensure_disabled()
+    }
+    /// Reject the retired relay-static filter even when a caller bypasses config normalization.
+    pub(crate) fn ensure_disabled(&self) -> Result<(), ConfigError> {
+        if !self.enabled {
+            return Ok(());
+        }
+        Err(ConfigError::ReplayFilter(
+            "pow.replay_filter.enabled is unsupported because the descriptor is relay-static; use the credential-specific durable replay stores"
+                .to_owned(),
+        ))
     }
     #[must_use]
     pub fn is_enabled(&self) -> bool {
@@ -2817,10 +2830,10 @@ pub struct QuotaConfig {
     /// Window (seconds) over which `per_remote_burst` is measured.
     #[norito(default = "QuotaConfig::default_per_remote_window_secs")]
     pub per_remote_window_secs: u64,
-    /// Burst of circuits permitted per blinded descriptor.
+    /// Retired per-descriptor burst. It must remain zero because the descriptor is relay-static.
     #[norito(default = "QuotaConfig::default_per_descriptor_burst")]
     pub per_descriptor_burst: u32,
-    /// Window (seconds) over which `per_descriptor_burst` is measured.
+    /// Retired per-descriptor window retained only for configuration-schema compatibility.
     #[norito(default = "QuotaConfig::default_per_descriptor_window_secs")]
     pub per_descriptor_window_secs: u64,
     /// Cooldown applied after exceeding a quota window.
@@ -2850,7 +2863,7 @@ impl QuotaConfig {
         60
     }
     const fn default_per_descriptor_burst() -> u32 {
-        160
+        0
     }
     const fn default_per_descriptor_window_secs() -> u64 {
         60
@@ -2880,6 +2893,11 @@ impl QuotaConfig {
         self.validate_named("quotas")
     }
     fn validate_named(&self, path: &str) -> Result<(), ConfigError> {
+        if self.per_descriptor_burst != 0 {
+            return Err(ConfigError::Quota(format!(
+                "{path}.per_descriptor_burst must be 0 because the descriptor commitment is relay-static; use per-remote quotas and authenticated credential limits"
+            )));
+        }
         if self.max_entries > QUOTA_TRACKER_MAX_ENTRIES_V1 {
             return Err(ConfigError::Quota(format!(
                 "{path}.max_entries ({}) exceeds the first-release limit of {QUOTA_TRACKER_MAX_ENTRIES_V1}",

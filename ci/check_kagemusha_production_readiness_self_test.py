@@ -489,13 +489,37 @@ finally:
     require_no_macos_extended_acl = real_require_no_macos_extended_acl
 if sys.platform == 'darwin':
     try:
+        (descriptor, _) = pin_regular_metadata(
+            SOURCE_GIT,
+            'self-test ACL-free macOS input',
+            require_single_link=False,
+        )
+        try:
+            # SOURCE_GIT already passed the production custody check above and
+            # provides a stable clean control even when the host automatically
+            # labels newly created temporary files with protected provenance.
+            require_no_macos_extended_acl(descriptor, 'self-test ACL-free macOS input')
+        finally:
+            os.close(descriptor)
         with tempfile.TemporaryDirectory(prefix='kagemusha-acl-custody-self-test-') as temporary:
             acl_path = Path(temporary) / 'acl-input'
             acl_path.write_bytes(b'root-custody-acl-test')
             acl_path.chmod(384)
+            added_xattr = subprocess.run(
+                ['/usr/bin/xattr', '-w', 'iroha.kagemusha.self-test', '1', str(acl_path)], cwd=Path('/'),
+                env={'LANG': 'C', 'LC_ALL': 'C', 'PATH': '/usr/bin:/bin'},
+                stdin=subprocess.DEVNULL, check=False, capture_output=True, close_fds=True)
+            if added_xattr.returncode != 0:
+                raise ValueError('could not install the macOS xattr custody fixture')
             (descriptor, _) = pin_regular_metadata(acl_path, 'self-test macOS ACL input')
             try:
-                require_no_macos_extended_acl(descriptor, 'self-test ACL-free macOS input')
+                expect_value_error(
+                    lambda: require_no_macos_extended_acl(
+                        descriptor, 'self-test extended-attribute macOS input'
+                    ),
+                    'self-test failed to reject a macOS extended attribute',
+                    'must not have unbound extended attributes',
+                )
             finally:
                 os.close(descriptor)
             added_acl = subprocess.run(['/bin/chmod', '+a', 'everyone allow read', str(acl_path)], cwd=Path('/'), env={'LANG': 'C',
@@ -1875,6 +1899,16 @@ static_mutations = (
         '                && status.resolved_from == "state"',
         '                && status.resolved_from == "cache"',
         'reject cache-resolved Applied as transaction finality',
+        ('closed global/state finality classification',)),
+    (KAGEMUSHA_ROLLOUT_COMPONENT,
+        '                && status.resolved_from == "state"\n                && status.status.kind == "Rejected"',
+        '                && status.status.kind == "Rejected"',
+        'reject non-state Rejected as transaction finality',
+        ('closed global/state finality classification',)),
+    (KAGEMUSHA_ROLLOUT_COMPONENT,
+        '                && status.resolved_from == "state"\n                && status.status.kind == "Expired"',
+        '                && status.status.kind == "Expired"',
+        'reject non-state Expired as transaction finality',
         ('closed global/state finality classification',)),
     (KAGEMUSHA_ROLLOUT_COMPONENT,
         '                    stage: "proof-anchored Applied result reporting",',

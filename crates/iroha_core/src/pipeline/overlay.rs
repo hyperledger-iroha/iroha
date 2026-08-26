@@ -126,6 +126,9 @@ struct OverlayLifecycleCompletion {
 fn smart_contract_heap_limit(state: &impl StateReadOnly) -> u64 {
     state.world().parameters().smart_contract().memory().get()
 }
+fn configure_zk_lane_trace_collection(vm: &mut ivm::IVM, halo2_enabled: bool) {
+    vm.set_zk_trace_enabled(halo2_enabled && vm.zk_mode_enabled());
+}
 fn validate_overlay_contract_runtime_context(
     world: &impl WorldReadOnly,
     context: &crate::executor::ContractRuntimeExecutionContext,
@@ -2327,7 +2330,7 @@ where
                 .map_err(OverlayBuildError::IvmRun)?;
             vm.set_gas_limit(gas_limit);
             apply_contract_call_execution_context(&mut vm, Some(&contract_call_context))?;
-            vm.set_zk_trace_enabled(false);
+            configure_zk_lane_trace_collection(&mut vm, state_ro.zk().halo2.enabled);
             run_vm_with_host(&mut vm, &mut host)?;
             let ivm_gas_used = gas_limit.saturating_sub(vm.remaining_gas());
             let transport_caps_snapshot = host.transport_caps_snapshot().copied();
@@ -2497,7 +2500,7 @@ where
                 .map_err(OverlayBuildError::IvmRun)?;
             vm.set_gas_limit(gas_limit);
             apply_contract_call_execution_context(&mut vm, contract_call_context.as_ref())?;
-            vm.set_zk_trace_enabled(false);
+            configure_zk_lane_trace_collection(&mut vm, state_ro.zk().halo2.enabled);
             run_vm_with_host(&mut vm, &mut host)?;
             let ivm_gas_used = gas_limit.saturating_sub(vm.remaining_gas());
             let transport_caps_snapshot = host.transport_caps_snapshot().copied();
@@ -2865,7 +2868,7 @@ where
             }
             vm.set_gas_limit(tx_gas_limit);
             apply_contract_call_execution_context(&mut vm, Some(&contract_call_context))?;
-            vm.set_zk_trace_enabled(false);
+            configure_zk_lane_trace_collection(&mut vm, state_ro.zk().halo2.enabled);
             #[cfg(feature = "telemetry")]
             observe_overlay_stage_ms(state_ro, "overlay_host_hydrate", host_hydrate_start);
             #[cfg(feature = "telemetry")]
@@ -3060,7 +3063,7 @@ where
             begin_overlay_access_log(&mut host, capture_access_log)?;
             vm.set_gas_limit(tx_gas_limit);
             apply_contract_call_execution_context(&mut vm, contract_call_context.as_ref())?;
-            vm.set_zk_trace_enabled(false);
+            configure_zk_lane_trace_collection(&mut vm, state_ro.zk().halo2.enabled);
             #[cfg(feature = "telemetry")]
             observe_overlay_stage_ms(state_ro, "overlay_host_hydrate", host_hydrate_start);
             #[cfg(feature = "telemetry")]
@@ -6019,6 +6022,20 @@ mod tests {
     }
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("overlay fixture key generation should succeed")
+    }
+    #[test]
+    fn zk_lane_trace_collection_requires_halo2_and_zk_mode() {
+        let mut vm = ivm::IVM::new(u64::MAX);
+
+        configure_zk_lane_trace_collection(&mut vm, true);
+        assert!(!vm.zk_trace_enabled());
+
+        vm.set_zk_mode(true);
+        configure_zk_lane_trace_collection(&mut vm, false);
+        assert!(!vm.zk_trace_enabled());
+
+        configure_zk_lane_trace_collection(&mut vm, true);
+        assert!(vm.zk_trace_enabled());
     }
     #[test]
     fn ivm_proved_canonical_boundaries_reject_alternate_outer_and_nested_layouts() {

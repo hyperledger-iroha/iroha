@@ -1,6 +1,25 @@
 import CryptoKit
+import Foundation
 import XCTest
 @testable import IrohaSwift
+
+private struct Ed25519PublicKeyAdmissionFixture: Decodable {
+    struct Vector: Decodable {
+        let name: String
+        let valid: Bool
+        let keyHex: String
+        let singleCanonicalHex: String
+
+        private enum CodingKeys: String, CodingKey {
+            case name
+            case valid
+            case keyHex = "key_hex"
+            case singleCanonicalHex = "single_canonical_hex"
+        }
+    }
+
+    let vectors: [Vector]
+}
 
 final class SigningKeyTests: XCTestCase {
     func testEd25519SigningProducesEnvelope() throws {
@@ -34,10 +53,13 @@ final class SigningKeyTests: XCTestCase {
             0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
             0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F,
         ])
+        let mixedTorsionR = try XCTUnwrap(
+            Data(hexString: "6AEBC0B955CE4A2F1344029986B775E6EA5C40F93F1112B86EC51678EB9DC0FB")
+        )
 
         XCTAssertFalse(Ed25519SignatureAdmission.isValidSignature(Data(repeating: 0, count: 64)))
         XCTAssertFalse(Ed25519SignatureAdmission.isValidSignature(Data(signature.dropLast())))
-        for replacementR in [smallOrderR, noncanonicalR] {
+        for replacementR in [smallOrderR, noncanonicalR, mixedTorsionR] {
             var malformed = signature
             malformed.replaceSubrange(0..<replacementR.count, with: replacementR)
             XCTAssertFalse(Ed25519SignatureAdmission.isValidSignature(malformed))
@@ -65,6 +87,83 @@ final class SigningKeyTests: XCTestCase {
         XCTAssertFalse(Ed25519PublicKeyAdmission.isValidPublicKey(Data(repeating: 0x42, count: 31)))
         XCTAssertFalse(Ed25519PublicKeyAdmission.isValidPublicKey(smallOrderKey))
         XCTAssertFalse(Ed25519PublicKeyAdmission.isValidPublicKey(noncanonicalKey))
+    }
+
+    func testEd25519PublicKeyAdmissionMatchesSharedVectorsAndAccountBoundaries() throws {
+        let fixtureURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("fixtures/crypto/ed25519_public_key_admission_v1.json")
+        let fixture = try JSONDecoder().decode(
+            Ed25519PublicKeyAdmissionFixture.self,
+            from: Data(contentsOf: fixtureURL)
+        )
+
+        for vector in fixture.vectors {
+            let publicKey = try XCTUnwrap(Data(hexString: vector.keyHex), vector.name)
+            let canonical = try XCTUnwrap(
+                Data(hexString: vector.singleCanonicalHex),
+                vector.name
+            )
+            XCTAssertEqual(
+                Ed25519PublicKeyAdmission.isValidPublicKey(publicKey),
+                vector.valid,
+                vector.name
+            )
+            if vector.valid {
+                let constructed = try AccountAddress.fromAccount(publicKey: publicKey)
+                XCTAssertEqual(try constructed.canonicalBytes(), canonical, vector.name)
+                XCTAssertNoThrow(try AccountAddress.fromCanonicalBytes(canonical), vector.name)
+            } else {
+                XCTAssertThrowsError(
+                    try AccountAddress.fromAccount(publicKey: publicKey),
+                    vector.name
+                ) { error in
+                    XCTAssertEqual(error as? AccountAddressError, .invalidPublicKey, vector.name)
+                }
+                XCTAssertThrowsError(
+                    try AccountAddress.fromCanonicalBytes(canonical),
+                    vector.name
+                ) { error in
+                    XCTAssertEqual(error as? AccountAddressError, .invalidPublicKey, vector.name)
+                }
+            }
+        }
+    }
+
+    func testMultisigBuilderRejectsMixedTorsionEd25519Member() throws {
+        let mixedTorsion = try XCTUnwrap(
+            Data(hexString: "6AEBC0B955CE4A2F1344029986B775E6EA5C40F93F1112B86EC51678EB9DC0FB")
+        )
+        let builder = MultisigPolicyBuilder()
+            .setThreshold(1)
+            .addMember(algorithm: .ed25519, weight: 1, publicKey: mixedTorsion)
+
+        XCTAssertThrowsError(try builder.build()) { error in
+            XCTAssertEqual(error as? AccountAddressError, .invalidPublicKey)
+        }
+    }
+
+    func testCanonicalMultisigRejectsMixedTorsionEd25519Member() throws {
+        var canonical = try XCTUnwrap(Data(hexString:
+            "0A010100030003010001002068F4B6017D0F876A55C80A82B8388A54AAD264D367269E2DE8BE079C935B5F96" +
+            "01000100207EA0E3BD52E207C9D3B0EBA65C0704E66FCA2D8E165A175218B174FC4160E413" +
+            "0100020020884B8857F4EAA1613C61504DB34D4BEAF346517A0E31DE3CDDD4D9B4201D9D0B"
+        ))
+        let validFirstMember = try XCTUnwrap(
+            Data(hexString: "68F4B6017D0F876A55C80A82B8388A54AAD264D367269E2DE8BE079C935B5F96")
+        )
+        let mixedTorsion = try XCTUnwrap(
+            Data(hexString: "6AEBC0B955CE4A2F1344029986B775E6EA5C40F93F1112B86EC51678EB9DC0FB")
+        )
+        let memberRange = try XCTUnwrap(canonical.range(of: validFirstMember))
+        canonical.replaceSubrange(memberRange, with: mixedTorsion)
+
+        XCTAssertThrowsError(try AccountAddress.fromCanonicalBytes(canonical)) { error in
+            XCTAssertEqual(error as? AccountAddressError, .invalidPublicKey)
+        }
     }
 
     func testSm2SigningKeyPreservesMetadata() throws {
@@ -111,7 +210,7 @@ final class SigningKeyTests: XCTestCase {
             "ML-DSA bridge is unavailable in this environment."
         )
         let keypair = try MlDsaKeypair.generate(suite: .mlDsa65)
-        let signingKey = try SigningKey.mlDsa(privateKey: keypair.secretKey,
+        let signingKey = try SigningKey.mldsa(keypair,
                                               metadata: SigningMetadata(label: "mldsa"))
         let message = Data("swift-ml-dsa".utf8)
         let signature = try signingKey.sign(message)
@@ -129,6 +228,34 @@ final class SigningKeyTests: XCTestCase {
             )
         }
         XCTAssertTrue(verified)
+
+        let otherKeypair = try MlDsaKeypair.generate(suite: .mlDsa65)
+        let inconsistentKeypair = try MlDsaKeypair(
+            suite: .mlDsa65,
+            publicKey: otherKeypair.publicKey,
+            secretKey: keypair.secretKey
+        )
+        XCTAssertThrowsError(try SigningKey.mldsa(inconsistentKeypair)) { error in
+            guard case MlDsaError.inconsistentKeypair = error else {
+                return XCTFail("inconsistent ML-DSA-65 keypair failed with unexpected error: \(error)")
+            }
+        }
+    }
+
+    func testProtocolMlDsaSigningKeyRejectsNon65SuitesBeforeBridge() throws {
+        for suite in [MlDsaSuite.mlDsa44, .mlDsa87] {
+            let parameters = suite.parameters()
+            let keypair = try MlDsaKeypair(
+                suite: suite,
+                publicKey: Data(repeating: 0xA5, count: parameters.publicKeyLength),
+                secretKey: Data(repeating: 0x5A, count: parameters.secretKeyLength)
+            )
+            XCTAssertThrowsError(try SigningKey.mldsa(keypair)) { error in
+                guard case MlDsaError.unsupportedProtocolSuite = error else {
+                    return XCTFail("\(suite) failed with unexpected error: \(error)")
+                }
+            }
+        }
     }
 
     func testMlDsaSuiteParametersAreAvailableBeforeBridge() {

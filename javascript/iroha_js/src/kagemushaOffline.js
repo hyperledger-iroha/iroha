@@ -5,6 +5,8 @@
  * a supported wallet/prover implementation.
  */
 
+import { validateNoritoFrame } from "./norito.js";
+
 export const KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION = 23;
 export const KAGEMUSHA_MANIFEST_VERSION = 4;
 export const KAGEMUSHA_MAX_HOPS = 8;
@@ -14,6 +16,11 @@ export const KAGEMUSHA_REDEEM_REQUEST_MAX_BYTES = 48 * 1024 * 1024;
 
 const HASH_32 = /^[0-9a-f]{63}[13579bdf]$/u;
 const OPERATION_ID = /^(?!0{64}$)[0-9a-f]{64}$/u;
+const ERROR_CODE = /^[a-z0-9][a-z0-9_]{0,63}$/u;
+const POSITIVE_DECIMAL = /^[0-9]+$/u;
+const MAX_U64 = 0xffff_ffff_ffff_ffffn;
+const TOP_UP_REQUEST_SCHEMA_NAME = "iroha.torii.v1.offline.top_up.request";
+const REDEEM_REQUEST_SCHEMA_NAME = "iroha.torii.v1.offline.redeem.request";
 const EXACT_JSON_MEDIA_TYPE =
   /^[ \t]*application\/json(?:[ \t]*;[ \t]*[!#$%&'*+\-.^_`|~0-9A-Za-z]+=(?:[!#$%&'*+\-.^_`|~0-9A-Za-z]+|"(?:[ \t!#-\[\]-~\u0080-\u00ff]|\\[ \t!-~\u0080-\u00ff])*"))*[ \t]*$/iu;
 const OFFLINE_STATUS_FIELDS = Object.freeze([
@@ -40,13 +47,19 @@ function exactFields(value, context, fields) {
   return item;
 }
 
-function exactString(value, context, { maximum = 1024 } = {}) {
+function exactString(
+  value,
+  context,
+  { maximum = 1024, maximumUtf8Bytes = maximum * 4 } = {},
+) {
   if (
     typeof value !== "string" ||
     value.length === 0 ||
-    value.length > maximum ||
+    [...value].length > maximum ||
+    new TextEncoder().encode(value).byteLength > maximumUtf8Bytes ||
     value.trim() !== value ||
-    /[\u0000-\u001f\u007f]/u.test(value)
+    /[\ud800-\udfff]/u.test(value) ||
+    /[\u0000-\u001f\u007f-\u009f]/u.test(value)
   ) {
     throw new TypeError(`${context} must be exact non-empty text`);
   }
@@ -128,7 +141,12 @@ export function normalizeOfflineStatus(payload) {
   });
 }
 
-function normalizeKagemushaNoritoRequestV4(value, maximumBytes, context) {
+function normalizeKagemushaNoritoRequestV4(
+  value,
+  maximumBytes,
+  expectedSchemaName,
+  context,
+) {
   const item = exactFields(value, context, ["version", "operationId", "norito"]);
   if (item.version !== KAGEMUSHA_MANIFEST_VERSION) {
     throw new TypeError(`${context}.version must be 4; V3 archives are not upgraded`);
@@ -143,13 +161,27 @@ function normalizeKagemushaNoritoRequestV4(value, maximumBytes, context) {
   );
   if (
     archive.byteLength < 40 ||
-    archive.byteLength > maximumBytes ||
-    archive[0] !== 0x4e ||
-    archive[1] !== 0x52 ||
-    archive[2] !== 0x54 ||
-    archive[3] !== 0x30
+    archive.byteLength > maximumBytes
   ) {
     throw new TypeError(`${context}.norito must be a bounded canonical Norito archive`);
+  }
+  try {
+    const frame = validateNoritoFrame(archive, {
+      context: `${context}.norito`,
+      expectedTypeName: expectedSchemaName,
+      expectedPaddingLength: 8,
+      requireNonEmptyPayload: true,
+    });
+    if (frame.flags !== 0x02) {
+      throw new TypeError(
+        `${context}.norito must use canonical compact-length layout flags`,
+      );
+    }
+  } catch (error) {
+    throw new TypeError(
+      `${context}.norito must be a schema-bound canonical Norito archive: ${error.message}`,
+      { cause: error },
+    );
   }
   return Object.freeze({
     version: KAGEMUSHA_MANIFEST_VERSION,
@@ -165,6 +197,7 @@ export function normalizeKagemushaTopUpRequestV4(
   return normalizeKagemushaNoritoRequestV4(
     value,
     KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES,
+    TOP_UP_REQUEST_SCHEMA_NAME,
     context,
   );
 }
@@ -176,6 +209,7 @@ export function normalizeKagemushaRedeemRequestV4(
   return normalizeKagemushaNoritoRequestV4(
     value,
     KAGEMUSHA_REDEEM_REQUEST_MAX_BYTES,
+    REDEEM_REQUEST_SCHEMA_NAME,
     context,
   );
 }
@@ -198,7 +232,7 @@ function taggedPending(value, context) {
 
 export function normalizeKagemushaOperationReference(
   payload,
-  { expectedOperationId, expectedKind, location },
+  { expectedOperationId, expectedKind, location, retryAfter },
 ) {
   const context = "Kagemusha operation reference";
   const item = exactFields(payload, context, [
@@ -221,13 +255,24 @@ export function normalizeKagemushaOperationReference(
   ) {
     throw new TypeError(`${context} does not match the submitted V4 command`);
   }
+  if (
+    typeof retryAfter !== "string" ||
+    retryAfter.length > 20 ||
+    !POSITIVE_DECIMAL.test(retryAfter) ||
+    BigInt(retryAfter) === 0n ||
+    BigInt(retryAfter) > MAX_U64
+  ) {
+    throw new TypeError(`${context} Retry-After must be a positive u64 number of seconds`);
+  }
   return Object.freeze({
     operation_id: operationId,
     kind: Object.freeze({ kind, value: null }),
     state: Object.freeze({ state: "pending", value: null }),
     transaction_hash: hash32(item.transaction_hash, `${context}.transaction_hash`),
     status_uri: statusUri,
-    submitted_at_ms: safeUnsigned(item.submitted_at_ms, `${context}.submitted_at_ms`),
+    submitted_at_ms: safeUnsigned(item.submitted_at_ms, `${context}.submitted_at_ms`, {
+      positive: true,
+    }),
   });
 }
 
@@ -262,8 +307,13 @@ function normalizeAppliedResult(value, operationId, context) {
         finalized_block_height: safeUnsigned(
           result.finalized_block_height,
           `${context}.result.finalized_block_height`,
+          { positive: true },
         ),
-        server_time_ms: safeUnsigned(result.server_time_ms, `${context}.result.server_time_ms`),
+        server_time_ms: safeUnsigned(
+          result.server_time_ms,
+          `${context}.result.server_time_ms`,
+          { positive: true },
+        ),
       }),
     });
   }
@@ -306,8 +356,13 @@ function normalizeAppliedResult(value, operationId, context) {
       finalized_block_height: safeUnsigned(
         result.finalized_block_height,
         `${context}.result.finalized_block_height`,
+        { positive: true },
       ),
-      server_time_ms: safeUnsigned(result.server_time_ms, `${context}.result.server_time_ms`),
+      server_time_ms: safeUnsigned(
+        result.server_time_ms,
+        `${context}.result.server_time_ms`,
+        { positive: true },
+      ),
       anchor: jsonSnapshot(anchor),
       finality_proof: jsonSnapshot(finalityProof),
     }),
@@ -342,7 +397,9 @@ export function normalizeKagemushaOperationStatus(payload, expectedOperationId) 
           value: null,
         }),
         transaction_hash: hash32(value.transaction_hash, `${context}.value.transaction_hash`),
-        submitted_at_ms: safeUnsigned(value.submitted_at_ms, `${context}.value.submitted_at_ms`),
+        submitted_at_ms: safeUnsigned(value.submitted_at_ms, `${context}.value.submitted_at_ms`, {
+          positive: true,
+        }),
       }),
     });
   }
@@ -377,8 +434,14 @@ export function normalizeKagemushaOperationStatus(payload, expectedOperationId) 
   ) {
     throw new TypeError(`${context}.value.error contains missing or unknown fields`);
   }
+  const code = exactString(error.code, `${context}.value.error.code`, { maximum: 64 });
+  if (!ERROR_CODE.test(code)) {
+    throw new TypeError(
+      `${context}.value.error.code must be a stable lowercase error code`,
+    );
+  }
   const normalizedError = {
-    code: exactString(error.code, `${context}.value.error.code`, { maximum: 128 }),
+    code,
     message: exactString(error.message, `${context}.value.error.message`),
   };
   if (hasDetails) {

@@ -80,8 +80,12 @@ class CancelAssetLockInstruction private constructor(
         31 * escrowId.hashCode() + expectedRemainingAmount.hashCode()
 
     companion object {
-        /** Registered native instruction type and Norito schema path. */
+        /** Canonical native instruction wire identifier. */
         const val WIRE_NAME: String =
+            "iroha.instruction.v1::escrow::CancelAssetLock"
+
+        /** Concrete Norito schema path used only for the typed payload. */
+        internal const val SCHEMA_NAME: String =
             "iroha_data_model::isi::escrow::CancelAssetLock"
 
         /** Maximum UTF-8 bytes accepted for the lock-id preimage in V1. */
@@ -150,7 +154,7 @@ class CancelAssetLockInstruction private constructor(
 
 /** Canonical native Norito encoder/decoder for [CancelAssetLockInstruction]. */
 object CancelAssetLockWirePayloadEncoder {
-    /** Registered native instruction type and Norito schema path. */
+    /** Canonical native instruction wire identifier. */
     const val WIRE_NAME: String = CancelAssetLockInstruction.WIRE_NAME
 
     private val uint32Adapter: TypeAdapter<Long> = NoritoAdapters.uint(32)
@@ -163,12 +167,12 @@ object CancelAssetLockWirePayloadEncoder {
     /** Encode only the canonical native `CancelAssetLock` Norito frame. */
     @JvmStatic
     fun encodePayload(instruction: CancelAssetLockInstruction): ByteArray =
-        NoritoCodec.encode(instruction, WIRE_NAME, PayloadAdapter)
+        NoritoCodec.encode(instruction, CancelAssetLockInstruction.SCHEMA_NAME, PayloadAdapter)
 
     /** Decode a canonical native `CancelAssetLock` Norito frame. */
     @JvmStatic
     fun decodePayload(payload: ByteArray): CancelAssetLockInstruction =
-        NoritoCodec.decode(payload, PayloadAdapter, WIRE_NAME)
+        NoritoCodec.decode(payload, PayloadAdapter, CancelAssetLockInstruction.SCHEMA_NAME)
 
     private object PayloadAdapter : TypeAdapter<CancelAssetLockInstruction> {
         override fun encode(

@@ -3750,18 +3750,17 @@ impl ProductionLifecycleOwnerV1 {
         {
             return Err(ProductionIngressSchedulerInputsError::CompetingReadyWork);
         }
-        let admission = match selector
-            .prepare_selected_certified_fetch_admission(executor, &self.verified)
-        {
-            Ok(admission) => admission,
-            Err(_) => {
-                return Err(
-                    ProductionIngressSchedulerInputsError::CertifiedFetchAdmissionPreparation {
-                        _prepared: selector,
-                    },
-                );
-            }
-        };
+        let admission =
+            match selector.prepare_selected_certified_fetch_admission(executor, &self.verified) {
+                Ok(admission) => admission,
+                Err(_) => {
+                    return Err(
+                        ProductionIngressSchedulerInputsError::CertifiedFetchAdmissionPreparation {
+                            _prepared: selector,
+                        },
+                    );
+                }
+            };
         let capacity = services
             .capture_lifecycle_capacity_rank(selector)
             .map_err(|error| {
@@ -3819,15 +3818,14 @@ impl ProductionLifecycleOwnerV1 {
                 );
             }
         }
-        let fetch = match prepared
-            .attest_scheduler_fetch_carrier(&self.coordinator, &mut self.registry)
-        {
-            Ok(fetch) => fetch,
-            Err(_) => {
-                drop(reservation.abort_into_prepared(prepared));
-                return Err(ProductionIngressSchedulerInputsError::InvalidSelectedCarrier);
-            }
-        };
+        let fetch =
+            match prepared.attest_scheduler_fetch_carrier(&self.coordinator, &mut self.registry) {
+                Ok(fetch) => fetch,
+                Err(_) => {
+                    drop(reservation.abort_into_prepared(prepared));
+                    return Err(ProductionIngressSchedulerInputsError::InvalidSelectedCarrier);
+                }
+            };
         let positions = prepared.selected_positions().components();
         let live_debts = [
             mode.debt(),

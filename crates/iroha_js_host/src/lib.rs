@@ -1166,12 +1166,19 @@ fn algorithm_alias_key(value: &str) -> String {
         .collect()
 }
 fn parse_crypto_algorithm(value: Option<&str>) -> napi::Result<Algorithm> {
-    let value = value.unwrap_or("ed25519").trim();
+    let value = value.unwrap_or("ed25519");
+    if !value.bytes().all(|byte| (0x20..=0x7e).contains(&byte)) {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("unsupported crypto algorithm: {value}"),
+        ));
+    }
+    let value = value.trim();
     let key = algorithm_alias_key(value);
     let algorithm = match key.as_str() {
         "ed25519" | "ed" | "eddsa" => Algorithm::Ed25519,
         "secp256k1" | "secp" | "secpk1" => Algorithm::Secp256k1,
-        "mldsa" | "mldsa65" | "mldsa44" | "mldsa87" => Algorithm::MlDsa,
+        "mldsa" | "mldsa65" => Algorithm::MlDsa,
         "blsnormal" | "bls12381g1" => Algorithm::BlsNormal,
         "blssmall" | "bls12381g2" => Algorithm::BlsSmall,
         "gost256a" | "gost34102012256paramseta" => Algorithm::Gost3410_2012_256ParamSetA,
@@ -12235,6 +12242,31 @@ mod tests {
     }
     fn test_network_id_bytes(label: &[u8]) -> Uint8Array {
         Uint8Array::from(test_network_id(label).as_bytes().to_vec())
+    }
+    #[test]
+    fn generic_ml_dsa_parser_accepts_only_the_protocol_suite() {
+        for label in ["mldsa", "ML-DSA-65", "ML_DSA_65"] {
+            assert_eq!(
+                parse_crypto_algorithm(Some(label)).expect("protocol ML-DSA alias"),
+                Algorithm::MlDsa,
+                "{label}"
+            );
+        }
+        for label in [
+            "mldsa44",
+            "ML-DSA-44",
+            "ML_DSA_87",
+            "Ml.DsA/44",
+            "ML-DSA-4-4",
+            "ML-DSA-４４",
+            "ML-DSA-８７",
+            "ML－DSA-65",
+        ] {
+            assert!(
+                parse_crypto_algorithm(Some(label)).is_err(),
+                "non-protocol ML-DSA suite alias {label} must fail"
+            );
+        }
     }
     #[test]
     fn transaction_network_id_requires_exact_marked_32_bytes() {

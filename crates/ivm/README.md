@@ -53,7 +53,7 @@ For the latest architecture ideas including deterministic parallel execution and
   - Gas metering; `GETGAS` and per-op cost accounting.
   - Syscall/host trait with a default host implementation.
   - Vector helpers with runtime SIMD detection (SSE/AVX/NEON) and scalar fallback; SHA-256 compression accelerated via Apple Metal when available.
-  - AES, SHA-3, Poseidon helpers and BN254 utilities on CPU; Ed25519 and ECDSA verification; optional ML-DSA (Dilithium) behind the `ml-dsa` feature.
+  - AES, SHA-3, Poseidon helpers and BN254 utilities on CPU; Ed25519, ECDSA, and deterministic ML-DSA verification.
   - Deterministic parallel scheduler with conflict-aware grouping; optional HTM fast path on x86_64 (feature `htm`).
   - Halo2 constraint gadgets exercised by circuit tests, OpenVerify IPA/Pasta proof-envelope verification in the host, and ZK trace logging (see `halo2.rs`, `zk.rs`, and `zk_verify.rs`).
 
@@ -109,7 +109,7 @@ High-level smart contract language targeting IVM bytecode:
 - **Turing Complete & Gas-Limited:** Branching, jumping and memory operations allow any algorithm to be expressed. A contract must also supply a gas budget, ensuring execution halts deterministically.
 - **Optimised for Financial Operations:** Fast 64-bit arithmetic and register access keep asset calculations efficient, suitable for high-throughput ledgers.
 - **Bulk Memory Helpers:** `load_bytes` and `store_bytes` efficiently copy contiguous regions, speeding up cryptographic hashing and serialization.
-- **Quantum-Resistant Signatures:** Optional verification of ML‑DSA (Crystals Dilithium) signatures via the `ml-dsa` feature.
+- **Quantum-Resistant Signatures:** Deterministic ML‑DSA (Crystals Dilithium) verification is included in every build.
 - **SIMD Poseidon Hashing:** `POSEIDON2` hashes two scalar registers and `POSEIDON6` hashes one six-register window, avoiding transient memory traffic. Both automatically use deterministic hardware acceleration when supported by the host CPU.
 - **SIMD Field Arithmetic:** BN254 helpers are implemented on CPU with runtime SIMD detection plumbed through vector utilities. For benchmarking or deterministic testing, thread `AccelerationPolicy::with_forced_simd(Some(SimdChoice::{Scalar|Sse2|Avx2|Avx512|Neon}))` through `IvmConfig`, or call `ivm::set_forced_simd` in tests; unsupported requests automatically fall back to the scalar implementation to preserve safety. Future work: add architecture-specific intrinsics where beneficial.
 - **Apple Metal Acceleration:** On macOS the VM accelerates vector lanes (`vadd32`/`vadd64`/`vand`/`vxor`/`vor`/`vrot32`), SHA‑256 compression and tree reductions, Keccak‑f1600, AES rounds/batches, and non-opcode Ed25519 batch helpers via Metal when a compatible device is present. Acceleration is gated by `AccelerationPolicy::with_metal(true)`, honours developer toggles like `IVM_DISABLE_METAL`/`IVM_FORCE_METAL_ENUM`, and falls back to CPU/SIMD with identical semantics when Metal is unavailable or disabled. The consensus-visible `ED25519BATCHVERIFY` opcode always uses ordered strict CPU verification.

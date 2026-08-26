@@ -1615,8 +1615,7 @@ mod tests {
     fn assert_registry_decodes_registered_type<T>(
         registry: &crate::isi::InstructionRegistry,
         value: T,
-    )
-    where
+    ) where
         T: crate::isi::Instruction
             + norito::codec::Encode
             + 'static
@@ -1703,7 +1702,7 @@ mod tests {
         assert_eq!(decoded, quorum);
     }
     #[test]
-fn signatory_quorum_default_registry_decodes_canonical_wire_ids() {
+    fn signatory_quorum_default_registry_decodes_canonical_wire_ids() {
         let registry = crate::isi::registry::default();
         let account = account(0x59);
         let signatory = public_key(0x5a);

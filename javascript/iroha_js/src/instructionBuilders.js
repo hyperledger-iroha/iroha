@@ -97,6 +97,10 @@ export const SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1 = 1024 * 1024;
 export const CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1 = 4_096;
 /** Maximum UTF-8 bytes accepted for an asset-transfer availability reason. */
 export const ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1 = 512;
+/** Maximum relay hops accepted by a first-release Kaigi manifest. */
+export const KAIGI_RELAY_MANIFEST_MAX_HOPS_V1 = 8;
+/** Maximum decoded bytes accepted for a first-release Kaigi HPKE public key. */
+export const KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1 = 4_096;
 const SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BASE64_CHARS_V1 =
   4 * Math.ceil(SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1 / 3);
 function fail(code, message, path) {
@@ -1756,6 +1760,28 @@ function normalizeOptionalBase64(value, name) {
   return normalizeBase64(value, name);
 }
 
+function normalizeKaigiHpkePublicKey(value, name) {
+  const key =
+    typeof value === "string"
+      ? decodeBase64Strict(value.trim(), name)
+      : toBinaryBuffer(value, name);
+  if (key.length === 0) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must be a non-empty HPKE public key`,
+      name,
+    );
+  }
+  if (key.length > KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${name} must not exceed ${KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1} decoded bytes`,
+      name,
+    );
+  }
+  return key.toString("base64");
+}
+
 function normalizeKaigiId(value, name) {
   if (typeof value === "string") {
     const trimmed = value.trim();
@@ -1827,7 +1853,7 @@ function normalizeKaigiRelayHop(value, context) {
   const hpkeKey = hop.hpke_public_key ?? hop.hpkePublicKey;
   return {
     relay_id: normalizeAccountId(relayId, `${context}.relayId`),
-    hpke_public_key: normalizeBase64(
+    hpke_public_key: normalizeKaigiHpkePublicKey(
       hpkeKey,
       `${context}.hpkePublicKey`,
     ),
@@ -1853,6 +1879,13 @@ function normalizeKaigiRelayManifest(value, context) {
     fail(
       ValidationErrorCode.VALUE_OUT_OF_RANGE,
       `${context}.hops must include at least three relay hops`,
+      `${context}.hops`,
+    );
+  }
+  if (hopsValue.length > KAIGI_RELAY_MANIFEST_MAX_HOPS_V1) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${context}.hops must not exceed ${KAIGI_RELAY_MANIFEST_MAX_HOPS_V1} relay hops`,
       `${context}.hops`,
     );
   }
@@ -2252,7 +2285,7 @@ function normalizeRegisterRelayInput(options) {
         relayId,
         "registerKaigiRelay.relayId",
       ),
-      hpke_public_key: normalizeBase64(
+      hpke_public_key: normalizeKaigiHpkePublicKey(
         hpkeKey,
         "registerKaigiRelay.hpkePublicKey",
       ),

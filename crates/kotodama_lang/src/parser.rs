@@ -256,14 +256,47 @@ pub(crate) struct GrammarParseOutput {
 }
 /// Parse the canonical significant token view once while recording the CST
 /// structure chosen by those exact grammar decisions.
-pub(crate) fn parse_with_syntax(source: &SourceFile, tokens: &[Token]) -> GrammarParseOutput {
+pub(crate) fn parse_with_syntax(
+    source: &SourceFile,
+    budget: FrontendBudget,
+    tokens: &[Token],
+) -> GrammarParseOutput {
     #[cfg(test)]
     CANONICAL_GRAMMAR_PARSES.with(|count| count.set(count.get().saturating_add(1)));
-    let mut parser = CstAstLowerer::new(tokens, source, true);
+    let mut parser = CstAstLowerer::new(tokens, source, true, budget);
     let parsed = parser.parse_program();
     let mut errors = std::mem::take(&mut parser.errors);
     if let Err(error) = parsed.as_ref() {
         errors.push(error.as_ref().clone());
+    }
+    if let Ok(program) = parsed.as_ref()
+        && let Some(range) = crate::ast::expression_depth_violation(
+            program,
+            budget.max_nesting(),
+            &parser.expression_syntax_depths,
+        )
+    {
+        let location = source.line_column(range.start);
+        let line_text = source
+            .text()
+            .lines()
+            .nth(location.line.saturating_sub(1))
+            .unwrap_or("");
+        let caret = " ".repeat(location.column.saturating_sub(1)) + "^";
+        errors.push(ParseError {
+            code: "K0003",
+            message: format!(
+                "source exceeds the {}-level syntactic nesting limit",
+                budget.max_nesting()
+            ),
+            line: location.line,
+            column: location.column,
+            snippet: format!("{line_text}\n{caret}"),
+            range,
+            fix: None,
+            expected: None,
+            expected_owner: None,
+        });
     }
     append_forbidden_source_identifier_errors(&parser, tokens, &mut errors);
     errors.sort_by(|left, right| {
@@ -298,7 +331,11 @@ pub(crate) fn parse_with_syntax(source: &SourceFile, tokens: &[Token]) -> Gramma
             program,
             facts: parser.facts,
         }),
-        Ok(_) | Err(_) => None,
+        Ok(program) => {
+            crate::ast::drop_program_iterative(program);
+            None
+        }
+        Err(_) => None,
     };
     GrammarParseOutput {
         spanned,
@@ -431,8 +468,21 @@ pub(crate) fn validate_nesting(
     Ok(())
 }
 fn parse_diagnostic_bundle(source: &SourceFile, mut errors: Vec<ParseError>) -> DiagnosticBundle {
+    let nesting_error = errors.iter().find(|error| error.code == "K0003").cloned();
     let omitted = errors.len().saturating_sub(MAX_DIAGNOSTICS - 1);
     errors.truncate(MAX_DIAGNOSTICS - 1);
+    if let Some(nesting_error) = nesting_error
+        && !errors.iter().any(|error| error.code == "K0003")
+    {
+        errors.pop();
+        errors.push(nesting_error);
+        errors.sort_by(|left, right| {
+            left.range
+                .cmp(&right.range)
+                .then_with(|| left.code.cmp(right.code))
+                .then_with(|| left.message.cmp(&right.message))
+        });
+    }
     let mut diagnostics = errors
         .into_iter()
         .map(|error| {
@@ -502,13 +552,39 @@ struct CstAstLowerer<'a> {
     recover: bool,
     errors: Vec<ParseError>,
     allow_struct_literals: bool,
+    max_nesting: usize,
+    delimiter_depths: Vec<usize>,
+    expression_syntax_depths: Vec<usize>,
+    recursive_expression_entry_depths: Vec<usize>,
     declared_function_parameters: std::collections::BTreeMap<String, Option<Vec<String>>>,
     syntax: SyntaxOutlineBuilder,
 }
 impl<'a> CstAstLowerer<'a> {
-    fn new(tokens: &'a [Token], source: &'a SourceFile, recover: bool) -> Self {
+    fn new(
+        tokens: &'a [Token],
+        source: &'a SourceFile,
+        recover: bool,
+        budget: FrontendBudget,
+    ) -> Self {
         let mut syntax = SyntaxOutlineBuilder::default();
         syntax.start(SyntaxKind::Root, 0);
+        let mut delimiter_depth = 0_usize;
+        let delimiter_depths = tokens
+            .iter()
+            .map(|token| {
+                let depth_before = delimiter_depth;
+                match &token.kind {
+                    TokenKind::LBrace | TokenKind::LParen | TokenKind::LBracket => {
+                        delimiter_depth = delimiter_depth.saturating_add(1);
+                    }
+                    TokenKind::RBrace | TokenKind::RParen | TokenKind::RBracket => {
+                        delimiter_depth = delimiter_depth.saturating_sub(1);
+                    }
+                    _ => {}
+                }
+                depth_before
+            })
+            .collect();
         Self {
             tokens,
             pos: 0,
@@ -520,6 +596,10 @@ impl<'a> CstAstLowerer<'a> {
             recover,
             errors: Vec::new(),
             allow_struct_literals: true,
+            max_nesting: budget.max_nesting(),
+            delimiter_depths,
+            expression_syntax_depths: Vec::new(),
+            recursive_expression_entry_depths: Vec::new(),
             declared_function_parameters: std::collections::BTreeMap::new(),
             syntax,
         }
@@ -677,16 +757,128 @@ impl<'a> CstAstLowerer<'a> {
             name,
         });
     }
+    fn current_delimiter_depth(&self) -> usize {
+        self.delimiter_depths.get(self.pos).copied().unwrap_or(0)
+    }
+    fn enter_recursive_expression(&mut self) -> ParseResult<()> {
+        let delimiter_depth = self.current_delimiter_depth();
+        let unrepresented_depth = self
+            .recursive_expression_entry_depths
+            .iter()
+            .filter(|entry_depth| **entry_depth >= delimiter_depth)
+            .count()
+            .saturating_add(1);
+        // A parsed `if` may be committed as a statement, where its condition
+        // shares the enclosing block depth. Use that most-permissive shape
+        // here; the final AST validation applies the exact committed context.
+        if delimiter_depth.saturating_add(unrepresented_depth.saturating_sub(1)) > self.max_nesting
+        {
+            let range = self
+                .tokens
+                .get(self.pos)
+                .map_or(TextRange::empty(self.current_start()), |token| token.range);
+            return Err(self.nesting_error(range));
+        }
+        self.recursive_expression_entry_depths.push(delimiter_depth);
+        Ok(())
+    }
+    fn leave_recursive_expression(&mut self) {
+        self.recursive_expression_entry_depths
+            .pop()
+            .expect("recursive expression entry must be balanced");
+    }
+    fn nesting_error(&self, range: TextRange) -> Box<ParseError> {
+        let token = self
+            .tokens
+            .iter()
+            .find(|token| token.range.start <= range.start && range.start < token.range.end)
+            .or_else(|| {
+                self.tokens
+                    .iter()
+                    .find(|token| token.range.start == range.start)
+            })
+            .cloned()
+            .unwrap_or_else(|| {
+                self.tokens
+                    .last()
+                    .cloned()
+                    .unwrap_or_else(|| self.bump_token())
+            });
+        let mut error = self.coded_error(
+            token,
+            "K0003",
+            format!(
+                "source exceeds the {}-level syntactic nesting limit",
+                self.max_nesting
+            ),
+        );
+        error.range = range;
+        error
+    }
+    fn bump_token(&self) -> Token {
+        Token {
+            kind: TokenKind::EOF,
+            line: 1,
+            column: 1,
+            range: TextRange::empty(0),
+        }
+    }
+    fn guard_expression_depth(&mut self, expression: Expr) -> Expr {
+        let violation = crate::ast::expression_depth_violation_in_expression(
+            &expression,
+            self.current_delimiter_depth(),
+            self.max_nesting,
+            &self.expression_syntax_depths,
+        );
+        let Some(range) = violation else {
+            return expression;
+        };
+        if !self.errors.iter().any(|error| error.code == "K0003") {
+            let error = self.nesting_error(range);
+            self.errors.push(*error);
+        }
+        let source = match &expression {
+            Expr::Source { node, source, .. } => Some((*node, *source)),
+            _ => None,
+        };
+        crate::ast::drop_expression_iterative(expression);
+        source.map_or(Expr::Bool(false), |(node, source)| Expr::Source {
+            node,
+            source,
+            expression: Box::new(Expr::Bool(false)),
+        })
+    }
+    fn sourced_expression(&mut self, node: NodeId, source: SourceRange, expression: Expr) -> Expr {
+        self.guard_expression_depth(Expr::Source {
+            node,
+            source,
+            expression: Box::new(expression),
+        })
+    }
+    fn add_expression_syntax_depth(&mut self, expression: Expr, depth: usize) -> Expr {
+        if depth == 0 {
+            return expression;
+        }
+        if let Some(node) = expression.source_node() {
+            let required = node.index().saturating_add(1);
+            if self.expression_syntax_depths.len() < required {
+                self.expression_syntax_depths.resize(required, 0);
+            }
+            self.expression_syntax_depths[node.index()] =
+                self.expression_syntax_depths[node.index()].saturating_add(depth);
+        }
+        self.guard_expression_depth(expression)
+    }
     fn source_expression(&mut self, kind: AstNodeKind, range: TextRange, expression: Expr) -> Expr {
         let node = self
             .facts
             .source_map
             .allocate_owned(kind, range, self.current_function);
-        Expr::Source {
+        self.sourced_expression(
             node,
-            source: SourceRange::new(self.facts.source_map.source(), range),
-            expression: Box::new(expression),
-        }
+            SourceRange::new(self.facts.source_map.source(), range),
+            expression,
+        )
     }
     fn source_expression_from(&mut self, start: u32, expression: Expr) -> Expr {
         let range = TextRange::new(start, self.previous_end(start));
@@ -720,11 +912,11 @@ impl<'a> CstAstLowerer<'a> {
     ) -> Expr {
         self.facts.source_map.set_kind(owner, kind);
         self.facts.source_map.finish(owner, range.end);
-        Expr::Source {
-            node: owner,
-            source: SourceRange::new(self.facts.source_map.source(), range),
-            expression: Box::new(expression),
-        }
+        self.sourced_expression(
+            owner,
+            SourceRange::new(self.facts.source_map.source(), range),
+            expression,
+        )
     }
     fn finish_owned_statement(
         &mut self,
@@ -826,8 +1018,8 @@ impl<'a> CstAstLowerer<'a> {
         Ok(Program {
             unit,
             items,
-            test_target: self.test_target.clone(),
-            fixtures: self.fixtures.clone(),
+            test_target: self.test_target.take(),
+            fixtures: std::mem::take(&mut self.fixtures),
         })
     }
     fn parse_source_unit(&mut self, kind: SourceUnitKind) -> ParseResult<(SourceUnit, Vec<Item>)> {
@@ -2188,13 +2380,18 @@ impl<'a> CstAstLowerer<'a> {
         statement
     }
     fn parse_if_expression(&mut self) -> ParseResult<Expr> {
-        let start = self.current_start();
-        let owner = self.begin_node(AstNodeKind::Expression, start);
-        let expression = self.with_syntax(SyntaxKind::IfExpr, start, |parser| {
-            parser.parse_if_expression_inner(owner)
-        })?;
-        let range = TextRange::new(start, self.previous_end(start));
-        Ok(self.finish_owned_expression(owner, AstNodeKind::Expression, range, expression))
+        self.enter_recursive_expression()?;
+        let result = (|| {
+            let start = self.current_start();
+            let owner = self.begin_node(AstNodeKind::Expression, start);
+            let expression = self.with_syntax(SyntaxKind::IfExpr, start, |parser| {
+                parser.parse_if_expression_inner(owner)
+            })?;
+            let range = TextRange::new(start, self.previous_end(start));
+            Ok(self.finish_owned_expression(owner, AstNodeKind::Expression, range, expression))
+        })();
+        self.leave_recursive_expression();
+        result
     }
     fn parse_if_expression_inner(&mut self, owner: NodeId) -> ParseResult<Expr> {
         self.expect(TokenKind::If)?;
@@ -2246,13 +2443,18 @@ impl<'a> CstAstLowerer<'a> {
         }
     }
     fn parse_match_expression(&mut self) -> ParseResult<Expr> {
-        let start = self.current_start();
-        let owner = self.begin_node(AstNodeKind::Expression, start);
-        let expression = self.with_syntax(SyntaxKind::MatchExpr, start, |parser| {
-            parser.parse_match_expression_inner(owner)
-        })?;
-        let range = TextRange::new(start, self.previous_end(start));
-        Ok(self.finish_owned_expression(owner, AstNodeKind::Expression, range, expression))
+        self.enter_recursive_expression()?;
+        let result = (|| {
+            let start = self.current_start();
+            let owner = self.begin_node(AstNodeKind::Expression, start);
+            let expression = self.with_syntax(SyntaxKind::MatchExpr, start, |parser| {
+                parser.parse_match_expression_inner(owner)
+            })?;
+            let range = TextRange::new(start, self.previous_end(start));
+            Ok(self.finish_owned_expression(owner, AstNodeKind::Expression, range, expression))
+        })();
+        self.leave_recursive_expression();
+        result
     }
     fn parse_match_expression_inner(&mut self, owner: NodeId) -> ParseResult<Expr> {
         self.expect(TokenKind::Match)?;
@@ -2730,11 +2932,11 @@ impl<'a> CstAstLowerer<'a> {
                         range,
                         self.current_function,
                     );
-                    let expr = Expr::Source {
+                    let expr = self.sourced_expression(
                         node,
-                        source: SourceRange::new(self.facts.source_map.source(), range),
-                        expression: Box::new(Expr::DecimalLiteral(format!("-{spelling}"))),
-                    };
+                        SourceRange::new(self.facts.source_map.source(), range),
+                        Expr::DecimalLiteral(format!("-{spelling}")),
+                    );
                     let mut expr = self.parse_postfix(expr, minus.range.start)?;
                     for (op, token) in prefixes.into_iter().rev() {
                         expr = self.source_expression_from(
@@ -2829,16 +3031,16 @@ impl<'a> CstAstLowerer<'a> {
                             "get" => STATE_MAP_GET_INTRINSIC.to_owned(),
                             _ => field,
                         };
-                        expr = Expr::Source {
+                        expr = self.sourced_expression(
                             node,
                             source,
-                            expression: Box::new(Expr::Call {
+                            Expr::Call {
                                 name: call_name,
                                 args: full_args,
                                 argument_names,
                                 implicit_receiver: true,
-                            }),
-                        };
+                            },
+                        );
                         continue;
                     }
                     let call_name = match field.as_str() {
@@ -2873,14 +3075,14 @@ impl<'a> CstAstLowerer<'a> {
                     range,
                     self.current_function,
                 );
-                expr = Expr::Source {
+                expr = self.sourced_expression(
                     node,
-                    source: SourceRange::new(self.facts.source_map.source(), range),
-                    expression: Box::new(Expr::Index {
+                    SourceRange::new(self.facts.source_map.source(), range),
+                    Expr::Index {
                         target: Box::new(expr),
                         index: Box::new(idx),
-                    }),
-                };
+                    },
+                );
             } else if self.peek(TokenKind::Question) && !self.question_starts_ternary() {
                 self.bump();
                 expr =
@@ -2912,11 +3114,11 @@ impl<'a> CstAstLowerer<'a> {
                     range,
                     self.current_function,
                 );
-                Expr::Source {
+                self.sourced_expression(
                     node,
-                    source: SourceRange::new(self.facts.source_map.source(), range),
-                    expression: Box::new(Expr::DecimalLiteral(spelling.clone())),
-                }
+                    SourceRange::new(self.facts.source_map.source(), range),
+                    Expr::DecimalLiteral(spelling.clone()),
+                )
             }
             TokenKind::String(s) => Expr::String(s.clone()),
             TokenKind::Bytes(bytes) => Expr::Bytes(bytes.clone()),
@@ -3022,6 +3224,7 @@ impl<'a> CstAstLowerer<'a> {
         Ok(Expr::List(elements))
     }
     fn parse_parenthesized(&mut self, opening: Token) -> ParseResult<Expr> {
+        let group_start = opening.range.start;
         let mut openings = vec![opening];
         while self.peek(TokenKind::LParen) {
             openings.push(self.bump());
@@ -3048,6 +3251,8 @@ impl<'a> CstAstLowerer<'a> {
                 expected_owner: None,
             }));
         }
+        let opening_count = openings.len();
+        let mut represented_parentheses = 0_usize;
         let mut expression = self.parse_expr()?;
         for _ in openings.iter().rev() {
             if self.peek(TokenKind::Comma) {
@@ -3057,10 +3262,23 @@ impl<'a> CstAstLowerer<'a> {
                     elements.push(self.parse_expr()?);
                 }
                 expression = Expr::Tuple(elements);
+                represented_parentheses = represented_parentheses.saturating_add(1);
             }
             self.expect(TokenKind::RParen)?;
         }
-        Ok(expression)
+        let range = TextRange::new(group_start, self.previous_end(group_start));
+        let expression = if expression
+            .source()
+            .is_some_and(|source| source.range == range)
+        {
+            expression
+        } else {
+            self.source_expression(AstNodeKind::Expression, range, expression)
+        };
+        Ok(self.add_expression_syntax_depth(
+            expression,
+            opening_count.saturating_sub(represented_parentheses),
+        ))
     }
     fn parse_named_primary(&mut self, ident_token: Token, mut name: String) -> ParseResult<Expr> {
         // Keyword tokens stay reserved as bindings and declarations. Canonical
@@ -3207,16 +3425,16 @@ impl<'a> CstAstLowerer<'a> {
                 TextRange::new(ident_token.range.start, call_end),
                 false,
             );
-            Ok(Expr::Source {
+            Ok(self.sourced_expression(
                 node,
                 source,
-                expression: Box::new(Expr::Call {
+                Expr::Call {
                     name,
                     args,
                     argument_names,
                     implicit_receiver: false,
-                }),
-            })
+                },
+            ))
         } else {
             Ok(Expr::Ident(name))
         }
@@ -3755,11 +3973,11 @@ impl<'a> CstAstLowerer<'a> {
             name_token.range,
             self.current_function,
         );
-        let mut expr = Expr::Source {
+        let mut expr = self.sourced_expression(
             node,
-            source: SourceRange::new(self.facts.source_map.source(), name_token.range),
-            expression: Box::new(Expr::Ident(name)),
-        };
+            SourceRange::new(self.facts.source_map.source(), name_token.range),
+            Expr::Ident(name),
+        );
         loop {
             if self.peek(TokenKind::Dot) {
                 self.bump();
@@ -3787,14 +4005,14 @@ impl<'a> CstAstLowerer<'a> {
                     range,
                     self.current_function,
                 );
-                expr = Expr::Source {
+                expr = self.sourced_expression(
                     node,
-                    source: SourceRange::new(self.facts.source_map.source(), range),
-                    expression: Box::new(Expr::Member {
+                    SourceRange::new(self.facts.source_map.source(), range),
+                    Expr::Member {
                         object: Box::new(expr),
                         field,
-                    }),
-                };
+                    },
+                );
             } else if self.peek(TokenKind::LBracket) {
                 self.bump();
                 let idx = self.parse_expr()?;
@@ -3805,14 +4023,14 @@ impl<'a> CstAstLowerer<'a> {
                     range,
                     self.current_function,
                 );
-                expr = Expr::Source {
+                expr = self.sourced_expression(
                     node,
-                    source: SourceRange::new(self.facts.source_map.source(), range),
-                    expression: Box::new(Expr::Index {
+                    SourceRange::new(self.facts.source_map.source(), range),
+                    Expr::Index {
                         target: Box::new(expr),
                         index: Box::new(idx),
-                    }),
-                };
+                    },
+                );
             } else {
                 break;
             }
@@ -4114,12 +4332,25 @@ impl<'a> CstAstLowerer<'a> {
             .map_or(usize::MAX, |token| token.column);
         self.pos = item_start.saturating_add(1).min(self.tokens.len());
         let mut brace_depth = 0_usize;
+        // Minified source has no indentation cue, so a completed top-level
+        // item delimiter must also make the next declaration recoverable.
+        let mut reached_item_boundary = false;
         while let Some(token) = self.tokens.get(self.pos) {
             match &token.kind {
-                TokenKind::LBrace => brace_depth = brace_depth.saturating_add(1),
+                TokenKind::LBrace => {
+                    brace_depth = brace_depth.saturating_add(1);
+                    reached_item_boundary = false;
+                }
                 TokenKind::RBrace if brace_depth == 0 => return,
-                TokenKind::RBrace => brace_depth = brace_depth.saturating_sub(1),
-                _ if Self::token_starts_source_item(token) && token.column <= start_column => {
+                TokenKind::RBrace => {
+                    brace_depth = brace_depth.saturating_sub(1);
+                    reached_item_boundary = brace_depth == 0;
+                }
+                TokenKind::Semicolon if brace_depth == 0 => reached_item_boundary = true,
+                _ if brace_depth == 0
+                    && Self::token_starts_source_item(token)
+                    && (reached_item_boundary || token.column <= start_column) =>
+                {
                     return;
                 }
                 _ => {}

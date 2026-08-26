@@ -31,6 +31,7 @@ use super::{
     v2_transport::AuthenticatedCertifiedBodyResponse,
 };
 use crate::kura::KuraV2CommitReceipt;
+use iroha_config::parameters::defaults::sumeragi::V2_MAX_LIFECYCLE_RECORDS_PER_HEIGHT;
 use iroha_crypto::{Hash, HashOf, PublicKey};
 use iroha_data_model::block::{
     CertifiedMergeLedgerReference, SignedBlock, consensus_v2 as wire, decode_framed_signed_block,
@@ -53,6 +54,62 @@ const FRAME_HEADER_LEN: usize = STORE_MAGIC.len() + size_of::<u16>() + size_of::
 const CHECKSUM_LEN: usize = 32;
 const FRAME_PAYLOAD_MAX_BYTES: u64 =
     wire::MAX_EXECUTED_BLOCK_WIRE_BYTES + wire::MAX_DA_ENCODED_PAYLOAD_BYTES;
+/// Compatibility default for callers which do not supply an operator limit.
+pub(crate) const DEFAULT_V2_BODY_STORE_MAX_BYTES_PER_HEIGHT: u64 = 1024 * 1024 * 1024;
+const BODY_STORE_TEMPORARY_ENTRIES_PER_BODY: usize = 2;
+const BODY_STORE_DIRECTORY_ENTRIES_PER_BODY: usize = 4;
+
+/// Per-height geometry for bounded durable body ownership.
+///
+/// Production construction fixes the semantic entry ceiling to the lifecycle
+/// record limit. The byte ceiling covers complete final `.norito` body frames;
+/// validation markers and atomic-write remnants are separately count-bounded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct V2BodyStoreCapacity {
+    max_body_entries: usize,
+    max_body_frame_bytes: u64,
+    max_temporary_entries: usize,
+    max_directory_entries: usize,
+}
+
+impl V2BodyStoreCapacity {
+    /// Build the production capacity geometry for one height.
+    pub(crate) fn new(max_bytes_per_height: u64) -> Result<Self, V2BodyStoreError> {
+        Self::with_entry_limit(V2_MAX_LIFECYCLE_RECORDS_PER_HEIGHT, max_bytes_per_height)
+    }
+
+    fn with_entry_limit(
+        max_body_entries: usize,
+        max_body_frame_bytes: u64,
+    ) -> Result<Self, V2BodyStoreError> {
+        if max_body_entries == 0
+            || max_body_entries > V2_MAX_LIFECYCLE_RECORDS_PER_HEIGHT
+            || max_body_frame_bytes == 0
+        {
+            return Err(V2BodyStoreError::InvalidCapacityGeometry);
+        }
+        let max_temporary_entries = max_body_entries
+            .checked_mul(BODY_STORE_TEMPORARY_ENTRIES_PER_BODY)
+            .ok_or(V2BodyStoreError::InvalidCapacityGeometry)?;
+        let max_directory_entries = max_body_entries
+            .checked_mul(BODY_STORE_DIRECTORY_ENTRIES_PER_BODY)
+            .ok_or(V2BodyStoreError::InvalidCapacityGeometry)?;
+        Ok(Self {
+            max_body_entries,
+            max_body_frame_bytes,
+            max_temporary_entries,
+            max_directory_entries,
+        })
+    }
+
+    #[cfg(test)]
+    fn for_test(
+        max_body_entries: usize,
+        max_body_frame_bytes: u64,
+    ) -> Result<Self, V2BodyStoreError> {
+        Self::with_entry_limit(max_body_entries, max_body_frame_bytes)
+    }
+}
 /// Metadata and exact canonical bytes persisted in one final body file.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 struct StoredBodyEnvelope {
@@ -1069,6 +1126,8 @@ pub(crate) struct V2BodyStore {
     context: wire::HeightContext,
     signature_policy: BlockSignaturePolicy,
     directory: PathBuf,
+    capacity: V2BodyStoreCapacity,
+    body_frame_bytes: u64,
     /// Emergency Fast owners are empty and may neither publish nor retire files.
     emergency_read_only: bool,
     entries: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), DurableBodyReceipt>,
@@ -1632,8 +1691,8 @@ impl V2BodyStore {
             .map_err(|source| V2BodyStoreError::Io { path, source })
     }
     /// Open the active context directory and fail closed on every malformed
-    /// final body file. Incomplete `.tmp` files are unacknowledged writes and
-    /// are deliberately ignored.
+    /// final body file. Incomplete atomic-write files are unacknowledged and
+    /// are removed after bounded inventory.
     #[cfg(test)]
     pub(crate) fn open(
         root: impl AsRef<Path>,
@@ -1649,6 +1708,16 @@ impl V2BodyStore {
         root: impl AsRef<Path>,
         context: wire::HeightContext,
         signature_policy: BlockSignaturePolicy,
+    ) -> Result<Self, V2BodyStoreError> {
+        let capacity = V2BodyStoreCapacity::new(DEFAULT_V2_BODY_STORE_MAX_BYTES_PER_HEIGHT)?;
+        Self::open_with_policy_and_capacity(root, context, signature_policy, capacity)
+    }
+    /// Open a context directory with an explicit signature policy and capacity.
+    pub(crate) fn open_with_policy_and_capacity(
+        root: impl AsRef<Path>,
+        context: wire::HeightContext,
+        signature_policy: BlockSignaturePolicy,
+        capacity: V2BodyStoreCapacity,
     ) -> Result<Self, V2BodyStoreError> {
         context.validate()?;
         if matches!(signature_policy, BlockSignaturePolicy::GenesisAuthority(_))
@@ -1670,6 +1739,8 @@ impl V2BodyStore {
             context,
             signature_policy,
             directory,
+            capacity,
+            body_frame_bytes: 0,
             emergency_read_only: false,
             entries: BTreeMap::new(),
             manifests: BTreeMap::new(),
@@ -1678,26 +1749,99 @@ impl V2BodyStore {
             validated: BTreeMap::new(),
             rejected: BTreeMap::new(),
         };
-        let mut paths = fs::read_dir(&store.directory)
-            .map_err(|source| V2BodyStoreError::Io {
+        let mut directory_entry_count = 0_usize;
+        let mut body_frame_bytes = 0_u64;
+        let mut body_paths = Vec::new();
+        let mut validation_marker_paths = Vec::new();
+        let mut temporary_paths = Vec::new();
+        let entries = fs::read_dir(&store.directory).map_err(|source| V2BodyStoreError::Io {
+            path: store.directory.clone(),
+            source,
+        })?;
+        for entry in entries {
+            let entry = entry.map_err(|source| V2BodyStoreError::Io {
                 path: store.directory.clone(),
                 source,
-            })?
-            .map(|entry| {
-                entry
-                    .map(|entry| entry.path())
-                    .map_err(|source| V2BodyStoreError::Io {
-                        path: store.directory.clone(),
-                        source,
-                    })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        paths.sort();
-        for path in paths
-            .iter()
-            .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("norito"))
-        {
-            let (envelope, frame_hash) = read_envelope(&path)?;
+            })?;
+            directory_entry_count = directory_entry_count.checked_add(1).ok_or(
+                V2BodyStoreError::DirectoryEntryCapacityExceeded {
+                    capacity: capacity.max_directory_entries,
+                },
+            )?;
+            if directory_entry_count > capacity.max_directory_entries {
+                return Err(V2BodyStoreError::DirectoryEntryCapacityExceeded {
+                    capacity: capacity.max_directory_entries,
+                });
+            }
+            let path = entry.path();
+            let file_type = entry.file_type().map_err(|source| V2BodyStoreError::Io {
+                path: path.clone(),
+                source,
+            })?;
+            if !file_type.is_file() {
+                return Err(V2BodyStoreError::UnexpectedEntry(path));
+            }
+            let file_name = entry.file_name();
+            let name = file_name
+                .to_str()
+                .ok_or_else(|| V2BodyStoreError::UnexpectedEntry(path.clone()))?;
+            if name.ends_with(".norito.tmp") || name.ends_with(".validated.tmp") {
+                if temporary_paths.len() >= capacity.max_temporary_entries {
+                    return Err(V2BodyStoreError::TemporaryEntryCapacityExceeded {
+                        capacity: capacity.max_temporary_entries,
+                    });
+                }
+                temporary_paths.push(path);
+                continue;
+            }
+            match path.extension().and_then(|value| value.to_str()) {
+                Some("norito") => {
+                    if body_paths.len() >= capacity.max_body_entries {
+                        return Err(V2BodyStoreError::BodyEntryCapacityExceeded {
+                            capacity: capacity.max_body_entries,
+                        });
+                    }
+                    let frame_bytes = entry
+                        .metadata()
+                        .map_err(|source| V2BodyStoreError::Io {
+                            path: path.clone(),
+                            source,
+                        })?
+                        .len();
+                    let next_body_frame_bytes = body_frame_bytes.checked_add(frame_bytes).ok_or(
+                        V2BodyStoreError::BodyByteCapacityExceeded {
+                            capacity: capacity.max_body_frame_bytes,
+                        },
+                    )?;
+                    if next_body_frame_bytes > capacity.max_body_frame_bytes {
+                        return Err(V2BodyStoreError::BodyByteCapacityExceeded {
+                            capacity: capacity.max_body_frame_bytes,
+                        });
+                    }
+                    body_frame_bytes = next_body_frame_bytes;
+                    body_paths.push(path);
+                }
+                Some("validated") => {
+                    if validation_marker_paths.len() >= capacity.max_body_entries {
+                        return Err(V2BodyStoreError::ValidationMarkerCapacityExceeded {
+                            capacity: capacity.max_body_entries,
+                        });
+                    }
+                    validation_marker_paths.push(path);
+                }
+                _ => return Err(V2BodyStoreError::UnexpectedEntry(path)),
+            }
+        }
+        if !temporary_paths.is_empty() {
+            temporary_paths.sort();
+            for path in temporary_paths {
+                fs::remove_file(&path).map_err(|source| V2BodyStoreError::Io { path, source })?;
+            }
+            sync_directory(&store.directory)?;
+        }
+        body_paths.sort();
+        for path in &body_paths {
+            let (envelope, frame_hash) = read_envelope(path)?;
             store.validate_envelope(&envelope)?;
             let receipt = receipt_for(&envelope, frame_hash);
             let key = (envelope.round, envelope.subject);
@@ -1707,10 +1851,8 @@ impl V2BodyStore {
                 return Err(V2BodyStoreError::DuplicateBodyKey);
             }
         }
-        for path in paths
-            .iter()
-            .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("validated"))
-        {
+        validation_marker_paths.sort();
+        for path in &validation_marker_paths {
             let marker = read_validation_outcome_marker(path)?;
             let key = (marker.round, marker.subject);
             let receipt = store
@@ -1734,17 +1876,7 @@ impl V2BodyStore {
                 return Err(V2BodyStoreError::DuplicateValidationMarker);
             }
         }
-        for path in &paths {
-            let name = path
-                .file_name()
-                .and_then(|value| value.to_str())
-                .ok_or_else(|| V2BodyStoreError::UnexpectedEntry(path.clone()))?;
-            let extension = path.extension().and_then(|value| value.to_str());
-            if name.ends_with(".tmp") || matches!(extension, Some("norito" | "validated")) {
-                continue;
-            }
-            return Err(V2BodyStoreError::UnexpectedEntry(path.clone()));
-        }
+        store.body_frame_bytes = body_frame_bytes;
         Ok(store)
     }
     /// Construct an empty, read-only owner without opening or inventorying the
@@ -1765,11 +1897,14 @@ impl V2BodyStore {
         {
             return Err(V2BodyStoreError::InvalidSignaturePolicy);
         }
+        let capacity = V2BodyStoreCapacity::new(DEFAULT_V2_BODY_STORE_MAX_BYTES_PER_HEIGHT)?;
         Ok(Self {
             identity: Arc::new(V2BodyStoreInstanceIdentityMarker),
             directory: root.as_ref().join(hex::encode(context.id().0.as_ref())),
             context,
             signature_policy,
+            capacity,
+            body_frame_bytes: 0,
             emergency_read_only: true,
             entries: BTreeMap::new(),
             manifests: BTreeMap::new(),
@@ -1795,11 +1930,14 @@ impl V2BodyStore {
             path: directory.clone(),
             source,
         })?;
+        let capacity = V2BodyStoreCapacity::new(DEFAULT_V2_BODY_STORE_MAX_BYTES_PER_HEIGHT)?;
         Ok(Self {
             identity: Arc::new(V2BodyStoreInstanceIdentityMarker),
             context,
             signature_policy,
             directory,
+            capacity,
+            body_frame_bytes: 0,
             emergency_read_only: false,
             entries: BTreeMap::new(),
             manifests: BTreeMap::new(),
@@ -2474,14 +2612,32 @@ impl V2BodyStore {
             }
             return Err(V2BodyStoreError::ConflictingBody);
         }
+        if self.entries.len() >= self.capacity.max_body_entries {
+            return Err(V2BodyStoreError::BodyEntryCapacityExceeded {
+                capacity: self.capacity.max_body_entries,
+            });
+        }
         let encoded = envelope.encode();
         let framed = frame_payload(&encoded)?;
+        let frame_bytes =
+            u64::try_from(framed.len()).map_err(|_| V2BodyStoreError::BodyTooLarge)?;
+        let next_body_frame_bytes = self.body_frame_bytes.checked_add(frame_bytes).ok_or(
+            V2BodyStoreError::BodyByteCapacityExceeded {
+                capacity: self.capacity.max_body_frame_bytes,
+            },
+        )?;
+        if next_body_frame_bytes > self.capacity.max_body_frame_bytes {
+            return Err(V2BodyStoreError::BodyByteCapacityExceeded {
+                capacity: self.capacity.max_body_frame_bytes,
+            });
+        }
         let frame_hash = Hash::new(&framed);
         let path = self.path_for(envelope.round, envelope.subject);
         write_atomic_synced(&path, &framed)?;
         let receipt = receipt_for(&envelope, frame_hash);
         self.entries.insert(key, receipt.clone());
         self.manifests.insert(key, envelope.manifest);
+        self.body_frame_bytes = next_body_frame_bytes;
         Ok(receipt)
     }
     /// Load and revalidate the exact block represented by a durable receipt.
@@ -3195,6 +3351,39 @@ pub(crate) enum V2BodyStoreError {
     /// Frozen height context is structurally invalid.
     #[error("invalid Sumeragi v2 body-store height context: {0}")]
     Context(#[from] wire::ValidationError),
+    /// Configured per-height body capacity cannot form a bounded geometry.
+    #[error("invalid Sumeragi v2 body-store capacity geometry")]
+    InvalidCapacityGeometry,
+    /// Context directory exceeds the bounded inventory geometry.
+    #[error("Sumeragi v2 body-store directory exceeds {capacity} entries")]
+    DirectoryEntryCapacityExceeded {
+        /// Maximum entries inventoried for one height directory.
+        capacity: usize,
+    },
+    /// Atomic-write remnants exceed their bounded inventory allowance.
+    #[error("Sumeragi v2 body-store directory exceeds {capacity} temporary entries")]
+    TemporaryEntryCapacityExceeded {
+        /// Maximum temporary entries inventoried for one height.
+        capacity: usize,
+    },
+    /// Durable semantic body count reached the lifecycle ceiling.
+    #[error("Sumeragi v2 body store exceeds {capacity} durable bodies per height")]
+    BodyEntryCapacityExceeded {
+        /// Maximum durable body entries for one height.
+        capacity: usize,
+    },
+    /// Durable validation-marker count exceeds the bounded body geometry.
+    #[error("Sumeragi v2 body store exceeds {capacity} validation markers per height")]
+    ValidationMarkerCapacityExceeded {
+        /// Maximum validation markers for one height.
+        capacity: usize,
+    },
+    /// Complete durable body frames exceed the configured per-height byte cap.
+    #[error("Sumeragi v2 body store exceeds {capacity} body-frame bytes per height")]
+    BodyByteCapacityExceeded {
+        /// Maximum complete body-frame bytes for one height.
+        capacity: u64,
+    },
     /// Stored file uses an unsupported framing or envelope version.
     #[error("unsupported Sumeragi v2 body-store version {0}")]
     UnsupportedVersion(u16),

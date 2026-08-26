@@ -41,6 +41,7 @@ const PRODUCTION_POLICY_SCHEMA: &str = "sccp-release-trust-policy-v1";
 const TEST_POLICY_SCHEMA: &str = "sccp-release-test-trust-policy-v1";
 const RELEASE_EVIDENCE_SCHEMA: &str = "sccp-release-evidence-v1";
 const VALIDATOR_PROTOCOL_VERSION: u8 = 1;
+const PRODUCTION_VALIDATOR_FEATURES: [&str; 1] = ["dev-tools"];
 #[cfg(feature = "test-fixtures")]
 const MAX_INPUT_BYTES: u64 = 40 * 1024 * 1024;
 const MAX_LANE_INPUT_BYTES: u64 = 16 * 1024 * 1024;
@@ -743,7 +744,11 @@ fn validate_validator_identity_shape(identity: &ValidatorIdentityV1) -> Result<(
     if identity.protocol_version != VALIDATOR_PROTOCOL_VERSION
         || identity.crate_name != env!("CARGO_PKG_NAME")
         || identity.crate_version != env!("CARGO_PKG_VERSION")
-        || !identity.enabled_features.is_empty()
+        || !identity
+            .enabled_features
+            .iter()
+            .map(String::as_str)
+            .eq(PRODUCTION_VALIDATOR_FEATURES)
         || !matches!(identity.build_profile.as_str(), "debug" | "release")
         || !canonical_identifier(&identity.target_triple)
         || identity.target_triple.matches('-').count() < 2
@@ -1067,6 +1072,7 @@ fn validate_sora_finality_anchor_policy(
         checkpoint_finality_artifact_hash,
     })
 }
+#[derive(Debug)]
 struct ValidatedReleaseTrustV1 {
     release_keys: [[u8; 32]; 2],
 }
@@ -2951,17 +2957,32 @@ mod tests {
         assert_ne!(first.source_sha256_hex, "00".repeat(32));
         assert_ne!(first.build_identity_hex, "00".repeat(32));
         #[cfg(not(feature = "test-fixtures"))]
+        assert_eq!(first.enabled_features, vec!["dev-tools".to_owned()]);
+        #[cfg(feature = "test-fixtures")]
+        assert_eq!(
+            first.enabled_features,
+            vec!["dev-tools".to_owned(), "test-fixtures".to_owned()]
+        );
+        #[cfg(not(feature = "test-fixtures"))]
         validate_validator_identity_shape(&first).unwrap();
     }
     #[test]
     #[cfg(not(feature = "test-fixtures"))]
     fn validator_identity_rejects_test_features_and_mismatched_rustc() {
         let identity = validator_identity().unwrap();
+        let mut missing_required_feature = identity.clone();
+        missing_required_feature.enabled_features.clear();
+        assert!(validate_validator_identity_shape(&missing_required_feature).is_err());
         let mut test_features = identity.clone();
         test_features
             .enabled_features
             .push("test-fixtures".to_owned());
         assert!(validate_validator_identity_shape(&test_features).is_err());
+        let mut duplicate_feature = identity.clone();
+        duplicate_feature
+            .enabled_features
+            .push("dev-tools".to_owned());
+        assert!(validate_validator_identity_shape(&duplicate_feature).is_err());
         let mut wrong_rustc = identity.clone();
         wrong_rustc.rustc_version = "rustc 0.0.0 (000000000 1970-01-01)".to_owned();
         assert!(validate_validator_identity_shape(&wrong_rustc).is_err());
@@ -2971,7 +2992,7 @@ mod tests {
     }
     #[test]
     fn validator_build_identity_matches_python_golden() {
-        let features = Vec::<String>::new();
+        let features = vec!["dev-tools".to_owned()];
         let identity = validator_build_identity_hash(&ValidatorBuildIdentityInputs {
             protocol_version: 1,
             crate_name: "iroha_sccp",
@@ -2990,7 +3011,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             lowercase_hex(&identity),
-            "5f2fb61fb1622ae4e5a233f72f431cae8cb96c6ea64fde57bb130f3940344f9b"
+            "8ed0a7bfbff79b302fe1193ca51a992b65b7ab136862ecc871efcce391449414"
         );
     }
     #[test]

@@ -2138,6 +2138,46 @@ mod tests {
         );
     }
     #[test]
+    fn route_revision_is_governed_by_the_immutable_tron_contract_address() {
+        let contract = [0x33; 20];
+        let transaction = transaction_bytes(contract, 1, TRON_TRIGGER_SMART_CONTRACT_TYPE_URL_V1);
+        let root = sha256_bytes(&transaction);
+        let proof = single_transaction_proof(transaction);
+        let lane = SccpLaneIdV1 {
+            source: SccpNetworkV1::TronMainnet,
+            target: SccpNetworkV1::SoraTaira,
+        };
+        let first_payload = SccpPayloadV1::Transfer(test_transfer());
+        let first = verify_tron_native_sccp_transaction(
+            &proof,
+            root,
+            contract,
+            [0x45; 32],
+            lane,
+            &first_payload,
+        )
+        .expect("canonical first TRON route revision");
+
+        let mut successor_transfer = test_transfer();
+        successor_transfer.route_revision = 2;
+        let successor_payload = SccpPayloadV1::Transfer(successor_transfer);
+        let successor = verify_tron_native_sccp_transaction(
+            &proof,
+            root,
+            contract,
+            [0x46; 32],
+            lane,
+            &successor_payload,
+        )
+        .expect("transaction call data deliberately omits governed revision metadata");
+
+        assert_eq!(first.transaction_hash, successor.transaction_hash);
+        assert_eq!(first.contract_address, successor.contract_address);
+        assert_ne!(first.message_id, successor.message_id);
+        assert_ne!(first.payload_hash, successor.payload_hash);
+        assert_ne!(first.source_event_digest, successor.source_event_digest);
+    }
+    #[test]
     fn complete_native_source_binds_typed_lane_transfer_contract_and_anchor() {
         use iroha_data_model::bridge::sccp::{SccpLaneIdV1, SccpTronSourceEmitterV1};
         let contract = [0x33; 20];

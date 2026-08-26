@@ -10,6 +10,7 @@ import java.security.cert.CertificateFactory
 import java.security.cert.PKIXParameters
 import java.security.cert.TrustAnchor
 import java.security.cert.X509Certificate
+import java.util.Date
 import org.hyperledger.iroha.sdk.crypto.keystore.KeyAttestation
 
 private const val ATTESTATION_OID = "1.3.6.1.4.1.11129.2.1.17"
@@ -23,31 +24,43 @@ private val INT_MAX_BIG_INTEGER = BigInteger.valueOf(Int.MAX_VALUE.toLong())
 class AttestationVerifier private constructor(
     trustAnchors: Set<TrustAnchor>,
     private val requireStrongBox: Boolean,
+    private val revocationPolicy: AndroidAttestationRevocationPolicyV1,
+    private val evaluationTimeEpochMillis: Long,
 ) {
     private val trustAnchors: Set<TrustAnchor> = trustAnchors.toSet()
 
-    /** Validates `attestation` against the configured policy. */
+    /** Retained for binary compatibility; always fails closed because a challenge is required. */
     @Throws(AttestationVerificationException::class)
-    fun verify(attestation: KeyAttestation): AttestationResult = verify(attestation, null)
+    fun verify(attestation: KeyAttestation): AttestationResult {
+        throw AttestationVerificationException(
+            "Expected attestation challenge must be non-empty"
+        )
+    }
 
     /**
-     * Validates `attestation` and checks that the embedded challenge matches `expectedChallenge`
-     * when provided.
+     * Validates `attestation` and checks that the embedded challenge matches the required,
+     * non-empty `expectedChallenge`.
      */
     @Throws(AttestationVerificationException::class)
     fun verify(attestation: KeyAttestation, expectedChallenge: ByteArray?): AttestationResult {
+        if (expectedChallenge == null || expectedChallenge.isEmpty()) {
+            throw AttestationVerificationException(
+                "Expected attestation challenge must be non-empty"
+            )
+        }
+        val challenge = expectedChallenge.copyOf()
+        revocationPolicy.validateAt(evaluationTimeEpochMillis)
         val chain = decodeChain(attestation)
         if (chain.isEmpty()) {
             throw AttestationVerificationException("Attestation certificate chain is empty")
         }
         val leaf = chain[0]
 
-        validateCertificatePath(chain)
+        val activeTrustAnchors = validateRevocationStatus(chain)
+        validateCertificatePath(chain, activeTrustAnchors)
 
         val description = parseKeyDescription(leaf)
-        if (expectedChallenge != null
-            && !MessageDigest.isEqual(expectedChallenge, description.attestationChallenge)
-        ) {
+        if (!MessageDigest.isEqual(challenge, description.attestationChallenge)) {
             throw AttestationVerificationException("Attestation challenge mismatch")
         }
         if (requireStrongBox
@@ -86,7 +99,44 @@ class AttestationVerifier private constructor(
         }
     }
 
-    private fun validateCertificatePath(chain: List<X509Certificate>) {
+    private fun validateRevocationStatus(
+        chain: List<X509Certificate>
+    ): Set<TrustAnchor> {
+        for (certificate in chain) {
+            if (isRevoked(certificate)) {
+                throw AttestationVerificationException(
+                    "Attestation certificate is rejected by the governed revocation status"
+                )
+            }
+        }
+        val activeAnchors = trustAnchors.filterTo(linkedSetOf()) { anchor ->
+            val certificate = anchor.trustedCert
+            certificate == null || !isRevoked(certificate)
+        }
+        if (activeAnchors.isEmpty()) {
+            throw AttestationVerificationException(
+                "All configured attestation trust anchors are revoked"
+            )
+        }
+        return activeAnchors
+    }
+
+    private fun isRevoked(certificate: X509Certificate): Boolean {
+        val tbsDigest = try {
+            MessageDigest.getInstance("SHA-256").digest(certificate.tbsCertificate)
+        } catch (ex: Exception) {
+            throw AttestationVerificationException(
+                "Unable to hash attestation certificate TBS bytes",
+                ex,
+            )
+        }
+        return revocationPolicy.rejects(certificate.serialNumber, tbsDigest)
+    }
+
+    private fun validateCertificatePath(
+        chain: List<X509Certificate>,
+        activeTrustAnchors: Set<TrustAnchor>,
+    ) {
         val factory: CertificateFactory
         try {
             factory = CertificateFactory.getInstance("X.509")
@@ -95,7 +145,7 @@ class AttestationVerifier private constructor(
         }
 
         val certPath = try {
-            factory.generateCertPath(certificatesForPath(chain))
+            factory.generateCertPath(certificatesForPath(chain, activeTrustAnchors))
         } catch (ex: CertificateException) {
             throw AttestationVerificationException("Failed to construct attestation CertPath", ex)
         }
@@ -107,11 +157,13 @@ class AttestationVerifier private constructor(
         }
 
         val parameters = try {
-            PKIXParameters(trustAnchors)
+            PKIXParameters(activeTrustAnchors)
         } catch (ex: Exception) {
             throw AttestationVerificationException("Invalid PKIX parameters", ex)
         }
+        // The governed, freshness-checked offline snapshot above is the sole revocation source.
         parameters.isRevocationEnabled = false
+        parameters.date = Date(evaluationTimeEpochMillis)
 
         try {
             validator.validate(certPath, parameters)
@@ -126,12 +178,15 @@ class AttestationVerifier private constructor(
         }
     }
 
-    private fun certificatesForPath(chain: List<X509Certificate>): List<X509Certificate> {
+    private fun certificatesForPath(
+        chain: List<X509Certificate>,
+        activeTrustAnchors: Set<TrustAnchor>,
+    ): List<X509Certificate> {
         if (chain.size < 2) {
             return chain
         }
         val trailingCertificate = chain[chain.size - 1]
-        for (anchor in trustAnchors) {
+        for (anchor in activeTrustAnchors) {
             val trusted = anchor.trustedCert
             if (trusted != null && sameTrustAnchorCertificate(trailingCertificate, trusted)) {
                 // The configured trust anchor is not part of the PKIX CertPath. Android
@@ -206,6 +261,8 @@ class AttestationVerifier private constructor(
     class Builder internal constructor() {
         private val trustedRoots = linkedSetOf<X509Certificate>()
         private var requireStrongBox = false
+        private var revocationPolicy: AndroidAttestationRevocationPolicyV1? = null
+        private var evaluationTimeEpochMillis: Long? = null
 
         /** Adds a trusted root certificate in DER form. */
         @Throws(AttestationVerificationException::class)
@@ -230,12 +287,33 @@ class AttestationVerifier private constructor(
             this.requireStrongBox = enabled
         }
 
+        /** Configures the mandatory governed revocation snapshot. */
+        fun revocationPolicy(policy: AndroidAttestationRevocationPolicyV1): Builder = apply {
+            revocationPolicy = policy
+        }
+
+        /** Configures the explicit epoch-millisecond time used for freshness and PKIX checks. */
+        fun evaluationTimeEpochMillis(value: Long): Builder = apply {
+            evaluationTimeEpochMillis = value
+        }
+
         fun build(): AttestationVerifier {
             check(trustedRoots.isNotEmpty()) {
                 "At least one trusted root certificate is required"
             }
+            val policy = checkNotNull(revocationPolicy) {
+                "A governed Android attestation revocation policy is required"
+            }
+            val evaluationTime = checkNotNull(evaluationTimeEpochMillis) {
+                "An explicit attestation evaluation time is required"
+            }
             val anchors = trustedRoots.mapTo(linkedSetOf()) { TrustAnchor(it, null) }
-            return AttestationVerifier(anchors, requireStrongBox)
+            return AttestationVerifier(
+                anchors,
+                requireStrongBox,
+                policy,
+                evaluationTime,
+            )
         }
     }
 
@@ -331,8 +409,20 @@ class AttestationVerifier private constructor(
     }
 
     companion object {
-        /** Creates a verifier that trusts the supplied root certificates. */
+        /**
+         * Creates a verifier builder. Callers must configure a governed revocation policy and an
+         * explicit evaluation time before `build()` can succeed.
+         */
         @JvmStatic
         fun builder(): Builder = Builder()
+
+        /** Creates a verifier builder with its mandatory revocation inputs preconfigured. */
+        @JvmStatic
+        fun builder(
+            revocationPolicy: AndroidAttestationRevocationPolicyV1,
+            evaluationTimeEpochMillis: Long,
+        ): Builder = Builder()
+            .revocationPolicy(revocationPolicy)
+            .evaluationTimeEpochMillis(evaluationTimeEpochMillis)
     }
 }

@@ -981,16 +981,28 @@ pub trait SetReadOnly {
         }
         due_retries.into_iter().chain(scheduled)
     }
-    /// Returns an iterator over `(TriggerId, LoadedAction)` pairs for a deterministic pipeline event.
+    /// Returns trigger ids matching a deterministic pipeline event.
+    ///
+    /// Triggers registered at `current_block_height` are excluded so a pipeline
+    /// event cannot execute a trigger created by the same block.
     fn match_pipeline_event<'a>(
         &'a self,
         event: &'a PipelineEventBox,
-    ) -> impl Iterator<Item = (TriggerId, LoadedAction<PipelineEventFilterBox>)> + 'a {
+        current_block_height: u64,
+    ) -> impl Iterator<Item = TriggerId> + 'a {
+        let key_height = "__registered_block_height".parse::<Name>().ok();
         self.pipeline_triggers()
             .iter()
             .filter(|(_, action)| Set::action_is_active(action))
+            .filter(move |(_, action)| {
+                let registered_height = key_height
+                    .as_ref()
+                    .and_then(|key| action.metadata().get(key))
+                    .and_then(|json| json.try_into_any_norito::<u64>().ok());
+                registered_height.is_some_and(|height| height < current_block_height)
+            })
             .filter(move |(_, action)| action.filter.matches(event))
-            .map(move |(id, action)| (id.clone(), action.clone()))
+            .map(|(id, _)| id.clone())
     }
     /// Get [`ExecutableRef`] for given [`TriggerId`]. Returns `None` if `id` is not in the set.
     fn get_executable(&self, id: &TriggerId) -> Option<&ExecutableRef> {
@@ -1245,12 +1257,13 @@ impl<'set> SetBlock<'set> {
             max_invocations,
         )
     }
-    /// Returns pipeline triggers matching a deterministic pipeline event.
+    /// Returns trigger ids matching a deterministic pipeline event outside their registration block.
     pub fn match_pipeline_event<'a>(
         &'a self,
         event: &'a PipelineEventBox,
-    ) -> impl Iterator<Item = (TriggerId, LoadedAction<PipelineEventFilterBox>)> + 'a {
-        <Self as SetReadOnly>::match_pipeline_event(self, event)
+        current_block_height: u64,
+    ) -> impl Iterator<Item = TriggerId> + 'a {
+        <Self as SetReadOnly>::match_pipeline_event(self, event, current_block_height)
     }
 }
 trait TriggeringEventFilter: EventFilter {}
@@ -1855,10 +1868,17 @@ impl json::JsonDeserialize for ExecutableRef {
 mod tests {
     use super::*;
     use crate::smartcontracts::isi::triggers::TRIGGER_ENABLED_METADATA_KEY;
-    use core::time::Duration;
+    use core::{num::NonZeroU64, time::Duration};
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
-        events::{execute_trigger::ExecuteTriggerEventFilter, time::Schedule},
+        block::BlockHeader,
+        events::{
+            execute_trigger::ExecuteTriggerEventFilter,
+            pipeline::{
+                BlockEvent, BlockEventFilter, BlockStatus, PipelineEventBox, PipelineEventFilterBox,
+            },
+            time::Schedule,
+        },
         metadata::Metadata,
         prelude::{
             AccountId, Executable, ExecutionTime, InstructionBox, Level, Log, TimeEvent,
@@ -2155,6 +2175,57 @@ mod tests {
         assert_eq!(
             matches_later, 1,
             "trigger should appear for subsequent blocks"
+        );
+    }
+    #[test]
+    fn match_pipeline_event_skips_recently_registered_triggers() {
+        let set = Set::default();
+        let trigger_id: TriggerId = "pipeline_trigger".parse().expect("valid id");
+        {
+            let mut block = set.block();
+            let mut tx = block.transaction();
+            let instruction = InstructionBox::from(Log::new(Level::INFO, "noop".to_owned()));
+            let executable = Executable::Instructions(ConstVec::from(vec![instruction]));
+            let mut action = SpecializedAction::new(
+                executable,
+                Repeats::Exactly(1),
+                sample_authority(),
+                PipelineEventFilterBox::from(
+                    BlockEventFilter::new().for_status(BlockStatus::Approved),
+                ),
+            )
+            .expect("test pipeline-trigger action satisfies its authority invariant");
+            action.metadata.insert(
+                "__registered_block_height".parse().expect("valid name"),
+                Json::from(42_u64),
+            );
+            tx.add_pipeline_trigger(SpecializedTrigger::new(trigger_id.clone(), action))
+                .expect("pipeline trigger should be added");
+            tx.apply();
+            block.commit();
+        }
+        let event = PipelineEventBox::from(BlockEvent {
+            header: BlockHeader::new(
+                NonZeroU64::new(42).expect("nonzero height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            ),
+            status: BlockStatus::Approved,
+        });
+        let block_view = set.block();
+        assert!(
+            block_view.match_pipeline_event(&event, 42).next().is_none(),
+            "pipeline trigger registered in the current block must be skipped"
+        );
+        assert_eq!(
+            block_view
+                .match_pipeline_event(&event, 43)
+                .collect::<Vec<_>>(),
+            vec![trigger_id],
+            "pipeline trigger should match in a subsequent block"
         );
     }
     #[test]

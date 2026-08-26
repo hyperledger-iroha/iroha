@@ -34,22 +34,18 @@ static PROVER_STACK_SIZE: LazyLock<AtomicUsize> =
     LazyLock::new(|| AtomicUsize::new(crate::parallel::thread_stack_size()));
 static PROVER_POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
 /// Install a register logger for the current thread.
-pub fn set_reg_logger(ptr: Option<*mut RegLog>) {
+fn set_reg_logger(ptr: Option<*mut RegLog>) {
     REG_LOGGER.with(|l| *l.borrow_mut() = ptr);
 }
 /// RAII helper that clears the register logger when dropped.
-pub struct RegLoggerGuard {
+pub(crate) struct RegLoggerGuard {
     installed: bool,
 }
 impl RegLoggerGuard {
     /// Install the register logger and return a guard that will clear it on drop.
-    pub fn install(log: &mut RegLog) -> Self {
+    pub(crate) fn install(log: &mut RegLog) -> Self {
         set_reg_logger(Some(log as *mut _));
         Self { installed: true }
-    }
-    /// Return a no-op guard for cases where register logging is disabled.
-    pub const fn noop() -> Self {
-        Self { installed: false }
     }
 }
 impl Drop for RegLoggerGuard {
@@ -154,6 +150,18 @@ mod tests {
             .build_global();
         let result = verify_trace(&[], &[], &[], &[]);
         assert!(result.is_ok());
+    }
+    #[test]
+    fn verify_trace_accepts_arbitrary_register_data() {
+        let mut gpr = [0u64; 256];
+        gpr[0] = 0xDEAD_BEEF_DEAD_BEEF;
+        let trace = [RegisterState {
+            pc: 0,
+            gpr,
+            tags: [false; 256],
+        }];
+
+        assert!(verify_trace(&trace, &[], &[], &[]).is_ok());
     }
     #[test]
     fn verify_trace_rejects_cross_chunk_memory_writes() {
@@ -534,15 +542,7 @@ pub fn verify_trace(
                 Err(crate::error::VMError::AssertionFailed)
             }
         })?;
-        if trace
-            .last()
-            .map(|state| state.gpr.contains(&0xDEAD_BEEF_DEAD_BEEFu64))
-            .unwrap_or(false)
-        {
-            Err(crate::error::VMError::AssertionFailed)
-        } else {
-            Ok(())
-        }
+        Ok(())
     })
 }
 

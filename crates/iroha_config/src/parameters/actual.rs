@@ -6085,7 +6085,19 @@ impl_default!(SumeragiQueues => {
             body_source_bytes: defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES,
             chunks: defaults::sumeragi::QUEUE_CHUNK_CAPACITY,
             ready_bodies: defaults::sumeragi::QUEUE_READY_BODY_CAPACITY,
-        }
+    }
+});
+/// Node-local durable storage budgets for Sumeragi v2.
+#[derive(Debug, Clone, Copy)]
+pub struct SumeragiStorage {
+    /// Aggregate checksummed body-frame bytes retained for one active height.
+    pub body_store_max_bytes_per_height: Bytes<u64>,
+}
+impl_default!(SumeragiStorage => {
+    Self {
+        body_store_max_bytes_per_height:
+            defaults::sumeragi::BODY_STORE_MAX_BYTES_PER_HEIGHT,
+    }
 });
 /// Shared finite runtime bounds for Sumeragi v2 lane, merge, and Native AMX services.
 #[derive(Debug, Clone, Copy)]
@@ -6248,6 +6260,8 @@ pub struct Sumeragi {
     pub queues: SumeragiQueues,
     /// Shared finite lane, merge, recovery, and Native AMX service bounds.
     pub limits: SumeragiV2RuntimeLimits,
+    /// Node-local durable storage budgets excluded from the shared fingerprint.
+    pub storage: SumeragiStorage,
     /// Consensus key-rotation and HSM policy.
     pub keys: SumeragiKeys,
 }
@@ -6260,6 +6274,7 @@ impl_default!(Sumeragi => {
             block: SumeragiBlock::default(),
             queues: SumeragiQueues::default(),
             limits: SumeragiV2RuntimeLimits::default(),
+            storage: SumeragiStorage::default(),
             keys: SumeragiKeys::default(),
         }
 });

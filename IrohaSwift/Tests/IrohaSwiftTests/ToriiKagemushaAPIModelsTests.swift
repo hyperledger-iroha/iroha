@@ -963,8 +963,11 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         assetBytes[6] = (assetBytes[6] & 0x0f) | 0x40
         assetBytes[8] = (assetBytes[8] & 0x3f) | 0x80
         let fixed32: (UInt8) -> Data = { Data(repeating: $0, count: 32) }
+        let payerPublicKey = try Keypair(
+            privateKeyBytes: fixed32(0xc0)
+        ).publicKey
         let payer = try AccountAddress
-            .fromAccount(publicKey: fixed32(0xc0))
+            .fromAccount(publicKey: payerPublicKey)
             .toI105(networkPrefix: 0x02f1)
         let account = try AccountAddress
             .parseEncoded(payer, expectedPrefix: 0x02f1)

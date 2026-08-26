@@ -1,15 +1,15 @@
 #[cfg(test)]
 mod handle_update_tests {
-    use std::{
-        collections::HashSet,
-        sync::{Barrier, atomic::AtomicUsize},
-    };
+    use super::*;
     use iroha_config::parameters::actual::SoranetHandshake as ActualSoranetHandshake;
     use iroha_crypto::encryption::ChaCha20Poly1305;
     use iroha_primitives::addr::socket_addr;
     use norito::codec::{Decode, DecodeAll, Encode};
+    use std::{
+        collections::HashSet,
+        sync::{Barrier, atomic::AtomicUsize},
+    };
     use tokio::sync::{mpsc, watch};
-    use super::*;
     #[derive(Clone, Debug, Decode, Encode)]
     struct Dummy;
     impl message::ClassifyTopic for Dummy {}
@@ -878,6 +878,7 @@ mod handle_update_tests {
                     Mutex::new(ReliableProgressTopology::empty()),
                 ),
                 reliable_direct_topology: Arc::new(Mutex::new(ReliableProgressTopology::empty())),
+                configured_peer_ids: Arc::new(Mutex::new(ConfiguredPeerState::default())),
                 reply_route_owner: Arc::new(()),
                 reply_route_source_capacity: 8,
                 update_topology_sender: update_topology_tx,
@@ -983,6 +984,7 @@ mod handle_update_tests {
             online_peer_capabilities_receiver,
             reliable_broadcast_topology: Arc::new(Mutex::new(ReliableProgressTopology::empty())),
             reliable_direct_topology: Arc::new(Mutex::new(ReliableProgressTopology::empty())),
+            configured_peer_ids: Arc::new(Mutex::new(ConfiguredPeerState::default())),
             reply_route_owner: Arc::new(()),
             reply_route_source_capacity: 8,
             update_topology_sender: update_topology_tx,
@@ -1068,6 +1070,7 @@ mod handle_update_tests {
                     Mutex::new(ReliableProgressTopology::empty()),
                 ),
                 reliable_direct_topology: Arc::new(Mutex::new(ReliableProgressTopology::empty())),
+                configured_peer_ids: Arc::new(Mutex::new(ConfiguredPeerState::default())),
                 reply_route_owner: Arc::new(()),
                 reply_route_source_capacity: 8,
                 update_topology_sender: update_topology_tx,

@@ -6,6 +6,7 @@ using Hyperledger.Iroha.Address;
 using Hyperledger.Iroha.Crypto;
 using Hyperledger.Iroha.Http;
 using Hyperledger.Iroha.Norito;
+using Hyperledger.Iroha.Numeric;
 using Hyperledger.Iroha.Torii;
 using Hyperledger.Iroha.Transactions;
 
@@ -14,6 +15,9 @@ namespace Hyperledger.Iroha.Sdk.Tests;
 /// <summary>Exercises the first-release prepared onboarding and faucet protocol.</summary>
 public sealed partial class ToriiClientTests
 {
+    private static FeePaymentIntent PreparedAccountFeePayment =>
+        FeePaymentIntent.Authority([]);
+
     [Theory]
     [InlineData("onboarding_prepared")]
     [InlineData("onboarding_proof_required")]
@@ -200,6 +204,7 @@ public sealed partial class ToriiClientTests
             receipt.Body.Request,
             receipt,
             proofRequired.Binding,
+            PreparedAccountFeePayment,
             AccountOnboardingToken,
             vector.GetProperty("signer_account_id").GetString()!,
             PreparedTransactionSignatureNetworkId(vector),
@@ -243,6 +248,7 @@ public sealed partial class ToriiClientTests
             expected.Receipt.Body.Request,
             expected.Receipt,
             expected.Binding,
+            expected.FeePayment,
             AccountOnboardingToken,
             vector.GetProperty("signer_account_id").GetString()!,
             PreparedTransactionSignatureNetworkId(vector),
@@ -272,6 +278,7 @@ public sealed partial class ToriiClientTests
             receipt.Body.Request,
             receipt,
             expected.Binding,
+            PreparedAccountFeePayment,
             AccountOnboardingToken,
             vector.GetProperty("signer_account_id").GetString()!,
             PreparedTransactionSignatureNetworkId(vector),
@@ -651,6 +658,21 @@ public sealed partial class ToriiClientTests
     }
 
     [Fact]
+    public void AccountFaucetPolicyRequiresCanonicalPositiveTypedValues()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new ToriiAccountFaucetPolicyV1(
+                OnboardingFixtureAuthority,
+                "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+                NumericV1.QuantityValue.ParseCanonical("0")));
+        Assert.Throws<ArgumentException>(() =>
+            new ToriiAccountFaucetPolicyV1(
+                OnboardingFixtureAuthority,
+                "not-an-asset-definition",
+                NumericV1.QuantityValue.ParseCanonical("1")));
+    }
+
+    [Fact]
     public async Task PrepareAccountFaucetAsyncAcceptsAuthenticatedPreparedGolden()
     {
         var vector = PreparedTransactionSignatureVector("faucet_prepared");
@@ -665,6 +687,8 @@ public sealed partial class ToriiClientTests
         var prepared = await client.PrepareAccountFaucetAsync(
             expected.Claim,
             expected.Binding,
+            expected.FeePayment,
+            FaucetPolicy(vector, expected),
             PreparedTransactionSignatureNetworkId(vector),
             TestContext.Current.CancellationToken);
 
@@ -693,6 +717,8 @@ public sealed partial class ToriiClientTests
         var error = await Assert.ThrowsAsync<JsonException>(() => client.PrepareAccountFaucetAsync(
             expected.Claim with { AccountId = alternateAccountId },
             expected.Binding,
+            expected.FeePayment,
+            FaucetPolicy(vector, expected),
             PreparedTransactionSignatureNetworkId(vector),
             TestContext.Current.CancellationToken));
 
@@ -732,6 +758,7 @@ public sealed partial class ToriiClientTests
         var outcome = await client.SubmitPreparedAccountOnboardingAsync(
             prepared.Receipt.Body.Request,
             prepared,
+            prepared.FeePayment,
             AccountOnboardingToken,
             vector.GetProperty("signer_account_id").GetString()!,
             PreparedTransactionSignatureNetworkId(vector),
@@ -739,6 +766,76 @@ public sealed partial class ToriiClientTests
             TestContext.Current.CancellationToken);
 
         Assert.Equal("Pending", outcome.Outcome);
+    }
+
+    [Fact]
+    public async Task PreparedSubmitsRejectCallerFeeAndFaucetPolicySubstitutionBeforeDispatch()
+    {
+        var onboardingVector = PreparedTransactionSignatureVector("onboarding_prepared");
+        var onboarding = DeserializePreparedFixture<ToriiAccountOnboardingPreparedTransactionV1>(
+            onboardingVector.GetProperty("response"));
+        using var onboardingHandler = new RecordingHandler(_ =>
+            throw new InvalidOperationException("fee-substituted onboarding reached HTTP dispatch"));
+        using var onboardingClient = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(onboardingHandler));
+
+        await Assert.ThrowsAsync<JsonException>(() =>
+            onboardingClient.SubmitPreparedAccountOnboardingAsync(
+                onboarding.Receipt.Body.Request,
+                onboarding,
+                FeePaymentIntent.Authority([], gasLimit: 1),
+                AccountOnboardingToken,
+                onboardingVector.GetProperty("signer_account_id").GetString()!,
+                PreparedTransactionSignatureNetworkId(onboardingVector),
+                SharedOnboardingBodyEncoder,
+                TestContext.Current.CancellationToken));
+        Assert.Null(onboardingHandler.LastRequest);
+
+        var faucetVector = PreparedTransactionSignatureVector("faucet_prepared");
+        var faucet = DeserializePreparedFixture<ToriiAccountFaucetPreparedTransactionV1>(
+            faucetVector.GetProperty("response"));
+        using var faucetHandler = new RecordingHandler(_ =>
+            throw new InvalidOperationException("fee-substituted faucet reached HTTP dispatch"));
+        using var faucetClient = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(faucetHandler));
+
+        await Assert.ThrowsAsync<JsonException>(() =>
+            faucetClient.SubmitPreparedAccountFaucetAsync(
+                faucet,
+                FeePaymentIntent.Authority([], gasLimit: 1),
+                FaucetPolicy(faucetVector, faucet),
+                PreparedTransactionSignatureNetworkId(faucetVector),
+                TestContext.Current.CancellationToken));
+
+        var trustedPolicy = FaucetPolicy(faucetVector, faucet);
+        var substitutedPolicies = new ToriiAccountFaucetPolicyV1[]
+        {
+            new(
+                onboardingVector.GetProperty("signer_account_id").GetString()!,
+                trustedPolicy.AssetDefinitionId,
+                trustedPolicy.Amount),
+            new(
+                trustedPolicy.FaucetAuthority,
+                "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+                trustedPolicy.Amount),
+            new(
+                trustedPolicy.FaucetAuthority,
+                trustedPolicy.AssetDefinitionId,
+                NumericV1.QuantityValue.ParseCanonical("6")),
+        };
+        foreach (var substitutedPolicy in substitutedPolicies)
+        {
+            await Assert.ThrowsAsync<JsonException>(() =>
+                faucetClient.SubmitPreparedAccountFaucetAsync(
+                    faucet,
+                    faucet.FeePayment,
+                    substitutedPolicy,
+                    PreparedTransactionSignatureNetworkId(faucetVector),
+                    TestContext.Current.CancellationToken));
+        }
+        Assert.Null(faucetHandler.LastRequest);
     }
 
     [Theory]
@@ -775,6 +872,8 @@ public sealed partial class ToriiClientTests
 
         var task = client.SubmitPreparedAccountFaucetAsync(
             prepared,
+            prepared.FeePayment,
+            FaucetPolicy(vector, prepared),
             PreparedTransactionSignatureNetworkId(vector),
             TestContext.Current.CancellationToken);
         if (succeeds)
@@ -852,6 +951,8 @@ public sealed partial class ToriiClientTests
 
             await Assert.ThrowsAnyAsync<Exception>(() => client.SubmitPreparedAccountFaucetAsync(
                 mutation,
+                prepared.FeePayment,
+                FaucetPolicy(vector, prepared),
                 PreparedTransactionSignatureNetworkId(vector),
                 TestContext.Current.CancellationToken));
             Assert.Null(handler.LastRequest);
@@ -870,7 +971,7 @@ public sealed partial class ToriiClientTests
             Assert.Equal(HttpMethod.Post, request.Method);
             Assert.Equal("/v1/accounts/onboard/prepare", request.RequestUri!.AbsolutePath);
             Assert.Equal(
-                ["schema", "binding", "receipt"],
+                ["schema", "binding", "receipt", "fee_payment"],
                 payload.RootElement.EnumerateObject().Select(static property => property.Name));
             Assert.Equal(
                 ToriiAccountOnboardingPrepareRequestV1.SchemaV1,
@@ -881,6 +982,9 @@ public sealed partial class ToriiClientTests
             Assert.Equal(
                 receipt.PlanHash,
                 payload.RootElement.GetProperty("receipt").GetProperty("plan_hash").GetString());
+            Assert.Equal(
+                "authority",
+                payload.RootElement.GetProperty("fee_payment").GetProperty("payer").GetString());
             Assert.False(payload.RootElement.TryGetProperty("transaction", out _));
             Assert.False(payload.RootElement.TryGetProperty("apply", out _));
             return JsonResponse("{\"schema\":\"unsupported\"}", HttpStatusCode.OK);
@@ -893,6 +997,7 @@ public sealed partial class ToriiClientTests
             receipt.Body.Request,
             receipt,
             binding,
+            PreparedAccountFeePayment,
             AccountOnboardingToken,
             OnboardingFixtureAuthority,
             SharedOnboardingReceiptNetworkId,
@@ -919,6 +1024,7 @@ public sealed partial class ToriiClientTests
             SharedOnboardingReceipt(),
             DeserializePreparedFixture<ToriiAccountOnboardingProofRequiredPrepareResponseV1>(
                 response).Binding,
+            PreparedAccountFeePayment,
             AccountOnboardingToken,
             PreparedTransactionSignatureVector("onboarding_proof_required")
                 .GetProperty("signer_account_id")
@@ -956,6 +1062,7 @@ public sealed partial class ToriiClientTests
             receipt.Body.Request,
             substituted,
             ValidPreparedMutationBinding(ToriiAccountOnboardingPreparedTransactionV1.OperationV1),
+            PreparedAccountFeePayment,
             AccountOnboardingToken,
             OnboardingFixtureAuthority,
             SharedOnboardingReceiptNetworkId,
@@ -985,6 +1092,7 @@ public sealed partial class ToriiClientTests
             receipt.Body.Request with { AccountId = alternateAccountId },
             receipt,
             ValidPreparedMutationBinding(ToriiAccountOnboardingPreparedTransactionV1.OperationV1),
+            PreparedAccountFeePayment,
             AccountOnboardingToken,
             OnboardingFixtureAuthority,
             SharedOnboardingReceiptNetworkId,
@@ -1005,7 +1113,7 @@ public sealed partial class ToriiClientTests
             Assert.Equal(HttpMethod.Post, request.Method);
             Assert.Equal("/v1/accounts/faucet/prepare", request.RequestUri!.AbsolutePath);
             Assert.Equal(
-                ["schema", "binding", "claim"],
+                ["schema", "binding", "claim", "fee_payment"],
                 payload.RootElement.EnumerateObject().Select(static property => property.Name));
             Assert.Equal(
                 ToriiAccountFaucetPrepareRequestV1.SchemaV1,
@@ -1014,6 +1122,9 @@ public sealed partial class ToriiClientTests
             Assert.Equal(CanonicalAccountId, claim.GetProperty("account_id").GetString());
             Assert.Equal<ulong>(68, claim.GetProperty("pow_anchor_height").GetUInt64());
             Assert.Equal("00", claim.GetProperty("pow_nonce_hex").GetString());
+            Assert.Equal(
+                "authority",
+                payload.RootElement.GetProperty("fee_payment").GetProperty("payer").GetString());
             Assert.False(payload.RootElement.TryGetProperty("tx_hash_hex", out _));
             return JsonResponse("{}", HttpStatusCode.OK);
         });
@@ -1024,6 +1135,8 @@ public sealed partial class ToriiClientTests
         await Assert.ThrowsAsync<JsonException>(() => client.PrepareAccountFaucetAsync(
             ValidFaucetClaim(),
             binding,
+            PreparedAccountFeePayment,
+            FaucetPolicy(),
             OnboardingFixtureNetworkId,
             cancellationToken: TestContext.Current.CancellationToken));
     }
@@ -1067,6 +1180,8 @@ public sealed partial class ToriiClientTests
         await Assert.ThrowsAnyAsync<ArgumentException>(() => client.PrepareAccountFaucetAsync(
             ValidFaucetClaim(),
             binding,
+            PreparedAccountFeePayment,
+            FaucetPolicy(),
             OnboardingFixtureNetworkId,
             cancellationToken: TestContext.Current.CancellationToken));
 
@@ -1095,6 +1210,41 @@ public sealed partial class ToriiClientTests
     [Fact]
     public void PreparedProtocolModelsRejectMissingDefaultableRequiredFields()
     {
+        var onboardingPrepare = JsonSerializer.SerializeToNode(
+            new ToriiAccountOnboardingPrepareRequestV1(
+                ValidPreparedMutationBinding(
+                    ToriiAccountOnboardingPreparedTransactionV1.OperationV1),
+                SharedOnboardingReceipt(),
+                PreparedAccountFeePayment))!.AsObject();
+        Assert.True(onboardingPrepare.Remove("fee_payment"));
+        Assert.Throws<JsonException>(() =>
+            onboardingPrepare.Deserialize<ToriiAccountOnboardingPrepareRequestV1>());
+
+        var faucetPrepare = JsonSerializer.SerializeToNode(
+            new ToriiAccountFaucetPrepareRequestV1(
+                ValidPreparedMutationBinding(
+                    ToriiAccountFaucetPreparedTransactionV1.OperationV1),
+                ValidFaucetClaim(),
+                PreparedAccountFeePayment))!.AsObject();
+        Assert.True(faucetPrepare.Remove("fee_payment"));
+        Assert.Throws<JsonException>(() =>
+            faucetPrepare.Deserialize<ToriiAccountFaucetPrepareRequestV1>());
+
+        foreach (var field in new[] { "pow_anchor_height", "pow_nonce_hex" })
+        {
+            var missingClaimField = JsonSerializer.SerializeToNode(
+                ValidFaucetClaim())!.AsObject();
+            Assert.True(missingClaimField.Remove(field));
+            Assert.ThrowsAny<Exception>(() =>
+                missingClaimField.Deserialize<ToriiAccountFaucetClaimV1>());
+
+            var nullClaimField = JsonSerializer.SerializeToNode(
+                ValidFaucetClaim())!.AsObject();
+            nullClaimField[field] = null;
+            Assert.ThrowsAny<Exception>(() =>
+                nullClaimField.Deserialize<ToriiAccountFaucetClaimV1>());
+        }
+
         var onboarding = JsonNode.Parse(
             PreparedTransactionSignatureVector("onboarding_prepared")
                 .GetProperty("response")
@@ -1125,12 +1275,21 @@ public sealed partial class ToriiClientTests
     }
 
     private static ToriiAccountFaucetClaimV1 ValidFaucetClaim() =>
-        new()
-        {
-            AccountId = CanonicalAccountId,
-            PowAnchorHeight = 68,
-            PowNonceHex = "00",
-        };
+        new(CanonicalAccountId, 68, "00");
+
+    private static ToriiAccountFaucetPolicyV1 FaucetPolicy(
+        JsonElement vector,
+        ToriiAccountFaucetPreparedTransactionV1 prepared) =>
+        new(
+            vector.GetProperty("signer_account_id").GetString()!,
+            prepared.AssetDefinitionId,
+            NumericV1.QuantityValue.ParseCanonical(prepared.Amount));
+
+    private static ToriiAccountFaucetPolicyV1 FaucetPolicy() =>
+        new(
+            OnboardingFixtureAuthority,
+            "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+            NumericV1.QuantityValue.ParseCanonical("1"));
 
     private static JsonElement PreparedTransactionSignatureVector(string name)
     {

@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-08-26
+Last updated: 2026-08-27
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
@@ -11,13 +11,15 @@ Completed history lives in [`status.md`](./status.md).
   by the full workspace test and strict all-target Clippy matrices from one
   settled candidate. The unrelated `iroha_crypto` SoraNet test-target
   compilation failures have been repaired.
-- Complete the deferred review of Swift, offline, and specialized attestation
-  signature consumers. Kotlin/Java deterministic Ed25519 exports and Android
-  per-key hardware-policy enforcement are hardened; qualify the latter on real
-  TEE and StrongBox devices, including older API behavior. Separately reconcile
-  the operator `allow_node_key` documentation with its effective key set and
-  the validator-roster length helper with the proof-of-possession-filtered
-  roster.
+- Complete the remaining deferred review of offline and specialized signature
+  consumers. Browser Connect now uses strict Ed25519 verification, Swift admits
+  only canonical prime-order Ed25519 keys and signature points, and mirrored
+  Android attestation requires a fresh challenge, committed revocation snapshot,
+  and alias-to-leaf key binding. Qualify the Android controls on real TEE and
+  StrongBox devices, including older API behavior, with a governance-authenticated
+  snapshot commitment. Separately reconcile the operator `allow_node_key`
+  documentation with its effective key set and the validator-roster length
+  helper with the proof-of-possession-filtered roster.
 
 ## Iroha crypto first-release closure
 
@@ -61,6 +63,10 @@ Completed history lives in [`status.md`](./status.md).
 
 ## Iroha Core first-release closure
 
+- Add consensus-configured per-block and per-authority trigger-count, matching,
+  and native-instruction work budgets. Back trigger-scoped permission cleanup
+  with a maintained reverse index so mass one-shot depletion never scans the
+  complete account and role permission state for each callback.
 - Replace the two remaining stored/ephemeral `QueryItemKind` match tables with one typed registry
   declaration that generates both execution modes and an exhaustiveness test. Keep canonical exact
   payload decoding and source-budget admission explicit; do not restore boxed or compatibility
@@ -107,6 +113,18 @@ Completed history lives in [`status.md`](./status.md).
 
 ## Torii first-release closure
 
+- Define governed DA lane/epoch producer authority, an admissible epoch
+  horizon, and an atomic durable retirement operation for replay cursors and
+  receipts. Enforce that policy before replay-window reservation so arbitrary
+  authenticated accounts cannot consume the finite lane/epoch inventory.
+- Specify a canonical, size-bounded Taikai anchor acknowledgement whose proof
+  is authenticated and bound to the exact request digest and manifest ID.
+  Require HTTPS outside loopback testing, same-origin/no redirects, request
+  deadlines, and verified receipt persistence before source artefacts retire.
+- Make DA spool recovery transactional: journal server-owned timestamps and
+  intended artefact bytes before the first immutable write, then resume or
+  quarantine receipt-less partial transactions deterministically after
+  restart.
 - Remove Torii's crate-wide `dead_code`, `unused_imports`, and `unused_async`
   allowances. Delete or feature-gate every resulting production-only finding,
   and replace trait-check helper functions with compile-time assertions that do
@@ -127,8 +145,31 @@ Completed history lives in [`status.md`](./status.md).
   surface that has no production owner instead of carrying compatibility
   branches.
 
+## Taikai first-release closure
+
+- Persist a versioned ingest-proposal journal before the first spool side
+  effect. Key it by the replay coordinates and fingerprint, authenticate it
+  against the signed request, and reuse the exact server queue time, PDP
+  commitment, receipt signature, and commitment record on interrupted retries.
+- Retain authenticated TRM lineage history by artifact identity instead of only
+  the latest alias head, so an exact staged retry remains recoverable after a
+  later routing window advances. Historical retries must never emit a second
+  alias-rotation event.
+- Provide one canonical publisher-side builder for the exact Taikai
+  `DaManifestV1`, envelope, CAR commitment, alias proof input, and SSM preimage,
+  with byte-parity tests against Torii's enforced retention and rent policy.
+  Publishers should not have to duplicate private admission algorithms.
+- Extend the CAR output prepare/commit boundary to the optional summary output,
+  then rerun the focused Torii, CLI, xtask, viewer/cache, CAR, integration, and
+  full-workspace matrices from a settled candidate.
+
 ## Data-model first-release closure
 
+- Either connect the parsed Hijiri fee policy to one deterministic runtime
+  pricing/admission owner, with end-to-end governance and wire tests, or remove
+  the inactive configuration surface and correct the broader integration claims.
+  Define canonical evidence-path semantics and bounded collection sizes before
+  exposing Hijiri evidence or observer records to untrusted ingress.
 - Remove the always-rejected `RegisterProviderOwner` and
   `UnregisterProviderOwner` instruction surfaces from the registry, executor,
   fixtures, and SDKs instead of retaining inert pre-release operations.
@@ -288,18 +329,23 @@ Completed history lives in [`status.md`](./status.md).
   one profile change. Do not treat the existing arbitrary account witness or a
   copied NIZK as bearer authorization. Usage proofs and host-signed lifecycle
   operations are separate and remain valid.
-- Replace the Kaigi call-signal endpoint's authenticated full-history scan with
-  a bounded committed projection keyed by fully qualified call id. Give its
+- Replace the Kaigi call-signal endpoint's now fail-closed cumulative history
+  walk with a persistent bounded projection keyed by fully qualified call id. Give its
   pagination cursor a stable canonical tie-breaker such as transaction hash or
   `(block height, transaction offset)` so later backdated metadata cannot shift
-  an already issued page boundary. Keep the current account-signed
-  expensive-compute admission until that index is deployed.
+  an already issued page boundary. Keep the current account-signed expensive-
+  compute admission and per-carrier plus cumulative physical-work budgets until
+  that index is deployed.
 - Finish non-Rust Kaigi parity against one Rust-generated eight-instruction
   Norito fixture set. Wire the Kotlin/Java typed templates into canonical
   `WirePayload` encoding and expose relay-health wherever the other seven
-  mutations exist; add all eight typed builders plus the authenticated signal
-  query to Swift and Python instead of treating argument maps as submit-ready
-  wires.
+  mutations exist; consume the same complete fixture set from JavaScript,
+  Python, Swift, Kotlin, and Java rather than maintaining handwritten wire
+  expectations.
+- Replace the opaque bounded Kaigi HPKE byte vector with a suite-tagged bounded
+  descriptor before adding another cipher suite. Preserve the current 4 KiB
+  protocol ceiling and 3–8-hop manifest bound, and add suite-specific exact-
+  length validation without changing observable results across peers.
 - Add a typed, authorized retirement/migration path for stale Kaigi relay
   descriptors and feedback after account-ID rekey. Current admission safely
   keeps exact metadata-key/embedded-ID binding and resolves governance through
@@ -323,8 +369,14 @@ Completed history lives in [`status.md`](./status.md).
 
 ## Inrou V1 release qualification
 
-- Settle and freeze one immutable candidate, then run the remaining focused
-  onboarding/Torii integration tests, strict workspace test and all-target
+- Clear the concurrent merge's unrelated Core, data-model-test, Swift, and
+  Kotlin `NexusAppClient` compilation blockers. Then run the new single-revision
+  daemon/Core/Torii/CLI regressions, including durable stale-snapshot scrubbing
+  and restart after an atomic Inrou revision switch; finish maintained
+  SDK/native parity against the regenerated canonical corpus, and freeze one
+  immutable candidate.
+- From that frozen candidate, run the remaining focused onboarding/Torii
+  integration tests, strict workspace test and all-target
   Clippy matrices, stale retired-symbol/domain scans, and deterministic release
   build. Regenerate the byte-identical OpenAPI mirrors from that candidate and
   attach clean authorized signed provenance; dirty-tree development artifacts
@@ -341,12 +393,12 @@ Completed history lives in [`status.md`](./status.md).
   workload canary. The current macOS/arm64 host
   cannot supply this Linux/KVM evidence; static/mock orchestration tests are not
   a substitute.
-- Restore authorized public reachability and runtime custody: the HTTPS probe on
-  port 443 currently times out, SSH authentication is unavailable, and
-  owner-private reset/canary inputs are absent. Before remote cleanup or
-  mutation, provide the exact four-validator inventory, explicit runtime-only
-  authorization, SSH and canary inputs, and the trusted compiled
-  dispatcher/reset guard on the admitted host.
+- Restore authorized public reachability and runtime custody: public HTTPS
+  ingress currently returns HTTP 502 for `/status`, `/v1/mcp`, and
+  `/api/v1/health`; SSH authentication and owner-private reset/canary inputs
+  remain unavailable. Before remote cleanup or mutation, provide the exact
+  four-validator inventory, explicit runtime-only authorization, SSH and canary
+  inputs, and the trusted compiled dispatcher/reset guard on the admitted host.
 - With those gates satisfied, build the same-revision `iroha` evidence binary
   using `--profile release`, run only `iroha taira public-reset preflight` and
   `iroha taira public-reset apply`, and archive cleanup and reset evidence. Then
@@ -3319,7 +3371,10 @@ verifying-key preimage; ten-signal, eleven-IC-point, 36-word, and policy-less
 representations are invalid. A production circuit must prove canonical transfer
 encoding, message-leaf derivation, Merkle inclusion, Taira block commitment,
 the complete Sumeragi-v2 finality artifact and dual quorum, and continuity from
-the governed checkpoint. The checked-in labeled-signal circuit is explicitly
+the governed checkpoint. Registered TRON revisions remain permanently retained
+and must use distinct immutable route addresses within a lane, so one finalized
+transaction cannot be relabeled under a successor revision. The checked-in
+labeled-signal circuit is explicitly
 non-production and cannot be promoted by metadata.
 
 The production evidence gate is implemented and fail closed. Each profile must
@@ -16724,6 +16779,12 @@ excluded from the first release.
 - Keep hardening the ISO 20022 bridge after the new inbound lifecycle endpoints
   and durable outbox helpers for `pacs.002`, `pacs.004`, `camt.029`, `camt.056`,
   `sese.023`, `sese.024`, `sese.025`, and `colr.012`; remaining TradFi work is
+  led by a consensus-owned permanent economic idempotency claim keyed by the
+  rail/profile, ISO message id, payload digest, business message id, UETR, and
+  exact signed transaction hash, committed atomically with the transfer. The
+  local admission lock, durable exact-hash reservation, and pinned ambiguous
+  queue records remain tactical protections; bounded node-local TTL/count state
+  must not be treated as a network-wide replay boundary. Further work is
   tracked in the engineering backlog for deeper XMLDSig/XAdES path-policy processing
   beyond the implemented trust-anchor, signer-admission, key-identifier, and
   revocation corridor; official XMLDSig/XAdES trust-anchor packages; CRL/OCSP
@@ -25638,6 +25699,12 @@ signed ancestor-linked solid-block header proof,
 
 **Status:** external release evidence remains.
 
+- If development overlay persistence must support attacker-writable ancestor
+  directories, replace path-relative staging with parent-handle-relative
+  creation and rename on Unix and Windows. Define a fail-stop host outcome for
+  rollback persistence failure so callers cannot ignore `IVMHost::restore ==
+  false`; the current hardening safely restores in-memory state and avoids a
+  panic but cannot promise restart durability after an underlying I/O failure.
 - Run the candidate and the approved, source-and-lock-authenticated benchmark
   baseline through `.github/workflows/kotodama_perf.yml` on the same quiet,
   pinned runner and retain the workflow evidence for the `<=5%` threshold. The

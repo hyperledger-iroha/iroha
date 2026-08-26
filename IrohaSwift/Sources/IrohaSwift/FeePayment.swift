@@ -24,6 +24,11 @@ extension FeeChargeKind: Codable {
     }
 
     public init(from decoder: Decoder) throws {
+        try requireExactStringKeys(
+            decoder,
+            expected: Set(CodingKeys.allCases.map(\.stringValue)),
+            at: decoder.codingPath
+        )
         let container = try decoder.container(keyedBy: CodingKeys.self)
         try requireExactKeys(container, expected: Set(CodingKeys.allCases), at: decoder.codingPath)
         guard try container.decodeNil(forKey: .value) else {
@@ -84,6 +89,11 @@ public struct FeeChargeLimit: Codable, Sendable, Equatable {
     }
 
     public init(from decoder: Decoder) throws {
+        try requireExactStringKeys(
+            decoder,
+            expected: Set(CodingKeys.allCases.map(\.stringValue)),
+            at: decoder.codingPath
+        )
         let container = try decoder.container(keyedBy: CodingKeys.self)
         try requireExactKeys(container, expected: Set(CodingKeys.allCases), at: decoder.codingPath)
         try self.init(
@@ -100,6 +110,7 @@ public struct FeeChargeLimit: Codable, Sendable, Equatable {
 /// including that literal's own chain discriminant. Norito carries the
 /// domainless account controller, so the discriminant is validated at the
 /// JSON/API boundary and is not rewritten into the controller payload.
+/// Equality and hashing use that universal controller identity plus the name.
 public struct FeeSponsorProgramId: Codable, Sendable, Equatable, Hashable, CustomStringConvertible {
     public let sponsor: String
     public let name: String
@@ -133,12 +144,34 @@ public struct FeeSponsorProgramId: Codable, Sendable, Equatable, Hashable, Custo
     }
 
     public init(from decoder: Decoder) throws {
+        try requireExactStringKeys(
+            decoder,
+            expected: Set(CodingKeys.allCases.map(\.stringValue)),
+            at: decoder.codingPath
+        )
         let container = try decoder.container(keyedBy: CodingKeys.self)
         try requireExactKeys(container, expected: Set(CodingKeys.allCases), at: decoder.codingPath)
         try self.init(
             sponsor: container.decode(String.self, forKey: .sponsor),
             name: container.decode(String.self, forKey: .name)
         )
+    }
+
+    public static func == (lhs: FeeSponsorProgramId, rhs: FeeSponsorProgramId) -> Bool {
+        guard lhs.name == rhs.name else { return false }
+        return (try? toriiAccountIdsHaveSameIdentity(lhs.sponsor, rhs.sponsor)) == true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(name)
+        // Initializers admit only canonical I105 literals, so this conversion
+        // cannot fail for a valid value. Keep the literal fallback to preserve
+        // Hashable's total-function contract if a decoder ever regresses.
+        if let identity = try? exactToriiAccountIdentityPayload(sponsor) {
+            hasher.combine(identity)
+        } else {
+            hasher.combine(sponsor)
+        }
     }
 
     public var description: String { "\(sponsor)/\(name)" }
@@ -337,7 +370,6 @@ public enum FeePaymentIntentError: Error, LocalizedError, Sendable, Equatable {
     case zeroProgramRevision
     case zeroGasLimit
     case nonCanonicalChargeLimits
-    case quoteChangedPayerOrGas
 
     public var errorDescription: String? {
         switch self {
@@ -357,8 +389,36 @@ public enum FeePaymentIntentError: Error, LocalizedError, Sendable, Equatable {
             return "Fee payment gas limit must be positive when present."
         case .nonCanonicalChargeLimits:
             return "Fee charge limits must be unique and ordered nexus before pipeline gas."
-        case .quoteChangedPayerOrGas:
+        }
+    }
+}
+
+/// Semantic rejection of a decoded fee quote that cannot be applied to its exact draft.
+public enum FeeQuoteValidationError: Error, LocalizedError, Sendable, Equatable {
+    case changedPayerOrGas
+    case componentMismatch
+    case decisionMismatch
+    case capacityShapeMismatch
+    case insufficientCapacity(assetDefinitionId: String, field: String)
+    case invalidQuantity(String)
+    case quantityOverflow
+
+    public var errorDescription: String? {
+        switch self {
+        case .changedPayerOrGas:
             return "Fee quote changed the selected payer, sponsor revision, or gas bound."
+        case .componentMismatch:
+            return "Fee quote components differ from the quoted intent."
+        case .decisionMismatch:
+            return "Fee quote admission decision is inconsistent with the selected payer."
+        case .capacityShapeMismatch:
+            return "Fee quote capacities must be unique, related, and canonically ordered."
+        case let .insufficientCapacity(assetDefinitionId, field):
+            return "Fee quote capacity \(field) cannot cover the aggregate charge for \(assetDefinitionId)."
+        case let .invalidQuantity(value):
+            return "Fee quote quantity is not canonical: \(value)"
+        case .quantityOverflow:
+            return "Fee quote quantity aggregation exceeds the canonical Quantity range."
         }
     }
 }
@@ -377,6 +437,11 @@ public enum FeeSponsorProgramLifecycle: String, Codable, Sendable, Equatable {
     }
 
     public init(from decoder: Decoder) throws {
+        try requireExactStringKeys(
+            decoder,
+            expected: Set(CodingKeys.allCases.map(\.stringValue)),
+            at: decoder.codingPath
+        )
         let container = try decoder.container(keyedBy: CodingKeys.self)
         try requireExactKeys(container, expected: Set(CodingKeys.allCases), at: decoder.codingPath)
         guard try container.decodeNil(forKey: .value),
@@ -407,6 +472,11 @@ public struct FeeSponsorProgramActivation: Codable, Sendable, Equatable {
     }
 
     public init(from decoder: Decoder) throws {
+        try requireExactStringKeys(
+            decoder,
+            expected: Set(CodingKeys.allCases.map(\.stringValue)),
+            at: decoder.codingPath
+        )
         let container = try decoder.container(keyedBy: CodingKeys.self)
         try requireExactKeys(container, expected: Set(CodingKeys.allCases), at: decoder.codingPath)
         revision = try container.decode(UInt64.self, forKey: .revision)
@@ -439,6 +509,16 @@ public struct FeeSponsorProgram: Codable, Sendable, Equatable {
     }
 
     public init(from decoder: Decoder) throws {
+        try requireExactStringKeys(
+            decoder,
+            expected: Set(CodingKeys.allCases.map(\.stringValue)),
+            required: Set([
+                CodingKeys.id.stringValue,
+                CodingKeys.payoutAccount.stringValue,
+                CodingKeys.lifecycle.stringValue,
+            ]),
+            at: decoder.codingPath
+        )
         let container = try decoder.container(keyedBy: CodingKeys.self)
         try requireExactKeys(
             container,
@@ -450,12 +530,42 @@ public struct FeeSponsorProgram: Codable, Sendable, Equatable {
         payoutAccount = try container.decode(String.self, forKey: .payoutAccount)
         _ = try canonicalFeeSponsorAddress(payoutAccount)
         lifecycle = try container.decode(FeeSponsorProgramLifecycle.self, forKey: .lifecycle)
-        activeRevision = try container.decodeIfPresent(UInt64.self, forKey: .activeRevision)
-        stagedRevision = try container.decodeIfPresent(UInt64.self, forKey: .stagedRevision)
-        scheduledActivation = try container.decodeIfPresent(
-            FeeSponsorProgramActivation.self,
-            forKey: .scheduledActivation
-        )
+        if container.contains(.activeRevision) {
+            guard try !container.decodeNil(forKey: .activeRevision) else {
+                throw DecodingError.valueNotFound(UInt64.self, .init(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "active_revision must be omitted or positive"
+                ))
+            }
+            activeRevision = try container.decode(UInt64.self, forKey: .activeRevision)
+        } else {
+            activeRevision = nil
+        }
+        if container.contains(.stagedRevision) {
+            guard try !container.decodeNil(forKey: .stagedRevision) else {
+                throw DecodingError.valueNotFound(UInt64.self, .init(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "staged_revision must be omitted or positive"
+                ))
+            }
+            stagedRevision = try container.decode(UInt64.self, forKey: .stagedRevision)
+        } else {
+            stagedRevision = nil
+        }
+        if container.contains(.scheduledActivation) {
+            guard try !container.decodeNil(forKey: .scheduledActivation) else {
+                throw DecodingError.valueNotFound(FeeSponsorProgramActivation.self, .init(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "scheduled_activation must be omitted or an object"
+                ))
+            }
+            scheduledActivation = try container.decode(
+                FeeSponsorProgramActivation.self,
+                forKey: .scheduledActivation
+            )
+        } else {
+            scheduledActivation = nil
+        }
         guard activeRevision.map({ $0 > 0 }) ?? true,
               stagedRevision.map({ $0 > 0 }) ?? true else {
             throw DecodingError.dataCorrupted(.init(
@@ -479,6 +589,11 @@ public struct FeeQuoteObservation: Codable, Sendable, Equatable {
     }
 
     public init(from decoder: Decoder) throws {
+        try requireExactStringKeys(
+            decoder,
+            expected: Set(CodingKeys.allCases.map(\.stringValue)),
+            at: decoder.codingPath
+        )
         let container = try decoder.container(keyedBy: CodingKeys.self)
         try requireExactKeys(container, expected: Set(CodingKeys.allCases), at: decoder.codingPath)
         ledgerTimeMs = try container.decode(UInt64.self, forKey: .ledgerTimeMs)
@@ -507,6 +622,11 @@ public struct FeeQuoteComponent: Codable, Sendable, Equatable {
     }
 
     public init(from decoder: Decoder) throws {
+        try requireExactStringKeys(
+            decoder,
+            expected: Set(CodingKeys.allCases.map(\.stringValue)),
+            at: decoder.codingPath
+        )
         let container = try decoder.container(keyedBy: CodingKeys.self)
         try requireExactKeys(container, expected: Set(CodingKeys.allCases), at: decoder.codingPath)
         kind = try container.decode(FeeChargeKind.self, forKey: .kind)
@@ -536,6 +656,11 @@ public struct FeeQuoteCapacity: Codable, Sendable, Equatable {
     }
 
     public init(from decoder: Decoder) throws {
+        try requireExactStringKeys(
+            decoder,
+            expected: Set(CodingKeys.allCases.map(\.stringValue)),
+            at: decoder.codingPath
+        )
         let container = try decoder.container(keyedBy: CodingKeys.self)
         try requireExactKeys(container, expected: Set(CodingKeys.allCases), at: decoder.codingPath)
         assetDefinitionId = try container.decode(String.self, forKey: .assetDefinitionId)
@@ -565,6 +690,11 @@ public enum FeeDebitSource: Codable, Sendable, Equatable {
     }
 
     public init(from decoder: Decoder) throws {
+        try requireExactStringKeys(
+            decoder,
+            expected: Set(CodingKeys.allCases.map(\.stringValue)),
+            at: decoder.codingPath
+        )
         let container = try decoder.container(keyedBy: CodingKeys.self)
         try requireExactKeys(container, expected: Set(CodingKeys.allCases), at: decoder.codingPath)
         switch try container.decode(String.self, forKey: .kind) {
@@ -612,6 +742,11 @@ public struct FeeQuoteDecision: Codable, Sendable, Equatable {
     }
 
     public init(from decoder: Decoder) throws {
+        try requireExactStringKeys(
+            decoder,
+            expected: Set(CodingKeys.allCases.map(\.stringValue)),
+            at: decoder.codingPath
+        )
         let container = try decoder.container(keyedBy: CodingKeys.self)
         try requireExactKeys(container, expected: Set(CodingKeys.allCases), at: decoder.codingPath)
         guard try container.decode(String.self, forKey: .status) == "accepted" else {
@@ -621,11 +756,17 @@ public struct FeeQuoteDecision: Codable, Sendable, Equatable {
                 debugDescription: "Fee quote decision must be accepted"
             )
         }
-        let value = try container.nestedContainer(keyedBy: ValueKeys.self, forKey: .value)
+        let valueDecoder = try container.superDecoder(forKey: .value)
+        try requireExactStringKeys(
+            valueDecoder,
+            expected: Set(ValueKeys.allCases.map(\.stringValue)),
+            at: decoder.codingPath + [CodingKeys.value]
+        )
+        let value = try valueDecoder.container(keyedBy: ValueKeys.self)
         try requireExactKeys(
             value,
             expected: Set(ValueKeys.allCases),
-            required: [.debitSource],
+            required: Set(ValueKeys.allCases),
             at: decoder.codingPath + [CodingKeys.value]
         )
         debitSource = try value.decode(FeeDebitSource.self, forKey: .debitSource)
@@ -644,7 +785,11 @@ public struct FeeQuoteDecision: Codable, Sendable, Equatable {
         try container.encode("accepted", forKey: .status)
         var value = container.nestedContainer(keyedBy: ValueKeys.self, forKey: .value)
         try value.encode(debitSource, forKey: .debitSource)
-        try value.encodeIfPresent(programRevision, forKey: .programRevision)
+        if let programRevision {
+            try value.encode(programRevision, forKey: .programRevision)
+        } else {
+            try value.encodeNil(forKey: .programRevision)
+        }
     }
 }
 
@@ -665,6 +810,11 @@ public struct FeeQuoteResponse: Codable, Sendable, Equatable {
     }
 
     public init(from decoder: Decoder) throws {
+        try requireExactStringKeys(
+            decoder,
+            expected: Set(CodingKeys.allCases.map(\.stringValue)),
+            at: decoder.codingPath
+        )
         let container = try decoder.container(keyedBy: CodingKeys.self)
         try requireExactKeys(container, expected: Set(CodingKeys.allCases), at: decoder.codingPath)
         intent = try container.decode(FeePaymentIntent.self, forKey: .intent)
@@ -672,18 +822,128 @@ public struct FeeQuoteResponse: Codable, Sendable, Equatable {
         components = try container.decode([FeeQuoteComponent].self, forKey: .components)
         capacities = try container.decode([FeeQuoteCapacity].self, forKey: .capacities)
         decision = try container.decode(FeeQuoteDecision.self, forKey: .decision)
+        try validateSemantics(authority: nil)
     }
 
-    /// Return the quoted maxima only if payer, immutable revision, and gas bound are unchanged.
-    public func applying(to draft: FeePaymentIntent) throws -> FeePaymentIntent {
+    /// Return the quoted maxima only when the complete V1 quote is valid for this exact draft.
+    public func applying(
+        to draft: FeePaymentIntent,
+        authority: String
+    ) throws -> FeePaymentIntent {
+        try draft.validateForFeeQuoteDraft()
         guard draft.hasSamePayerAndGasBound(as: intent) else {
-            throw FeePaymentIntentError.quoteChangedPayerOrGas
+            throw FeeQuoteValidationError.changedPayerOrGas
         }
+        try validateCanonicalAccount(authority)
+        try validateSemantics(authority: authority)
         return intent
+    }
+
+    private func validateSemantics(authority: String?) throws {
+        guard components.count == intent.chargeLimits.count,
+              zip(components, intent.chargeLimits).allSatisfy({ component, limit in
+                  component.kind == limit.kind
+                      && component.assetDefinitionId == limit.assetDefinitionId
+                      && component.maxAmount == limit.maxAmount
+              }) else {
+            throw FeeQuoteValidationError.componentMismatch
+        }
+
+        switch intent {
+        case .authority:
+            guard case let .account(debitAccount) = decision.debitSource,
+                  decision.programRevision == nil,
+                  capacities.isEmpty else {
+                throw FeeQuoteValidationError.decisionMismatch
+            }
+            if let authority {
+                guard try toriiAccountIdsHaveSameIdentity(authority, debitAccount) else {
+                    throw FeeQuoteValidationError.decisionMismatch
+                }
+            }
+        case let .sponsor(programId, programRevision, _, _):
+            guard decision.debitSource == .sponsorProgram(programId),
+                  decision.programRevision == programRevision else {
+                throw FeeQuoteValidationError.decisionMismatch
+            }
+            try validateSponsorCapacities()
+        }
+    }
+
+    private func validateSponsorCapacities() throws {
+        guard capacities.isEmpty == components.isEmpty else {
+            throw FeeQuoteValidationError.capacityShapeMismatch
+        }
+
+        var requiredByAsset: [String: CanonicalNumeric] = [:]
+        for component in components {
+            let amount = try exactFeeQuoteQuantity(component.maxAmount)
+            if let current = requiredByAsset[component.assetDefinitionId] {
+                do {
+                    requiredByAsset[component.assetDefinitionId] = try current.adding(
+                        amount,
+                        maxBytes: CanonicalNorito.maxBigIntBytes
+                    )
+                } catch {
+                    throw FeeQuoteValidationError.quantityOverflow
+                }
+            } else {
+                requiredByAsset[component.assetDefinitionId] = amount
+            }
+        }
+
+        let expectedAssets = requiredByAsset.keys.sorted(by: canonicalFeeAssetPrecedes)
+        guard capacities.count == expectedAssets.count else {
+            throw FeeQuoteValidationError.capacityShapeMismatch
+        }
+
+        for (capacity, assetDefinitionId) in zip(capacities, expectedAssets) {
+            guard capacity.assetDefinitionId == assetDefinitionId,
+                  let required = requiredByAsset[assetDefinitionId] else {
+                throw FeeQuoteValidationError.capacityShapeMismatch
+            }
+            let vaultBalance = try exactFeeQuoteQuantity(capacity.vaultBalance)
+            let reserveFloor = try exactFeeQuoteQuantity(capacity.reserveFloor)
+            let requiredVault: CanonicalNumeric
+            do {
+                requiredVault = try reserveFloor.adding(
+                    required,
+                    maxBytes: CanonicalNorito.maxBigIntBytes
+                )
+            } catch {
+                throw FeeQuoteValidationError.quantityOverflow
+            }
+            guard vaultBalance.compared(to: requiredVault) != .orderedAscending else {
+                throw FeeQuoteValidationError.insufficientCapacity(
+                    assetDefinitionId: assetDefinitionId,
+                    field: "vault_balance"
+                )
+            }
+            for (field, value) in [
+                ("block_remaining", capacity.blockRemaining),
+                ("program_epoch_remaining", capacity.programEpochRemaining),
+                ("beneficiary_epoch_remaining", capacity.beneficiaryEpochRemaining),
+            ] where try exactFeeQuoteQuantity(value).compared(to: required) == .orderedAscending {
+                throw FeeQuoteValidationError.insufficientCapacity(
+                    assetDefinitionId: assetDefinitionId,
+                    field: field
+                )
+            }
+        }
     }
 }
 
 private extension FeePaymentIntent {
+    func validateForFeeQuoteDraft() throws {
+        switch self {
+        case let .authority(chargeLimits, gasLimit):
+            try Self.validate(chargeLimits: chargeLimits, gasLimit: gasLimit)
+        case let .sponsor(_, programRevision, chargeLimits, gasLimit):
+            guard programRevision > 0 else { throw FeePaymentIntentError.zeroProgramRevision }
+            try Self.validate(chargeLimits: chargeLimits, gasLimit: gasLimit)
+        }
+    }
+
     func encodeNorito(compact: Bool) throws -> Data {
         switch self {
         case let .authority(chargeLimits, gasLimit):
@@ -793,11 +1053,31 @@ private func canonicalFeeSponsorAddress(_ value: String) throws -> AccountAddres
 
 /// Reject canonically-equivalent alternate UTF-8 spellings at every sponsor-program wire boundary.
 func isCanonicalFeeSponsorProgramName(_ value: String) -> Bool {
-    guard !value.isEmpty else { return false }
+    guard !value.isEmpty, value.utf8.count <= 255 else { return false }
     let normalized = value.precomposedStringWithCanonicalMapping
     guard value.utf8.elementsEqual(normalized.utf8) else { return false }
     return value.unicodeScalars.allSatisfy { scalar in
-        !CharacterSet.whitespacesAndNewlines.contains(scalar)
+        let codePoint = scalar.value
+        let isWhitespace = (0x0009...0x000D).contains(codePoint)
+            || codePoint == 0x0020
+            || codePoint == 0x0085
+            || codePoint == 0x00A0
+            || codePoint == 0x1680
+            || (0x2000...0x200A).contains(codePoint)
+            || (0x2028...0x2029).contains(codePoint)
+            || codePoint == 0x202F
+            || codePoint == 0x205F
+            || codePoint == 0x3000
+        let isControl = (0x0000...0x001F).contains(codePoint)
+            || (0x007F...0x009F).contains(codePoint)
+        let isBidiControl = codePoint == 0x061C
+            || codePoint == 0x200E
+            || codePoint == 0x200F
+            || (0x202A...0x202E).contains(codePoint)
+            || (0x2066...0x2069).contains(codePoint)
+        return !isWhitespace
+            && !isControl
+            && !isBidiControl
             && scalar != "@" && scalar != "#" && scalar != "$" && scalar != "/"
     }
 }
@@ -883,6 +1163,20 @@ private func requireExactKeys<Key: CodingKey & Hashable>(
 }
 
 private func requireExactStringKeys(
+    _ decoder: Decoder,
+    expected: Set<String>,
+    required: Set<String>? = nil,
+    at codingPath: [CodingKey]
+) throws {
+    try requireExactStringKeys(
+        decoder.container(keyedBy: FeePaymentDynamicCodingKey.self),
+        expected: expected,
+        required: required,
+        at: codingPath
+    )
+}
+
+private func requireExactStringKeys(
     _ container: KeyedDecodingContainer<FeePaymentDynamicCodingKey>,
     expected: Set<String>,
     required: Set<String>? = nil,
@@ -909,6 +1203,30 @@ private func validateCanonicalAssetDefinition(_ value: String) throws {
     guard AssetDefinitionAddressCodec.canonicalDefinitionLiteral(value) == value else {
         throw FeePaymentIntentError.invalidAssetDefinitionId(value)
     }
+}
+
+private func exactFeeQuoteQuantity(_ value: String) throws -> CanonicalNumeric {
+    let numeric: CanonicalNumericComponents
+    do {
+        numeric = try CanonicalNorito.parseNumeric(value)
+    } catch {
+        throw FeeQuoteValidationError.invalidQuantity(value)
+    }
+    guard numeric.canonicalString == value,
+          numeric.canonicalNumeric.compared(
+              to: CanonicalNumeric(isNegative: false, scale: 0, digits: "0")
+          ) != .orderedAscending else {
+        throw FeeQuoteValidationError.invalidQuantity(value)
+    }
+    return numeric.canonicalNumeric
+}
+
+private func canonicalFeeAssetPrecedes(_ lhs: String, _ rhs: String) -> Bool {
+    guard let lhsBytes = AssetDefinitionAddressCodec.uuidBytes(lhs),
+          let rhsBytes = AssetDefinitionAddressCodec.uuidBytes(rhs) else {
+        return lhs < rhs
+    }
+    return lhsBytes.lexicographicallyPrecedes(rhsBytes)
 }
 
 private func validateCanonicalQuantity(_ value: String) throws {

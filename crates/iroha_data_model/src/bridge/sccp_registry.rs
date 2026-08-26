@@ -240,6 +240,9 @@ pub enum SccpRouteValidationError {
     /// An immutable route configuration occurs more than once.
     #[error("SCCP registry contains a reused route-configuration commitment")]
     DuplicateRouteConfiguration,
+    /// Two retained TRON revisions in one lane reuse an immutable route address.
+    #[error("SCCP lane contains a reused TRON source route address")]
+    DuplicateTronSourceAddress,
     /// More than one immutable revision of one semantic route is enabled.
     #[error("SCCP registry enables multiple revisions of one semantic route and asset")]
     MultipleEnabledRevisions,
@@ -1598,6 +1601,7 @@ impl SccpGovernedLaneV1 {
             return Err(SccpRouteValidationError::InvalidLaneLiveRouteCount);
         }
         let mut lineages = BTreeMap::<(&str, &str), Vec<(u32, bool)>>::new();
+        let mut tron_source_addresses = BTreeSet::new();
         for route in &self.routes {
             route.validate_with_anchor(current_native_trust_anchor)?;
             if route
@@ -1608,6 +1612,11 @@ impl SccpGovernedLaneV1 {
             }
             if route.lane_id != self.lane_id {
                 return Err(SccpRouteValidationError::InvalidInboundLane);
+            }
+            if let SccpSourceEmitterV1::Tron(emitter) = route.source_identity.emitter
+                && !tron_source_addresses.insert(emitter.address)
+            {
+                return Err(SccpRouteValidationError::DuplicateTronSourceAddress);
             }
             lineages
                 .entry((route.route_id.as_str(), route.asset_key.as_str()))
@@ -2833,6 +2842,65 @@ mod tests {
             taira_to_token_multiplier: SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER,
         }
     }
+    fn tron_lane(source: SccpNetworkV1) -> SccpLaneIdV1 {
+        SccpLaneIdV1 {
+            source,
+            target: SccpNetworkV1::SoraTaira,
+        }
+    }
+    fn tron_route(
+        source: SccpNetworkV1,
+        revision: u32,
+        activation: SccpRouteActivationV1,
+        deployment: SccpTronDestinationDeploymentV1,
+    ) -> SccpGovernedRouteV1 {
+        let lane = tron_lane(source);
+        let destination = SccpDestinationDeploymentV1::Tron(deployment);
+        let route_config_hash = destination
+            .route_configuration_hash(
+                lane,
+                "taira_tron_xor",
+                "xor",
+                revision,
+                SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
+            )
+            .expect("valid exact TRON route configuration");
+        SccpGovernedRouteV1 {
+            lane_id: lane,
+            route_id: "taira_tron_xor".to_owned(),
+            asset_key: "xor".to_owned(),
+            revision,
+            activation,
+            inbound_finality_cutoff: activation.is_terminal().then_some(
+                SccpInboundFinalityCutoffV1 {
+                    trust_anchor_hash: [0xd1; 32],
+                    max_anchor_interval_height: 100,
+                },
+            ),
+            source_identity: SccpSourceIdentityV1 {
+                lane,
+                emitter: SccpSourceEmitterV1::Tron(SccpTronSourceEmitterV1 {
+                    address: deployment.route_address,
+                    runtime_code_hash: deployment.route_code_hash,
+                    route_config_hash,
+                }),
+            },
+            destination,
+            sora_outbound_execution_policy: sora_outbound_execution_policy(),
+            settlement: SccpSoraSettlementV1 {
+                asset_definition_id: sccp_v1_taira_xor_asset_definition_id(),
+                custody_owner: AccountId::new(SIGNATORY.parse().expect("valid custody public key")),
+                payload_amount_scale: SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
+            },
+        }
+    }
+    fn tron_anchor(height: u64) -> SccpNativeTrustAnchorV1 {
+        SccpNativeTrustAnchorV1 {
+            backend: BridgeNativeProofBackendV1::TronDpos,
+            anchor_hash: [0xd1; 32],
+            checkpoint_height: height,
+        }
+    }
     fn solana_lane() -> SccpLaneIdV1 {
         SccpLaneIdV1 {
             source: SccpNetworkV1::SolanaTestnet,
@@ -3799,6 +3867,81 @@ mod tests {
                 .validate()
                 .is_ok()
         );
+    }
+    #[test]
+    fn retained_tron_revisions_require_distinct_route_addresses_per_lane() {
+        let first_deployment = tron_deployment();
+        let mut second_deployment = first_deployment;
+        second_deployment.verifier_address = [0x32; 20];
+        second_deployment.verifier_code_hash = [0x42; 32];
+        let first = tron_route(
+            SccpNetworkV1::TronMainnet,
+            1,
+            SccpRouteActivationV1::InboundOnly,
+            first_deployment,
+        );
+        let second = tron_route(
+            SccpNetworkV1::TronMainnet,
+            2,
+            SccpRouteActivationV1::Bidirectional,
+            second_deployment,
+        );
+        assert_ne!(
+            first.destination_binding_hash().unwrap(),
+            second.destination_binding_hash().unwrap(),
+            "existing destination-binding uniqueness must not mask route-address reuse"
+        );
+        assert_ne!(
+            first.route_configuration_hash().unwrap(),
+            second.route_configuration_hash().unwrap(),
+            "contiguous revisions must retain distinct configuration commitments"
+        );
+        assert_eq!(
+            registry_for_lane(
+                tron_lane(SccpNetworkV1::TronMainnet),
+                vec![first.clone(), second],
+                Some(tron_anchor(100)),
+            )
+            .validate(),
+            Err(SccpRouteValidationError::DuplicateTronSourceAddress)
+        );
+
+        second_deployment.route_address = [0x52; 20];
+        second_deployment.route_code_hash = [0x62; 32];
+        let fresh_address = tron_route(
+            SccpNetworkV1::TronMainnet,
+            2,
+            SccpRouteActivationV1::Bidirectional,
+            second_deployment,
+        );
+        registry_for_lane(
+            tron_lane(SccpNetworkV1::TronMainnet),
+            vec![first, fresh_address],
+            Some(tron_anchor(100)),
+        )
+        .validate()
+        .expect("a fresh immutable TRON deployment address is a valid successor");
+
+        let same_raw_address_across_profiles = SccpRegistryV1 {
+            version: 1,
+            lanes: [SccpNetworkV1::TronMainnet, SccpNetworkV1::TronNile]
+                .into_iter()
+                .map(|source| SccpGovernedLaneV1 {
+                    lane_id: tron_lane(source),
+                    native_trust_anchors: Vec::new(),
+                    current_native_trust_anchor_hash: None,
+                    routes: vec![tron_route(
+                        source,
+                        1,
+                        SccpRouteActivationV1::Staged,
+                        first_deployment,
+                    )],
+                })
+                .collect(),
+        };
+        same_raw_address_across_profiles
+            .validate()
+            .expect("TRON address uniqueness is scoped to one exact lane");
     }
     #[test]
     fn governance_activation_is_separate_from_network_environment_classification() {

@@ -2458,7 +2458,7 @@ impl IVM {
     /// When enabled and no explicit cycle limit has been set, the default
     /// [`zk::MAX_CYCLES`] value is used. Disabling ZK clears the cycle limit.
     pub fn set_zk_mode(&mut self, enabled: bool) {
-        if self.zk_mode && !enabled && !self.scrub_private_memory() {
+        if !enabled && !self.scrub_private_state() {
             return;
         }
         self.zk_mode = enabled;
@@ -2498,7 +2498,7 @@ impl IVM {
         if code.len() > Memory::HEAP_START as usize {
             return Err(VMError::MemoryOutOfBounds);
         }
-        if !self.scrub_private_memory() {
+        if !self.scrub_private_state() {
             return Err(VMError::PrivacyViolation);
         }
         self.metadata = ProgramMetadata::default();
@@ -2646,7 +2646,7 @@ impl IVM {
         if code_len > Memory::HEAP_START || image.entry_pc > code_len {
             return Err(VMError::InvalidMetadata);
         }
-        if !self.scrub_private_memory() {
+        if !self.scrub_private_state() {
             return Err(VMError::PrivacyViolation);
         }
         self.metadata = image.metadata.clone();
@@ -3071,6 +3071,12 @@ impl IVM {
         }
         self.private_memory_bytes.is_empty()
     }
+    /// Scrub every private value before a mode transition or program replacement.
+    fn scrub_private_state(&mut self) -> bool {
+        let memory_scrubbed = self.scrub_private_memory();
+        self.registers.scrub_private();
+        memory_scrubbed
+    }
     /// Detect a direct value or complete owned TLV that overlaps private bytes.
     ///
     /// Register tags catch scalar arguments. This additional check prevents a
@@ -3404,6 +3410,37 @@ impl IVM {
         self.ensure_owned_tlv_range(ptr, total)?;
         Ok(len)
     }
+    /// Charge the byte-linear portion of a direct signature opcode before
+    /// checksum hashing or cryptographic verification.
+    ///
+    /// All operands are inspected even after a malformed public pointer so a
+    /// later private operand still fails with `PrivacyViolation`. Aliased
+    /// operands are charged independently because validation scans each role.
+    fn preflight_signature_opcode_payloads(&mut self, pointers: [u64; 3]) -> Result<bool, VMError> {
+        let mut payload_lengths = [0_u64; 3];
+        let mut malformed = false;
+        for (index, pointer) in pointers.into_iter().enumerate() {
+            match self.inspect_owned_public_tlv_payload_len(pointer) {
+                Ok(length) => {
+                    payload_lengths[index] =
+                        u64::try_from(length).map_err(|_| VMError::GasCostOverflow)?;
+                }
+                Err(VMError::PrivacyViolation) => return Err(VMError::PrivacyViolation),
+                Err(_) => malformed = true,
+            }
+        }
+        if malformed {
+            return Ok(false);
+        }
+        let extra_gas = crate::gas::signature_opcode_extra_gas(
+            payload_lengths[0],
+            payload_lengths[1],
+            payload_lengths[2],
+        )
+        .ok_or(VMError::GasCostOverflow)?;
+        self.debit_gas(extra_gas)?;
+        Ok(true)
+    }
     /// Validate a pointer-ABI TLV in any owned public region and return its decoded view.
     pub fn validate_tlv(&self, ptr: u64) -> Result<crate::pointer_abi::Tlv<'_>, VMError> {
         let len = self.inspect_owned_public_tlv_payload_len(ptr)?;
@@ -3709,7 +3746,7 @@ impl IVM {
     }
     /// Reset the VM state (registers, PC, cycles) but preserve loaded program and host.
     pub fn reset(&mut self) {
-        let _ = self.scrub_private_memory();
+        let _ = self.scrub_private_state();
         let resume_pc = self
             .entrypoint_pc
             .or_else(|| self.prepared.as_ref().map(|prepared| prepared.first_pc))
@@ -4534,6 +4571,10 @@ impl IVM {
         }
     }
     fn run_with_host_ref(&mut self, host: &mut dyn IVMHost) -> Result<(), VMError> {
+        if !self.zk_mode && (self.registers.has_private() || !self.private_memory_bytes.is_empty())
+        {
+            return Err(VMError::PrivacyViolation);
+        }
         self.last_diagnostic = None;
         self.halted = false;
         self.constraint_failed = false;
@@ -6422,11 +6463,14 @@ impl IVM {
                         let msg_ptr = self.registers.get(rs1);
                         let sig_ptr = self.registers.get(rs2);
                         let pk_ptr = self.registers.get(rd);
-                        let ok = if let (Some(tlv_msg), Some(tlv_sig), Some(tlv_pk)) = (
-                            self.validate_public_crypto_tlv(msg_ptr)?,
-                            self.validate_public_crypto_tlv(sig_ptr)?,
-                            self.validate_public_crypto_tlv(pk_ptr)?,
-                        ) {
+                        let operands_ready =
+                            self.preflight_signature_opcode_payloads([msg_ptr, sig_ptr, pk_ptr])?;
+                        let ok = if operands_ready
+                            && let (Some(tlv_msg), Some(tlv_sig), Some(tlv_pk)) = (
+                                self.validate_public_crypto_tlv(msg_ptr)?,
+                                self.validate_public_crypto_tlv(sig_ptr)?,
+                                self.validate_public_crypto_tlv(pk_ptr)?,
+                            ) {
                             let types_ok = tlv_msg.type_id_raw()
                                 == crate::pointer_abi::PointerType::Blob as u16
                                 && tlv_sig.type_id_raw()
@@ -6465,11 +6509,14 @@ impl IVM {
                         let msg_ptr = self.registers.get(rs1);
                         let sig_ptr = self.registers.get(rs2);
                         let pk_ptr = self.registers.get(rd);
-                        let ok = if let (Some(tlv_msg), Some(tlv_sig), Some(tlv_pk)) = (
-                            self.validate_public_crypto_tlv(msg_ptr)?,
-                            self.validate_public_crypto_tlv(sig_ptr)?,
-                            self.validate_public_crypto_tlv(pk_ptr)?,
-                        ) {
+                        let operands_ready =
+                            self.preflight_signature_opcode_payloads([msg_ptr, sig_ptr, pk_ptr])?;
+                        let ok = if operands_ready
+                            && let (Some(tlv_msg), Some(tlv_sig), Some(tlv_pk)) = (
+                                self.validate_public_crypto_tlv(msg_ptr)?,
+                                self.validate_public_crypto_tlv(sig_ptr)?,
+                                self.validate_public_crypto_tlv(pk_ptr)?,
+                            ) {
                             let types_ok = tlv_msg.type_id_raw()
                                 == crate::pointer_abi::PointerType::Blob as u16
                                 && tlv_sig.type_id_raw()
@@ -6508,11 +6555,14 @@ impl IVM {
                         let msg_ptr = self.registers.get(rs1);
                         let sig_ptr = self.registers.get(rs2);
                         let pk_ptr = self.registers.get(rd);
-                        let ok = if let (Some(tlv_msg), Some(tlv_sig), Some(tlv_pk)) = (
-                            self.validate_public_crypto_tlv(msg_ptr)?,
-                            self.validate_public_crypto_tlv(sig_ptr)?,
-                            self.validate_public_crypto_tlv(pk_ptr)?,
-                        ) {
+                        let operands_ready =
+                            self.preflight_signature_opcode_payloads([msg_ptr, sig_ptr, pk_ptr])?;
+                        let ok = if operands_ready
+                            && let (Some(tlv_msg), Some(tlv_sig), Some(tlv_pk)) = (
+                                self.validate_public_crypto_tlv(msg_ptr)?,
+                                self.validate_public_crypto_tlv(sig_ptr)?,
+                                self.validate_public_crypto_tlv(pk_ptr)?,
+                            ) {
                             let types_ok = tlv_msg.type_id_raw()
                                 == crate::pointer_abi::PointerType::Blob as u16
                                 && tlv_sig.type_id_raw()

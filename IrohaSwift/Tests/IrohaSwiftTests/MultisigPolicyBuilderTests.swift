@@ -3,15 +3,21 @@ import XCTest
 
 final class MultisigPolicyBuilderTests: XCTestCase {
     func testBuilderProducesDigestAndCtap2Payload() throws {
+        let firstPublicKey = try Keypair(
+            privateKeyBytes: Data(repeating: 0x11, count: 32)
+        ).publicKey
+        let secondPublicKey = try Keypair(
+            privateKeyBytes: Data(repeating: 0x22, count: 32)
+        ).publicKey
         let builder = MultisigPolicyBuilder()
             .setVersion(1)
             .setThreshold(2)
             .addMember(algorithm: .ed25519,
                        weight: 1,
-                       publicKey: Data(repeating: 0x11, count: 32))
+                       publicKey: firstPublicKey)
             .addMember(algorithm: .ed25519,
                        weight: 1,
-                       publicKey: Data(repeating: 0x22, count: 32))
+                       publicKey: secondPublicKey)
 
         let policy = try builder.build()
 

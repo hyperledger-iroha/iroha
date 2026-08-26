@@ -4,9 +4,12 @@ import XCTest
 final class TransactionInputValidatorTests: XCTestCase {
     private let sampleAid = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
 
+    private func validEd25519PublicKey(seed: UInt8) throws -> Data {
+        try Keypair(privateKeyBytes: Data(repeating: seed, count: 32)).publicKey
+    }
+
     private func i105(seed: UInt8 = 1) throws -> String {
-        let keypair = try Keypair(privateKeyBytes: Data(repeating: seed, count: 32))
-        let address = try AccountAddress.fromAccount(publicKey: keypair.publicKey)
+        let address = try AccountAddress.fromAccount(publicKey: validEd25519PublicKey(seed: seed))
         return try address.toI105(networkPrefix: AccountId.defaultNetworkPrefix)
     }
 
@@ -268,7 +271,7 @@ final class TransactionInputValidatorTests: XCTestCase {
     }
 
     func testValidateAcceptsI105Authority() throws {
-        let publicKey = Data(repeating: 0xAB, count: 32)
+        let publicKey = try validEd25519PublicKey(seed: 0xAB)
         let i105 = try AccountId.makeI105(publicKey: publicKey)
         let ids = try TransactionInputValidator.validate(networkId: TestNetworkIds.canonical,
                                                          authorityId: i105)
@@ -276,7 +279,9 @@ final class TransactionInputValidatorTests: XCTestCase {
     }
 
     func testValidateAcceptsSoraSentinelAuthority() throws {
-        let address = try AccountAddress.fromAccount(publicKey: Data(repeating: 0xAD, count: 32))
+        let address = try AccountAddress.fromAccount(
+            publicKey: validEd25519PublicKey(seed: 0xAD)
+        )
         let i105 = try address.toI105(networkPrefix: AccountId.defaultNetworkPrefix)
         let ids = try TransactionInputValidator.validate(networkId: TestNetworkIds.canonical,
                                                          authorityId: i105)
@@ -285,10 +290,10 @@ final class TransactionInputValidatorTests: XCTestCase {
 
     func testValidatePreservesTairaAuthorityAndDestinationDiscriminants() throws {
         let authority = try AccountAddress
-            .fromAccount(publicKey: Data(repeating: 0xB1, count: 32))
+            .fromAccount(publicKey: validEd25519PublicKey(seed: 0xB1))
             .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
         let destination = try AccountAddress
-            .fromAccount(publicKey: Data(repeating: 0xB2, count: 32))
+            .fromAccount(publicKey: validEd25519PublicKey(seed: 0xB2))
             .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
 
         let ids = try TransactionInputValidator.validate(
@@ -308,7 +313,7 @@ final class TransactionInputValidatorTests: XCTestCase {
 
     func testCanonicalNoritoAccountEncodersPreserveTairaLiteral() throws {
         let address = try AccountAddress.fromAccount(
-            publicKey: Data(repeating: 0xB3, count: 32)
+            publicKey: validEd25519PublicKey(seed: 0xB3)
         )
         let taira = try address.toI105(
             networkPrefix: SccpV1.tairaI105DiscriminantV1
@@ -334,7 +339,7 @@ final class TransactionInputValidatorTests: XCTestCase {
     }
 
     func testValidateRejectsI105WithDomainSuffix() throws {
-        let publicKey = Data(repeating: 0xAC, count: 32)
+        let publicKey = try validEd25519PublicKey(seed: 0xAC)
         let i105 = try AccountId.makeI105(publicKey: publicKey)
         let literal = "\(i105)@banka.dataspace"
         XCTAssertThrowsError(

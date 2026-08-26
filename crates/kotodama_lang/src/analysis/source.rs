@@ -1,6 +1,7 @@
 use super::{AnalysisCategory, AnalysisFinding};
 use crate::{
     ast::{Block, Expr, Item, Program, Statement},
+    builtins::Builtin,
     semantic::{
         self, ExprKind, TypedBlock, TypedExpr, TypedFunction, TypedProgram, TypedStatement,
     },
@@ -81,7 +82,8 @@ fn analyze_block_reentrancy(
             analyze_statement_reentrancy(stmt, state_names, state_before, func_name, findings);
     }
     if let Some(tail) = &block.tail {
-        visit_expr_for_host_calls(tail, state_before, func_name, findings);
+        state_before =
+            visit_expr_for_host_calls(tail, state_names, state_before, func_name, findings);
     }
     state_before
 }
@@ -97,33 +99,27 @@ fn analyze_statement_reentrancy(
             analyze_statement_reentrancy(statement, state_names, state_before, func_name, findings)
         }
         Statement::Let { value, .. } => {
-            visit_expr_for_host_calls(value, state_before, func_name, findings);
-            state_before
+            visit_expr_for_host_calls(value, state_names, state_before, func_name, findings)
         }
         Statement::Assign { name, value } => {
-            visit_expr_for_host_calls(value, state_before, func_name, findings);
-            if state_names.contains(name) {
-                true
-            } else {
-                state_before
-            }
+            let state_after_value =
+                visit_expr_for_host_calls(value, state_names, state_before, func_name, findings);
+            state_after_value || state_names.contains(name)
         }
         Statement::AssignExpr { target, value, .. } => {
-            visit_expr_for_host_calls(target, state_before, func_name, findings);
-            visit_expr_for_host_calls(value, state_before, func_name, findings);
-            if expr_targets_state(target, state_names) {
-                true
-            } else {
-                state_before
-            }
+            let state_after_target =
+                visit_expr_for_host_calls(target, state_names, state_before, func_name, findings);
+            let state_after_value = visit_expr_for_host_calls(
+                value,
+                state_names,
+                state_after_target,
+                func_name,
+                findings,
+            );
+            state_after_value || expr_targets_state(target, state_names)
         }
-        Statement::Expr(expr) => {
-            visit_expr_for_host_calls(expr, state_before, func_name, findings);
-            state_before
-        }
-        Statement::Return(Some(expr)) => {
-            visit_expr_for_host_calls(expr, state_before, func_name, findings);
-            state_before
+        Statement::Expr(expr) | Statement::Return(Some(expr)) => {
+            visit_expr_for_host_calls(expr, state_names, state_before, func_name, findings)
         }
         Statement::Return(None) | Statement::Break | Statement::Continue => state_before,
         Statement::If {
@@ -131,18 +127,25 @@ fn analyze_statement_reentrancy(
             then_branch,
             else_branch,
         } => {
-            visit_expr_for_host_calls(cond, state_before, func_name, findings);
+            let state_after_condition =
+                visit_expr_for_host_calls(cond, state_names, state_before, func_name, findings);
             let then_state = analyze_block_reentrancy(
                 then_branch,
                 state_names,
-                state_before,
+                state_after_condition,
                 func_name,
                 findings,
             );
-            let else_state = else_branch.as_ref().map_or(state_before, |block| {
-                analyze_block_reentrancy(block, state_names, state_before, func_name, findings)
+            let else_state = else_branch.as_ref().map_or(state_after_condition, |block| {
+                analyze_block_reentrancy(
+                    block,
+                    state_names,
+                    state_after_condition,
+                    func_name,
+                    findings,
+                )
             });
-            state_before || then_state || else_state
+            then_state || else_state
         }
         Statement::IfLet {
             value,
@@ -150,24 +153,36 @@ fn analyze_statement_reentrancy(
             else_branch,
             ..
         } => {
-            visit_expr_for_host_calls(value, state_before, func_name, findings);
+            let state_after_value =
+                visit_expr_for_host_calls(value, state_names, state_before, func_name, findings);
             let then_state = analyze_block_reentrancy(
                 then_branch,
                 state_names,
-                state_before,
+                state_after_value,
                 func_name,
                 findings,
             );
-            let else_state = else_branch.as_ref().map_or(state_before, |block| {
-                analyze_block_reentrancy(block, state_names, state_before, func_name, findings)
+            let else_state = else_branch.as_ref().map_or(state_after_value, |block| {
+                analyze_block_reentrancy(block, state_names, state_after_value, func_name, findings)
             });
-            state_before || then_state || else_state
+            then_state || else_state
         }
         Statement::While { cond, body } => {
-            visit_expr_for_host_calls(cond, state_before, func_name, findings);
-            let body_state =
-                analyze_block_reentrancy(body, state_names, state_before, func_name, findings);
-            state_before || body_state
+            let state_after_condition =
+                visit_expr_for_host_calls(cond, state_names, state_before, func_name, findings);
+            let body_state = analyze_block_reentrancy(
+                body,
+                state_names,
+                state_after_condition,
+                func_name,
+                findings,
+            );
+            // A later iteration observes writes established by the first.
+            if body_state && !state_after_condition {
+                visit_expr_for_host_calls(cond, state_names, true, func_name, findings);
+                analyze_block_reentrancy(body, state_names, true, func_name, findings);
+            }
+            body_state
         }
         Statement::For {
             init,
@@ -187,8 +202,10 @@ fn analyze_statement_reentrancy(
                 );
             }
             if let Some(cond_expr) = cond {
-                visit_expr_for_host_calls(cond_expr, current, func_name, findings);
+                current =
+                    visit_expr_for_host_calls(cond_expr, state_names, current, func_name, findings);
             }
+            let state_before_iteration = current;
             let body_state =
                 analyze_block_reentrancy(body, state_names, current, func_name, findings);
             current = current || body_state;
@@ -201,82 +218,129 @@ fn analyze_statement_reentrancy(
                     findings,
                 );
             }
+            // Revisit one iteration after the first establishes a write; the
+            // state flag is monotonic, so additional passes add no information.
+            if current && !state_before_iteration {
+                if let Some(cond_expr) = cond {
+                    visit_expr_for_host_calls(cond_expr, state_names, true, func_name, findings);
+                }
+                analyze_block_reentrancy(body, state_names, true, func_name, findings);
+                if let Some(step_stmt) = step {
+                    analyze_statement_reentrancy(step_stmt, state_names, true, func_name, findings);
+                }
+            }
             current
         }
         Statement::ForEachMap { map, body, .. } => {
-            visit_expr_for_host_calls(map, state_before, func_name, findings);
+            let state_after_map =
+                visit_expr_for_host_calls(map, state_names, state_before, func_name, findings);
             let body_state =
-                analyze_block_reentrancy(body, state_names, state_before, func_name, findings);
-            state_before || body_state
+                analyze_block_reentrancy(body, state_names, state_after_map, func_name, findings);
+            // A later map entry observes writes established for an earlier one.
+            if body_state && !state_after_map {
+                analyze_block_reentrancy(body, state_names, true, func_name, findings);
+            }
+            body_state
         }
     }
 }
 fn visit_expr_for_host_calls(
     expr: &Expr,
+    state_names: &HashSet<String>,
     state_before: bool,
     func_name: &str,
     findings: &mut Vec<AnalysisFinding>,
-) {
+) -> bool {
     match expr {
         Expr::Source { expression, .. } | Expr::Resolved { expression, .. } => {
-            visit_expr_for_host_calls(expression, state_before, func_name, findings);
+            visit_expr_for_host_calls(expression, state_names, state_before, func_name, findings)
         }
         Expr::Call { name, args, .. } => {
-            if state_before && is_external_call(name) {
-                findings.push(AnalysisFinding::warning(
-                    AnalysisCategory::StaticSource,
-                    "static-reentrancy-risk",
-                    format!(
-                        "function `{func_name}` writes seiyaku state before calling `{name}`; review for reentrancy"
-                    ),
-                ));
+            let state_after_arguments = args.iter().fold(state_before, |state, argument| {
+                visit_expr_for_host_calls(argument, state_names, state, func_name, findings)
+            });
+            if state_after_arguments && is_external_call(name) {
+                let message = format!(
+                    "function `{func_name}` writes seiyaku state before calling `{name}`; review for reentrancy"
+                );
+                if !findings.iter().any(|finding| {
+                    finding.code == "static-reentrancy-risk" && finding.message == message
+                }) {
+                    findings.push(AnalysisFinding::warning(
+                        AnalysisCategory::StaticSource,
+                        "static-reentrancy-risk",
+                        message,
+                    ));
+                }
             }
-            for arg in args {
-                visit_expr_for_host_calls(arg, state_before, func_name, findings);
-            }
+            state_after_arguments
         }
         Expr::Binary { left, right, .. } => {
-            visit_expr_for_host_calls(left, state_before, func_name, findings);
-            visit_expr_for_host_calls(right, state_before, func_name, findings);
+            let state_after_left =
+                visit_expr_for_host_calls(left, state_names, state_before, func_name, findings);
+            visit_expr_for_host_calls(right, state_names, state_after_left, func_name, findings)
         }
         Expr::Unary { expr, .. }
         | Expr::OptionSome(expr)
         | Expr::ResultOk(expr)
         | Expr::ResultErr(expr)
         | Expr::Propagate(expr) => {
-            visit_expr_for_host_calls(expr, state_before, func_name, findings)
+            visit_expr_for_host_calls(expr, state_names, state_before, func_name, findings)
         }
         Expr::Conditional {
             cond,
             then_expr,
             else_expr,
         } => {
-            visit_expr_for_host_calls(cond, state_before, func_name, findings);
-            visit_expr_for_host_calls(then_expr, state_before, func_name, findings);
-            visit_expr_for_host_calls(else_expr, state_before, func_name, findings);
+            let state_after_condition =
+                visit_expr_for_host_calls(cond, state_names, state_before, func_name, findings);
+            let then_state = visit_expr_for_host_calls(
+                then_expr,
+                state_names,
+                state_after_condition,
+                func_name,
+                findings,
+            );
+            let else_state = visit_expr_for_host_calls(
+                else_expr,
+                state_names,
+                state_after_condition,
+                func_name,
+                findings,
+            );
+            then_state || else_state
         }
         Expr::If {
             condition,
             then_branch,
             else_branch,
         } => {
-            visit_expr_for_host_calls(condition, state_before, func_name, findings);
-            analyze_block_reentrancy(
-                then_branch,
-                &HashSet::new(),
+            let state_after_condition = visit_expr_for_host_calls(
+                condition,
+                state_names,
                 state_before,
                 func_name,
                 findings,
             );
-            if let Some(branch) = else_branch {
-                analyze_block_reentrancy(
-                    branch,
-                    &HashSet::new(),
-                    state_before,
-                    func_name,
-                    findings,
-                );
-            }
+            let then_state = analyze_block_reentrancy(
+                then_branch,
+                state_names,
+                state_after_condition,
+                func_name,
+                findings,
+            );
+            let else_state = else_branch
+                .as_ref()
+                .map_or(state_after_condition, |branch| {
+                    analyze_block_reentrancy(
+                        branch,
+                        state_names,
+                        state_after_condition,
+                        func_name,
+                        findings,
+                    )
+                });
+            then_state || else_state
         }
         Expr::IfLet {
             value,
@@ -284,82 +348,83 @@ fn visit_expr_for_host_calls(
             else_branch,
             ..
         } => {
-            visit_expr_for_host_calls(value, state_before, func_name, findings);
-            analyze_block_reentrancy(
+            let state_after_value =
+                visit_expr_for_host_calls(value, state_names, state_before, func_name, findings);
+            let then_state = analyze_block_reentrancy(
                 then_branch,
-                &HashSet::new(),
-                state_before,
+                state_names,
+                state_after_value,
                 func_name,
                 findings,
             );
-            if let Some(branch) = else_branch {
+            let else_state = else_branch.as_ref().map_or(state_after_value, |branch| {
                 analyze_block_reentrancy(
                     branch,
-                    &HashSet::new(),
-                    state_before,
+                    state_names,
+                    state_after_value,
                     func_name,
                     findings,
-                );
-            }
+                )
+            });
+            then_state || else_state
         }
         Expr::Match { value, arms } => {
-            visit_expr_for_host_calls(value, state_before, func_name, findings);
+            let state_after_value =
+                visit_expr_for_host_calls(value, state_names, state_before, func_name, findings);
+            let mut aggregate_state = state_after_value;
             for arm in arms {
-                analyze_block_reentrancy(
+                let arm_state = analyze_block_reentrancy(
                     &arm.body,
-                    &HashSet::new(),
-                    state_before,
+                    state_names,
+                    state_after_value,
                     func_name,
                     findings,
                 );
+                aggregate_state = aggregate_state || arm_state;
             }
+            aggregate_state
         }
         Expr::Member { object, .. } => {
-            visit_expr_for_host_calls(object, state_before, func_name, findings);
+            visit_expr_for_host_calls(object, state_names, state_before, func_name, findings)
         }
         Expr::Index { target, index } => {
-            visit_expr_for_host_calls(target, state_before, func_name, findings);
-            visit_expr_for_host_calls(index, state_before, func_name, findings);
+            let state_after_target =
+                visit_expr_for_host_calls(target, state_names, state_before, func_name, findings);
+            visit_expr_for_host_calls(index, state_names, state_after_target, func_name, findings)
         }
-        Expr::Tuple(items) | Expr::List(items) => {
-            for item in items {
-                visit_expr_for_host_calls(item, state_before, func_name, findings);
-            }
-        }
-        Expr::JsonObject(entries) => {
-            for entry in entries {
-                visit_expr_for_host_calls(&entry.value, state_before, func_name, findings);
-            }
-        }
-        Expr::JsonArray(elements) => {
-            for element in elements {
-                visit_expr_for_host_calls(element, state_before, func_name, findings);
-            }
-        }
+        Expr::Tuple(items) | Expr::List(items) => items.iter().fold(state_before, |state, item| {
+            visit_expr_for_host_calls(item, state_names, state, func_name, findings)
+        }),
+        Expr::JsonObject(entries) => entries.iter().fold(state_before, |state, entry| {
+            visit_expr_for_host_calls(&entry.value, state_names, state, func_name, findings)
+        }),
+        Expr::JsonArray(elements) => elements.iter().fold(state_before, |state, element| {
+            visit_expr_for_host_calls(element, state_names, state, func_name, findings)
+        }),
         Expr::ListComprehension {
             expression,
             source,
             condition,
             ..
         } => {
-            visit_expr_for_host_calls(source, state_before, func_name, findings);
-            visit_expr_for_host_calls(expression, state_before, func_name, findings);
+            let mut state =
+                visit_expr_for_host_calls(source, state_names, state_before, func_name, findings);
             if let Some(condition) = condition {
-                visit_expr_for_host_calls(condition, state_before, func_name, findings);
+                state =
+                    visit_expr_for_host_calls(condition, state_names, state, func_name, findings);
             }
+            visit_expr_for_host_calls(expression, state_names, state, func_name, findings)
         }
-        Expr::StructLiteral { fields, .. } => {
-            for field in fields {
-                visit_expr_for_host_calls(&field.value, state_before, func_name, findings);
-            }
-        }
+        Expr::StructLiteral { fields, .. } => fields.iter().fold(state_before, |state, field| {
+            visit_expr_for_host_calls(&field.value, state_names, state, func_name, findings)
+        }),
         Expr::Bool(_)
         | Expr::IntLiteral(_)
         | Expr::DecimalLiteral(_)
         | Expr::OptionNone
         | Expr::String(_)
         | Expr::Bytes(_)
-        | Expr::Ident(_) => {}
+        | Expr::Ident(_) => state_before,
     }
 }
 fn expr_targets_state(expr: &Expr, state_names: &HashSet<String>) -> bool {
@@ -415,15 +480,10 @@ fn expr_targets_state(expr: &Expr, state_names: &HashSet<String>) -> bool {
     }
 }
 fn is_external_call(name: &str) -> bool {
-    const HOST_PREFIXES: [&str; 2] = ["host::", "std::host::"];
-    if HOST_PREFIXES.iter().any(|prefix| name.starts_with(prefix)) {
-        return true;
-    }
-    let simple_name = name.split("::").last().unwrap_or(name);
-    matches!(
-        simple_name,
-        "call" | "call_contract" | "call_async" | "invoke" | "invoke_contract" | "transfer"
-    )
+    Builtin::from_source_name(name).is_some_and(|builtin| {
+        let effects = builtin.effects();
+        effects.host_side_effects || effects.emits_instructions
+    })
 }
 fn detect_infinite_loops(program: &Program, findings: &mut Vec<AnalysisFinding>) {
     for item in &program.items {
@@ -865,6 +925,92 @@ mod tests {
         assert!(
             !findings.iter().any(|f| f.code == "static-reentrancy-risk"),
             "unexpected reentrancy finding: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn user_function_names_do_not_masquerade_as_external_calls() {
+        let findings = analyze_static(
+            r#"
+            seiyaku Demo {
+                state int counter;
+                hajimari() { counter = 0; }
+                fn transfer() {}
+                fn run() {
+                    counter = 1;
+                    transfer();
+                }
+            }
+        "#,
+        );
+        assert!(
+            !findings.iter().any(|f| f.code == "static-reentrancy-risk"),
+            "a pure user function named like a host operation was misclassified: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn registered_host_effects_create_reentrancy_findings() {
+        let findings = analyze_static(
+            r#"
+            seiyaku Demo {
+                state int counter;
+                hajimari() { counter = 0; }
+                kotoage fn run() authorize("Run") {
+                    counter = 1;
+                    debug::info("state changed");
+                }
+            }
+        "#,
+        );
+        assert!(
+            findings.iter().any(|f| f.code == "static-reentrancy-risk"),
+            "a registered host effect was omitted from analysis: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn expression_state_writes_are_visible_to_enclosing_host_calls() {
+        let findings = analyze_static(
+            r#"
+            seiyaku Demo {
+                state int counter;
+                hajimari() { counter = 0; }
+                kotoage fn run(bool update) authorize("Run") {
+                    debug::info(if update { counter = 1; 1 } else { 0 });
+                }
+            }
+        "#,
+        );
+        assert!(
+            findings.iter().any(|f| f.code == "static-reentrancy-risk"),
+            "a state write in an evaluated call argument was not propagated: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn loop_carried_state_writes_are_visible_to_later_iterations() {
+        let findings = analyze_static(
+            r#"
+            seiyaku Demo {
+                state int counter;
+                hajimari() { counter = 0; }
+                kotoage fn run() authorize("Run") {
+                    for index in range(2) {
+                        debug::info("before write");
+                        counter = index;
+                    }
+                }
+            }
+        "#,
+        );
+        let reentrancy_findings = findings
+            .iter()
+            .filter(|finding| finding.code == "static-reentrancy-risk")
+            .count();
+        assert_eq!(
+            reentrancy_findings, 1,
+            "the later iteration must be analyzed without duplicating the finding: {findings:?}"
         );
     }
 }

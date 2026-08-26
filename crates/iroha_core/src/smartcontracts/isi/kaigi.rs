@@ -22,10 +22,12 @@ use iroha_data_model::{
         },
     },
     kaigi::{
-        KaigiId, KaigiParticipantCommitment, KaigiParticipantNullifier, KaigiPrivacyMode,
-        KaigiRecord, KaigiRelayAllowlist, KaigiRelayFeedback, KaigiRelayManifest,
-        KaigiRelayRegistration, KaigiStatus, kaigi_metadata_key, kaigi_relay_allowlist_key,
-        kaigi_relay_feedback_key, kaigi_relay_metadata_key,
+        KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1, KAIGI_RELAY_MANIFEST_MAX_HOPS_V1,
+        KAIGI_RELAY_MANIFEST_MIN_HOPS_V1, KaigiId, KaigiParticipantCommitment,
+        KaigiParticipantNullifier, KaigiPrivacyMode, KaigiRecord, KaigiRelayAllowlist,
+        KaigiRelayFeedback, KaigiRelayManifest, KaigiRelayRegistration, KaigiStatus,
+        kaigi_metadata_key, kaigi_relay_allowlist_key, kaigi_relay_feedback_key,
+        kaigi_relay_metadata_key,
     },
     prelude::{AccountId, DomainId, Json, Name},
     query::error::FindError,
@@ -538,11 +540,7 @@ impl Execute for RegisterKaigiRelay {
             ));
         }
         state_transaction.world.account(authority)?;
-        if registration.hpke_public_key.is_empty() {
-            return Err(relay_error(
-                "relay registration requires an HPKE public key",
-            ));
-        }
+        validate_relay_hpke_public_key(&registration.hpke_public_key)?;
         if registration.bandwidth_class == 0 {
             return Err(relay_error(
                 "relay registration requires a non-zero bandwidth class",
@@ -648,10 +646,8 @@ impl Execute for ReportKaigiRelayHealth {
                         ));
                     }
                 }
-                store_relay_feedback(stx, &feedback)?;
-                emit_relay_health_summary(stx, &feedback);
-                #[cfg(feature = "telemetry")]
-                let relay_domain = relay_domain(stx, &relay_id)?;
+                let relay_domain = store_relay_feedback(stx, &feedback)?;
+                emit_relay_health_summary(stx, &relay_domain, &feedback);
                 #[cfg(feature = "telemetry")]
                 stx.telemetry
                     .record_kaigi_relay_health(&relay_domain, &relay_id, status);
@@ -706,6 +702,15 @@ where
     if record.id != *call_id {
         return Err(Error::InvariantViolation(
             "stored Kaigi record identifier does not match metadata key".into(),
+        ));
+    }
+    if record
+        .relay_manifest
+        .as_ref()
+        .is_some_and(|manifest| validate_relay_manifest(manifest).is_err())
+    {
+        return Err(Error::InvariantViolation(
+            "stored Kaigi relay manifest violates V1 constraints".into(),
         ));
     }
     #[cfg(feature = "telemetry")]
@@ -803,7 +808,7 @@ fn clear_ledger_visible_privacy_hints(record: &mut KaigiRecord) {
 fn store_relay_feedback(
     state_transaction: &mut StateTransaction<'_, '_>,
     feedback: &KaigiRelayFeedback,
-) -> Result<(), Error> {
+) -> Result<DomainId, Error> {
     let key = kaigi_relay_feedback_key(&feedback.relay_id).map_err(|err| {
         Error::InvalidParameter(InvalidParameterError::SmartContract(err.to_string()))
     })?;
@@ -823,11 +828,11 @@ fn store_relay_feedback(
     state_transaction
         .world
         .emit_events(Some(DomainEvent::MetadataInserted(MetadataChanged {
-            target: domain_id,
+            target: domain_id.clone(),
             key,
             value,
         })));
-    Ok(())
+    Ok(domain_id)
 }
 fn metadata_key(call_id: &KaigiId) -> Result<Name, Error> {
     kaigi_metadata_key(&call_id.call_name).map_err(|err| {
@@ -1351,20 +1356,23 @@ fn record_has_participant_in_active_lineage(
     Ok(false)
 }
 fn validate_relay_manifest(manifest: &KaigiRelayManifest) -> Result<(), Error> {
-    if manifest.hops.len() < 3 {
+    if manifest.hops.len() < KAIGI_RELAY_MANIFEST_MIN_HOPS_V1 {
         return Err(Error::InvalidParameter(
             InvalidParameterError::SmartContract(
                 "relay manifest must include at least three hops".into(),
             ),
         ));
     }
+    if manifest.hops.len() > KAIGI_RELAY_MANIFEST_MAX_HOPS_V1 {
+        return Err(Error::InvalidParameter(
+            InvalidParameterError::SmartContract(format!(
+                "relay manifest must not include more than {KAIGI_RELAY_MANIFEST_MAX_HOPS_V1} hops"
+            )),
+        ));
+    }
     let mut seen_relays = BTreeSet::new();
     for hop in &manifest.hops {
-        if hop.hpke_public_key.is_empty() {
-            return Err(Error::InvalidParameter(
-                InvalidParameterError::SmartContract("relay hops require HPKE keys".into()),
-            ));
-        }
+        validate_relay_hpke_public_key(&hop.hpke_public_key)?;
         if hop.weight == 0 {
             return Err(Error::InvalidParameter(
                 InvalidParameterError::SmartContract("relay weights must be non-zero".into()),
@@ -1377,6 +1385,17 @@ fn validate_relay_manifest(manifest: &KaigiRelayManifest) -> Result<(), Error> {
                 ),
             ));
         }
+    }
+    Ok(())
+}
+fn validate_relay_hpke_public_key(hpke_public_key: &[u8]) -> Result<(), Error> {
+    if hpke_public_key.is_empty() {
+        return Err(relay_error("relay HPKE public key must be non-empty"));
+    }
+    if hpke_public_key.len() > KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1 {
+        return Err(relay_error(format!(
+            "relay HPKE public key must not exceed {KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1} bytes"
+        )));
     }
     Ok(())
 }
@@ -1600,8 +1619,13 @@ fn emit_usage_summary(stx: &mut StateTransaction<'_, '_>, record: &KaigiRecord) 
     stx.world
         .emit_events(Some(DomainEvent::KaigiUsageSummary(summary)));
 }
-fn emit_relay_health_summary(stx: &mut StateTransaction<'_, '_>, feedback: &KaigiRelayFeedback) {
+fn emit_relay_health_summary(
+    stx: &mut StateTransaction<'_, '_>,
+    relay_domain: &DomainId,
+    feedback: &KaigiRelayFeedback,
+) {
     let summary = KaigiRelayHealthSummary::new(
+        relay_domain.clone(),
         feedback.call.clone(),
         feedback.relay_id.clone(),
         feedback.status,
@@ -1902,6 +1926,21 @@ mod tests {
         });
     }
     #[test]
+    fn relay_hpke_public_key_validation_enforces_v1_byte_boundaries() {
+        assert!(validate_relay_hpke_public_key(&[]).is_err());
+        assert!(
+            validate_relay_hpke_public_key(&vec![0xA5; KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1])
+                .is_ok()
+        );
+        assert!(
+            validate_relay_hpke_public_key(&vec![
+                0xA5;
+                KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1 + 1
+            ])
+            .is_err()
+        );
+    }
+    #[test]
     fn relay_manifest_validation_enforces_rules() {
         let manifest = KaigiRelayManifest {
             hops: Vec::new(),
@@ -1935,12 +1974,23 @@ mod tests {
         let mut invalid = valid.clone();
         invalid.hops[1].hpke_public_key.clear();
         assert!(validate_relay_manifest(&invalid).is_err());
+        let mut oversized_key = valid.clone();
+        oversized_key.hops[1].hpke_public_key =
+            vec![0xA5; KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1 + 1];
+        assert!(validate_relay_manifest(&oversized_key).is_err());
         let mut zero_weight = valid.clone();
         zero_weight.hops[0].weight = 0;
         assert!(validate_relay_manifest(&zero_weight).is_err());
         let mut duplicate = valid.clone();
         duplicate.hops[2].relay_id = hop_a;
         assert!(validate_relay_manifest(&duplicate).is_err());
+        let mut too_many = valid;
+        while too_many.hops.len() <= KAIGI_RELAY_MANIFEST_MAX_HOPS_V1 {
+            too_many.hops.push(too_many.hops[0].clone());
+        }
+        let error = validate_relay_manifest(&too_many)
+            .expect_err("a nine-hop first-release relay route must be rejected");
+        assert_smart_contract_error(error, "must not include more than 8 hops");
     }
     #[test]
     fn relay_manifest_rejects_two_ids_from_one_active_rekey_lineage() {
@@ -3589,6 +3639,26 @@ mod tests {
                 .expect("register relay account");
             add_relay_to_allowlist(stx, &domain_id, &relay_id);
             stx.world.take_external_events();
+            let oversized_error = RegisterKaigiRelay {
+                relay: KaigiRelayRegistration {
+                    relay_id: relay_id.clone(),
+                    hpke_public_key: vec![0xA5; KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1 + 1],
+                    bandwidth_class: 5,
+                },
+            }
+            .execute(&relay_id, stx)
+            .expect_err("oversized relay key must fail before persistence or event emission");
+            assert_smart_contract_error(oversized_error, "must not exceed 4096 bytes");
+            let key = kaigi_relay_metadata_key(&relay_id).expect("metadata key");
+            assert!(
+                stx.world
+                    .domain(&domain_id)
+                    .expect("domain lookup")
+                    .metadata()
+                    .get(&key)
+                    .is_none()
+            );
+            assert!(stx.world.take_external_events().is_empty());
             RegisterKaigiRelay {
                 relay: registration.clone(),
             }
@@ -3599,7 +3669,6 @@ mod tests {
                 extract_registration_summary(&events).expect("relay registration summary event");
             assert_eq!(summary.relay().subject_id(), relay_id.subject_id());
             assert_eq!(*summary.bandwidth_class(), 5);
-            let key = kaigi_relay_metadata_key(&relay_id).expect("metadata key");
             let domain = stx.world.domain(&domain_id).expect("domain lookup");
             let stored = domain
                 .metadata()
@@ -4273,6 +4342,77 @@ mod tests {
             .expect_err("mismatched stored identifier must reject");
             assert_invariant_error(err, "identifier does not match metadata key");
             assert_eq!(load_call_record(stx, &call), mismatched);
+            assert!(stx.world.take_external_events().is_empty());
+        });
+    }
+    #[test]
+    fn stored_record_relay_manifest_must_satisfy_v1_constraints() {
+        let (record, host, _participant) = new_record(KaigiPrivacyMode::Transparent);
+        let call = record.id.clone();
+        let domain = call.domain_id.clone();
+        with_state_transaction(|stx| {
+            Register::domain(Domain::new(domain.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register domain");
+            Register::account(Account::new(host.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register host");
+            create_call(stx, &record, &host);
+
+            let key = kaigi_metadata_key(&call.call_name).expect("metadata key");
+            let mut persisted = load_call_record(stx, &call);
+            let mut too_many = sample_manifest();
+            while too_many.hops.len() <= KAIGI_RELAY_MANIFEST_MAX_HOPS_V1 {
+                too_many.hops.push(too_many.hops[0].clone());
+            }
+            persisted.relay_manifest = Some(too_many);
+            stx.world
+                .domain_mut(&domain)
+                .expect("domain")
+                .metadata_mut()
+                .insert(
+                    key.clone(),
+                    Json::try_new(persisted.clone()).expect("serialize oversized manifest"),
+                );
+            stx.world.take_external_events();
+
+            let error = RecordKaigiUsage {
+                call_id: call.clone(),
+                duration_ms: 1,
+                billed_gas: 1,
+                usage_commitment: None,
+                proof: None,
+            }
+            .execute(&host, stx)
+            .expect_err("a persisted overlong relay manifest must fail closed");
+            assert_invariant_error(error, "relay manifest violates V1 constraints");
+            assert_eq!(load_call_record(stx, &call), persisted);
+            assert!(stx.world.take_external_events().is_empty());
+
+            let mut oversized_key = sample_manifest();
+            oversized_key.hops[0].hpke_public_key =
+                vec![0xA5; KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1 + 1];
+            persisted.relay_manifest = Some(oversized_key);
+            stx.world
+                .domain_mut(&domain)
+                .expect("domain")
+                .metadata_mut()
+                .insert(
+                    key,
+                    Json::try_new(persisted.clone()).expect("serialize oversized relay key"),
+                );
+
+            let error = RecordKaigiUsage {
+                call_id: call.clone(),
+                duration_ms: 1,
+                billed_gas: 1,
+                usage_commitment: None,
+                proof: None,
+            }
+            .execute(&host, stx)
+            .expect_err("a persisted oversized relay key must fail closed");
+            assert_invariant_error(error, "relay manifest violates V1 constraints");
+            assert_eq!(load_call_record(stx, &call), persisted);
             assert!(stx.world.take_external_events().is_empty());
         });
     }

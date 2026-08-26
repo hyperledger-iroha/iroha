@@ -524,6 +524,7 @@ mod tests {
     #[tokio::test]
     async fn vpn_initial_prepaid_voucher_is_accepted_before_service_starts() {
         let helper_ticket = sample_helper_ticket([0xA0; 16]);
+        let overlay = Arc::new(VpnOverlay::from_config(VpnConfig::default()));
         let now_ms = unix_time_ms(SystemTime::now());
         let envelope = usage_voucher_envelope(
             &helper_ticket,
@@ -545,7 +546,7 @@ mod tests {
                 flow_label: vpn_flow_label_from_session_id(helper_ticket.session_id),
                 sequence: 0,
                 ack: 0,
-                padding_budget_ms: 0,
+                padding_budget_ms: overlay.config().padding_budget_ms,
                 payload_len: 0,
             },
             payload,
@@ -553,7 +554,6 @@ mod tests {
         let frame = cell.into_padded_frame().expect("prepaid control frame");
         let (mut peer, mut relay) = duplex(VPN_CELL_LEN * 2);
         peer.write_all(frame.as_ref()).await.expect("write voucher");
-        let overlay = Arc::new(VpnOverlay::from_config(VpnConfig::default()));
         let session = overlay.start_session(Arc::new(Metrics::new()));
         let handle = bind_sample_helper_session(&overlay, session, helper_ticket.clone());
         let adapter = VpnAdapter::new(handle.session().clone(), overlay);

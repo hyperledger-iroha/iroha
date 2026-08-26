@@ -1,17 +1,21 @@
+using System.Buffers;
 using System.Buffers.Binary;
 using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
 using Hyperledger.Iroha.Address;
 using Hyperledger.Iroha.Crypto;
 using Hyperledger.Iroha.Http;
 using Hyperledger.Iroha.Norito;
+using Hyperledger.Iroha.Numeric;
 using Hyperledger.Iroha.Queries;
 using Hyperledger.Iroha.Sccp;
 using Hyperledger.Iroha.Transactions;
@@ -24,8 +28,12 @@ public sealed partial class ToriiClient : IDisposable
     public const string AccountOnboardingTokenHeaderName = "X-Iroha-Onboarding-Token";
 
     private const int AccountOnboardingCurrentStateResponseMaxBytesV1 = 4 * 1024;
+    private const int FeeSponsorProgramResponseMaxBytes = 64 * 1024;
+    private const int FeeQuoteResponseMaxBytes = 64 * 1024;
     private const int SoraFsAliasTextMaxChars = 128;
     private const string InvalidUtf8ResponseBody = "<response body is not valid UTF-8>";
+    private static readonly JsonSerializerOptions ExactFeeResponseSerializerOptions =
+        CreateExactFeeResponseSerializerOptions();
     private static readonly byte[] FaucetClaimHashDomainV1 =
         "iroha:accounts:faucet:claim:v1\0"u8.ToArray();
     private static readonly Encoding StrictUtf8 = new UTF8Encoding(false, true);
@@ -111,6 +119,117 @@ public sealed partial class ToriiClient : IDisposable
         using var content = CreateJsonContent(request);
         using var response = await SendAsync(HttpMethod.Post, path, query, content, cancellationToken: cancellationToken);
         return await DeserializeAsync<TResponse>(response, cancellationToken);
+    }
+
+    private async Task<ToriiFeeQuoteResponse> PostFeeQuoteAsync(
+        ToriiFeeQuoteRequest request,
+        CancellationToken cancellationToken) =>
+        await PostBoundedExactJsonAsync<ToriiFeeQuoteRequest, ToriiFeeQuoteResponse>(
+            "/v1/fees/quote",
+            request,
+            FeeQuoteResponseMaxBytes,
+            "Fee quote response",
+            cancellationToken);
+
+    private async Task<TResponse> PostBoundedExactJsonAsync<TRequest, TResponse>(
+        string path,
+        TRequest request,
+        int maximumResponseBytes,
+        string responseContext,
+        CancellationToken cancellationToken,
+        Action<JsonElement>? validateJson = null)
+    {
+        using var content = CreateJsonContent(request);
+        using var httpRequest = await CreateRequestAsync(
+            HttpMethod.Post,
+            path,
+            query: null,
+            content,
+            accept: "application/json",
+            configureRequest: null,
+            cancellationToken);
+        using var response = await HttpClient.SendAsync(
+            httpRequest,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
+        var body = await ReadBoundedExactJsonResponseBodyAsync(
+            response.Content,
+            maximumResponseBytes,
+            responseContext,
+            cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw CreateApiExceptionFromBody(response, body);
+        }
+        RequireSingleJsonContentType(response.Content, responseContext);
+
+        using var bodyStream = new MemoryStream(body, writable: false);
+        using var document = await ParseJsonDocumentRejectingDuplicatePropertiesAsync(
+            bodyStream,
+            $"Torii response for `{response.RequestMessage?.RequestUri}`",
+            cancellationToken);
+        validateJson?.Invoke(document.RootElement);
+        return document.RootElement.Deserialize<TResponse>(ExactFeeResponseSerializerOptions)
+            ?? throw new JsonException(
+                $"Torii response for `{response.RequestMessage?.RequestUri}` deserialized to null.");
+    }
+
+    private static void RequireSingleJsonContentType(HttpContent content, string context)
+    {
+        if (!content.Headers.NonValidated.TryGetValues("Content-Type", out var values))
+        {
+            throw new InvalidDataException(
+                $"{context} Content-Type must be application/json.");
+        }
+        var rawValues = values.ToArray();
+        if (rawValues.Length != 1
+            || rawValues[0].Contains(',', StringComparison.Ordinal)
+            || !MediaTypeHeaderValue.TryParse(rawValues[0], out var contentType)
+            || !string.Equals(
+                contentType.MediaType,
+                "application/json",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException(
+                $"{context} Content-Type must be application/json.");
+        }
+    }
+
+    private static async Task<byte[]> ReadBoundedExactJsonResponseBodyAsync(
+        HttpContent content,
+        int maximumBytes,
+        string context,
+        CancellationToken cancellationToken)
+    {
+        await using var stream = await content.ReadAsStreamAsync(cancellationToken);
+        using var output = new MemoryStream(maximumBytes);
+        var buffer = ArrayPool<byte>.Shared.Rent(81_920);
+        try
+        {
+            while (true)
+            {
+                var remaining = maximumBytes - checked((int)output.Length);
+                var requested = Math.Min(buffer.Length, remaining + 1);
+                var count = await stream.ReadAsync(
+                    buffer.AsMemory(0, requested),
+                    cancellationToken);
+                if (count == 0)
+                {
+                    return output.ToArray();
+                }
+                if (count > remaining)
+                {
+                    throw new InvalidDataException(
+                        $"{context} exceeds the {maximumBytes}-byte limit.");
+                }
+
+                output.Write(buffer, 0, count);
+            }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
+        }
     }
 
     private async Task<(TResponse Value, HttpStatusCode StatusCode)> PostAccountOnboardingAsync<TRequest, TResponse>(
@@ -861,6 +980,7 @@ public sealed partial class ToriiClient : IDisposable
         ToriiAccountOnboardingPlanRequest expectedRequest,
         ToriiAccountOnboardingPlanReceipt receipt,
         ToriiTairaPublicResetMutationBindingV1 binding,
+        FeePaymentIntent feePayment,
         string onboardingToken,
         string expectedAuthority,
         NetworkId expectedNetworkId,
@@ -882,13 +1002,16 @@ public sealed partial class ToriiClient : IDisposable
             binding,
             ToriiAccountOnboardingPreparedTransactionV1.OperationV1,
             requireActive: true);
+        var exactFeePayment = NormalizeFeePaymentIntent(
+            feePayment,
+            nameof(feePayment),
+            requireGasLimit: false);
         var (response, statusCode) = await PostAccountOnboardingAsync<ToriiAccountOnboardingPrepareRequestV1, JsonElement>(
             "/v1/accounts/onboard/prepare",
-            new ToriiAccountOnboardingPrepareRequestV1
-            {
-                Binding = exactBinding,
-                Receipt = receipt,
-            },
+            new ToriiAccountOnboardingPrepareRequestV1(
+                exactBinding,
+                receipt,
+                exactFeePayment),
             exactOnboardingToken,
             cancellationToken: cancellationToken);
         RequireExactPreparedStatus(statusCode, HttpStatusCode.OK, "account onboarding prepare");
@@ -906,6 +1029,7 @@ public sealed partial class ToriiClient : IDisposable
                 exactExpectedRequest,
                 receipt,
                 exactBinding,
+                exactFeePayment,
                 expectedAuthority,
                 expectedNetworkId,
                 canonicalBodyEncoder);
@@ -986,6 +1110,7 @@ public sealed partial class ToriiClient : IDisposable
     public async Task<ToriiPreparedTransactionSubmitResponseV1> SubmitPreparedAccountOnboardingAsync(
         ToriiAccountOnboardingPlanRequest expectedRequest,
         ToriiAccountOnboardingPreparedTransactionV1 prepared,
+        FeePaymentIntent expectedFeePayment,
         string onboardingToken,
         string expectedAuthority,
         NetworkId expectedNetworkId,
@@ -993,12 +1118,17 @@ public sealed partial class ToriiClient : IDisposable
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(prepared);
+        var exactExpectedFeePayment = NormalizeFeePaymentIntent(
+            expectedFeePayment,
+            nameof(expectedFeePayment),
+            requireGasLimit: false);
         var exactOnboardingToken = RequireAccountOnboardingToken(onboardingToken);
         ValidatePreparedAccountOnboarding(
             prepared,
             NormalizeAccountOnboardingPlanRequest(expectedRequest),
             prepared.Receipt,
             prepared.Binding,
+            exactExpectedFeePayment,
             expectedAuthority,
             expectedNetworkId,
             canonicalBodyEncoder);
@@ -1040,39 +1170,60 @@ public sealed partial class ToriiClient : IDisposable
     public async Task<ToriiAccountFaucetPreparedTransactionV1> PrepareAccountFaucetAsync(
         ToriiAccountFaucetClaimV1 claim,
         ToriiTairaPublicResetMutationBindingV1 binding,
+        FeePaymentIntent feePayment,
+        ToriiAccountFaucetPolicyV1 policy,
         NetworkId expectedNetworkId,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(claim);
+        ArgumentNullException.ThrowIfNull(policy);
         ArgumentNullException.ThrowIfNull(expectedNetworkId);
         var normalizedClaim = NormalizeAccountFaucetClaim(claim);
         var exactBinding = NormalizePreparedMutationBinding(
             binding,
             ToriiAccountFaucetPreparedTransactionV1.OperationV1,
             requireActive: true);
+        var exactFeePayment = NormalizeFeePaymentIntent(
+            feePayment,
+            nameof(feePayment),
+            requireGasLimit: false);
         var (response, statusCode) = await PostWithStatusAsync<ToriiAccountFaucetPrepareRequestV1, ToriiAccountFaucetPreparedTransactionV1>(
             "/v1/accounts/faucet/prepare",
-            new ToriiAccountFaucetPrepareRequestV1
-            {
-                Binding = exactBinding,
-                Claim = normalizedClaim,
-            },
+            new ToriiAccountFaucetPrepareRequestV1(
+                exactBinding,
+                normalizedClaim,
+                exactFeePayment),
             cancellationToken);
         RequireExactPreparedStatus(statusCode, HttpStatusCode.OK, "account faucet prepare");
-        ValidatePreparedAccountFaucet(response, normalizedClaim, exactBinding, expectedNetworkId);
+        ValidatePreparedAccountFaucet(
+            response,
+            normalizedClaim,
+            exactBinding,
+            exactFeePayment,
+            policy,
+            expectedNetworkId);
         return response;
     }
 
     public async Task<ToriiPreparedTransactionSubmitResponseV1> SubmitPreparedAccountFaucetAsync(
         ToriiAccountFaucetPreparedTransactionV1 prepared,
+        FeePaymentIntent expectedFeePayment,
+        ToriiAccountFaucetPolicyV1 policy,
         NetworkId expectedNetworkId,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(prepared);
+        ArgumentNullException.ThrowIfNull(policy);
+        var exactExpectedFeePayment = NormalizeFeePaymentIntent(
+            expectedFeePayment,
+            nameof(expectedFeePayment),
+            requireGasLimit: false);
         ValidatePreparedAccountFaucet(
             prepared,
             prepared.Claim,
             prepared.Binding,
+            exactExpectedFeePayment,
+            policy,
             expectedNetworkId);
         var (response, statusCode) = await PostWithStatusAsync<
             ToriiAccountFaucetPreparedTransactionV1,
@@ -1353,20 +1504,22 @@ public sealed partial class ToriiClient : IDisposable
     {
         ArgumentNullException.ThrowIfNull(payload);
         RequireCanonicalRequestCredentials("/v1/fees/quote");
-        if (!string.Equals(
-                Options.CanonicalRequestCredentials!.AccountId,
-                payload.Authority,
-                StringComparison.Ordinal))
+        var requestAccount = Options.CanonicalRequestCredentials!.AccountId;
+        if (!CanonicalRequest.IsCanonicalAsciiAccountAlias(requestAccount)
+            && !AccountIdsHaveSameIdentity(requestAccount, payload.Authority))
         {
             throw new InvalidOperationException(
-                "Canonical request account must equal the unsigned transaction authority.");
+                "Canonical request account must identify the unsigned transaction authority.");
         }
 
-        var response = await PostAsync<ToriiFeeQuoteRequest, ToriiFeeQuoteResponse>(
-            "/v1/fees/quote",
+        var response = await PostFeeQuoteAsync(
             new ToriiFeeQuoteRequest { Payload = payload },
-            cancellationToken: cancellationToken);
-        ValidateFeeQuoteResponse(response, payload.FeePayment, "fee quote response");
+            cancellationToken);
+        ValidateFeeQuoteResponse(
+            response,
+            payload.FeePayment,
+            payload.Authority,
+            "fee quote response");
         return response;
     }
 
@@ -1377,24 +1530,16 @@ public sealed partial class ToriiClient : IDisposable
     {
         ArgumentNullException.ThrowIfNull(programId);
         RequireCanonicalRequestCredentials("/v1/fee-sponsor-programs/by-id");
-        var response = await PostAsync<ToriiFeeSponsorProgramLookupRequest, ToriiFeeSponsorProgram>(
+        var response = await PostBoundedExactJsonAsync<
+            ToriiFeeSponsorProgramLookupRequest,
+            ToriiFeeSponsorProgram>(
             "/v1/fee-sponsor-programs/by-id",
             new ToriiFeeSponsorProgramLookupRequest { ProgramId = programId.ToString() },
-            cancellationToken: cancellationToken);
-        if (response.Id != programId)
-        {
-            throw new JsonException("Fee sponsor program lookup returned a different program id.");
-        }
-        try
-        {
-            _ = AccountAddress.Parse(response.PayoutAccount);
-        }
-        catch (FormatException error)
-        {
-            throw new JsonException(
-                "Fee sponsor program lookup returned a non-canonical payout account.",
-                error);
-        }
+            FeeSponsorProgramResponseMaxBytes,
+            "Fee sponsor program response",
+            cancellationToken,
+            ValidateFeeSponsorProgramJson);
+        ValidateFeeSponsorProgramResponse(response, programId);
         return response;
     }
 
@@ -3180,6 +3325,7 @@ public sealed partial class ToriiClient : IDisposable
         ToriiAccountOnboardingPlanRequest exactExpectedRequest,
         ToriiAccountOnboardingPlanReceipt expectedReceipt,
         ToriiTairaPublicResetMutationBindingV1 expectedBinding,
+        FeePaymentIntent expectedFeePayment,
         string expectedAuthority,
         NetworkId expectedNetworkId,
         ToriiAccountOnboardingPlanBodyEncoder canonicalBodyEncoder)
@@ -3242,6 +3388,11 @@ public sealed partial class ToriiClient : IDisposable
             "prepared onboarding response");
         var feePayment = prepared.FeePayment
             ?? throw new JsonException("prepared onboarding response.fee_payment must not be null.");
+        if (!feePayment.HasSamePayerAndGasBound(expectedFeePayment))
+        {
+            throw new JsonException(
+                "prepared onboarding response.fee_payment changed the requested payer, sponsor revision, or gas bound.");
+        }
         var signerPublicKey = ValidatePreparedTransactionPayload(
             transaction,
             expectedNetworkId,
@@ -3407,9 +3558,12 @@ public sealed partial class ToriiClient : IDisposable
         ToriiAccountFaucetPreparedTransactionV1 prepared,
         ToriiAccountFaucetClaimV1 expectedClaim,
         ToriiTairaPublicResetMutationBindingV1 expectedBinding,
+        FeePaymentIntent expectedFeePayment,
+        ToriiAccountFaucetPolicyV1 policy,
         NetworkId expectedNetworkId)
     {
         ArgumentNullException.ThrowIfNull(prepared);
+        ArgumentNullException.ThrowIfNull(policy);
         ArgumentNullException.ThrowIfNull(expectedNetworkId);
         if (prepared.Binding is null || prepared.Claim is null)
         {
@@ -3427,9 +3581,18 @@ public sealed partial class ToriiClient : IDisposable
             || !string.Equals(claim.AccountId, expected.AccountId, StringComparison.Ordinal)
             || claim.PowAnchorHeight != expected.PowAnchorHeight
             || !string.Equals(claim.PowNonceHex, expected.PowNonceHex, StringComparison.Ordinal)
-            || !string.Equals(prepared.AccountId, expected.AccountId, StringComparison.Ordinal))
+            || !string.Equals(prepared.AccountId, expected.AccountId, StringComparison.Ordinal)
+            || !string.Equals(
+                prepared.AssetDefinitionId,
+                policy.AssetDefinitionId,
+                StringComparison.Ordinal)
+            || !string.Equals(
+                prepared.Amount,
+                policy.Amount.ToString(),
+                StringComparison.Ordinal))
         {
-            throw new JsonException("prepared faucet response differs from its exact claim or protocol identity.");
+            throw new JsonException(
+                "prepared faucet response differs from its exact claim, protocol identity, or trusted policy.");
         }
         _ = RequireExactLowerHex(prepared.SemanticHashHex, 32, "prepared faucet response.semantic_hash_hex");
         if (!string.Equals(
@@ -3473,10 +3636,15 @@ public sealed partial class ToriiClient : IDisposable
             "prepared faucet response");
         var feePayment = prepared.FeePayment
             ?? throw new JsonException("prepared faucet response.fee_payment must not be null.");
+        if (!feePayment.HasSamePayerAndGasBound(expectedFeePayment))
+        {
+            throw new JsonException(
+                "prepared faucet response.fee_payment changed the requested payer, sponsor revision, or gas bound.");
+        }
         var signerPublicKey = ValidatePreparedTransactionPayload(
             transaction,
             expectedNetworkId,
-            null,
+            policy.FaucetAuthority,
             prepared.AccountId,
             feePayment,
             exactBinding,
@@ -3502,9 +3670,8 @@ public sealed partial class ToriiClient : IDisposable
         var encoding = new TransactionEncodingContext(claim.AccountId);
         var encodedClaim = new CanonicalNoritoWriter();
         encodedClaim.WriteField(encoding.EncodeString(claim.AccountId));
-        encodedClaim.WriteField(
-            encoding.EncodeOption(claim.PowAnchorHeight, encoding.EncodeUInt64));
-        encodedClaim.WriteField(encoding.EncodeOptionalString(claim.PowNonceHex));
+        encodedClaim.WriteField(encoding.EncodeUInt64(claim.PowAnchorHeight));
+        encodedClaim.WriteField(encoding.EncodeString(claim.PowNonceHex));
         var claimBytes = encodedClaim.ToArray();
         var domainAndClaim = new byte[FaucetClaimHashDomainV1.Length + claimBytes.Length];
         FaucetClaimHashDomainV1.CopyTo(domainAndClaim, 0);
@@ -4392,12 +4559,79 @@ public sealed partial class ToriiClient : IDisposable
         ToriiContractCallJson.ValidateContractCallResponse(response, context);
     }
 
-    private static void ValidateFeeQuoteResponse(
+    private static void ValidateFeeSponsorProgramResponse(
+        ToriiFeeSponsorProgram response,
+        FeeSponsorProgramId requestedProgramId)
+    {
+        ArgumentNullException.ThrowIfNull(response);
+        ArgumentNullException.ThrowIfNull(requestedProgramId);
+        if (response.Id is null || response.Id != requestedProgramId)
+        {
+            throw new JsonException("Fee sponsor program lookup returned a different program id.");
+        }
+        try
+        {
+            _ = AccountAddress.Parse(response.PayoutAccount);
+        }
+        catch (FormatException error)
+        {
+            throw new JsonException(
+                "Fee sponsor program lookup returned a non-canonical payout account.",
+                error);
+        }
+
+        if (response.Lifecycle is null
+            || response.Lifecycle.Value is not null
+            || response.Lifecycle.State is not (
+                "staged" or "paused" or "active" or "closing" or "closed"))
+        {
+            throw new JsonException(
+                "Fee sponsor program lookup returned an invalid lifecycle.");
+        }
+        if (response.ActiveRevision == 0 || response.StagedRevision == 0)
+        {
+            throw new JsonException(
+                "Fee sponsor program lookup returned a zero revision.");
+        }
+        if (response.ScheduledActivation is { } activation
+            && (activation.Revision == 0 || activation.ActivateAtHeight == 0))
+        {
+            throw new JsonException(
+                "Fee sponsor program lookup returned an invalid scheduled activation.");
+        }
+    }
+
+    private static void ValidateFeeSponsorProgramJson(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+        foreach (var field in new[]
+        {
+            "active_revision",
+            "staged_revision",
+            "scheduled_activation",
+        })
+        {
+            if (root.TryGetProperty(field, out var value)
+                && value.ValueKind == JsonValueKind.Null)
+            {
+                throw new JsonException(
+                    "Fee sponsor program lookup returned an explicit null optional field.");
+            }
+        }
+    }
+
+    internal static void ValidateFeeQuoteResponse(
         ToriiFeeQuoteResponse response,
         FeePaymentIntent requestedIntent,
+        string requestedAuthority,
         string context)
     {
         ArgumentNullException.ThrowIfNull(response);
+        ArgumentNullException.ThrowIfNull(requestedIntent);
+        ArgumentException.ThrowIfNullOrEmpty(requestedAuthority);
         if (response.Intent is null)
         {
             throw new JsonException($"{context}.intent must not be null.");
@@ -4420,10 +4654,216 @@ public sealed partial class ToriiClient : IDisposable
         {
             throw new JsonException($"{context} component and capacity arrays must not be null.");
         }
+        if (response.Components.Any(static component => component is null)
+            || response.Capacities.Any(static capacity => capacity is null))
+        {
+            throw new JsonException($"{context} component and capacity arrays must not contain nulls.");
+        }
         if (!response.Components.SequenceEqual(response.Intent.ChargeLimits))
         {
             throw new JsonException($"{context}.components must equal the returned intent charge limits.");
         }
+
+        var decision = response.Decision.Value;
+        switch (response.Intent)
+        {
+            case AuthorityFeePaymentIntent:
+                if (!string.Equals(decision.DebitSource.Kind, "account", StringComparison.Ordinal)
+                    || decision.DebitSource.Value.ValueKind != JsonValueKind.String
+                    || !AccountIdsHaveSameIdentity(
+                        decision.DebitSource.Value.GetString(),
+                        requestedAuthority)
+                    || decision.ProgramRevision is not null)
+                {
+                    throw new JsonException(
+                        $"{context}.decision must debit the exact transaction authority with a null program revision.");
+                }
+                if (response.Capacities.Count != 0)
+                {
+                    throw new JsonException($"{context}.capacities must be empty for authority payment.");
+                }
+                break;
+            case SponsorFeePaymentIntent sponsor:
+                var decisionProgram = ParseFeeQuoteProgramId(
+                    decision.DebitSource,
+                    $"{context}.decision.value.debit_source");
+                if (decisionProgram != sponsor.ProgramId
+                    || decision.ProgramRevision != sponsor.ProgramRevision)
+                {
+                    throw new JsonException(
+                        $"{context}.decision must debit the exact sponsor program revision.");
+                }
+                ValidateFeeQuoteSponsorCapacities(response, context);
+                break;
+            default:
+                throw new JsonException($"{context}.intent has an unsupported payer.");
+        }
+    }
+
+    private static FeeSponsorProgramId ParseFeeQuoteProgramId(
+        ToriiFeeDebitSource source,
+        string context)
+    {
+        if (!string.Equals(source.Kind, "sponsor_program", StringComparison.Ordinal))
+        {
+            throw new JsonException($"{context}.kind must be sponsor_program.");
+        }
+        var program = FeePaymentIntentJsonConverter.RequireExactObject(
+            source.Value,
+            $"{context}.value",
+            ["sponsor", "name"]);
+        if (program["sponsor"].ValueKind != JsonValueKind.String
+            || program["name"].ValueKind != JsonValueKind.String)
+        {
+            throw new JsonException($"{context}.value must contain string sponsor and name fields.");
+        }
+        try
+        {
+            return new FeeSponsorProgramId(
+                program["sponsor"].GetString()!,
+                program["name"].GetString()!);
+        }
+        catch (ArgumentException exception)
+        {
+            throw new JsonException($"{context}.value is not an exact sponsor program id.", exception);
+        }
+    }
+
+    private static void ValidateFeeQuoteSponsorCapacities(
+        ToriiFeeQuoteResponse response,
+        string context)
+    {
+        if ((response.Components.Count == 0) != (response.Capacities.Count == 0))
+        {
+            throw new JsonException(
+                $"{context}.capacities must be empty exactly when sponsored components are empty.");
+        }
+
+        var requiredByAsset = new SortedDictionary<string, NumericV1.QuantityValue>(
+            StringComparer.Ordinal);
+        foreach (var component in response.Components)
+        {
+            var assetDefinitionId = RequireFeeQuoteAssetDefinitionId(
+                component.AssetDefinitionId,
+                $"{context}.components.asset_definition_id");
+            var amount = RequireFeeQuoteQuantity(
+                component.MaxAmount,
+                $"{context}.components.max_amount");
+            requiredByAsset[assetDefinitionId] = requiredByAsset.TryGetValue(
+                assetDefinitionId,
+                out var current)
+                ? AddFeeQuoteQuantities(current, amount)
+                : amount;
+        }
+        if (response.Capacities.Count != requiredByAsset.Count)
+        {
+            throw new JsonException(
+                $"{context}.capacities must contain one entry per sponsored fee asset.");
+        }
+
+        var index = 0;
+        foreach (var (assetDefinitionId, required) in requiredByAsset)
+        {
+            var capacity = response.Capacities[index];
+            var capacityContext = $"{context}.capacities[{index}]";
+            var observedAsset = RequireFeeQuoteAssetDefinitionId(
+                capacity.AssetDefinitionId,
+                $"{capacityContext}.asset_definition_id");
+            if (!string.Equals(observedAsset, assetDefinitionId, StringComparison.Ordinal))
+            {
+                throw new JsonException(
+                    $"{context}.capacities are duplicated, unrelated, or not in canonical asset order.");
+            }
+            var vaultBalance = RequireFeeQuoteQuantity(
+                capacity.VaultBalance,
+                $"{capacityContext}.vault_balance");
+            var reserveFloor = RequireFeeQuoteQuantity(
+                capacity.ReserveFloor,
+                $"{capacityContext}.reserve_floor");
+            if (CompareFeeQuoteQuantities(
+                    vaultBalance,
+                    AddFeeQuoteQuantities(reserveFloor, required)) < 0)
+            {
+                throw new JsonException(
+                    $"{capacityContext}.vault_balance cannot cover the reserve and aggregate charge.");
+            }
+            foreach (var (field, text) in new[]
+            {
+                ("block_remaining", capacity.BlockRemaining),
+                ("program_epoch_remaining", capacity.ProgramEpochRemaining),
+                ("beneficiary_epoch_remaining", capacity.BeneficiaryEpochRemaining),
+            })
+            {
+                if (CompareFeeQuoteQuantities(
+                        RequireFeeQuoteQuantity(text, $"{capacityContext}.{field}"),
+                        required) < 0)
+                {
+                    throw new JsonException(
+                        $"{capacityContext}.{field} cannot cover the aggregate charge.");
+                }
+            }
+            index++;
+        }
+    }
+
+    private static string RequireFeeQuoteAssetDefinitionId(string? value, string context)
+    {
+        try
+        {
+            var canonical = TransactionEncodingContext.CanonicalizeAssetDefinitionId(value!, context);
+            if (!string.Equals(canonical, value, StringComparison.Ordinal))
+            {
+                throw new ArgumentException("asset definition id is not canonical", context);
+            }
+            return canonical;
+        }
+        catch (ArgumentException exception)
+        {
+            throw new JsonException(
+                $"{context} must be an exact canonical asset-definition address.",
+                exception);
+        }
+    }
+
+    private static NumericV1.QuantityValue RequireFeeQuoteQuantity(string? value, string context)
+    {
+        try
+        {
+            return NumericV1.QuantityValue.ParseCanonical(value!);
+        }
+        catch (ArgumentException exception)
+        {
+            throw new JsonException($"{context} must be a canonical Quantity.", exception);
+        }
+    }
+
+    private static NumericV1.QuantityValue AddFeeQuoteQuantities(
+        NumericV1.QuantityValue left,
+        NumericV1.QuantityValue right)
+    {
+        var scale = Math.Max(left.Scale, right.Scale);
+        var leftMantissa = left.Mantissa * BigInteger.Pow(10, scale - left.Scale);
+        var rightMantissa = right.Mantissa * BigInteger.Pow(10, scale - right.Scale);
+        try
+        {
+            return NumericV1.QuantityValue.FromMantissa(leftMantissa + rightMantissa, scale);
+        }
+        catch (ArgumentException exception)
+        {
+            throw new JsonException(
+                "fee quote quantity aggregate exceeds the exact Quantity domain.",
+                exception);
+        }
+    }
+
+    private static int CompareFeeQuoteQuantities(
+        NumericV1.QuantityValue left,
+        NumericV1.QuantityValue right)
+    {
+        var scale = Math.Max(left.Scale, right.Scale);
+        var leftMantissa = left.Mantissa * BigInteger.Pow(10, scale - left.Scale);
+        var rightMantissa = right.Mantissa * BigInteger.Pow(10, scale - right.Scale);
+        return leftMantissa.CompareTo(rightMantissa);
     }
 
     private static void ValidateContractViewResponse(ToriiContractViewResponse response, string context)
@@ -4556,9 +4996,9 @@ public sealed partial class ToriiClient : IDisposable
         try
         {
             return AccountAddress.Parse(left)
-                .CanonicalBytes()
+                .ControllerBytes()
                 .AsSpan()
-                .SequenceEqual(AccountAddress.Parse(right).CanonicalBytes());
+                .SequenceEqual(AccountAddress.Parse(right).ControllerBytes());
         }
         catch (AccountAddressException)
         {
@@ -5862,6 +6302,27 @@ public sealed partial class ToriiClient : IDisposable
             response.ReasonPhrase);
     }
 
+    private static ToriiApiException CreateApiExceptionFromBody(
+        HttpResponseMessage response,
+        ReadOnlySpan<byte> body)
+    {
+        string responseBody;
+        try
+        {
+            responseBody = StrictUtf8.GetString(body);
+        }
+        catch (DecoderFallbackException)
+        {
+            responseBody = InvalidUtf8ResponseBody;
+        }
+
+        return new ToriiApiException(
+            response.StatusCode,
+            response.RequestMessage?.RequestUri,
+            responseBody,
+            response.ReasonPhrase);
+    }
+
     private static async Task<string> ReadStrictUtf8TextContentAsync(
         HttpContent content,
         string context,
@@ -6605,6 +7066,20 @@ public sealed partial class ToriiClient : IDisposable
         return options;
     }
 
+    private static JsonSerializerOptions CreateExactFeeResponseSerializerOptions()
+    {
+        var options = new JsonSerializerOptions(ToriiJsonSerializerContext.Default.Options)
+        {
+            AllowTrailingCommas = false,
+            MaxDepth = 128,
+            NumberHandling = JsonNumberHandling.Strict,
+            PropertyNameCaseInsensitive = false,
+            ReadCommentHandling = JsonCommentHandling.Disallow,
+            UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+        };
+        return options;
+    }
+
     private StringContent CreateJsonContent<TRequest>(TRequest request)
     {
         var json = JsonSerializer.Serialize(request, serializerOptions);
@@ -6656,45 +7131,13 @@ public sealed partial class ToriiClient : IDisposable
             nameof(claim.AccountId),
             chainDiscriminant: null);
 
-        string? nonceHex = null;
-        if (claim.PowNonceHex is not null)
-        {
-            nonceHex = ToriiAccountFaucetPow.RequireExactHex(
-                claim.PowNonceHex,
-                nameof(claim.PowNonceHex));
-            if (nonceHex.Length > 64)
-            {
-                throw new ArgumentException(
-                    "Faucet PoW nonce must not exceed 32 bytes.",
-                    nameof(claim.PowNonceHex));
-            }
-        }
-
-        if (claim.PowAnchorHeight is null)
-        {
-            throw new ArgumentException(
-                "Faucet PoW anchor height is required.",
-                nameof(claim.PowAnchorHeight));
-        }
-        if (claim.PowAnchorHeight.Value == 0)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(claim.PowAnchorHeight),
-                "Faucet PoW anchor height must be positive.");
-        }
-        if (nonceHex is null)
-        {
-            throw new ArgumentException(
-                "Faucet PoW nonce is required.",
-                nameof(claim.PowNonceHex));
-        }
-
-        return new ToriiAccountFaucetClaimV1
-        {
-            AccountId = accountId,
-            PowAnchorHeight = claim.PowAnchorHeight,
-            PowNonceHex = nonceHex,
-        };
+        var nonceHex = ToriiAccountFaucetMetadata.RequireFaucetNonceHex(
+            claim.PowNonceHex,
+            nameof(claim.PowNonceHex));
+        return new ToriiAccountFaucetClaimV1(
+            accountId,
+            claim.PowAnchorHeight,
+            nonceHex);
     }
 
     private static ToriiVpnQuoteCreateRequest NormalizeVpnQuoteCreateRequest(

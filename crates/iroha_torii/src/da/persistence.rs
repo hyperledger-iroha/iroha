@@ -42,6 +42,8 @@ const DA_RECEIPT_ARTIFACT_MAX_BYTES_V1: usize = 64 * 1024;
 const DA_RECEIPT_SIGNATURE_MAX_BYTES_V1: usize = 4 * 1024;
 /// First-release ceiling for one canonical DA manifest spool body.
 const DA_MANIFEST_ARTIFACT_MAX_BYTES_V1: usize = 2 * 1024 * 1024;
+/// First-release ceiling for one authorised DA pin-intent spool body.
+const DA_PIN_INTENT_ARTIFACT_MAX_BYTES_V1: usize = 2 * 1024 * 1024;
 const TICKET_ARTIFACTS_DIR: &str = "artifacts";
 const MANIFEST_ARTIFACT_FILE_NAME: &str = "manifest.norito";
 const PDP_COMMITMENT_ARTIFACT_FILE_NAME: &str = "pdp-commitment.norito";
@@ -2671,6 +2673,66 @@ pub(super) fn load_pdp_commitment_for_manifest_artifact(
     validate_pdp_commitment_spool_body_for_manifest(&bytes, manifest_hash)?;
     Ok(bytes)
 }
+pub(super) fn load_da_pin_intent(
+    spool_dir: &Path,
+    lane_id: LaneId,
+    epoch: u64,
+    sequence: u64,
+    storage_ticket: &StorageTicketId,
+    fingerprint: &ReplayFingerprint,
+) -> std::io::Result<DaPinIntent> {
+    if spool_dir.as_os_str().is_empty() {
+        return Err(std::io::Error::new(
+            ErrorKind::NotFound,
+            "DA pin-intent spool directory is not configured",
+        ));
+    }
+    validate_ticket_fingerprint(storage_ticket, fingerprint).map_err(|err| {
+        std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!("invalid DA pin-intent lookup tuple: {err}"),
+        )
+    })?;
+    if open_spool_dir_no_follow(spool_dir)?.is_none() {
+        return Err(std::io::Error::new(
+            ErrorKind::NotFound,
+            "DA pin-intent spool directory does not exist",
+        ));
+    }
+    let path = da_pin_intent_file_path(
+        spool_dir,
+        lane_id,
+        epoch,
+        sequence,
+        storage_ticket,
+        fingerprint,
+    );
+    let bytes = read_regular_spool_artifact(
+        &path,
+        "DA pin-intent artifact",
+        DA_PIN_INTENT_ARTIFACT_MAX_BYTES_V1,
+    )?;
+    let intent = decode_from_bytes::<DaPinIntent>(&bytes).map_err(|err| {
+        std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "failed to decode DA pin-intent artifact {}: {err}",
+                path.display()
+            ),
+        )
+    })?;
+    validate_pin_intent_artifact_inputs(&intent, lane_id, epoch, sequence, storage_ticket)
+        .map_err(|err| {
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "DA pin-intent artifact {} does not match its filename: {err}",
+                    path.display()
+                ),
+            )
+        })?;
+    Ok(intent)
+}
 fn load_ticket_artifact_path(
     spool_dir: &Path,
     ticket: &StorageTicketId,
@@ -2918,6 +2980,19 @@ fn validate_pin_intent_artifact_inputs(
     {
         return Err(invalid_artifact_input(
             "DA pin-intent artifact filename tuple does not match intent body",
+        ));
+    }
+    if intent.authorization.lane_id != intent.lane_id
+        || intent.authorization.epoch != intent.epoch
+        || intent.authorization.sequence != intent.sequence
+    {
+        return Err(invalid_artifact_input(
+            "DA pin-intent authorization tuple does not match intent body",
+        ));
+    }
+    if !intent.authorization.has_valid_canonical_signatures() {
+        return Err(invalid_artifact_input(
+            "DA pin-intent authorization signatures are invalid",
         ));
     }
     Ok(())
@@ -3199,16 +3274,31 @@ pub(super) fn persist_da_pin_intent(
         return Ok(None);
     }
     validate_pin_intent_artifact_inputs(intent, lane_id, epoch, sequence, storage_ticket)?;
+    validate_ticket_fingerprint(storage_ticket, fingerprint)?;
     create_spool_dir_no_follow(spool_dir)?;
     let lane = lane_id.as_u32();
     let ticket_hex = hex::encode(storage_ticket.as_ref());
     let fingerprint_hex = hex::encode(fingerprint.as_bytes());
-    let file_name = format!(
-        "da-pin-intent-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-{fingerprint_hex}.norito"
+    let target_path = da_pin_intent_file_path(
+        spool_dir,
+        lane_id,
+        epoch,
+        sequence,
+        storage_ticket,
+        fingerprint,
     );
-    let target_path = spool_dir.join(file_name);
     let encoded =
         to_bytes(intent).map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))?;
+    if encoded.len() > DA_PIN_INTENT_ARTIFACT_MAX_BYTES_V1 {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            format!(
+                "DA pin intent is {} bytes, exceeding the first-release {}-byte limit",
+                encoded.len(),
+                DA_PIN_INTENT_ARTIFACT_MAX_BYTES_V1
+            ),
+        ));
+    }
     if let Some(path) =
         existing_artifact_path_if_matching(&target_path, &encoded, "DA pin intent artifact")?
     {
@@ -3238,4 +3328,20 @@ pub(super) fn persist_da_pin_intent(
         "queued DA pin intent for registry ingestion"
     );
     Ok(Some(target_path))
+}
+
+fn da_pin_intent_file_path(
+    spool_dir: &Path,
+    lane_id: LaneId,
+    epoch: u64,
+    sequence: u64,
+    storage_ticket: &StorageTicketId,
+    fingerprint: &ReplayFingerprint,
+) -> PathBuf {
+    let lane = lane_id.as_u32();
+    let ticket_hex = hex::encode(storage_ticket.as_ref());
+    let fingerprint_hex = hex::encode(fingerprint.as_bytes());
+    spool_dir.join(format!(
+        "da-pin-intent-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-{fingerprint_hex}.norito"
+    ))
 }

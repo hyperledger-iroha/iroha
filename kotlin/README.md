@@ -9,7 +9,7 @@ Not published to Maven Central yet. Build locally and consume via `mavenLocal()`
 | Artifact | Type | Description |
 |----------|------|-------------|
 | `org.hyperledger.iroha.sdk:core-jvm` | JAR | Pure Kotlin/JVM models, codec, crypto, clients, and ABI-21/V4 artifact streaming |
-| `org.hyperledger.iroha.sdk:client-android` | AAR | Android keystore, device telemetry, IrohaKeyManager, shared JNI bridge for ML-DSA / offline flows |
+| `org.hyperledger.iroha.sdk:client-android` | AAR | Android keystore, device telemetry, IrohaKeyManager, shared JNI bridge for ML-DSA-65 / offline flows |
 | `org.hyperledger.iroha.sdk:offline-wallet-android` | AAR | Offline-wallet integration built on `client-android`; use this artifact for Android offline cash |
 
 ### Consumer usage
@@ -416,8 +416,10 @@ val instructionBox = cancel.toInstructionBox()
 ```
 
 The typed constructor derives the native `EscrowId` with Blake2b-256 and emits
-only `escrow_id` plus `expected_remaining_amount` under the registered
-`iroha_data_model::isi::escrow::CancelAssetLock` Norito wire name. The lock-ID
+only `escrow_id` plus `expected_remaining_amount`. The instruction pair uses
+the canonical `iroha.instruction.v1::escrow::CancelAssetLock` wire ID; its
+payload frame retains the concrete `iroha_data_model::isi::escrow::CancelAssetLock`
+Norito schema name. The lock-ID
 preimage must be nonempty exact text without surrounding whitespace or a BOM
 and is bounded by `CancelAssetLockInstruction.MAX_LOCK_ID_UTF8_BYTES_V1`
 (4,096 UTF-8 bytes, not characters); the on-wire `EscrowId` remains 32 bytes.
@@ -586,7 +588,7 @@ the generated native bridge task.
 
 ### Step 2: Build native libraries (for `client-android`)
 
-The `libconnect_norito_bridge.so` files are **not tracked in git** — they are built from the Rust crate at `crates/connect_norito_bridge` in the same iroha repository. The Gradle task now lives on `client-android`, which owns the shared native bridge used for ML-DSA signing and the typed Kagemusha lifecycle/artifact streaming. It defaults to `../..` as the iroha root (override via `iroha.dir` in `local.properties` if needed).
+The `libconnect_norito_bridge.so` files are **not tracked in git** — they are built from the Rust crate at `crates/connect_norito_bridge` in the same iroha repository. The Gradle task now lives on `client-android`, which owns the shared native bridge used for ML-DSA-65 signing and the typed Kagemusha lifecycle/artifact streaming. It defaults to `../..` as the iroha root (override via `iroha.dir` in `local.properties` if needed).
 
 **One-time setup:**
 
@@ -923,7 +925,7 @@ The original SDK shipped as a single monolith. This rewrite splits it into three
 
 - **`core-jvm`** — pure JVM, no Android framework dependency. Usable in Kotlin Multiplatform modules, JUnit tests without Robolectric, server-side tools, and admin panels. Contains all protocol logic: Norito codec, transaction building, client transport, connect protocol.
 
-- **`client-android`** — Android keystore integration, hardware-backed key generation, device telemetry, and the shared JNI bridge used for ML-DSA signing. Depends on `core-jvm` via `api()` — consumers get all core types transitively.
+- **`client-android`** — Android keystore integration, hardware-backed key generation, device telemetry, and the shared JNI bridge used for ML-DSA-65 signing. Depends on `core-jvm` via `api()` — consumers get all core types transitively.
 
 ### Null safety
 

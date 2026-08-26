@@ -992,6 +992,53 @@ pub fn visit_committed_transactions_bounded(
         |transaction, matches, _| visitor(transaction, matches),
     )
 }
+/// Visit committed transactions with both per-carrier and cumulative physical-work bounds.
+///
+/// Every touched carrier consumes at least one unit even when it contains no
+/// transactions. Declared and reconciled merge work consumes its actual unit
+/// count. This variant is intended for endpoints whose predicate cannot use a
+/// positive Kura index and whose visitor must otherwise inspect the complete
+/// selected history.
+///
+/// # Errors
+///
+/// Returns [`QueryExecutionFail::GasBudgetExceeded`] before resolving a carrier
+/// that exceeds either work bound, [`QueryExecutionFail::FetchSizeTooBig`] for
+/// zero or non-canonical limits, or propagates durable history failures.
+pub fn visit_committed_transactions_with_work_budget(
+    state_ro: &impl StateReadOnly,
+    filter: CompoundPredicate<CommittedTransaction>,
+    max_carrier_projection_work: u64,
+    max_total_projection_work: u64,
+    mut visitor: impl FnMut(CommittedTransaction, bool) -> Result<ControlFlow<()>, QueryExecutionFail>,
+) -> Result<bool, QueryExecutionFail> {
+    let canonical_max = iroha_data_model::query::parameters::MAX_FETCH_SIZE.get();
+    if max_carrier_projection_work == 0
+        || max_carrier_projection_work > canonical_max
+        || max_total_projection_work == 0
+        || max_total_projection_work > canonical_max
+    {
+        return Err(QueryExecutionFail::FetchSizeTooBig);
+    }
+    let mut total_projection_work = 0_u64;
+    visit_committed_transactions(
+        state_ro,
+        &filter,
+        TransactionHistoryAnchor::capture(state_ro),
+        None,
+        |work| {
+            if work > max_carrier_projection_work {
+                return Err(QueryExecutionFail::GasBudgetExceeded);
+            }
+            total_projection_work = total_projection_work
+                .checked_add(work.max(1))
+                .filter(|total| *total <= max_total_projection_work)
+                .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
+            Ok(())
+        },
+        |transaction, matches, _| visitor(transaction, matches),
+    )
+}
 /// Collect a small committed-transaction snapshot within explicit retention bounds.
 ///
 /// Carrier work is bounded independently before sidecar resolution. Transactions are visited
@@ -2096,6 +2143,67 @@ pub(crate) mod tests {
             .expect("each carrier fits independently within the projection bound");
         assert!(exhausted);
         assert!(visited > 2, "the scan crossed multiple bounded carriers");
+    }
+    #[test]
+    fn cumulative_transaction_visitor_bounds_chain_age_and_projection_work() {
+        let fixture = merge_query_fixture();
+        let state_view = fixture.sandbox.state.view();
+        state_view.kura().reset_merge_query_read_counters_for_test();
+        let false_filter = CompoundPredicate::<CommittedTransaction>::build(|prototype| {
+            prototype.equals("field_that_does_not_exist", true)
+        });
+        let mut visited = 0_usize;
+        let error = visit_committed_transactions_with_work_budget(
+            &state_view,
+            false_filter,
+            2,
+            3,
+            |_, matches| {
+                assert!(!matches);
+                visited = visited.saturating_add(1);
+                Ok(ControlFlow::Continue(()))
+            },
+        )
+        .expect_err("a second two-entry carrier must exceed cumulative work three");
+        assert_eq!(error, QueryExecutionFail::GasBudgetExceeded);
+        assert_eq!(visited, 2, "only the first carrier may be projected");
+        assert_eq!(
+            state_view.kura().merge_query_read_counters_for_test(),
+            (0, 0, 1),
+            "the over-budget carrier must be rejected before sidecar resolution",
+        );
+    }
+    #[test]
+    fn cumulative_transaction_visitor_charges_empty_carriers() {
+        let mut sandbox = Sandbox::default();
+        let genesis = Arc::new(empty_query_block(None));
+        sandbox
+            .state
+            .kura()
+            .store_block(Arc::clone(&genesis))
+            .expect("store empty query genesis");
+        sandbox.state.push_block_hash_for_testing(genesis.hash());
+        let mut previous = genesis;
+        for _ in 0..3 {
+            let carrier = Arc::new(empty_query_block(Some(previous.as_ref())));
+            sandbox
+                .state
+                .kura()
+                .store_block(Arc::clone(&carrier))
+                .expect("store empty query carrier");
+            sandbox.state.push_block_hash_for_testing(carrier.hash());
+            previous = carrier;
+        }
+        let state_view = sandbox.state.view();
+        let error = visit_committed_transactions_with_work_budget(
+            &state_view,
+            CompoundPredicate::PASS,
+            1,
+            2,
+            |_, _| panic!("empty carriers must not project transactions"),
+        )
+        .expect_err("three empty carriers must exceed cumulative work two");
+        assert_eq!(error, QueryExecutionFail::GasBudgetExceeded);
     }
     #[test]
     fn transaction_budget_rejects_large_sidecar_before_resolve_or_decode() {

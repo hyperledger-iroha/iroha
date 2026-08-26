@@ -53,7 +53,8 @@ pub struct KaigiRelayManifest {
 
 pub struct KaigiRelayHop {
     pub relay_id: AccountId,
-    /// Non-empty encoded HPKE public key bytes for the relay's negotiated suite.
+    /// Non-empty encoded HPKE public key bytes for the relay's negotiated suite
+    /// (at most 4 KiB in V1).
     pub hpke_public_key: Vec<u8>,
     pub weight: u8,
 }
@@ -121,13 +122,22 @@ and the signed transaction authority must share the active account-id rekey
 lineage of the host or a current transparent roster participant. Lineage and
 roster checks use one generation-consistent state snapshot at its authenticated
 committed ledger time; malformed or ambiguous live lineage fails closed.
+An omitted signal kind projects as `signal`; an explicitly empty kind or one
+padded by the Unicode `White_Space` property is malformed and is not projected.
+The kind remains an open string vocabulary rather than a closed WebRTC enum:
+Torii folds ASCII `A`-`Z` to lowercase and otherwise preserves the exact code
+points, while SDK response decoders require that normalized spelling.
+Camel-case and snake-case metadata aliases are accepted only when their values
+are identical; conflicting call, kind, timestamp, or advertised-identity
+aliases are malformed.
 The projection rejects non-signal and wrong-call transactions before resolving
 their authorities, and caps the remaining distinct-authority lineage cache at
 the canonical per-query fetch budget so unrelated ledger history cannot grow
 request memory without bound.
 Only unique, live, explicitly proven account-ID rekey successors of the stored
-host or current transparent participants qualify; ordinary alias reassignment
-and revoked or expired lineage do not.
+host or current transparent participants qualify; the historical stored ID is
+not a bypass when its lineage is no longer live. Ordinary alias reassignment and
+revoked or expired lineage do not qualify.
 Private calls remain host-only while private roster joins are disabled. Because
 projecting the signal history scans committed
 transactions, the route is classified as expensive compute and requires a
@@ -143,7 +153,10 @@ or surfacing signals outside the call's lifetime.
 Private responses omit the signed authority and remove the
 canonical host/participant identity fields from both the response projection
 and its returned metadata. Call reads also reject a stored record whose embedded
-identifier does not match the domain metadata key requested by the client.
+identifier does not match the domain metadata key requested by the client, or
+whose retained relay manifest violates the V1 hop, key, weight, or uniqueness
+constraints. Core mutation paths enforce the same retained-record validation
+before authorization or state changes.
 
 ## `CreateKaigi`
 
@@ -157,7 +170,7 @@ identifier does not match the domain metadata key requested by the client.
 - Require the signed host to be a registered account. An explicit
   `billing_account` must identify that same host; third-party billing remains
   unavailable until a delegated billing authorization is defined.
-- If a `relay_manifest` is supplied, enforce ≥3 hops, non-zero weights, HPKE key presence, exact identifier uniqueness, typed account-rekey-lineage uniqueness, and an expiry strictly after the current block time. Every hop must also be allowed by any configured governance allowlist and have a stored descriptor with the exact relay identifier, a non-zero bandwidth class, and the same HPKE key; creation and later manifest replacement use the same admission checks. A retired and successor relay ID therefore cannot fill two route positions.
+- If a `relay_manifest` is supplied, enforce 3–8 hops, non-zero weights, HPKE key presence bounded to 4 KiB, exact identifier uniqueness, typed account-rekey-lineage uniqueness, and an expiry strictly after the current block time. Every hop must also be allowed by any configured governance allowlist and have a stored descriptor with the exact relay identifier, a non-zero bandwidth class, and the same HPKE key; creation and later manifest replacement use the same admission checks. A retired and successor relay ID therefore cannot fill two route positions.
 - Validate `room_policy` input from SDKs/CLI (`public` vs `authenticated`) and retain it as on-chain SoraNet intent. Hosts wire this via `iroha kaigi create --room-policy …`, the JS SDK’s `roomPolicy` field, or by setting `room_policy` when Swift clients assemble the Norito payload prior to submission. V1 disables every token-bearing filesystem exit route until RouteOpen binds a viewer credential and authoritative segment proof and the producer provides durable revocation.
 - Starts with an empty participant-commitment log. If the host supplies the
   optional privacy proof at creation, stores the host commitment and records
@@ -274,13 +287,13 @@ Hosts can still submit transparent totals; privacy mode only makes the commitmen
 
 ## Relay Registration
 
-- Relays self-register as domain metadata entries `kaigi_relay__<account-digest>` including HPKE key material and bandwidth class. Native domain registration and generic metadata ISIs reject attempts to seed, overwrite, or remove these reserved entries; relay descriptors must use `RegisterKaigiRelay`. The signed relay account must be registered and have a live domain-qualified primary alias; that authenticated primary alias, not a global allowlist scan, selects the descriptor's governance domain. Aliasless or domainless-primary relays fail closed. While relay state exists, primary-alias changes may stay within that storage domain but cannot clear or move to another domain; account/domain removal likewise fails while protected Kaigi dependencies remain.
+- Relays self-register as domain metadata entries `kaigi_relay__<account-digest>` including HPKE key material and bandwidth class. V1 rejects empty keys and encoded keys larger than 4 KiB before metadata persistence or event emission; the opaque ceiling accommodates the current ML-KEM suites while bounding ledger and subscriber work until the descriptor carries an explicit suite tag. Native domain registration and generic metadata ISIs reject attempts to seed, overwrite, or remove these reserved entries; relay descriptors must use `RegisterKaigiRelay`. The signed relay account must be registered and have a live domain-qualified primary alias; that authenticated primary alias, not a global allowlist scan, selects the descriptor's governance domain. Aliasless or domainless-primary relays fail closed. While relay state exists, primary-alias changes may stay within that storage domain but cannot clear or move to another domain; account/domain removal likewise fails while protected Kaigi dependencies remain.
 - The `RegisterKaigiRelay` instruction persists the descriptor in domain metadata, emits a `KaigiRelayRegistered` summary (with HPKE fingerprint and bandwidth class), and can be re-invoked to rotate keys deterministically.
 - Governance can curate allowlists through domain metadata (`kaigi_relay_allowlist`); when an allowlist is configured, relay registration and manifest updates enforce membership before accepting new paths. Membership follows only a unique, explicitly typed account-ID rekey lineage, including retained canonical `AccountIdRekey` edges after lease expiry or reassignment, so a retired allowlist entry can authorize its valid successor without granting authority to an independent alias assignee. The relay itself still needs a live domain-qualified primary alias, and malformed allowlists in unrelated domains are never consulted.
 
 ## Manifest Creation
 
-- Hosts build multi-hop paths (minimum length 3) from available relays. The manifest encodes the sequence of AccountIds and the HPKE public keys required to encrypt the layered envelope.
+- Hosts build multi-hop paths of 3–8 relays from available registrations. Together with the 4 KiB per-key ceiling, the V1 route bound caps embedded public-key material at 32 KiB. The manifest encodes the sequence of AccountIds and the HPKE public keys required to encrypt the layered envelope.
 - `relay_manifest` stored on-chain contains hop descriptors and expiry (Norito-encoded `KaigiRelayManifest`); actual ephemeral keys and per-session offsets are exchanged off-ledger using HPKE.
 
 ## Signalling & Media
@@ -290,7 +303,7 @@ Hosts can still submit transparent totals; privacy mode only makes the commitmen
 
 ## Failover
 
-- Clients monitor relay health via the `ReportKaigiRelayHealth` instruction, which persists signed feedback in domain metadata (`kaigi_relay_feedback__<account-digest>`), broadcasts `KaigiRelayHealthUpdated`, and allows governance/hosts to reason about current availability. Stored feedback must embed the relay identifier selected by its metadata key. The global latest-observation singleton is strictly ordered by `reported_at_ms`: future timestamps beyond the current block time and older reports are rejected, every non-identical equal-timestamp report is rejected across calls, and an exact duplicate is an event-free idempotent no-op. Feedback is diagnostic and does not override relay governance or manifest admission; when a relay fails, the host issues an updated manifest and logs a `KaigiRelayManifestUpdated` event (see below).
+- Clients monitor relay health via the `ReportKaigiRelayHealth` instruction, which persists signed feedback in domain metadata (`kaigi_relay_feedback__<account-digest>`), broadcasts `KaigiRelayHealthUpdated`, and allows governance/hosts to reason about current availability. The summary carries the relay's owning governance domain separately from the originating call ID, so relay-domain SSE filters remain correct when a call uses a cross-domain relay. Stored feedback must embed the relay identifier selected by its metadata key. The global latest-observation singleton is strictly ordered by `reported_at_ms`: future timestamps beyond the current block time and older reports are rejected, every non-identical equal-timestamp report is rejected across calls, and an exact duplicate is an event-free idempotent no-op. Feedback is diagnostic and does not override relay governance or manifest admission; when a relay fails, the host issues an updated manifest and logs a `KaigiRelayManifestUpdated` event (see below).
 - Hosts apply manifest changes on-ledger through the `SetKaigiRelayManifest` instruction, which replaces the stored path or clears it entirely. Clearing emits a summary with `hop_count = 0` so operators can observe the transition back to direct routing.
 - Prometheus metrics (`kaigi_relay_registered_total`, `kaigi_relay_registration_bandwidth_class`, `kaigi_relay_manifest_updates_total`, `kaigi_relay_manifest_updates_by_domain_total`, `kaigi_relay_manifest_hop_count`, `kaigi_relay_health_reports_total`, `kaigi_relay_health_reports_by_domain_total`, `kaigi_relay_health_state`, `kaigi_relay_failover_total`, `kaigi_relay_failovers_by_domain_total`, `kaigi_relay_failover_hop_count`) now surface relay churn, health status, and failover cadence for operator dashboards. The domain-only counters back bounded diagnostic snapshots without collecting the dimensioned Prometheus label families.
 

@@ -174,7 +174,9 @@ use iroha_data_model::{
     transaction::signed::{SignedTransaction, TransactionEntrypoint, TransactionResult},
 };
 use iroha_executor_data_model::permission::{
-    nft::CanModifyNftMetadata, sorafs::CanOperateSorafsRepair, trigger::CanExecuteTrigger,
+    nft::CanModifyNftMetadata,
+    sorafs::CanOperateSorafsRepair,
+    trigger::{CanExecuteTrigger, CanRegisterTrigger},
 };
 use iroha_file_mmap::ReadOnlyMmap;
 use iroha_logger::prelude::*;
@@ -428,7 +430,10 @@ use crate::{
     role::RoleIdWithOwner,
     settlement::SettlementEngine,
     smartcontracts::{
-        isi::{triggers::trigger_is_enabled, world::isi::apply_policy_if_due},
+        isi::{
+            triggers::{TRIGGER_ENABLED_METADATA_KEY, trigger_is_enabled},
+            world::isi::apply_policy_if_due,
+        },
         ivm::cache::{
             CacheStats, IvmCache, PreparedContractCache, PreparedContractCacheStats, ProgramSummary,
         },
@@ -1507,53 +1512,18 @@ struct AccountPermissionSummary {
     reg_trigger_authorities: std::collections::BTreeSet<iroha_data_model::account::AccountId>,
     exec_trigger_ids: std::collections::BTreeSet<iroha_data_model::trigger::TriggerId>,
 }
-pub(crate) fn parse_permission_account_field(
-    world: &impl WorldReadOnly,
-    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
-    payload: &iroha_primitives::json::Json,
-    field: &str,
-    now_ms: u64,
-) -> Result<Option<iroha_data_model::account::AccountId>, crate::sns::SnsError> {
-    let Ok(value) = norito::json::parse_value(payload.get()) else {
-        return Ok(None);
-    };
-    let map = match value {
-        norito::json::Value::Object(map) => map,
-        _ => return Ok(None),
-    };
-    let Some(entry) = map.get(field) else {
-        return Ok(None);
-    };
-    let literal = match entry {
-        norito::json::Value::String(value) => value.as_str(),
-        _ => return Ok(None),
-    };
-    crate::block::parse_account_literal_with_world(world, dataspace_catalog, literal, now_ms)
-}
 impl AccountPermissionSummary {
     fn clear(&mut self) {
         self.hydrated = false;
         self.reg_trigger_authorities.clear();
         self.exec_trigger_ids.clear();
     }
-    fn apply_grant(
-        &mut self,
-        world: &impl WorldReadOnly,
-        dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
-        _permission_owner: &AccountId,
-        permission: &Permission,
-        now_ms: u64,
-    ) {
+    fn apply_grant(&mut self, permission: &Permission) {
         match permission.name() {
             "CanRegisterTrigger" => {
-                if let Ok(Some(authority)) = parse_permission_account_field(
-                    world,
-                    dataspace_catalog,
-                    permission.payload(),
-                    "authority",
-                    now_ms,
-                ) {
-                    self.reg_trigger_authorities.insert(authority);
+                if let Ok(decoded) = CanRegisterTrigger::try_from(permission) {
+                    self.reg_trigger_authorities
+                        .insert(decoded.authority.clone());
                 }
             }
             "CanExecuteTrigger" => {
@@ -12304,6 +12274,8 @@ pub struct StateTransaction<'block, 'state> {
     /// State telemetry
     #[cfg(feature = "telemetry")]
     pub telemetry: &'state StateTelemetry,
+    /// Transaction-local operator-status updates, published only by [`Self::apply`].
+    public_lane_staking_status_overlay: crate::sumeragi::status::PublicLaneStakingStatusOverlay,
     pub(crate) _curr_block: BlockHeader,
     #[cfg(feature = "zk-preverify")]
     pub(crate) zk_dedup: &'block mut crate::zk::DedupCache,
@@ -38604,6 +38576,24 @@ impl State {
                 .map_err(|error| LaneLifecycleError::ConfiguredCatalogBaseline(error.to_string()))
         }
     }
+    fn ensure_emergency_fast_restored_catalogs_match(
+        restored: &iroha_config::parameters::actual::Nexus,
+        requested: &iroha_config::parameters::actual::Nexus,
+    ) -> Result<(), LaneLifecycleError> {
+        if requested.lane_catalog != restored.lane_catalog {
+            return Err(LaneLifecycleError::ConfiguredCatalogBaseline(
+                "emergency Fast configuration differs from the restored runtime lane catalog"
+                    .to_owned(),
+            ));
+        }
+        if requested.dataspace_catalog != restored.dataspace_catalog {
+            return Err(LaneLifecycleError::ConfiguredCatalogBaseline(
+                "emergency Fast configuration differs from the restored runtime dataspace catalog"
+                    .to_owned(),
+            ));
+        }
+        Ok(())
+    }
     /// Install Nexus configuration sourced from this process's validated startup configuration.
     ///
     /// Unlike [`Self::set_nexus`], this is the single boundary allowed to establish the immutable
@@ -38619,13 +38609,7 @@ impl State {
         mut nexus: iroha_config::parameters::actual::Nexus,
     ) -> Result<(), LaneLifecycleError> {
         if self.kura.emergency_fast_startup_enabled() && self.nexus_runtime_restored_from_snapshot {
-            let restored_catalog = self.nexus.get_mut().lane_catalog.clone();
-            if nexus.lane_catalog != restored_catalog {
-                return Err(LaneLifecycleError::ConfiguredCatalogBaseline(
-                    "emergency Fast configuration differs from the restored runtime lane catalog"
-                        .to_owned(),
-                ));
-            }
+            Self::ensure_emergency_fast_restored_catalogs_match(self.nexus.get_mut(), &nexus)?;
             nexus.lane_config =
                 iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
             *self.nexus.get_mut() = nexus;
@@ -39260,6 +39244,16 @@ impl State {
                 }
             };
         let is_stale_dataspace_permission = |permission: &Permission| {
+            if let Ok(permission) =
+                iroha_executor_data_model::permission::query::CanReadRestrictedDataspace::try_from(
+                    permission,
+                )
+            {
+                return !dataspace_ids.contains(&permission.dataspace);
+            }
+            if let Ok(permission) = iroha_executor_data_model::permission::asset::CanSetAssetTransferDailyLimit::try_from(permission) {
+                return !dataspace_ids.contains(&permission.account_dataspace);
+            }
             if let Ok(permission) =
                 iroha_executor_data_model::permission::account::CanResolveAccountAlias::try_from(
                     permission,
@@ -46263,6 +46257,8 @@ impl<'state> StateBlock<'state> {
             query_ledger_time_ms: self.query_ledger_time_ms,
             #[cfg(feature = "telemetry")]
             telemetry: self.telemetry,
+            public_lane_staking_status_overlay:
+                crate::sumeragi::status::begin_public_lane_staking_status_overlay(),
             _curr_block: self._curr_block,
             #[cfg(feature = "zk-preverify")]
             zk_dedup: &mut self.zk_dedup,
@@ -50290,6 +50286,115 @@ impl<'state> StateBlock<'state> {
             },
         )
     }
+    /// Execute deterministic pipeline callbacks in independent rollback boundaries.
+    ///
+    /// A user callback failure must not invalidate the consensus block that produced
+    /// the event. Failed callbacks are disabled in a fresh transaction after their
+    /// partial effects are discarded, while healthy callbacks remain applied.
+    pub(crate) fn execute_pipeline_triggers_isolated(
+        &mut self,
+        events: impl IntoIterator<Item = PipelineEventBox>,
+    ) -> Vec<(TriggerId, TransactionResultInner)> {
+        let mut next_step_index = 0_u32;
+        let mut outcomes = Vec::new();
+
+        for pipeline_event in events {
+            let matched: Vec<_> = self
+                .world
+                .triggers
+                .match_pipeline_event(&pipeline_event, self._curr_block.height().get())
+                .collect();
+            for trg_id in matched {
+                if self.gas_limit_per_block != 0
+                    && self.gas_used_in_block >= self.gas_limit_per_block
+                {
+                    warn!(
+                        gas_used = self.gas_used_in_block,
+                        gas_limit = self.gas_limit_per_block,
+                        "pipeline trigger gas budget exhausted for block"
+                    );
+                    return outcomes;
+                }
+                let Some(action) = self
+                    .world
+                    .triggers
+                    .pipeline_triggers()
+                    .get(&trg_id)
+                    .cloned()
+                else {
+                    continue;
+                };
+                let authority = action.authority().clone();
+                #[cfg(feature = "zk-preverify")]
+                let zk_dedup_checkpoint = self.zk_dedup.clone();
+                let witness_overlay = crate::sumeragi::witness::begin_exec_witness_overlay();
+                let mut transaction = self.transaction();
+                let result =
+                    transaction.execute_pipeline_trigger(&trg_id, &pipeline_event, next_step_index);
+                let gas_used = transaction.last_tx_gas_used;
+                match result {
+                    Ok(steps) => {
+                        let advance = u32::try_from(steps.len().max(1)).unwrap_or(u32::MAX);
+                        next_step_index = next_step_index.saturating_add(advance);
+                        transaction.apply();
+                        witness_overlay.commit();
+                        self.gas_used_in_block = self.gas_used_in_block.saturating_add(gas_used);
+                        outcomes.push((trg_id, Ok(steps)));
+                    }
+                    Err(reason) => {
+                        // Roll back the WSV overlay and every callback-local side channel before
+                        // applying the deterministic quarantine record.
+                        drop(transaction);
+                        drop(witness_overlay);
+                        #[cfg(feature = "zk-preverify")]
+                        {
+                            self.zk_dedup = zk_dedup_checkpoint;
+                        }
+                        self.gas_used_in_block = self.gas_used_in_block.saturating_add(gas_used);
+                        let entrypoint_hash = TimeTriggerEntrypoint {
+                            id: trg_id.clone(),
+                            instructions: ConstVec::new_empty().into(),
+                            authority,
+                        }
+                        .hash_as_entrypoint();
+                        let failure_event = TriggerCompletedEvent::new(
+                            trg_id.clone(),
+                            entrypoint_hash,
+                            next_step_index,
+                            TriggerCompletedOutcome::Failure(reason.to_string()),
+                        );
+                        let mut quarantine = self.transaction();
+                        let enabled_key = TRIGGER_ENABLED_METADATA_KEY
+                            .parse::<Name>()
+                            .expect("trigger enabled metadata key must be valid");
+                        let disabled = quarantine
+                            .world
+                            .triggers
+                            .inspect_by_id_mut(&trg_id, |action| {
+                                action
+                                    .metadata_mut()
+                                    .insert(enabled_key.clone(), Json::from(false));
+                            })
+                            .is_some();
+                        quarantine
+                            .world
+                            .external_event_buf
+                            .push(failure_event.into());
+                        quarantine.apply();
+                        warn!(
+                            trigger_id = %trg_id,
+                            disabled,
+                            reason = ?reason,
+                            "pipeline trigger failed; partial effects rolled back and trigger disabled"
+                        );
+                        next_step_index = next_step_index.saturating_add(1);
+                        outcomes.push((trg_id, Err(reason)));
+                    }
+                }
+            }
+        }
+        outcomes
+    }
     fn time_trigger_nft_seq_base(block_height: u64, invocation_index: usize) -> u64 {
         let height_part = u32::try_from(block_height).unwrap_or(u32::MAX) as u128;
         let index_part = u32::try_from(invocation_index).unwrap_or(u32::MAX) as u128;
@@ -50366,10 +50471,7 @@ impl<'state> StateBlock<'state> {
         // subscription billing scheduling its next charge. The fresh action has
         // its own repeat budget and must not be consumed by this invocation.
         if !registered_in_current_block {
-            transaction
-                .world
-                .triggers
-                .decrease_repeats([trg_id].into_iter());
+            transaction.decrease_trigger_repeats_and_cleanup(trg_id);
         }
         transaction.apply();
         (entrypoint, Ok(trigger_sequence))
@@ -56674,6 +56776,7 @@ impl StateTransaction<'_, '_> {
             current_lane_id,
             #[cfg(feature = "telemetry")]
             telemetry,
+            public_lane_staking_status_overlay,
             ..
         } = self;
         if let Some(pending) = pending_lane_lifecycle {
@@ -56783,6 +56886,7 @@ impl StateTransaction<'_, '_> {
         committed_topology.apply();
         block_hashes.apply();
         world.apply();
+        public_lane_staking_status_overlay.commit();
     }
     /// Get and cache the `NumericSpec` for an asset definition within this transaction.
     /// Fetch the numeric specification for a given asset definition.
@@ -56863,6 +56967,19 @@ impl StateTransaction<'_, '_> {
         self.last_logo_present = Some((def_id.clone(), present));
         Ok(present)
     }
+    /// Consume one finite trigger repetition and revoke every capability tied to
+    /// the trigger id when that consumption removes the trigger.
+    fn decrease_trigger_repeats_and_cleanup(&mut self, id: &TriggerId) -> bool {
+        let removed = self.world.triggers.decrease_repeats([id].into_iter());
+        if !removed.is_empty() {
+            let removed_ids = removed.iter().cloned().collect();
+            crate::smartcontracts::isi::triggers::isi::remove_trigger_associated_permissions_for_ids(
+                self,
+                &removed_ids,
+            );
+        }
+        removed.contains(id)
+    }
     /// Execute a called trigger, staging its state changes.
     ///
     /// Returns the execution step on success, or the rejection reason on failure.
@@ -56925,7 +57042,7 @@ impl StateTransaction<'_, '_> {
         // transaction overlay.
         self.world.external_event_buf.push(event.clone().into());
         // Decrease repeats and prune depleted triggers.
-        self.world.triggers.decrease_repeats([id].into_iter());
+        self.decrease_trigger_repeats_and_cleanup(id);
         Ok(step)
     }
     /// Execute deterministic pipeline triggers, staging their state changes.
@@ -56938,43 +57055,81 @@ impl StateTransaction<'_, '_> {
             let matched: Vec<_> = self
                 .world
                 .triggers
-                .match_pipeline_event(&pipeline_event)
-                .map(|(id, _)| id)
+                .match_pipeline_event(&pipeline_event, self._curr_block.height().get())
                 .collect();
             for trg_id in matched {
-                let Some(action) = self
-                    .world
-                    .triggers
-                    .pipeline_triggers()
-                    .get(&trg_id)
-                    .cloned()
-                else {
-                    continue;
-                };
-                if !trigger_is_enabled(action.metadata()) || action.repeats.is_depleted() {
-                    continue;
-                }
                 let step_index = u32::try_from(steps.len()).unwrap_or(u32::MAX);
-                let step = self.execute_trigger(
+                steps.extend(self.execute_pipeline_trigger(
                     &trg_id,
-                    action.authority(),
-                    action.executable(),
-                    EventBox::Pipeline(pipeline_event.clone()),
+                    &pipeline_event,
                     step_index,
-                    None,
-                )?;
-                self.world.triggers.decrease_repeats([&trg_id].into_iter());
-                let chained = self.execute_data_triggers_dfs_from(
-                    action.authority(),
-                    step_index.saturating_add(1),
-                )?;
-                steps.push(DataTriggerStep {
-                    id: trg_id,
-                    instructions: step,
-                });
-                steps.extend(chained);
+                )?);
             }
         }
+        Ok(steps)
+    }
+    /// Execute one pipeline trigger inside the caller's transaction boundary.
+    fn execute_pipeline_trigger(
+        &mut self,
+        trg_id: &TriggerId,
+        pipeline_event: &PipelineEventBox,
+        step_index: u32,
+    ) -> TransactionResultInner {
+        let Some(action) = self.world.triggers.pipeline_triggers().get(trg_id).cloned() else {
+            return Ok(Vec::new());
+        };
+        if !trigger_is_enabled(action.metadata())
+            || action.repeats.is_depleted()
+            || !action.filter.matches(pipeline_event)
+        {
+            return Ok(Vec::new());
+        }
+        let registered_before_current_block = "__registered_block_height"
+            .parse::<Name>()
+            .ok()
+            .and_then(|key| action.metadata().get(&key))
+            .and_then(|json| json.try_into_any_norito::<u64>().ok())
+            .is_some_and(|height| height < self._curr_block.height().get());
+        // Matching takes an ID snapshot before callbacks run. A preceding callback
+        // may replace a later ID, so revalidate the freshly loaded action and never
+        // execute an incarnation registered by this block.
+        if !registered_before_current_block {
+            return Ok(Vec::new());
+        }
+        let step = self.execute_trigger(
+            trg_id,
+            action.authority(),
+            action.executable(),
+            EventBox::Pipeline(pipeline_event.clone()),
+            step_index,
+            None,
+        )?;
+        let registered_in_current_block = self
+            .world
+            .triggers
+            .pipeline_triggers()
+            .get(trg_id)
+            .and_then(|current_action| {
+                let key = "__registered_block_height".parse::<Name>().ok()?;
+                current_action
+                    .metadata()
+                    .get(&key)
+                    .and_then(|json| json.try_into_any_norito::<u64>().ok())
+            })
+            .is_some_and(|height| height == self._curr_block.height().get());
+        // The body may replace its own id. Do not debit the freshly registered
+        // incarnation for an invocation of the prior action.
+        if !registered_in_current_block {
+            self.decrease_trigger_repeats_and_cleanup(trg_id);
+        }
+        let chained =
+            self.execute_data_triggers_dfs_from(action.authority(), step_index.saturating_add(1))?;
+        let mut steps = Vec::with_capacity(chained.len().saturating_add(1));
+        steps.push(DataTriggerStep {
+            id: trg_id.clone(),
+            instructions: step,
+        });
+        steps.extend(chained);
         Ok(steps)
     }
     /// Perform a depth-first traversal of the trigger execution path, staging state changes.
@@ -57060,8 +57215,10 @@ impl StateTransaction<'_, '_> {
                 step_index,
                 None,
             )?;
-            let depleted = self.world.triggers.decrease_repeats([&trg_id].into_iter());
-            stack.retain(|(_, trg_id, _)| !depleted.contains(trg_id));
+            let depleted = self.decrease_trigger_repeats_and_cleanup(&trg_id);
+            if depleted {
+                stack.retain(|(_, pending_id, _)| pending_id != &trg_id);
+            }
             let step = DataTriggerStep {
                 id: trg_id,
                 instructions: step,
@@ -58254,11 +58411,9 @@ impl StateTransaction<'_, '_> {
     }
     fn build_permission_summary(&mut self, account: &AccountId) -> AccountPermissionSummary {
         let world = &self.world;
-        let dataspace_catalog = &self.nexus.dataspace_catalog;
-        let now_ms = self.block_unix_timestamp_ms();
         let mut summary = AccountPermissionSummary::default();
         let mut merge_permission = |permission: &Permission| {
-            summary.apply_grant(world, dataspace_catalog, account, permission, now_ms);
+            summary.apply_grant(permission);
         };
         if let Some(perms) = world.account_permissions.get(account) {
             for permission in perms {
@@ -58293,9 +58448,7 @@ impl StateTransaction<'_, '_> {
     }
     /// Fast check: does `caller` have `CanRegisterTrigger{authority}` for `owner`?
     pub fn can_register_trigger_for(&mut self, caller: &AccountId, owner: &AccountId) -> bool {
-        let set = self.cached_reg_trigger_authorities(caller);
-        set.iter()
-            .any(|authority| authority.subject_id() == owner.subject_id())
+        self.cached_reg_trigger_authorities(caller).contains(owner)
     }
     /// Fast check: does `caller` have `CanExecuteTrigger{trigger_id}` for `id`?
     pub fn can_execute_trigger_for(&mut self, caller: &AccountId, id: &TriggerId) -> bool {

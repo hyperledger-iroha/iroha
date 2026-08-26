@@ -71,7 +71,7 @@ final class CancelAssetLockV1Tests: XCTestCase {
         let instruction = try value.transactionInstructionFrame()
         XCTAssertEqual(
             instruction.wireName,
-            "iroha_data_model::isi::escrow::CancelAssetLock"
+            "iroha.instruction.v1::escrow::CancelAssetLock"
         )
         XCTAssertEqual(instruction.framedPayload, archive)
     }
@@ -262,7 +262,7 @@ final class CancelAssetLockV1Tests: XCTestCase {
         XCTAssertThrowsError(
             try CancelAssetLockInstructionV1.decodeNoritoArchive(
                 noritoEncode(
-                    typeName: CancelAssetLockInstructionV1.wireId,
+                    typeName: CancelAssetLockInstructionV1.schemaName,
                     payload: legacyPayload.data,
                     flags: NoritoHeader.compactLen
                 )
@@ -280,7 +280,7 @@ final class CancelAssetLockV1Tests: XCTestCase {
             XCTAssertThrowsError(
                 try CancelAssetLockInstructionV1.decodeNoritoArchive(
                     noritoEncode(
-                        typeName: CancelAssetLockInstructionV1.wireId,
+                        typeName: CancelAssetLockInstructionV1.schemaName,
                         payload: invalidPayload.data,
                         flags: NoritoHeader.compactLen
                     )
@@ -297,7 +297,7 @@ final class CancelAssetLockV1Tests: XCTestCase {
         XCTAssertThrowsError(
             try CancelAssetLockInstructionV1.decodeNoritoArchive(
                 noritoEncode(
-                    typeName: CancelAssetLockInstructionV1.wireId,
+                    typeName: CancelAssetLockInstructionV1.schemaName,
                     payload: malformedEscrowPayload.data,
                     flags: NoritoHeader.compactLen
                 )

@@ -47,11 +47,11 @@ use std::{
 };
 iroha_crypto::define_soranet_record_io_adapters!(soranet_record_io);
 use iroha_data_model::soranet::vpn::{
-    VPN_CELL_LEN, VPN_DEFAULT_TUNNEL_MTU_BYTES, VPN_HELPER_TICKET_LEN,
-    VPN_RELAY_MLDSA65_PUBLIC_KEY_BYTES_V1, VPN_USAGE_VOUCHER_CONTROL_MAGIC, VpnCellClassV1,
-    VpnCellError, VpnCellFlagsV1, VpnCellHeaderV1, VpnCellV1, VpnFlowLabelV1, VpnHelperTicketV1,
-    VpnPaddedCellV1, VpnUsageVoucherBodyV1, VpnUsageVoucherEnvelopeV1, VpnUsageVoucherV1,
-    derive_vpn_session_address_plan_v1, vpn_helper_network_policy_hash_v1,
+    VPN_DEFAULT_TUNNEL_MTU_BYTES, VPN_HELPER_TICKET_LEN, VPN_RELAY_MLDSA65_PUBLIC_KEY_BYTES_V1,
+    VPN_USAGE_VOUCHER_CONTROL_MAGIC, VpnCellClassV1, VpnCellError, VpnCellFlagsV1, VpnCellHeaderV1,
+    VpnCellV1, VpnFlowLabelV1, VpnHelperTicketV1, VpnPaddedCellV1, VpnUsageVoucherBodyV1,
+    VpnUsageVoucherEnvelopeV1, VpnUsageVoucherV1, derive_vpn_session_address_plan_v1,
+    vpn_helper_network_policy_hash_v1,
 };
 use norito::{
     codec::{Decode, Encode},
@@ -146,6 +146,8 @@ const VPN_MAX_DNS_ENTRIES_V1: usize = 8;
 const VPN_MAX_DNS_BYTES_V1: usize = 64;
 const DEFAULT_ROUTE_CMD: &str = "ip";
 const DEFAULT_ROUTE_SHOW_PREFIX: [&str; 3] = ["-N", "-o", "route"];
+const EXCLUDED_ROUTE_PROTOCOL_V1: &str = "186";
+const PLANNED_EXCLUDED_ROUTE_PREFIX_V1: &str = "sora-vpn-planned-route-v1 ";
 const USAGE_VOUCHER_INTERVAL: Duration = Duration::from_secs(1);
 const USAGE_VOUCHER_BYTE_CREDIT_WINDOW: u64 = 256 * 1024;
 const USAGE_VOUCHER_BYTE_REFRESH_THRESHOLD: u64 = USAGE_VOUCHER_BYTE_CREDIT_WINDOW / 2;
@@ -440,13 +442,19 @@ const PLAN_TLS_NAME_RANGE: std::ops::Range<usize> =
 const PLAN_RELAY_MLDSA65_RANGE: std::ops::Range<usize> =
     PLAN_TLS_NAME_RANGE.end..PLAN_TLS_NAME_RANGE.end + VPN_RELAY_MLDSA65_PUBLIC_KEY_BYTES_V1;
 const PLAN_ROUTE_SLOT_BYTES: usize = 18;
-const PLAN_ROUTE_RANGE: std::ops::Range<usize> = 4_096..4_096 + 64 * PLAN_ROUTE_SLOT_BYTES;
+// Keep the variable route region aligned and leave a canonical zero-filled gap after the
+// fixed-width ML-DSA-65 identity. The previous hard-coded 4 KiB start overlapped the current
+// first-release key width and made the helper fail its compile-time layout assertion.
+const PLAN_ROUTE_START: usize = (PLAN_RELAY_MLDSA65_RANGE.end + 63) & !63;
+const PLAN_ROUTE_RANGE: std::ops::Range<usize> =
+    PLAN_ROUTE_START..PLAN_ROUTE_START + 64 * PLAN_ROUTE_SLOT_BYTES;
 const PLAN_EXCLUDED_RANGE: std::ops::Range<usize> =
     PLAN_ROUTE_RANGE.end..PLAN_ROUTE_RANGE.end + 64 * PLAN_ROUTE_SLOT_BYTES;
 const PLAN_DNS_SLOT_BYTES: usize = 17;
 const PLAN_DNS_RANGE: std::ops::Range<usize> =
     PLAN_EXCLUDED_RANGE.end..PLAN_EXCLUDED_RANGE.end + 8 * PLAN_DNS_SLOT_BYTES;
-const _: () = assert!(PLAN_RELAY_MLDSA65_RANGE.end <= PLAN_ROUTE_RANGE.start);
+const _: () = assert!(PLAN_RELAY_MLDSA65_RANGE.end < PLAN_ROUTE_RANGE.start);
+const _: () = assert!(PLAN_ROUTE_RANGE.start.is_multiple_of(64));
 const _: () = assert!(PLAN_DNS_RANGE.end <= NETWORK_WORKER_PLAN_FRAME_BYTES);
 
 fn encode_plan_cidr(slot: &mut [u8], cidr: ParsedCidr) {
@@ -1209,10 +1217,12 @@ enum DnsBackendState {
 struct ExcludedRouteSnapshot {
     cidr: String,
     family: IpFamily,
-    /// Exact `ip -o route` readback after this helper installed the exclusion.
+    /// Durable ownership proof for the helper-installed exclusion.
     ///
-    /// `None` means the mutation was not durably proven. Cleanup then succeeds only when the
-    /// exact prefix remains absent; every other value is retained for repair.
+    /// Before mutation this stores a versioned canonical route tuple. After mutation it stores the
+    /// exact `ip -o route` readback. Keeping both forms in the existing string field preserves the
+    /// v1 state-frame layout while closing the post-add, pre-fsync recovery gap. `None` is accepted
+    /// only for legacy state and can be cleaned safely only when the exact prefix is absent.
     installed_route: Option<String>,
 }
 type RouteViaDev = (Option<String>, Option<String>);
@@ -5946,6 +5956,30 @@ where
             }
         )));
     };
+    if let Some(gateway) = via.as_deref() {
+        let gateway_address = gateway.parse::<IpAddr>().map_err(|_| {
+            ControllerError::State(format!(
+                "cannot install excluded route {normalized}: default gateway is not an IP address"
+            ))
+        })?;
+        let gateway_family = match gateway_address {
+            IpAddr::V4(_) => IpFamily::V4,
+            IpAddr::V6(_) => IpFamily::V6,
+        };
+        if gateway_family != parsed.family() {
+            return Err(ControllerError::State(format!(
+                "cannot install excluded route {normalized}: default gateway has the wrong address family"
+            )));
+        }
+    }
+    if dev
+        .as_deref()
+        .is_some_and(|device| matches!(device, "via" | "dev" | "proto"))
+    {
+        return Err(ControllerError::State(format!(
+            "cannot install excluded route {normalized}: default device name collides with route syntax"
+        )));
+    }
     let mut command = vec![
         parsed.family().flag().to_owned(),
         "route".to_owned(),
@@ -5960,23 +5994,24 @@ where
         command.push("dev".to_owned());
         command.push(dev);
     }
-    if !command
-        .iter()
-        .any(|argument| argument == "via" || argument == "dev")
-    {
+    if !command.iter().any(|argument| argument == "dev") {
         return Err(ControllerError::State(format!(
-            "cannot install excluded route {normalized}: default route has neither a gateway nor a device"
+            "cannot install excluded route {normalized}: default route has no device"
         )));
     }
     // Numeric protocol 186 is reserved by this first-release helper contract as an ownership
     // marker. Cleanup still requires the entire exact readback, not merely this marker.
     command.push("proto".to_owned());
-    command.push("186".to_owned());
+    command.push(EXCLUDED_ROUTE_PROTOCOL_V1.to_owned());
+    let planned_ownership = format!(
+        "{PLANNED_EXCLUDED_ROUTE_PREFIX_V1}{}",
+        command[3..].join(" ")
+    );
     Ok((
         ExcludedRouteSnapshot {
             cidr: normalized,
             family: parsed.family(),
-            installed_route: None,
+            installed_route: Some(planned_ownership),
         },
         command,
     ))
@@ -6084,6 +6119,84 @@ fn route_has_exact_field(route: &str, field: &str, value: &str) -> bool {
         .windows(2)
         .any(|pair| pair[0] == field && pair[1] == value)
 }
+fn unique_route_field_value<'a>(
+    route: &'a str,
+    field: &str,
+) -> Result<Option<&'a str>, ControllerError> {
+    let mut tokens = route.split_ascii_whitespace();
+    let mut value = None;
+    while let Some(token) = tokens.next() {
+        if token != field {
+            continue;
+        }
+        let next = tokens.next().ok_or_else(|| {
+            ControllerError::State(format!("route has a truncated {field} field"))
+        })?;
+        if value.replace(next).is_some() {
+            return Err(ControllerError::State(format!(
+                "route has duplicate {field} fields"
+            )));
+        }
+    }
+    Ok(value)
+}
+fn validate_precommitted_excluded_route(
+    snapshot: &ExcludedRouteSnapshot,
+    planned_route: &str,
+    current_route: &str,
+) -> Result<(), ControllerError> {
+    let mut tokens = planned_route.split_ascii_whitespace().peekable();
+    let Some(destination) = tokens.next() else {
+        return Err(ControllerError::State(format!(
+            "excluded route {} has an empty precommitted ownership proof",
+            snapshot.cidr
+        )));
+    };
+    if !route_destination_matches_cidr(destination, &snapshot.cidr) {
+        return Err(ControllerError::State(format!(
+            "excluded route {} has a precommit for another destination",
+            snapshot.cidr
+        )));
+    }
+    let planned_via = if tokens.peek() == Some(&"via") {
+        let _ = tokens.next();
+        let value = tokens.next().ok_or_else(|| {
+            ControllerError::State("precommitted excluded route has truncated via field".to_owned())
+        })?;
+        Some(value)
+    } else {
+        None
+    };
+    if tokens.next() != Some("dev") {
+        return Err(ControllerError::State(format!(
+            "excluded route {} precommit lacks its device",
+            snapshot.cidr
+        )));
+    }
+    let planned_dev = tokens.next().ok_or_else(|| {
+        ControllerError::State("precommitted excluded route has truncated dev field".to_owned())
+    })?;
+    if tokens.next() != Some("proto")
+        || tokens.next() != Some(EXCLUDED_ROUTE_PROTOCOL_V1)
+        || tokens.next().is_some()
+    {
+        return Err(ControllerError::State(format!(
+            "excluded route {} precommit lacks the exact protocol-{} ownership marker",
+            snapshot.cidr, EXCLUDED_ROUTE_PROTOCOL_V1
+        )));
+    }
+    if !route_destination_matches_cidr(current_route, &snapshot.cidr)
+        || unique_route_field_value(current_route, "via")? != planned_via
+        || unique_route_field_value(current_route, "dev")? != Some(planned_dev)
+        || unique_route_field_value(current_route, "proto")? != Some(EXCLUDED_ROUTE_PROTOCOL_V1)
+    {
+        return Err(ControllerError::State(format!(
+            "refusing to delete excluded route {} because the live route does not match its precommitted ownership tuple",
+            snapshot.cidr
+        )));
+    }
+    Ok(())
+}
 fn validate_installed_excluded_route(
     snapshot: &ExcludedRouteSnapshot,
     mutation: &[String],
@@ -6116,38 +6229,40 @@ fn validate_installed_excluded_route(
 #[derive(Debug, PartialEq, Eq)]
 enum ExcludedRouteRestoreAction {
     AlreadyAbsent,
-    DeleteInstalled,
+    DeleteInstalled(String),
 }
 fn excluded_route_restore_action(
     snapshot: &ExcludedRouteSnapshot,
     current_route: Option<&str>,
 ) -> Result<ExcludedRouteRestoreAction, ControllerError> {
-    if current_route.is_none() {
+    let Some(current_route) = current_route else {
         return Ok(ExcludedRouteRestoreAction::AlreadyAbsent);
-    }
-    if current_route != snapshot.installed_route.as_deref() {
+    };
+    let Some(ownership) = snapshot.installed_route.as_deref() else {
+        return Err(ControllerError::State(format!(
+            "refusing to delete excluded route {} because it lacks a durable ownership proof",
+            snapshot.cidr
+        )));
+    };
+    if let Some(planned_route) = ownership.strip_prefix(PLANNED_EXCLUDED_ROUTE_PREFIX_V1) {
+        validate_precommitted_excluded_route(snapshot, planned_route, current_route)?;
+    } else if current_route != ownership {
         return Err(ControllerError::State(format!(
             "refusing to delete excluded route {} because live route state drifted from the exact helper-installed readback",
             snapshot.cidr
         )));
     }
-    Ok(ExcludedRouteRestoreAction::DeleteInstalled)
+    Ok(ExcludedRouteRestoreAction::DeleteInstalled(
+        current_route.to_owned(),
+    ))
 }
 fn restore_excluded_route(snapshot: &ExcludedRouteSnapshot) -> Result<(), ControllerError> {
     let current = capture_existing_route(snapshot.family, &snapshot.cidr)?;
     let action = excluded_route_restore_action(snapshot, current.as_deref())?;
-    if action == ExcludedRouteRestoreAction::AlreadyAbsent {
-        return Ok(());
-    }
-    let ExcludedRouteRestoreAction::DeleteInstalled = action else {
-        unreachable!("the already-absent action returned above")
+    let installed_route = match action {
+        ExcludedRouteRestoreAction::AlreadyAbsent => return Ok(()),
+        ExcludedRouteRestoreAction::DeleteInstalled(installed_route) => installed_route,
     };
-    let installed_route = snapshot.installed_route.as_ref().ok_or_else(|| {
-        ControllerError::State(format!(
-            "excluded route {} lacks a durable installed-route ownership readback",
-            snapshot.cidr
-        ))
-    })?;
     // Delete the exact installed attributes rather than only the prefix. If another route
     // manager wins the race after the readback check, netlink rejects this deletion instead of
     // removing that manager's replacement.
@@ -11007,7 +11122,9 @@ mod tests {
                 ExcludedRouteSnapshot {
                     cidr: route.to_owned(),
                     family: IpFamily::V4,
-                    installed_route: None,
+                    installed_route: Some(format!(
+                        "{PLANNED_EXCLUDED_ROUTE_PREFIX_V1}{route} via 192.0.2.1 dev eth0 proto {EXCLUDED_ROUTE_PROTOCOL_V1}"
+                    )),
                 },
                 route.to_owned(),
             ))
@@ -11141,8 +11258,12 @@ mod tests {
                         .expect("last durable journal remains present")
                         .excluded_route_snapshots
                         .iter()
-                        .all(|snapshot| snapshot.installed_route.is_none()),
-                    "a failed installed-readback persist must not publish uncommitted ownership"
+                        .all(
+                            |snapshot| snapshot.installed_route.as_deref().is_some_and(|proof| {
+                                proof.starts_with(PLANNED_EXCLUDED_ROUTE_PREFIX_V1)
+                            })
+                        ),
+                    "a failed installed-readback persist must retain the durable precommitted ownership tuple"
                 );
                 continue;
             }
@@ -12488,7 +12609,11 @@ mod tests {
                 Ok(outputs.next().expect("one fake route readback").to_owned())
             })
             .expect("plan exact helper-owned exclusion");
-        assert_eq!(snapshot.installed_route, None);
+        assert_eq!(
+            snapshot.installed_route.as_deref(),
+            Some("sora-vpn-planned-route-v1 198.51.100.0/24 via 192.0.2.1 dev eth0 proto 186"),
+            "planning must precommit the complete route ownership tuple"
+        );
         assert!(
             commands
                 .iter()
@@ -12517,7 +12642,9 @@ mod tests {
             let snapshot = ExcludedRouteSnapshot {
                 cidr: cidr.to_owned(),
                 family: parse_cidr(cidr).expect("host exclusion").family(),
-                installed_route: None,
+                installed_route: Some(format!(
+                    "{PLANNED_EXCLUDED_ROUTE_PREFIX_V1}{cidr} via 192.0.2.1 dev eth0 proto {EXCLUDED_ROUTE_PROTOCOL_V1}"
+                )),
             };
             let mutation = installed
                 .split_ascii_whitespace()
@@ -12560,7 +12687,9 @@ mod tests {
                 Some("198.51.100.0/24 via 192.0.2.1 dev eth0 proto 186"),
             )
             .expect("exact installed readback is helper-owned"),
-            ExcludedRouteRestoreAction::DeleteInstalled
+            ExcludedRouteRestoreAction::DeleteInstalled(
+                "198.51.100.0/24 via 192.0.2.1 dev eth0 proto 186".to_owned()
+            )
         );
         assert_eq!(
             excluded_route_restore_action(&snapshot, None).expect("absence is idempotent"),
@@ -12575,7 +12704,7 @@ mod tests {
 
         let unproven = ExcludedRouteSnapshot {
             installed_route: None,
-            ..snapshot
+            ..snapshot.clone()
         };
         assert_eq!(
             excluded_route_restore_action(&unproven, None).expect("no route needs no cleanup"),
@@ -12589,6 +12718,30 @@ mod tests {
             .is_err(),
             "a crash before exact installed readback persistence must retain repair state"
         );
+
+        let precommitted = ExcludedRouteSnapshot {
+            installed_route: Some(format!(
+                "{PLANNED_EXCLUDED_ROUTE_PREFIX_V1}198.51.100.0/24 via 192.0.2.1 dev eth0 proto {EXCLUDED_ROUTE_PROTOCOL_V1}"
+            )),
+            ..snapshot
+        };
+        let current = "198.51.100.0/24 via 192.0.2.1 dev eth0 proto 186 metric 20";
+        assert_eq!(
+            excluded_route_restore_action(&precommitted, Some(current))
+                .expect("an exact precommitted ownership tuple is recoverable"),
+            ExcludedRouteRestoreAction::DeleteInstalled(current.to_owned())
+        );
+        for drifted in [
+            "198.51.100.0/24 via 203.0.113.1 dev eth0 proto 186",
+            "198.51.100.0/24 via 192.0.2.1 dev eth1 proto 186",
+            "198.51.100.0/24 via 192.0.2.1 dev eth0 proto 4",
+            "203.0.113.0/24 via 192.0.2.1 dev eth0 proto 186",
+        ] {
+            assert!(
+                excluded_route_restore_action(&precommitted, Some(drifted)).is_err(),
+                "recovery must retain a route outside the precommitted ownership tuple: {drifted}"
+            );
+        }
     }
     #[test]
     fn exact_route_readback_rejects_ambiguous_results() {

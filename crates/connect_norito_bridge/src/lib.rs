@@ -24605,6 +24605,16 @@ mod accel_tests {
         assert_eq!(output.public_bytes(), expected_public_bytes);
     }
     #[test]
+    fn keypair_from_empty_mldsa_seed_fails_without_outputs() {
+        let _guard = chain_guard();
+        let output = call_keypair_from_seed(Algorithm::MlDsa, &[]);
+        assert_eq!(output.status, ERR_CONNECT_KEYPAIR);
+        assert!(output.private_ptr.is_null());
+        assert_eq!(output.private_len, 0);
+        assert!(output.public_ptr.is_null());
+        assert_eq!(output.public_len, 0);
+    }
+    #[test]
     fn connect_open_app_metadata_roundtrip() {
         let _guard = chain_guard();
         let app_pk = [0x22u8; 32];
@@ -28336,6 +28346,16 @@ mod tests {
         assert!(encoded_json.contains(&exact_field));
         let genesis = encoded_json.replacen(&exact_field, "\"network_id\":\"genesis\"", 1);
         assert!(norito::json::from_str::<ConnectAccountOnboardingPlanBodyV1>(&genesis).is_err());
+        let missing_owner_auto_renew =
+            encoded_json.replacen("\"owner_auto_renew_instruction\":null,", "", 1);
+        assert_ne!(missing_owner_auto_renew, encoded_json);
+        assert!(
+            norito::json::from_str::<ConnectAccountOnboardingPlanBodyV1>(
+                &missing_owner_auto_renew,
+            )
+            .is_err(),
+            "the exact V1 owner_auto_renew_instruction slot must be present even when null"
+        );
         for retired in ["chain", "chainId", "chain_id"] {
             let replaced = encoded_json.replacen(
                 &exact_field,

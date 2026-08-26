@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.android;
 
+import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
@@ -25,6 +26,8 @@ import org.hyperledger.iroha.android.crypto.keystore.KeyGenParameters;
 import org.hyperledger.iroha.android.crypto.keystore.KeystoreBackend;
 import org.hyperledger.iroha.android.crypto.keystore.KeyGenerationResult;
 import org.hyperledger.iroha.android.crypto.keystore.KeystoreKeyProvider;
+import org.hyperledger.iroha.android.crypto.keystore.attestation.AndroidAttestationRevocationPolicyV1;
+import org.hyperledger.iroha.android.crypto.keystore.attestation.AndroidAttestationRevocationTestFixtures;
 import org.hyperledger.iroha.android.crypto.keystore.attestation.AttestationResult;
 import org.hyperledger.iroha.android.crypto.keystore.attestation.AttestationVerificationException;
 import org.hyperledger.iroha.android.crypto.keystore.attestation.AttestationVerifier;
@@ -67,6 +70,7 @@ public final class IrohaKeyManagerTests {
           + "FxdGTgtauVtYo24deQ==");
 
   private static final byte[] STRONGBOX_CHALLENGE = hex("4145454245");
+  private static final long EVALUATION_TIME_EPOCH_MILLIS = 1761408000000L;
   private static final byte[] ED25519_SPKI_PREFIX =
       new byte[] {
         0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00
@@ -248,16 +252,14 @@ public final class IrohaKeyManagerTests {
             .addCertificate(STRONGBOX_CERT)
             .addCertificate(ROOT_CERT)
             .build());
+    backend.setAttestedKey("attested-alias");
 
     final IrohaKeyManager manager =
         IrohaKeyManager.fromProviders(
             List.of(keystoreProvider, new SoftwareKeyProvider()));
 
-    manager.generateOrLoad(
-        "attested-alias", IrohaKeyManager.KeySecurityPreference.STRONGBOX_PREFERRED);
-
     final AttestationVerifier verifier =
-        AttestationVerifier.builder().addTrustedRoot(ROOT_CERT).requireStrongBox(true).build();
+        verifierBuilder().addTrustedRoot(ROOT_CERT).requireStrongBox(true).build();
 
     final Optional<AttestationResult> result =
         manager.verifyAttestation("attested-alias", verifier, STRONGBOX_CHALLENGE);
@@ -284,15 +286,14 @@ public final class IrohaKeyManagerTests {
         IrohaKeyManager.fromProviders(
             List.of(keystoreProvider, new SoftwareKeyProvider()));
 
-    manager.generateOrLoad(
-        "attest-on-demand", IrohaKeyManager.KeySecurityPreference.STRONGBOX_PREFERRED);
+    backend.setAttestedKey("attest-on-demand");
 
     final Optional<KeyAttestation> generated =
         manager.generateAttestation("attest-on-demand", STRONGBOX_CHALLENGE);
     assert generated.isPresent() : "Expected generated attestation bundle";
 
     final AttestationVerifier verifier =
-        AttestationVerifier.builder().addTrustedRoot(ROOT_CERT).requireStrongBox(true).build();
+        verifierBuilder().addTrustedRoot(ROOT_CERT).requireStrongBox(true).build();
     final Optional<AttestationResult> verified =
         manager.verifyAttestation("attest-on-demand", verifier, STRONGBOX_CHALLENGE);
     assert verified.isPresent() : "Generated attestation should verify";
@@ -394,6 +395,16 @@ public final class IrohaKeyManagerTests {
 
   private static byte[] decodeBase64(final String value) {
     return Base64.getDecoder().decode(value);
+  }
+
+  private static AttestationVerifier.Builder verifierBuilder() {
+    final AndroidAttestationRevocationPolicyV1 policy =
+        AndroidAttestationRevocationTestFixtures.policy(
+            EVALUATION_TIME_EPOCH_MILLIS,
+            86_400L,
+            java.util.Collections.emptyList(),
+            java.util.Collections.emptyList());
+    return AttestationVerifier.builder(policy, EVALUATION_TIME_EPOCH_MILLIS);
   }
 
   private static byte[] hex(final String value) {
@@ -609,6 +620,14 @@ public final class IrohaKeyManagerTests {
 
     void setAttestation(final String alias, final KeyAttestation attestation) {
       attestations.put(alias, attestation);
+    }
+
+    void setAttestedKey(final String alias) throws Exception {
+      final java.security.cert.X509Certificate certificate =
+          (java.security.cert.X509Certificate)
+              java.security.cert.CertificateFactory.getInstance("X.509")
+                  .generateCertificate(new ByteArrayInputStream(leafCertificate));
+      keys.put(alias, new KeyPair(certificate.getPublicKey(), null));
     }
   }
 }

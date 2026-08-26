@@ -1064,16 +1064,23 @@ impl TaikaiRoutingManifestV1 {
         self.segment_window.contains(sequence)
     }
     /// Validate manifest invariants:
+    /// - the format version is supported
     /// - windows are ordered
     /// - rendition ranges fall within the manifest window
     /// - rendition identifiers are unique
     ///
     /// # Errors
-    /// Returns [`TaikaiRoutingManifestValidationError::SegmentWindow`] when the manifest
-    /// window is invalid, [`TaikaiRoutingManifestValidationError::RenditionWindowOutOfRange`]
-    /// when a rendition window extends outside that range, or
-    /// [`TaikaiRoutingManifestValidationError::DuplicateRendition`] when identifiers repeat.
+    /// Returns [`TaikaiRoutingManifestValidationError::UnsupportedVersion`] when the manifest is
+    /// not V1, [`TaikaiRoutingManifestValidationError::SegmentWindow`] when its window is invalid,
+    /// [`TaikaiRoutingManifestValidationError::RenditionWindowOutOfRange`] when a rendition window
+    /// extends outside that range, or [`TaikaiRoutingManifestValidationError::DuplicateRendition`]
+    /// when identifiers repeat.
     pub fn validate(&self) -> Result<(), TaikaiRoutingManifestValidationError> {
+        if self.version != Self::VERSION {
+            return Err(TaikaiRoutingManifestValidationError::UnsupportedVersion {
+                actual: self.version,
+            });
+        }
         self.segment_window.validate()?;
         let mut seen = BTreeSet::new();
         for route in &self.renditions {
@@ -1101,6 +1108,12 @@ impl TaikaiRoutingManifestV1 {
 /// Errors emitted when validating a [`TaikaiRoutingManifestV1`].
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum TaikaiRoutingManifestValidationError {
+    /// The decoded routing manifest advertises an unsupported format version.
+    #[error("unsupported Taikai routing manifest version {actual} (expected 1)")]
+    UnsupportedVersion {
+        /// Version found in the decoded manifest.
+        actual: u16,
+    },
     /// Wrapper for underlying window errors.
     #[error(transparent)]
     SegmentWindow(#[from] TaikaiSegmentWindowError),
@@ -1841,6 +1854,15 @@ mod tests {
             err,
             TaikaiRoutingManifestValidationError::RenditionWindowOutOfRange { .. }
         ));
+    }
+    #[test]
+    fn routing_manifest_validation_rejects_unsupported_version() {
+        let mut manifest = sample_routing_manifest();
+        manifest.version = TaikaiRoutingManifestV1::VERSION + 1;
+        assert_eq!(
+            manifest.validate(),
+            Err(TaikaiRoutingManifestValidationError::UnsupportedVersion { actual: 2 })
+        );
     }
     #[test]
     fn routing_manifest_validation_rejects_duplicate_renditions() {

@@ -294,6 +294,11 @@ def test_algorithm_labels_reject_empty_strings_across_public_api() -> None:
             call()
 
 
+def test_mldsa_seed_derivation_rejects_empty_input() -> None:
+    with pytest.raises(ValueError, match="ML-DSA seed material must not be empty"):
+        derive_keypair_from_seed(b"", ML_DSA_ALGORITHM)
+
+
 def test_algorithm_labels_reject_surrounding_whitespace_across_public_api() -> None:
     keypair = derive_keypair_from_seed(b"strict algorithm label boundary", ED25519_ALGORITHM)
     message = b"strict algorithm label boundary message"

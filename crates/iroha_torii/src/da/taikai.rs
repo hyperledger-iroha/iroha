@@ -143,7 +143,24 @@ pub(crate) mod taikai_ingest {
         manifest_digest_hex: String,
         window_start_sequence: u64,
         window_end_sequence: u64,
+        artifact_base_id: Option<String>,
         updated_unix: u64,
+    }
+    /// Result of checking a routing manifest against durable alias lineage.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub(crate) enum TrmLineageValidation {
+        /// The routing manifest advances the alias lineage.
+        Fresh,
+        /// The exact routing-manifest artifact was already durably staged by
+        /// an interrupted ingest at the same replay coordinates.
+        ExactArtifactRetry,
+    }
+    impl TrmLineageValidation {
+        /// Whether accepting this manifest represents a new alias-lineage
+        /// rotation rather than recovery of an already committed rotation.
+        pub(crate) const fn records_alias_rotation(self) -> bool {
+            matches!(self, Self::Fresh)
+        }
     }
     pub(crate) struct TrmLineageGuard {
         manifest_store_dir: PathBuf,
@@ -231,6 +248,50 @@ pub(crate) mod taikai_ingest {
             }
             Ok(())
         }
+        /// Validate one ingest, admitting an exact retry only when the
+        /// previously staged TRM is bound to the same replay coordinates and
+        /// has identical bytes.
+        #[allow(clippy::too_many_arguments)]
+        pub fn validate_ingest_retry(
+            &self,
+            manifest: &TaikaiRoutingManifestV1,
+            manifest_digest_hex: &str,
+            lane_id: LaneId,
+            epoch: u64,
+            sequence: u64,
+            storage_ticket: &StorageTicketId,
+            fingerprint: &ReplayFingerprint,
+            trm_bytes: &[u8],
+        ) -> Result<TrmLineageValidation, (StatusCode, String)> {
+            let artifact_base_id =
+                taikai_artifact_base_id(lane_id, epoch, sequence, storage_ticket, fingerprint);
+            if let Some(previous) = &self.previous
+                && previous.manifest_digest_hex == manifest_digest_hex
+                && previous.window_start_sequence == manifest.segment_window.start_sequence
+                && previous.window_end_sequence == manifest.segment_window.end_sequence
+                && previous.artifact_base_id.as_deref() == Some(artifact_base_id.as_str())
+            {
+                match validate_existing_trm_retry_artifact(
+                    &self.manifest_store_dir,
+                    lane_id,
+                    epoch,
+                    sequence,
+                    storage_ticket,
+                    fingerprint,
+                    trm_bytes,
+                ) {
+                    Ok(()) => return Ok(TrmLineageValidation::ExactArtifactRetry),
+                    Err(err) if err.kind() == ErrorKind::NotFound => {}
+                    Err(err) => {
+                        return Err(internal_error(format!(
+                            "failed to validate exact Taikai routing manifest retry artifact: {err}"
+                        )));
+                    }
+                }
+            }
+            self.validate(manifest, manifest_digest_hex)?;
+            Ok(TrmLineageValidation::Fresh)
+        }
         pub fn persist_lineage_hint(
             &self,
             lane_id: LaneId,
@@ -274,6 +335,31 @@ pub(crate) mod taikai_ingest {
             window: TaikaiSegmentWindow,
             manifest_digest_hex: &str,
         ) -> Result<(), (StatusCode, String)> {
+            self.commit_record(window, manifest_digest_hex, None)
+        }
+        /// Commit lineage together with the deterministic artifact identity
+        /// that may authenticate a later interrupted-ingest retry.
+        #[allow(clippy::too_many_arguments)]
+        pub fn commit_ingest(
+            &mut self,
+            window: TaikaiSegmentWindow,
+            manifest_digest_hex: &str,
+            lane_id: LaneId,
+            epoch: u64,
+            sequence: u64,
+            storage_ticket: &StorageTicketId,
+            fingerprint: &ReplayFingerprint,
+        ) -> Result<(), (StatusCode, String)> {
+            let artifact_base_id =
+                taikai_artifact_base_id(lane_id, epoch, sequence, storage_ticket, fingerprint);
+            self.commit_record(window, manifest_digest_hex, Some(artifact_base_id))
+        }
+        fn commit_record(
+            &mut self,
+            window: TaikaiSegmentWindow,
+            manifest_digest_hex: &str,
+            artifact_base_id: Option<String>,
+        ) -> Result<(), (StatusCode, String)> {
             validate_manifest_digest_hex(manifest_digest_hex).map_err(|err| {
                 internal_error(format!(
                     "failed to validate Taikai routing manifest digest before lineage commit: {err}"
@@ -285,6 +371,7 @@ pub(crate) mod taikai_ingest {
                 manifest_digest_hex: manifest_digest_hex.to_owned(),
                 window_start_sequence: window.start_sequence,
                 window_end_sequence: window.end_sequence,
+                artifact_base_id,
                 updated_unix: current_unix_seconds(),
             };
             write_lineage_record(&self.record_path, &record).map_err(|err| {
@@ -684,6 +771,18 @@ pub(crate) mod taikai_ingest {
                 "Taikai routing manifest lineage record window_start_sequence exceeds window_end_sequence",
             ));
         }
+        let artifact_base_id = match map.get("artifact_base_id") {
+            None => None,
+            Some(value) => {
+                let base_id = value.as_str().ok_or_else(|| {
+                    invalid_lineage_record(
+                        "Taikai routing manifest lineage record artifact_base_id must be a string",
+                    )
+                })?;
+                validate_taikai_artifact_base_id(base_id)?;
+                Some(base_id.to_owned())
+            }
+        };
         let updated_unix = map
             .get("updated_unix")
             .and_then(Value::as_u64)
@@ -698,6 +797,7 @@ pub(crate) mod taikai_ingest {
             manifest_digest_hex,
             window_start_sequence,
             window_end_sequence,
+            artifact_base_id,
             updated_unix,
         }))
     }
@@ -721,6 +821,12 @@ pub(crate) mod taikai_ingest {
             "window_end_sequence".into(),
             Value::from(record.window_end_sequence),
         );
+        if let Some(artifact_base_id) = &record.artifact_base_id {
+            map.insert(
+                "artifact_base_id".into(),
+                Value::from(artifact_base_id.clone()),
+            );
+        }
         map.insert("updated_unix".into(), Value::from(record.updated_unix));
         let rendered = json::to_json_pretty(&Value::Object(map))
             .map_err(|err| io::Error::new(ErrorKind::Other, err.to_string()))?;
@@ -779,6 +885,31 @@ pub(crate) mod taikai_ingest {
         if bytes.len() != 32 {
             return Err(invalid_lineage_record(
                 "Taikai routing manifest lineage record manifest_digest_hex must decode to 32 bytes",
+            ));
+        }
+        Ok(())
+    }
+    fn validate_taikai_artifact_base_id(base_id: &str) -> io::Result<()> {
+        let mut components = base_id.split('-');
+        for width in [8, 16, 16, 64, 64] {
+            let Some(component) = components.next() else {
+                return Err(invalid_lineage_record(
+                    "Taikai routing manifest lineage record artifact_base_id must be canonical lowercase hex",
+                ));
+            };
+            if component.len() != width
+                || !component
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            {
+                return Err(invalid_lineage_record(
+                    "Taikai routing manifest lineage record artifact_base_id must be canonical lowercase hex",
+                ));
+            }
+        }
+        if components.next().is_some() {
+            return Err(invalid_lineage_record(
+                "Taikai routing manifest lineage record artifact_base_id must be canonical lowercase hex",
             ));
         }
         Ok(())
@@ -1099,6 +1230,40 @@ pub(crate) mod taikai_ingest {
             bytes,
             TAIKAI_ANCHOR_TRM_MAX_BYTES,
         )
+    }
+    /// Require the exact TRM artifact staged for one interrupted ingest.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn validate_existing_trm_retry_artifact(
+        spool_dir: &Path,
+        lane_id: LaneId,
+        epoch: u64,
+        sequence: u64,
+        storage_ticket: &StorageTicketId,
+        fingerprint: &ReplayFingerprint,
+        bytes: &[u8],
+    ) -> io::Result<()> {
+        ensure_taikai_artifact_size("taikai-trm", bytes.len(), TAIKAI_ANCHOR_TRM_MAX_BYTES)?;
+        if spool_dir.as_os_str().is_empty() {
+            return Err(io::Error::new(
+                ErrorKind::NotFound,
+                "exact Taikai routing manifest retry artifact is unavailable without a spool directory",
+            ));
+        }
+        let base_id =
+            taikai_artifact_base_id(lane_id, epoch, sequence, storage_ticket, fingerprint);
+        let path = spool_dir
+            .join(TAIKAI_SPOOL_SUBDIR)
+            .join(format!("taikai-trm-{base_id}.norito"));
+        match existing_taikai_artifact_path_if_matching(&path, bytes, "taikai-trm")? {
+            Some(_) => Ok(()),
+            None => Err(io::Error::new(
+                ErrorKind::NotFound,
+                format!(
+                    "exact Taikai routing manifest retry artifact is missing: {}",
+                    path.display()
+                ),
+            )),
+        }
     }
     pub(crate) fn persist_anchor_ready(
         spool_dir: &Path,
@@ -3132,6 +3297,8 @@ pub(crate) fn validate_taikai_cache_hint(
 #[derive(Debug)]
 /// Result details from validating a Taikai signing manifest.
 pub(crate) struct TaikaiSsmOutcome {
+    /// Canonical publisher authenticated by the SSM signature.
+    pub(crate) publisher_account: AccountId,
     /// Namespaced alias label referenced by the SSM.
     pub(crate) alias_label: String,
     /// Digest of the signing manifest payload.
@@ -3173,6 +3340,12 @@ pub(crate) fn validate_taikai_ssm(
                 signing_manifest.body.version,
                 TaikaiSegmentSigningBodyV1::VERSION
             ),
+        ));
+    }
+    if signing_manifest.body.signed_unix_ms == 0 {
+        return Err(taikai_ingest::bad_request(
+            META_TAIKAI_SSM,
+            "signed_unix_ms must be a non-zero production timestamp",
         ));
     }
     match signing_manifest.body.publisher_key.try_algorithm() {
@@ -3297,11 +3470,25 @@ pub(crate) fn validate_taikai_ssm(
     }
     let ssm_digest = BlobDigest::from_hash(blake3_hash(ssm_bytes));
     Ok(TaikaiSsmOutcome {
+        publisher_account: signing_manifest.body.publisher_account.clone(),
         alias_label,
         ssm_digest,
         evaluation,
         alias_binding: alias_binding.clone(),
     })
+}
+/// Require the outer DA principal to be the publisher authenticated by the SSM.
+pub(crate) fn validate_taikai_publisher_owner(
+    outcome: &TaikaiSsmOutcome,
+    authenticated_owner: &AccountId,
+) -> Result<(), (StatusCode, String)> {
+    if &outcome.publisher_account != authenticated_owner {
+        return Err(taikai_ingest::bad_request(
+            META_TAIKAI_SSM,
+            "authenticated DA owner does not match the SSM publisher account",
+        ));
+    }
+    Ok(())
 }
 /// Derive the Taikai availability class from the routing manifest metadata.
 pub(crate) fn taikai_availability_from_metadata(

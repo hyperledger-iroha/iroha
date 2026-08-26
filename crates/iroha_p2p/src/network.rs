@@ -6706,6 +6706,25 @@ impl<T: Pload> Subscriber<T> {
         pending
     }
 }
+#[derive(Debug, Default)]
+struct ConfiguredPeerState {
+    generation: u64,
+    peer_ids: Vec<PeerId>,
+}
+
+/// One bounded, rotating view of the configured logical peers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConfiguredPeerBatch {
+    /// Membership generation from which this batch was selected.
+    pub generation: u64,
+    /// Total configured logical peers in the captured generation.
+    pub total_peer_count: usize,
+    /// Canonically ordered peers selected for this sampling round.
+    pub peer_ids: Vec<PeerId>,
+    /// Start index to use for the next sampling round.
+    pub next_start_index: usize,
+}
+
 /// `NetworkBase` actor handle.
 // NOTE: safety/high/low network queues are bounded by configuration. The
 // authoritative-consensus safety channel is independent so auxiliary control
@@ -6724,6 +6743,8 @@ pub struct NetworkBaseHandle<T: Pload, E: Enc> {
     /// Accepted logical-topology and authenticated-peer authority for direct
     /// reliable progress posts.
     reliable_direct_topology: Arc<Mutex<ReliableProgressTopology>>,
+    /// Actor-published, key-ACL-filtered configured logical peer ids.
+    configured_peer_ids: Arc<Mutex<ConfiguredPeerState>>,
     /// Unforgeable identity binding reply-route tokens to this actor instance.
     reply_route_owner: Arc<()>,
     /// Maximum independent authenticated reply sources derived from connection geometry.
@@ -6786,6 +6807,7 @@ impl<T: Pload, E: Enc> Clone for NetworkBaseHandle<T, E> {
             online_peer_capabilities_receiver: self.online_peer_capabilities_receiver.clone(),
             reliable_broadcast_topology: Arc::clone(&self.reliable_broadcast_topology),
             reliable_direct_topology: Arc::clone(&self.reliable_direct_topology),
+            configured_peer_ids: Arc::clone(&self.configured_peer_ids),
             reply_route_owner: Arc::clone(&self.reply_route_owner),
             reply_route_source_capacity: self.reply_route_source_capacity,
             update_topology_sender: self.update_topology_sender.clone(),
@@ -7261,6 +7283,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             watch::channel(HashMap::new());
         let reliable_broadcast_topology = Arc::new(Mutex::new(ReliableProgressTopology::empty()));
         let reliable_direct_topology = Arc::new(Mutex::new(ReliableProgressTopology::empty()));
+        let configured_peer_ids = Arc::new(Mutex::new(ConfiguredPeerState::default()));
         let reply_route_owner = Arc::new(());
         drop(update_topology_rx);
         drop(update_peers_rx);
@@ -7276,6 +7299,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             online_peer_capabilities_receiver,
             reliable_broadcast_topology,
             reliable_direct_topology,
+            configured_peer_ids,
             reply_route_owner,
             reply_route_source_capacity: 1,
             update_topology_sender: update_topology_tx,
@@ -7807,6 +7831,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             watch::channel(HashMap::new());
         let reliable_broadcast_topology = Arc::new(Mutex::new(ReliableProgressTopology::empty()));
         let reliable_direct_topology = Arc::new(Mutex::new(ReliableProgressTopology::empty()));
+        let configured_peer_ids = Arc::new(Mutex::new(ConfiguredPeerState::default()));
         let reply_route_owner = Arc::new(());
         let (subscribe_to_peers_messages_sender, subscribe_to_peers_messages_receiver) =
             mpsc::channel(p2p_subscriber_queue_cap.get());
@@ -7978,6 +8003,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             online_peer_capabilities_sender,
             reliable_broadcast_topology: Arc::clone(&reliable_broadcast_topology),
             reliable_direct_topology: Arc::clone(&reliable_direct_topology),
+            configured_peer_ids: Arc::clone(&configured_peer_ids),
             reply_route_owner: Arc::clone(&reply_route_owner),
             reply_route_tenures: HashMap::new(),
             next_reply_connection_ordinal: 0,
@@ -8110,6 +8136,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
                 online_peer_capabilities_receiver,
                 reliable_broadcast_topology,
                 reliable_direct_topology,
+                configured_peer_ids,
                 reply_route_owner,
                 reply_route_source_capacity: max_total_connections,
                 update_topology_sender,
@@ -9207,6 +9234,79 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
         f: impl FnOnce(&message::OnlinePeerCapabilities) -> P,
     ) -> P {
         f(&self.online_peer_capabilities_receiver.borrow())
+    }
+    /// Return the current configured-peer generation and cardinality.
+    ///
+    /// The generation changes whenever the fail-closed effective sampling set
+    /// changes. Consumers can invalidate in-flight work and retained samples
+    /// without cloning the complete topology.
+    pub fn configured_peer_generation_and_count(&self) -> (u64, usize) {
+        let state = self
+            .configured_peer_ids
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        (state.generation, state.peer_ids.len())
+    }
+
+    /// Run `f` while the configured-peer generation is held stable.
+    ///
+    /// This provides a linearization point for consumers that must invalidate
+    /// generation-bound state and use it in one operation. The closure should
+    /// remain short and must not call back into configured-peer snapshot APIs.
+    pub fn with_configured_peer_generation_and_count<R>(
+        &self,
+        f: impl FnOnce(u64, usize) -> R,
+    ) -> R {
+        let state = self
+            .configured_peer_ids
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        f(state.generation, state.peer_ids.len())
+    }
+
+    /// Return a bounded rotating batch of configured semantic peer ids.
+    ///
+    /// Unlike [`Self::online_peers`], this relay-aware snapshot retains logical
+    /// targets reachable through a hub in Spoke deployments. The actor publishes
+    /// it only after topology and key-ACL admission; authenticated peers outside the
+    /// configured topology are deliberately excluded.
+    /// Results begin at `start_index`, wrap once, and clone no more than
+    /// `limit` identifiers. A complete-cycle batch advances by one position so
+    /// bounded low-priority admission cannot permanently favor the canonical
+    /// prefix when the peer count is less than or equal to the round cap.
+    pub fn configured_peer_ids_bounded(
+        &self,
+        start_index: usize,
+        limit: usize,
+    ) -> ConfiguredPeerBatch {
+        let state = self
+            .configured_peer_ids
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let total_peer_count = state.peer_ids.len();
+        if limit == 0 || total_peer_count == 0 {
+            return ConfiguredPeerBatch {
+                generation: state.generation,
+                total_peer_count,
+                peer_ids: Vec::new(),
+                next_start_index: 0,
+            };
+        }
+        let start = start_index % total_peer_count;
+        let take = limit.min(total_peer_count);
+        let peer_ids = state.peer_ids[start..]
+            .iter()
+            .chain(state.peer_ids[..start].iter())
+            .take(take)
+            .cloned()
+            .collect();
+        let advance = if take == total_peer_count { 1 } else { take };
+        ConfiguredPeerBatch {
+            generation: state.generation,
+            total_peer_count,
+            peer_ids,
+            next_start_index: (start + advance) % total_peer_count,
+        }
     }
     /// Get a receiver of [`OnlinePeers`]
     pub fn online_peers_receiver(&self) -> watch::Receiver<OnlinePeers> {
@@ -11099,6 +11199,8 @@ struct NetworkBase<T: Pload, E: Enc> {
     /// Actor-published authority for direct reliable posts. This contains the
     /// accepted logical topology plus currently authenticated peer identities.
     reliable_direct_topology: Arc<Mutex<ReliableProgressTopology>>,
+    /// Actor-published configured logical peers after topology and key-ACL admission.
+    configured_peer_ids: Arc<Mutex<ConfiguredPeerState>>,
     /// Actor-instance identity and exact current connection tenures used to
     /// mint unforgeable reply routes for inbound semantic origins.
     reply_route_owner: Arc<()>,
@@ -14325,6 +14427,36 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
         (removed.len(), cancelled_waiters)
     }
     fn reconcile_reliable_progress_topologies(&mut self) -> (usize, usize) {
+        let mut configured_peer_ids = self
+            .requested_topology
+            .iter()
+            .filter(|peer_id| *peer_id != &self.self_id)
+            // A pending revocation must stop being a sampling authority before
+            // obsolete connection owners finish draining. Pending additions,
+            // however, are not exposed until the topology commits.
+            .filter(|peer_id| {
+                self.pending_reply_source_authority
+                    .topology
+                    .as_ref()
+                    .is_none_or(|pending| pending.0.contains(peer_id))
+            })
+            .filter(|peer_id| self.projected_reply_source_acl_allows(peer_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        configured_peer_ids.sort();
+        let mut state = self
+            .configured_peer_ids
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.peer_ids != configured_peer_ids {
+            state.generation = state
+                .generation
+                .checked_add(1)
+                .expect("configured-peer generation space exhausted");
+            state.peer_ids = configured_peer_ids;
+        }
+        drop(state);
+
         let (removed_broadcast, cancelled_broadcast_waiters) = self.reconcile_reliable_topology(
             &self.reliable_broadcast_topology,
             &self.current_topology,
@@ -17875,6 +18007,7 @@ mod tests {
                     Mutex::new(ReliableProgressTopology::empty()),
                 ),
                 reliable_direct_topology: Arc::new(Mutex::new(ReliableProgressTopology::empty())),
+                configured_peer_ids: Arc::new(Mutex::new(ConfiguredPeerState::default())),
                 reply_route_owner: Arc::new(()),
                 reply_route_tenures: HashMap::new(),
                 next_reply_connection_ordinal: 0,
@@ -21936,6 +22069,128 @@ mod tests {
             .broadcast_recoverable(broadcast(2), Some(second_ticket))
             .expect("second exact target copy eventually acquires the lane");
         assert!(progress_rx.try_recv().is_ok());
+    }
+    #[test]
+    fn configured_peer_snapshot_keeps_spoke_targets_and_excludes_observers() {
+        let_test_network!(network);
+        let mut expected = (0..4).map(|_| random_peer_id()).collect::<Vec<_>>();
+        network.requested_topology = expected.iter().cloned().collect();
+        network.current_topology = HashSet::from([expected[0].clone()]);
+        let observer = random_peer_id();
+        let (observer_handle, _observer_receivers) = test_wire_peer_handle::<DummyMsg>(1);
+        insert_dummy_ref_peer(
+            &mut network,
+            observer.clone(),
+            socket_addr!(127.0.0.1:12888),
+            8_888,
+            observer_handle,
+        );
+
+        let _ = network.reconcile_reliable_progress_topologies();
+        expected.sort();
+        let published = network
+            .configured_peer_ids
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .peer_ids
+            .clone();
+        assert_eq!(published, expected);
+        assert!(!published.contains(&observer));
+    }
+    #[test]
+    fn configured_peer_snapshot_applies_pending_revocations_fail_closed() {
+        let_test_network!(network);
+        let retained = random_peer_id();
+        let topology_revoked = random_peer_id();
+        let acl_revoked = random_peer_id();
+        network.requested_topology = HashSet::from([
+            retained.clone(),
+            topology_revoked.clone(),
+            acl_revoked.clone(),
+        ]);
+        network.pending_reply_source_authority.topology = Some(UpdateTopology(HashSet::from([
+            retained.clone(),
+            acl_revoked.clone(),
+            random_peer_id(),
+        ])));
+        network.pending_reply_source_authority.acl = Some(message::UpdateAcl {
+            deny_keys: vec![acl_revoked.public_key().clone()],
+            ..message::UpdateAcl::default()
+        });
+
+        let _ = network.reconcile_reliable_progress_topologies();
+        let state = network
+            .configured_peer_ids
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(state.peer_ids.as_slice(), [retained]);
+        assert_eq!(state.generation, 1);
+    }
+    #[test]
+    fn configured_peer_ids_are_bounded_and_round_robin() {
+        let (handle, _safety_rx, _progress_rx, _high_rx, _low_rx) =
+            handle_with_network_receivers::<DeferredProgressMsg>();
+        let mut expected = (0..4).map(|_| random_peer_id()).collect::<Vec<_>>();
+        expected.sort();
+        let mut state = handle
+            .configured_peer_ids
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.generation = 7;
+        state.peer_ids = expected.clone();
+        drop(state);
+
+        let first = handle.configured_peer_ids_bounded(0, 2);
+        assert_eq!(first.generation, 7);
+        assert_eq!(first.peer_ids, expected[..2]);
+        let second = handle.configured_peer_ids_bounded(first.next_start_index, 2);
+        assert_eq!(second.peer_ids, expected[2..]);
+        let wrapped = handle.configured_peer_ids_bounded(second.next_start_index, 2);
+        assert_eq!(wrapped.peer_ids, expected[..2]);
+
+        let full = handle.configured_peer_ids_bounded(0, expected.len());
+        assert_eq!(full.peer_ids, expected);
+        assert_eq!(full.next_start_index, 1);
+        let rotated = handle.configured_peer_ids_bounded(full.next_start_index, usize::MAX);
+        assert_eq!(rotated.peer_ids[0], expected[1]);
+        assert_eq!(rotated.peer_ids.last(), Some(&expected[0]));
+    }
+    #[test]
+    fn configured_peer_generation_callback_holds_membership_stable() {
+        let (handle, _safety_rx, _progress_rx, _high_rx, _low_rx) =
+            handle_with_network_receivers::<DeferredProgressMsg>();
+        let peer = random_peer_id();
+        {
+            let mut state = handle
+                .configured_peer_ids
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            state.generation = 3;
+            state.peer_ids = vec![peer];
+        }
+        let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(1);
+        let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+        let reader = {
+            let handle = handle.clone();
+            std::thread::spawn(move || {
+                handle.with_configured_peer_generation_and_count(|generation, count| {
+                    assert_eq!((generation, count), (3, 1));
+                    entered_tx.send(()).expect("publish callback entry");
+                    release_rx
+                        .recv_timeout(Duration::from_secs(5))
+                        .expect("release generation reader");
+                });
+            })
+        };
+        entered_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("generation reader enters callback");
+        assert!(
+            handle.configured_peer_ids.try_lock().is_err(),
+            "membership publication must wait for a generation-bound operation"
+        );
+        release_tx.send(()).expect("release generation callback");
+        reader.join().expect("generation reader thread");
     }
     #[test]
     fn exact_broadcast_retry_coalesces_but_distinct_and_direct_requests_do_not() {

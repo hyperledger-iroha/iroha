@@ -34,6 +34,10 @@ library SccpExactTransferCodec {
         0x2b8324804fc1df0b2b4d00993dfbd7a72f431806ad2fe478c4ee1b274a0ea0b0;
     uint256 private constant ED25519_SQRT_EXPONENT =
         0x0ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffd;
+    uint256 private constant ED25519_SUBGROUP_ORDER =
+        0x1000000000000000000000000000000014def9dea2f79cd65812631a5cf5d3ed;
+    uint256 private constant ED25519_TWO_D =
+        0x2406d9dc56dffce7198e80f2eef3d13000e0149a8283b156ebd69b9426b2f159;
     uint256 private constant ED25519_Y_MASK = (uint256(1) << 255) - 1;
     uint256 private constant ED25519_TORSION_Y_1 =
         0x7a03ac9277fdc74ec6cc392cfa53202a0f67100d760b3cba4fd84d3d706a17c7;
@@ -57,6 +61,13 @@ library SccpExactTransferCodec {
         uint8 recipientCodec;
         bytes recipient;
         bytes routeId;
+    }
+
+    struct EdwardsPoint {
+        uint256 x;
+        uint256 y;
+        uint256 z;
+        uint256 t;
     }
 
     function ethereumNetwork(uint8 profile) internal pure returns (bytes memory) {
@@ -172,7 +183,8 @@ library SccpExactTransferCodec {
      * I105 validation. It requires Taira's named `test` sentinel (discriminant
      * 369), a minimal base-105/checksum round trip, the exact single-key
      * AccountAddress bytes `02 00 01 20 || ed25519_key`, and the same canonical,
-     * decompressible, non-weak Ed25519 key policy as Rust admission.
+     * decompressible Ed25519 key in the prime-order subgroup, matching Rust
+     * admission including rejection of small-order and mixed-torsion points.
      */
     function isCanonicalTairaRecipient(bytes memory value) internal pure returns (bool) {
         return isCanonicalTairaRecipientRange(value, 0, value.length);
@@ -490,8 +502,56 @@ library SccpExactTransferCodec {
         if (y >= ED25519_FIELD || _isSmallOrderEd25519Y(y)) return false;
         (bool decompressed, uint256 x) = _recoverEd25519X(y);
         if (!decompressed) return false;
-        // Both signs are canonical for nonzero x; x=0 has only sign bit zero.
-        return x != 0 || (encoded >> 255) == 0;
+        uint256 sign = encoded >> 255;
+        if ((x & 1) != sign) x = ED25519_FIELD - x;
+        return _isEd25519PrimeSubgroup(x, y);
+    }
+
+    function _isEd25519PrimeSubgroup(uint256 x, uint256 y)
+        private pure returns (bool)
+    {
+        EdwardsPoint memory result = EdwardsPoint(0, 1, 1, 0);
+        EdwardsPoint memory multiple = EdwardsPoint(x, y, 1, mulmod(x, y, ED25519_FIELD));
+        uint256 scalar = ED25519_SUBGROUP_ORDER;
+        while (scalar != 0) {
+            if ((scalar & 1) != 0) result = _addEd25519(result, multiple);
+            multiple = _addEd25519(multiple, multiple);
+            scalar >>= 1;
+        }
+        return result.z != 0 && result.x == 0 && result.y == result.z;
+    }
+
+    function _addEd25519(EdwardsPoint memory left, EdwardsPoint memory right)
+        private pure returns (EdwardsPoint memory result)
+    {
+        uint256 a = mulmod(
+            addmod(left.y, ED25519_FIELD - left.x, ED25519_FIELD),
+            addmod(right.y, ED25519_FIELD - right.x, ED25519_FIELD),
+            ED25519_FIELD
+        );
+        uint256 b = mulmod(
+            addmod(left.y, left.x, ED25519_FIELD),
+            addmod(right.y, right.x, ED25519_FIELD),
+            ED25519_FIELD
+        );
+        uint256 c = mulmod(
+            ED25519_TWO_D,
+            mulmod(left.t, right.t, ED25519_FIELD),
+            ED25519_FIELD
+        );
+        uint256 d = mulmod(
+            2,
+            mulmod(left.z, right.z, ED25519_FIELD),
+            ED25519_FIELD
+        );
+        uint256 e = addmod(b, ED25519_FIELD - a, ED25519_FIELD);
+        uint256 f = addmod(d, ED25519_FIELD - c, ED25519_FIELD);
+        uint256 g = addmod(d, c, ED25519_FIELD);
+        uint256 h = addmod(b, a, ED25519_FIELD);
+        result.x = mulmod(e, f, ED25519_FIELD);
+        result.y = mulmod(g, h, ED25519_FIELD);
+        result.z = mulmod(f, g, ED25519_FIELD);
+        result.t = mulmod(e, h, ED25519_FIELD);
     }
 
     function _recoverEd25519X(uint256 y) private pure returns (bool, uint256 x) {

@@ -1769,12 +1769,11 @@ pub struct TxInstr {
     pub payload_hex: String,
 }
 fn instruction_box_to_tx_instr(boxed: iroha_data_model::isi::InstructionBox) -> TxInstr {
-    use iroha_data_model::isi::Instruction;
-    let wire_id = Instruction::id(&*boxed).to_string();
-    let payload = Instruction::dyn_encode(&*boxed);
+    let (wire_id, framed) = iroha_data_model::isi::framed_instruction_payload(&boxed)
+        .expect("instruction must have a canonical V1 wire identifier and Norito frame");
     TxInstr {
-        wire_id,
-        payload_hex: hex::encode(payload),
+        wire_id: wire_id.to_owned(),
+        payload_hex: hex::encode(framed),
     }
 }
 #[derive(Debug, JsonSerialize, NoritoSerialize)]
@@ -1887,6 +1886,26 @@ mod tests {
     use super::*;
     use http_body_util::BodyExt as _;
     use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::State};
+
+    #[test]
+    fn runtime_upgrade_instruction_drafts_use_canonical_wire_ids_and_frames() {
+        let boxed: iroha_data_model::isi::InstructionBox =
+            iroha_data_model::isi::runtime_upgrade::CancelRuntimeUpgrade {
+                id: iroha_data_model::runtime::RuntimeUpgradeId([0xA5; 32]),
+            }
+            .into();
+        let draft = instruction_box_to_tx_instr(boxed);
+
+        assert_eq!(draft.wire_id, "iroha.runtime_upgrade.cancel");
+        let framed = hex::decode(&draft.payload_hex).expect("decode framed instruction hex");
+        let decoded = iroha_data_model::isi::decode_instruction_from_pair(&draft.wire_id, &framed)
+            .expect("decode canonical runtime-upgrade instruction pair");
+        assert_eq!(
+            iroha_data_model::isi::Instruction::id(&*decoded),
+            std::any::type_name::<iroha_data_model::isi::runtime_upgrade::CancelRuntimeUpgrade>()
+        );
+    }
+
     #[cfg(feature = "app_api")]
     fn checked_projection_ed25519_keypair(seed: u8) -> iroha_crypto::KeyPair {
         iroha_crypto::KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)

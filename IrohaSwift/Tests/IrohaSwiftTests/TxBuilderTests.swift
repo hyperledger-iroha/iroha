@@ -253,7 +253,10 @@ final class TxBuilderTests: XCTestCase {
         "ed01205634E9071E8662974A22F137972663C4644DC3546A1938E1CAC58DE4CBA8D965"
     private static let fixtureClaimSignatureHex =
         "9262CA8C755D47207ED0CD2E19892DFAA4612701A36DCAF87173D42CC754DFB6A66158856FDFD25974C2A11E9FC32940CA0DF18CAC25A38CB5DEDC4625E67900"
-    private static let fixtureExplorerAccountId = AccountId.make(publicKey: Data(repeating: 0x2A, count: 32))
+    private static let fixtureExplorerAccountId: String = {
+        let keypair = try! Keypair(privateKeyBytes: Data(repeating: 0x2A, count: 32))
+        return AccountId.make(publicKey: keypair.publicKey)
+    }()
     private static let fixtureAssetDefinition = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
     private static let fixtureCreationTimeMs: UInt64 = 1_700_000_000_000
     private enum FixtureError: Error { case invalidKey }
@@ -444,7 +447,7 @@ final class TxBuilderTests: XCTestCase {
         let keypair = try makeFixtureKeypair()
         let authority = AccountId.make(publicKey: keypair.publicKey)
         let instruction = try TransactionInstructionFrame(
-            wireName: "iroha_data_model::isi::Log",
+            wireName: "iroha.log",
             framedPayload: noritoEncode(
                 typeName: "iroha_data_model::isi::Log",
                 payload: Data([1, 2, 3]),

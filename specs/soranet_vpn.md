@@ -394,8 +394,11 @@ the same deterministic framing.
   `NoNewPrivs=1`, `Seccomp=2`, `TracerPid=0`, `Threads=1`, and root custody of
   the child's `/proc` directory before releasing the payload. The child then
   returns one exact 8 KiB plan containing the signed helper ticket and canonical
-  network fields. The supervisor reparses that ticket with the fixed issuer key,
-  recomputes its policy hash, and accepts no unused or nonzero padding bytes.
+  network fields. Its variable route region begins at the next 64-byte boundary
+  after the complete fixed-width ML-DSA-65 relay identity, and all intervening
+  and unused bytes must remain zero. The supervisor reparses that ticket with
+  the fixed issuer key, recomputes its policy hash, and accepts no unused or
+  nonzero padding bytes.
   The subsequent fixed 64-byte credential-bearing IPC sequence is
   `WORKER_READY`, `TUN_READY(fd)`, `TUN_ACK`, `START`, `STARTED`, cumulative
   `TRAFFIC`, `STOP`, and `WORKER_EXIT`. Every datagram carries kernel peer
@@ -447,8 +450,13 @@ the same deterministic framing.
   recursively killable. Teardown always stops and reaps the exact network child,
   closes the final TUN custody, then restores global state. V1 requires a
   trusted `resolvectl`; it never edits or backs up `/etc/resolv.conf` directly.
-  Cleanup durably advances after the per-link DNS revert and restores/pops each
-  ownership-checked excluded route one at a time.
+  Before each excluded-route add, the journal durably records a versioned ownership tuple
+  containing the exact prefix, gateway (when present), device, and reserved numeric protocol
+  186 marker. A successful add replaces that precommit with the exact numeric kernel readback.
+  Recovery after a crash in between accepts only a live route matching the complete precommit
+  and deletes using that live exact readback; any destination, gateway, device, or protocol
+  drift remains repair-required. Cleanup durably advances after the per-link DNS revert and
+  restores/pops each ownership-checked excluded route one at a time.
   Every external cleanup unit is idempotent, so a failure or crash resumes from
   the last durable phase without skipping later routes.
   If the outer connect path observes an early supervisor exit or readiness

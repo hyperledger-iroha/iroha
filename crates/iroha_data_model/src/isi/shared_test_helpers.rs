@@ -94,9 +94,8 @@ mod tests {
             assert!(!source.contains("fn assert_slice_roundtrip"));
             assert!(!source.contains("fn assert_registry_decodes"));
             assert!(
-                source.contains(
-                    "assert_registry_decodes_registered_type as assert_registry_decodes"
-                )
+                source
+                    .contains("assert_registry_decodes_registered_type as assert_registry_decodes")
             );
             slice_calls += source.matches("assert_slice_roundtrip(").count();
             registry_calls += source.matches("assert_registry_decodes(").count();

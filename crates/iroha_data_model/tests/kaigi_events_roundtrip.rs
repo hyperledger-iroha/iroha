@@ -94,8 +94,10 @@ fn relay_registration_summary_roundtrips_via_norito() {
 #[test]
 fn relay_health_summary_roundtrips_via_norito() {
     let call = sample_call_id();
+    let relay_domain = DomainId::try_new("relay", "universal").expect("valid relay domain");
     let relay = checked_random_account_id();
     let summary = DomainEvent::KaigiRelayHealthUpdated(KaigiRelayHealthSummary::new(
+        relay_domain.clone(),
         call.clone(),
         relay.clone(),
         KaigiRelayHealthStatus::Unavailable,
@@ -105,6 +107,7 @@ fn relay_health_summary_roundtrips_via_norito() {
     let decoded = DomainEvent::decode(&mut bytes.as_slice()).expect("decode relay health summary");
     assert_eq!(summary, decoded);
     if let DomainEvent::KaigiRelayHealthUpdated(decoded_summary) = decoded {
+        assert_eq!(&decoded_summary.domain, &relay_domain);
         assert_eq!(&decoded_summary.call, &call);
         assert_eq!(&decoded_summary.relay, &relay);
         assert_eq!(decoded_summary.status, KaigiRelayHealthStatus::Unavailable);

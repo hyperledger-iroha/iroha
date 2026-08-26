@@ -1,6 +1,8 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using Hyperledger.Iroha.Address;
+using Hyperledger.Iroha.Numeric;
 using Hyperledger.Iroha.Transactions;
 
 namespace Hyperledger.Iroha.Torii;
@@ -198,14 +200,45 @@ public sealed record class ToriiAccountOnboardingPrepareRequestV1
 {
     public const string SchemaV1 = "iroha.accounts.onboard.prepare.v1";
 
+    public ToriiAccountOnboardingPrepareRequestV1(
+        ToriiTairaPublicResetMutationBindingV1 binding,
+        ToriiAccountOnboardingPlanReceipt receipt,
+        FeePaymentIntent feePayment)
+        : this(SchemaV1, binding, receipt, feePayment)
+    {
+    }
+
+    [JsonConstructor]
+    public ToriiAccountOnboardingPrepareRequestV1(
+        string schema,
+        ToriiTairaPublicResetMutationBindingV1 binding,
+        ToriiAccountOnboardingPlanReceipt receipt,
+        FeePaymentIntent feePayment)
+    {
+        if (!string.Equals(schema, SchemaV1, StringComparison.Ordinal))
+        {
+            throw new JsonException("Unsupported account onboarding prepare schema.");
+        }
+        Binding = binding
+            ?? throw new JsonException("Account onboarding prepare binding is required.");
+        Receipt = receipt
+            ?? throw new JsonException("Account onboarding prepare receipt is required.");
+        FeePayment = feePayment
+            ?? throw new JsonException("Account onboarding prepare fee_payment is required.");
+        Schema = schema;
+    }
+
     [JsonRequired, JsonPropertyName("schema")]
-    public string Schema { get; init; } = SchemaV1;
+    public string Schema { get; init; }
 
     [JsonRequired, JsonPropertyName("binding")]
-    public ToriiTairaPublicResetMutationBindingV1 Binding { get; init; } = new();
+    public ToriiTairaPublicResetMutationBindingV1 Binding { get; init; }
 
     [JsonRequired, JsonPropertyName("receipt")]
-    public ToriiAccountOnboardingPlanReceipt Receipt { get; init; } = new();
+    public ToriiAccountOnboardingPlanReceipt Receipt { get; init; }
+
+    [JsonRequired, JsonPropertyName("fee_payment")]
+    public FeePaymentIntent FeePayment { get; init; }
 }
 
 /// <summary>Live onboarding disposition used to prepare the exact instruction vector.</summary>
@@ -415,14 +448,102 @@ public sealed class ToriiAccountOnboardingCurrentStateProofV1
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record class ToriiAccountFaucetClaimV1
 {
+    private string accountId = string.Empty;
+    private ulong powAnchorHeight;
+    private string powNonceHex = string.Empty;
+
+    [JsonConstructor]
+    public ToriiAccountFaucetClaimV1(
+        string accountId,
+        ulong powAnchorHeight,
+        string powNonceHex)
+    {
+        AccountId = accountId;
+        PowAnchorHeight = powAnchorHeight;
+        PowNonceHex = powNonceHex;
+    }
+
     [JsonRequired, JsonPropertyName("account_id")]
-    public string AccountId { get; init; } = string.Empty;
+    public string AccountId
+    {
+        get => accountId;
+        init => accountId = ToriiAccountFaucetMetadata.RequireCanonicalAccountId(
+            value,
+            nameof(AccountId));
+    }
 
     [JsonRequired, JsonPropertyName("pow_anchor_height")]
-    public ulong? PowAnchorHeight { get; init; }
+    public ulong PowAnchorHeight
+    {
+        get => powAnchorHeight;
+        init => powAnchorHeight = ToriiAccountFaucetMetadata.RequirePositive(
+            value,
+            nameof(PowAnchorHeight));
+    }
 
     [JsonRequired, JsonPropertyName("pow_nonce_hex")]
-    public string? PowNonceHex { get; init; }
+    public string PowNonceHex
+    {
+        get => powNonceHex;
+        init => powNonceHex = ToriiAccountFaucetMetadata.RequireFaucetNonceHex(
+            value,
+            nameof(PowNonceHex));
+    }
+}
+
+/// <summary>
+/// Independently trusted first-release faucet authority and exact issuance policy.
+/// </summary>
+public sealed record class ToriiAccountFaucetPolicyV1
+{
+    public ToriiAccountFaucetPolicyV1(
+        string faucetAuthority,
+        string assetDefinitionId,
+        NumericV1.QuantityValue amount)
+    {
+        FaucetAuthority = ToriiAccountFaucetMetadata.RequireCanonicalAccountId(
+            faucetAuthority,
+            nameof(faucetAuthority));
+        var authority = AccountAddress.Parse(FaucetAuthority);
+        if (authority.AddressClass != AddressClass.SingleKey
+            || authority.CurveIdentifier != CurveId.Ed25519)
+        {
+            throw new ArgumentException(
+                "Faucet authority must be one canonical Ed25519 account.",
+                nameof(faucetAuthority));
+        }
+
+        AssetDefinitionId = ToriiAccountFaucetMetadata.RequireExactTokenText(
+            assetDefinitionId,
+            nameof(assetDefinitionId));
+        try
+        {
+            _ = new TransactionEncodingContext(FaucetAuthority)
+                .EncodeAssetDefinitionId(AssetDefinitionId);
+        }
+        catch (ArgumentException error)
+        {
+            throw new ArgumentException(
+                "Faucet asset definition must be canonical.",
+                nameof(assetDefinitionId),
+                error);
+        }
+
+        ArgumentNullException.ThrowIfNull(amount);
+        if (amount.Mantissa.Sign <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(amount),
+                "Faucet amount must be positive.");
+        }
+        Amount = amount;
+    }
+
+    public string FaucetAuthority { get; }
+
+    public string AssetDefinitionId { get; }
+
+    public NumericV1.QuantityValue Amount { get; }
 }
 
 /// <summary>Exact non-mutating faucet prepare request.</summary>
@@ -431,14 +552,45 @@ public sealed record class ToriiAccountFaucetPrepareRequestV1
 {
     public const string SchemaV1 = "iroha.accounts.faucet.prepare.v1";
 
+    public ToriiAccountFaucetPrepareRequestV1(
+        ToriiTairaPublicResetMutationBindingV1 binding,
+        ToriiAccountFaucetClaimV1 claim,
+        FeePaymentIntent feePayment)
+        : this(SchemaV1, binding, claim, feePayment)
+    {
+    }
+
+    [JsonConstructor]
+    public ToriiAccountFaucetPrepareRequestV1(
+        string schema,
+        ToriiTairaPublicResetMutationBindingV1 binding,
+        ToriiAccountFaucetClaimV1 claim,
+        FeePaymentIntent feePayment)
+    {
+        if (!string.Equals(schema, SchemaV1, StringComparison.Ordinal))
+        {
+            throw new JsonException("Unsupported account faucet prepare schema.");
+        }
+        Binding = binding
+            ?? throw new JsonException("Account faucet prepare binding is required.");
+        Claim = claim
+            ?? throw new JsonException("Account faucet prepare claim is required.");
+        FeePayment = feePayment
+            ?? throw new JsonException("Account faucet prepare fee_payment is required.");
+        Schema = schema;
+    }
+
     [JsonRequired, JsonPropertyName("schema")]
-    public string Schema { get; init; } = SchemaV1;
+    public string Schema { get; init; }
 
     [JsonRequired, JsonPropertyName("binding")]
-    public ToriiTairaPublicResetMutationBindingV1 Binding { get; init; } = new();
+    public ToriiTairaPublicResetMutationBindingV1 Binding { get; init; }
 
     [JsonRequired, JsonPropertyName("claim")]
-    public ToriiAccountFaucetClaimV1 Claim { get; init; } = new();
+    public ToriiAccountFaucetClaimV1 Claim { get; init; }
+
+    [JsonRequired, JsonPropertyName("fee_payment")]
+    public FeePaymentIntent FeePayment { get; init; }
 }
 
 /// <summary>Authenticated exact faucet transaction prepared by Torii.</summary>
@@ -458,7 +610,7 @@ public sealed record class ToriiAccountFaucetPreparedTransactionV1
     public string Operation { get; init; } = OperationV1;
 
     [JsonRequired, JsonPropertyName("claim")]
-    public ToriiAccountFaucetClaimV1 Claim { get; init; } = new();
+    public ToriiAccountFaucetClaimV1 Claim { get; init; } = null!;
 
     [JsonRequired, JsonPropertyName("semantic_hash_hex")]
     public string SemanticHashHex { get; init; } = string.Empty;
@@ -2182,7 +2334,10 @@ internal static class ToriiAccountFaucetMetadata
 {
     internal static string RequireCanonicalAccountId(string? value, string paramName)
     {
-        return ToriiExplorerDirectMetadata.RequireCanonicalAccountId(value, paramName);
+        return ToriiAccountFaucetPow.RequireExactAccountId(
+            value,
+            paramName,
+            chainDiscriminant: null);
     }
 
     internal static string RequireExactTokenText(string? value, string paramName)
@@ -2193,6 +2348,26 @@ internal static class ToriiAccountFaucetMetadata
     internal static string RequireCanonicalQuantityText(string? value, string paramName)
     {
         return ToriiExplorerDirectMetadata.RequireCanonicalQuantityText(value, paramName);
+    }
+
+    internal static string RequireFaucetNonceHex(string? value, string paramName)
+    {
+        var exact = RequireExactTokenText(value, paramName);
+        if (exact.Length > 64)
+        {
+            throw new ArgumentException(
+                "Faucet PoW nonce must not exceed 32 bytes.",
+                paramName);
+        }
+        if ((exact.Length & 1) != 0
+            || exact.Any(static character =>
+                character is not (>= '0' and <= '9') and not (>= 'a' and <= 'f')))
+        {
+            throw new ArgumentException(
+                "Faucet PoW nonce must be non-empty canonical lowercase hexadecimal.",
+                paramName);
+        }
+        return exact;
     }
 
     internal static string RequireFaucetAlgorithm(string? value, string paramName)
@@ -5922,125 +6097,138 @@ public sealed record class ToriiFeeQuoteRequest
     public UnsignedTransactionPayload Payload { get; init; } = null!;
 }
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record class ToriiFeeQuoteObservation
 {
-    [JsonPropertyName("ledger_time_ms")]
+    [JsonRequired, JsonPropertyName("ledger_time_ms")]
     public ulong LedgerTimeMilliseconds { get; init; }
 
-    [JsonPropertyName("next_block_height")]
+    [JsonRequired, JsonPropertyName("next_block_height")]
     public ulong NextBlockHeight { get; init; }
 
-    [JsonPropertyName("route_dataspace_id")]
+    [JsonRequired, JsonPropertyName("route_dataspace_id")]
     public ulong RouteDataspaceId { get; init; }
 }
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record class ToriiFeeQuoteCapacity
 {
-    [JsonPropertyName("asset_definition_id")]
+    [JsonRequired, JsonPropertyName("asset_definition_id")]
     public string AssetDefinitionId { get; init; } = string.Empty;
 
-    [JsonPropertyName("vault_balance")]
+    [JsonRequired, JsonPropertyName("vault_balance")]
     public string VaultBalance { get; init; } = string.Empty;
 
-    [JsonPropertyName("reserve_floor")]
+    [JsonRequired, JsonPropertyName("reserve_floor")]
     public string ReserveFloor { get; init; } = string.Empty;
 
-    [JsonPropertyName("block_remaining")]
+    [JsonRequired, JsonPropertyName("block_remaining")]
     public string BlockRemaining { get; init; } = string.Empty;
 
-    [JsonPropertyName("program_epoch_remaining")]
+    [JsonRequired, JsonPropertyName("program_epoch_remaining")]
     public string ProgramEpochRemaining { get; init; } = string.Empty;
 
-    [JsonPropertyName("beneficiary_epoch_remaining")]
+    [JsonRequired, JsonPropertyName("beneficiary_epoch_remaining")]
     public string BeneficiaryEpochRemaining { get; init; } = string.Empty;
 }
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record class ToriiFeeDebitSource
 {
-    [JsonPropertyName("kind")]
+    [JsonRequired, JsonPropertyName("kind")]
     public string Kind { get; init; } = string.Empty;
 
-    [JsonPropertyName("value")]
+    [JsonRequired, JsonPropertyName("value")]
     public JsonElement Value { get; init; }
 }
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record class ToriiFeeQuoteDecisionValue
 {
-    [JsonPropertyName("debit_source")]
+    [JsonRequired, JsonPropertyName("debit_source")]
     public ToriiFeeDebitSource DebitSource { get; init; } = null!;
 
-    [JsonPropertyName("program_revision")]
+    [JsonRequired, JsonPropertyName("program_revision")]
     public ulong? ProgramRevision { get; init; }
 }
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record class ToriiFeeQuoteDecision
 {
-    [JsonPropertyName("status")]
+    [JsonRequired, JsonPropertyName("status")]
     public string Status { get; init; } = string.Empty;
 
-    [JsonPropertyName("value")]
+    [JsonRequired, JsonPropertyName("value")]
     public ToriiFeeQuoteDecisionValue Value { get; init; } = null!;
 }
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record class ToriiFeeQuoteResponse
 {
-    [JsonPropertyName("intent")]
+    [JsonRequired, JsonPropertyName("intent")]
     public FeePaymentIntent Intent { get; init; } = null!;
 
-    [JsonPropertyName("observation")]
+    [JsonRequired, JsonPropertyName("observation")]
     public ToriiFeeQuoteObservation Observation { get; init; } = null!;
 
-    [JsonPropertyName("components")]
+    [JsonRequired, JsonPropertyName("components")]
     public IReadOnlyList<FeeChargeLimit> Components { get; init; } = Array.Empty<FeeChargeLimit>();
 
-    [JsonPropertyName("capacities")]
+    [JsonRequired, JsonPropertyName("capacities")]
     public IReadOnlyList<ToriiFeeQuoteCapacity> Capacities { get; init; } = Array.Empty<ToriiFeeQuoteCapacity>();
 
-    [JsonPropertyName("decision")]
+    [JsonRequired, JsonPropertyName("decision")]
     public ToriiFeeQuoteDecision Decision { get; init; } = null!;
 }
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record class ToriiFeeSponsorProgramLookupRequest
 {
-    [JsonPropertyName("program_id")]
+    [JsonRequired, JsonPropertyName("program_id")]
     public string ProgramId { get; init; } = string.Empty;
 }
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record class ToriiFeeSponsorProgramLifecycle
 {
-    [JsonPropertyName("state")]
+    [JsonRequired, JsonPropertyName("state")]
     public string State { get; init; } = string.Empty;
 
-    [JsonPropertyName("value")]
+    [JsonRequired, JsonPropertyName("value")]
     public JsonNode? Value { get; init; }
 }
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record class ToriiFeeSponsorProgramActivation
 {
-    [JsonPropertyName("revision")]
+    [JsonRequired, JsonPropertyName("revision")]
     public ulong Revision { get; init; }
 
-    [JsonPropertyName("activate_at_height")]
+    [JsonRequired, JsonPropertyName("activate_at_height")]
     public ulong ActivateAtHeight { get; init; }
 }
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record class ToriiFeeSponsorProgram
 {
-    [JsonPropertyName("id")]
+    [JsonRequired, JsonPropertyName("id")]
     public FeeSponsorProgramId Id { get; init; } = null!;
 
-    [JsonPropertyName("payout_account")]
+    [JsonRequired, JsonPropertyName("payout_account")]
     public string PayoutAccount { get; init; } = string.Empty;
 
-    [JsonPropertyName("lifecycle")]
+    [JsonRequired, JsonPropertyName("lifecycle")]
     public ToriiFeeSponsorProgramLifecycle Lifecycle { get; init; } = null!;
 
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     [JsonPropertyName("active_revision")]
     public ulong? ActiveRevision { get; init; }
 
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     [JsonPropertyName("staged_revision")]
     public ulong? StagedRevision { get; init; }
 
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     [JsonPropertyName("scheduled_activation")]
     public ToriiFeeSponsorProgramActivation? ScheduledActivation { get; init; }
 }

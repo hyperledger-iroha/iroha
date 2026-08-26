@@ -5282,9 +5282,11 @@ mod tests {
         }
     }
     include!("openapi/tests/diagnostics_schemas.rs");
+    include!("openapi/tests/fee_quote_contract.rs");
     include!("openapi/tests/finality_app_contracts.rs");
     include!("openapi/tests/iso20022_auth.rs");
     include!("openapi/tests/json_value_contract.rs");
+    include!("openapi/tests/prepared_account_contracts.rs");
     include!("openapi/tests/soracloud_lease_contracts.rs");
     include!("openapi/tests/vpn_da.rs");
 }

@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 
 import * as sdk from "../src/index.js";
 import * as distSdk from "../dist/index.js";
@@ -12,12 +13,17 @@ import {
   KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION,
   KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES,
   normalizeOfflineStatus,
+  normalizeKagemushaOperationReference,
   normalizeKagemushaOperationStatus,
+  normalizeKagemushaRedeemRequestV4,
   normalizeKagemushaTopUpRequestV4,
 } from "../src/kagemushaOffline.js";
+import { crc64Xz } from "../src/crc64Xz.js";
 
 const OPERATION_ID = "11".repeat(32);
 const TRANSACTION_HASH = "23".repeat(32);
+const TOP_UP_SCHEMA_NAME = "iroha.torii.v1.offline.top_up.request";
+const REDEEM_SCHEMA_NAME = "iroha.torii.v1.offline.redeem.request";
 
 function jsonResponse(payload, { status = 200, headers = {} } = {}) {
   return new Response(JSON.stringify(payload), {
@@ -36,14 +42,24 @@ function universalCapability(overrides = {}) {
   };
 }
 
-function noritoArchive() {
-  const archive = new Uint8Array(40);
-  archive.set([0x4e, 0x52, 0x54, 0x30]);
+function noritoArchive(schemaName = TOP_UP_SCHEMA_NAME) {
+  const payload = Buffer.from([0x01]);
+  const archive = Buffer.alloc(48 + payload.length);
+  archive.write("NRT0", 0, "ascii");
+  createHash("sha256")
+    .update(Buffer.from("norito:v1:type-name\0", "utf8"))
+    .update(Buffer.from(schemaName, "utf8"))
+    .digest()
+    .copy(archive, 6, 0, 16);
+  archive.writeBigUInt64LE(BigInt(payload.length), 23);
+  archive.writeBigUInt64LE(crc64Xz(payload), 31);
+  archive[39] = 0x02;
+  payload.copy(archive, 48);
   return archive;
 }
 
-function requestV4() {
-  return { version: 4, operationId: OPERATION_ID, norito: noritoArchive() };
+function requestV4(schemaName = TOP_UP_SCHEMA_NAME) {
+  return { version: 4, operationId: OPERATION_ID, norito: noritoArchive(schemaName) };
 }
 
 function operationReference(kind) {
@@ -104,17 +120,61 @@ test("Kagemusha JavaScript surface is transport-only ABI-23/V4", () => {
   );
 });
 
+test("Kagemusha requests require an exact schema-bound Norito frame", () => {
+  assert.equal(normalizeKagemushaTopUpRequestV4(requestV4()).norito.length, 49);
+  assert.equal(
+    normalizeKagemushaRedeemRequestV4(requestV4(REDEEM_SCHEMA_NAME)).norito.length,
+    49,
+  );
+
+  const wrongSchema = requestV4();
+  assert.throws(
+    () => normalizeKagemushaRedeemRequestV4(wrongSchema),
+    /schema hash did not match/u,
+  );
+
+  const badChecksum = requestV4();
+  badChecksum.norito[48] ^= 0xff;
+  assert.throws(
+    () => normalizeKagemushaTopUpRequestV4(badChecksum),
+    /CRC64 mismatch/u,
+  );
+
+  const withoutAlignmentPadding = requestV4();
+  withoutAlignmentPadding.norito = Buffer.concat([
+    withoutAlignmentPadding.norito.subarray(0, 40),
+    withoutAlignmentPadding.norito.subarray(48),
+  ]);
+  assert.throws(
+    () => normalizeKagemushaTopUpRequestV4(withoutAlignmentPadding),
+    /exactly 8 bytes of header padding/u,
+  );
+
+  const alternateFlags = requestV4();
+  alternateFlags.norito[39] = 0;
+  assert.throws(
+    () => normalizeKagemushaTopUpRequestV4(alternateFlags),
+    /canonical compact-length layout flags/u,
+  );
+});
+
 test("ToriiClient preserves all four Kagemusha routes and V4 request headers", async () => {
   const observed = [];
   const responses = [
     jsonResponse(universalCapability()),
     jsonResponse(operationReference("top_up"), {
       status: 202,
-      headers: { location: `/v1/offline/operations/${OPERATION_ID}` },
+      headers: {
+        location: `/v1/offline/operations/${OPERATION_ID}`,
+        "retry-after": "1",
+      },
     }),
     jsonResponse(operationReference("redeem"), {
       status: 202,
-      headers: { location: `/v1/offline/operations/${OPERATION_ID}` },
+      headers: {
+        location: `/v1/offline/operations/${OPERATION_ID}`,
+        "retry-after": "1",
+      },
     }),
     jsonResponse({
       state: "applied",
@@ -141,7 +201,7 @@ test("ToriiClient preserves all four Kagemusha routes and V4 request headers", a
 
   const capability = await client.getOfflineCapability();
   const topUp = await client.submitKagemushaTopUpV4(requestV4());
-  const redeem = await client.submitKagemushaRedeemV4(requestV4());
+  const redeem = await client.submitKagemushaRedeemV4(requestV4(REDEEM_SCHEMA_NAME));
   const status = await client.getKagemushaOperationStatus(OPERATION_ID);
 
   assert.deepEqual(capability, universalCapability());
@@ -159,11 +219,17 @@ test("ToriiClient preserves all four Kagemusha routes and V4 request headers", a
     ],
   );
   assert.equal(observed[0].url.search, "");
-  for (const { init } of observed.slice(1, 3)) {
+  const submittedArchives = [
+    noritoArchive(TOP_UP_SCHEMA_NAME),
+    noritoArchive(REDEEM_SCHEMA_NAME),
+  ];
+  for (const [{ init }, expectedArchive] of observed
+    .slice(1, 3)
+    .map((entry, index) => [entry, submittedArchives[index]])) {
     const headers = new Headers(init.headers);
     assert.equal(headers.get("content-type"), "application/x-norito");
     assert.equal(headers.get("idempotency-key"), OPERATION_ID);
-    assert.deepEqual([...new Uint8Array(init.body)], [...noritoArchive()]);
+    assert.deepEqual([...new Uint8Array(init.body)], [...expectedArchive]);
   }
 });
 
@@ -173,7 +239,10 @@ test("ToriiBrowserClient exposes the same transport-only Kagemusha contract", as
     jsonResponse(universalCapability()),
     jsonResponse(operationReference("top_up"), {
       status: 202,
-      headers: { location: `/v1/offline/operations/${OPERATION_ID}` },
+      headers: {
+        location: `/v1/offline/operations/${OPERATION_ID}`,
+        "retry-after": "1",
+      },
     }),
     jsonResponse({
       state: "pending",
@@ -207,6 +276,53 @@ test("ToriiBrowserClient exposes the same transport-only Kagemusha contract", as
       "/v1/offline/top-up",
       `/v1/offline/operations/${OPERATION_ID}`,
     ],
+  );
+});
+
+test("operation references require Torii's positive Retry-After header", () => {
+  for (const retryAfter of [
+    null,
+    "0",
+    "soon",
+    "18446744073709551616",
+    "9".repeat(10_000),
+  ]) {
+    assert.throws(
+      () => normalizeKagemushaOperationReference(operationReference("top_up"), {
+        expectedOperationId: OPERATION_ID,
+        expectedKind: "top_up",
+        location: `/v1/offline/operations/${OPERATION_ID}`,
+        retryAfter,
+      }),
+      /Retry-After must be a positive u64/u,
+    );
+  }
+});
+
+test("pending operation timestamps must be positive", () => {
+  assert.throws(
+    () => normalizeKagemushaOperationReference({
+      ...operationReference("top_up"),
+      submitted_at_ms: 0,
+    }, {
+      expectedOperationId: OPERATION_ID,
+      expectedKind: "top_up",
+      location: `/v1/offline/operations/${OPERATION_ID}`,
+      retryAfter: "1",
+    }),
+    /submitted_at_ms must be a positive safe unsigned integer/u,
+  );
+  assert.throws(
+    () => normalizeKagemushaOperationStatus({
+      state: "pending",
+      value: {
+        operation_id: OPERATION_ID,
+        kind: { kind: "top_up", value: null },
+        transaction_hash: TRANSACTION_HASH,
+        submitted_at_ms: 0,
+      },
+    }, OPERATION_ID),
+    /submitted_at_ms must be a positive safe unsigned integer/u,
   );
 });
 
@@ -257,6 +373,16 @@ test("rejected operation parsing requires the exact error envelope", () => {
       normalize(rejected, OPERATION_ID).value.error.code,
       "offline_operation_rejected",
     );
+    assert.equal(
+      normalize({
+        ...rejected,
+        value: {
+          ...rejected.value,
+          error: { ...rejected.value.error, message: "😀".repeat(1024) },
+        },
+      }, OPERATION_ID).value.error.message,
+      "😀".repeat(1024),
+    );
     assert.throws(
       () => normalize({
         ...rejected,
@@ -288,6 +414,70 @@ test("rejected operation parsing requires the exact error envelope", () => {
         },
       }, OPERATION_ID),
       /canonical lowercase 32-byte Iroha hash/u,
+    );
+    for (const code of ["INVALID-CODE", "_private", `a${"b".repeat(64)}`]) {
+      assert.throws(
+        () => normalize({
+          ...rejected,
+          value: {
+            ...rejected.value,
+            error: { ...rejected.value.error, code },
+          },
+        }, OPERATION_ID),
+        /(?:stable lowercase error code|exact non-empty text)/u,
+      );
+    }
+    assert.throws(
+      () => normalize({
+        ...rejected,
+        value: {
+          ...rejected.value,
+          error: { ...rejected.value.error, message: "control\u0085text" },
+        },
+      }, OPERATION_ID),
+      /exact non-empty text/u,
+    );
+    assert.throws(
+      () => normalize({
+        ...rejected,
+        value: {
+          ...rejected.value,
+          error: { ...rejected.value.error, message: "x".repeat(1025) },
+        },
+      }, OPERATION_ID),
+      /exact non-empty text/u,
+    );
+  }
+});
+
+test("applied operation parsing rejects zero finality fields", () => {
+  const applied = {
+    state: "applied",
+    value: {
+      operation_id: OPERATION_ID,
+      result: {
+        kind: "redeem",
+        result: {
+          transaction_hash: TRANSACTION_HASH,
+          finalized_block_height: 1,
+          server_time_ms: 1,
+        },
+      },
+    },
+  };
+  for (const field of ["finalized_block_height", "server_time_ms"]) {
+    assert.throws(
+      () => normalizeKagemushaOperationStatus({
+        ...applied,
+        value: {
+          ...applied.value,
+          result: {
+            ...applied.value.result,
+            result: { ...applied.value.result.result, [field]: 0 },
+          },
+        },
+      }, OPERATION_ID),
+      new RegExp(`${field} must be a positive safe unsigned integer`, "u"),
     );
   }
 });

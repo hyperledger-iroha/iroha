@@ -191,6 +191,21 @@ internal static class ToriiAccountFaucetJson
 
 internal sealed class ToriiAccountFaucetPuzzleJsonConverter : JsonConverter<ToriiAccountFaucetPuzzle>
 {
+    private static readonly string[] RequiredProperties =
+    [
+        "algorithm",
+        "network_id",
+        "chain_discriminant",
+        "difficulty_bits",
+        "anchor_height",
+        "anchor_block_hash_hex",
+        "challenge_salt_hex",
+        "scrypt_log_n",
+        "scrypt_r",
+        "scrypt_p",
+        "max_anchor_age_blocks",
+    ];
+
     public override bool HandleNull => true;
 
     public override ToriiAccountFaucetPuzzle Read(
@@ -225,6 +240,7 @@ internal sealed class ToriiAccountFaucetPuzzleJsonConverter : JsonConverter<Tori
         {
             if (reader.TokenType == JsonTokenType.EndObject)
             {
+                RequireExactProperties(seen);
                 try
                 {
                     var response = new ToriiAccountFaucetPuzzle
@@ -331,14 +347,24 @@ internal sealed class ToriiAccountFaucetPuzzleJsonConverter : JsonConverter<Tori
                     maxAnchorAgeBlocks = ToriiAccountFaucetJson.ReadUInt64(ref reader, "account faucet puzzle.max_anchor_age_blocks");
                     break;
                 default:
-                    ToriiIdentifierJson.SkipRejectingDuplicateProperties(
-                        ref reader,
-                        $"account faucet puzzle.{propertyName}");
-                    break;
+                    throw new JsonException(
+                        $"account faucet puzzle.{propertyName} is an unknown property; the exact 11-field V1 schema does not allow extensions.");
             }
         }
 
         throw new JsonException("account faucet puzzle is truncated.");
+    }
+
+    private static void RequireExactProperties(HashSet<string> seen)
+    {
+        foreach (var property in RequiredProperties)
+        {
+            if (!seen.Contains(property))
+            {
+                throw new JsonException(
+                    $"account faucet puzzle.{property} must not be null or omitted; the exact 11-field V1 schema requires it to be present.");
+            }
+        }
     }
 
     private static JsonException DirectMetadataErrorToJsonException(ArgumentException error, string context)

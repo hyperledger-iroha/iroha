@@ -4051,6 +4051,21 @@ fn authoritative_service_deployment_bundle(
     })?;
     Ok((deployment, bundle))
 }
+fn ensure_authoritative_rollout_draft_supported(
+    world: &impl WorldReadOnly,
+    service_name: &str,
+) -> Result<(), SoracloudError> {
+    let (deployment, bundle) = authoritative_service_deployment_bundle(world, service_name)?;
+    if bundle.service.execution_plane == SoraServiceExecutionPlaneV1::HttpService
+        && bundle.container.runtime == SoraContainerRuntimeV1::Inrou
+    {
+        return Err(SoracloudError::bad_request(format!(
+            "service `{}` uses the first-release HttpService+Inrou runtime; staged rollout drafts are not supported; publish an atomic upgrade as the sole current revision",
+            deployment.service_name
+        )));
+    }
+    Ok(())
+}
 fn decode_public_service_discovery_registry(
     entry: &SoraServiceConfigEntryV1,
 ) -> Result<SoracloudPublicServiceDiscoveryRegistryV1, SoracloudError> {
@@ -6173,6 +6188,14 @@ pub(crate) async fn handle_rollout(
         Ok(service_name) => service_name,
         Err(err) => return err.into_response(),
     };
+    {
+        let state_view = app.state.view();
+        if let Err(err) =
+            ensure_authoritative_rollout_draft_supported(state_view.world(), service_name.as_ref())
+        {
+            return err.into_response();
+        }
+    }
     soracloud_draft_response(
         &signer,
         vec![InstructionBox::from(
@@ -10418,6 +10441,30 @@ mod tests {
         .expect_err("an active revision that fails SCR admission must fail closed");
         assert_eq!(error.kind, SoracloudErrorKind::Internal);
         assert!(error.message.contains("fails authoritative SCR admission"));
+    }
+
+    #[test]
+    fn rollout_draft_rejects_inrou_and_preserves_deterministic_ivm() {
+        use iroha_core::state::World;
+
+        let inrou_bundle = fixture_hosted_http_inrou_bundle("2026.03.0");
+        let inrou_service_name = inrou_bundle.service.service_name.clone();
+        let mut inrou_world = World::new();
+        install_fixture_service(&mut inrou_world, &inrou_bundle, &inrou_service_name);
+        let error =
+            ensure_authoritative_rollout_draft_supported(&inrou_world, inrou_service_name.as_ref())
+                .expect_err("first-release Inrou must not expose staged rollout drafts");
+        assert_eq!(error.kind, SoracloudErrorKind::BadRequest);
+        assert!(error.message.contains("HttpService+Inrou"));
+        assert!(error.message.contains("atomic upgrade"));
+        assert!(error.message.contains("sole current revision"));
+
+        let ivm_bundle = fixture_bundle("2026.03.0");
+        let ivm_service_name = ivm_bundle.service.service_name.clone();
+        let mut ivm_world = World::new();
+        install_fixture_service(&mut ivm_world, &ivm_bundle, &ivm_service_name);
+        ensure_authoritative_rollout_draft_supported(&ivm_world, ivm_service_name.as_ref())
+            .expect("deterministic IVM services must retain generic staged rollouts");
     }
 
     #[tokio::test]

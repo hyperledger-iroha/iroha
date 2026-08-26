@@ -236,6 +236,7 @@ struct SaturatedCompletionRuntime {
     effect_owners: BTreeMap<Hash, crate::sumeragi::v2_runtime::RuntimeEffectOwnerAssignment>,
     external_lifecycle_owners: Vec<RuntimeLifecycleOwner>,
     external_lifecycle_owner_capacity: Option<usize>,
+    exact_effect_ownership: Option<(AdapterEffect, RuntimeEffectOwnership)>,
 }
 impl SaturatedCompletionRuntime {
     fn new(queued: usize, capacity: usize) -> Self {
@@ -246,6 +247,7 @@ impl SaturatedCompletionRuntime {
             effect_owners: BTreeMap::new(),
             external_lifecycle_owners: Vec::new(),
             external_lifecycle_owner_capacity: None,
+            exact_effect_ownership: None,
         }
     }
     fn reject_completion() -> Result<(), EnqueueError> {
@@ -331,6 +333,17 @@ impl SaturatedCompletionRuntime {
     }
 }
 impl EffectRuntime for SaturatedCompletionRuntime {
+    fn can_admit_network_message_with_ingress_ownership(
+        &self,
+        message: &wire::ConsensusMessageV2,
+        _ingress_ownership: &FairV2IngressOwnershipEvidence,
+    ) -> bool {
+        matches!(
+            &message.payload,
+            wire::ConsensusMessageV2Payload::PayloadChunk(_)
+        )
+    }
+
     fn step_effects(&mut self, _now: Instant) -> Result<RuntimeStep<AdapterEffect>, String> {
         Ok(RuntimeStep::Idle)
     }
@@ -344,6 +357,14 @@ impl EffectRuntime for SaturatedCompletionRuntime {
         &mut self,
         effects: &[AdapterEffect],
     ) -> Result<Vec<RuntimeEffectOwnership>, String> {
+        if let Some((expected, ownership)) = self.exact_effect_ownership.take() {
+            if effects == core::slice::from_ref(&expected)
+                && ownership.exactly_binds_adapter_effect(&expected)
+            {
+                return Ok(vec![ownership]);
+            }
+            return Err("saturated exact effect ownership changed before transfer".to_owned());
+        }
         let ownership = effects
             .iter()
             .map(|effect| self.effect_ownership(effect))

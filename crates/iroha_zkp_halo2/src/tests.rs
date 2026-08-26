@@ -119,6 +119,36 @@ fn naive_msm<B: IpaBackend>(bases: &[B::Group], scalars: &[B::Scalar]) -> B::Gro
             acc.mul(base.pow(*scalar))
         })
 }
+fn forged_zero_round_envelope<B: IpaBackend>() -> OpenVerifyEnvelope {
+    let one = B::Scalar::one();
+    let a_final = one.add(one);
+    let t = one;
+    let g = B::derive_group_elem(b"G", 1, 0);
+    let u = B::derive_group_elem(b"U", 1, 0);
+    // For n=1 the old verifier had no challenge. Choosing
+    // P = G^a * U^(a-t) made its final equality hold without knowing a
+    // G-only commitment opening whose evaluation was t.
+    let p_g = g.pow(a_final).mul(u.pow(a_final.sub(t)));
+    OpenVerifyEnvelope {
+        params: IpaParams {
+            version: 1,
+            curve_id: B::CURVE_ID.as_u16(),
+            n: 1,
+        },
+        public: nh::poly_open_public::<B>(1, one, t, p_g),
+        proof: IpaProofData {
+            version: 1,
+            l: Vec::new(),
+            r: Vec::new(),
+            a_final: a_final.to_bytes(),
+            b_final: one.to_bytes(),
+        },
+        transcript_label: "forged-zero-round".into(),
+        vk_commitment: None,
+        public_inputs_schema_hash: None,
+        domain_tag: None,
+    }
+}
 #[test]
 fn params_power_of_two() {
     let pallas_params = pallas::Params::new(8).expect("n=8");
@@ -200,12 +230,46 @@ fn backend_msm_rejects_dimension_mismatch() {
 #[test]
 fn params_invalid_n() {
     assert!(pallas::Params::new(0).is_err());
+    assert!(matches!(pallas::Params::new(1), Err(Error::InvalidN(1))));
     assert!(pallas::Params::new(3).is_err());
+    assert!(matches!(bn254::Params::new(1), Err(Error::InvalidN(1))));
+    let pallas_wire = IpaParams {
+        version: 1,
+        curve_id: ZkCurveId::Pallas.as_u16(),
+        n: 1,
+    };
+    assert!(matches!(
+        nh::params_from_wire::<PallasBackend>(&pallas_wire),
+        Err(Error::InvalidN(1))
+    ));
+    let bn254_wire = IpaParams {
+        curve_id: ZkCurveId::Bn254.as_u16(),
+        ..pallas_wire
+    };
+    assert!(matches!(
+        nh::params_from_wire::<Bn254Backend>(&bn254_wire),
+        Err(Error::InvalidN(1))
+    ));
     #[cfg(feature = "goldilocks_backend")]
     {
         assert!(gold::Params::new(0).is_err());
+        assert!(matches!(gold::Params::new(1), Err(Error::InvalidN(1))));
         assert!(gold::Params::new(3).is_err());
     }
+}
+#[test]
+fn forged_zero_round_pallas_opening_is_rejected() {
+    let envelope = forged_zero_round_envelope::<PallasBackend>();
+    let results =
+        batch::verify_open_batch_with_options(&[envelope], &batch::BatchOptions::sequential());
+    assert!(matches!(results.first(), Some(Err(Error::InvalidN(1)))));
+}
+#[test]
+fn forged_zero_round_bn254_opening_is_rejected() {
+    let envelope = forged_zero_round_envelope::<Bn254Backend>();
+    let results =
+        batch::verify_open_batch_with_options(&[envelope], &batch::BatchOptions::sequential());
+    assert!(matches!(results.first(), Some(Err(Error::InvalidN(1)))));
 }
 #[test]
 fn poly_commit_open_verify_pallas() {
@@ -1171,6 +1235,11 @@ fn ipa_round_challenge_projection_rejects_bad_shape() {
         derive_ipa_verifier_round_challenges::<PallasBackend>(0, &mut invalid_n, &proof),
         Err(Error::InvalidN(0))
     ));
+    let mut zero_round_n = Transcript::new("round-shape");
+    assert!(matches!(
+        derive_ipa_verifier_round_challenges::<PallasBackend>(1, &mut zero_round_n, &proof),
+        Err(Error::InvalidN(1))
+    ));
     let mut missing_round = proof.clone();
     missing_round.r_vec.pop();
     let mut missing_round_transcript = Transcript::new("round-shape");
@@ -1419,6 +1488,20 @@ fn ipa_transcript_projection_validation_rejects_round_order_substitution() {
     ));
 }
 #[test]
+fn ipa_transcript_binding_rejects_zero_round_projection() {
+    let projection = IpaVerifierTranscriptProjection::<pallas::Scalar> {
+        n: 1,
+        state_before_ipa_n: [0; 32],
+        state_after_ipa_n: [0; 32],
+        rounds: Vec::new(),
+        final_state: [0; 32],
+    };
+    assert!(matches!(
+        derive_ipa_verifier_transcript_binding(&projection),
+        Err(Error::InvalidN(1))
+    ));
+}
+#[test]
 fn ipa_transcript_binding_projection_binds_rounds_and_challenges() {
     let (params, z, commitment, t, proof) = sample_pallas_opening(8, "transcript-binding");
     let mut transcript = Transcript::new("transcript-binding");
@@ -1586,6 +1669,10 @@ fn ipa_b_vector_reduction_projection_rejects_bad_shape() {
         derive_ipa_verifier_round_challenges::<PallasBackend>(params.n(), &mut transcript, &proof)
             .expect("round challenges derive");
     let b = pallas_evaluation_vector(params.n(), z);
+    assert!(matches!(
+        derive_ipa_verifier_b_vector_reduction(&[pallas::Scalar::one()], &[]),
+        Err(Error::InvalidN(1))
+    ));
     assert!(matches!(
         derive_ipa_verifier_b_vector_reduction(&b[..7], &rounds),
         Err(Error::InvalidN(7))

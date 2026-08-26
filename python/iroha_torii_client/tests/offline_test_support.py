@@ -6,6 +6,7 @@ import copy
 from typing import Any, Dict, List, Mapping, Optional
 
 from iroha_torii_client import KagemushaRedeemRequestV4, KagemushaTopUpRequestV4
+from iroha_torii_client.norito_frame import _crc64_xz, schema_hash_for_type_name
 
 CANONICAL_OWNER = "sorauﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP"
 CANONICAL_ASSET_ID = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
@@ -49,26 +50,55 @@ OFFLINE_TRANSACTION_HASH = "23" * 32
 OFFLINE_STATUS_URI = f"/v1/offline/operations/{OFFLINE_OPERATION_ID}"
 OFFLINE_NETWORK_ID = _canonical_hash(0x91)
 OFFLINE_OTHER_NETWORK_ID = _canonical_hash(0x93)
+OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME = "iroha.torii.v1.offline.top_up.request"
+OFFLINE_REDEEM_REQUEST_SCHEMA_NAME = "iroha.torii.v1.offline.redeem.request"
+
+
+def offline_norito_frame(type_name: str, payload: bytes = b"\x01") -> bytes:
+    """Build one canonical uncompressed compact-length Norito frame fixture."""
+
+    return b"".join(
+        (
+            b"NRT0\x00\x00",
+            schema_hash_for_type_name(type_name),
+            b"\x00",
+            len(payload).to_bytes(8, "little"),
+            _crc64_xz(payload).to_bytes(8, "little"),
+            b"\x02",
+            b"\x00" * 8,
+            payload,
+        )
+    )
 
 
 def offline_top_up_request(
     *,
-    norito: bytes = b"kagemusha-top-up-v4\x00\x01\x02",
+    norito: Optional[bytes] = None,
     operation_id: str = OFFLINE_OPERATION_ID,
 ) -> KagemushaTopUpRequestV4:
     """Build one canonical Kagemusha top-up request fixture."""
 
-    return KagemushaTopUpRequestV4(norito=norito, operation_id=operation_id)
+    archive = (
+        offline_norito_frame(OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME)
+        if norito is None
+        else norito
+    )
+    return KagemushaTopUpRequestV4(norito=archive, operation_id=operation_id)
 
 
 def offline_redeem_request(
     *,
-    norito: bytes = b"kagemusha-redeem-v4\x03\x04\x05",
+    norito: Optional[bytes] = None,
     operation_id: str = OFFLINE_OPERATION_ID,
 ) -> KagemushaRedeemRequestV4:
     """Build one canonical Kagemusha redemption request fixture."""
 
-    return KagemushaRedeemRequestV4(norito=norito, operation_id=operation_id)
+    archive = (
+        offline_norito_frame(OFFLINE_REDEEM_REQUEST_SCHEMA_NAME)
+        if norito is None
+        else norito
+    )
+    return KagemushaRedeemRequestV4(norito=archive, operation_id=operation_id)
 
 
 def offline_operation_reference(**overrides: Any) -> Dict[str, Any]:

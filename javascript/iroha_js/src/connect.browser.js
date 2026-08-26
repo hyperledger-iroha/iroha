@@ -1,10 +1,11 @@
-import { ed25519, x25519 } from "@noble/curves/ed25519";
+import { x25519 } from "@noble/curves/ed25519";
 import { chacha20poly1305 } from "@noble/ciphers/chacha";
 import { blake2b } from "@noble/hashes/blake2b";
 import { hkdf } from "@noble/hashes/hkdf";
 import { sha256 } from "@noble/hashes/sha2";
 import { AccountAddress } from "./address.js";
 import { crc64Xz } from "./crc64Xz.js";
+import { verifyEd25519Strict } from "./ed25519Strict.js";
 import { NetworkId, networkIdBytes } from "./networkId.js";
 
 export { NetworkId };
@@ -1216,7 +1217,7 @@ function requireValidEd25519Signature(signature, message, publicKey) {
   }
   let valid = false;
   try {
-    valid = ed25519.verify(normalizedSignature, message, publicKey);
+    valid = verifyEd25519Strict(message, normalizedSignature, publicKey);
   } catch {
     // Use one stable error for every malformed or mismatched wallet signature.
   }
@@ -1263,7 +1264,7 @@ function verifyApproval(preview, control, relayToken) {
   }
   const publicKey = accountEd25519PublicKey(control.accountId);
   const preimage = buildApprovalPreimage(preview, control, relayToken);
-  if (!ed25519.verify(control.signature.signature, preimage, publicKey)) {
+  if (!verifyEd25519Strict(preimage, control.signature.signature, publicKey)) {
     throw new Error("Connect approval signature verification failed");
   }
   return publicKey;

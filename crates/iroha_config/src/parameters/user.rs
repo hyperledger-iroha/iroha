@@ -1024,6 +1024,9 @@ pub enum ParseError {
     /// Snapshot configuration contained an invalid audited-bootstrap policy.
     #[error("Invalid snapshot configuration")]
     InvalidSnapshotConfig,
+    /// Network Time Service configuration contained invalid or unsafe values.
+    #[error("Invalid network time service configuration")]
+    InvalidNtsConfig,
     /// Genesis trust-root configuration was absent, ambiguous, or invalid.
     #[error("Invalid genesis trust-root configuration")]
     InvalidGenesisConfig,
@@ -1458,7 +1461,7 @@ impl Root {
             gov_provider_binding_valid = false;
         }
         let gov = gov_provider_binding_valid.then(|| self.gov.parse());
-        let nts = self.nts.parse();
+        let nts = self.nts.parse(&mut emitter);
         let nexus = self.nexus.parse(&mut emitter);
         let confidential = self.confidential.parse();
         let streaming = if let Some(ref key_pair) = key_pair {
@@ -3421,17 +3424,51 @@ impl Acceleration {
     }
 }
 impl Nts {
-    fn parse(self) -> actual::Nts {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::Nts {
+        let emit = |emitter: &mut Emitter<ParseError>, message: &'static str| {
+            emitter.emit(Report::new(ParseError::InvalidNtsConfig).attach(message));
+        };
+        if self.sample_cap_per_round == 0 {
+            emit(
+                emitter,
+                "nts.sample_cap_per_round must be greater than zero",
+            );
+        }
+        if self.max_rtt_ms == 0 {
+            emit(emitter, "nts.max_rtt_ms must be greater than zero");
+        }
+        if self.trim_percent > 45 {
+            emit(
+                emitter,
+                "nts.trim_percent must be in the inclusive range 0..=45",
+            );
+        }
+        if self.per_peer_buffer == 0 {
+            emit(emitter, "nts.per_peer_buffer must be greater than zero");
+        }
+        if self.min_samples == 0 {
+            emit(emitter, "nts.min_samples must be greater than zero");
+        }
+        if !self.smoothing_alpha.is_finite() || !(0.0..=1.0).contains(&self.smoothing_alpha) {
+            emit(
+                emitter,
+                "nts.smoothing_alpha must be finite and in the inclusive range 0..=1",
+            );
+        }
         actual::Nts {
             sample_interval: self.sample_interval_ms.get().max(MIN_TIMER_INTERVAL),
-            sample_cap_per_round: self.sample_cap_per_round,
-            max_rtt_ms: self.max_rtt_ms,
-            trim_percent: self.trim_percent,
-            per_peer_buffer: self.per_peer_buffer,
+            sample_cap_per_round: self.sample_cap_per_round.max(1),
+            max_rtt_ms: self.max_rtt_ms.max(1),
+            trim_percent: self.trim_percent.min(45),
+            per_peer_buffer: self.per_peer_buffer.max(1),
             smoothing_enabled: self.smoothing_enabled,
-            smoothing_alpha: self.smoothing_alpha,
+            smoothing_alpha: if self.smoothing_alpha.is_finite() {
+                self.smoothing_alpha.clamp(0.0, 1.0)
+            } else {
+                defaults::time::NTS_SMOOTHING_ALPHA
+            },
             max_adjust_ms_per_min: self.max_adjust_ms_per_min,
-            min_samples: self.min_samples,
+            min_samples: self.min_samples.max(1),
             max_offset_ms: self.max_offset_ms,
             max_confidence_ms: self.max_confidence_ms,
             enforcement_mode: self.enforcement_mode.into_actual(),
@@ -5530,6 +5567,9 @@ fn parse_q16_decimal(value: &str) -> std::result::Result<ModelQ16, ParseQ16Error
         return Err(ParseQ16Error::Negative);
     }
     let normalized = trimmed.replace('_', "");
+    if normalized.is_empty() {
+        return Err(ParseQ16Error::InvalidFormat);
+    }
     let mut parts = normalized.split('.');
     let int_part = parts.next().ok_or(ParseQ16Error::InvalidFormat)?;
     let frac_part = parts.next();
@@ -5546,7 +5586,7 @@ fn parse_q16_decimal(value: &str) -> std::result::Result<ModelQ16, ParseQ16Error
     if integer > 0xFFFF {
         return Err(ParseQ16Error::IntegerOverflow);
     }
-    let mut raw = integer << 16;
+    let mut raw = u128::from(integer) << 16;
     if let Some(frac_str) = frac_part {
         if frac_str.is_empty() {
             return Err(ParseQ16Error::InvalidFormat);
@@ -5567,12 +5607,11 @@ fn parse_q16_decimal(value: &str) -> std::result::Result<ModelQ16, ParseQ16Error
             .checked_mul(1u128 << 16)
             .ok_or(ParseQ16Error::FractionOverflow)?;
         let rounded = (numerator + denom / 2) / denom;
-        if rounded > 0xFFFF {
-            return Err(ParseQ16Error::FractionOverflow);
-        }
-        let rounded_u32 = u32::try_from(rounded).map_err(|_| ParseQ16Error::FractionOverflow)?;
-        raw |= rounded_u32;
+        raw = raw
+            .checked_add(rounded)
+            .ok_or(ParseQ16Error::FractionOverflow)?;
     }
+    let raw = u32::try_from(raw).map_err(|_| ParseQ16Error::FractionOverflow)?;
     Ok(ModelQ16::from_raw(raw))
 }
 #[derive(Debug, thiserror::Error)]
@@ -5602,6 +5641,7 @@ enum HijiriPolicyError {
 }
 /// User-level configuration container for `FeeMultiplierBandConfig`.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub struct FeeMultiplierBandConfig {
     /// Upper bound on borrower risk (encoded as Q16) covered by this band.
     pub max_risk: String,
@@ -5610,6 +5650,7 @@ pub struct FeeMultiplierBandConfig {
 }
 /// User-level configuration container for `HijiriFeePolicyConfig`.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub struct HijiriFeePolicyConfig {
     #[config(default)]
     /// Ordered set of fee multiplier bands.
@@ -5636,6 +5677,7 @@ impl HijiriFeePolicyConfig {
 }
 /// User-level configuration container for `Hijiri`.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub struct Hijiri {
     /// Optional Hijiri fee policy that overrides the default pricing.
     pub fee_policy: Option<HijiriFeePolicyConfig>,
@@ -5652,6 +5694,77 @@ impl Hijiri {
             .transpose()
             .ok_or_emit(emitter)?;
         Some(actual::Hijiri::new(fee_policy))
+    }
+}
+#[cfg(test)]
+mod hijiri_config_tests {
+    use super::*;
+    use iroha_config_base::{read::ConfigReader, toml::TomlSource};
+
+    #[test]
+    fn q16_decimal_rounding_carries_into_the_integer_part() {
+        assert_eq!(
+            parse_q16_decimal("0.999999999").expect("rounded value is representable"),
+            ModelQ16::ONE
+        );
+        assert_eq!(
+            parse_q16_decimal("1.999999999").expect("rounded value is representable"),
+            ModelQ16::from_parts(2, 0)
+        );
+        assert!(matches!(
+            parse_q16_decimal("65535.999999999"),
+            Err(ParseQ16Error::FractionOverflow)
+        ));
+    }
+
+    #[test]
+    fn q16_decimal_rejects_separator_only_input() {
+        assert!(matches!(
+            parse_q16_decimal("___"),
+            Err(ParseQ16Error::InvalidFormat)
+        ));
+    }
+
+    #[test]
+    fn hijiri_config_rejects_unknown_nested_fields() {
+        let cases = [
+            (
+                r#"
+extra_hijiri = true
+[fee_policy]
+penalty_cap = "2"
+bands = [{ max_risk = "1", multiplier = "1" }]
+"#,
+                "extra_hijiri",
+            ),
+            (
+                r#"
+[fee_policy]
+penalty_cap = "2"
+extra_policy = true
+bands = [{ max_risk = "1", multiplier = "1" }]
+"#,
+                "extra_policy",
+            ),
+            (
+                r#"
+[fee_policy]
+penalty_cap = "2"
+bands = [{ max_risk = "1", multiplier = "1", extra_band = true }]
+"#,
+                "extra_band",
+            ),
+        ];
+
+        for (source, unknown_field) in cases {
+            let table = toml::from_str(source).expect("parse Hijiri test configuration");
+            let error = ConfigReader::new()
+                .with_toml_source(TomlSource::inline(table))
+                .read_and_complete::<Hijiri>()
+                .expect_err("unknown Hijiri configuration fields must fail closed");
+            let report = format!("{error:?}");
+            assert!(report.contains(unknown_field), "{report}");
+        }
     }
 }
 /// User-level enumeration translating `FraudRiskBand` settings.
@@ -6146,6 +6259,13 @@ pub struct SumeragiQueues {
     #[config(default = "defaults::sumeragi::QUEUE_READY_BODY_CAPACITY")]
     pub ready_bodies: NonZeroUsize,
 }
+/// User-level durable storage budgets for Sumeragi v2.
+#[derive(Debug, Clone, Copy, ReadConfig)]
+pub struct SumeragiStorage {
+    /// Aggregate checksummed body-frame bytes retained for one active height.
+    #[config(default = "defaults::sumeragi::BODY_STORE_MAX_BYTES_PER_HEIGHT")]
+    pub body_store_max_bytes_per_height: Bytes<u64>,
+}
 /// User-facing finite runtime bounds for Sumeragi v2 lane, merge, and Native AMX services.
 #[derive(Debug, Clone, Copy, ReadConfig)]
 pub struct SumeragiV2RuntimeLimits {
@@ -6278,6 +6398,9 @@ pub struct Sumeragi {
     /// Shared finite lane, merge, recovery, and Native AMX service bounds.
     #[config(nested)]
     pub limits: SumeragiV2RuntimeLimits,
+    /// Node-local durable storage budgets.
+    #[config(nested)]
+    pub storage: SumeragiStorage,
     /// Consensus key-rotation and HSM policy.
     #[config(nested)]
     pub keys: SumeragiKeys,
@@ -6379,6 +6502,7 @@ impl Sumeragi {
             block,
             queues,
             limits,
+            storage,
             keys,
         } = self;
         let mut valid = true;
@@ -6412,6 +6536,18 @@ impl Sumeragi {
                 Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
                     "sumeragi.queues.commands must be at least {}",
                     defaults::sumeragi::MIN_RUNTIME_COMMAND_CAPACITY,
+                )),
+            );
+            valid = false;
+        }
+        if storage.body_store_max_bytes_per_height.get()
+            < defaults::sumeragi::BODY_STORE_MIN_BYTES_PER_HEIGHT
+        {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+                    "sumeragi.storage.body_store_max_bytes_per_height must hold one maximum durable body frame (minimum {}, configured {})",
+                    defaults::sumeragi::BODY_STORE_MIN_BYTES_PER_HEIGHT,
+                    storage.body_store_max_bytes_per_height.get(),
                 )),
             );
             valid = false;
@@ -6599,6 +6735,9 @@ impl Sumeragi {
                 native_amx_signing_guard_record_bytes: limits.native_amx_signing_guard_record_bytes,
                 native_amx_signing_guard_anchor_bytes: limits.native_amx_signing_guard_anchor_bytes,
             },
+            storage: actual::SumeragiStorage {
+                body_store_max_bytes_per_height: storage.body_store_max_bytes_per_height,
+            },
             keys: actual::SumeragiKeys {
                 activation_lead_blocks: keys.activation_lead_blocks,
                 overlap_grace_blocks: keys.overlap_grace_blocks,
@@ -6719,9 +6858,9 @@ impl SoranetHandshake {
         let relay_uses_defaults =
             matches!(relay_capabilities.origin(), ParameterOrigin::Default { .. })
                 && relay_capabilities.value().0.as_slice() == DEFAULT_RELAY_CAPABILITIES;
-        let descriptor_commit = descriptor_commit.map(Into::into);
-        let mut client_capabilities = client_capabilities.map(Into::into);
-        let mut relay_capabilities = relay_capabilities.map(Into::into);
+        let descriptor_commit = descriptor_commit.map(Vec::<u8>::from);
+        let mut client_capabilities = client_capabilities.map(Vec::<u8>::from);
+        let mut relay_capabilities = relay_capabilities.map(Vec::<u8>::from);
         Self::synchronize_default_capabilities(
             descriptor_commit.value(),
             resolved_kem_id,
@@ -34502,6 +34641,34 @@ publish_delay_seconds = 17
         assert!(
             report.contains(&format!(
                 "aggregate canonical outer-ingress wire-byte capacity {underbudget} is below the roster-aware minimum {required}"
+            )),
+            "{report}",
+        );
+    }
+    #[test]
+    fn sumeragi_body_store_budget_must_hold_one_maximum_frame() {
+        let mut table = four_validator_roster_table();
+        let underbudget = defaults::sumeragi::BODY_STORE_MIN_BYTES_PER_HEIGHT - 1;
+        table
+            .entry("sumeragi")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("sumeragi table")
+            .entry("storage")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("sumeragi storage table")
+            .insert(
+                "body_store_max_bytes_per_height".into(),
+                Value::Integer(i64::try_from(underbudget).expect("fixture budget fits TOML")),
+            );
+        let error = actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect_err("a durable-body budget below one maximum frame must be rejected");
+        let report = format!("{error:?}");
+        assert!(
+            report.contains(&format!(
+                "must hold one maximum durable body frame (minimum {}",
+                defaults::sumeragi::BODY_STORE_MIN_BYTES_PER_HEIGHT,
             )),
             "{report}",
         );

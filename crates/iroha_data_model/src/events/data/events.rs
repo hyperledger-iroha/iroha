@@ -1115,7 +1115,7 @@ mod domain {
             #[has_origin(summary => &summary.call.domain_id)]
             /// Kaigi usage metrics recorded.
             KaigiUsageSummary(KaigiUsageSummary),
-            #[has_origin(summary => &summary.call.domain_id)]
+            #[has_origin(summary => &summary.domain)]
             /// Kaigi relay health status changed.
             KaigiRelayHealthUpdated(KaigiRelayHealthSummary),
             #[has_origin(ticket_ready => &ticket_ready.domain)]
@@ -1283,6 +1283,8 @@ mod domain {
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub struct KaigiRelayHealthSummary {
+            /// Domain that owns the reported relay registration.
+            pub domain: DomainId,
             /// Call identifier where the health update originated.
             pub call: KaigiId,
             /// Relay account being reported.
@@ -1296,12 +1298,14 @@ mod domain {
             /// Construct a new relay health summary payload.
             #[must_use]
             pub fn new(
+                domain: DomainId,
                 call: KaigiId,
                 relay: AccountId,
                 status: KaigiRelayHealthStatus,
                 reported_at_ms: u64,
             ) -> Self {
                 Self {
+                    domain,
                     call,
                     relay,
                     status,
@@ -2089,7 +2093,7 @@ mod config {
             InitializeLaneTrustAnchor,
             /// Compare-and-swap the single native checkpoint for a lane.
             AdvanceLaneTrustAnchor,
-            /// Remove a never-used staged route revision.
+            /// Remove a never-used staged non-TRON route revision.
             RemoveStagedRoute,
         }
         /// Bounded lifecycle event for a journaled SCCP registry mutation.

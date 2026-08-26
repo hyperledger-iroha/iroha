@@ -36,6 +36,7 @@ pub const ALIAS_LEASE_YEAR_MS: u64 = 31_536_000_000;
 /// dataspace `paynet`; `merchant@paynet` has no domain segment.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 #[norito(decode_from_slice)]
 pub struct AccountAliasName {
     /// Canonical alias label.
@@ -182,6 +183,7 @@ fn canonical_alias_segment(raw: &str, segment: AliasSegment) -> Result<Name, Par
 /// Canonical dataspace text paired with the numeric ID expected by the caller.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct ResolvedDataSpaceV1 {
     /// Canonical textual dataspace name.
     pub canonical_name: Name,
@@ -231,6 +233,7 @@ impl fmt::Display for ResolvedDataSpaceV1 {
 /// Canonical fully qualified domain paired with its expected numeric dataspace ID.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct ResolvedDomainV1 {
     /// Canonical `domain.dataspace` text.
     pub canonical_name: DomainId,
@@ -285,6 +288,7 @@ impl fmt::Display for ResolvedDomainV1 {
 /// Canonical account-alias text paired with its expected numeric dataspace ID.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct ResolvedAccountAliasV1 {
     /// Canonical account alias text.
     pub canonical_name: AccountAliasName,
@@ -365,7 +369,12 @@ impl From<ResolvedAccountAliasV1> for AccountAlias {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
-    norito(tag = "kind", content = "value", rename_all = "snake_case")
+    norito(
+        tag = "kind",
+        content = "value",
+        rename_all = "snake_case",
+        deny_unknown_fields
+    )
 )]
 #[repr(u8)]
 pub enum AccountProvisionV1 {
@@ -381,7 +390,12 @@ pub enum AccountProvisionV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
-    norito(tag = "kind", content = "value", rename_all = "snake_case")
+    norito(
+        tag = "kind",
+        content = "value",
+        rename_all = "snake_case",
+        deny_unknown_fields
+    )
 )]
 #[repr(u8)]
 pub enum AccountAliasRoleV1 {
@@ -395,6 +409,7 @@ pub enum AccountAliasRoleV1 {
 /// Desired state for one dataspace alias.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct AliasDataSpaceIntentV1 {
     /// Resolved dataspace name.
     pub dataspace: ResolvedDataSpaceV1,
@@ -404,6 +419,7 @@ pub struct AliasDataSpaceIntentV1 {
 /// Desired state for one domain.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct AliasDomainIntentV1 {
     /// Resolved domain name, including its parent dataspace.
     pub domain: ResolvedDomainV1,
@@ -413,6 +429,7 @@ pub struct AliasDomainIntentV1 {
 /// Desired state for one account alias.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct AliasAccountIntentV1 {
     /// Resolved account alias.
     pub alias: ResolvedAccountAliasV1,
@@ -428,7 +445,12 @@ pub struct AliasAccountIntentV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
-    norito(tag = "kind", content = "intent", rename_all = "snake_case")
+    norito(
+        tag = "kind",
+        content = "intent",
+        rename_all = "snake_case",
+        deny_unknown_fields
+    )
 )]
 pub enum AliasIntentV1 {
     /// Ensure a dataspace alias and its exact owner.
@@ -455,6 +477,7 @@ impl AliasIntentV1 {
 /// Lease terms used only when setup classifies a resource as absent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct AliasLeaseAcquisitionV1 {
     /// Requested lease term in whole years.
     pub term_years: u8,
@@ -478,6 +501,7 @@ impl AliasLeaseAcquisitionV1 {
 /// Guard binding a lease operation to an exact policy and bounded quote.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct AliasQuoteGuardV1 {
     /// Policy version that consensus must observe.
     pub expected_policy_version: u16,
@@ -518,7 +542,12 @@ impl AliasSetupPlanRequestV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
-    norito(tag = "kind", content = "resource", rename_all = "snake_case")
+    norito(
+        tag = "kind",
+        content = "resource",
+        rename_all = "snake_case",
+        deny_unknown_fields
+    )
 )]
 pub enum AliasTargetV1 {
     /// Dataspace alias resource.
@@ -705,7 +734,12 @@ pub enum AliasLifecyclePlanDispositionV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
-    norito(tag = "kind", content = "value", rename_all = "snake_case")
+    norito(
+        tag = "kind",
+        content = "value",
+        rename_all = "snake_case",
+        deny_unknown_fields
+    )
 )]
 #[repr(u8)]
 pub enum AliasPlanDispositionV1 {
@@ -725,6 +759,7 @@ pub enum AliasPlanDispositionV1 {
 /// Exact lease quote attached to a create or renewal plan resource.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct AliasLeaseQuoteV1 {
     /// Resource to which the quote applies.
     pub target: AliasTargetV1,
@@ -744,6 +779,7 @@ pub struct AliasLeaseQuoteV1 {
 /// Planner result for one ordered resource intent.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct AliasPlanResourceV1 {
     /// Canonically resolved desired state.
     pub intent: AliasIntentV1,
@@ -765,6 +801,7 @@ pub struct AliasPlanResourceV1 {
 /// Exact framed Norito instruction returned by the planner.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct AliasFramedInstructionV1 {
     /// Stable instruction wire identifier.
     pub wire_id: String,
@@ -896,6 +933,7 @@ impl AliasSetupReportV1 {
 /// World-state anchor used to classify an alias plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct AliasPlanAnchorV1 {
     /// Height of the anchored block.
     pub block_height: u64,
@@ -1229,6 +1267,31 @@ mod tests {
     fn amount(value: u32) -> Quantity {
         Quantity::from_canonical_numeric(Numeric::new(value, 0)).expect("quantity")
     }
+    macro_rules! assert_json_unknown_field_rejected {
+        ($value:expr, $ty:ty, $label:literal) => {{
+            let mut value =
+                norito::json::to_value(&$value).expect(concat!("serialize ", $label));
+            norito::json::from_value::<$ty>(value.clone())
+                .expect(concat!("decode canonical ", $label));
+            value
+                .as_object_mut()
+                .expect(concat!($label, " JSON object"))
+                .insert(
+                    "retired_v0".to_owned(),
+                    norito::json::Value::Bool(true),
+                );
+            let error = norito::json::from_value::<$ty>(value)
+                .expect_err(concat!($label, " must reject unknown fields"));
+            assert!(
+                matches!(
+                    error,
+                    norito::json::Error::UnknownField { ref field } if field == "retired_v0"
+                ),
+                "{} reported the wrong error: {error:?}",
+                $label
+            );
+        }};
+    }
     fn deterministic_account_onboarding_receipt_vector() -> SharedAccountOnboardingReceiptVector {
         let target_signer = KeyPair::try_from_seed(vec![0x22; 32], Algorithm::Ed25519)
             .expect("derive deterministic onboarding target");
@@ -1387,6 +1450,105 @@ mod tests {
                 "V1 resource must reject an omitted {field} slot"
             );
         }
+    }
+    #[test]
+    fn onboarding_nested_v1_records_reject_unknown_fields() {
+        let fixture = deterministic_account_onboarding_receipt_vector();
+        let body = &fixture.receipt_json.body;
+        let resource = &body.resource;
+        let AliasIntentV1::AccountAlias(account_intent) = &resource.intent else {
+            panic!("onboarding fixture must contain an account-alias intent");
+        };
+        let quote = resource
+            .quote
+            .as_ref()
+            .expect("onboarding fixture must contain a lease quote");
+
+        let resolved_dataspace = ResolvedDataSpaceV1::new(
+            "paynet".parse().expect("dataspace name"),
+            DataSpaceId::new(7),
+        );
+        let resolved_domain = ResolvedDomainV1::new(
+            DomainId::try_new("banka", "paynet").expect("resolved domain"),
+            DataSpaceId::new(7),
+        );
+        let dataspace_intent = AliasDataSpaceIntentV1 {
+            dataspace: resolved_dataspace.clone(),
+            owner: account(0x61),
+        };
+        let domain_intent = AliasDomainIntentV1 {
+            domain: resolved_domain.clone(),
+            owner: account(0x62),
+        };
+
+        assert_json_unknown_field_rejected!(
+            &account_intent.alias.canonical_name,
+            AccountAliasName,
+            "account alias name"
+        );
+        assert_json_unknown_field_rejected!(
+            &resolved_dataspace,
+            ResolvedDataSpaceV1,
+            "resolved dataspace"
+        );
+        assert_json_unknown_field_rejected!(&resolved_domain, ResolvedDomainV1, "resolved domain");
+        assert_json_unknown_field_rejected!(
+            &account_intent.alias,
+            ResolvedAccountAliasV1,
+            "resolved account alias"
+        );
+        assert_json_unknown_field_rejected!(
+            &dataspace_intent,
+            AliasDataSpaceIntentV1,
+            "dataspace intent"
+        );
+        assert_json_unknown_field_rejected!(&domain_intent, AliasDomainIntentV1, "domain intent");
+        assert_json_unknown_field_rejected!(
+            account_intent,
+            AliasAccountIntentV1,
+            "account-alias intent"
+        );
+        assert_json_unknown_field_rejected!(
+            &body.acquisition,
+            AliasLeaseAcquisitionV1,
+            "lease acquisition"
+        );
+        assert_json_unknown_field_rejected!(&body.quote_guard, AliasQuoteGuardV1, "quote guard");
+        assert_json_unknown_field_rejected!(quote, AliasLeaseQuoteV1, "lease quote");
+        assert_json_unknown_field_rejected!(resource, AliasPlanResourceV1, "plan resource");
+        assert_json_unknown_field_rejected!(
+            &body.instructions[0],
+            AliasFramedInstructionV1,
+            "framed instruction"
+        );
+        assert_json_unknown_field_rejected!(&body.anchor, AliasPlanAnchorV1, "plan anchor");
+    }
+    #[test]
+    fn onboarding_nested_v1_tagged_enums_reject_unknown_fields() {
+        let fixture = deterministic_account_onboarding_receipt_vector();
+        let resource = &fixture.receipt_json.body.resource;
+        let quote = resource
+            .quote
+            .as_ref()
+            .expect("onboarding fixture must contain a lease quote");
+
+        assert_json_unknown_field_rejected!(
+            AccountProvisionV1::Create,
+            AccountProvisionV1,
+            "account provision"
+        );
+        assert_json_unknown_field_rejected!(
+            AccountAliasRoleV1::Primary,
+            AccountAliasRoleV1,
+            "account alias role"
+        );
+        assert_json_unknown_field_rejected!(&resource.intent, AliasIntentV1, "alias intent");
+        assert_json_unknown_field_rejected!(&quote.target, AliasTargetV1, "alias target");
+        assert_json_unknown_field_rejected!(
+            resource.disposition,
+            AliasPlanDispositionV1,
+            "plan disposition"
+        );
     }
     #[test]
     #[expect(

@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.sdk
 
 import java.security.KeyPair
+import java.security.MessageDigest
 import org.hyperledger.iroha.sdk.crypto.Ed25519Signer
 import org.hyperledger.iroha.sdk.crypto.KeyGenerationOutcome
 import org.hyperledger.iroha.sdk.crypto.KeyManagementException
@@ -232,12 +233,14 @@ class IrohaKeyManager private constructor(
     /**
      * Verifies attestation material produced by hardware-backed providers for `alias`.
      *
-     * The first provider that returns a non-empty attestation result is treated as authoritative.
-     * Providers that do not expose attestation simply return null.
+     * The first provider that returns a non-empty attestation result supplies the certificate
+     * material, which this manager independently re-verifies and binds to the provider's currently
+     * loaded alias key before returning it. Providers that do not expose attestation simply return
+     * null.
      *
      * @param alias alias whose attestation should be verified
      * @param verifier verifier configured with trusted roots and policy expectations
-     * @param expectedChallenge optional challenge value that must match the attested payload when provided
+     * @param expectedChallenge required non-empty challenge that must match the attested payload
      * @return the attestation verification result when available, or null when no attestation is recorded for `alias`
      * @throws AttestationVerificationException when attestation verification fails for the alias
      */
@@ -247,12 +250,71 @@ class IrohaKeyManager private constructor(
         verifier: AttestationVerifier,
         expectedChallenge: ByteArray? = null,
     ): AttestationResult? {
+        if (expectedChallenge == null || expectedChallenge.isEmpty()) {
+            throw AttestationVerificationException(
+                "Expected attestation challenge must be non-empty"
+            )
+        }
+        val challenge = expectedChallenge.copyOf()
         for (provider in providers) {
             try {
-                val result = provider.verifyAttestation(alias, verifier, expectedChallenge)
+                val result = provider.verifyAttestation(alias, verifier, challenge)
                 if (result != null) {
-                    keystoreTelemetry.recordResult(alias, provider.metadata(), result.attestationSecurityLevel.name, result.leafCertificate)
-                    return result
+                    val authoritativeResult = try {
+                        val attestationBuilder = KeyAttestation.builder().setAlias(alias)
+                        for (certificate in result.certificateChain()) {
+                            attestationBuilder.addCertificate(certificate)
+                        }
+                        verifier.verify(attestationBuilder.build(), challenge)
+                    } catch (ex: AttestationVerificationException) {
+                        throw ex
+                    } catch (ex: RuntimeException) {
+                        throw AttestationVerificationException(
+                            "Provider returned malformed attestation certificates",
+                            ex,
+                        )
+                    }
+                    if (!MessageDigest.isEqual(
+                            challenge,
+                            authoritativeResult.attestationChallenge(),
+                        )
+                    ) {
+                        throw AttestationVerificationException("Attestation challenge mismatch")
+                    }
+                    val loadedKey = try {
+                        provider.load(alias)
+                    } catch (ex: KeyManagementException) {
+                        throw AttestationVerificationException(
+                            "Failed to load the attested alias key",
+                            ex,
+                        )
+                    } catch (ex: RuntimeException) {
+                        throw AttestationVerificationException(
+                            "Failed to load the attested alias key",
+                            ex,
+                        )
+                    }
+                    val aliasPublicKey = loadedKey?.public?.encoded
+                    val attestedPublicKey = authoritativeResult.leafCertificate.publicKey?.encoded
+                    if (aliasPublicKey == null) {
+                        throw AttestationVerificationException(
+                            "Attested alias key is unavailable"
+                        )
+                    }
+                    if (attestedPublicKey == null ||
+                        !MessageDigest.isEqual(aliasPublicKey, attestedPublicKey)
+                    ) {
+                        throw AttestationVerificationException(
+                            "Attested leaf public key does not match the alias key"
+                        )
+                    }
+                    keystoreTelemetry.recordResult(
+                        alias,
+                        provider.metadata(),
+                        authoritativeResult.attestationSecurityLevel.name,
+                        authoritativeResult.leafCertificate,
+                    )
+                    return authoritativeResult
                 }
             } catch (ex: AttestationVerificationException) {
                 keystoreTelemetry.recordFailure(alias, provider.metadata(), ex.message)
@@ -594,6 +656,22 @@ private fun KeyProvider.verifyAttestation(
     alias: String,
     verifier: AttestationVerifier,
     expectedChallenge: ByteArray?,
-): AttestationResult? = null
+): AttestationResult? {
+    if (expectedChallenge == null || expectedChallenge.isEmpty()) {
+        throw AttestationVerificationException(
+            "Expected attestation challenge must be non-empty"
+        )
+    }
+    return when (this) {
+        is KeystoreKeyProvider -> verifyAttestation(alias, verifier, expectedChallenge.copyOf())
+        else -> null
+    }
+}
 
-private fun KeyProvider.generateAttestation(alias: String, challenge: ByteArray?): KeyAttestation? = null
+private fun KeyProvider.generateAttestation(
+    alias: String,
+    challenge: ByteArray?,
+): KeyAttestation? = when (this) {
+    is KeystoreKeyProvider -> generateAttestation(alias, challenge?.copyOf())
+    else -> null
+}

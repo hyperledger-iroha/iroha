@@ -1,6 +1,18 @@
 package org.hyperledger.iroha.sdk.core.model.instructions
 
 private const val ACTION = "LeaveKaigi"
+private val LEAVE_KAIGI_ARGUMENTS = setOf(
+    "action",
+    "call.domain_id",
+    "call.call_name",
+    "participant",
+    "commitment.commitment",
+    "commitment.alias_tag",
+    "nullifier.digest",
+    "nullifier.issued_at_ms",
+    "roster_root",
+    "proof",
+)
 
 /** Typed representation of a `LeaveKaigi` instruction. */
 class LeaveKaigiInstruction(
@@ -32,7 +44,9 @@ class LeaveKaigiInstruction(
 
     override val kind: InstructionKind = InstructionKind.CUSTOM
 
-    override val arguments: Map<String, String> by lazy { canonicalArguments() }
+    override val arguments: Map<String, String> by lazy {
+        KaigiInstructionUtils.immutableArguments(canonicalArguments())
+    }
 
     private fun canonicalArguments(): Map<String, String> {
         val args = linkedMapOf<String, String>()
@@ -85,6 +99,7 @@ class LeaveKaigiInstruction(
     companion object {
         @JvmStatic
         fun fromArguments(arguments: Map<String, String>): LeaveKaigiInstruction {
+            KaigiInstructionUtils.requireKnownArguments(arguments, LEAVE_KAIGI_ARGUMENTS)
             KaigiInstructionUtils.requireAction(arguments, ACTION)
             val callId = KaigiInstructionUtils.parseCallId(arguments, "call")
             val participant = KaigiInstructionUtils.require(arguments, "participant")

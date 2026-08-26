@@ -85,9 +85,12 @@ pub struct IvmCache {
 impl IvmCache {
     /// Create a new cache with the given capacity (number of entries).
     pub fn new(capacity: usize) -> Self {
+        Self::new_with_max_bytes(capacity, configured_max_bytes())
+    }
+    fn new_with_max_bytes(capacity: usize, max_bytes: usize) -> Self {
         Self {
             cap: capacity,
-            max_bytes: configured_max_bytes(),
+            max_bytes,
             cur_bytes: 0,
             map: HashMap::new(),
             sizes: HashMap::new(),
@@ -289,13 +292,21 @@ pub struct ShardedCache {
 const SHARD_ACTIVATION_THRESHOLD: usize = 64;
 impl ShardedCache {
     fn new(total_capacity: usize) -> Self {
-        let shard_vec = Self::build_shards(total_capacity, default_shard_count());
+        let shard_vec = Self::build_shards(
+            total_capacity,
+            configured_max_bytes(),
+            default_shard_count(),
+        );
         Self {
             shards: RwLock::new(shard_vec),
             total_capacity: AtomicUsize::new(total_capacity),
         }
     }
-    fn build_shards(total_capacity: usize, suggested_shards: usize) -> Vec<Arc<Mutex<IvmCache>>> {
+    fn build_shards(
+        total_capacity: usize,
+        total_max_bytes: usize,
+        suggested_shards: usize,
+    ) -> Vec<Arc<Mutex<IvmCache>>> {
         let desired_shards = if total_capacity <= SHARD_ACTIVATION_THRESHOLD {
             1
         } else {
@@ -322,7 +333,10 @@ impl ShardedCache {
             if idx < remainder {
                 cap = cap.saturating_add(1);
             }
-            shards.push(Arc::new(Mutex::new(IvmCache::new(cap))));
+            let max_bytes = shard_share(total_max_bytes, shard_count, idx);
+            shards.push(Arc::new(Mutex::new(IvmCache::new_with_max_bytes(
+                cap, max_bytes,
+            ))));
         }
         shards
     }
@@ -340,7 +354,11 @@ impl ShardedCache {
     }
     fn set_capacity(&self, total_capacity: usize) {
         self.total_capacity.store(total_capacity, Ordering::Relaxed);
-        let shard_vec = Self::build_shards(total_capacity, default_shard_count());
+        let shard_vec = Self::build_shards(
+            total_capacity,
+            configured_max_bytes(),
+            default_shard_count(),
+        );
         let old_shards = {
             let mut guard = self.shards.write().unwrap();
             std::mem::replace(&mut *guard, shard_vec)
@@ -354,6 +372,23 @@ impl ShardedCache {
             .sum();
         atomic_saturating_add(&EVICTS, evicted);
     }
+    fn set_max_bytes(&self, total_max_bytes: usize) {
+        let shards = self.shards.read().unwrap();
+        let shard_count = shards.len();
+        for (index, shard) in shards.iter().enumerate() {
+            let mut guard = shard.lock().unwrap();
+            guard.max_bytes = shard_share(total_max_bytes, shard_count, index);
+            guard.enforce_limits();
+        }
+    }
+}
+fn shard_share(total: usize, shard_count: usize, index: usize) -> usize {
+    debug_assert!(shard_count > 0);
+    debug_assert!(index < shard_count);
+    if total == usize::MAX {
+        return usize::MAX;
+    }
+    total / shard_count + usize::from(index < total % shard_count)
 }
 static CACHE_MAX_BYTES: AtomicUsize = AtomicUsize::new(DEFAULT_CACHE_MAX_BYTES);
 static CACHE_MAX_DECODED_OPS: AtomicUsize = AtomicUsize::new(DEFAULT_CACHE_MAX_DECODED_OPS);
@@ -458,29 +493,88 @@ fn normalize_limits(limits: CacheLimits) -> CacheLimits {
 fn denormalize(value: usize) -> usize {
     if value == usize::MAX { 0 } else { value }
 }
-fn apply_max_bytes_to_shards(max_bytes: usize) {
-    if let Some(cache) = GLOBAL_CACHE.get() {
-        let shards = cache.shards.read().unwrap();
-        for shard in shards.iter() {
-            let mut guard = shard.lock().unwrap();
-            guard.max_bytes = max_bytes;
-            guard.enforce_limits();
-        }
-    }
-}
 /// Configure cache limits (capacity, byte budget, decoded-op guard) from host config.
 pub fn configure_limits(limits: CacheLimits) {
     let normalized = normalize_limits(limits);
     CACHE_MAX_BYTES.store(normalized.max_bytes, Ordering::Relaxed);
     CACHE_MAX_DECODED_OPS.store(normalized.max_decoded_ops, Ordering::Relaxed);
     if let Some(cache) = GLOBAL_CACHE.get() {
-        apply_max_bytes_to_shards(normalized.max_bytes);
         let current = cache.total_capacity.load(Ordering::Relaxed);
         if current != normalized.capacity {
             cache.set_capacity(normalized.capacity);
+        } else {
+            cache.set_max_bytes(normalized.max_bytes);
         }
     } else {
         let _ = GLOBAL_CACHE.set(ShardedCache::new(normalized.capacity));
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn shard_limits(shards: &[Arc<Mutex<IvmCache>>]) -> Vec<(usize, usize)> {
+        shards
+            .iter()
+            .map(|shard| {
+                let shard = shard.lock().expect("cache shard lock");
+                (shard.cap, shard.max_bytes)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn finite_and_unlimited_shard_shares_are_deterministic() {
+        assert_eq!(
+            (0..4).map(|i| shard_share(10, 4, i)).collect::<Vec<_>>(),
+            [3, 3, 2, 2]
+        );
+        assert_eq!(
+            (0..4).map(|i| shard_share(2, 4, i)).collect::<Vec<_>>(),
+            [1, 1, 0, 0]
+        );
+        assert_eq!(
+            (0..4)
+                .map(|i| shard_share(usize::MAX, 4, i))
+                .collect::<Vec<_>>(),
+            [usize::MAX; 4]
+        );
+    }
+
+    #[test]
+    fn sharded_cache_partitions_entry_and_byte_budgets() {
+        let shards = ShardedCache::build_shards(67, 10, 4);
+        assert_eq!(shard_limits(&shards), [(17, 3), (17, 3), (17, 2), (16, 2)]);
+        assert_eq!(
+            shards
+                .iter()
+                .map(|shard| shard.lock().unwrap().max_bytes)
+                .sum::<usize>(),
+            10
+        );
+    }
+
+    #[test]
+    fn live_byte_limit_updates_remain_aggregate() {
+        let cache = ShardedCache {
+            shards: RwLock::new(ShardedCache::build_shards(67, 10, 4)),
+            total_capacity: AtomicUsize::new(67),
+        };
+        cache.set_max_bytes(2);
+        assert_eq!(
+            shard_limits(&cache.shards.read().unwrap()),
+            [(17, 1), (17, 1), (17, 0), (16, 0)]
+        );
+        cache.set_max_bytes(usize::MAX);
+        assert_eq!(
+            shard_limits(&cache.shards.read().unwrap()),
+            [
+                (17, usize::MAX),
+                (17, usize::MAX),
+                (17, usize::MAX),
+                (16, usize::MAX)
+            ]
+        );
     }
 }
 /// Snapshot of the current cache limits (0 denotes unlimited for max fields).

@@ -142,7 +142,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ExpireSpaceDirectoryManifest {
 mod tests {
     use super::*;
     use crate::isi::test_support::{
-assert_registry_decodes_registered_type as assert_registry_decodes, assert_slice_roundtrip,
+        assert_registry_decodes_registered_type as assert_registry_decodes, assert_slice_roundtrip,
     };
     use crate::nexus::ManifestVersion;
     use iroha_crypto::Hash;
@@ -181,11 +181,17 @@ assert_registry_decodes_registered_type as assert_registry_decodes, assert_slice
         });
     }
     #[test]
-fn space_directory_registry_decodes_canonical_wire_ids() {
+    fn space_directory_registry_decodes_canonical_wire_ids() {
         let registry = crate::isi::InstructionRegistry::new()
-.register_with_id_slice::<PublishSpaceDirectoryManifest>("iroha.instruction.v1::space_directory::PublishSpaceDirectoryManifest")
-            .register_with_id_slice::<RevokeSpaceDirectoryManifest>("iroha.instruction.v1::space_directory::RevokeSpaceDirectoryManifest")
-            .register_with_id_slice::<ExpireSpaceDirectoryManifest>("iroha.instruction.v1::space_directory::ExpireSpaceDirectoryManifest");
+            .register_with_id_slice::<PublishSpaceDirectoryManifest>(
+                "iroha.instruction.v1::space_directory::PublishSpaceDirectoryManifest",
+            )
+            .register_with_id_slice::<RevokeSpaceDirectoryManifest>(
+                "iroha.instruction.v1::space_directory::RevokeSpaceDirectoryManifest",
+            )
+            .register_with_id_slice::<ExpireSpaceDirectoryManifest>(
+                "iroha.instruction.v1::space_directory::ExpireSpaceDirectoryManifest",
+            );
         assert_registry_decodes(
             &registry,
             PublishSpaceDirectoryManifest {

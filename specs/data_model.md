@@ -122,7 +122,7 @@ These types sit alongside the existing Ed25519/BLS/ML-DSA primitives and become 
   - `mint_burn`, `transfer`, `register`, and a `transparent` bundle of helpers.
   - Type enums for meta flows: `InstructionType`, boxed sums like `SetKeyValueBox` (domain/account/asset_def/nft/trigger).
 - Errors: rich error model under `isi::error` (evaluation type errors, find errors, mintability, math, invalid parameters, repetition, invariants).
-- Instruction registry: the `instruction_registry!{ ... }` macro builds a direction-separated registry. Concrete Rust type names select entries only while encoding; decoding accepts only the registered stable wire IDs. `InstructionBox` clone and Norito codecs use this registry for dynamic serialization without a type-name alias. If no registry has been explicitly set via `set_instruction_registry(...)`, a built-in default registry with all core ISI is lazily installed on first use.
+- Instruction registry: `instruction_registry_with_ids!{ ... }` builds a direction-separated registry. Concrete Rust type names select entries only inside the encoder; every producer must obtain the registered stable wire ID plus canonical framed bytes through `framed_instruction_payload`. Decoding accepts only registered stable wire IDs and never treats a Rust type name as an alias. `InstructionBox` clone and Norito codecs use the same registry, whose complete built-in first-release inventory is installed lazily when no explicit test or embedding registry was set.
 
 ## Transactions
 

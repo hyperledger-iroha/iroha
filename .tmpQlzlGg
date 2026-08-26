@@ -1,0 +1,15 @@
+
+            {
+                "mode": "Entry",
+                "listen": "127.0.0.1:0",
+                "handshake": {
+                    "kem": [
+                        { "id": "unknown-kem", "required": true }
+                    ],
+                    "signatures": [
+                        { "id": "dilithium3", "required": true }
+                    ],
+                    "grease": []
+                }
+            }
+        

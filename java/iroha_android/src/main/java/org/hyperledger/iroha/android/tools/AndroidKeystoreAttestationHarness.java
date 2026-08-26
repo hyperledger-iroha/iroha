@@ -25,6 +25,7 @@ import java.util.stream.Collectors;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 import org.hyperledger.iroha.android.crypto.keystore.KeyAttestation;
+import org.hyperledger.iroha.android.crypto.keystore.attestation.AndroidAttestationRevocationPolicyV1;
 import org.hyperledger.iroha.android.crypto.keystore.attestation.AttestationResult;
 import org.hyperledger.iroha.android.crypto.keystore.attestation.AttestationVerificationException;
 import org.hyperledger.iroha.android.crypto.keystore.attestation.AttestationVerifier;
@@ -35,11 +36,14 @@ import org.hyperledger.iroha.android.crypto.keystore.attestation.AttestationVeri
  * archive attestation bundles and confirm firmware coverage before onboarding pilot networks.
  *
  * <p>The harness accepts DER or PEM encoded certificate chains and requires at least one trusted
- * root. Challenges can be supplied via command-line flag or a {@code challenge.hex} file located in
- * the bundle directory. Results are printed to stdout and may optionally be written to a JSON file
- * for archival.
+ * root, a non-empty challenge, a governed revocation snapshot, and an explicit evaluation time.
+ * Challenges can be supplied via command-line flag or a {@code challenge.hex} file located in the
+ * bundle directory. Results are printed to stdout and may optionally be written to a JSON file for
+ * archival.
  */
 public final class AndroidKeystoreAttestationHarness {
+
+  private static final int MAX_REVOCATION_SNAPSHOT_BYTES = 512 * 1024;
 
   /** Summary of the attestation verification. */
   public static final class Result {
@@ -157,7 +161,12 @@ public final class AndroidKeystoreAttestationHarness {
       throw new IllegalArgumentException("No attestation certificates found");
     }
 
-    final AttestationVerifier.Builder verifierBuilder = AttestationVerifier.builder();
+    final AndroidAttestationRevocationPolicyV1 revocationPolicy =
+        AndroidAttestationRevocationPolicyV1.fromCanonicalSnapshot(
+            arguments.revocationSnapshot, arguments.trustedRevocationSnapshotSha256);
+    final AttestationVerifier.Builder verifierBuilder =
+        AttestationVerifier.builder(
+            revocationPolicy, arguments.evaluationTimeEpochMillis);
     for (final X509Certificate root :
         loadTrustedRoots(
             arguments.trustedRoots, arguments.trustedRootDirs, arguments.trustedRootBundles)) {
@@ -428,6 +437,9 @@ public final class AndroidKeystoreAttestationHarness {
     final boolean requireStrongBox;
     final String alias;
     final byte[] challenge;
+    final byte[] revocationSnapshot;
+    final byte[] trustedRevocationSnapshotSha256;
+    final long evaluationTimeEpochMillis;
     final Path output;
 
     private Arguments(
@@ -439,6 +451,9 @@ public final class AndroidKeystoreAttestationHarness {
         final boolean requireStrongBox,
         final String alias,
         final byte[] challenge,
+        final byte[] revocationSnapshot,
+        final byte[] trustedRevocationSnapshotSha256,
+        final long evaluationTimeEpochMillis,
         final Path output) {
       this.bundleDir = bundleDir;
       this.chainFile = chainFile;
@@ -448,6 +463,9 @@ public final class AndroidKeystoreAttestationHarness {
       this.requireStrongBox = requireStrongBox;
       this.alias = alias;
       this.challenge = challenge;
+      this.revocationSnapshot = revocationSnapshot;
+      this.trustedRevocationSnapshotSha256 = trustedRevocationSnapshotSha256;
+      this.evaluationTimeEpochMillis = evaluationTimeEpochMillis;
       this.output = output;
     }
 
@@ -460,6 +478,9 @@ public final class AndroidKeystoreAttestationHarness {
       boolean requireStrongBox = false;
       String alias = "android-keystore-alias";
       byte[] challenge = null;
+      byte[] revocationSnapshot = null;
+      byte[] trustedRevocationSnapshotSha256 = null;
+      Long evaluationTimeEpochMillis = null;
       Path output = null;
 
       for (int i = 0; i < args.length; ++i) {
@@ -495,6 +516,25 @@ public final class AndroidKeystoreAttestationHarness {
                     Files.readString(Paths.get(requireValue(args, ++i, "--challenge-file")))
                         .trim());
             break;
+          case "--revocation-snapshot":
+            revocationSnapshot =
+                readBoundedFile(
+                    Paths.get(requireValue(args, ++i, "--revocation-snapshot")),
+                    "--revocation-snapshot",
+                    MAX_REVOCATION_SNAPSHOT_BYTES);
+            break;
+          case "--revocation-snapshot-sha256":
+            trustedRevocationSnapshotSha256 =
+                parseRequiredDigest(
+                    requireValue(args, ++i, "--revocation-snapshot-sha256"),
+                    "--revocation-snapshot-sha256");
+            break;
+          case "--evaluation-time-ms":
+            evaluationTimeEpochMillis =
+                parsePositiveLong(
+                    requireValue(args, ++i, "--evaluation-time-ms"),
+                    "--evaluation-time-ms");
+            break;
           case "--output":
             output = Paths.get(requireValue(args, ++i, "--output"));
             break;
@@ -529,8 +569,15 @@ public final class AndroidKeystoreAttestationHarness {
         collectTrustRootsFromBundle(bundleDir, trustedRoots, trustedRootBundles);
       }
 
-      if (challenge == null) {
-        challenge = new byte[0];
+      if (challenge == null || challenge.length == 0) {
+        throw new IllegalArgumentException(
+            "A non-empty --challenge-hex, --challenge-file, or bundle challenge.hex is required");
+      }
+      if (revocationSnapshot == null
+          || trustedRevocationSnapshotSha256 == null
+          || evaluationTimeEpochMillis == null) {
+        throw new IllegalArgumentException(
+            "Canonical governed revocation snapshot, trusted commitment, and explicit evaluation time are required");
       }
 
       final List<Path> normalizedRoots =
@@ -551,6 +598,9 @@ public final class AndroidKeystoreAttestationHarness {
           requireStrongBox,
           alias,
           challenge,
+          revocationSnapshot,
+          trustedRevocationSnapshotSha256,
+          evaluationTimeEpochMillis,
           output == null ? null : output.toAbsolutePath());
     }
 
@@ -559,6 +609,57 @@ public final class AndroidKeystoreAttestationHarness {
         throw new IllegalArgumentException(flag + " requires a value");
       }
       return args[index];
+    }
+
+    private static byte[] readBoundedFile(
+        final Path path, final String flag, final int maxBytes) throws IOException {
+      if (!Files.isRegularFile(path) || Files.isSymbolicLink(path)) {
+        throw new IllegalArgumentException(flag + " must name a regular non-symlink file");
+      }
+      try (InputStream input = Files.newInputStream(path);
+          ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+        final byte[] buffer = new byte[8192];
+        int total = 0;
+        while (true) {
+          final int read = input.read(buffer);
+          if (read < 0) {
+            break;
+          }
+          total += read;
+          if (total > maxBytes) {
+            throw new IllegalArgumentException(flag + " exceeds the V1 size bound");
+          }
+          output.write(buffer, 0, read);
+        }
+        return output.toByteArray();
+      }
+    }
+
+    private static long parsePositiveLong(final String value, final String flag) {
+      if (!value.matches("[1-9][0-9]*")) {
+        throw new IllegalArgumentException(flag + " requires a canonical positive integer");
+      }
+      try {
+        return Long.parseLong(value);
+      } catch (final NumberFormatException ex) {
+        throw new IllegalArgumentException(flag + " is outside the supported integer range", ex);
+      }
+    }
+
+    private static byte[] parseRequiredDigest(final String value, final String flag) {
+      if (!value.matches("[0-9a-f]{64}")) {
+        throw new IllegalArgumentException(
+            flag + " requires exactly 32 bytes of lowercase hexadecimal");
+      }
+      final byte[] digest = parseHex(value);
+      int aggregate = 0;
+      for (final byte current : digest) {
+        aggregate |= current;
+      }
+      if (aggregate == 0) {
+        throw new IllegalArgumentException(flag + " must not be all zero");
+      }
+      return digest;
     }
 
     private static String usage() {
@@ -571,6 +672,10 @@ public final class AndroidKeystoreAttestationHarness {
           "  --trust-root <path>      Trusted root certificate (PEM/DER). Repeat as needed.",
           "                             Files named trust_root_*.pem in the bundle directory are detected",
           "                             automatically.",
+          "  --challenge-hex <hex>    Non-empty verification challenge (or use --challenge-file).",
+          "  --revocation-snapshot <path>  Canonical domain-separated governed V1 snapshot.",
+          "  --revocation-snapshot-sha256 <hex>  Separately trusted SHA-256 of that exact snapshot.",
+          "  --evaluation-time-ms <ms>  Explicit verification time within snapshot freshness.",
           "",
           "Optional:",
           "  --trust-root-dir <path>  Directory containing PEM/DER/CRT trust anchors (recursively scanned).",
@@ -579,7 +684,6 @@ public final class AndroidKeystoreAttestationHarness {
           "                             are detected automatically.",
           "  --chain <path>           Explicit attestation chain file (PEM/DER). Overrides bundle.",
           "  --alias <alias>          Override alias (default: alias.txt).",
-          "  --challenge-hex <hex>    Verification challenge (hex encoded).",
           "  --challenge-file <path>  File containing hex-encoded challenge.",
           "  --require-strongbox      Enforce StrongBox attestation.",
           "  --output <path>          Write result JSON to <path>.",

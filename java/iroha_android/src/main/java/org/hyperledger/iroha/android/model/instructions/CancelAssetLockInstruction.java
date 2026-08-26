@@ -23,9 +23,12 @@ import org.hyperledger.iroha.android.util.HashLiteral;
  */
 public final class CancelAssetLockInstruction implements InstructionTemplate {
 
-  /** Registered native instruction type and Norito schema path. */
+  /** Canonical native instruction wire identifier. */
   public static final String WIRE_NAME =
-      "iroha_data_model::isi::escrow::CancelAssetLock";
+      "iroha.instruction.v1::escrow::CancelAssetLock";
+
+  /** Concrete Norito schema path used only for the typed payload. */
+  static final String SCHEMA_NAME = "iroha_data_model::isi::escrow::CancelAssetLock";
 
   /** Maximum UTF-8 bytes accepted for the lock-id preimage in V1. */
   public static final int MAX_LOCK_ID_UTF8_BYTES_V1 = 4_096;

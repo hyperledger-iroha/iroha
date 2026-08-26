@@ -34,7 +34,7 @@ pub(crate) fn trigger_is_enabled(metadata: &Metadata) -> bool {
 }
 /// All instructions related to triggers.
 /// - registering a trigger and validating the declared authority against
-///   `CanRegisterTrigger{authority: ...}` permissions or domain ownership
+///   `CanRegisterTrigger{authority: ...}` permissions
 /// - un-registering a trigger and cleaning up associated metadata
 /// - adjusting trigger metadata to reflect registration height and block time
 #[allow(clippy::used_underscore_binding)]
@@ -111,33 +111,33 @@ pub mod isi {
         })?;
         Ok(())
     }
-    fn is_permission_trigger_associated(
+    fn is_permission_trigger_associated_with_any(
         permission: &iroha_data_model::permission::Permission,
-        trigger_id: &TriggerId,
+        trigger_ids: &std::collections::BTreeSet<TriggerId>,
     ) -> bool {
         if let Ok(permission) =
             iroha_executor_data_model::permission::trigger::CanUnregisterTrigger::try_from(
                 permission,
             )
         {
-            return &permission.trigger == trigger_id;
+            return trigger_ids.contains(&permission.trigger);
         }
         if let Ok(permission) =
             iroha_executor_data_model::permission::trigger::CanModifyTrigger::try_from(permission)
         {
-            return &permission.trigger == trigger_id;
+            return trigger_ids.contains(&permission.trigger);
         }
         if let Ok(permission) =
             iroha_executor_data_model::permission::trigger::CanExecuteTrigger::try_from(permission)
         {
-            return &permission.trigger == trigger_id;
+            return trigger_ids.contains(&permission.trigger);
         }
         if let Ok(permission) =
             iroha_executor_data_model::permission::trigger::CanModifyTriggerMetadata::try_from(
                 permission,
             )
         {
-            return &permission.trigger == trigger_id;
+            return trigger_ids.contains(&permission.trigger);
         }
         false
     }
@@ -145,6 +145,22 @@ pub mod isi {
         state_transaction: &mut StateTransaction<'_, '_>,
         trigger_id: &TriggerId,
     ) {
+        remove_trigger_associated_permissions_for_ids(
+            state_transaction,
+            &std::collections::BTreeSet::from([trigger_id.clone()]),
+        );
+    }
+    /// Remove every account and role capability tied to one of the supplied trigger ids.
+    ///
+    /// The permission stores are each traversed once regardless of how many trigger ids
+    /// were depleted together.
+    pub(crate) fn remove_trigger_associated_permissions_for_ids(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        trigger_ids: &std::collections::BTreeSet<TriggerId>,
+    ) {
+        if trigger_ids.is_empty() {
+            return;
+        }
         let account_ids: Vec<AccountId> = state_transaction
             .world
             .account_permissions
@@ -157,9 +173,9 @@ pub mod isi {
                 .account_permissions
                 .get(&holder)
                 .is_some_and(|permissions| {
-                    permissions
-                        .iter()
-                        .any(|permission| is_permission_trigger_associated(permission, trigger_id))
+                    permissions.iter().any(|permission| {
+                        is_permission_trigger_associated_with_any(permission, trigger_ids)
+                    })
                 });
             if !should_remove {
                 continue;
@@ -167,8 +183,9 @@ pub mod isi {
             let remove_entry = if let Some(permissions) =
                 state_transaction.world.account_permissions.get_mut(&holder)
             {
-                permissions
-                    .retain(|permission| !is_permission_trigger_associated(permission, trigger_id));
+                permissions.retain(|permission| {
+                    !is_permission_trigger_associated_with_any(permission, trigger_ids)
+                });
                 permissions.is_empty()
             } else {
                 false
@@ -193,16 +210,18 @@ pub mod isi {
                 .roles
                 .get(&role_id)
                 .is_some_and(|role| {
-                    role.permissions()
-                        .any(|permission| is_permission_trigger_associated(permission, trigger_id))
+                    role.permissions().any(|permission| {
+                        is_permission_trigger_associated_with_any(permission, trigger_ids)
+                    })
                 });
             if !should_remove {
                 continue;
             }
             let impacted_accounts = state_transaction.accounts_with_role(&role_id);
             if let Some(role) = state_transaction.world.roles.get_mut(&role_id) {
-                role.permissions
-                    .retain(|permission| !is_permission_trigger_associated(permission, trigger_id));
+                role.permissions.retain(|permission| {
+                    !is_permission_trigger_associated_with_any(permission, trigger_ids)
+                });
                 role.permission_epochs
                     .retain(|permission, _| role.permissions.contains(permission));
             }
@@ -239,10 +258,10 @@ pub mod isi {
         )?;
         {
             // Enforce minimal permission: only genesis block, the trigger owner,
-            // domain owner of the trigger owner, an account with
-            // CanRegisterTrigger{authority: <owner>}, or the contract lifecycle
-            // path for its exact derived and already-registered subject may
-            // register the trigger.
+            // an account with CanRegisterTrigger{authority: <owner>}, or the
+            // contract lifecycle path for its exact derived and already-registered
+            // subject may register the trigger. Alias-domain ownership does not
+            // authorize acting as the canonical, domainless account.
             let owner = new_trigger.action().authority().clone();
             let is_preauthorized_manifest_contract_subject =
                 preauthorized_manifest_contract_subject.is_some_and(|subject| subject == &owner);
@@ -258,40 +277,10 @@ pub mod isi {
             }
             let is_genesis = state_transaction._curr_block.is_genesis();
             let is_owner = authority == &owner;
-            let mut is_domain_owner = false;
-            for alias in state_transaction.world.bound_account_aliases(&owner) {
-                if crate::sns::resolve_active_account_alias(
-                    &state_transaction.world,
-                    &state_transaction.nexus.dataspace_catalog,
-                    &alias,
-                    state_transaction.block_unix_timestamp_ms(),
-                )
-                .map_err(|error| Error::InvariantViolation(error.to_string().into()))?
-                .as_ref()
-                    != Some(&owner)
-                {
-                    continue;
-                }
-                let Ok(Some(domain_id)) =
-                    alias.domain_id(&state_transaction.nexus.dataspace_catalog)
-                else {
-                    continue;
-                };
-                let domain_owner = state_transaction
-                    .world
-                    .domain(&domain_id)
-                    .map(|domain| domain.owned_by().clone())
-                    .map_err(Error::Find)?;
-                if &domain_owner == authority {
-                    is_domain_owner = true;
-                    break;
-                }
-            }
             let has_permission =
                 (!is_genesis) && state_transaction.can_register_trigger_for(authority, &owner);
             if !(is_genesis
                 || is_owner
-                || is_domain_owner
                 || has_permission
                 || is_preauthorized_manifest_contract_subject)
             {
@@ -1527,6 +1516,7 @@ mod tests {
     #[test]
     fn by_call_trigger_is_pruned_after_manual_execution() {
         use iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter;
+        use iroha_executor_data_model::permission::trigger::CanExecuteTrigger;
         use iroha_logger::Level;
         // Build state
         let kura = Kura::blank_kura_for_testing();
@@ -1552,6 +1542,9 @@ mod tests {
         Register::account(Account::new(ALICE_ID.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
+        Register::account(Account::new(BOB_ID.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
         // Register a by-call trigger that may run exactly once
         let trig_id: TriggerId = "manual_once".parse().unwrap();
         let trig = Trigger::new(
@@ -1567,15 +1560,56 @@ mod tests {
         Register::trigger(trig)
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
+        let stale_permission: Permission = CanExecuteTrigger {
+            trigger: trig_id.clone(),
+        }
+        .into();
+        Grant::account_permission(stale_permission.clone(), BOB_ID.clone())
+            .execute(&ALICE_ID, &mut stx)
+            .expect("grant execute permission for the first trigger incarnation");
+        assert!(
+            stx.can_execute_trigger_for(&BOB_ID, &trig_id),
+            "fixture must prime the permission cache before automatic depletion"
+        );
         // First execution should succeed.
         ExecuteTrigger::new(trig_id.clone())
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
+        assert!(
+            !stx.world
+                .account_permissions
+                .get(&*BOB_ID)
+                .is_some_and(|permissions| permissions.contains(&stale_permission)),
+            "automatic depletion must revoke trigger-scoped permissions"
+        );
+        assert!(
+            !stx.can_execute_trigger_for(&BOB_ID, &trig_id),
+            "automatic depletion must invalidate cached trigger capabilities"
+        );
         // Subsequent execution should report the trigger as missing/depleted.
         let err = ExecuteTrigger::new(trig_id.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect_err("depleted by-call trigger must not run twice");
         assert!(matches!(err, Error::Find(FindError::Trigger(id)) if id == trig_id));
+
+        // Reusing the id must not transfer a capability from the deleted trigger
+        // incarnation to its replacement.
+        let replacement = Trigger::new(
+            trig_id.clone(),
+            Action::new(
+                Vec::<InstructionBox>::new(),
+                Repeats::Indefinitely,
+                ALICE_ID.clone(),
+                ExecuteTriggerEventFilter::new().for_trigger(trig_id.clone()),
+            )
+            .expect("replacement trigger action is valid"),
+        );
+        Register::trigger(replacement)
+            .execute(&ALICE_ID, &mut stx)
+            .expect("reuse depleted trigger id");
+        ExecuteTrigger::new(trig_id)
+            .execute(&BOB_ID, &mut stx)
+            .expect_err("stale permission must not authorize the replacement trigger");
     }
     #[test]
     fn register_trigger_without_permission_is_rejected() {
@@ -1622,6 +1656,115 @@ mod tests {
             }
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+    #[test]
+    fn active_alias_domain_owner_cannot_register_trigger_for_canonical_account() {
+        use iroha_data_model::{
+            account::{
+                AccountAddress,
+                rekey::{AccountAlias, AccountAliasDomain, AccountRekeyRecord},
+            },
+            events::execute_trigger::ExecuteTriggerEventFilter,
+            nexus::DataSpaceId,
+            sns::{NameControllerV1, NameRecordV1},
+        };
+
+        let domain_id = DomainId::try_new("aliasbank", "universal").expect("domain id");
+        let world = World::with(
+            [Domain::new(domain_id).build(&BOB_ID)],
+            [
+                Account::new(ALICE_ID.clone()).build(&ALICE_ID),
+                Account::new(BOB_ID.clone()).build(&BOB_ID),
+            ],
+            [],
+        );
+        let state = State::new(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut state_block = state.block(BlockHeader::new(
+            NonZeroU64::new(2).expect("nonzero"),
+            None,
+            None,
+            None,
+            50,
+            0,
+        ));
+        let mut stx = state_block.transaction();
+        let alias = AccountAlias::new(
+            "customer".parse().expect("alias label"),
+            Some(AccountAliasDomain::new(
+                "aliasbank".parse().expect("alias domain"),
+            )),
+            DataSpaceId::UNIVERSAL,
+        );
+        let selector = crate::sns::selector_for_account_alias(&alias, &stx.nexus.dataspace_catalog)
+            .expect("account alias selector");
+        let address = AccountAddress::from_account_id(&ALICE_ID).expect("account address");
+        let lease = NameRecordV1::new(
+            selector.clone(),
+            ALICE_ID.clone(),
+            vec![NameControllerV1::account(&address)],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            Metadata::default(),
+        );
+        stx.world.smart_contract_state.insert(
+            crate::sns::record_storage_key(&selector),
+            norito::codec::Encode::encode(&lease),
+        );
+        stx.world
+            .insert_account_alias_binding(alias.clone(), ALICE_ID.clone());
+        stx.world.account_rekey_records.insert(
+            alias.clone(),
+            AccountRekeyRecord::new(alias.clone(), ALICE_ID.clone()),
+        );
+        assert_eq!(
+            crate::sns::resolve_active_account_alias(
+                &stx.world,
+                &stx.nexus.dataspace_catalog,
+                &alias,
+                stx.block_unix_timestamp_ms(),
+            )
+            .expect("active alias lookup"),
+            Some(ALICE_ID.clone()),
+            "fixture must expose an active alias in the attacker's domain",
+        );
+
+        let trigger_id: TriggerId = "alias_domain_impersonation".parse().expect("trigger id");
+        let trigger = Trigger::new(
+            trigger_id.clone(),
+            Action::new(
+                Vec::<InstructionBox>::new(),
+                Repeats::Indefinitely,
+                ALICE_ID.clone(),
+                ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
+            )
+            .expect("valid trigger action"),
+        );
+        let error = Register::trigger(trigger)
+            .execute(&BOB_ID, &mut stx)
+            .expect_err("alias-domain ownership must not authorize the canonical account");
+        assert!(
+            matches!(
+                error,
+                InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(ref message)
+                ) if message.contains("CanRegisterTrigger")
+            ),
+            "unexpected registration error: {error:?}",
+        );
+        assert!(
+            stx.world
+                .triggers
+                .inspect_by_id(&trigger_id, |_| ())
+                .is_none(),
+            "rejected trigger must not enter world state",
+        );
     }
     #[test]
     fn register_trigger_with_permission_succeeds() {

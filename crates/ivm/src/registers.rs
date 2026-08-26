@@ -198,6 +198,23 @@ impl Registers {
             });
         }
     }
+    /// Zero every private register before clearing its privacy tag.
+    ///
+    /// Public registers are preserved so hosts may preload ordinary arguments
+    /// before replacing a program. Zeroing first prevents logs and Merkle
+    /// leaves from ever representing a secret value as public.
+    pub(crate) fn scrub_private(&mut self) {
+        for index in 1..self.tags.len() {
+            if self.tags[index] {
+                self.set(index, 0);
+                self.set_tag(index, false);
+            }
+        }
+    }
+    /// Return whether any general-purpose register is private-tagged.
+    pub(crate) fn has_private(&self) -> bool {
+        self.tags.iter().any(|tag| *tag)
+    }
     /// Mutable access for test‑suites and advanced host tooling.
     #[inline]
     pub fn set_raw(&mut self, index: usize, value: u64) {
@@ -427,5 +444,24 @@ mod tests {
         let cleared = regs.usage_summary();
         assert_eq!(cleared.unique_registers, 0);
         assert_eq!(cleared.max_index, 0);
+    }
+    #[test]
+    fn private_scrub_zeros_tagged_registers_and_preserves_public_values() {
+        let mut regs = Registers::new();
+        regs.set(2, 0xfeed_face_dead_beef);
+        regs.set_tag(2, true);
+        regs.set(200, 0x0123_4567_89ab_cdef);
+        regs.set_tag(200, true);
+        regs.set(7, 0x55aa);
+
+        regs.scrub_private();
+
+        assert_eq!(regs.get(2), 0);
+        assert!(!regs.tag(2));
+        assert_eq!(regs.get(200), 0);
+        assert!(!regs.tag(200));
+        assert_eq!(regs.get(7), 0x55aa);
+        assert!(!regs.tag(7));
+        assert!(!regs.has_private());
     }
 }

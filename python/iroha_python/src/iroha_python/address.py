@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from enum import IntEnum
 from typing import Iterable, List, Mapping, Optional, Sequence, Tuple
 
+from blake3 import blake3
+
 HEADER_VERSION_V1 = 0
 HEADER_NORM_VERSION_V1 = 1
 I105_SENTINEL_SORA = "sora"
@@ -80,6 +82,46 @@ IROHA_POEM_KANA_HALFWIDTH: Tuple[str, ...] = (
 I105_ALPHABET: Tuple[str, ...] = BASE58_ALPHABET + IROHA_POEM_KANA_HALFWIDTH
 I105_BASE = len(I105_ALPHABET)
 I105_INDEX = {symbol: idx for idx, symbol in enumerate(I105_ALPHABET)}
+
+
+def require_canonical_asset_definition_id(value: object, context: str) -> str:
+    """Return one exact V1 asset-definition address or raise ``ValueError``."""
+
+    if (
+        not isinstance(value, str)
+        or not value
+        or value.strip() != value
+        or any(character.isspace() for character in value)
+    ):
+        raise ValueError(
+            f"{context} must be an exact canonical asset definition address"
+        )
+    alphabet_index = {character: index for index, character in enumerate(BASE58_ALPHABET)}
+    try:
+        payload = decode_base_n(
+            [alphabet_index[character] for character in value],
+            len(BASE58_ALPHABET),
+        )
+    except (KeyError, AccountAddressError) as error:
+        raise ValueError(
+            f"{context} must be an exact canonical asset definition address"
+        ) from error
+    canonical = "".join(
+        BASE58_ALPHABET[digit]
+        for digit in encode_base_n(payload, len(BASE58_ALPHABET))
+    )
+    if (
+        canonical != value
+        or len(payload) != 21
+        or payload[0] != 1
+        or payload[7] >> 4 != 0b0100
+        or payload[9] & 0b11000000 != 0b10000000
+        or blake3(bytes(payload[:17])).digest()[:4] != bytes(payload[17:])
+    ):
+        raise ValueError(
+            f"{context} must be an exact canonical asset definition address"
+        )
+    return value
 
 
 class AccountAddressError(ValueError):

@@ -1,0 +1,12 @@
+{
+                "mode": "Entry",
+                "listen": "127.0.0.1:0",
+                "compliance": {
+                    "enable": true,
+                    "log_path": "/tmp/logger.jsonl",
+                    "hash_salt_path": "/Users/takemiyamakoto/devstuff/iroha/.tmprmwVPH",
+                    "max_log_bytes": 123456,
+                    "max_backup_files": 3,
+                    "pipeline_spool_dir": "/tmp/spool"
+                }
+            }

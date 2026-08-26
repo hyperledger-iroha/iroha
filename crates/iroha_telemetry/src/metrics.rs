@@ -2681,6 +2681,21 @@ mod tests {
                 .all(|snapshot| snapshot.stream != "stream-0"),
             "oldest stream should be evicted"
         );
+        let dump = metrics.try_to_string().expect("metrics text");
+        assert!(
+            dump.lines().all(|line| {
+                !line.starts_with("taikai_ingest_segment_latency_ms")
+                    || !line.contains("stream=\"stream-0\"")
+            }),
+            "snapshot eviction must remove the Prometheus child for the oldest stream"
+        );
+        assert_eq!(
+            dump.lines()
+                .filter(|line| line.starts_with("taikai_ingest_segment_latency_ms_count{"))
+                .count(),
+            TAIKAI_INGEST_SNAPSHOT_CAP,
+            "Prometheus latency stream cardinality must follow the snapshot cap"
+        );
     }
     #[test]
     fn taikai_ingest_error_reasons_are_capped() {
@@ -2711,6 +2726,25 @@ mod tests {
                 .iter()
                 .all(|entry| entry.reason != "reason-0"),
             "oldest reason should be evicted to enforce the cap"
+        );
+        let dump = metrics.try_to_string().expect("metrics text");
+        let error_lines = dump
+            .lines()
+            .filter(|line| {
+                line.starts_with("taikai_ingest_errors_total{")
+                    && line.contains("stream=\"stream-main\"")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            error_lines.len(),
+            TAIKAI_INGEST_ERROR_REASON_CAP,
+            "Prometheus error cardinality must follow the reason cap"
+        );
+        assert!(
+            error_lines
+                .iter()
+                .all(|line| !line.contains("reason=\"reason-0\"")),
+            "reason eviction must remove the Prometheus child"
         );
     }
     #[test]
@@ -11666,15 +11700,18 @@ impl Metrics {
         F: FnOnce(&mut TaikaiIngestSnapshotInternal),
     {
         let key = (cluster.to_owned(), stream.to_owned());
-        if let (Ok(mut snapshots), Ok(mut order)) = (
+        let evicted = if let (Ok(mut snapshots), Ok(mut order)) = (
             self.taikai_ingest_snapshots.write(),
             self.taikai_ingest_snapshot_order.write(),
         ) {
+            let mut evicted = None;
             if !snapshots.contains_key(&key) {
                 if snapshots.len() >= TAIKAI_INGEST_SNAPSHOT_CAP
-                    && let Some(evicted) = order.pop_front()
+                    && let Some(evicted_key) = order.pop_front()
                 {
-                    snapshots.remove(&evicted);
+                    evicted = snapshots
+                        .remove(&evicted_key)
+                        .map(|snapshot| (evicted_key, snapshot));
                 }
                 order.push_back(key.clone());
             } else if let Some(position) = order.iter().position(|entry| entry == &key) {
@@ -11685,6 +11722,33 @@ impl Metrics {
                 .entry(key)
                 .or_insert_with(TaikaiIngestSnapshotInternal::default);
             update(entry);
+            evicted
+        } else {
+            None
+        };
+        if let Some(((cluster, stream), snapshot)) = evicted {
+            self.remove_taikai_ingest_metric_children(&cluster, &stream, &snapshot);
+        }
+    }
+    fn remove_taikai_ingest_metric_children(
+        &self,
+        cluster: &str,
+        stream: &str,
+        snapshot: &TaikaiIngestSnapshotInternal,
+    ) {
+        let _ = self
+            .taikai_ingest_segment_latency_ms
+            .remove_label_values(&[cluster, stream]);
+        let _ = self
+            .taikai_ingest_live_edge_drift_ms
+            .remove_label_values(&[cluster, stream]);
+        let _ = self
+            .taikai_ingest_live_edge_drift_signed_ms
+            .remove_label_values(&[cluster, stream]);
+        for reason in snapshot.error_totals.keys() {
+            let _ = self
+                .taikai_ingest_errors_total
+                .remove_label_values(&[cluster, stream, reason]);
         }
     }
     /// Record the latest encoder-to-ingest latency for the given stream.
@@ -11707,6 +11771,7 @@ impl Metrics {
     /// Record an ingest error for the given stream and reason.
     pub fn record_taikai_ingest_error_snapshot(&self, cluster: &str, stream: &str, reason: &str) {
         let reason = reason.to_owned();
+        let mut evicted_reason = None;
         self.update_taikai_snapshot(cluster, stream, |snapshot| {
             if snapshot.error_totals.contains_key(&reason)
                 || snapshot.error_totals.len() < TAIKAI_INGEST_ERROR_REASON_CAP
@@ -11715,10 +11780,16 @@ impl Metrics {
                 return;
             }
             // Evict the lexicographically earliest entry to bound memory usage.
-            if snapshot.error_totals.pop_first().is_some() {
+            if let Some((evicted, _)) = snapshot.error_totals.pop_first() {
+                evicted_reason = Some(evicted);
                 snapshot.error_totals.insert(reason, 1);
             }
         });
+        if let Some(reason) = evicted_reason {
+            let _ = self
+                .taikai_ingest_errors_total
+                .remove_label_values(&[cluster, stream, &reason]);
+        }
     }
     fn record_taikai_alias_rotation_snapshot(&self, snapshot: TaikaiAliasRotationSnapshotArgs<'_>) {
         if let Ok(mut guard) = self.taikai_alias_rotation_snapshots.write() {

@@ -2570,7 +2570,10 @@ public sealed partial class SccpExactTests
         FeePaymentIntent? feePayment = null,
         ulong? timeToLiveMilliseconds = DefaultTransactionTimeToLiveMilliseconds)
     {
-        const string submitBridgeProof = "iroha_data_model::isi::bridge::SubmitBridgeProof";
+        const string submitBridgeProofWireId =
+            "iroha.instruction.v1::bridge::SubmitBridgeProof";
+        const string submitBridgeProofSchemaName =
+            "iroha_data_model::isi::bridge::SubmitBridgeProof";
         var pair = Ed25519KeyPair.FromSeed(Enumerable.Repeat((byte)0x57, 32).ToArray());
         var compactPublicKey = new byte[1 + pair.PublicKey.Length];
         pair.PublicKey.CopyTo(compactPublicKey, 1);
@@ -2596,11 +2599,11 @@ public sealed partial class SccpExactTests
             legacyOuterBinding ? CompactField(FixedByteArray(routeConfigurationHash)) : [],
             CompactField(bridgePayload));
         var instructionArchive = NoritoCodec.Encode(
-            submitBridgeProof,
+            submitBridgeProofSchemaName,
             CompactField(bridgeProof),
             flags: 0x02);
         var instruction = Concat(
-            CompactField(CompactString(submitBridgeProof)),
+            CompactField(CompactString(submitBridgeProofWireId)),
             CompactField(RawByteVector(instructionArchive)));
         var instructions = Concat(UInt64(1), CompactField(instruction));
         var executable = Concat(UInt32(0), CompactField(instructions));

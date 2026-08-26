@@ -402,6 +402,22 @@ def _x509_certificate_serial(certificate: bytes) -> str:
     return format(serial, "x")
 
 
+def _x509_certificate_tbs_sha256(certificate: bytes) -> str:
+    """Return lowercase SHA-256 of the exact DER TBSCertificate value."""
+
+    # Validate the complete certificate before projecting the exact first
+    # element of Certificate ::= SEQUENCE { tbsCertificate, ... }.
+    _x509_certificate_header(certificate)
+    certificate_reader = _StrictDerReader(certificate)
+    certificate_sequence = certificate_reader.expect(0, True, 16, "X.509 certificate")
+    certificate_reader.finish("X.509 certificate")
+    outer = _StrictDerReader(certificate_sequence)
+    tag_class, constructed, tag, _, raw_tbs = outer.read()
+    if (tag_class, constructed, tag) != (0, True, 16):
+        raise ValueError("X.509 TBSCertificate is malformed")
+    return hashlib.sha256(raw_tbs).hexdigest()
+
+
 def _x509_certificate_validity_and_subject(
     certificate: bytes,
 ) -> tuple[tuple[int, int], bytes]:

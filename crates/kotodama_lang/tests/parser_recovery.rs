@@ -5,6 +5,15 @@ use kotodama_lang::{
     syntax::{SyntaxKind, parse},
 };
 use std::fmt::Write as _;
+
+fn count_nodes(node: &kotodama_lang::syntax::GreenNode, kind: SyntaxKind) -> usize {
+    let nested = node.children.iter().filter_map(|child| match child {
+        kotodama_lang::syntax::GreenElement::Node(child) => Some(count_nodes(child, kind)),
+        kotodama_lang::syntax::GreenElement::Token(_) => None,
+    });
+    usize::from(node.kind == kind) + nested.sum::<usize>()
+}
+
 #[test]
 fn recovers_multiple_errors_inside_one_block_and_across_items() {
     let text = r#"seiyaku Broken {
@@ -36,6 +45,18 @@ fn recovers_multiple_errors_inside_one_block_and_across_items() {
             .count()
             >= 3
     );
+}
+
+#[test]
+fn recovers_a_valid_item_after_a_same_line_item_error() {
+    let text = "module Recovery { const int broken = ; fn kept() {} }";
+    let source = SourceFile::new(SourceId(5), "same-line-recovery.ko", text);
+    let output = parse(&source, FrontendBudget::v1());
+
+    assert_eq!(output.tree.text(&source), text);
+    assert!(!output.is_ok());
+    assert_eq!(count_nodes(output.tree.root(), SyntaxKind::ConstItem), 1);
+    assert_eq!(count_nodes(output.tree.root(), SyntaxKind::FunctionItem), 1);
 }
 #[test]
 fn malformed_delimiters_keep_the_complete_tree_and_make_progress() {

@@ -672,7 +672,10 @@ pub mod isi {
     fn account_subject_matches(left: &AccountId, right: &AccountId) -> bool {
         left.subject_id() == right.subject_id()
     }
-    fn is_permission_account_associated(permission: &Permission, account_id: &AccountId) -> bool {
+    pub(crate) fn is_permission_account_associated(
+        permission: &Permission,
+        account_id: &AccountId,
+    ) -> bool {
         if let Ok(permission) =
             iroha_executor_data_model::permission::nexus::CanManageFeeSponsorProgram::try_from(
                 permission,
@@ -726,6 +729,13 @@ pub mod isi {
             return account_subject_matches(&permission.account, account_id);
         }
         if let Ok(permission) =
+            iroha_executor_data_model::permission::account::CanReplaceAccountController::try_from(
+                permission,
+            )
+        {
+            return account_subject_matches(&permission.account, account_id);
+        }
+        if let Ok(permission) =
             iroha_executor_data_model::permission::query::CanReadAccountData::try_from(permission)
         {
             return account_subject_matches(&permission.account, account_id);
@@ -736,6 +746,34 @@ pub mod isi {
             return account_subject_matches(&permission.authority, account_id);
         }
         if let Ok(permission) =
+            iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint::try_from(
+                permission,
+            )
+        {
+            return account_subject_matches(permission.contract.subject_id(), account_id);
+        }
+        if let Ok(permission) =
+            iroha_executor_data_model::permission::asset::CanSetAssetTransferAvailability::try_from(
+                permission,
+            )
+        {
+            return account_subject_matches(&permission.account, account_id);
+        }
+        if let Ok(permission) =
+            iroha_executor_data_model::permission::asset::CanSetAssetHoldingLimit::try_from(
+                permission,
+            )
+        {
+            return account_subject_matches(&permission.account, account_id);
+        }
+        if let Ok(permission) =
+            iroha_executor_data_model::permission::settlement::CanExecuteSettlement::try_from(
+                permission,
+            )
+        {
+            return account_subject_matches(permission.debited_asset.account(), account_id);
+        }
+        if let Ok(permission) =
             iroha_executor_data_model::permission::governance::CanRecordCitizenService::try_from(
                 permission,
             )
@@ -744,7 +782,7 @@ pub mod isi {
         }
         false
     }
-    fn remove_account_associated_permissions(
+    pub(crate) fn remove_account_associated_permissions(
         state_transaction: &mut StateTransaction<'_, '_>,
         account_id: &AccountId,
     ) {
@@ -879,6 +917,34 @@ pub mod isi {
             )
         {
             return permission.asset.definition() == asset_definition_id;
+        }
+        if let Ok(permission) =
+            iroha_executor_data_model::permission::asset::CanSetAssetTransferAvailability::try_from(
+                permission,
+            )
+        {
+            return &permission.asset_definition == asset_definition_id;
+        }
+        if let Ok(permission) =
+            iroha_executor_data_model::permission::asset::CanSetAssetTransferDailyLimit::try_from(
+                permission,
+            )
+        {
+            return &permission.asset_definition == asset_definition_id;
+        }
+        if let Ok(permission) =
+            iroha_executor_data_model::permission::asset::CanSetAssetHoldingLimit::try_from(
+                permission,
+            )
+        {
+            return &permission.asset_definition == asset_definition_id;
+        }
+        if let Ok(permission) =
+            iroha_executor_data_model::permission::settlement::CanExecuteSettlement::try_from(
+                permission,
+            )
+        {
+            return permission.debited_asset.definition() == asset_definition_id;
         }
         false
     }
@@ -6156,6 +6222,103 @@ mod tests {
         );
     }
     #[test]
+    fn unregister_account_removes_all_account_scoped_permissions() {
+        let mut state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let target = AccountId::new(checked_keypair().public_key().clone());
+        let holder = AccountId::new(checked_keypair().public_key().clone());
+        let asset_definition = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("account-cleanup", "universal").expect("asset domain"),
+            "cash".parse().expect("asset name"),
+        );
+        let contract = ContractAddress::derive(
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("network id"),
+            &target,
+            1,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let permissions = [
+            Permission::from(
+                iroha_executor_data_model::permission::account::CanReplaceAccountController {
+                    account: target.clone(),
+                },
+            ),
+            Permission::from(
+                iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
+                    contract,
+                    entrypoint: "main".to_owned(),
+                },
+            ),
+            Permission::from(
+                iroha_executor_data_model::permission::asset::CanSetAssetTransferAvailability {
+                    account: target.clone(),
+                    asset_definition: asset_definition.clone(),
+                },
+            ),
+            Permission::from(
+                iroha_executor_data_model::permission::asset::CanSetAssetHoldingLimit {
+                    account: target.clone(),
+                    asset_definition: asset_definition.clone(),
+                },
+            ),
+            Permission::from(
+                iroha_executor_data_model::permission::settlement::CanExecuteSettlement {
+                    debited_asset: AssetId::new(asset_definition, target.clone()),
+                    settlement_id: "account_cleanup_consent".parse().expect("settlement id"),
+                    intent_hash: Hash::new(b"account cleanup consent"),
+                },
+            ),
+        ];
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        for account in [target.clone(), holder.clone()] {
+            Register::account(NewAccount::new(account))
+                .execute(&authority, &mut tx)
+                .expect("register cleanup fixture account");
+        }
+        let role_id: RoleId = "ACCOUNT_CLEANUP".parse().expect("role id");
+        Register::role(Role::new(role_id.clone(), holder.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register cleanup fixture role");
+        for permission in &permissions {
+            Grant::account_permission(permission.clone(), holder.clone())
+                .execute(&authority, &mut tx)
+                .expect("grant account-scoped permission");
+            Grant::role_permission(permission.clone(), role_id.clone())
+                .execute(&authority, &mut tx)
+                .expect("grant role-scoped permission");
+        }
+        Unregister::account(target)
+            .execute(&authority, &mut tx)
+            .expect("unregister target account");
+        assert!(
+            tx.world
+                .account_permissions
+                .get(&holder)
+                .is_none_or(|held| permissions
+                    .iter()
+                    .all(|permission| !held.contains(permission))),
+            "direct account-scoped permissions must be removed"
+        );
+        let role = tx.world.roles.get(&role_id).expect("cleanup role remains");
+        assert!(
+            permissions
+                .iter()
+                .all(|permission| !role.permissions().any(|candidate| candidate == permission)),
+            "role-held account-scoped permissions must be removed"
+        );
+        assert!(
+            permissions
+                .iter()
+                .all(|permission| !role.permission_epochs().contains_key(permission)),
+            "removed role permissions must not retain epochs"
+        );
+    }
+    #[test]
     fn unregister_account_removes_all_bound_aliases() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("label", "universal").expect("domain id");
@@ -10595,9 +10758,37 @@ mod tests {
         .into();
         let permission_with_asset: Permission =
             iroha_executor_data_model::permission::asset::CanModifyAssetMetadata {
-                asset: asset_id,
+                asset: asset_id.clone(),
             }
             .into();
+        let lifecycle_permissions = [
+            Permission::from(
+                iroha_executor_data_model::permission::asset::CanSetAssetTransferAvailability {
+                    account: asset_account.clone(),
+                    asset_definition: asset_definition_id.clone(),
+                },
+            ),
+            Permission::from(
+                iroha_executor_data_model::permission::asset::CanSetAssetTransferDailyLimit {
+                    asset_definition: asset_definition_id.clone(),
+                    account_domain: asset_domain.name().clone().into(),
+                    account_dataspace: DataSpaceId::UNIVERSAL,
+                },
+            ),
+            Permission::from(
+                iroha_executor_data_model::permission::asset::CanSetAssetHoldingLimit {
+                    account: asset_account.clone(),
+                    asset_definition: asset_definition_id.clone(),
+                },
+            ),
+            Permission::from(
+                iroha_executor_data_model::permission::settlement::CanExecuteSettlement {
+                    debited_asset: asset_id,
+                    settlement_id: "asset_cleanup_consent".parse().expect("settlement id"),
+                    intent_hash: Hash::new(b"asset-definition cleanup consent"),
+                },
+            ),
+        ];
         Grant::account_permission(permission_with_definition.clone(), holder_id.clone())
             .execute(&authority, &mut tx)
             .expect("grant definition permission to holder");
@@ -10613,6 +10804,11 @@ mod tests {
         Grant::account_permission(permission_with_exact_alias.clone(), holder_id.clone())
             .execute(&authority, &mut tx)
             .expect("grant exact alias permission to holder");
+        for permission in &lifecycle_permissions {
+            Grant::account_permission(permission.clone(), holder_id.clone())
+                .execute(&authority, &mut tx)
+                .expect("grant lifecycle permission to holder");
+        }
         let role_id: RoleId = "ASSET_CLEANUP".parse().expect("role id");
         Register::role(Role::new(role_id.clone(), holder_id.clone()))
             .execute(&authority, &mut tx)
@@ -10629,6 +10825,11 @@ mod tests {
         Grant::role_permission(permission_with_exact_alias.clone(), role_id.clone())
             .execute(&authority, &mut tx)
             .expect("grant exact alias permission to role");
+        for permission in &lifecycle_permissions {
+            Grant::role_permission(permission.clone(), role_id.clone())
+                .execute(&authority, &mut tx)
+                .expect("grant lifecycle permission to role");
+        }
         assert!(
             tx.world
                 .account_permissions
@@ -10638,6 +10839,9 @@ mod tests {
                         && perms.contains(&permission_with_confidential_policy)
                         && perms.contains(&permission_with_asset)
                         && perms.contains(&permission_with_exact_alias)
+                        && lifecycle_permissions
+                            .iter()
+                            .all(|permission| perms.contains(permission))
                 }),
             "holder should have permissions before unregister"
         );
@@ -10662,6 +10866,12 @@ mod tests {
                 .any(|perm| perm == &permission_with_exact_alias),
             "role should include exact alias permission before unregister"
         );
+        assert!(
+            lifecycle_permissions
+                .iter()
+                .all(|permission| role.permissions().any(|candidate| candidate == permission)),
+            "role should include lifecycle permissions before unregister"
+        );
         Unregister::asset_definition(asset_definition_id.clone())
             .execute(&authority, &mut tx)
             .expect("unregister asset definition");
@@ -10674,6 +10884,9 @@ mod tests {
                         || perms.contains(&permission_with_confidential_policy)
                         || perms.contains(&permission_with_asset)
                         || perms.contains(&permission_with_exact_alias)
+                        || lifecycle_permissions
+                            .iter()
+                            .any(|permission| perms.contains(permission))
                 }),
             "holder permissions should be removed"
         );
@@ -10701,6 +10914,12 @@ mod tests {
                 .permissions()
                 .any(|perm| perm == &permission_with_exact_alias),
             "role exact alias permission should be removed"
+        );
+        assert!(
+            lifecycle_permissions
+                .iter()
+                .all(|permission| !role.permissions().any(|candidate| candidate == permission)),
+            "role lifecycle permissions should be removed"
         );
         assert!(
             !role

@@ -125,6 +125,27 @@ const RWA_ID =
   "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities.sora";
 const test = makeNativeTest(baseTest);
 
+function acceptedAuthorityFeeQuote(payload, intent = payload.fee_payment) {
+  assert.equal(intent.payer, "authority");
+  return {
+    intent,
+    observation: {
+      ledger_time_ms: 1,
+      next_block_height: 1,
+      route_dataspace_id: 0,
+    },
+    components: intent.value.charge_limits.map((limit) => ({ ...limit })),
+    capacities: [],
+    decision: {
+      status: "accepted",
+      value: {
+        debit_source: { kind: "account", value: payload.authority },
+        program_revision: null,
+      },
+    },
+  };
+}
+
 function i105FromEd25519PublicKeyHex(publicKeyHex) {
   const publicKey = Buffer.from(publicKeyHex.trim(), "hex");
   return AccountAddress.fromAccount({ publicKey }).toI105();
@@ -667,7 +688,7 @@ test("quoteAndSignTransaction performs the guided exact-payload flow", async () 
       const client = {
         async quoteFees(draft, options) {
           calls.push(["quote", draft, options]);
-          return { intent: quotedIntent, observation: {}, components: [], capacities: [] };
+          return acceptedAuthorityFeeQuote(payload, quotedIntent);
         },
       };
       const result = await quoteAndSignTransaction(client, {
@@ -687,6 +708,56 @@ test("quoteAndSignTransaction performs the guided exact-payload flow", async () 
   assert.deepEqual(Buffer.from(calls[1][1]), NETWORK_ID_BYTES);
   assert.equal(calls[1][2], JSON.stringify(payload));
   assert.deepEqual(JSON.parse(calls[1][3]), quotedIntent);
+});
+
+baseTest("quoteAndSignTransaction rejects an unbound injectable-client quote before signing", async () => {
+  const instruction = buildMintAssetInstruction({
+    assetId: ASSET_ID_INPUT,
+    quantity: "1",
+  });
+  const payload = {
+    domain: { kind: "network", value: NETWORK_ID.literal },
+    authority: AUTHORITY_ID,
+    fee_payment: {
+      payer: "authority",
+      value: { charge_limits: [], gas_limit: null },
+    },
+  };
+  let signCalls = 0;
+  await withNativeBindingAsync(
+    {
+      buildTransactionPayload: () => ({
+        payload_json: JSON.stringify(payload),
+        payload_bytes: Buffer.from([1]),
+        payload_hash: Buffer.alloc(32, 2),
+      }),
+      signQuotedTransactionPayload: () => {
+        signCalls += 1;
+        return {
+          signed_transaction: Buffer.from([3]),
+          hash: Buffer.alloc(32, 4),
+        };
+      },
+    },
+    async () => {
+      const invalidQuote = acceptedAuthorityFeeQuote(payload);
+      invalidQuote.observation.next_block_height = 0;
+      await assert.rejects(
+        () => quoteAndSignTransaction(
+          { async quoteFees() { return invalidQuote; } },
+          {
+            networkId: NETWORK_ID,
+            authority: AUTHORITY_ID_INPUT,
+            instructions: [instruction],
+            feePayment: AUTHORITY_FEE_PAYMENT,
+            privateKey: PRIVATE_KEY,
+          },
+        ),
+        /next_block_height/u,
+      );
+    },
+  );
+  assert.equal(signCalls, 0);
 });
 
 baseTest("quoted transaction signers require one nominal NetworkId", () => {
@@ -824,12 +895,7 @@ test("buildRegisterPinManifestTransaction quotes and signs exactly one instructi
     async () => {
       const client = {
         async quoteFees() {
-          return {
-            intent: quotedIntent,
-            observation: {},
-            components: [],
-            capacities: [],
-          };
+          return acceptedAuthorityFeeQuote(payload, quotedIntent);
         },
       };
       const result = await buildRegisterPinManifestTransaction(client, {
@@ -1886,12 +1952,7 @@ test("submitIvmProvedContractCall proof-binds, quotes, rebuilds, and signs", asy
   client.quoteFees = async (draft, options) => {
     captures.feeQuoteDraft = draft;
     captures.feeQuoteOptions = options;
-    return {
-      intent: quotedIntent,
-      observation: {},
-      components: [],
-      capacities: [],
-    };
+    return acceptedAuthorityFeeQuote(draft.payload, quotedIntent);
   };
   client.submitTransaction = async (payload, options) => {
     captures.submitted = Buffer.from(payload);

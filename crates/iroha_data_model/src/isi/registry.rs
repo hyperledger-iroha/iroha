@@ -295,8 +295,14 @@ mod tests {
                 .entry_for_wire_id(inventory.wire_id)
                 .expect("canonical wire-id entry");
             assert_eq!(decoding.type_name, encoding.type_name, "{type_name}");
-            assert!(std::ptr::fn_addr_eq(decoding.ctor, encoding.ctor), "{type_name}");
-            assert!(std::ptr::fn_addr_eq(decoding.frame, encoding.frame), "{type_name}");
+            assert!(
+                std::ptr::fn_addr_eq(decoding.ctor, encoding.ctor),
+                "{type_name}"
+            );
+            assert!(
+                std::ptr::fn_addr_eq(decoding.frame, encoding.frame),
+                "{type_name}"
+            );
             assert!(
                 std::ptr::fn_addr_eq(decoding.frame_len, encoding.frame_len),
                 "{type_name}"
@@ -434,8 +440,8 @@ mod tests {
     #[test]
     #[should_panic(expected = "instruction registry key collision")]
     fn instruction_registry_rejects_own_type_name_as_wire_id() {
-        let _registry = InstructionRegistry::new()
-            .register_with_id::<Log>(std::any::type_name::<Log>());
+        let _registry =
+            InstructionRegistry::new().register_with_id::<Log>(std::any::type_name::<Log>());
     }
     #[test]
     #[should_panic(expected = "instruction registry key collision")]
@@ -1322,7 +1328,10 @@ mod tests {
                 registry.wire_id(type_name).is_some(),
                 "{type_name} missing from default registry"
             );
-            assert!(!registry.contains(type_name), "{type_name} remained a decode alias");
+            assert!(
+                !registry.contains(type_name),
+                "{type_name} remained a decode alias"
+            );
         }
         assert_default_registry_decodes(content::PublishContentBundle {
             bundle_id: Hash::new(b"content-bundle"),

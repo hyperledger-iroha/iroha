@@ -376,8 +376,10 @@ InstructionBox instructionBox = cancel.toInstructionBox();
 ```
 
 The builder derives the native escrow hash with Blake2b-256 and emits only
-`escrow_id` plus `expected_remaining_amount` under the registered
-`iroha_data_model::isi::escrow::CancelAssetLock` Norito wire name. The lock-ID
+`escrow_id` plus `expected_remaining_amount`. The instruction pair uses the
+canonical `iroha.instruction.v1::escrow::CancelAssetLock` wire ID; its payload
+frame retains the concrete `iroha_data_model::isi::escrow::CancelAssetLock`
+Norito schema name. The lock-ID
 preimage must be nonempty exact text without surrounding whitespace or a BOM
 and is bounded by `CancelAssetLockInstruction.MAX_LOCK_ID_UTF8_BYTES_V1`
 (4,096 UTF-8 bytes, not characters); the on-wire `EscrowId` remains 32 bytes.
@@ -1462,7 +1464,7 @@ IrohaKeyManager manager =
     IrohaKeyManager.withExportableSoftwareKeys(store, passphraseProvider);
 ```
 
-To opt into post-quantum ML-DSA transaction signing and Kagemusha lifecycle/artifact streaming
+To opt into post-quantum ML-DSA-65 transaction signing and Kagemusha lifecycle/artifact streaming
 flows, select the signing algorithm up front:
 
 ```java
@@ -1547,19 +1549,25 @@ Use `IrohaKeyManager.verifyAttestation(...)` (or the underlying
 `KeystoreKeyProvider.verifyAttestation(...)`) alongside `AttestationVerifier`
 when you need to validate the StrongBox/TEE attestation chain exported by the
 Android backend. The verifier checks the certificate path, decoded challenge,
-and security level while surfacing parsed metadata so applications can enforce
-hardware policies or forward the attestation bundle to remote services. For
-lab automation run `scripts/android_keystore_attestation.sh --bundle-dir <path>
---trust-root <root.pem> [--trust-root-dir <directory>]` — it compiles the same
-verifier and produces a JSON summary that should be archived with each
-attestation bundle.
+security level, explicit evaluation time, and a fresh governed offline
+revocation snapshot while surfacing parsed metadata. A non-empty expected
+challenge is mandatory; the retained challenge-less overloads fail closed. For
+lab automation, pass the canonical `android-sdk-revocation-snapshot-v1.txt`,
+its SHA-256 commitment obtained from the separately authenticated governance
+record, and the evaluation time to `scripts/android_keystore_attestation.sh`
+together with the bundle and trust root. The snapshot commitment binds the
+payload digest, freshness metadata, and both deny lists as one object. The
+script compiles the same verifier and produces a JSON summary that should be
+archived with each attestation bundle.
 
 Need fresh attestation material? Call
 `IrohaKeyManager.generateAttestation(alias, challenge)` – it uses the selected
 provider (StrongBox/TEE first) and returns a `KeyAttestation`
 bundle when the hardware can satisfy the request, storing the artefact in the
 backing provider for subsequent verification. Pass a non-empty `challenge` to
-force fresh material (cache entries are keyed by `(alias, challenge)`), and set
+force fresh material; challenged authentication bypasses stored and in-memory
+attestation caches, while only challenge-less inspection may reuse cached
+material. Set
 `KeyGenParameters.Builder.setAttestationChallenge(...)` when generating keys if
 you need the challenge embedded at creation time. StrongBox preferences are
 propagated to keystore parameters (`STRONGBOX_REQUIRED` forces StrongBox,

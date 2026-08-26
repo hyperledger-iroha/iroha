@@ -37,6 +37,7 @@ Payload is a Norito-encoded `DaIngestRequest`. Responses use
 | 409 Conflict | Duplicate `client_blob_id` with mismatched metadata. |
 | 413 Payload Too Large | Exceeds configured blob length limit. |
 | 429 Too Many Requests | Rate limit hit. |
+| 503 Service Unavailable | Bounded ingest compute capacity is saturated; retry later. |
 | 500 Internal Error | Unexpected failure (logged + alert). |
 
 ```
@@ -248,7 +249,8 @@ hashing, chunking, and verifying optional manifests.
 ### Validation Checklist
 
 1. Verify request Norito header matches `DaIngestRequest`.
-2. Before decompression, reject zero or greater-than-64-MiB `total_size` claims.
+2. Before decompression, reject zero or greater-than-64-MiB `total_size` claims
+   and reject `sequence = u64::MAX`, which cannot have a monotonic successor.
 3. Enforce power-of-two `chunk_size` in the inclusive 1 KiB–2 MiB range and
    at most 1,024 source chunks.
 4. Require 1–64 data shards, 2–64 parity shards, and at most 64 row-parity
@@ -261,7 +263,9 @@ hashing, chunking, and verifying optional manifests.
    `torii.da_ingest.max_concurrent_compute_jobs` (default `1`). The owned
    semaphore permit remains inside the physical worker, so cancelling an HTTP
    request cannot admit replacement work while its detached computation is
-   still running.
+   still running. Admission is fail-fast: a request that reaches a saturated
+   compute boundary receives `503` instead of retaining its decoded payload in
+   an unbounded semaphore wait queue.
 5. `retention_policy.required_replica_count` must respect governance baseline.
 6. Require the exact genesis-derived `NetworkId`, bind `owner` to the
    authenticated account, and verify the canonical witness set against the
@@ -269,8 +273,10 @@ hashing, chunking, and verifying optional manifests.
    controller key; multisig accounts require committed-member weights meeting
    the committed threshold.
 7. Reject duplicate `client_blob_id` unless payload hash + metadata identical.
-8. When `norito_manifest` provided, verify schema + hash matches recalculated
-   manifest after chunking; otherwise node generates manifest and stores it.
+8. When `norito_manifest` is provided, verify every chunk field—including
+   `role` and `group_id`—exactly matches the canonical chunk vector before
+   accepting its IPA commitment; otherwise the node generates and stores the
+   manifest.
 9. Enforce the configured replication policy: Torii rewrites the submitted
    `RetentionPolicy` with `torii.da_ingest.replication_policy` (see
    `replication_policy.md`) and rejects pre-built manifests whose retention

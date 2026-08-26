@@ -13310,6 +13310,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                          receipt,
                          ValidPreparedMutationBinding(
                              ToriiAccountOnboardingPreparedTransactionV1.OperationV1),
+                         PreparedAccountFeePayment,
                          onboardingToken!,
                          OnboardingFixtureAuthority,
                          SharedOnboardingReceiptNetworkId,
@@ -13503,6 +13504,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object[] { "difficulty_bits", RemoveTopLevelJsonField(AccountFaucetPuzzleResponseJson("difficulty_bits", 10), "difficulty_bits") };
         yield return new object[] { "anchor_height", RemoveTopLevelJsonField(AccountFaucetPuzzleResponseJson("anchor_height", 68UL), "anchor_height") };
         yield return new object[] { "anchor_block_hash_hex", RemoveTopLevelJsonField(AccountFaucetPuzzleResponseJson("anchor_block_hash_hex", ContractCodeHashHex), "anchor_block_hash_hex") };
+        yield return new object[] { "challenge_salt_hex", RemoveTopLevelJsonField(AccountFaucetPuzzleResponseJson("challenge_salt_hex", null), "challenge_salt_hex") };
         yield return new object[] { "scrypt_log_n", RemoveTopLevelJsonField(AccountFaucetPuzzleResponseJson("scrypt_log_n", 13), "scrypt_log_n") };
         yield return new object[] { "scrypt_r", RemoveTopLevelJsonField(AccountFaucetPuzzleResponseJson("scrypt_r", 8U), "scrypt_r") };
         yield return new object[] { "scrypt_p", RemoveTopLevelJsonField(AccountFaucetPuzzleResponseJson("scrypt_p", 1U), "scrypt_p") };
@@ -13572,7 +13574,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             "{\"algorithm\":\"scrypt-leading-zero-bits-v1\",\"algorithm\":\"scrypt-leading-zero-bits-v1\"}",
             "must not appear more than once",
         };
-        yield return new object[] { "account faucet puzzle.audit.nonce", AccountFaucetPuzzleUnknownExtensionDuplicateJson(), "must not appear more than once" };
+        yield return new object[] { "account faucet puzzle.audit", AccountFaucetPuzzleResponseJson("audit", 1), "unknown property" };
         yield return new object[] { "algorithm", AccountFaucetPuzzleResponseJson("algorithm", 1), "string" };
         yield return new object[] { "network_id", AccountFaucetPuzzleResponseJson("network_id", 1), "canonical NetworkId string" };
         yield return new object[] { "chain_discriminant", AccountFaucetPuzzleResponseJson("chain_discriminant", -1), "unsigned 16-bit integer" };
@@ -13724,141 +13726,35 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         Assert.Contains("UInt64.MaxValue", error.Message, StringComparison.Ordinal);
     }
 
-    public static IEnumerable<object[]> InvalidAccountFaucetClaimRequests()
+    public static IEnumerable<object?[]> InvalidAccountFaucetClaimValues()
     {
-        yield return new object[]
-        {
-            new ToriiAccountFaucetClaimV1 { AccountId = string.Empty },
-            "AccountId",
-            "null or whitespace",
-        };
-        yield return new object[]
-        {
-            new ToriiAccountFaucetClaimV1 { AccountId = " " + CanonicalAccountId },
-            "AccountId",
-            "whitespace",
-        };
-        yield return new object[]
-        {
-            new ToriiAccountFaucetClaimV1 { AccountId = CanonicalAccountId + "\u0001" },
-            "AccountId",
-            "control characters",
-        };
-        yield return new object[]
-        {
-            new ToriiAccountFaucetClaimV1 { AccountId = "merchant@sora" },
-            "AccountId",
-            "canonical I105",
-        };
-        yield return new object[]
-        {
-            new ToriiAccountFaucetClaimV1
-            {
-                AccountId = CanonicalAccountId,
-                PowAnchorHeight = 68,
-            },
-            "PowNonceHex",
-            "required",
-        };
-        yield return new object[]
-        {
-            new ToriiAccountFaucetClaimV1
-            {
-                AccountId = CanonicalAccountId,
-                PowNonceHex = "00",
-            },
-            "PowAnchorHeight",
-            "required",
-        };
-        yield return new object[]
-        {
-            new ToriiAccountFaucetClaimV1
-            {
-                AccountId = CanonicalAccountId,
-                PowAnchorHeight = 0,
-                PowNonceHex = "00",
-            },
-            "PowAnchorHeight",
-            "must be positive",
-        };
-        yield return new object[]
-        {
-            new ToriiAccountFaucetClaimV1
-            {
-                AccountId = CanonicalAccountId,
-                PowAnchorHeight = 68,
-                PowNonceHex = " 00",
-            },
-            "PowNonceHex",
-            "whitespace",
-        };
-        yield return new object[]
-        {
-            new ToriiAccountFaucetClaimV1
-            {
-                AccountId = CanonicalAccountId,
-                PowAnchorHeight = 68,
-                PowNonceHex = "00\u0001",
-            },
-            "PowNonceHex",
-            "control characters",
-        };
-        yield return new object[]
-        {
-            new ToriiAccountFaucetClaimV1
-            {
-                AccountId = CanonicalAccountId,
-                PowAnchorHeight = 68,
-                PowNonceHex = "0",
-            },
-            "PowNonceHex",
-            "even number of hexadecimal characters",
-        };
-        yield return new object[]
-        {
-            new ToriiAccountFaucetClaimV1
-            {
-                AccountId = CanonicalAccountId,
-                PowAnchorHeight = 68,
-                PowNonceHex = "gg",
-            },
-            "PowNonceHex",
-            "even number of hexadecimal characters",
-        };
-        yield return new object[]
-        {
-            new ToriiAccountFaucetClaimV1
-            {
-                AccountId = CanonicalAccountId,
-                PowAnchorHeight = 68,
-                PowNonceHex = new string('a', 66),
-            },
-            "PowNonceHex",
-            "must not exceed 32 bytes",
-        };
+        yield return [string.Empty, 68UL, "00", "AccountId", "null or whitespace"];
+        yield return [" " + CanonicalAccountId, 68UL, "00", "AccountId", "whitespace"];
+        yield return [CanonicalAccountId + "\u0001", 68UL, "00", "AccountId", "control characters"];
+        yield return ["merchant@sora", 68UL, "00", "AccountId", "canonical I105"];
+        yield return [CanonicalAccountId, 0UL, "00", "PowAnchorHeight", "positive"];
+        yield return [CanonicalAccountId, 68UL, " 00", "PowNonceHex", "whitespace"];
+        yield return [CanonicalAccountId, 68UL, "00\u0001", "PowNonceHex", "control characters"];
+        yield return [CanonicalAccountId, 68UL, "0", "PowNonceHex", "lowercase hexadecimal"];
+        yield return [CanonicalAccountId, 68UL, "gg", "PowNonceHex", "lowercase hexadecimal"];
+        yield return [CanonicalAccountId, 68UL, "AA", "PowNonceHex", "lowercase hexadecimal"];
+        yield return [CanonicalAccountId, 68UL, new string('a', 66), "PowNonceHex", "32 bytes"];
     }
 
     [Theory]
-    [MemberData(nameof(InvalidAccountFaucetClaimRequests))]
-    public async Task PrepareAccountFaucetAsyncRejectsMalformedPowFieldsBeforeDispatch(
-        ToriiAccountFaucetClaimV1 request,
+    [MemberData(nameof(InvalidAccountFaucetClaimValues))]
+    public void AccountFaucetClaimV1RejectsMalformedDirectFields(
+        string accountId,
+        ulong powAnchorHeight,
+        string powNonceHex,
         string expectedParamName,
         string expectedMessage)
     {
-        using var handler = new RecordingHandler(_ =>
-            throw new InvalidOperationException("malformed faucet claim reached HTTP dispatch"));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        var error = await Assert.ThrowsAnyAsync<ArgumentException>(() =>
-            client.PrepareAccountFaucetAsync(
-                request,
-                ValidPreparedMutationBinding(ToriiAccountFaucetPreparedTransactionV1.OperationV1),
-                OnboardingFixtureNetworkId,
-                cancellationToken: TestContext.Current.CancellationToken));
+        var error = Assert.ThrowsAny<ArgumentException>(() =>
+            new ToriiAccountFaucetClaimV1(accountId, powAnchorHeight, powNonceHex));
 
         Assert.Equal(expectedParamName, error.ParamName);
         Assert.Contains(expectedMessage, error.Message);
-        Assert.Null(handler.LastRequest);
     }
 
     private static ToriiAccountFaucetPuzzle DeterministicFaucetPuzzle(
@@ -13935,12 +13831,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         Assert.Equal(CanonicalAccountId, solution.AccountId);
         Assert.Equal((ulong)68, solution.AnchorHeight);
         Assert.Equal(
-            new ToriiAccountFaucetClaimV1
-            {
-                AccountId = CanonicalAccountId,
-                PowAnchorHeight = 68,
-                PowNonceHex = "000000000000008f",
-            },
+            new ToriiAccountFaucetClaimV1(
+                CanonicalAccountId,
+                68,
+                "000000000000008f"),
             solution.ToClaim());
     }
 
@@ -26261,11 +26155,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         return response.ToJsonString();
     }
 
-    private static string AccountFaucetPuzzleUnknownExtensionDuplicateJson()
-    {
-        return JsonWithIgnoredAuditDuplicate(AccountFaucetPuzzleResponseJson("algorithm", ToriiAccountFaucetPow.Algorithm));
-    }
-
     private static ToriiAccountOnboardingPlanRequest ValidAccountOnboardingPlanRequest()
     {
         return new ToriiAccountOnboardingPlanRequest
@@ -28476,6 +28365,14 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         var wireName = wireNameOverride ?? request switch
         {
             ToriiVerifyingKeyRegisterRequest _ =>
+                "iroha.instruction.v1::verifying_keys::RegisterVerifyingKey",
+            ToriiVerifyingKeyUpdateRequest _ =>
+                "iroha.instruction.v1::verifying_keys::UpdateVerifyingKey",
+            _ => throw new ArgumentException("Unsupported verifying-key fixture request.", nameof(request)),
+        };
+        var schemaName = request switch
+        {
+            ToriiVerifyingKeyRegisterRequest _ =>
                 "iroha_data_model::isi::verifying_keys::RegisterVerifyingKey",
             ToriiVerifyingKeyUpdateRequest _ =>
                 "iroha_data_model::isi::verifying_keys::UpdateVerifyingKey",
@@ -28534,7 +28431,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             VkOption(inlineKey),
             [status]);
         var instructionArchive = NoritoCodec.Encode(
-            wireName,
+            schemaName,
             VkFields(id, record),
             flags: 0x02);
         var instruction = VkFields(

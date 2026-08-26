@@ -15,6 +15,9 @@ Required:
   --trust-root <path>      Trusted root certificate (PEM/DER). Repeat for additional roots.
                              Files named trust_root_*.pem in the bundle directory are detected
                              automatically.
+  --revocation-snapshot <path>  Canonical domain-separated governed V1 snapshot.
+  --revocation-snapshot-sha256 <hex>  Separately trusted SHA-256 of that exact snapshot.
+  --evaluation-time-ms <ms>  Explicit verification time within snapshot freshness.
 
 Optional:
   --trust-root-dir <path>  Directory containing trusted roots (PEM/DER/CRT). Repeat as needed.
@@ -47,6 +50,9 @@ ALIAS_OVERRIDE=""
 CHALLENGE_HEX=""
 CHALLENGE_FILE=""
 OUTPUT=""
+REVOCATION_SNAPSHOT=""
+REVOCATION_SNAPSHOT_SHA256=""
+EVALUATION_TIME_MS=""
 REQUIRE_STRONGBOX=0
 declare -a TRUST_ROOTS
 declare -a TRUST_ROOT_DIRS
@@ -72,6 +78,18 @@ while [[ $# -gt 0 ]]; do
       ;;
     --challenge-file)
       CHALLENGE_FILE="$2"
+      shift 2
+      ;;
+    --revocation-snapshot)
+      REVOCATION_SNAPSHOT="$2"
+      shift 2
+      ;;
+    --revocation-snapshot-sha256)
+      REVOCATION_SNAPSHOT_SHA256="$2"
+      shift 2
+      ;;
+    --evaluation-time-ms)
+      EVALUATION_TIME_MS="$2"
       shift 2
       ;;
     --trust-root)
@@ -112,6 +130,12 @@ if [[ -z "$BUNDLE_DIR" && -z "$CHAIN_FILE" ]]; then
   exit 1
 fi
 
+if [[ -z "$REVOCATION_SNAPSHOT" || -z "$REVOCATION_SNAPSHOT_SHA256" || -z "$EVALUATION_TIME_MS" ]]; then
+  echo "Canonical governed revocation snapshot, trusted commitment, and explicit evaluation time are required." >&2
+  usage >&2
+  exit 1
+fi
+
 if [[ -z "$BUNDLE_DIR" && ${#TRUST_ROOTS[@]} -eq 0 && ${#TRUST_ROOT_DIRS[@]} -eq 0 && ${#TRUST_ROOT_BUNDLES[@]} -eq 0 ]]; then
   echo "At least one --trust-root, --trust-root-dir, or --trust-root-bundle must be supplied." >&2
   usage >&2
@@ -130,6 +154,11 @@ fi
 
 if [[ -n "$CHALLENGE_FILE" && ! -f "$CHALLENGE_FILE" ]]; then
   echo "Challenge file not found: $CHALLENGE_FILE" >&2
+  exit 1
+fi
+
+if [[ ! -f "$REVOCATION_SNAPSHOT" || -L "$REVOCATION_SNAPSHOT" ]]; then
+  echo "Revocation snapshot must be a regular non-symlink file: $REVOCATION_SNAPSHOT" >&2
   exit 1
 fi
 
@@ -203,6 +232,7 @@ MAIN_SOURCES=(
   "$ANDROID_ROOT/src/main/java/org/hyperledger/iroha/android/crypto/keystore/KeyAttestation.java"
   "$ANDROID_ROOT/src/main/java/org/hyperledger/iroha/android/crypto/keystore/attestation/AttestationResult.java"
   "$ANDROID_ROOT/src/main/java/org/hyperledger/iroha/android/crypto/keystore/attestation/AttestationVerificationException.java"
+  "$ANDROID_ROOT/src/main/java/org/hyperledger/iroha/android/crypto/keystore/attestation/AndroidAttestationRevocationPolicyV1.java"
   "$ANDROID_ROOT/src/main/java/org/hyperledger/iroha/android/crypto/keystore/attestation/AttestationVerifier.java"
   "$ANDROID_ROOT/src/main/java/org/hyperledger/iroha/android/tools/AndroidKeystoreAttestationHarness.java"
 )
@@ -257,6 +287,12 @@ if [[ -n "$CHALLENGE_HEX" ]]; then
 elif [[ -n "$CHALLENGE_FILE" ]]; then
   COMMAND+=("--challenge-file" "$(cd "$(dirname "$CHALLENGE_FILE")" && pwd)/$(basename "$CHALLENGE_FILE")")
 fi
+
+COMMAND+=(
+  "--revocation-snapshot" "$(cd "$(dirname "$REVOCATION_SNAPSHOT")" && pwd)/$(basename "$REVOCATION_SNAPSHOT")"
+  "--revocation-snapshot-sha256" "$REVOCATION_SNAPSHOT_SHA256"
+  "--evaluation-time-ms" "$EVALUATION_TIME_MS"
+)
 
 if [[ $REQUIRE_STRONGBOX -eq 1 ]]; then
   COMMAND+=("--require-strongbox")

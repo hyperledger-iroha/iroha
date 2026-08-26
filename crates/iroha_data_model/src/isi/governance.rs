@@ -366,7 +366,7 @@ impl_governance_decode_from_slice!(UnregisterCitizen { owner: AccountId });
 mod tests {
     use super::*;
     use crate::isi::test_support::{
-assert_registry_decodes_registered_type as assert_registry_decodes, assert_slice_roundtrip,
+        assert_registry_decodes_registered_type as assert_registry_decodes, assert_slice_roundtrip,
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_primitives::numeric::Numeric;
@@ -699,7 +699,7 @@ assert_registry_decodes_registered_type as assert_registry_decodes, assert_slice
         assert_slice_roundtrip(UnregisterCitizen { owner: account(1) });
     }
     #[test]
-fn governance_default_registry_decodes_canonical_wire_ids() {
+    fn governance_default_registry_decodes_canonical_wire_ids() {
         let registry = crate::isi::registry::default();
         assert_registry_decodes(
             &registry,
