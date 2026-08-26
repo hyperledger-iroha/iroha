@@ -1,8 +1,5 @@
 package org.hyperledger.iroha.android.client;
 
-import java.util.Base64;
-import java.util.Objects;
-
 /** Public key metadata to which a private execution output is encrypted. */
 public final class SoracloudUploadedModelEncryptionRecipient {
   private final long schemaVersion;
@@ -12,6 +9,7 @@ public final class SoracloudUploadedModelEncryptionRecipient {
   private final String aead;
   private final String publicKeyBytesBase64;
   private final String publicKeyFingerprint;
+  private final byte[] publicKeyBytes;
 
   public SoracloudUploadedModelEncryptionRecipient(
       final long schemaVersion,
@@ -21,15 +19,26 @@ public final class SoracloudUploadedModelEncryptionRecipient {
       final String aead,
       final String publicKeyBytesBase64,
       final String publicKeyFingerprint) {
+    SoracloudPrivateModelValidation.requireSchemaVersion(schemaVersion, "schemaVersion");
+    SoracloudPrivateModelValidation.requirePositiveU32(keyVersion, "keyVersion");
+    if (!SoracloudPrivateModelValidation.X25519_HKDF_SHA256.equals(kem)) {
+      throw new IllegalArgumentException("kem must equal X25519HkdfSha256");
+    }
+    if (!SoracloudPrivateModelValidation.AES_256_GCM.equals(aead)) {
+      throw new IllegalArgumentException("aead must equal Aes256Gcm");
+    }
     this.schemaVersion = schemaVersion;
-    this.keyId = Objects.requireNonNull(keyId, "keyId");
+    this.keyId = SoracloudPrivateModelValidation.requireCanonicalString(keyId, "keyId");
     this.keyVersion = keyVersion;
-    this.kem = Objects.requireNonNull(kem, "kem");
-    this.aead = Objects.requireNonNull(aead, "aead");
-    this.publicKeyBytesBase64 =
-        Objects.requireNonNull(publicKeyBytesBase64, "publicKeyBytesBase64");
+    this.kem = kem;
+    this.aead = aead;
+    this.publicKeyBytes =
+        SoracloudPrivateModelValidation.decodeCanonicalX25519PublicKey(
+            publicKeyBytesBase64, "publicKeyBytesBase64");
+    this.publicKeyBytesBase64 = publicKeyBytesBase64;
     this.publicKeyFingerprint =
-        Objects.requireNonNull(publicKeyFingerprint, "publicKeyFingerprint");
+        SoracloudPrivateModelValidation.requireRecipientFingerprint(
+            publicKeyFingerprint, this.publicKeyBytes, "publicKeyFingerprint");
   }
 
   public long schemaVersion() { return schemaVersion; }
@@ -45,7 +54,7 @@ public final class SoracloudUploadedModelEncryptionRecipient {
   public String publicKeyBytesBase64() { return publicKeyBytesBase64; }
 
   /** Return a defensive copy of the decoded recipient public key. */
-  public byte[] publicKeyBytes() { return Base64.getDecoder().decode(publicKeyBytesBase64); }
+  public byte[] publicKeyBytes() { return publicKeyBytes.clone(); }
 
   public String publicKeyFingerprint() { return publicKeyFingerprint; }
 }

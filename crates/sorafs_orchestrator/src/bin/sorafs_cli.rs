@@ -20568,7 +20568,7 @@ mod tests {
             None,
             Metadata::default(),
         );
-        record.status = PinStatus::Approved(5);
+        record.approve(5, None);
         PinManifestFinalizedRecordV1 {
             finalized_cursor: PinManifestFinalizedCursorV1 {
                 height: 17,
@@ -20674,6 +20674,7 @@ mod tests {
         assert_eq!(validated.por_root, manifest.por_root);
         let mut pending = finalized.clone();
         pending.manifest.status = PinStatus::Pending;
+        pending.manifest.approved_epoch = None;
         assert!(
             validate_finalized_pin_manifest(&manifest, digest.as_bytes(), &pending)
                 .expect_err("pending record must fail")

@@ -4,6 +4,39 @@ fn soracloud_control_plane_openapi_exposes_authoritative_lease_accounting() {
     let schemas = component_schemas(&document);
     let contracts: &[(&str, &[&str])] = &[
         (
+            "ControlPlaneAuditEvent",
+            &[
+                "sequence",
+                "action",
+                "service_name",
+                "from_version",
+                "to_version",
+                "service_manifest_hash",
+                "container_manifest_hash",
+                "process_generation",
+                "config_generation",
+                "secret_generation",
+                "config_snapshot_hash",
+                "secret_snapshot_hash",
+                "binding_name",
+                "state_key",
+                "config_mutations",
+                "secret_mutations",
+                "governance_tx_hash",
+                "rollout_state",
+                "policy_name",
+                "policy_snapshot_hash",
+                "jurisdiction_tag",
+                "consent_evidence_hash",
+                "break_glass",
+                "break_glass_reason",
+                "lease_usage",
+                "service_lease_commitment",
+                "lease_reporting_epoch_rollover",
+                "signed_by",
+            ],
+        ),
+        (
             "ControlPlaneServiceLeaseSnapshot",
             &[
                 "authoritative_state",
@@ -12,12 +45,24 @@ fn soracloud_control_plane_openapi_exposes_authoritative_lease_accounting() {
             ],
         ),
         (
-            "SoraServiceLeaseReporterAssignmentV1",
+            "SoraInrouReplicaPlacementV1",
+            &[
+                "replica_slot",
+                "validator_account_id",
+                "peer_id",
+                "selected_guest_isa",
+                "selected_geography_tag",
+                "selection_latency_ms",
+            ],
+        ),
+        (
+            "SoraServiceConfigEntryV1",
             &[
                 "schema_version",
-                "service_version",
-                "placement",
-                "placement_reconciled_at_ms",
+                "config_name",
+                "value_json",
+                "value_hash",
+                "last_update_sequence",
             ],
         ),
         (
@@ -31,13 +76,12 @@ fn soracloud_control_plane_openapi_exposes_authoritative_lease_accounting() {
             ],
         ),
         (
-            "SoraServiceLeaseUsageAuditV1",
+            "SoraServiceLeaseReporterAssignmentV1",
             &[
                 "schema_version",
-                "reporting_epoch",
-                "assignment",
-                "replica_accounted_egress_bytes",
-                "finalize_reporter",
+                "service_version",
+                "placement",
+                "placement_reconciled_at_ms",
             ],
         ),
         (
@@ -75,6 +119,25 @@ fn soracloud_control_plane_openapi_exposes_authoritative_lease_accounting() {
                 "last_status_reason",
             ],
         ),
+        (
+            "SoraServiceLeaseUsageAuditV1",
+            &[
+                "schema_version",
+                "reporting_epoch",
+                "assignment",
+                "replica_accounted_egress_bytes",
+                "finalize_reporter",
+            ],
+        ),
+        (
+            "SoraServiceSecretEntryV1",
+            &[
+                "schema_version",
+                "secret_name",
+                "envelope",
+                "last_update_sequence",
+            ],
+        ),
     ];
     for (name, fields) in contracts {
         assert_strict_object_schema(schemas, name, fields, &[]);
@@ -84,6 +147,14 @@ fn soracloud_control_plane_openapi_exposes_authoritative_lease_accounting() {
         "#/components/schemas/ControlPlaneServiceLeaseSnapshot"
     );
     assert_eq!(
+        nullable_property_ref(
+            schemas,
+            "ControlPlaneAuditEvent",
+            "lease_reporting_epoch_rollover",
+        ),
+        "#/components/schemas/SoraServiceLeaseReportingEpochRolloverV1"
+    );
+    assert_eq!(
         nullable_property_ref(schemas, "ControlPlaneAuditEvent", "lease_usage"),
         "#/components/schemas/SoraServiceLeaseUsageAuditV1"
     );
@@ -91,9 +162,9 @@ fn soracloud_control_plane_openapi_exposes_authoritative_lease_accounting() {
         nullable_property_ref(
             schemas,
             "ControlPlaneAuditEvent",
-            "lease_reporting_epoch_rollover",
+            "service_lease_commitment",
         ),
-        "#/components/schemas/SoraServiceLeaseReportingEpochRolloverV1"
+        "#/components/schemas/Hash"
     );
     let actions = schemas["SoracloudAction"]["oneOf"]
         .as_array()
@@ -116,6 +187,7 @@ fn soracloud_control_plane_openapi_exposes_authoritative_lease_accounting() {
             "FhePolicyRegister",
             "FhePolicyRevoke",
             "FhePolicyRotate",
+            "LeaseUsage",
             "LeaseReportingEpochRollover",
             "Rollback",
             "Rollout",
@@ -137,6 +209,127 @@ fn soracloud_control_plane_openapi_exposes_authoritative_lease_accounting() {
             "retired flattened service lease field remains: {retired}"
         );
     }
+}
+
+#[test]
+fn soracloud_openapi_uses_the_consensus_block_lease_clock() {
+    let document = canonical_document();
+    let schemas = component_schemas(&document);
+    let contracts: &[(&str, &[&str], &[&str])] = &[
+        ("AgentDeployPayload", &["lease_blocks"], &["lease_ticks"]),
+        (
+            "AgentLeaseRenewPayload",
+            &["lease_blocks"],
+            &["lease_ticks"],
+        ),
+        (
+            "AgentApartmentStatusEntry",
+            &[
+                "lease_started_height",
+                "lease_expires_height",
+                "lease_remaining_blocks",
+            ],
+            &[
+                "lease_started_sequence",
+                "lease_expires_sequence",
+                "lease_remaining_ticks",
+            ],
+        ),
+        (
+            "AgentAutonomyStatusResponse",
+            &["lease_expires_height", "lease_remaining_blocks"],
+            &["lease_expires_sequence", "lease_remaining_ticks"],
+        ),
+        (
+            "SoraHttpServiceEconomicsV1",
+            &[
+                "lease_duration_blocks",
+                "runtime_price_per_block",
+                "storage_price_per_gib_block",
+            ],
+            &[
+                "lease_duration_sequences",
+                "runtime_price_per_sequence",
+                "storage_price_per_gib_sequence",
+            ],
+        ),
+        (
+            "SoraMailboxContractV1",
+            &["retention_blocks"],
+            &["retention_sequences"],
+        ),
+        (
+            "SoraServiceLeaseReportingEpochRolloverV1",
+            &["lease_started_height"],
+            &["lease_started_sequence"],
+        ),
+        (
+            "SoraServiceLeaseStateV1",
+            &[
+                "runtime_price_per_block",
+                "storage_price_per_gib_block",
+                "lease_started_height",
+                "lease_expires_height",
+            ],
+            &[
+                "runtime_price_per_sequence",
+                "storage_price_per_gib_sequence",
+                "lease_started_sequence",
+                "lease_expires_sequence",
+            ],
+        ),
+        (
+            "SoracloudRuntimeMailboxPlan",
+            &["retention_blocks"],
+            &["retention_sequences"],
+        ),
+        (
+            "SoracloudRuntimeServicePlan",
+            &[
+                "lease_expires_height",
+                "authoritative_pending_mailbox_messages",
+            ],
+            &[
+                "lease_expires_sequence",
+                "reported_pending_mailbox_messages",
+            ],
+        ),
+        (
+            "SoracloudRuntimeLeaseVolumePlan",
+            &["lease_expires_height"],
+            &["lease_expires_sequence"],
+        ),
+        (
+            "SoracloudRuntimeApartmentPlan",
+            &["lease_expires_height"],
+            &["lease_expires_sequence"],
+        ),
+    ];
+    for (name, current, retired) in contracts {
+        let fields = component_properties(schemas, name);
+        for field in *current {
+            assert!(
+                fields.contains_key(*field),
+                "{name} is missing first-release block-clock field {field}"
+            );
+        }
+        for field in *retired {
+            assert!(
+                !fields.contains_key(*field),
+                "{name} retains retired sequence-clock field {field}"
+            );
+        }
+    }
+
+    let enabled_pressure = schemas["SoracloudStatusRuntimePressureV1"]["oneOf"]
+        .as_array()
+        .expect("runtime pressure variants")
+        .iter()
+        .find(|variant| variant["properties"]["enabled"]["const"].as_bool() == Some(true))
+        .and_then(|variant| variant["properties"].as_object())
+        .expect("enabled runtime pressure properties");
+    assert!(enabled_pressure.contains_key("authoritative_pending_mailbox_messages"));
+    assert!(!enabled_pressure.contains_key("reported_pending_mailbox_messages"));
 }
 
 #[test]

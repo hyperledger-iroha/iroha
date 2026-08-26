@@ -1611,6 +1611,20 @@ fn startup_enter_view_effect_restarts_clocks_and_is_returned_unchanged() {
     assert_eq!(runtime.driver.timeouts, vec![next]);
 }
 #[test]
+fn interrupted_tip_recovery_is_rejected_after_live_clock_arm() {
+    let start = Instant::now();
+    let initial = tag(0);
+    let mut runtime = runtime(
+        FakeDriver::new(initial),
+        start,
+        RuntimeQueueConfig::new(8, 2, 2),
+    );
+    assert!(matches!(
+        runtime.step_recovery(start),
+        Err(RuntimeError::RecoveryAfterClocksArmed)
+    ));
+}
+#[test]
 fn adapter_failure_closes_runtime_permanently() {
     let start = Instant::now();
     let initial = tag(0);

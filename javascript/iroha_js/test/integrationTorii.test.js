@@ -2443,6 +2443,10 @@ test(
       const [manifest] = pinList.manifests;
       const manifestDigestHex = Buffer.from(manifest.digest).toString("hex");
       assertHexString(manifestDigestHex, "SoraFS manifest digest");
+      assert.ok(
+        manifest.approved_epoch === null || Number.isInteger(manifest.approved_epoch),
+        "pin summaries must expose an explicit nullable approval epoch",
+      );
       assert.equal("alias" in manifest, false, "list summaries must omit alias proofs");
       assert.equal("metadata" in manifest, false, "list summaries must omit metadata");
       assert.equal("lineage" in manifest, false, "list summaries must omit lineage expansion");
@@ -2481,8 +2485,8 @@ test(
       const order = replicationList.replication_orders[0];
       assertHexString(order.order_id_hex, "replication order id");
       assert.ok(
-        Array.isArray(order.receipts),
-        "replication order entries must include receipts array",
+        Array.isArray(order.provider_completions),
+        "replication order entries must include provider_completions array",
       );
       const replicationIteratorHit = await iteratorIncludes(
         client.iterateSorafsReplicationOrders({ pageSize: 1, maxItems: 10, canonicalAuth }),

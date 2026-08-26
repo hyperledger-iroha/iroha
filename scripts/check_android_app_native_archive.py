@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail-closed verifier for the ABI-22 bridge embedded in an APK or AAB."""
+"""Fail-closed verifier for the ABI-23 bridge embedded in an APK or AAB."""
 
 from __future__ import annotations
 

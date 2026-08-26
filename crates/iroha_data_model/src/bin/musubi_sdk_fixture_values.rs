@@ -234,7 +234,7 @@ fn signed_provider_attestation(
                 policy_digest: [0xF1; 32],
             },
         ),
-        replication_order: ReplicationOrderId::new([0xC2; 32]),
+        replication_order: ReplicationOrderId::new([0x42; 32]),
         assignment_revision: 1,
         completion_epoch: 600,
         finalized_anchor: ProviderIngestFinalizedAnchorV1 {

@@ -215,7 +215,7 @@ use iroha_data_model::{
         soracloud_fhe_public_key_proof_open_verify_bounds,
         soracloud_fhe_public_key_proof_public_inputs_schema_hash_v1,
     },
-    sorafs::pin_registry::{ManifestDigest, PinStatus, StorageClass},
+    sorafs::pin_registry::{PinStatus, StorageClass},
     zk::{BackendTag, OpenVerifyEnvelope, OpenVerifyEnvelopeBounds, StarkFriOpenProofV1},
 };
 use iroha_primitives::{
@@ -4798,86 +4798,107 @@ fn ensure_soracloud_audit_sequence_capacity(
     Ok(())
 }
 fn parse_training_model_name(model_name: &str) -> Result<String, InstructionExecutionError> {
-    let normalized = model_name.trim();
-    let parsed: iroha_data_model::name::Name = normalized
+    if model_name.trim() != model_name {
+        return Err(invalid_parameter(
+            "model_name must not contain surrounding whitespace",
+        ));
+    }
+    let parsed: iroha_data_model::name::Name = model_name
         .parse()
         .map_err(|err| invalid_parameter(format!("invalid model_name: {err}")))?;
+    if parsed.as_ref() != model_name {
+        return Err(invalid_parameter(
+            "model_name must use its exact NFC-normalized spelling",
+        ));
+    }
     Ok(parsed.to_string())
 }
 fn parse_training_job_id(job_id: &str) -> Result<String, InstructionExecutionError> {
-    let normalized = job_id.trim();
-    if normalized.is_empty() {
+    if job_id.is_empty() {
         return Err(invalid_parameter("job_id must not be empty"));
     }
-    if normalized.len() > TRAINING_MAX_IDENTIFIER_BYTES {
+    if job_id.trim() != job_id {
+        return Err(invalid_parameter(
+            "job_id must not contain surrounding whitespace",
+        ));
+    }
+    if job_id.len() > TRAINING_MAX_IDENTIFIER_BYTES {
         return Err(invalid_parameter(format!(
             "job_id exceeds max bytes ({TRAINING_MAX_IDENTIFIER_BYTES})"
         )));
     }
-    if normalized.chars().any(char::is_control) {
+    if job_id.chars().any(char::is_control) {
         return Err(invalid_parameter(
             "job_id must not contain control characters",
         ));
     }
-    if normalized.chars().any(|ch| ch.is_ascii_whitespace()) {
+    if job_id.chars().any(|ch| ch.is_ascii_whitespace()) {
         return Err(invalid_parameter("job_id must not contain whitespace"));
     }
-    if !normalized
+    if !job_id
         .chars()
         .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ':' | '#'))
     {
         return Err(invalid_parameter(
-            "job_id must use only ASCII letters, digits, or [- _ . : #]",
+            "job_id must use only ASCII letters, digits, or [-_.:#]",
         ));
     }
-    Ok(normalized.to_owned())
+    Ok(job_id.to_owned())
 }
 fn parse_model_weight_version(weight_version: &str) -> Result<String, InstructionExecutionError> {
-    let normalized = weight_version.trim();
-    if normalized.is_empty() {
+    if weight_version.is_empty() {
         return Err(invalid_parameter("weight_version must not be empty"));
     }
-    if normalized.len() > TRAINING_MAX_IDENTIFIER_BYTES {
+    if weight_version.trim() != weight_version {
+        return Err(invalid_parameter(
+            "weight_version must not contain surrounding whitespace",
+        ));
+    }
+    if weight_version.len() > TRAINING_MAX_IDENTIFIER_BYTES {
         return Err(invalid_parameter(format!(
             "weight_version exceeds max bytes ({TRAINING_MAX_IDENTIFIER_BYTES})"
         )));
     }
-    if normalized.chars().any(char::is_control) {
+    if weight_version.chars().any(char::is_control) {
         return Err(invalid_parameter(
             "weight_version must not contain control characters",
         ));
     }
-    if normalized.chars().any(|ch| ch.is_ascii_whitespace()) {
+    if weight_version.chars().any(|ch| ch.is_ascii_whitespace()) {
         return Err(invalid_parameter(
             "weight_version must not contain whitespace",
         ));
     }
-    if !normalized
+    if !weight_version
         .chars()
         .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ':' | '#'))
     {
         return Err(invalid_parameter(
-            "weight_version must use only ASCII letters, digits, or [- _ . : #]",
+            "weight_version must use only ASCII letters, digits, or [-_.:#]",
         ));
     }
-    Ok(normalized.to_owned())
+    Ok(weight_version.to_owned())
 }
 fn parse_model_weight_dataset_ref(dataset_ref: &str) -> Result<String, InstructionExecutionError> {
-    let normalized = dataset_ref.trim();
-    if normalized.is_empty() {
+    if dataset_ref.is_empty() {
         return Err(invalid_parameter("dataset_ref must not be empty"));
     }
-    if normalized.len() > MODEL_WEIGHT_MAX_DATASET_REF_BYTES {
+    if dataset_ref.trim() != dataset_ref {
+        return Err(invalid_parameter(
+            "dataset_ref must not contain surrounding whitespace",
+        ));
+    }
+    if dataset_ref.len() > MODEL_WEIGHT_MAX_DATASET_REF_BYTES {
         return Err(invalid_parameter(format!(
             "dataset_ref exceeds max bytes ({MODEL_WEIGHT_MAX_DATASET_REF_BYTES})"
         )));
     }
-    if normalized.chars().any(char::is_control) {
+    if dataset_ref.chars().any(char::is_control) {
         return Err(invalid_parameter(
             "dataset_ref must not contain control characters",
         ));
     }
-    Ok(normalized.to_owned())
+    Ok(dataset_ref.to_owned())
 }
 fn parse_uploaded_model_id(model_id: &str) -> Result<String, InstructionExecutionError> {
     parse_training_job_id(model_id).map_err(|_| invalid_parameter("invalid model_id"))
@@ -5830,6 +5851,8 @@ pub(crate) fn write_soracloud_service_lease_usage(
     record_audit_event(state_transaction, audit_event)
 }
 fn require_consensus_verified_ordered_mailbox_execution() -> Result<(), InstructionExecutionError> {
+    // TODO: Enable ordered mailbox execution only after consensus can re-execute the exact
+    // admitted IVM bundle and persist a self-contained effect certificate.
     Err(InstructionExecutionError::InvariantViolation(
         "ordered mailbox admission and execution are disabled until consensus can re-execute the exact admitted IVM bundle and persist a self-contained effect certificate"
             .into(),
@@ -6337,63 +6360,13 @@ pub(crate) fn write_soracloud_runtime_receipt(
         .insert(receipt.receipt_id, receipt);
     Ok(())
 }
-fn validate_soracloud_private_output_manifest_binding(
-    output_manifest_payload: &[u8],
-    output_artifact: &SoraPrivateModelArtifactRefV1,
-) -> Result<(), InstructionExecutionError> {
-    if output_manifest_payload.is_empty()
-        || output_manifest_payload.len() > sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES
-    {
-        return Err(invalid_parameter(format!(
-            "private output manifest payload has {} bytes; expected 1..={}",
-            output_manifest_payload.len(),
-            sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES,
-        )));
-    }
-    let manifest = sorafs_manifest::decode_manifest_v1_canonical(output_manifest_payload).map_err(
-        |error| {
-            invalid_parameter(format!(
-                "invalid canonical private output ManifestV1 payload: {error}"
-            ))
-        },
-    )?;
-    let digest = ManifestDigest::from_manifest(&manifest).map_err(|error| {
-        invalid_parameter(format!(
-            "failed to derive private output manifest digest: {error}"
-        ))
-    })?;
-    let root_cid =
-        iroha_data_model::sorafs::pin_registry::ManifestRootCid::try_from_slice(&manifest.root_cid)
-            .map_err(|error| {
-                invalid_parameter(format!(
-                    "private output manifest root CID is not canonical: {error}"
-                ))
-            })?;
-    if digest != output_artifact.sorafs_manifest_digest
-        || root_cid != output_artifact.sorafs_root_cid
-        || manifest.content_length != output_artifact.ciphertext_bytes
-    {
-        return Err(InstructionExecutionError::InvariantViolation(
-            "private output manifest digest, root CID, or content length does not match the receipt artifact"
-                .into(),
-        ));
-    }
-    Ok(())
-}
-
 pub(crate) fn write_soracloud_private_uploaded_model_execution_receipt(
     state_transaction: &mut StateTransaction<'_, '_>,
-    authority: &AccountId,
-    output_manifest_payload: Vec<u8>,
     mut receipt: SoraPrivateUploadedModelExecutionReceiptV1,
 ) -> Result<(), InstructionExecutionError> {
     receipt
         .validate_submission()
         .map_err(|err| invalid_parameter(err.to_string()))?;
-    validate_soracloud_private_output_manifest_binding(
-        &output_manifest_payload,
-        &receipt.output_artifact,
-    )?;
 
     // Exact retries are a no-op even if the referenced artifacts were retired after the
     // original execution. The persisted sequence is ledger-owned and is the only field a
@@ -6460,6 +6433,11 @@ pub(crate) fn write_soracloud_private_uploaded_model_execution_receipt(
         ));
     }
 
+    crate::soracloud_runtime::validate_finalized_soracloud_uploaded_model_release(
+        &state_transaction.world,
+        bundle,
+    )
+    .map_err(|error| InstructionExecutionError::InvariantViolation(error.into()))?;
     require_active_sorafs_uploaded_model_pin(state_transaction, bundle)?;
     let service_revision_key = (
         receipt.service_name.as_ref().to_owned(),
@@ -6605,76 +6583,67 @@ pub(crate) fn write_soracloud_private_uploaded_model_execution_receipt(
         ));
     }
 
-    let require_artifact_pin = |artifact: &SoraPrivateModelArtifactRefV1,
-                                require_approved: bool|
-     -> Result<(), InstructionExecutionError> {
-        let pin = state_transaction
-            .world
-            .pin_manifests
-            .get(&artifact.sorafs_manifest_digest)
-            .ok_or_else(|| {
-                InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "private `{}` artifact SoraFS manifest {:?} is not registered",
-                        artifact.artifact_role, artifact.sorafs_manifest_digest
+    let require_artifact_pin =
+        |artifact: &SoraPrivateModelArtifactRefV1| -> Result<(), InstructionExecutionError> {
+            let pin = state_transaction
+                .world
+                .pin_manifests
+                .get(&artifact.sorafs_manifest_digest)
+                .ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "private `{}` artifact SoraFS manifest {:?} is not registered",
+                            artifact.artifact_role, artifact.sorafs_manifest_digest
+                        )
+                        .into(),
                     )
-                    .into(),
-                )
-            })?;
-        match pin.status {
-            PinStatus::Approved(_) => {}
-            PinStatus::Pending if !require_approved => {}
-            PinStatus::Pending => {
+                })?;
+            match pin.status {
+                PinStatus::Approved(_) => {}
+                PinStatus::Pending => {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "private `{}` artifact SoraFS manifest {:?} is not approved",
+                            artifact.artifact_role, artifact.sorafs_manifest_digest
+                        )
+                        .into(),
+                    ));
+                }
+                PinStatus::Retired(epoch) => {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "private `{}` artifact SoraFS manifest {:?} retired at epoch {epoch}",
+                            artifact.artifact_role, artifact.sorafs_manifest_digest
+                        )
+                        .into(),
+                    ));
+                }
+            }
+            if pin.digest != artifact.sorafs_manifest_digest
+                || pin.root_cid != artifact.sorafs_root_cid
+                || pin.content_length != artifact.ciphertext_bytes
+            {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
-                        "private `{}` artifact SoraFS manifest {:?} is not approved",
-                        artifact.artifact_role, artifact.sorafs_manifest_digest
+                        "private `{}` artifact does not exactly match its SoraFS pin record",
+                        artifact.artifact_role
                     )
                     .into(),
                 ));
             }
-            PinStatus::Retired(epoch) => {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "private `{}` artifact SoraFS manifest {:?} retired at epoch {epoch}",
-                        artifact.artifact_role, artifact.sorafs_manifest_digest
-                    )
-                    .into(),
-                ));
-            }
-        }
-        if pin.digest != artifact.sorafs_manifest_digest
-            || pin.root_cid != artifact.sorafs_root_cid
-            || pin.content_length != artifact.ciphertext_bytes
-        {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!(
-                    "private `{}` artifact does not exactly match its SoraFS pin record",
-                    artifact.artifact_role
-                )
-                .into(),
-            ));
-        }
-        if artifact.artifact_role == "output"
-            && pin.submitted_by != receipt.attesting_validator.validator_account_id
-        {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "private output artifact pin submitter must equal the attesting validator".into(),
-            ));
-        }
-        Ok(())
-    };
-    require_artifact_pin(&receipt.input_artifact, true)?;
-    // A governed SoraFS policy can leave an output pin pending. An exact existing pin is reused;
-    // otherwise the canonical payload is registered below only after every receipt precondition
-    // and the final ledger-owned sequence have been validated.
-    let output_pin_exists = state_transaction
-        .world
-        .pin_manifests
-        .get(&receipt.output_artifact.sorafs_manifest_digest)
-        .is_some();
-    if output_pin_exists {
-        require_artifact_pin(&receipt.output_artifact, false)?;
+            Ok(())
+        };
+    require_artifact_pin(&receipt.input_artifact)?;
+    let durability = crate::soracloud_runtime::validate_soracloud_private_output_durability_v1(
+        &state_transaction.world,
+        &receipt,
+        state_transaction.block_unix_timestamp_ms() / 1_000,
+    )
+    .map_err(|message| InstructionExecutionError::InvariantViolation(message.into()))?;
+    if durability != crate::soracloud_runtime::SoracloudPrivateOutputDurabilityStatusV1::Ready {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!("private output is not durably replicated: {durability:?}").into(),
+        ));
     }
 
     if state_transaction
@@ -6701,14 +6670,6 @@ pub(crate) fn write_soracloud_private_uploaded_model_execution_receipt(
         .validate()
         .map_err(|err| invalid_parameter(err.to_string()))?;
 
-    if !output_pin_exists {
-        iroha_data_model::isi::sorafs::RegisterPinManifest::new(
-            output_manifest_payload,
-            None,
-            None,
-        )
-        .execute(authority, state_transaction)?;
-    }
     ensure_soracloud_sequence_is_next(state_transaction, receipt.emitted_sequence)?;
     state_transaction
         .world
@@ -17616,6 +17577,44 @@ impl Execute for isi::FinalizeSoracloudUploadedModelBundle {
             ));
         }
         require_active_sorafs_uploaded_model_pin(state_transaction, &bundle_record)?;
+        // Finalization belongs to the uploaded release, not to a registry model-name alias. A
+        // second alias would create projections that the executable-release validator must reject
+        // as ambiguous, so fail before writing either half of the atomic projection pair.
+        let user_upload_source_matches = |source: Option<&SoraModelProvenanceRefV1>| {
+            source.is_some_and(|source| {
+                source.kind == SoraModelProvenanceKindV1::UserUpload && source.id == model_id
+            })
+        };
+        let has_weight_projection = state_transaction
+            .world
+            .soracloud_model_weight_versions
+            .iter()
+            .any(
+                |((stored_service, _stored_model, stored_version), weight)| {
+                    stored_service == service_name.as_ref()
+                        && (stored_version == &weight_version
+                            || weight.weight_version == weight_version)
+                        && user_upload_source_matches(weight.source_provenance.as_ref())
+                },
+            );
+        let has_artifact_projection = state_transaction
+            .world
+            .soracloud_model_artifacts
+            .iter()
+            .any(|((stored_service, _stored_artifact), artifact)| {
+                stored_service == service_name.as_ref()
+                    && (artifact.weight_version.as_deref() == Some(weight_version.as_str())
+                        || artifact.consumed_by_version.as_deref() == Some(weight_version.as_str()))
+                    && user_upload_source_matches(artifact.source_provenance.as_ref())
+            });
+        if has_weight_projection || has_artifact_projection {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "uploaded model bundle `{model_id}` version `{weight_version}` for service `{service_name}` already has a finalization projection"
+                )
+                .into(),
+            ));
+        }
         let artifact_key = (service_name.as_ref().to_owned(), artifact_id.clone());
         if state_transaction
             .world
@@ -18683,10 +18682,7 @@ impl Execute for isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), InstructionExecutionError> {
-        let Self {
-            output_manifest_payload,
-            receipt,
-        } = self;
+        let Self { receipt } = self;
         if receipt.network_id != *state_transaction.network_id() {
             return Err(InstructionExecutionError::InvariantViolation(
                 "private uploaded-model receipt belongs to another network".into(),
@@ -18707,8 +18703,6 @@ impl Execute for isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
         {
             return write_soracloud_private_uploaded_model_execution_receipt(
                 state_transaction,
-                authority,
-                output_manifest_payload,
                 receipt,
             );
         }
@@ -18730,12 +18724,7 @@ impl Execute for isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
                     .into(),
             ));
         }
-        write_soracloud_private_uploaded_model_execution_receipt(
-            state_transaction,
-            authority,
-            output_manifest_payload,
-            receipt,
-        )
+        write_soracloud_private_uploaded_model_execution_receipt(state_transaction, receipt)
     }
 }
 #[cfg(all(test, feature = "zk-stark"))]

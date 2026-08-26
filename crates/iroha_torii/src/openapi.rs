@@ -1,9 +1,10 @@
 //! Static authority for Torii's OpenAPI description.
 //!
-//! The package-local document is an exact mirror of the canonical release
-//! artifact. Torii parses it once with Norito JSON, then removes only operations
-//! disabled by the compiled route catalog. This keeps every feature profile
-//! aligned with the mounted router without compiling a second schema builder.
+//! The package-local document is the source-owned contract authority. Torii
+//! parses it once with Norito JSON, then removes only operations disabled by the
+//! compiled route catalog. This keeps every feature profile aligned with the
+//! mounted router without compiling a second schema builder. Signed release
+//! mirrors are synchronized separately after the source merge is recorded.
 use iroha_torii_shared::route_catalog::{
     CATALOGED_ROUTES, CatalogProjection, EnabledFeatures, HttpMethod as CatalogHttpMethod,
     RouteCatalog,
@@ -12,7 +13,7 @@ use norito::json::{Map, Value};
 use std::{collections::BTreeSet, sync::LazyLock};
 /// OpenAPI operation extension consumed by the MCP policy bridge.
 pub(crate) const TOOL_EFFECT_EXTENSION: &str = "x-iroha-tool-effect";
-/// Package-local, release-provenance-bound mirror of `artifacts/openapi/torii.json`.
+/// Package-local source authority for Torii's OpenAPI contract.
 const CANONICAL_OPENAPI_JSON: &str = include_str!("../assets/openapi/torii.json");
 static COMPILED_OPENAPI_SPEC: LazyLock<Value> = LazyLock::new(|| {
     let mut document: Value = norito::json::from_str(CANONICAL_OPENAPI_JSON)
@@ -895,18 +896,17 @@ mod tests {
         );
         assert_eq!(
             operation_response_schema_ref(execute, "200", "private uploaded-model execute",),
-            "#/components/schemas/PrivateUploadedModelExecuteResponse"
+            "#/components/schemas/PrivateUploadedModelExecuteCommittedResponse"
         );
         assert_eq!(
             operation_response_schema_ref(execute, "202", "private uploaded-model execute",),
-            "#/components/schemas/PrivateUploadedModelExecuteResponse"
+            "#/components/schemas/PrivateUploadedModelExecuteAcceptedResponse"
         );
         assert_strict_object_schema(
             schemas,
             "PrivateUploadedModelExecuteRequest",
             &[
                 "model_id",
-                "model_name",
                 "bundle_root",
                 "service_name",
                 "service_version",
@@ -917,13 +917,22 @@ mod tests {
             ],
             &[],
         );
+        assert_eq!(
+            property_ref(schemas, "PrivateUploadedModelExecuteRequest", "bundle_root"),
+            "#/components/schemas/Hash"
+        );
+        assert_eq!(
+            component_properties(schemas, "PrivateUploadedModelExecuteRequest")["model_id"]["type"]
+                .as_str(),
+            Some("string")
+        );
         assert_strict_object_schema(
             schemas,
             "PrivateUploadedModelExecuteResponse",
             &[
                 "schema_version",
                 "status",
-                "submission_status",
+                "submission_phase",
                 "transaction_hash",
                 "receipt",
                 "output_artifact",
@@ -938,6 +947,91 @@ mod tests {
             property_ref(schemas, "PrivateUploadedModelExecuteResponse", "receipt"),
             "#/components/schemas/SoraPrivateUploadedModelExecutionReceiptV1"
         );
+        assert_eq!(
+            property_ref(
+                schemas,
+                "PrivateUploadedModelExecuteResponse",
+                "submission_phase"
+            ),
+            "#/components/schemas/PrivateUploadedModelSubmissionPhaseV1"
+        );
+        let submission_phases = schemas["PrivateUploadedModelSubmissionPhaseV1"]["enum"]
+            .as_array()
+            .expect("private uploaded-model submission phase enum")
+            .iter()
+            .map(|phase| phase.as_str().expect("submission phase string"))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            submission_phases,
+            BTreeSet::from([
+                "awaiting_output_durability",
+                "output_pin_submitted",
+                "receipt_submitted",
+                "committed",
+            ])
+        );
+        let response_variants = schemas["PrivateUploadedModelExecuteResponse"]["oneOf"]
+            .as_array()
+            .expect("private uploaded-model execute response state union");
+        assert_eq!(response_variants.len(), 4);
+        for (phase, requires_hash, assigned_receipt) in [
+            ("awaiting_output_durability", false, false),
+            ("output_pin_submitted", true, false),
+            ("receipt_submitted", true, false),
+            ("committed", false, true),
+        ] {
+            let variant = response_variants
+                .iter()
+                .find(|variant| {
+                    variant["properties"]["submission_phase"]["const"].as_str() == Some(phase)
+                })
+                .unwrap_or_else(|| panic!("missing private execute response phase {phase}"));
+            let transaction_hash = &variant["properties"]["transaction_hash"];
+            if requires_hash {
+                assert_eq!(
+                    transaction_hash["$ref"].as_str(),
+                    Some("#/components/schemas/Hash"),
+                    "{phase} must require a transaction hash"
+                );
+            } else {
+                assert_eq!(
+                    transaction_hash["type"].as_str(),
+                    Some("null"),
+                    "{phase} must require a null transaction hash"
+                );
+            }
+            let receipt = &variant["properties"]["receipt"];
+            for coordinate in ["emitted_sequence", "emitted_block_height"] {
+                let coordinate_schema = &receipt["properties"][coordinate];
+                if assigned_receipt {
+                    assert_eq!(coordinate_schema["minimum"].as_u64(), Some(1));
+                    assert_eq!(coordinate_schema["format"].as_str(), Some("uint64"));
+                } else {
+                    assert_eq!(coordinate_schema["const"].as_u64(), Some(0));
+                }
+            }
+        }
+        let accepted_phases = schemas["PrivateUploadedModelExecuteAcceptedResponse"]["allOf"][1]
+            ["properties"]["submission_phase"]["enum"]
+            .as_array()
+            .expect("HTTP 202 private execute phase enum")
+            .iter()
+            .map(|phase| phase.as_str().expect("HTTP 202 private execute phase string"))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            accepted_phases,
+            BTreeSet::from([
+                "awaiting_output_durability",
+                "output_pin_submitted",
+                "receipt_submitted",
+            ])
+        );
+        assert_eq!(
+            schemas["PrivateUploadedModelExecuteCommittedResponse"]["allOf"][1]["properties"]
+                ["submission_phase"]["const"]
+                .as_str(),
+            Some("committed")
+        );
         assert_strict_object_schema(
             schemas,
             "UploadedModelStatusResponse",
@@ -949,6 +1043,7 @@ mod tests {
             "SoraPrivateUploadedModelExecutionReceiptV1",
             &[
                 "schema_version",
+                "network_id",
                 "receipt_id",
                 "service_name",
                 "service_version",
@@ -962,6 +1057,7 @@ mod tests {
                 "attesting_validator",
                 "input_artifact",
                 "output_artifact",
+                "output_replication_order_id",
                 "input_commitment",
                 "output_commitment",
                 "output_recipient",
@@ -969,6 +1065,27 @@ mod tests {
                 "result_commitment",
                 "emitted_sequence",
                 "emitted_block_height",
+            ],
+            &[],
+        );
+        assert_eq!(
+            property_ref(
+                schemas,
+                "SoraPrivateUploadedModelExecutionReceiptV1",
+                "output_replication_order_id",
+            ),
+            "#/components/schemas/ReplicationOrderId"
+        );
+        assert_strict_object_schema(
+            schemas,
+            "SoraPrivateModelArtifactRefV1",
+            &[
+                "schema_version",
+                "sorafs_manifest_digest",
+                "sorafs_root_cid",
+                "artifact_hash",
+                "ciphertext_bytes",
+                "artifact_role",
             ],
             &[],
         );
@@ -996,11 +1113,49 @@ mod tests {
                 .map(|role| role.as_str().expect("private model artifact role"))
                 .collect::<BTreeSet<_>>();
         assert_eq!(artifact_roles, BTreeSet::from(["input", "output"]));
+        let ciphertext_bytes =
+            &component_properties(schemas, "SoraPrivateModelArtifactRefV1")["ciphertext_bytes"];
+        assert_eq!(
+            ciphertext_bytes.get("minimum").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            ciphertext_bytes.get("maximum").and_then(Value::as_u64),
+            Some(
+                u64::try_from(
+                    iroha_data_model::soracloud::SORA_PRIVATE_MODEL_ENCRYPTED_ARTIFACT_MAX_BYTES_V1,
+                )
+                .expect("private encrypted artifact limit fits u64")
+            )
+        );
+        let remaining_items = &component_properties(
+            schemas,
+            "PrivateUploadedModelReceiptListResponse",
+        )["remaining_items"];
+        let remaining_variants = remaining_items["anyOf"]
+            .as_array()
+            .expect("private receipt remaining_items nullable variants");
+        assert!(
+            remaining_variants
+                .iter()
+                .any(|variant| variant["type"].as_str() == Some("integer"))
+        );
+        assert!(
+            remaining_variants
+                .iter()
+                .any(|variant| variant["type"].as_str() == Some("null"))
+        );
 
         let parameters =
             document["paths"]["/v1/soracloud/model/upload/private/receipts"]["get"]["parameters"]
                 .as_array()
                 .expect("private uploaded-model receipt query parameters");
+        assert!(
+            parameters
+                .iter()
+                .any(|parameter| parameter["name"].as_str() == Some("cursor")),
+            "private uploaded-model receipt query must expose its continuation cursor",
+        );
         let count_mode = parameters
             .iter()
             .find(|parameter| parameter["name"].as_str() == Some("count_mode"))
@@ -1012,6 +1167,33 @@ mod tests {
             .map(|variant| variant.as_str().expect("count_mode string variant"))
             .collect::<BTreeSet<_>>();
         assert_eq!(variants, BTreeSet::from(["bounded", "exact"]));
+        let limit = parameters
+            .iter()
+            .find(|parameter| parameter["name"].as_str() == Some("limit"))
+            .expect("private uploaded-model receipt limit parameter");
+        assert_eq!(limit["schema"]["minimum"].as_u64(), Some(1));
+        assert_eq!(
+            limit["schema"]["default"].as_u64(),
+            Some(u64::from(
+                crate::soracloud::PRIVATE_UPLOADED_MODEL_RECEIPT_DEFAULT_LIMIT
+            ))
+        );
+        assert_eq!(
+            limit["schema"]["maximum"].as_u64(),
+            Some(u64::from(
+                crate::soracloud::PRIVATE_UPLOADED_MODEL_RECEIPT_MAX_LIMIT
+            ))
+        );
+        let cursor = parameters
+            .iter()
+            .find(|parameter| parameter["name"].as_str() == Some("cursor"))
+            .expect("private uploaded-model receipt cursor parameter");
+        assert_eq!(cursor["schema"]["minLength"].as_u64(), Some(114));
+        assert_eq!(cursor["schema"]["maxLength"].as_u64(), Some(114));
+        assert_eq!(
+            cursor["schema"]["pattern"].as_str(),
+            Some("^[A-Za-z0-9_-]{114}$")
+        );
     }
     #[test]
     #[expect(
@@ -1361,7 +1543,7 @@ mod tests {
                 "/v1/soracloud/model/upload/private/execute",
                 "post",
                 Some("PrivateUploadedModelExecuteRequest"),
-                "PrivateUploadedModelExecuteResponse",
+                "PrivateUploadedModelExecuteCommittedResponse",
             ),
             (
                 "/v1/soracloud/model/upload/private/receipts",
@@ -1615,6 +1797,7 @@ mod tests {
                 "ServiceConfigSetRequest".to_owned(),
                 "ServiceConfigStatusEntry".to_owned(),
                 "SignedBundleRequest".to_owned(),
+                "SoraServiceConfigEntryV1".to_owned(),
             ]),
             "only explicitly dynamic configuration/runtime JSON fields may use JsonValue"
         );
@@ -4660,7 +4843,7 @@ mod tests {
         }
     }
     #[test]
-    fn retired_validation_fee_plain_ballot_draft_is_absent() {
+    fn validation_fee_plaintext_contracts_stay_retired_and_parliament_capabilities_are_exact() {
         const RETIRED_PATH: &str = "/v1/validation-fee/proposals/{proposal_id}/plain-ballot/draft";
         for (surface, source) in [
             (
@@ -4678,8 +4861,8 @@ mod tests {
                 "retired validation-fee PLAIN ballot draft reappeared in {surface}"
             );
             assert!(
-                !source.contains("ValidationFeePlainBallotDraft"),
-                "retired validation-fee PLAIN ballot draft type reappeared in {surface}"
+                !source.contains("ValidationFeePlain"),
+                "retired validation-fee plaintext type reappeared in {surface}"
             );
         }
         for (label, document) in [
@@ -4694,6 +4877,12 @@ mod tests {
                 !paths.contains_key(RETIRED_PATH),
                 "retired validation-fee PLAIN ballot draft remains in {label} OpenAPI"
             );
+            assert!(
+                paths.keys().all(|path| {
+                    !path.starts_with("/v1/validation-fee/") || !path.contains("plain")
+                }),
+                "retired validation-fee plaintext route remains in {label} OpenAPI"
+            );
             let schemas = document
                 .get("components")
                 .and_then(Value::as_object)
@@ -4703,12 +4892,100 @@ mod tests {
             for retired_schema in [
                 "ValidationFeePlainBallotDraftRequestV1",
                 "ValidationFeePlainBallotDraftResponseV1",
+                "ValidationFeePlainElectorateMemberV1",
+                "ValidationFeePlainElectorateRulesV1",
+                "ValidationFeePlainElectorateSnapshotV1",
             ] {
                 assert!(
                     !schemas.contains_key(retired_schema),
                     "retired schema {retired_schema} remains in {label} OpenAPI"
                 );
             }
+            assert!(
+                schemas
+                    .keys()
+                    .all(|name| !name.starts_with("ValidationFeePlain")),
+                "retired validation-fee plaintext schema remains in {label} OpenAPI"
+            );
+
+            assert_strict_object_schema(
+                schemas,
+                "GovernanceCapabilitiesV1",
+                &[
+                    "schema",
+                    "version",
+                    "network_id",
+                    "current_height",
+                    "network_prefix",
+                    "abi_version",
+                    "data_model_version",
+                    "approval_mode",
+                    "private_ballot_protocol",
+                    "mandatory_private_ballots",
+                    "proposal_backed_referendum_ballots_supported",
+                    "standalone_plain_ballots_supported",
+                    "standalone_zk_ballots_supported",
+                    "citizenship_asset_id",
+                    "citizenship_bond_amount",
+                    "citizenship_escrow_account",
+                    "voting_asset_id",
+                    "min_bond_amount",
+                    "bond_escrow_account",
+                    "min_enactment_delay",
+                    "invitation_phase_blocks",
+                    "registration_phase_blocks",
+                    "survivor_freeze_phase_blocks",
+                    "commitment_phase_blocks",
+                    "release_delay_blocks",
+                    "opening_phase_blocks",
+                    "max_ballot_retries",
+                    "max_corpus_entries",
+                    "target_body_sizes",
+                    "supported_proposal_kinds",
+                    "supported_routes",
+                ],
+                &[],
+            );
+            let capabilities = component_properties(schemas, "GovernanceCapabilitiesV1");
+            for retired_field in [
+                "approval_threshold_denominator",
+                "approval_threshold_numerator",
+                "auto_finalize_plain",
+                "auto_finalize_plain_scope",
+                "conviction_step_blocks",
+                "max_conviction",
+                "min_turnout",
+                "parliament_quorum_bps",
+                "plain_voting_enabled",
+                "validation_fee_plain_electorate_rules",
+                "validation_fee_plain_requires_explicit_finalization",
+                "window_span",
+            ] {
+                assert!(
+                    !capabilities.contains_key(retired_field),
+                    "retired GovernanceCapabilitiesV1 field {retired_field} remains in {label} OpenAPI"
+                );
+            }
+            assert_eq!(
+                capabilities["approval_mode"]["const"].as_str(),
+                Some("PARLIAMENT_ATTEMPT_TIMED_OVN_V1")
+            );
+            assert_eq!(
+                capabilities["private_ballot_protocol"]["const"].as_str(),
+                Some("TIMED_OVN_TLE_THRESHOLD_BLS_V1")
+            );
+            assert_eq!(
+                capabilities["mandatory_private_ballots"]["const"].as_bool(),
+                Some(true)
+            );
+            assert_eq!(
+                capabilities["proposal_backed_referendum_ballots_supported"]["const"].as_bool(),
+                Some(false)
+            );
+            assert_eq!(
+                capabilities["standalone_zk_ballots_supported"]["const"].as_bool(),
+                Some(true)
+            );
         }
     }
     #[test]

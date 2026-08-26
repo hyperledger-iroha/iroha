@@ -313,7 +313,7 @@ pub mod musubi {
                 FindMusubiExactReleaseV1::new(MusubiExactReleaseQueryV1 { release }).into(),
                 FindMusubiProviderBundleAttestationV1::new(MusubiProviderBundleAttestationKeyV1 {
                     archive_id: ArchiveId::new([0xA4; 32]),
-                    replication_order: ReplicationOrderId::new([0xA5; 32]),
+                    replication_order: ReplicationOrderId::new([0x25; 32]),
                     provider_id: ProviderId::new([0xA6; 32]),
                 })
                 .into(),

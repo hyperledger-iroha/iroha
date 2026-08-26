@@ -96,7 +96,7 @@ jobs:
           fi
           cargo build --locked --release -p connect_norito_bridge --target "$target"
 
-      - name: Authenticate and stage exact ABI-22 C# native bridge
+      - name: Authenticate and stage exact ABI-23 C# native bridge
         shell: bash
         run: |
           target="${{ matrix.target }}"

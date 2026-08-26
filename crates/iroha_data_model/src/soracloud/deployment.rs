@@ -580,6 +580,47 @@ fn validate_nonempty_no_control(
     }
     Ok(())
 }
+fn validate_uploaded_model_identifier(
+    manifest: &'static str,
+    field: &'static str,
+    value: &str,
+) -> Result<(), SoracloudManifestError> {
+    validate_nonblank_field(manifest, field, value)?;
+    if value.len() > SORA_UPLOADED_MODEL_IDENTIFIER_MAX_BYTES_V1 {
+        return Err(invalid_field(
+            manifest,
+            field,
+            format!("must not exceed {SORA_UPLOADED_MODEL_IDENTIFIER_MAX_BYTES_V1} bytes"),
+        ));
+    }
+    if !value.bytes().all(|byte| {
+        byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'#' | b'-')
+    }) {
+        return Err(invalid_field(
+            manifest,
+            field,
+            "must use only ASCII letters, digits, or [-_.:#]",
+        ));
+    }
+    Ok(())
+}
+fn validate_uploaded_model_service_version(
+    manifest: &'static str,
+    value: &str,
+) -> Result<(), SoracloudManifestError> {
+    const FIELD: &str = "service_version";
+    validate_nonempty_no_control(manifest, FIELD, value)?;
+    if value.len() > SORA_UPLOADED_MODEL_SERVICE_VERSION_MAX_BYTES_V1 {
+        return Err(invalid_field(
+            manifest,
+            FIELD,
+            format!(
+                "must not exceed {SORA_UPLOADED_MODEL_SERVICE_VERSION_MAX_BYTES_V1} UTF-8 bytes"
+            ),
+        ));
+    }
+    Ok(())
+}
 fn validate_distribution_geography_tag(
     manifest: &'static str,
     field: &'static str,
@@ -1925,7 +1966,7 @@ impl SoraUploadedModelEncryptionRecipientV1 {
             self.schema_version,
             SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1,
         )?;
-        validate_nonblank_field(
+        validate_nonempty_no_control(
             "sora uploaded model encryption recipient",
             "key_id",
             &self.key_id,
@@ -2014,7 +2055,7 @@ impl SoraUploadedModelWrappedKeyV1 {
             self.schema_version,
             SORA_UPLOADED_MODEL_WRAPPED_KEY_VERSION_V1,
         )?;
-        validate_nonblank_field(
+        validate_nonempty_no_control(
             "sora uploaded model wrapped key",
             "recipient_key_id",
             &self.recipient_key_id,
@@ -2188,9 +2229,17 @@ impl SoraUploadedModelBundleV1 {
             self.schema_version,
             SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1,
         )?;
+        validate_uploaded_model_identifier(
+            "sora uploaded model bundle",
+            "model_id",
+            &self.model_id,
+        )?;
+        validate_uploaded_model_identifier(
+            "sora uploaded model bundle",
+            "weight_version",
+            &self.weight_version,
+        )?;
         for (field, value) in [
-            ("model_id", self.model_id.as_str()),
-            ("weight_version", self.weight_version.as_str()),
             ("family", self.family.as_str()),
             ("decryption_policy_ref", self.decryption_policy_ref.as_str()),
         ] {
@@ -2289,11 +2338,14 @@ impl SoraPrivateModelArtifactRefV1 {
             "artifact_hash",
             self.artifact_hash,
         )?;
-        if self.ciphertext_bytes == 0 {
+        let max_ciphertext_bytes =
+            u64::try_from(SORA_PRIVATE_MODEL_ENCRYPTED_ARTIFACT_MAX_BYTES_V1)
+                .expect("private encrypted artifact limit fits u64");
+        if self.ciphertext_bytes == 0 || self.ciphertext_bytes > max_ciphertext_bytes {
             return Err(invalid_field(
                 "sora private model artifact ref",
                 "ciphertext_bytes",
-                "must be greater than zero",
+                format!("must be in 1..={max_ciphertext_bytes} bytes"),
             ));
         }
         let role = self.artifact_role.trim();
@@ -2392,7 +2444,7 @@ pub enum SoraPrivateModelArtifactContextV1 {
 }
 
 impl SoraPrivateModelArtifactContextV1 {
-    const MAX_IDENTIFIER_BYTES: usize = 256;
+    const MAX_CONTEXT_IDENTIFIER_BYTES: usize = 256;
 
     /// Return the canonical artifact role string used by SoraFS references.
     #[must_use]
@@ -2428,7 +2480,7 @@ impl SoraPrivateModelArtifactContextV1 {
                 validate_private_model_context_identifier(
                     "decryption_request_id",
                     &context.decryption_request_id,
-                    Self::MAX_IDENTIFIER_BYTES,
+                    Self::MAX_CONTEXT_IDENTIFIER_BYTES,
                 )?;
                 (
                     &context.service_version,
@@ -2441,7 +2493,7 @@ impl SoraPrivateModelArtifactContextV1 {
                 validate_private_model_context_identifier(
                     "decryption_request_id",
                     &context.decryption_request_id,
-                    Self::MAX_IDENTIFIER_BYTES,
+                    Self::MAX_CONTEXT_IDENTIFIER_BYTES,
                 )?;
                 for (field, digest) in [
                     ("input_blinded_commitment", context.input_blinded_commitment),
@@ -2468,14 +2520,25 @@ impl SoraPrivateModelArtifactContextV1 {
                 )
             }
         };
-        for (field, value) in [
-            ("service_version", service_version),
-            ("model_id", model_id),
-            ("weight_version", weight_version),
-            ("policy_id", policy_id),
-        ] {
-            validate_private_model_context_identifier(field, value, Self::MAX_IDENTIFIER_BYTES)?;
-        }
+        validate_uploaded_model_service_version(
+            "sora private model artifact context",
+            service_version,
+        )?;
+        validate_uploaded_model_identifier(
+            "sora private model artifact context",
+            "model_id",
+            model_id,
+        )?;
+        validate_uploaded_model_identifier(
+            "sora private model artifact context",
+            "weight_version",
+            weight_version,
+        )?;
+        validate_private_model_context_identifier(
+            "policy_id",
+            policy_id,
+            Self::MAX_CONTEXT_IDENTIFIER_BYTES,
+        )?;
         Ok(())
     }
 }
@@ -2857,6 +2920,13 @@ impl SoraPrivateQuantizedCpuOutputV1 {
 /// Runtime version string for deterministic private uploaded-model execution v1.
 pub const SORACLOUD_PRIVATE_MODEL_RUNTIME_VERSION_V1: &str = "soracloud.quantized-cpu.v1";
 
+/// Minimum remaining `SoraFS` retention required when a private execution receipt commits.
+///
+/// This consensus floor gives operators ten minutes to serve or repair the replicated encrypted
+/// output after the receipt becomes authoritative. Runtime admission may require a longer horizon
+/// to cover its configured recovery and transaction-submission budget.
+pub const SORACLOUD_PRIVATE_OUTPUT_MIN_RETENTION_SECS_V1: u64 = 10 * 60;
+
 /// Receipt committed for deterministic private uploaded-model execution.
 ///
 /// The receipt intentionally carries only commitments and encrypted artifact
@@ -2899,6 +2969,11 @@ pub struct SoraPrivateUploadedModelExecutionReceiptV1 {
     pub input_artifact: SoraPrivateModelArtifactRefV1,
     /// Encrypted output artifact persisted outside chain state.
     pub output_artifact: SoraPrivateModelArtifactRefV1,
+    /// Exact completed automatic `SoraFS` replication order proving output durability.
+    ///
+    /// The identifier is deterministically known from the output manifest digest before pin
+    /// registration, while consensus requires the referenced order to be complete before commit.
+    pub output_replication_order_id: ReplicationOrderId,
     /// Runtime-blinded commitment over the canonical plaintext input envelope.
     pub input_commitment: Hash,
     /// Runtime-blinded commitment over the canonical plaintext output envelope.
@@ -2979,6 +3054,10 @@ pub fn derive_soracloud_private_model_request_commitment_v1(
     );
     append_private_uploaded_model_receipt_transcript_part(
         &mut transcript,
+        &receipt.output_replication_order_id,
+    );
+    append_private_uploaded_model_receipt_transcript_part(
+        &mut transcript,
         &receipt.input_commitment,
     );
     append_private_uploaded_model_receipt_transcript_part(
@@ -3014,6 +3093,10 @@ pub fn derive_soracloud_private_model_result_commitment_v1(
     );
     append_private_uploaded_model_receipt_transcript_part(
         &mut transcript,
+        &receipt.output_replication_order_id,
+    );
+    append_private_uploaded_model_receipt_transcript_part(
+        &mut transcript,
         &receipt.output_commitment,
     );
     Hash::new(transcript)
@@ -3021,8 +3104,8 @@ pub fn derive_soracloud_private_model_result_commitment_v1(
 
 /// Derive the canonical sequence-independent V1 private uploaded-model receipt identifier.
 ///
-/// The identifier binds every immutable receipt field while excluding only the identifier itself
-/// and the ledger-assigned emission sequence.
+/// The identifier binds every immutable receipt field while excluding the identifier itself and
+/// both ledger-assigned coordinates (`emitted_sequence` and `emitted_block_height`).
 #[must_use]
 pub fn derive_soracloud_private_uploaded_model_execution_receipt_id_v1(
     receipt: &SoraPrivateUploadedModelExecutionReceiptV1,
@@ -3065,6 +3148,10 @@ pub fn derive_soracloud_private_uploaded_model_execution_receipt_id_v1(
     );
     append_private_uploaded_model_receipt_transcript_part(
         &mut transcript,
+        &receipt.output_replication_order_id,
+    );
+    append_private_uploaded_model_receipt_transcript_part(
+        &mut transcript,
         &receipt.input_commitment,
     );
     append_private_uploaded_model_receipt_transcript_part(
@@ -3102,6 +3189,7 @@ impl SoraPrivateUploadedModelExecutionReceiptV1 {
     pub fn validate_submission(&self) -> Result<(), SoracloudManifestError> {
         self.validate_with_sequence_state(false)
     }
+
     fn validate_with_sequence_state(
         &self,
         require_assigned_sequence: bool,
@@ -3111,10 +3199,21 @@ impl SoraPrivateUploadedModelExecutionReceiptV1 {
             self.schema_version,
             SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1,
         )?;
+        validate_uploaded_model_service_version(
+            "sora private uploaded model execution receipt",
+            &self.service_version,
+        )?;
+        validate_uploaded_model_identifier(
+            "sora private uploaded model execution receipt",
+            "model_id",
+            &self.model_id,
+        )?;
+        validate_uploaded_model_identifier(
+            "sora private uploaded model execution receipt",
+            "weight_version",
+            &self.weight_version,
+        )?;
         for (field, value) in [
-            ("service_version", self.service_version.as_str()),
-            ("model_id", self.model_id.as_str()),
-            ("weight_version", self.weight_version.as_str()),
             ("runtime_version", self.runtime_version.as_str()),
             ("policy_id", self.policy_id.as_str()),
             ("decryption_request_id", self.decryption_request_id.as_str()),
@@ -3183,6 +3282,17 @@ impl SoraPrivateUploadedModelExecutionReceiptV1 {
         }
         self.input_artifact.validate()?;
         self.output_artifact.validate()?;
+        let expected_output_replication_order_id =
+            derive_sorafs_auto_replication_order_id_v1(
+                &self.output_artifact.sorafs_manifest_digest,
+            );
+        if self.output_replication_order_id != expected_output_replication_order_id {
+            return Err(invalid_field(
+                "sora private uploaded model execution receipt",
+                "output_replication_order_id",
+                "must equal the deterministic automatic order for output_artifact.sorafs_manifest_digest",
+            ));
+        }
         self.output_recipient.validate()?;
         SoraRuntimeExecutionHostV1::DeterministicValidator(self.attesting_validator.clone())
             .validate()?;

@@ -55,7 +55,7 @@ APPROVED_PRIVACY_C_EXPORTS = (
     "iroha_privacy_free_buffer",
 )
 STALE_PRIVACY_ABI_MARKER_RE = re.compile(
-    r"(?:abi[_-]?(?:21|23)|(?:^|_)v(?:21|23)(?:$|_))",
+    r"(?:abi[_-]?(?:21|22)|(?:^|_)v(?:21|22)(?:$|_))",
     re.IGNORECASE,
 )
 DUMPBIN_EXPORT_RE = re.compile(

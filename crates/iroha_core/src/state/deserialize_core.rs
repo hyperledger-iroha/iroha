@@ -333,7 +333,24 @@ impl KuraSeed {
             take_required(&mut map, "nexus_runtime")?;
         let chain_id: ChainId = take_required(&mut map, "chain_id")?;
         let network_id: NetworkId = take_required(&mut map, "network_id")?;
+        {
+            let world_view = world.view();
+            for (_receipt_id, receipt) in world_view
+                .soracloud_private_uploaded_model_execution_receipts()
+                .iter()
+            {
+                if receipt.network_id != network_id {
+                    return Err(json::Error::InvalidField {
+                        field: "state.world.soracloud_private_uploaded_model_execution_receipts"
+                            .to_owned(),
+                        message: "private receipt network_id must match the snapshot network_id"
+                            .to_owned(),
+                    });
+                }
+            }
+        }
         let block_hashes_vec: Vec<HashOf<BlockHeader>> = take_required(&mut map, "block_hashes")?;
+        validate_replication_order_completion_anchors(&world, &block_hashes_vec)?;
         let committed_height =
             u64::try_from(block_hashes_vec.len()).map_err(|_| json::Error::InvalidField {
                 field: "state.block_hashes".to_owned(),
@@ -1114,6 +1131,206 @@ fn validate_provider_ingest_completion_authorities(
     }
     Ok(())
 }
+fn validate_capacity_declarations(
+    declarations: &Storage<ProviderId, CapacityDeclarationRecord>,
+    provider_owners: &Storage<ProviderId, AccountId>,
+) -> Result<(), json::Error> {
+    let provider_owners = provider_owners.view();
+    let owner_metadata_key: Name = "sorafs.owner_account_id"
+        .parse()
+        .expect("static capacity owner metadata key");
+    for (provider_id, record) in declarations.view().iter() {
+        let provider_label = hex::encode(provider_id.as_bytes());
+        if record.provider_id != *provider_id {
+            return Err(json::Error::InvalidField {
+                field: "world.capacity_declarations".to_owned(),
+                message: format!(
+                    "capacity declaration key {provider_label} does not match its stored provider"
+                ),
+            });
+        }
+        crate::smartcontracts::isi::sorafs::validate_stored_capacity_declaration(
+            record,
+            &provider_label,
+        )
+        .map_err(|error| json::Error::InvalidField {
+            field: "world.capacity_declarations".to_owned(),
+            message: error.to_string(),
+        })?;
+        let provider_owner = provider_owners.get(provider_id).ok_or_else(|| {
+            json::Error::InvalidField {
+                field: "world.capacity_declarations".to_owned(),
+                message: format!(
+                    "capacity declaration {provider_label} has no governance-established provider owner"
+                ),
+            }
+        })?;
+        let owner_literal = record.metadata.get(&owner_metadata_key).ok_or_else(|| {
+            json::Error::InvalidField {
+                field: "world.capacity_declarations".to_owned(),
+                message: format!(
+                    "capacity declaration {provider_label} omits metadata `sorafs.owner_account_id`"
+                ),
+            }
+        })?;
+        let owner_literal: String = owner_literal.try_into_any().map_err(|error| {
+            json::Error::InvalidField {
+                field: "world.capacity_declarations".to_owned(),
+                message: format!(
+                    "capacity declaration {provider_label} owner metadata must be a canonical account string: {error}"
+                ),
+            }
+        })?;
+        if owner_literal != provider_owner.to_string() {
+            return Err(json::Error::InvalidField {
+                field: "world.capacity_declarations".to_owned(),
+                message: format!(
+                    "capacity declaration {provider_label} owner metadata does not exactly match its governance-established provider owner"
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+fn validate_replication_order_completion_anchors(
+    world: &World,
+    block_hashes: &[HashOf<BlockHeader>],
+) -> Result<(), json::Error> {
+    for (order_id, order) in world.replication_orders.view().iter() {
+        let order_label = hex::encode(order_id.as_bytes());
+        for completion in &order.provider_completions {
+            let height = completion.finalized_anchor.height;
+            let index = usize::try_from(height)
+                .ok()
+                .and_then(|height| height.checked_sub(1))
+                .ok_or_else(|| json::Error::InvalidField {
+                    field: "state.world.replication_orders".to_owned(),
+                    message: format!(
+                        "replication order {order_label} completion for provider {} has a finalized anchor height outside the committed block prefix",
+                        hex::encode(completion.provider_id.as_bytes()),
+                    ),
+                })?;
+            let Some(committed_hash) = block_hashes.get(index) else {
+                return Err(json::Error::InvalidField {
+                    field: "state.world.replication_orders".to_owned(),
+                    message: format!(
+                        "replication order {order_label} completion for provider {} anchors unavailable committed height {height}",
+                        hex::encode(completion.provider_id.as_bytes()),
+                    ),
+                });
+            };
+            if *committed_hash.as_ref() != completion.finalized_anchor.block_hash {
+                return Err(json::Error::InvalidField {
+                    field: "state.world.replication_orders".to_owned(),
+                    message: format!(
+                        "replication order {order_label} completion for provider {} finalized anchor hash does not match committed block height {height}",
+                        hex::encode(completion.provider_id.as_bytes()),
+                    ),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+fn validate_automatic_replication_capacity_state(
+    declarations: &Storage<ProviderId, CapacityDeclarationRecord>,
+    provider_owners: &Storage<ProviderId, AccountId>,
+    completion_authorities: &Storage<ProviderId, ProviderIngestCompletionAuthorityV1>,
+    pin_manifests: &Storage<ManifestDigest, PinManifestRecord>,
+    replication_orders: &Storage<ReplicationOrderId, ReplicationOrderRecord>,
+) -> Result<(), json::Error> {
+    let invalid = |message: String| json::Error::InvalidField {
+        field: "world.replication_orders".to_owned(),
+        message,
+    };
+    let declarations = declarations.view();
+    let provider_owners = provider_owners.view();
+    let completion_authorities = completion_authorities.view();
+    let pin_manifests = pin_manifests.view();
+    let mut allocations = BTreeMap::<(ProviderId, String), u64>::new();
+    for (order_id, order) in replication_orders.view().iter() {
+        if !order_id.is_auto() {
+            continue;
+        }
+        let order_label = hex::encode(order_id.as_bytes());
+        let pin = pin_manifests.get(&order.manifest_digest).ok_or_else(|| {
+            invalid(format!(
+                "automatic replication order {order_label} references a missing pin manifest"
+            ))
+        })?;
+        let payload =
+            crate::smartcontracts::isi::sorafs::validate_stored_automatic_replication_order(
+                pin,
+                order,
+                &order_label,
+            )
+            .map_err(|error| invalid(error.to_string()))?;
+        if !matches!(pin.status, PinStatus::Approved(_))
+            || !matches!(
+                order.status,
+                ReplicationOrderStatus::Pending | ReplicationOrderStatus::Completed(_)
+            )
+        {
+            continue;
+        }
+        for assignment in &payload.assignments {
+            let provider_id = ProviderId::new(assignment.provider_id);
+            let provider_label = hex::encode(provider_id.as_bytes());
+            let declaration = declarations.get(&provider_id).ok_or_else(|| {
+                invalid(format!(
+                    "automatic replication order {order_label} assigns provider {provider_label} without a retained capacity declaration"
+                ))
+            })?;
+            let Some(profile_capacity) =
+                crate::smartcontracts::isi::sorafs::automatic_replication_profile_capacity_gib(
+                    declaration,
+                    pin,
+                    order.issued_epoch,
+                    order.deadline_epoch,
+                )
+                .map_err(|error| invalid(error.to_string()))?
+            else {
+                return Err(invalid(format!(
+                    "automatic replication order {order_label} assigns provider {provider_label} without exact profile, storage-class, and deadline capacity"
+                )));
+            };
+            let provider_owner = provider_owners.get(&provider_id).ok_or_else(|| {
+                invalid(format!(
+                    "automatic replication order {order_label} assigns provider {provider_label} without a governed owner"
+                ))
+            })?;
+            // A retained completion is immutable self-contained evidence and remains valid across
+            // a later governed owner rotation. Only an assignment that still needs completion
+            // depends on the current owner-bound authority.
+            if order.provider_completion(provider_id).is_none()
+                && !completion_authorities
+                    .get(&provider_id)
+                    .is_some_and(|authority| {
+                        authority.is_valid() && &authority.provider_owner == provider_owner
+                    })
+            {
+                return Err(invalid(format!(
+                    "pending automatic replication order {order_label} assigns provider {provider_label} without a valid owner-bound completion authority"
+                )));
+            }
+            let allocated = allocations
+                .entry((provider_id, payload.chunking_profile.clone()))
+                .or_default();
+            *allocated = allocated.checked_add(assignment.slice_gib).ok_or_else(|| {
+                invalid(format!(
+                    "automatic replication allocation overflowed for provider {provider_label}"
+                ))
+            })?;
+            if *allocated > profile_capacity {
+                return Err(invalid(format!(
+                    "automatic replication allocations oversubscribe provider {provider_label} profile `{}`: allocated {} GiB, committed {profile_capacity} GiB",
+                    payload.chunking_profile, *allocated
+                )));
+            }
+        }
+    }
+    Ok(())
+}
 pub(super) fn validate_ram_lfe_program_policies(
     policies: &Storage<RamLfeProgramId, RamLfeProgramPolicy>,
 ) -> Result<(), json::Error> {
@@ -1432,6 +1649,72 @@ pub(crate) fn validate_musubi_location_reverse_indices(
     let by_order = by_order.view();
     let by_provider = by_provider.view();
     for (order, record) in replication_orders.iter() {
+        let pin = pin_manifests
+            .get(&record.manifest_digest)
+            .ok_or_else(|| invalid("replication order targets a missing pin manifest".into()))?;
+        let order_label = hex::encode(order.as_bytes());
+        let approved_epoch =
+            crate::smartcontracts::isi::sorafs::validate_stored_pin_approval_history(
+                pin,
+                &hex::encode(pin.digest.as_bytes()),
+            )
+            .map_err(|error| invalid(error.to_string()))?
+            .ok_or_else(|| {
+                invalid(format!(
+                    "replication order {order_label} targets a pin that was never approved"
+                ))
+            })?;
+        if record.issued_epoch < approved_epoch {
+            return Err(invalid(format!(
+                "replication order {order_label} predates its target pin approval epoch {approved_epoch}"
+            )));
+        }
+        if let PinStatus::Retired(retired_epoch) = pin.status {
+            if record.issued_epoch > retired_epoch
+                || matches!(record.status, ReplicationOrderStatus::Pending)
+                || matches!(record.status, ReplicationOrderStatus::Completed(epoch) | ReplicationOrderStatus::Expired(epoch) if epoch > retired_epoch)
+                || order.is_auto()
+                    && matches!(record.status, ReplicationOrderStatus::Completed(_))
+                    && retired_epoch < pin.policy.retention_epoch
+            {
+                return Err(invalid(format!(
+                    "replication order {order_label} lifecycle falls outside its target pin retirement epoch {retired_epoch}"
+                )));
+            }
+        }
+        let canonical_order = if order.is_auto() {
+            crate::smartcontracts::isi::sorafs::validate_stored_automatic_replication_order(
+                pin,
+                record,
+                &order_label,
+            )
+        } else {
+            crate::smartcontracts::isi::sorafs::validate_stored_replication_order(
+                record,
+                &order_label,
+            )
+        }
+        .map_err(|error| invalid(error.to_string()))?;
+        if record.order_id != *order
+            || pin.digest != record.manifest_digest
+            || pin.root_cid != record.manifest_root_cid
+            || canonical_order.chunking_profile != pin.chunker.to_handle()
+            || canonical_order.target_replicas < pin.policy.min_replicas
+            || record.deadline_epoch >= pin.policy.retention_epoch
+        {
+            return Err(invalid(
+                "replication order does not match its immutable pin commitment or retention policy"
+                    .into(),
+            ));
+        }
+        if let ReplicationOrderStatus::Cancelled(cancelled_epoch) = record.status
+            && !matches!(pin.status, PinStatus::Retired(retired_epoch) if retired_epoch == cancelled_epoch)
+        {
+            return Err(invalid(
+                "cancelled replication order must exactly match its target pin retirement epoch"
+                    .into(),
+            ));
+        }
         let reference = by_order.get(order);
         match (record.musubi_archive, reference) {
             (None, None) => {}
@@ -1532,7 +1815,7 @@ pub(crate) fn validate_musubi_location_reverse_indices(
                 < iroha_data_model::musubi::MUSUBI_MIN_HEALTHY_REPLICAS_V1
             || canonical_order.target_replicas < pin.policy.min_replicas
             || pin.policy.min_replicas < iroha_data_model::musubi::MUSUBI_MIN_HEALTHY_REPLICAS_V1
-            || order_record.deadline_epoch > pin.policy.retention_epoch
+            || order_record.deadline_epoch >= pin.policy.retention_epoch
         {
             return Err(invalid(
                 "order binding does not match its immutable pin commitment or retention policy"
@@ -1648,6 +1931,46 @@ pub(crate) fn validate_musubi_location_reverse_indices(
                 "current archive location is missing an exact reverse-index entry".into(),
             ));
         }
+    }
+    for (manifest_digest, pin) in pin_manifests.iter() {
+        if manifest_digest != &pin.digest {
+            return Err(invalid(
+                "pin-manifest key does not match its embedded manifest digest".into(),
+            ));
+        }
+        let approval_epoch =
+            crate::smartcontracts::isi::sorafs::validate_stored_pin_approval_history(
+                pin,
+                &hex::encode(manifest_digest.as_bytes()),
+            )
+            .map_err(|error| invalid(error.to_string()))?;
+        let expected_order_id =
+            iroha_data_model::sorafs::pin_registry::derive_sorafs_auto_replication_order_id_v1(
+                &pin.digest,
+            );
+        if approval_epoch.is_none() {
+            if replication_orders.get(&expected_order_id).is_some() {
+                return Err(invalid(format!(
+                    "never-approved pin manifest {} has an automatic replication order {}",
+                    hex::encode(manifest_digest.as_bytes()),
+                    hex::encode(expected_order_id.as_bytes()),
+                )));
+            }
+            continue;
+        }
+        let record = replication_orders.get(&expected_order_id).ok_or_else(|| {
+            invalid(format!(
+                "approved pin history for manifest {} is missing its mandatory automatic replication order {}",
+                hex::encode(manifest_digest.as_bytes()),
+                hex::encode(expected_order_id.as_bytes()),
+            ))
+        })?;
+        crate::smartcontracts::isi::sorafs::validate_stored_automatic_replication_order(
+            pin,
+            record,
+            &hex::encode(expected_order_id.as_bytes()),
+        )
+        .map_err(|error| invalid(error.to_string()))?;
     }
     Ok(())
 }

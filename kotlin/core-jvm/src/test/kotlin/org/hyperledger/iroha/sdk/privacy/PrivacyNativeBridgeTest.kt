@@ -187,7 +187,7 @@ class PrivacyNativeBridgeTest {
     }
 
     @Test
-    fun compiledProfileCatalogRoundTripsAndRejectsAdversarialBytesThroughNativeAbi22() {
+    fun compiledProfileCatalogRoundTripsAndRejectsAdversarialBytesThroughNativeAbi23() {
         val available = PrivacyNativeBridge.isNativeAvailable()
         assertTrue(
             available,
@@ -257,7 +257,7 @@ class PrivacyNativeBridgeTest {
     }
 
     @Test
-    fun exact12FixtureBundleRoundTripsAndRejectsAdversarialBytesThroughNativeAbi22() {
+    fun exact12FixtureBundleRoundTripsAndRejectsAdversarialBytesThroughNativeAbi23() {
         val available = PrivacyNativeBridge.isNativeAvailable()
         assertTrue(
             available,

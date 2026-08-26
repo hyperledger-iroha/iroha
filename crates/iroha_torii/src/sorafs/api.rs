@@ -1244,7 +1244,12 @@ fn prepare_alias_presentation(
     }
     map.insert("cache_state".into(), Value::String(status_label.clone()));
     map.insert("status_label".into(), Value::String(status_label.clone()));
-    map.insert("lineage".into(), lineage_to_json(lineage));
+    insert_json_field(
+        &mut map,
+        alias.alias_label(),
+        "lineage",
+        lineage_to_json(lineage),
+    )?;
     map.insert(
         "cache_rotation_due".into(),
         Value::Bool(evaluation.rotation_due),
@@ -2534,7 +2539,7 @@ impl PinListQuery {
                     "percent-encoded finalized SoraFS pin-list query spellings are not accepted",
                 )));
             }
-            if !raw.is_empty() && raw.split('&').any(str::is_empty) {
+            if raw.split('&').any(str::is_empty) {
                 return Err(ResponseError::from(json_error(
                     StatusCode::BAD_REQUEST,
                     "empty finalized SoraFS pin-list query segments are not accepted",
@@ -2806,22 +2811,99 @@ impl StorageMetadataReadbackQuery {
 }
 impl AliasListQuery {
     fn parse(raw: Option<&str>) -> ApiResult<Self> {
+        if let Some(raw) = raw {
+            if raw.contains('%') {
+                return Err(ResponseError::from(json_error(
+                    StatusCode::BAD_REQUEST,
+                    "percent-encoded SoraFS alias query spellings are not accepted",
+                )));
+            }
+            if raw.split('&').any(str::is_empty) {
+                return Err(ResponseError::from(json_error(
+                    StatusCode::BAD_REQUEST,
+                    "empty SoraFS alias query segments are not accepted",
+                )));
+            }
+        }
         let mut query = Self::default();
         walk_query_params(raw, |key, value| match key {
-            "limit" => parse_u32_field(&mut query.limit, "limit", value),
-            "offset" => parse_u32_field(&mut query.offset, "offset", value),
-            "namespace" => {
-                query.namespace = Some(value.to_owned());
-                Ok(())
-            }
-            "manifest_digest" => {
-                query.manifest_digest = Some(value.to_owned());
-                Ok(())
-            }
-            _ => Ok(()),
+            "limit" => parse_alias_query_u32(&mut query.limit, key, value),
+            "offset" => parse_alias_query_u32(&mut query.offset, key, value),
+            "namespace" => parse_alias_query_string(&mut query.namespace, key, value),
+            "manifest_digest" => parse_alias_query_string(&mut query.manifest_digest, key, value),
+            _ => Err(ResponseError::from(json_error(
+                StatusCode::BAD_REQUEST,
+                format!("unknown SoraFS alias query parameter `{key}`"),
+            ))),
         })?;
+        if query
+            .limit
+            .is_some_and(|limit| !(1..=MAX_LIST_LIMIT as u32).contains(&limit))
+        {
+            return Err(ResponseError::from(json_error(
+                StatusCode::BAD_REQUEST,
+                format!("SoraFS alias query limit must be within 1..={MAX_LIST_LIMIT}"),
+            )));
+        }
+        if let Some(namespace) = query.namespace.as_deref()
+            && (namespace.len() > 128
+                || !namespace.bytes().all(|byte| {
+                    byte.is_ascii_lowercase()
+                        || byte.is_ascii_digit()
+                        || matches!(byte, b'.' | b'-' | b'_')
+                }))
+        {
+            return Err(ResponseError::from(json_error(
+                StatusCode::BAD_REQUEST,
+                "SoraFS alias namespace must contain 1..=128 lowercase ASCII letters, digits, '.', '-', or '_'",
+            )));
+        }
+        if let Some(digest) = query.manifest_digest.as_deref() {
+            let digest = parse_canonical_hex_fixed::<32>(digest, "manifest_digest")
+                .map_err(|error| ResponseError::from(json_error(StatusCode::BAD_REQUEST, error)))?;
+            if digest == [0; 32] {
+                return Err(ResponseError::from(json_error(
+                    StatusCode::BAD_REQUEST,
+                    "manifest_digest must be non-zero",
+                )));
+            }
+        }
         Ok(query)
     }
+}
+fn parse_alias_query_u32(target: &mut Option<u32>, name: &str, raw: &str) -> ApiResult<()> {
+    if target.is_some() || raw.is_empty() {
+        return Err(ResponseError::from(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("duplicate or empty SoraFS alias query parameter `{name}`"),
+        )));
+    }
+    if !raw.bytes().all(|byte| byte.is_ascii_digit()) || (raw.len() > 1 && raw.starts_with('0')) {
+        return Err(ResponseError::from(json_error(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "SoraFS alias {name} must use canonical unsigned decimal without a sign or leading zero"
+            ),
+        )));
+    }
+    let value = raw.parse::<u32>().map_err(|_| {
+        ResponseError::from(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("invalid SoraFS alias {name} value `{raw}`"),
+        ))
+    })?;
+    *target = Some(value);
+    Ok(())
+}
+fn parse_alias_query_string(target: &mut Option<String>, name: &str, raw: &str) -> ApiResult<()> {
+    if target.is_some() || raw.is_empty() {
+        return Err(ResponseError::from(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("duplicate or empty SoraFS alias query parameter `{name}`"),
+        )));
+    }
+    *target = Some(raw.to_owned());
+    Ok(())
 }
 impl ReplicationListQuery {
     fn parse(raw: Option<&str>) -> ApiResult<Self> {
@@ -2832,7 +2914,7 @@ impl ReplicationListQuery {
                     "percent-encoded SoraFS replication query spellings are not accepted",
                 )));
             }
-            if !raw.is_empty() && raw.split('&').any(str::is_empty) {
+            if raw.split('&').any(str::is_empty) {
                 return Err(ResponseError::from(json_error(
                     StatusCode::BAD_REQUEST,
                     "empty SoraFS replication query segments are not accepted",
@@ -2867,7 +2949,7 @@ impl ReplicationListQuery {
             return Err(ResponseError::from(json_error(
                 StatusCode::BAD_REQUEST,
                 format!(
-                    "invalid replication status `{status}`; expected pending, completed, or expired"
+                    "invalid replication status `{status}`; expected pending, completed, cancelled, or expired"
                 ),
             )));
         }
@@ -3801,6 +3883,7 @@ fn walk_query_params(
 enum ReplicationStatusFilter {
     Pending,
     Completed,
+    Cancelled,
     Expired,
 }
 pub(crate) async fn handle_get_sorafs_providers(
@@ -24527,7 +24610,7 @@ pub(crate) async fn handle_get_sorafs_replication_orders(
                 return json_error(
                     StatusCode::BAD_REQUEST,
                     format!(
-                        "invalid status filter `{value}`; expected pending, completed, or expired"
+                        "invalid status filter `{value}`; expected pending, completed, cancelled, or expired"
                     ),
                 );
             }
@@ -29660,6 +29743,66 @@ mod app_api_tests {
         assert_eq!(err.status(), StatusCode::BAD_REQUEST);
     }
     #[test]
+    fn alias_list_query_is_a_strict_canonical_hard_cut() {
+        let manifest_digest = "ab".repeat(32);
+        let raw = format!("limit=500&offset=0&namespace=sora&manifest_digest={manifest_digest}");
+        let query = AliasListQuery::parse(Some(&raw)).expect("canonical alias query");
+        assert_eq!(query.limit, Some(500));
+        assert_eq!(query.offset, Some(0));
+        assert_eq!(query.namespace.as_deref(), Some("sora"));
+        assert_eq!(
+            query.manifest_digest.as_deref(),
+            Some(manifest_digest.as_str())
+        );
+        AliasListQuery::parse(None).expect("absent query");
+
+        let uppercase_digest = manifest_digest.to_ascii_uppercase();
+        for invalid in [
+            String::new(),
+            "limit=".to_owned(),
+            "limit=0".to_owned(),
+            format!("limit={}", MAX_LIST_LIMIT + 1),
+            "limit=1&limit=2".to_owned(),
+            "limit=01".to_owned(),
+            "limit=+1".to_owned(),
+            "limit=-1".to_owned(),
+            "limit=4294967296".to_owned(),
+            "offset=".to_owned(),
+            "offset=00".to_owned(),
+            "offset=+0".to_owned(),
+            "offset=-1".to_owned(),
+            "offset=4294967296".to_owned(),
+            "offset=0&offset=1".to_owned(),
+            "namespace=".to_owned(),
+            "namespace=sora&namespace=archive".to_owned(),
+            "namespace=Docs".to_owned(),
+            "namespace=sora/cloud".to_owned(),
+            format!("namespace={}", "a".repeat(129)),
+            "manifest_digest=".to_owned(),
+            "manifest_digest=00".to_owned(),
+            format!("manifest_digest={}", "00".repeat(32)),
+            format!("manifest_digest={uppercase_digest}"),
+            format!("manifest_digest={}g", "a".repeat(63)),
+            format!("manifest_digest= {}", "ab".repeat(32)),
+            "lim%69t=1".to_owned(),
+            "namespace=%73ora".to_owned(),
+            format!("manifest_digest=%61{}", "b".repeat(63)),
+            "&limit=1".to_owned(),
+            "limit=1&".to_owned(),
+            "limit=1&&offset=0".to_owned(),
+            "legacy_offset=0".to_owned(),
+            "=value".to_owned(),
+        ] {
+            let error = AliasListQuery::parse(Some(&invalid))
+                .expect_err("legacy or noncanonical alias query must fail");
+            assert_eq!(
+                error.status(),
+                StatusCode::BAD_REQUEST,
+                "query unexpectedly accepted: {invalid}"
+            );
+        }
+    }
+    #[test]
     fn replication_list_query_is_a_strict_canonical_hard_cut() {
         let manifest_digest = "ab".repeat(32);
         let raw = format!("limit=25&offset=3&status=completed&manifest_digest={manifest_digest}");
@@ -29671,8 +29814,16 @@ mod app_api_tests {
             query.manifest_digest.as_deref(),
             Some(manifest_digest.as_str())
         );
+        let cancelled = ReplicationListQuery::parse(Some("status=cancelled"))
+            .expect("canonical cancelled status query");
+        assert_eq!(cancelled.status.as_deref(), Some("cancelled"));
+        assert!(
+            parse_replication_status_filter("cancelled")
+                .is_some_and(|filter| filter.matches_record(ReplicationOrderStatus::Cancelled(7)))
+        );
         let uppercase_digest = manifest_digest.to_ascii_uppercase();
         for invalid in [
+            String::new(),
             "limit=".to_owned(),
             "limit=0".to_owned(),
             format!("limit={}", MAX_LIST_LIMIT + 1),
@@ -30107,6 +30258,25 @@ mod app_api_tests {
         assert!(err.contains("32 bytes"));
     }
     #[test]
+    fn parse_manifest_digest_hex_requires_exact_nonzero_lowercase() {
+        let canonical = "aa".repeat(32);
+        assert_eq!(
+            parse_manifest_digest_hex(&canonical).expect("canonical manifest digest"),
+            [0xAA; 32]
+        );
+        for invalid in [
+            "00".repeat(32),
+            "AA".repeat(32),
+            format!(" {canonical}"),
+            "aa".repeat(31),
+        ] {
+            assert!(
+                parse_manifest_digest_hex(&invalid).is_err(),
+                "accepted noncanonical manifest digest {invalid:?}"
+            );
+        }
+    }
+    #[test]
     fn decode_hex_32_rejects_invalid_input() {
         assert!(
             decode_hex_32("deadbeef").is_err(),
@@ -30234,19 +30404,15 @@ fn pin_snapshot_with_attestation(
     pin_projection_with_attestation(state, collect_pin_registry)
 }
 fn parse_manifest_digest_hex(hex_str: &str) -> ApiResult<[u8; 32]> {
-    match hex::decode(hex_str) {
-        Ok(bytes) => bytes.try_into().map_err(|_| {
-            ResponseError::from(json_error(
-                StatusCode::BAD_REQUEST,
-                "expected 32-byte manifest digest",
-            ))
-        }),
-        Err(err) => Err(json_error(
+    let digest = parse_canonical_hex_fixed::<32>(hex_str, "manifest digest")
+        .map_err(|error| ResponseError::from(json_error(StatusCode::BAD_REQUEST, error)))?;
+    if digest == [0; 32] {
+        return Err(ResponseError::from(json_error(
             StatusCode::BAD_REQUEST,
-            format!("invalid manifest digest hex: {err}"),
-        )
-        .into()),
+            "manifest digest must be non-zero",
+        )));
     }
+    Ok(digest)
 }
 fn storage_stored_file_dto(file: &StoredFileRecord) -> StorageStoredFileDto {
     StorageStoredFileDto {
@@ -30309,6 +30475,7 @@ impl ReplicationStatusFilter {
             (self, status),
             (Self::Pending, ReplicationOrderStatus::Pending)
                 | (Self::Completed, ReplicationOrderStatus::Completed(_))
+                | (Self::Cancelled, ReplicationOrderStatus::Cancelled(_))
                 | (Self::Expired, ReplicationOrderStatus::Expired(_))
         )
     }
@@ -30317,6 +30484,7 @@ fn parse_replication_status_filter(value: &str) -> Option<ReplicationStatusFilte
     match value {
         "pending" => Some(ReplicationStatusFilter::Pending),
         "completed" => Some(ReplicationStatusFilter::Completed),
+        "cancelled" => Some(ReplicationStatusFilter::Cancelled),
         "expired" => Some(ReplicationStatusFilter::Expired),
         _ => None,
     }
@@ -37332,7 +37500,7 @@ mod advert_tests {
                     manifest_digest: manifest_digest.clone(),
                     manifest_root_cid: manifest_root_cid.clone(),
                     musubi_archive: None,
-                    issued_by: issuer,
+                    issued_by: issuer.clone(),
                     issued_epoch: 50,
                     deadline_epoch: 60,
                     canonical_order: encode_replication_order_bytes(
@@ -37345,6 +37513,31 @@ mod advert_tests {
                     assignment_revision: 1,
                     provider_completions: Vec::new(),
                     status: ReplicationOrderStatus::Expired(62),
+                },
+            );
+        let cancelled_id = ReplicationOrderId::new([0x25; 32]);
+        tx.world_mut_for_testing()
+            .replication_orders_mut_for_testing()
+            .insert(
+                cancelled_id,
+                ReplicationOrderRecord {
+                    order_id: cancelled_id,
+                    manifest_digest: manifest_digest.clone(),
+                    manifest_root_cid: manifest_root_cid.clone(),
+                    musubi_archive: None,
+                    issued_by: issuer,
+                    issued_epoch: 70,
+                    deadline_epoch: 80,
+                    canonical_order: encode_replication_order_bytes(
+                        &cancelled_id,
+                        &manifest_digest,
+                        &manifest_root_cid,
+                        70,
+                        80,
+                    ),
+                    assignment_revision: 1,
+                    provider_completions: Vec::new(),
+                    status: ReplicationOrderStatus::Cancelled(75),
                 },
             );
         tx.apply();
@@ -37360,6 +37553,7 @@ mod advert_tests {
         assert_eq!(summary.orders_pending, 1);
         assert_eq!(summary.orders_completed, 1);
         assert_eq!(summary.orders_expired, 2);
+        assert_eq!(summary.orders_cancelled, 1);
         assert_eq!(summary.sla_met, 1);
         assert_eq!(summary.sla_missed, 2);
         let mut latencies = summary.completion_latencies.clone();

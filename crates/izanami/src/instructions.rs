@@ -2620,13 +2620,15 @@ impl ChaosState {
         };
         let mut order_id_bytes = [0u8; 32];
         rng.fill_bytes(&mut order_id_bytes);
+        // The high bit of byte zero is reserved for registry-derived automatic orders.
+        order_id_bytes[0] &= 0x7f;
         if order_id_bytes.iter().all(|byte| *byte == 0) {
             order_id_bytes[0] = 1;
         }
         let issued_epoch = self.bump_replication();
-        let deadline_epoch = issued_epoch.saturating_add(60);
-        let issued_at = now_ms() / 1_000;
-        let deadline_at = issued_at.saturating_add(60);
+        let deadline_epoch = issued_epoch
+            .checked_add(60)
+            .ok_or_else(|| eyre!("replication-order deadline overflow"))?;
         let order = ReplicationOrderV1 {
             version: REPLICATION_ORDER_VERSION_V1,
             order_id: order_id_bytes,
@@ -2639,8 +2641,8 @@ impl ChaosState {
                 slice_gib: 1,
                 lane: None,
             }],
-            issued_at,
-            deadline_at,
+            issued_at: issued_epoch,
+            deadline_at: deadline_epoch,
             sla: ReplicationOrderSlaV1 {
                 ingest_deadline_secs: 60,
                 min_availability_percent_milli: 100_000,
@@ -3612,6 +3614,10 @@ mod tests {
             .expect("issue replication order");
         let decoded = ReplicationOrderV1::decode(&mut issue.order_payload.as_slice())
             .expect("decode payload");
+        assert!(!issue.order_id.is_auto());
+        assert_eq!(decoded.order_id, *issue.order_id.as_bytes());
+        assert_eq!(decoded.issued_at, issue.issued_epoch);
+        assert_eq!(decoded.deadline_at, issue.deadline_epoch);
         let seed = state.sorafs_replication.as_ref().expect("replication seed");
         assert_eq!(decoded.manifest_digest, *seed.manifest_digest.as_bytes());
         assert_eq!(decoded.chunking_profile, seed.chunker.to_handle());

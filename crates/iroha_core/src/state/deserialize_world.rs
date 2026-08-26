@@ -65,6 +65,7 @@ struct SoracloudInrouPersistedStateV1<'a> {
     inrou_service_placements: &'a Storage<(String, String), SoraInrouServicePlacementRecordV1>,
     uploaded_model_bundles: &'a Storage<(String, String, String), SoraUploadedModelBundleV1>,
     pin_manifests: &'a Storage<ManifestDigest, PinManifestRecord>,
+    replication_orders: &'a Storage<ReplicationOrderId, ReplicationOrderRecord>,
     mailbox_messages: &'a Storage<Hash, SoraServiceMailboxMessageV1>,
     runtime_receipts: &'a Storage<Hash, SoraRuntimeReceiptV1>,
     private_uploaded_model_execution_receipts:
@@ -4028,6 +4029,7 @@ impl SoracloudInrouPersistedStateV1<'_> {
 
         let decryption_request_records = self.decryption_request_records.view();
         let pin_manifests = self.pin_manifests.view();
+        let replication_orders = self.replication_orders.view();
         let mut consumed_private_decryption_requests = std::collections::BTreeSet::new();
         for (key, receipt) in self.private_uploaded_model_execution_receipts.view().iter() {
             receipt.validate().map_err(|error| {
@@ -4173,6 +4175,7 @@ impl SoracloudInrouPersistedStateV1<'_> {
                             )
                         })?;
                     if pin.digest != artifact.sorafs_manifest_digest
+                        || pin.root_cid != artifact.sorafs_root_cid
                         || pin.content_length != artifact.ciphertext_bytes
                     {
                         return Err(invalid_soracloud_state(
@@ -4210,6 +4213,53 @@ impl SoracloudInrouPersistedStateV1<'_> {
                 return Err(invalid_soracloud_state(
                     "soracloud_private_uploaded_model_execution_receipts",
                     "private output artifact pin submitter must equal the attesting validator",
+                ));
+            }
+            let replication_order = replication_orders
+                .get(&receipt.output_replication_order_id)
+                .ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_private_uploaded_model_execution_receipts",
+                        "private output artifact must retain its exact completed replication order",
+                    )
+                })?;
+            match output_pin.status {
+                PinStatus::Approved(_) | PinStatus::Retired(_) => {}
+                PinStatus::Pending => {
+                    return Err(invalid_soracloud_state(
+                        "soracloud_private_uploaded_model_execution_receipts",
+                        "private output artifact pin cannot remain pending after receipt commit",
+                    ));
+                }
+            }
+            let order_label = hex::encode(replication_order.order_id.as_bytes());
+            crate::smartcontracts::isi::sorafs::validate_stored_automatic_replication_order(
+                output_pin,
+                replication_order,
+                &order_label,
+            )
+            .map_err(|error| {
+                invalid_soracloud_state(
+                    "soracloud_private_uploaded_model_execution_receipts",
+                    format!("private output replication order is invalid: {error}"),
+                )
+            })?;
+            let ReplicationOrderStatus::Completed(completion_epoch) = replication_order.status
+            else {
+                return Err(invalid_soracloud_state(
+                    "soracloud_private_uploaded_model_execution_receipts",
+                    "private output artifact must retain a completed replication order",
+                ));
+            };
+            if matches!(
+                output_pin.status,
+                PinStatus::Retired(retired_epoch)
+                    if retired_epoch < output_pin.policy.retention_epoch
+                        || completion_epoch > retired_epoch
+            ) {
+                return Err(invalid_soracloud_state(
+                    "soracloud_private_uploaded_model_execution_receipts",
+                    "private output replication order must prove the exact pin-policy quorum and promised retention before retirement",
                 ));
             }
         }
@@ -6767,7 +6817,9 @@ fn parse_world(
         &mut map,
         "soracloud_private_uploaded_model_execution_receipts",
     )?;
-    let pin_manifests = take_optional_default(&mut map, "pin_manifests")?;
+    let capacity_declarations = take_required(&mut map, "capacity_declarations")?;
+    let pin_manifests = take_required(&mut map, "pin_manifests")?;
+    let replication_orders = take_required(&mut map, "replication_orders")?;
     SoracloudInrouPersistedStateV1 {
         sequence_watermark: *soracloud_sequence_watermark.view().get(),
         service_revisions: &soracloud_service_revisions,
@@ -6799,6 +6851,7 @@ fn parse_world(
         inrou_service_placements: &soracloud_inrou_service_placements,
         uploaded_model_bundles: &soracloud_uploaded_model_bundles,
         pin_manifests: &pin_manifests,
+        replication_orders: &replication_orders,
         mailbox_messages: &soracloud_mailbox_messages,
         runtime_receipts: &soracloud_runtime_receipts,
         private_uploaded_model_execution_receipts:
@@ -6812,6 +6865,7 @@ fn parse_world(
         &provider_owners,
         &provider_ingest_completion_authorities,
     )?;
+    validate_capacity_declarations(&capacity_declarations, &provider_owners)?;
     let zk_assets = take_optional_default(&mut map, "zk_assets")?;
     let elections = take_required(&mut map, "elections")?;
     let citizens = take_required(&mut map, "citizens")?;
@@ -6844,7 +6898,6 @@ fn parse_world(
     let lane_relay_emergency_validators =
         take_optional_default(&mut map, "lane_relay_emergency_validators")?;
     let manifest_aliases = take_optional_default(&mut map, "manifest_aliases")?;
-    let replication_orders = take_optional_default(&mut map, "replication_orders")?;
     validate_musubi_location_reverse_indices(
         &musubi_archives,
         &musubi_archive_locations,
@@ -6853,6 +6906,13 @@ fn parse_world(
         &musubi_locations_by_pin,
         &musubi_locations_by_replication_order,
         &musubi_locations_by_provider,
+    )?;
+    validate_automatic_replication_capacity_state(
+        &capacity_declarations,
+        &provider_owners,
+        &provider_ingest_completion_authorities,
+        &pin_manifests,
+        &replication_orders,
     )?;
     let content_bundles = take_optional_default(&mut map, "content_bundles")?;
     let content_chunks = take_optional_default(&mut map, "content_chunks")?;
@@ -7036,7 +7096,7 @@ fn parse_world(
         soracloud_mailbox_messages,
         soracloud_runtime_receipts,
         soracloud_private_uploaded_model_execution_receipts,
-        capacity_declarations: Storage::default(),
+        capacity_declarations,
         capacity_fee_ledger: Storage::default(),
         capacity_disputes: Storage::default(),
         provider_owners,
@@ -7109,6 +7169,37 @@ fn parse_world(
         consensus_evidence: Storage::default(),
         external_event_buf,
     };
+    {
+        let world_view = world.view();
+        for (_receipt_id, receipt) in world_view
+            .soracloud_private_uploaded_model_execution_receipts()
+            .iter()
+        {
+            let bundle = world_view
+                .soracloud_uploaded_model_bundles()
+                .get(&(
+                    receipt.service_name.as_ref().to_owned(),
+                    receipt.model_id.clone(),
+                    receipt.weight_version.clone(),
+                ))
+                .ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_private_uploaded_model_execution_receipts",
+                        "private receipt must reference an authoritative uploaded-model bundle",
+                    )
+                })?;
+            crate::soracloud_runtime::validate_finalized_soracloud_uploaded_model_release(
+                &world_view,
+                bundle,
+            )
+            .map_err(|error| {
+                invalid_soracloud_state(
+                    "soracloud_private_uploaded_model_execution_receipts",
+                    error,
+                )
+            })?;
+        }
+    }
     let parliament_attempts_view = world.parliament_attempts.view();
     let governance_proposals_view = world.governance_proposals.view();
     for (attempt_id, attempt) in parliament_attempts_view.iter() {
@@ -7453,6 +7544,16 @@ fn build_state(
     #[cfg(feature = "telemetry")]
     let telemetry_seed = telemetry.clone();
     let initial_crypto = iroha_config::parameters::actual::Crypto::default();
+    if world
+        .soracloud_private_uploaded_model_execution_receipts
+        .view()
+        .iter()
+        .any(|(_, receipt)| receipt.network_id != network_id)
+    {
+        return Err(MergeLedgerCommitError::ExecutionStatePublication(
+            "restored private uploaded-model receipt belongs to another network".to_owned(),
+        ));
+    }
     let streaming_storage_paths = StreamingStoragePaths::default();
     let da_receipt_cursors = parking_lot::RwLock::new(DaReceiptCursorIndex::default());
     let da_shard_cursors = parking_lot::RwLock::new(DaShardCursorIndex::default());

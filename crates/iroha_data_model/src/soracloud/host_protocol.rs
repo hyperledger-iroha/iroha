@@ -367,7 +367,7 @@ pub struct SoracloudEmitMailboxMessageRequestV1 {
     pub to_handler: Name,
     /// Opaque mailbox payload bytes.
     pub payload_bytes: Vec<u8>,
-    /// Number of authoritative Soracloud sequence steps to delay delivery.
+    /// Number of consensus blocks to delay delivery.
     pub delivery_delay_blocks: u32,
 }
 impl SoracloudEmitMailboxMessageRequestV1 {

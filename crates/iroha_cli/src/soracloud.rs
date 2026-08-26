@@ -23277,6 +23277,7 @@ mod tests {
             },
             BTreeMap::new(),
             BTreeMap::new(),
+            SoraServiceMutationPreconditionV1::ServiceAbsent,
             Some(&authority),
             &key_pair,
         )
@@ -23328,6 +23329,7 @@ mod tests {
                 services: Vec::new(),
             },
             Vec::new(),
+            SoraAppInfraMutationPreconditionV1::AppAbsent,
             &key_pair,
         )
         .expect("canonical signed app request");

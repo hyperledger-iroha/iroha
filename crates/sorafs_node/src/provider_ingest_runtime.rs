@@ -34,6 +34,7 @@ use iroha_data_model::{
             PinManifestFinalizedRecordV1, PinManifestRecord, PinStatus,
             ProviderIngestCompletionAuthorityV1, ProviderIngestCompletionSignerPolicyV1,
             ReplicationOrderCompletionRecord, ReplicationOrderRecord, ReplicationOrderStatus,
+            derive_sorafs_auto_replication_order_id_v1,
         },
     },
     transaction::{SignedTransaction, TransactionPayload},
@@ -2588,15 +2589,17 @@ where
             outcome.jobs_finalized = outcome.jobs_finalized.saturating_add(1);
             return Ok(());
         }
-        let cancellation_reason = match (&row.pin.manifest.status, &row.order.status) {
-            (PinStatus::Retired(_), _) => Some(ProviderIngestCancellationReasonV1::ManifestRetired),
-            (_, ReplicationOrderStatus::Expired(_)) => {
+        let cancellation_reason = match row.order.status {
+            ReplicationOrderStatus::Cancelled(_) => {
+                Some(ProviderIngestCancellationReasonV1::ManifestRetired)
+            }
+            ReplicationOrderStatus::Expired(_) => {
                 Some(ProviderIngestCancellationReasonV1::OrderExpired)
             }
-            (_, ReplicationOrderStatus::Completed(_)) => {
+            ReplicationOrderStatus::Completed(_) => {
                 Some(ProviderIngestCancellationReasonV1::OrderCompletedByOther)
             }
-            _ => None,
+            ReplicationOrderStatus::Pending => None,
         };
         if let Some(reason) = cancellation_reason {
             self.outbox.reconcile_finalized_cancellation(
@@ -4009,6 +4012,7 @@ fn validate_assignment_with_source_bound(
         return Err(ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding);
     }
     let mut completions = BTreeSet::new();
+    let mut previous_completion_epoch = None;
     for completion in &row.order.provider_completions {
         if !order
             .assignments
@@ -4016,6 +4020,8 @@ fn validate_assignment_with_source_bound(
             .any(|assignment| assignment.provider_id == *completion.provider_id.as_bytes())
             || completion.completion_epoch < row.order.issued_epoch
             || completion.completion_epoch > row.order.deadline_epoch
+            || previous_completion_epoch
+                .is_some_and(|previous| completion.completion_epoch < previous)
             || completion.assignment_revision != row.order.assignment_revision
             || !completion.completion_authority.is_valid()
             || completion.completion_authority.provider_owner != completion.completed_by
@@ -4027,10 +4033,18 @@ fn validate_assignment_with_source_bound(
         {
             return Err(ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding);
         }
+        previous_completion_epoch = Some(completion.completion_epoch);
     }
     match row.order.status {
-        ReplicationOrderStatus::Pending | ReplicationOrderStatus::Expired(_)
+        ReplicationOrderStatus::Pending
             if row.order.provider_completions.len() < target_replicas => {}
+        ReplicationOrderStatus::Expired(epoch)
+            if row.order.provider_completions.len() < target_replicas
+                && epoch > row.order.deadline_epoch => {}
+        ReplicationOrderStatus::Cancelled(epoch)
+            if row.order.provider_completions.len() < target_replicas
+                && epoch >= row.order.issued_epoch
+                && epoch <= row.order.deadline_epoch => {}
         ReplicationOrderStatus::Completed(epoch)
             if row.order.provider_completions.len() == target_replicas
                 && row
@@ -4040,9 +4054,40 @@ fn validate_assignment_with_source_bound(
                     .is_some_and(|completion| completion.completion_epoch == epoch) => {}
         ReplicationOrderStatus::Pending
         | ReplicationOrderStatus::Completed(_)
-        | ReplicationOrderStatus::Expired(_) => {
+        | ReplicationOrderStatus::Expired(_)
+        | ReplicationOrderStatus::Cancelled(_) => {
             return Err(ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding);
         }
+    }
+    let approved_epoch = row.pin.manifest.approved_epoch;
+    let is_automatic = row.order.order_id
+        == derive_sorafs_auto_replication_order_id_v1(&row.order.manifest_digest);
+    let issued_after_approval =
+        approved_epoch.is_some_and(|approved_epoch| row.order.issued_epoch >= approved_epoch);
+    let automatic_issued_at_approval =
+        !is_automatic || approved_epoch == Some(row.order.issued_epoch);
+    let pin_order_lifecycle_is_valid = match (row.pin.manifest.status, row.order.status) {
+        (PinStatus::Pending, _) => false,
+        (PinStatus::Approved(status_epoch), status) => {
+            approved_epoch == Some(status_epoch)
+                && issued_after_approval
+                && automatic_issued_at_approval
+                && !matches!(status, ReplicationOrderStatus::Cancelled(_))
+        }
+        (PinStatus::Retired(retired_epoch), status) => {
+            approved_epoch.is_some_and(|approved_epoch| approved_epoch <= retired_epoch)
+                && issued_after_approval
+                && automatic_issued_at_approval
+                && match status {
+                    ReplicationOrderStatus::Pending => false,
+                    ReplicationOrderStatus::Cancelled(epoch) => epoch == retired_epoch,
+                    ReplicationOrderStatus::Completed(epoch)
+                    | ReplicationOrderStatus::Expired(epoch) => epoch <= retired_epoch,
+                }
+        }
+    };
+    if !pin_order_lifecycle_is_valid {
+        return Err(ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding);
     }
     let authorization = if let Some(claim) = row.musubi_archive.as_ref() {
         FinalizedProviderIngestAuthorizationV1::from_finalized_musubi_state(

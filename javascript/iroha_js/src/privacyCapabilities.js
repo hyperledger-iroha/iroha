@@ -534,7 +534,7 @@ function compiledProfileCatalogFromNativeV1(native) {
   return bytes;
 }
 
-/** Decode the sole canonical Exact12 manifest archive through native ABI22/N-API. */
+/** Decode the sole canonical Exact12 manifest archive through native ABI23/N-API. */
 export function decodePrivacyExact12CapabilityManifestV1(canonicalArchive) {
   const bytes = copyPrivacyExact12ArchiveV1(canonicalArchive, "canonical archive");
   const native = requirePrivacyExact12NativeV1();
@@ -682,7 +682,7 @@ function requirePrivacyExact12NativeV1() {
     );
   }
   if (abiVersion !== 23) {
-    manifestFailV1("requires exact ABI22", "native binding");
+    manifestFailV1("requires exact ABI23", "native binding");
   }
   for (const method of PRIVACY_EXACT12_NATIVE_METHODS_V1) {
     if (typeof native?.[method] !== "function") {

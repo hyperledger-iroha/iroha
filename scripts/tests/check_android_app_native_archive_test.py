@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for exact ABI-22 byte authentication in Android app archives."""
+"""Tests for exact ABI-23 byte authentication in Android app archives."""
 
 from __future__ import annotations
 

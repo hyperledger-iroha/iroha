@@ -206,11 +206,11 @@ public sealed class PrivacyNativeTests
     }
 
     [Fact]
-    public void CompiledProfileCatalogRoundTripsAndRejectsAdversarialBytesThroughNativeAbi22()
+    public void CompiledProfileCatalogRoundTripsAndRejectsAdversarialBytesThroughNativeAbi23()
     {
         Assert.True(
             PrivacyNative.IsAvailable(),
-            "ABI-22 connect_norito_bridge with compiled-profile catalog symbols is required.");
+            "ABI-23 connect_norito_bridge with compiled-profile catalog symbols is required.");
 
         var catalog = PrivacyNative.CompiledProfileCatalogV1();
         var canonical = catalog.NoritoBytes;
@@ -266,11 +266,11 @@ public sealed class PrivacyNativeTests
     }
 
     [Fact]
-    public void Exact12FixtureBundleRoundTripsAndRejectsAdversarialBytesThroughNativeAbi22()
+    public void Exact12FixtureBundleRoundTripsAndRejectsAdversarialBytesThroughNativeAbi23()
     {
         Assert.True(
             PrivacyNative.IsAvailable(),
-            "ABI-22 connect_norito_bridge with exact-12 fixture symbols is required.");
+            "ABI-23 connect_norito_bridge with exact-12 fixture symbols is required.");
 
         var bundle = PrivacyNative.Exact12FixtureBundleV1();
         var canonical = bundle.NoritoBytes;

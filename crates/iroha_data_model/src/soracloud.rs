@@ -17,7 +17,8 @@ use crate::{
     peer::PeerId,
     proof::ProofAttachment,
     sorafs::pin_registry::{
-        MANIFEST_ROOT_CID_LENGTH, ManifestDigest, ManifestRootCid, StorageClass,
+        MANIFEST_ROOT_CID_LENGTH, ManifestDigest, ManifestRootCid, ReplicationOrderId,
+        StorageClass, derive_sorafs_auto_replication_order_id_v1,
     },
     zk::{BackendTag, OpenVerifyEnvelope, OpenVerifyEnvelopeBounds, StarkFriOpenProofV1},
 };
@@ -227,6 +228,10 @@ pub const SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1: u16 = 1;
 pub const SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraUploadedModelWrappedKeyV1`].
 pub const SORA_UPLOADED_MODEL_WRAPPED_KEY_VERSION_V1: u16 = 1;
+/// Maximum byte length of an uploaded-model id or weight-version identifier.
+pub const SORA_UPLOADED_MODEL_IDENTIFIER_MAX_BYTES_V1: usize = 128;
+/// Maximum UTF-8 byte length of an uploaded-model service revision.
+pub const SORA_UPLOADED_MODEL_SERVICE_VERSION_MAX_BYTES_V1: usize = 256;
 const SORA_UPLOADED_MODEL_X25519_PUBLIC_KEY_BYTES: usize = 32;
 /// Schema version for [`SoraPrivateModelArtifactRefV1`].
 pub const SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1: u16 = 1;

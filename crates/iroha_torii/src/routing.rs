@@ -39752,9 +39752,6 @@ mod explorer_lookup_tests {
     use http_body_util::BodyExt as _;
     use iroha_core::{
         block::{BlockBuilder, ValidBlock},
-        governance::parliament::{
-            ParliamentAttemptStateV1, ParliamentDecisionModeV1, RequiredParliamentBodyV1,
-        },
         kura::Kura,
         query::store::LiveQueryStore,
         state::{State, World},

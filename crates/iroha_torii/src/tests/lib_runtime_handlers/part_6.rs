@@ -1462,13 +1462,15 @@ fn seed_generated_hf_public_world(primary_peer_id: &str) -> (World, String, Stri
     let service_version = bundle.service.service_version.clone();
     let member_account =
         checked_torii_test_account_id(0x39, "derive generated-HF member fixture key");
-    let primary_validator =
-        checked_torii_test_account_id(0x3a, "derive generated-HF primary validator fixture key");
+    let primary_peer_id = primary_peer_id
+        .parse::<PeerId>()
+        .expect("canonical generated-HF primary peer id");
+    let primary_validator = AccountId::new(primary_peer_id.public_key().clone());
+    let primary_peer_id = primary_peer_id.to_string();
     let replica_validator =
         checked_torii_test_account_id(0x3b, "derive generated-HF replica validator fixture key");
     let replica_peer_id =
-        checked_torii_test_peer_id(0x3c, "derive generated-HF replica peer fixture key")
-            .to_string();
+        PeerId::from(replica_validator.expect_single_signatory().clone()).to_string();
     world.soracloud_service_revisions_mut_for_testing().insert(
         (service_name_string.clone(), service_version.clone()),
         bundle.clone(),

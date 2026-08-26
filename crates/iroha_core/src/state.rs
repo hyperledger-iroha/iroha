@@ -164,8 +164,9 @@ use iroha_data_model::{
             CapacityFeeLedgerEntry, ProviderId,
         },
         pin_registry::{
-            ManifestAliasId, ManifestAliasRecord, ManifestDigest, PinManifestRecord,
+            ManifestAliasId, ManifestAliasRecord, ManifestDigest, PinManifestRecord, PinStatus,
             ProviderIngestCompletionAuthorityV1, ReplicationOrderId, ReplicationOrderRecord,
+            ReplicationOrderStatus,
         },
         pricing::{PricingScheduleRecord, ProviderCreditRecord},
     },
@@ -4275,7 +4276,6 @@ pub struct World {
     pub(crate) soracloud_private_uploaded_model_execution_receipts:
         Storage<Hash, SoraPrivateUploadedModelExecutionReceiptV1>,
     /// Capacity declarations keyed by provider identifier.
-    #[norito(skip)]
     pub(crate) capacity_declarations: Storage<ProviderId, CapacityDeclarationRecord>,
     /// Aggregated fee ledger entries per provider.
     #[norito(skip)]
@@ -4307,13 +4307,11 @@ pub struct World {
     #[norito(skip)]
     pub(crate) da_pin_intents_by_lane_epoch: Storage<(LaneId, u64, u64), StorageTicketId>,
     /// `SoraFS` pin manifest registry keyed by manifest digest.
-    #[norito(skip)]
     pub(crate) pin_manifests: Storage<ManifestDigest, PinManifestRecord>,
     /// Active alias bindings keyed by `namespace/name`.
     #[norito(skip)]
     pub(crate) manifest_aliases: Storage<ManifestAliasId, ManifestAliasRecord>,
     /// Outstanding replication orders keyed by order identifier.
-    #[norito(skip)]
     pub(crate) replication_orders: Storage<ReplicationOrderId, ReplicationOrderRecord>,
     /// Content bundles keyed by bundle identifier.
     pub(crate) content_bundles: Storage<ContentBundleId, ContentBundleRecord>,
@@ -4989,7 +4987,6 @@ pub struct WorldBlock<'world> {
     pub(crate) soracloud_private_uploaded_model_execution_receipts:
         StorageBlock<'world, Hash, SoraPrivateUploadedModelExecutionReceiptV1>,
     /// Capacity declarations keyed by provider identifier.
-    #[norito(skip)]
     pub(crate) capacity_declarations: StorageBlock<'world, ProviderId, CapacityDeclarationRecord>,
     /// Capacity fee ledger entries per provider.
     #[norito(skip)]
@@ -5023,13 +5020,11 @@ pub struct WorldBlock<'world> {
     pub(crate) da_pin_intents_by_lane_epoch:
         StorageBlock<'world, (LaneId, u64, u64), StorageTicketId>,
     /// `SoraFS` pin manifest registry keyed by manifest digest.
-    #[norito(skip)]
     pub(crate) pin_manifests: StorageBlock<'world, ManifestDigest, PinManifestRecord>,
     /// Active alias bindings keyed by alias identifier.
     #[norito(skip)]
     pub(crate) manifest_aliases: StorageBlock<'world, ManifestAliasId, ManifestAliasRecord>,
     /// Outstanding replication orders keyed by order identifier.
-    #[norito(skip)]
     pub(crate) replication_orders: StorageBlock<'world, ReplicationOrderId, ReplicationOrderRecord>,
     /// Content bundles keyed by bundle identifier.
     pub(crate) content_bundles: StorageBlock<'world, ContentBundleId, ContentBundleRecord>,
@@ -5185,6 +5180,16 @@ pub struct WorldBlock<'world> {
     #[norito(skip)]
     external_event_buf: Vec<EventBox>,
 }
+#[cfg(test)]
+impl<'world> WorldBlock<'world> {
+    /// Mutable access to VRF epoch randomness and participation records.
+    pub fn vrf_epochs_mut(
+        &mut self,
+    ) -> &mut StorageBlock<'world, u64, iroha_data_model::consensus::VrfEpochRecord> {
+        &mut self.vrf_epochs
+    }
+}
+
 impl WorldBlock<'_> {
     #[cfg(test)]
     fn put_governance_locks(&mut self, referendum_id: String, locks: GovernanceLocksForReferendum) {

@@ -13,7 +13,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     fs::create_dir_all(&fixture_dir)?;
     let order = ReplicationOrderV1 {
         version: REPLICATION_ORDER_VERSION_V1,
-        order_id: [0xAB; 32],
+        order_id: [0x2B; 32],
         manifest_cid: canonical_manifest_root_cid([0x41; 32]),
         manifest_digest: [0x42; 32],
         chunking_profile: "sorafs.sf1@1.0.0".to_string(),

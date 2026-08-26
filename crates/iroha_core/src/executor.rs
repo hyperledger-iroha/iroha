@@ -9301,9 +9301,10 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
     ) {
         return true;
     }
-    // Cross-border settlement, relays, and public governance mutations either
-    // require an exact Core-enforced permission or consume a cryptographically
-    // verified, replay-protected proof. Keep the signed governance draft surface
+    // Cross-border settlement, relays, scoped governance mutations, and
+    // authority-bound public agenda intake reach Core only where it enforces an
+    // exact permission or proof, or persists the exact signed authority after
+    // canonical payload validation. Keep the signed governance draft surface
     // usable while the fail-safe Initial executor is active; the lower-level
     // `zk::SubmitBallot` vendor instruction remains IVM-latch-only below.
     if is_any!(
@@ -9326,6 +9327,7 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         iroha_data_model::isi::governance::SlashGovernanceLock,
         iroha_data_model::isi::governance::RestituteGovernanceLock,
         iroha_data_model::isi::governance::RecordCitizenServiceOutcome,
+        iroha_data_model::isi::ministry::SubmitAgendaProposal,
         iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay,
         iroha_data_model::isi::nexus::RegisterVerifiedFeeSponsorVaultAllocation,
         iroha_data_model::isi::nexus::SetLaneRelayEmergencyValidators,
@@ -11650,6 +11652,46 @@ mod tests {
                 "standalone referendum ballot must remain reachable after Parliament cutover"
             );
         }
+    }
+    #[test]
+    fn initial_executor_admits_public_ministry_agenda_submissions() {
+        use iroha_data_model::{
+            isi::ministry::SubmitAgendaProposal,
+            ministry::{
+                AGENDA_PROPOSAL_VERSION_V1, AgendaProposalAction, AgendaProposalSubmitter,
+                AgendaProposalSummary, AgendaProposalV1,
+            },
+        };
+        let instruction: InstructionBox = SubmitAgendaProposal {
+            proposal: AgendaProposalV1 {
+                version: AGENDA_PROPOSAL_VERSION_V1,
+                proposal_id: "AC-2026-001".to_owned(),
+                submitted_at_unix_ms: 1,
+                language: "en".to_owned(),
+                action: AgendaProposalAction::AmendPolicy,
+                summary: AgendaProposalSummary {
+                    title: "Public agenda proposal".to_owned(),
+                    motivation: "Exercise the signed public submission surface.".to_owned(),
+                    expected_impact: "The initial executor reaches exact Core validation."
+                        .to_owned(),
+                },
+                tags: Vec::new(),
+                targets: Vec::new(),
+                evidence: Vec::new(),
+                submitter: AgendaProposalSubmitter {
+                    name: "Citizen".to_owned(),
+                    contact: "citizen@example.org".to_owned(),
+                    organization: None,
+                    pgp_fingerprint: None,
+                },
+                duplicates: Vec::new(),
+            },
+        }
+        .into();
+        assert!(
+            initial_native_instruction_is_explicitly_admitted(&instruction),
+            "signed public Ministry proposals must reach exact Core validation"
+        );
     }
     #[test]
     fn initial_executor_denies_chain_and_foreign_controller_takeover_paths() {

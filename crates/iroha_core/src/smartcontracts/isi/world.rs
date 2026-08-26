@@ -18811,7 +18811,9 @@ pub mod isi {
             state::StateBlock,
         };
         use core::num::{NonZeroU32, NonZeroU64};
-        use iroha_config::parameters::actual::LaneConfig as RuntimeLaneConfig;
+        use iroha_config::parameters::actual::{
+            LaneConfig as RuntimeLaneConfig, ParliamentTimedOvn,
+        };
         use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
         #[allow(unused_imports)]
         use iroha_data_model::{
@@ -19546,7 +19548,7 @@ pub mod isi {
                             tle_key_session_id,
                             release_beacon_session_id,
                             30,
-                            iroha_config::parameters::actual::ParliamentTimedOvn {
+                            ParliamentTimedOvn {
                                 registration_phase_blocks: 2,
                                 survivor_freeze_phase_blocks: 2,
                                 commitment_phase_blocks: 2,
@@ -22158,7 +22160,10 @@ pub mod isi {
             );
         });
         world_test!(governance_sortition_has_no_synthetic_entropy_fallback {
-            blank_state_transaction!(state, block, state_block, state_transaction);
+            let state = blank_state();
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let state_transaction = state_block.transaction();
             let error = latest_governance_entropy_seed(&state_transaction)
                 .expect_err("missing finalized beacon entropy must fail closed");
             assert_err!(

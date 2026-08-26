@@ -42,9 +42,11 @@ use iroha_core::soracloud_runtime::{
     SoracloudApartmentExecutionResult, SoracloudHostedHttpReplicaRuntimeStateV1,
     SoracloudHostedHttpRuntimeStateV1, SoracloudLocalReadRequest, SoracloudLocalReadResponse,
     SoracloudOrderedMailboxExecutionRequest, SoracloudOrderedMailboxExecutionResult,
+    SoracloudPrivateOutputDurabilityStatusV1, SoracloudPrivateUploadedModelExecutionJournalPhaseV1,
     SoracloudPrivateUploadedModelExecutionJournalV1,
     SoracloudPrivateUploadedModelExecutionRequestV1,
-    SoracloudPrivateUploadedModelExecutionResultV1, SoracloudQuantizedCpuModelV1,
+    SoracloudPrivateUploadedModelExecutionResultV1,
+    SoracloudPrivateUploadedModelExecutionSubmissionProgressV1, SoracloudQuantizedCpuModelV1,
     SoracloudQuantizedRoundingV1, SoracloudRuntime, SoracloudRuntimeApartmentPlan,
     SoracloudRuntimeArtifactPlan, SoracloudRuntimeExecutionError,
     SoracloudRuntimeExecutionErrorKind, SoracloudRuntimeHfSourcePlan,
@@ -58,6 +60,7 @@ use iroha_core::soracloud_runtime::{
     resolve_ordered_mailbox_executor, soracloud_hf_generated_bundle_payload_if_applicable,
     soracloud_hf_generated_source_binding,
     validate_soracloud_apartment_autonomy_execution_summary_v1,
+    validate_soracloud_private_output_durability_v1,
 };
 use iroha_core::state::{State, StateReadOnly, StateView, WorldReadOnly};
 use iroha_core::{
@@ -76,6 +79,8 @@ use iroha_crypto::{
 use iroha_data_model::soracloud::SoraNetworkAllowlistEntryV1;
 #[cfg(test)]
 use iroha_data_model::soracloud::derive_hf_placement_id_v1;
+#[cfg(test)]
+use iroha_data_model::sorafs::pin_registry::derive_sorafs_auto_replication_order_id_v1;
 use iroha_data_model::{
     Decode, Encode, NetworkId,
     account::AccountId,
@@ -228,6 +233,10 @@ const SORACLOUD_PRIVATE_EXECUTION_JOURNAL_ENVELOPE_VERSION_V1: u16 = 1;
 const SORACLOUD_PRIVATE_EXECUTION_JOURNAL_MAX_ENTRIES: usize = 256;
 const SORACLOUD_PRIVATE_EXECUTION_JOURNAL_MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
 const SORACLOUD_PRIVATE_EXECUTION_JOURNAL_MAX_TOTAL_BYTES: u64 = 128 * 1024 * 1024;
+const SORACLOUD_PRIVATE_EXECUTION_OUTPUT_PIN_ENDPOINT: &str =
+    "/internal/soracloud/runtime/private-model-output-pin";
+const SORACLOUD_PRIVATE_EXECUTION_RECEIPT_ENDPOINT: &str =
+    "/internal/soracloud/runtime/private-model-receipt";
 const SORACLOUD_PRIVATE_EXECUTION_JOURNAL_DECODE_LIMITS: norito::DecodeLimits =
     norito::DecodeLimits::new(2_097_152, 2_097_152, 4_194_304, 32 * 1024 * 1024, 64);
 
@@ -2903,6 +2912,7 @@ pub struct SoracloudRuntimeManagerHandle {
     config: Arc<SoracloudRuntimeManagerConfig>,
     state_dir: Arc<PathBuf>,
     state: Arc<State>,
+    sorafs_node: Option<sorafs_node::NodeHandle>,
     hf_local_workers: SharedHfLocalRunnerWorkers,
     host_violation_reporter: Arc<SoracloudModelHostViolationReporter>,
     mutation_sink: Option<Arc<dyn SoracloudRuntimeMutationSink>>,
@@ -4169,19 +4179,29 @@ fn store_private_execution_journal_entry(
         let first_submission = existing.submission_attempt == 0
             && existing.transaction_hash.is_none()
             && existing.signed_transaction.is_none()
+            && existing.phase == entry.phase
             && entry.submission_attempt == 1
             && entry.transaction_hash.is_some()
             && entry.signed_transaction.is_some()
             && replace_expired_transaction.is_none();
         let next_expired_submission = existing.submission_attempt > 0
+            && existing.phase == entry.phase
             && entry.submission_attempt == existing.submission_attempt.saturating_add(1)
             && entry.transaction_hash.is_some()
             && entry.signed_transaction.is_some()
+            && entry.transaction_hash != existing.transaction_hash
             && replace_expired_transaction == existing.transaction_hash;
-        if !first_submission && !next_expired_submission {
+        let advance_to_receipt = existing.phase
+            == SoracloudPrivateUploadedModelExecutionJournalPhaseV1::OutputPin
+            && entry.phase == SoracloudPrivateUploadedModelExecutionJournalPhaseV1::Receipt
+            && entry.submission_attempt == 0
+            && entry.transaction_hash.is_none()
+            && entry.signed_transaction.is_none()
+            && replace_expired_transaction.is_none();
+        if !first_submission && !next_expired_submission && !advance_to_receipt {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "private execution journal transition must be Prepared(0)->Signed(1) or exact Signed(n)->Signed(n+1) expired replacement",
+                "private execution journal transition must be same-phase Prepared(0)->Signed(1), exact same-phase Signed(n)->Signed(n+1) expired replacement, or OutputPin->Receipt Prepared(0)",
             ));
         }
     } else if entry_count >= SORACLOUD_PRIVATE_EXECUTION_JOURNAL_MAX_ENTRIES {
@@ -4195,11 +4215,12 @@ fn store_private_execution_journal_entry(
     } else if entry.submission_attempt != 0
         || entry.transaction_hash.is_some()
         || entry.signed_transaction.is_some()
+        || entry.phase != SoracloudPrivateUploadedModelExecutionJournalPhaseV1::OutputPin
         || replace_expired_transaction.is_some()
     {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "private execution journal must durably store Prepared(0) before any signed attempt",
+            "private execution journal must durably store OutputPin Prepared(0) before any signed attempt",
         ));
     }
     let envelope = PrivateExecutionJournalEnvelopeV1 {
@@ -4308,14 +4329,17 @@ fn verify_private_execution_output_is_durable(
     Ok(())
 }
 
-fn validate_private_execution_commit_transaction(
-    transaction: &SignedTransaction,
+fn private_execution_transaction_instruction<'a>(
+    transaction: &'a SignedTransaction,
     network_id: &iroha_data_model::NetworkId,
     authority: &AccountId,
     configured_fee_payment: &iroha_data_model::transaction::FeePaymentIntent,
-    output_manifest_payload: &[u8],
-    receipt: &SoraPrivateUploadedModelExecutionReceiptV1,
-) -> Result<(), SoracloudRuntimeExecutionError> {
+) -> Result<&'a InstructionBox, SoracloudRuntimeExecutionError> {
+    transaction.verify_signature().map_err(|error| {
+        private_model_invalid(format!(
+            "private execution journal transaction signature is invalid: {error}"
+        ))
+    })?;
     if transaction.network_id() != Some(network_id) {
         return Err(private_model_invalid(
             "private execution journal transaction belongs to another network",
@@ -4360,25 +4384,143 @@ fn validate_private_execution_commit_transaction(
     };
     if instructions.len() != 1 {
         return Err(private_model_invalid(
-            "private execution journal transaction must contain exactly one atomic commit instruction",
+            "private execution journal transaction must contain exactly one phase instruction",
         ));
     }
-    let Some(commit) = instructions[0]
+    Ok(&instructions[0])
+}
+
+fn validate_private_execution_output_pin_transaction(
+    transaction: &SignedTransaction,
+    network_id: &iroha_data_model::NetworkId,
+    authority: &AccountId,
+    configured_fee_payment: &iroha_data_model::transaction::FeePaymentIntent,
+    output_manifest_payload: &[u8],
+) -> Result<(), SoracloudRuntimeExecutionError> {
+    let instruction = private_execution_transaction_instruction(
+        transaction,
+        network_id,
+        authority,
+        configured_fee_payment,
+    )?;
+    let Some(register) = instruction
+        .as_any()
+        .downcast_ref::<isi::sorafs::RegisterPinManifest>()
+    else {
+        return Err(private_model_invalid(
+            "private execution output-pin transaction does not contain RegisterPinManifest",
+        ));
+    };
+    if register.manifest_payload.as_slice() != output_manifest_payload
+        || register.alias.is_some()
+        || register.successor_of.is_some()
+    {
+        return Err(private_model_invalid(
+            "private execution output-pin transaction does not exactly bind its canonical manifest",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_private_execution_receipt_transaction(
+    transaction: &SignedTransaction,
+    network_id: &iroha_data_model::NetworkId,
+    authority: &AccountId,
+    configured_fee_payment: &iroha_data_model::transaction::FeePaymentIntent,
+    receipt: &SoraPrivateUploadedModelExecutionReceiptV1,
+) -> Result<(), SoracloudRuntimeExecutionError> {
+    let instruction = private_execution_transaction_instruction(
+        transaction,
+        network_id,
+        authority,
+        configured_fee_payment,
+    )?;
+    let Some(commit) = instruction
         .as_any()
         .downcast_ref::<isi::soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt>(
     ) else {
         return Err(private_model_invalid(
-            "private execution journal transaction does not contain the private execution commit instruction",
+            "private execution receipt transaction does not contain the receipt instruction",
         ));
     };
-    if commit.output_manifest_payload.as_slice() != output_manifest_payload
-        || &commit.receipt != receipt
-    {
+    if &commit.receipt != receipt {
         return Err(private_model_invalid(
-            "private execution journal transaction does not exactly bind its manifest and receipt evidence",
+            "private execution receipt transaction does not exactly bind its durable receipt evidence",
         ));
     }
     Ok(())
+}
+
+fn private_execution_phase_endpoint(
+    phase: SoracloudPrivateUploadedModelExecutionJournalPhaseV1,
+) -> &'static str {
+    match phase {
+        SoracloudPrivateUploadedModelExecutionJournalPhaseV1::OutputPin => {
+            SORACLOUD_PRIVATE_EXECUTION_OUTPUT_PIN_ENDPOINT
+        }
+        SoracloudPrivateUploadedModelExecutionJournalPhaseV1::Receipt => {
+            SORACLOUD_PRIVATE_EXECUTION_RECEIPT_ENDPOINT
+        }
+    }
+}
+
+fn validate_private_execution_phase_transaction(
+    transaction: &SignedTransaction,
+    network_id: &iroha_data_model::NetworkId,
+    authority: &AccountId,
+    configured_fee_payment: &iroha_data_model::transaction::FeePaymentIntent,
+    journal: &SoracloudPrivateUploadedModelExecutionJournalV1,
+) -> Result<(), SoracloudRuntimeExecutionError> {
+    match journal.phase {
+        SoracloudPrivateUploadedModelExecutionJournalPhaseV1::OutputPin => {
+            validate_private_execution_output_pin_transaction(
+                transaction,
+                network_id,
+                authority,
+                configured_fee_payment,
+                &journal.output_manifest_payload,
+            )
+        }
+        SoracloudPrivateUploadedModelExecutionJournalPhaseV1::Receipt => {
+            validate_private_execution_receipt_transaction(
+                transaction,
+                network_id,
+                authority,
+                configured_fee_payment,
+                &journal.receipt,
+            )
+        }
+    }
+}
+
+fn private_execution_phase_instruction(
+    journal: &SoracloudPrivateUploadedModelExecutionJournalV1,
+) -> InstructionBox {
+    match journal.phase {
+        SoracloudPrivateUploadedModelExecutionJournalPhaseV1::OutputPin => {
+            InstructionBox::from(isi::sorafs::RegisterPinManifest::new(
+                journal.output_manifest_payload.clone(),
+                None,
+                None,
+            ))
+        }
+        SoracloudPrivateUploadedModelExecutionJournalPhaseV1::Receipt => InstructionBox::from(
+            isi::soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt {
+                receipt: journal.receipt.clone(),
+            },
+        ),
+    }
+}
+
+fn private_execution_candidate_epoch(state: &State) -> Result<u64, SoracloudRuntimeExecutionError> {
+    let wall_epoch = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| private_model_unavailable("system clock is before the Unix epoch"))?
+        .as_secs();
+    let finalized_epoch = state
+        .latest_block_header_fast()
+        .map_or(0, |header| header.creation_time_ms / 1_000);
+    Ok(wall_epoch.max(finalized_epoch).saturating_add(1))
 }
 
 #[derive(Debug)]
@@ -5215,7 +5357,7 @@ impl SoracloudRuntimeReadHandle for SoracloudRuntimeManagerHandle {
     {
         let mutation_sink = self.mutation_sink.as_ref().ok_or_else(|| {
             private_model_unavailable(
-                "private execution requires an atomic production-qualified receipt persistence sink",
+                "private execution requires a production-qualified phase transaction sink",
             )
         })?;
         mutation_sink
@@ -5298,9 +5440,10 @@ impl SoracloudRuntimeReadHandle for SoracloudRuntimeManagerHandle {
         if entry.submission_attempt != 0
             || entry.transaction_hash.is_some()
             || entry.signed_transaction.is_some()
+            || entry.phase != SoracloudPrivateUploadedModelExecutionJournalPhaseV1::OutputPin
         {
             return Err(private_model_invalid(
-                "external journal storage accepts only canonical Prepared(0) evidence",
+                "external journal storage accepts only canonical OutputPin Prepared(0) evidence",
             ));
         }
         let binding = resolve_private_execution_journal_deployment_binding(
@@ -5362,12 +5505,14 @@ impl SoracloudRuntimeReadHandle for SoracloudRuntimeManagerHandle {
             ))
         })
     }
-    fn persist_private_uploaded_model_execution(
+    fn advance_private_uploaded_model_execution(
         &self,
         output_manifest_payload: Vec<u8>,
         receipt: SoraPrivateUploadedModelExecutionReceiptV1,
-        replace_expired_transaction: Option<Hash>,
-    ) -> Result<Hash, SoracloudRuntimeExecutionError> {
+    ) -> Result<
+        SoracloudPrivateUploadedModelExecutionSubmissionProgressV1,
+        SoracloudRuntimeExecutionError,
+    > {
         receipt.validate_submission().map_err(|error| {
             private_model_invalid(format!(
                 "private receipt is not in canonical submission form: {error}"
@@ -5418,9 +5563,21 @@ impl SoracloudRuntimeReadHandle for SoracloudRuntimeManagerHandle {
                 "private output manifest digest, root CID, or content length does not match the receipt artifact",
             ));
         }
+        let sorafs_node = self.sorafs_node.as_ref().ok_or_else(|| {
+            private_model_unavailable(
+                "private execution durable outbox requires embedded SoraFS storage",
+            )
+        })?;
+        verify_private_execution_output_is_durable(sorafs_node, &receipt.output_artifact).map_err(
+            |error| {
+                private_model_unavailable(format!(
+                    "private execution output is not durably recoverable before submission: {error}"
+                ))
+            },
+        )?;
         let mutation_sink = self.mutation_sink.as_ref().ok_or_else(|| {
             private_model_unavailable(
-                "private receipt persistence requires an atomic production-qualified mutation sink",
+                "private receipt persistence requires a production-qualified phase transaction sink",
             )
         })?;
         mutation_sink
@@ -5437,7 +5594,6 @@ impl SoracloudRuntimeReadHandle for SoracloudRuntimeManagerHandle {
                 "private receipt persistence signer authority does not match the local attesting validator",
             ));
         }
-        let endpoint = "/internal/soracloud/runtime/private-model-receipt";
         let binding = resolve_private_execution_journal_deployment_binding(
             self.state.as_ref(),
             self.config.as_ref(),
@@ -5475,91 +5631,197 @@ impl SoracloudRuntimeReadHandle for SoracloudRuntimeManagerHandle {
         }
 
         if let Some(transaction) = journal.signed_transaction.as_ref() {
-            validate_private_execution_commit_transaction(
+            validate_private_execution_phase_transaction(
                 transaction,
                 self.state.network_id_ref(),
                 &receipt.attesting_validator.validator_account_id,
                 &self.config.submission.fee_payment_intent(),
-                output_manifest_payload.as_slice(),
-                &receipt,
+                &journal,
             )?;
         }
-        let stored_transaction_requires_replacement = if replace_expired_transaction.is_none() {
-            journal
-                .signed_transaction
-                .as_ref()
-                .map(|transaction| {
-                    mutation_sink
-                        .prepared_transaction_requires_replacement(transaction, endpoint)
-                        .map_err(|error| {
-                            private_model_unavailable(format!(
-                                "failed to validate durable private execution transaction for recovery: {error}"
-                            ))
-                        })
-                })
-                .transpose()?
-                .unwrap_or(false)
-        } else {
-            false
-        };
-        let replacement_hash = match replace_expired_transaction {
-            Some(expected) => {
-                if journal.transaction_hash != Some(expected) {
-                    return Err(private_model_invalid(
-                        "private execution replacement hash does not match the durable signed attempt",
-                    ));
-                }
-                Some(expected)
+
+        // Phase one is complete only when the shared consensus predicate observes the exact pin,
+        // approval, canonical deterministic order, provider completions, and retention horizon.
+        // Expected lifecycle waits return without ever preparing a receipt transaction.
+        if journal.phase == SoracloudPrivateUploadedModelExecutionJournalPhaseV1::OutputPin {
+            let candidate_epoch = private_execution_candidate_epoch(self.state.as_ref())?;
+            let durability = {
+                let view = self.state.view();
+                validate_soracloud_private_output_durability_v1(
+                    view.world(),
+                    &journal.receipt,
+                    candidate_epoch,
+                )
             }
-            None if stored_transaction_requires_replacement => journal.transaction_hash,
-            None => None,
-        };
-        let transaction = if let Some(existing) = journal.signed_transaction.clone()
-            && replacement_hash.is_none()
-        {
+            .map_err(|error| {
+                private_model_invalid(format!(
+                    "private execution output durability evidence is invalid: {error}"
+                ))
+            })?;
+            match durability {
+                SoracloudPrivateOutputDurabilityStatusV1::Ready => {
+                    journal.phase = SoracloudPrivateUploadedModelExecutionJournalPhaseV1::Receipt;
+                    journal.transaction_hash = None;
+                    journal.signed_transaction = None;
+                    journal.submission_attempt = 0;
+                    store_private_execution_journal_entry(
+                        self.state_dir.as_ref(),
+                        binding,
+                        &journal,
+                        None,
+                    )
+                    .map_err(|error| {
+                        private_model_unavailable(format!(
+                            "failed to durably advance replicated private output to receipt phase: {error}"
+                        ))
+                    })?;
+                }
+                SoracloudPrivateOutputDurabilityStatusV1::AwaitingPinRegistration => {}
+                SoracloudPrivateOutputDurabilityStatusV1::AwaitingPinApproval
+                | SoracloudPrivateOutputDurabilityStatusV1::AwaitingReplicationQuorum { .. } => {
+                    return Ok(SoracloudPrivateUploadedModelExecutionSubmissionProgressV1 {
+                        phase: journal.phase,
+                        transaction_hash: journal.transaction_hash,
+                    });
+                }
+            }
+        }
+
+        let endpoint = private_execution_phase_endpoint(journal.phase);
+        let mut replacement_hash = None;
+        let mut reusable_transaction = None;
+        if let Some(existing) = journal.signed_transaction.clone() {
+            let existing_hash: Hash = existing.hash().into();
+            if journal.transaction_hash != Some(existing_hash) {
+                return Err(private_model_invalid(
+                    "private execution durable transaction hash does not match its signed payload",
+                ));
+            }
+            match mutation_sink
+                .observe_private_execution_transaction(&existing, endpoint)
+                .map_err(|error| {
+                    private_model_unavailable(format!(
+                        "failed to observe durable private execution phase transaction: {error}"
+                    ))
+                })? {
+                PrivateExecutionTransactionObservation::Pending => {
+                    return Ok(SoracloudPrivateUploadedModelExecutionSubmissionProgressV1 {
+                        phase: journal.phase,
+                        transaction_hash: Some(existing_hash),
+                    });
+                }
+                PrivateExecutionTransactionObservation::CommittedRejected => {
+                    return Err(private_model_invalid(format!(
+                        "private execution {:?} transaction {existing_hash} was permanently rejected; durable evidence was retained",
+                        journal.phase
+                    )));
+                }
+                PrivateExecutionTransactionObservation::Expired => {
+                    replacement_hash = Some(existing_hash);
+                }
+                PrivateExecutionTransactionObservation::Unknown => {
+                    reusable_transaction = Some(existing);
+                }
+                PrivateExecutionTransactionObservation::CommittedSuccess => match journal.phase {
+                    SoracloudPrivateUploadedModelExecutionJournalPhaseV1::OutputPin => {
+                        let candidate_epoch =
+                            private_execution_candidate_epoch(self.state.as_ref())?;
+                        let durability = {
+                                let view = self.state.view();
+                                validate_soracloud_private_output_durability_v1(
+                                    view.world(),
+                                    &journal.receipt,
+                                    candidate_epoch,
+                                )
+                            }
+                            .map_err(|error| {
+                                private_model_invalid(format!(
+                                    "committed private output pin has invalid durability evidence: {error}"
+                                ))
+                            })?;
+                        if matches!(
+                            durability,
+                            SoracloudPrivateOutputDurabilityStatusV1::AwaitingPinRegistration
+                        ) {
+                            return Err(private_model_internal(
+                                "successful private output-pin transaction has no authoritative pin record",
+                            ));
+                        }
+                        return Ok(SoracloudPrivateUploadedModelExecutionSubmissionProgressV1 {
+                            phase: journal.phase,
+                            transaction_hash: Some(existing_hash),
+                        });
+                    }
+                    SoracloudPrivateUploadedModelExecutionJournalPhaseV1::Receipt => {
+                        let committed = {
+                            let view = self.state.view();
+                            view.world()
+                                .soracloud_private_uploaded_model_execution_receipts()
+                                .get(&journal.receipt.receipt_id)
+                                .cloned()
+                        };
+                        let Some(committed) = committed else {
+                            return Err(private_model_internal(
+                                "successful private receipt transaction has no authoritative receipt record",
+                            ));
+                        };
+                        let mut expected = journal.receipt.clone();
+                        expected.emitted_sequence = committed.emitted_sequence;
+                        expected.emitted_block_height = committed.emitted_block_height;
+                        if committed != expected {
+                            return Err(private_model_invalid(
+                                "committed private receipt differs from durable outbox evidence",
+                            ));
+                        }
+                        return Ok(SoracloudPrivateUploadedModelExecutionSubmissionProgressV1 {
+                            phase: journal.phase,
+                            transaction_hash: Some(existing_hash),
+                        });
+                    }
+                },
+            }
+        }
+
+        let transaction = if let Some(existing) = reusable_transaction {
             existing
         } else {
             if journal.submission_attempt
                 >= SORACLOUD_PRIVATE_UPLOADED_MODEL_EXECUTION_MAX_SUBMISSION_ATTEMPTS_V1
             {
                 return Err(private_model_unavailable(format!(
-                    "private execution exhausted its {} bounded signed submission attempts",
+                    "private execution {:?} phase exhausted its {} bounded signed submission attempts",
+                    journal.phase,
                     SORACLOUD_PRIVATE_UPLOADED_MODEL_EXECUTION_MAX_SUBMISSION_ATTEMPTS_V1
                 )));
             }
             let transaction = mutation_sink
                 .prepare_instructions_atomic(
-                    vec![InstructionBox::from(
-                        isi::soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt {
-                            output_manifest_payload: output_manifest_payload.clone(),
-                            receipt: receipt.clone(),
-                        },
-                    )],
+                    vec![private_execution_phase_instruction(&journal)],
                     endpoint,
                 )
                 .map_err(|error| {
                     private_model_unavailable(format!(
-                        "failed to prepare signed private execution commit transaction: {error}"
+                        "failed to prepare signed private execution {:?} transaction: {error}",
+                        journal.phase
                     ))
                 })?;
-            validate_private_execution_commit_transaction(
+            validate_private_execution_phase_transaction(
                 &transaction,
                 self.state.network_id_ref(),
                 &receipt.attesting_validator.validator_account_id,
                 &self.config.submission.fee_payment_intent(),
-                output_manifest_payload.as_slice(),
-                &receipt,
+                &journal,
             )?;
             if mutation_sink
                 .prepared_transaction_requires_replacement(&transaction, endpoint)
                 .map_err(|error| {
                     private_model_unavailable(format!(
-                        "newly signed private execution transaction failed canonical admission before journaling: {error}"
+                        "newly signed private execution phase transaction failed canonical admission before journaling: {error}"
                     ))
                 })?
             {
                 return Err(private_model_unavailable(
-                    "newly signed private execution transaction expired before it could be durably journaled",
+                    "newly signed private execution phase transaction expired before it could be durably journaled",
                 ));
             }
             let transaction_hash: Hash = transaction.hash().into();
@@ -5591,20 +5853,20 @@ impl SoracloudRuntimeReadHandle for SoracloudRuntimeManagerHandle {
             })?;
             transaction
         };
-        validate_private_execution_commit_transaction(
+        validate_private_execution_phase_transaction(
             &transaction,
             self.state.network_id_ref(),
             &receipt.attesting_validator.validator_account_id,
             &self.config.submission.fee_payment_intent(),
-            output_manifest_payload.as_slice(),
-            &receipt,
+            &journal,
         )?;
         let expected_hash: Hash = transaction.hash().into();
         let submitted_hash = mutation_sink
             .submit_prepared_transaction(transaction, endpoint)
             .map_err(|error| {
                 private_model_unavailable(format!(
-                    "failed to enqueue durably signed private execution commit transaction: {error}"
+                    "failed to enqueue durably signed private execution {:?} transaction: {error}",
+                    journal.phase
                 ))
             })?;
         if submitted_hash != expected_hash || journal.transaction_hash != Some(expected_hash) {
@@ -5612,7 +5874,10 @@ impl SoracloudRuntimeReadHandle for SoracloudRuntimeManagerHandle {
                 "private execution mutation sink returned a hash different from durable signed evidence",
             ));
         }
-        Ok(expected_hash)
+        Ok(SoracloudPrivateUploadedModelExecutionSubmissionProgressV1 {
+            phase: journal.phase,
+            transaction_hash: Some(expected_hash),
+        })
     }
     fn local_peer_id(&self) -> Option<String> {
         self.config.local_peer_id.clone()
@@ -8066,6 +8331,7 @@ impl SoracloudRuntimeManager {
             config: Arc::new(manager.config.clone()),
             state_dir: Arc::new(manager.config.state_dir.clone()),
             state: Arc::clone(&manager.state),
+            sorafs_node: manager.sorafs_node.clone(),
             hf_local_workers: Arc::clone(&manager.hf_local_workers),
             host_violation_reporter: Arc::clone(&manager.host_violation_reporter),
             mutation_sink: manager.mutation_sink.as_ref().map(Arc::clone),
@@ -8354,7 +8620,6 @@ impl SoracloudRuntimeManager {
             return Ok(());
         }
         let runtime = Self::build_runtime_handle(self);
-        let endpoint = "/internal/soracloud/runtime/private-model-receipt";
         for entry in entries {
             match self.private_execution_journal_ledger_disposition(&entry)? {
                 PrivateExecutionJournalLedgerDisposition::Committed => {
@@ -8392,51 +8657,10 @@ impl SoracloudRuntimeManager {
                 }
                 PrivateExecutionJournalLedgerDisposition::Active => {}
             }
-            let sorafs_node = self.sorafs_node.as_ref().ok_or_else(|| {
-                eyre::eyre!("private execution durable outbox requires embedded SoraFS storage")
-            })?;
-            verify_private_execution_output_is_durable(
-                sorafs_node,
-                &entry.receipt.output_artifact,
-            )?;
-            let replacement = if let Some(transaction) = entry.signed_transaction.as_ref() {
-                validate_private_execution_commit_transaction(
-                    transaction,
-                    self.state.network_id_ref(),
-                    &entry.receipt.attesting_validator.validator_account_id,
-                    &self.config.submission.fee_payment_intent(),
-                    entry.output_manifest_payload.as_slice(),
-                    &entry.receipt,
-                )
-                .map_err(|error| eyre::eyre!(error.message))?;
-                match mutation_sink.observe_private_execution_transaction(transaction, endpoint)? {
-                    PrivateExecutionTransactionObservation::Pending => continue,
-                    PrivateExecutionTransactionObservation::CommittedSuccess => {
-                        eyre::bail!(
-                            "successful private execution transaction {} has no committed receipt",
-                            transaction.hash()
-                        );
-                    }
-                    PrivateExecutionTransactionObservation::CommittedRejected => {
-                        iroha_logger::error!(
-                            transaction_hash = %transaction.hash(),
-                            service = %entry.service_name,
-                            decryption_request_id = %entry.decryption_request_id,
-                            "private execution transaction was permanently rejected; retaining terminal outbox evidence without retry"
-                        );
-                        continue;
-                    }
-                    PrivateExecutionTransactionObservation::Expired => entry.transaction_hash,
-                    PrivateExecutionTransactionObservation::Unknown => None,
-                }
-            } else {
-                None
-            };
             runtime
-                .persist_private_uploaded_model_execution(
+                .advance_private_uploaded_model_execution(
                     entry.output_manifest_payload.clone(),
                     entry.receipt.clone(),
-                    replacement,
                 )
                 .map_err(|error| {
                     eyre::eyre!(
@@ -21114,6 +21338,16 @@ fn inrou_egress_reporter_key_digest(
 fn prepare_inrou_egress_checkpoint_dir(path: &Path) -> io::Result<PathBuf> {
     use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _};
 
+    // Convert relative runtime roots to an unresolved absolute spelling before
+    // walking ancestors. `Path::ancestors()` yields an empty terminal path for
+    // relative inputs, which cannot be inspected and made fresh-node startup
+    // fail with `ENOENT`. Joining the current directory preserves every named
+    // component for the symlink and custody checks below.
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
     let parent = path.parent().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -21139,17 +21373,17 @@ fn prepare_inrou_egress_checkpoint_dir(path: &Path) -> io::Result<PathBuf> {
             ));
         }
     }
-    match fs::symlink_metadata(path) {
+    match fs::symlink_metadata(&path) {
         Ok(_) => {}
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             let mut builder = fs::DirBuilder::new();
             builder.mode(0o700);
-            builder.create(path)?;
+            builder.create(&path)?;
             fs::File::open(parent)?.sync_all()?;
         }
         Err(error) => return Err(error),
     }
-    let named = fs::symlink_metadata(path)?;
+    let named = fs::symlink_metadata(&path)?;
     if named.file_type().is_symlink()
         || !named.is_dir()
         || named.uid() != effective_uid
@@ -21163,7 +21397,7 @@ fn prepare_inrou_egress_checkpoint_dir(path: &Path) -> io::Result<PathBuf> {
             ),
         ));
     }
-    let canonical = fs::canonicalize(path)?;
+    let canonical = fs::canonicalize(&path)?;
     for (index, ancestor) in canonical.ancestors().enumerate() {
         let metadata = fs::metadata(ancestor)?;
         let replaceable = metadata.mode() & 0o022 != 0;
@@ -28553,11 +28787,43 @@ fn validated_remote_hydration_order(
         || order.order_id != *record.order_id.as_bytes()
         || order.manifest_digest != *record.manifest_digest.as_bytes()
         || order.manifest_cid.as_slice() != record.manifest_root_cid.as_bytes()
+        || order.issued_at != record.issued_epoch
+        || order.deadline_at != record.deadline_epoch
     {
         iroha_logger::warn!(
             manifest_digest = %hex::encode(record.manifest_digest.as_bytes()),
             "rejected substituted canonical SoraFS replication order during Soracloud hydration"
         );
+        return None;
+    }
+    let target_replicas = usize::from(order.target_replicas);
+    if record.assignment_revision == 0
+        || record.provider_completions.len() != target_replicas
+    {
+        return None;
+    }
+    let mut completed_providers = BTreeSet::new();
+    let mut previous_completion_epoch = None;
+    for completion in &record.provider_completions {
+        if !order
+            .assignments
+            .iter()
+            .any(|assignment| assignment.provider_id == *completion.provider_id.as_bytes())
+            || !completed_providers.insert(*completion.provider_id.as_bytes())
+            || completion.completion_epoch < record.issued_epoch
+            || completion.completion_epoch > record.deadline_epoch
+            || previous_completion_epoch
+                .is_some_and(|previous| completion.completion_epoch < previous)
+            || completion.assignment_revision != record.assignment_revision
+            || !completion.completion_authority.is_valid()
+            || completion.completion_authority.provider_owner != completion.completed_by
+            || !completion.finalized_anchor.is_valid()
+        {
+            return None;
+        }
+        previous_completion_epoch = Some(completion.completion_epoch);
+    }
+    if previous_completion_epoch != Some(completed_epoch) {
         return None;
     }
     Some((completed_epoch, order))
@@ -29219,6 +29485,7 @@ mod tests {
     const TEST_HF_COMMIT_OID: &str = "0123456789abcdef0123456789abcdef01234567";
     const OTHER_TEST_HF_COMMIT_OID: &str = "1123456789abcdef0123456789abcdef01234567";
     const TEST_HF_WEIGHT_PAYLOAD: &[u8] = b"authenticated injected-test-runner model weights";
+    const SAMPLE_SERVICE_LEASE_STARTED_HEIGHT: u64 = 1;
     use eyre::Result;
     use iroha_core::{
         block::BlockBuilder, kura::Kura, query::store::LiveQueryStore, smartcontracts::Execute,
@@ -31185,6 +31452,574 @@ mod tests {
         assert_eq!(tx.authority(), &authority);
         Ok(())
     }
+    fn private_execution_journal_test_network(seed: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([seed; Hash::LENGTH]),
+        ))
+    }
+    fn private_execution_journal_test_binding(
+        network_id: NetworkId,
+        seed: u8,
+    ) -> PrivateExecutionJournalDeploymentBindingV1 {
+        PrivateExecutionJournalDeploymentBindingV1 {
+            network_id,
+            deployment_fingerprint: Hash::new([seed; 32]),
+        }
+    }
+    fn private_execution_journal_test_artifact(
+        role: &str,
+        seed: u8,
+        manifest_digest: ManifestDigest,
+        root_cid: ManifestRootCid,
+        ciphertext_bytes: u64,
+    ) -> SoraPrivateModelArtifactRefV1 {
+        SoraPrivateModelArtifactRefV1 {
+            schema_version: iroha_data_model::soracloud::SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1,
+            sorafs_manifest_digest: manifest_digest,
+            sorafs_root_cid: root_cid,
+            artifact_hash: Hash::new([seed; 32]),
+            ciphertext_bytes,
+            artifact_role: role.to_owned(),
+        }
+    }
+    fn private_execution_journal_test_fixture(
+        seed: u8,
+    ) -> Result<(
+        PrivateExecutionJournalDeploymentBindingV1,
+        SoracloudPrivateUploadedModelExecutionJournalV1,
+    )> {
+        let network_id = private_execution_journal_test_network(seed);
+        let binding = private_execution_journal_test_binding(network_id, seed.wrapping_add(1));
+        let output_ciphertext = vec![seed; 257];
+        let (_, output_manifest) = build_sorafs_manifest(&output_ciphertext)?;
+        let output_manifest_payload = norito::encode_canonical(&output_manifest)?;
+        let output_manifest_digest = ManifestDigest::from_manifest(&output_manifest)?;
+        let output_root_cid = ManifestRootCid::try_from_slice(&output_manifest.root_cid)?;
+        let input_manifest_digest = ManifestDigest::new([seed.wrapping_add(2); 32]);
+        let input_root_cid = ManifestRootCid::from_blake3_digest([seed.wrapping_add(3); 32])?;
+        let validator_account_id = (*ALICE_ID).clone();
+        let attesting_validator = SoraRuntimeDeterministicValidatorHostV1 {
+            lane_id: LaneId::SINGLE,
+            peer_id: PeerId::from(validator_account_id.expect_single_signatory().clone())
+                .to_string(),
+            validator_account_id,
+        };
+        let mut receipt = SoraPrivateUploadedModelExecutionReceiptV1 {
+            schema_version:
+                iroha_data_model::soracloud::SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1,
+            network_id,
+            receipt_id: Hash::prehashed([0; Hash::LENGTH]),
+            service_name: format!("private_journal_{seed}").parse()?,
+            service_version: "1.0.0".to_owned(),
+            model_id: format!("model-{seed}"),
+            weight_version: "v1".to_owned(),
+            runtime_version:
+                iroha_data_model::soracloud::SORACLOUD_PRIVATE_MODEL_RUNTIME_VERSION_V1.to_owned(),
+            model_manifest_digest: ManifestDigest::new([seed.wrapping_add(4); 32]),
+            model_bundle_root: Hash::new([seed.wrapping_add(5); 32]),
+            policy_id: "policy/v1".to_owned(),
+            decryption_request_id: format!("decrypt-{seed}"),
+            attesting_validator,
+            input_artifact: private_execution_journal_test_artifact(
+                "input",
+                seed.wrapping_add(6),
+                input_manifest_digest,
+                input_root_cid,
+                128,
+            ),
+            output_artifact: private_execution_journal_test_artifact(
+                "output",
+                seed.wrapping_add(7),
+                output_manifest_digest,
+                output_root_cid,
+                u64::try_from(output_ciphertext.len())?,
+            ),
+            output_replication_order_id: derive_sorafs_auto_replication_order_id_v1(
+                &output_manifest_digest,
+            ),
+            input_commitment: Hash::new([seed.wrapping_add(8); 32]),
+            output_commitment: Hash::new([seed.wrapping_add(9); 32]),
+            output_recipient: uploaded_model_encryption_recipient_from_secret(&[seed; 32]),
+            request_commitment: Hash::prehashed([0; Hash::LENGTH]),
+            result_commitment: Hash::prehashed([0; Hash::LENGTH]),
+            emitted_sequence: 0,
+            emitted_block_height: 0,
+        };
+        receipt.request_commitment =
+            iroha_data_model::soracloud::derive_soracloud_private_model_request_commitment_v1(
+                &receipt,
+            );
+        receipt.result_commitment =
+            iroha_data_model::soracloud::derive_soracloud_private_model_result_commitment_v1(
+                &receipt,
+            );
+        receipt.receipt_id = iroha_data_model::soracloud::derive_soracloud_private_uploaded_model_execution_receipt_id_v1(&receipt);
+        receipt.validate_submission()?;
+        let entry = SoracloudPrivateUploadedModelExecutionJournalV1 {
+            schema_version: iroha_core::soracloud_runtime::SORACLOUD_PRIVATE_UPLOADED_MODEL_EXECUTION_JOURNAL_VERSION_V1,
+            service_name: receipt.service_name.clone(),
+            decryption_request_id: receipt.decryption_request_id.clone(),
+            request_fingerprint: Hash::new([seed.wrapping_add(10); 32]),
+            output_manifest_payload,
+            receipt,
+            phase: SoracloudPrivateUploadedModelExecutionJournalPhaseV1::OutputPin,
+            transaction_hash: None,
+            signed_transaction: None,
+            submission_attempt: 0,
+        };
+        entry
+            .validate()
+            .map_err(|error| eyre::eyre!("invalid private journal test fixture: {error}"))?;
+        Ok((binding, entry))
+    }
+    fn private_execution_journal_test_signed_transaction(
+        network_id: NetworkId,
+        marker: &str,
+    ) -> Result<SignedTransaction> {
+        let payload = build_soracloud_runtime_submission_payload(
+            network_id,
+            (*ALICE_ID).clone(),
+            InstructionBox::from(Log::new(
+                Level::INFO,
+                format!("private execution journal {marker}"),
+            )),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            "/internal/soracloud/runtime/private-journal-test",
+        )?;
+        sign_soracloud_runtime_submission_payload(
+            payload,
+            &ALICE_KEYPAIR,
+            "/internal/soracloud/runtime/private-journal-test",
+        )
+    }
+    fn private_execution_journal_test_signed_entry(
+        prepared: &SoracloudPrivateUploadedModelExecutionJournalV1,
+        attempt: u8,
+        marker: &str,
+    ) -> Result<SoracloudPrivateUploadedModelExecutionJournalV1> {
+        let transaction =
+            private_execution_journal_test_signed_transaction(prepared.receipt.network_id, marker)?;
+        let mut signed = prepared.clone();
+        signed.transaction_hash = Some(Hash::from(transaction.hash()));
+        signed.signed_transaction = Some(transaction);
+        signed.submission_attempt = attempt;
+        Ok(signed)
+    }
+    fn private_execution_journal_test_reseal_receipt(
+        receipt: &mut SoraPrivateUploadedModelExecutionReceiptV1,
+    ) {
+        receipt.request_commitment =
+            iroha_data_model::soracloud::derive_soracloud_private_model_request_commitment_v1(
+                receipt,
+            );
+        receipt.result_commitment =
+            iroha_data_model::soracloud::derive_soracloud_private_model_result_commitment_v1(
+                receipt,
+            );
+        receipt.receipt_id = iroha_data_model::soracloud::derive_soracloud_private_uploaded_model_execution_receipt_id_v1(receipt);
+    }
+    fn private_execution_journal_test_invalid_signature_entry(
+        prepared: &SoracloudPrivateUploadedModelExecutionJournalV1,
+    ) -> Result<SoracloudPrivateUploadedModelExecutionJournalV1> {
+        let payload = build_soracloud_runtime_submission_payload(
+            prepared.receipt.network_id,
+            (*ALICE_ID).clone(),
+            InstructionBox::from(Log::new(
+                Level::INFO,
+                "private execution journal invalid signature".to_owned(),
+            )),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            "/internal/soracloud/runtime/private-journal-invalid-signature-test",
+        )?;
+        let builder = TransactionBuilder::from_payload(payload)?;
+        let wrong_signer = KeyPair::try_from_seed(vec![0xE9; 32], Algorithm::Ed25519)?;
+        assert_ne!(wrong_signer.public_key(), ALICE_KEYPAIR.public_key());
+        let signature =
+            Signature::try_new(wrong_signer.private_key(), &builder.payload_hash_bytes())?;
+        let transaction = builder.build_with_signature(signature);
+        assert!(transaction.verify_signature().is_err());
+        let mut signed = prepared.clone();
+        signed.transaction_hash = Some(Hash::from(transaction.hash()));
+        signed.signed_transaction = Some(transaction);
+        signed.submission_attempt = 1;
+        Ok(signed)
+    }
+    #[test]
+    fn private_execution_journal_prepared_round_trip_is_idempotent_and_removable() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let (binding, prepared) = private_execution_journal_test_fixture(0x41)?;
+        store_private_execution_journal_entry(temp_dir.path(), binding, &prepared, None)?;
+
+        assert_eq!(
+            load_private_execution_journal_entry(
+                temp_dir.path(),
+                binding,
+                &prepared.service_name,
+                &prepared.decryption_request_id,
+            )?,
+            Some(prepared.clone())
+        );
+        assert_eq!(
+            list_private_execution_journal_entries(temp_dir.path(), binding)?,
+            vec![prepared.clone()]
+        );
+
+        let directory = private_execution_journal_dir(temp_dir.path());
+        let path = private_execution_journal_path(
+            &directory,
+            &prepared.service_name,
+            &prepared.decryption_request_id,
+        );
+        let before_bytes = fs::read(&path)?;
+        #[cfg(unix)]
+        let before_metadata = fs::metadata(&path)?;
+        store_private_execution_journal_entry(temp_dir.path(), binding, &prepared, None)?;
+        assert_eq!(
+            fs::read(&path)?,
+            before_bytes,
+            "exact replay must not rewrite"
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            fs::metadata(&path)?.ino(),
+            before_metadata.ino(),
+            "exact replay must preserve the durable file identity"
+        );
+
+        remove_private_execution_journal_entry(
+            temp_dir.path(),
+            binding,
+            &prepared.service_name,
+            &prepared.decryption_request_id,
+        )?;
+        assert!(!path.exists());
+        assert!(list_private_execution_journal_entries(temp_dir.path(), binding)?.is_empty());
+        remove_private_execution_journal_entry(
+            temp_dir.path(),
+            binding,
+            &prepared.service_name,
+            &prepared.decryption_request_id,
+        )?;
+        Ok(())
+    }
+    #[test]
+    fn private_execution_journal_requires_prepared_before_signed() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let (binding, prepared) = private_execution_journal_test_fixture(0x42)?;
+        let signed = private_execution_journal_test_signed_entry(&prepared, 1, "direct-signed")?;
+        let error = store_private_execution_journal_entry(temp_dir.path(), binding, &signed, None)
+            .expect_err("a new Signed(1) entry must not bypass durable Prepared(0)");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(
+            load_private_execution_journal_entry(
+                temp_dir.path(),
+                binding,
+                &prepared.service_name,
+                &prepared.decryption_request_id,
+            )?
+            .is_none()
+        );
+        Ok(())
+    }
+    #[test]
+    fn private_execution_journal_manifest_binds_the_exact_root_cid() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let (binding, mut prepared) = private_execution_journal_test_fixture(0x4A)?;
+        let wrong_root = ManifestRootCid::from_blake3_digest([0xEE; 32])?;
+        assert_ne!(prepared.receipt.output_artifact.sorafs_root_cid, wrong_root);
+        prepared.receipt.output_artifact.sorafs_root_cid = wrong_root;
+        private_execution_journal_test_reseal_receipt(&mut prepared.receipt);
+        prepared.receipt.validate_submission()?;
+
+        let validation_error = prepared
+            .validate()
+            .expect_err("journal manifest root CID mismatch must fail validation");
+        assert!(validation_error.contains("root CID"), "{validation_error}");
+        let error =
+            store_private_execution_journal_entry(temp_dir.path(), binding, &prepared, None)
+                .expect_err("journal storage must reject a mismatched manifest root CID");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        Ok(())
+    }
+    #[test]
+    fn private_execution_journal_rejects_invalid_transaction_signature() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let (binding, prepared) = private_execution_journal_test_fixture(0x4B)?;
+        store_private_execution_journal_entry(temp_dir.path(), binding, &prepared, None)?;
+        let invalid = private_execution_journal_test_invalid_signature_entry(&prepared)?;
+        let validation_error = invalid
+            .validate()
+            .expect_err("journal must cryptographically verify its signed transaction");
+        assert!(
+            validation_error.contains("signature verification"),
+            "{validation_error}"
+        );
+        let error = store_private_execution_journal_entry(temp_dir.path(), binding, &invalid, None)
+            .expect_err("invalid signed transaction must not replace Prepared(0)");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(
+            load_private_execution_journal_entry(
+                temp_dir.path(),
+                binding,
+                &prepared.service_name,
+                &prepared.decryption_request_id,
+            )?,
+            Some(prepared)
+        );
+        Ok(())
+    }
+    #[test]
+    fn private_execution_journal_enforces_signed_transition_and_replacement_bounds() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let (binding, prepared) = private_execution_journal_test_fixture(0x43)?;
+        store_private_execution_journal_entry(temp_dir.path(), binding, &prepared, None)?;
+
+        let signed_one = private_execution_journal_test_signed_entry(&prepared, 1, "signed-one")?;
+        store_private_execution_journal_entry(temp_dir.path(), binding, &signed_one, None)?;
+        assert_eq!(
+            load_private_execution_journal_entry(
+                temp_dir.path(),
+                binding,
+                &prepared.service_name,
+                &prepared.decryption_request_id,
+            )?,
+            Some(signed_one.clone())
+        );
+        store_private_execution_journal_entry(temp_dir.path(), binding, &signed_one, None)?;
+        assert_eq!(
+            store_private_execution_journal_entry(
+                temp_dir.path(),
+                binding,
+                &signed_one,
+                signed_one.transaction_hash,
+            )
+            .expect_err("an exact replay is not an expired replacement")
+            .kind(),
+            io::ErrorKind::InvalidInput
+        );
+
+        let substitution =
+            private_execution_journal_test_signed_entry(&prepared, 1, "substitution")?;
+        let jump = private_execution_journal_test_signed_entry(&prepared, 3, "jump")?;
+        for (candidate, replacement) in [
+            (&prepared, None),
+            (&substitution, None),
+            (&jump, signed_one.transaction_hash),
+        ] {
+            assert_eq!(
+                store_private_execution_journal_entry(
+                    temp_dir.path(),
+                    binding,
+                    candidate,
+                    replacement,
+                )
+                .expect_err("regression, substitution, and attempt jumps must fail")
+                .kind(),
+                io::ErrorKind::InvalidInput
+            );
+        }
+
+        let mut reused_transaction = signed_one.clone();
+        reused_transaction.submission_attempt = 2;
+        assert_eq!(
+            store_private_execution_journal_entry(
+                temp_dir.path(),
+                binding,
+                &reused_transaction,
+                signed_one.transaction_hash,
+            )
+            .expect_err("a replacement attempt must use a distinct signed transaction hash")
+            .kind(),
+            io::ErrorKind::InvalidInput
+        );
+
+        let signed_two = private_execution_journal_test_signed_entry(&prepared, 2, "signed-two")?;
+        assert_eq!(
+            store_private_execution_journal_entry(
+                temp_dir.path(),
+                binding,
+                &signed_two,
+                Some(Hash::new(b"not-the-expired-transaction")),
+            )
+            .expect_err("replacement must name the exact previous signed hash")
+            .kind(),
+            io::ErrorKind::InvalidInput
+        );
+        store_private_execution_journal_entry(
+            temp_dir.path(),
+            binding,
+            &signed_two,
+            signed_one.transaction_hash,
+        )?;
+        let signed_three =
+            private_execution_journal_test_signed_entry(&prepared, 3, "signed-three")?;
+        store_private_execution_journal_entry(
+            temp_dir.path(),
+            binding,
+            &signed_three,
+            signed_two.transaction_hash,
+        )?;
+        assert_eq!(
+            load_private_execution_journal_entry(
+                temp_dir.path(),
+                binding,
+                &prepared.service_name,
+                &prepared.decryption_request_id,
+            )?,
+            Some(signed_three.clone())
+        );
+
+        let signed_four = private_execution_journal_test_signed_entry(&prepared, 4, "signed-four")?;
+        assert_eq!(
+            store_private_execution_journal_entry(
+                temp_dir.path(),
+                binding,
+                &signed_four,
+                signed_three.transaction_hash,
+            )
+            .expect_err("the durable replacement attempt bound must fail closed")
+            .kind(),
+            io::ErrorKind::InvalidInput
+        );
+        Ok(())
+    }
+    #[test]
+    fn private_execution_journal_rejects_network_and_deployment_or_custody_binding_mismatch()
+    -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let (binding, prepared) = private_execution_journal_test_fixture(0x44)?;
+        store_private_execution_journal_entry(temp_dir.path(), binding, &prepared, None)?;
+
+        let wrong_network = PrivateExecutionJournalDeploymentBindingV1 {
+            network_id: private_execution_journal_test_network(0x45),
+            deployment_fingerprint: binding.deployment_fingerprint,
+        };
+        let wrong_deployment = private_execution_journal_test_binding(binding.network_id, 0x46);
+        for mismatched in [wrong_network, wrong_deployment] {
+            // The opaque deployment fingerprint commits the validator signer, peer, and custody
+            // recipient. Any one of those changing is intentionally indistinguishable here.
+            let error = load_private_execution_journal_entry(
+                temp_dir.path(),
+                mismatched,
+                &prepared.service_name,
+                &prepared.decryption_request_id,
+            )
+            .expect_err("journal binding mismatch must fail closed");
+            assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+            assert_eq!(
+                store_private_execution_journal_entry(
+                    temp_dir.path(),
+                    mismatched,
+                    &prepared,
+                    None,
+                )
+                .expect_err("a mismatched deployment must not overwrite durable evidence")
+                .kind(),
+                io::ErrorKind::PermissionDenied
+            );
+            assert_eq!(
+                remove_private_execution_journal_entry(
+                    temp_dir.path(),
+                    mismatched,
+                    &prepared.service_name,
+                    &prepared.decryption_request_id,
+                )
+                .expect_err("a mismatched deployment must not remove durable evidence")
+                .kind(),
+                io::ErrorKind::PermissionDenied
+            );
+        }
+        assert_eq!(
+            load_private_execution_journal_entry(
+                temp_dir.path(),
+                binding,
+                &prepared.service_name,
+                &prepared.decryption_request_id,
+            )?,
+            Some(prepared)
+        );
+        Ok(())
+    }
+    #[cfg(unix)]
+    #[test]
+    fn private_execution_journal_lock_exclusive_child() -> Result<()> {
+        const STATE_DIR_ENV: &str = "IROHA_TEST_PRIVATE_EXECUTION_JOURNAL_LOCK_STATE_DIR";
+        let Some(state_dir) = std::env::var_os(STATE_DIR_ENV) else {
+            return Ok(());
+        };
+        let error = open_private_execution_journal_lock(Path::new(&state_dir))
+            .expect_err("a second process must not acquire the same journal lock");
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        Ok(())
+    }
+    #[cfg(unix)]
+    #[test]
+    fn private_execution_journal_lock_is_exclusive_for_the_state_directory() -> Result<()> {
+        const STATE_DIR_ENV: &str = "IROHA_TEST_PRIVATE_EXECUTION_JOURNAL_LOCK_STATE_DIR";
+        let temp_dir = tempfile::tempdir()?;
+        let first = open_private_execution_journal_lock(temp_dir.path())?;
+        let output = Command::new(std::env::current_exe()?)
+            .arg("private_execution_journal_lock_exclusive_child")
+            .arg("--test-threads=1")
+            .env(STATE_DIR_ENV, temp_dir.path())
+            .output()?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success(),
+            "exclusive-lock child failed\nstdout:\n{}\nstderr:\n{}",
+            stdout,
+            stderr,
+        );
+        assert!(
+            stdout.contains("1 passed"),
+            "exclusive-lock child test did not execute\nstdout:\n{stdout}\nstderr:\n{stderr}",
+        );
+        drop(first);
+        let reacquired = open_private_execution_journal_lock(temp_dir.path())?;
+        drop(reacquired);
+        Ok(())
+    }
+    #[test]
+    fn private_execution_journal_corruption_noncanonical_bytes_and_oversize_fail_closed()
+    -> Result<()> {
+        for (seed, mutation) in [
+            (0x47, "corrupt"),
+            (0x48, "noncanonical"),
+            (0x49, "oversized"),
+        ] {
+            let temp_dir = tempfile::tempdir()?;
+            let (binding, prepared) = private_execution_journal_test_fixture(seed)?;
+            store_private_execution_journal_entry(temp_dir.path(), binding, &prepared, None)?;
+            let path = private_execution_journal_path(
+                &private_execution_journal_dir(temp_dir.path()),
+                &prepared.service_name,
+                &prepared.decryption_request_id,
+            );
+            match mutation {
+                "corrupt" => fs::write(&path, b"not a Norito journal envelope")?,
+                "noncanonical" => {
+                    let mut file = fs::OpenOptions::new().append(true).open(&path)?;
+                    file.write_all(&[0])?;
+                    file.sync_all()?;
+                }
+                "oversized" => fs::OpenOptions::new()
+                    .write(true)
+                    .open(&path)?
+                    .set_len(SORACLOUD_PRIVATE_EXECUTION_JOURNAL_MAX_FILE_BYTES + 1)?,
+                _ => unreachable!(),
+            }
+            let error = load_private_execution_journal_entry(
+                temp_dir.path(),
+                binding,
+                &prepared.service_name,
+                &prepared.decryption_request_id,
+            )
+            .expect_err("unsafe durable journal bytes must fail closed");
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData, "{mutation}");
+        }
+        Ok(())
+    }
     struct FailingUploadedModelRng;
     #[derive(Debug)]
     struct FailingUploadedModelRngError;
@@ -31902,7 +32737,7 @@ mod tests {
                 runtime_price_per_block: "0.00025".parse().expect("runtime price"),
                 storage_price_per_gib_block: "0.000025".parse().expect("storage price"),
                 egress_price_per_mib: "0.000005".parse().expect("egress price"),
-                lease_started_height: 1,
+                lease_started_height: SAMPLE_SERVICE_LEASE_STARTED_HEIGHT,
                 lease_expires_height: 100,
                 reporting_epoch: 1,
                 settled_egress_bytes: 0,
@@ -33770,6 +34605,42 @@ mod tests {
             sources[1].manifest_digest_hex,
             hex::encode(fixtures[2].manifest_digest.as_bytes())
         );
+        let valid_record = view
+            .world()
+            .replication_orders()
+            .get(&fixtures[3].order_id)
+            .expect("completed remote hydration order");
+        let mut substituted_issued_epoch = valid_record.clone();
+        substituted_issued_epoch.issued_epoch += 1;
+        assert!(
+            validated_remote_hydration_order(&view, &state, &substituted_issued_epoch).is_none(),
+            "payload and ledger issued timestamps must match exactly"
+        );
+        let mut substituted_deadline_epoch = valid_record.clone();
+        substituted_deadline_epoch.deadline_epoch += 1;
+        assert!(
+            validated_remote_hydration_order(&view, &state, &substituted_deadline_epoch).is_none(),
+            "payload and ledger deadline timestamps must match exactly"
+        );
+        let mut missing_completion = valid_record.clone();
+        missing_completion.provider_completions.clear();
+        assert!(
+            validated_remote_hydration_order(&view, &state, &missing_completion).is_none(),
+            "completed orders must retain their exact redundancy target"
+        );
+        let mut owner_substitution = valid_record.clone();
+        owner_substitution.provider_completions[0].completed_by = (*BOB_ID).clone();
+        assert!(
+            validated_remote_hydration_order(&view, &state, &owner_substitution).is_none(),
+            "completion authority must exactly bind the retained completing owner"
+        );
+        let mut completion_epoch_substitution = valid_record.clone();
+        completion_epoch_substitution.provider_completions[0].completion_epoch += 1;
+        assert!(
+            validated_remote_hydration_order(&view, &state, &completion_epoch_substitution)
+                .is_none(),
+            "completed status must equal the last ordered completion epoch"
+        );
         Ok(())
     }
     #[test]
@@ -35082,6 +35953,7 @@ mod tests {
             config: Arc::new(manager.config.clone()),
             state_dir: Arc::new(manager.config.state_dir.clone()),
             state,
+            sorafs_node: manager.sorafs_node.clone(),
             hf_local_workers: Arc::clone(&manager.hf_local_workers),
             host_violation_reporter: Arc::clone(&manager.host_violation_reporter),
             mutation_sink: manager.mutation_sink.as_ref().map(Arc::clone),
@@ -43493,6 +44365,29 @@ mod tests {
         )
         .expect_err("a symlinked state ancestor must fail before checkpoint creation");
         assert!(fs::read_dir(&redirected)?.next().is_none());
+        Ok(())
+    }
+    #[cfg(unix)]
+    #[test]
+    fn durable_inrou_egress_gc_initializes_a_relative_fresh_state_root() -> Result<()> {
+        let temp_dir = tempfile::tempdir_in(".")?;
+        let relative_state_root = Path::new(".").join(
+            temp_dir
+                .path()
+                .file_name()
+                .expect("temporary state root has a file name"),
+        );
+        assert!(!relative_state_root.is_absolute());
+
+        assert_eq!(
+            reconcile_inrou_egress_checkpoint_directory(&relative_state_root, &BTreeSet::new(), 8,)?,
+            0
+        );
+        assert!(
+            relative_state_root
+                .join(SORACLOUD_INROU_EGRESS_CHECKPOINT_DIR)
+                .is_dir()
+        );
         Ok(())
     }
     #[cfg(unix)]

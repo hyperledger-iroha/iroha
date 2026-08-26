@@ -4627,7 +4627,7 @@ mod tests {
             bundle_manifest_digest_hex: "22".repeat(32),
             guest_content_cid: "guest-cid".to_owned(),
             guest_manifest_digest_hex: "33".repeat(32),
-            submitted_tx_hash: Hash::new(b"submitted-canary-mutation").to_string(),
+            submitted_tx_hash: iroha_crypto::Hash::new(b"submitted-canary-mutation").to_string(),
             mutation_response_digest: "mutation-response-hash".to_owned(),
         }
     }

@@ -7,6 +7,9 @@
 //! part of the pulse DTO, so different qualifying subsets cannot create
 //! different public representations of the same pulse.
 //!
+//! The first-release module exposes only this threshold-beacon construction;
+//! retired per-validator VRF constructions are deliberately absent.
+
 use iroha_crypto::{
     Hash,
     threshold_bls::{
@@ -2391,7 +2394,10 @@ pub(crate) mod tests {
         },
         kura::Kura,
         query::store::LiveQueryStore,
-        state::{GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, State, World, WorldReadOnly},
+        state::{
+            GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, MusubiResolverIndexRevisionV1, State, World,
+            WorldReadOnly as _,
+        },
         sumeragi::v2_beacon::{
             V2GlobalBeaconError, V2GlobalBeaconIngressOutcome, V2GlobalBeaconLifecycle,
         },
@@ -2399,7 +2405,7 @@ pub(crate) mod tests {
             V2ContextBuildError, finalized_global_beacon_npos_successor_seed_from_sources,
         },
     };
-    use iroha_config::parameters::actual::Governance;
+    use iroha_config::parameters::actual::{Governance, LaneConfig as RuntimeLaneConfig};
     use iroha_crypto::{
         Algorithm, HashOf, KeyPair,
         threshold_bls::{AdaptiveThresholdBlsSecretShare, DasRenDealerSecret, TleReleasePurpose},
@@ -2418,6 +2424,7 @@ pub(crate) mod tests {
             GovernanceExpectedHeadV1, GovernanceStageV1, ParliamentBody, ProposalContentId,
             RiskTierV1, SortitionRequestId, SortitionRequestV1, parliament_candidate_root_v1,
         },
+        musubi::MusubiRegistrySnapshotV1,
         peer::PeerId,
     };
     use rand::{SeedableRng as _, rngs::StdRng};
@@ -3237,7 +3244,7 @@ pub(crate) mod tests {
                 data_shards: 3,
                 parity_shards: 1,
                 max_payload_size_bytes: 4096,
-                max_chunk_count: 4,
+                max_chunk_count: 8,
             },
             leader_seed: [0x91; 32],
         };
@@ -3271,23 +3278,52 @@ pub(crate) mod tests {
                 .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, cursor);
             block.commit();
         }
-        let state = State::new_with_chain_and_network_id_for_testing(
+        let mut state = State::new_with_chain_and_network_id_for_testing(
             world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
             ChainId::from("live-global-threshold-beacon-producer"),
             fixture.session.record().network_id,
         );
-        {
-            let mut block_hashes = state.block_hashes.block();
-            for marker in 1_u8..40 {
-                block_hashes.push_for_tests(HashOf::from_untyped_unchecked(Hash::prehashed(
-                    [marker; 32],
-                )));
-            }
-            block_hashes.push_for_tests(parent_hash);
-            block_hashes.commit_for_tests();
+        for marker in 1_u8..40 {
+            state.push_block_hash_for_testing(HashOf::from_untyped_unchecked(Hash::prehashed(
+                [marker; 32],
+            )));
         }
+        state.push_block_hash_for_testing(parent_hash);
+        let snapshot_hashes = state
+            .block_hashes
+            .view()
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
+        let revision = MusubiResolverIndexRevisionV1::default();
+        let checkpoint = MusubiRegistrySnapshotV1 {
+            finalized_height: 1,
+            finalized_block_hash: *snapshot_hashes
+                .first()
+                .expect("live-producer history has a genesis hash")
+                .as_ref(),
+            index_revision: revision.get(),
+        };
+        checkpoint
+            .validate()
+            .expect("valid live-producer genesis resolver checkpoint");
+        {
+            let mut block = state.world.block();
+            assert!(
+                block
+                    .musubi_resolver_index_checkpoints
+                    .insert(revision, checkpoint)
+                    .is_none(),
+                "live-producer fixture must install one genesis resolver checkpoint"
+            );
+            block.commit();
+        }
+        state
+            .kura()
+            .extend_hash_only_suffix_from_verified_snapshot(&snapshot_hashes)
+            .expect("install verified live-producer snapshot prefix");
         state
     }
 
@@ -3473,10 +3509,8 @@ pub(crate) mod tests {
         {
             let mut block = state.world.block();
             {
-                let mut transaction = block.transaction_without_telemetry(
-                    iroha_config::parameters::actual::LaneConfig::default(),
-                    0,
-                );
+                let mut transaction =
+                    block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
                 transaction
                     .verify_and_advance_global_beacon_pulse(
                         &fixture_b.session,
@@ -3556,8 +3590,8 @@ pub(crate) mod tests {
             height: 0,
             round: 0,
         };
-        let state = live_producer_state(&fixture_a, cursor, parent_hash);
-        if optional_parliament_slot {
+        let mut state = live_producer_state(&fixture_a, cursor, parent_hash);
+        let transient_governance_attempt_id = if optional_parliament_slot {
             let (governance_attempt_id, _request_ids, attempt) =
                 pending_batched_sortition_attempt(&network_id, &roster, context.height);
             let mut block = state.world.block();
@@ -3565,7 +3599,10 @@ pub(crate) mod tests {
                 .parliament_attempts
                 .insert(governance_attempt_id, attempt);
             block.commit();
-        }
+            Some(governance_attempt_id)
+        } else {
+            None
+        };
 
         let signers = (1_u16..=2)
             .map(|index| live_fixture_signer(&fixture_a, index))
@@ -3626,6 +3663,7 @@ pub(crate) mod tests {
             0,
             0,
         );
+        let committed_hash = header.hash();
         let mut state_block = state.block(header);
         let mut transaction = state_block.transaction();
         transaction
@@ -3655,15 +3693,35 @@ pub(crate) mod tests {
             None,
         )
         .expect("post-transaction rotation must preserve the parent-authorized pulse");
+        if let Some(governance_attempt_id) = transient_governance_attempt_id {
+            assert!(
+                transaction
+                    .world
+                    .remove_parliament_attempt_for_testing(&governance_attempt_id)
+                    .is_some(),
+                "transient logical-pulse request must remain present through effect application"
+            );
+        }
         transaction.apply();
         state_block
             .commit()
             .expect("commit rotated key lifecycle and finalized pulse atomically");
+        state.push_block_hash_for_testing(committed_hash);
+        let committed_snapshot_hashes = state
+            .block_hashes
+            .view()
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
+        state
+            .kura()
+            .extend_hash_only_suffix_from_verified_snapshot(&committed_snapshot_hashes)
+            .expect("persist the committed pulse-height hash-only snapshot suffix");
 
         let snapshot = norito::json::to_value(&state)
             .expect("serialize the committed key rotation and pulse history");
         let restored = crate::state::deserialize::KuraSeed {
-            kura: Kura::blank_kura_for_testing(),
+            kura: state.kura_handle(),
             query_handle: LiveQueryStore::start_test(),
             #[cfg(feature = "telemetry")]
             telemetry: crate::telemetry::StateTelemetry::default(),
@@ -3963,10 +4021,8 @@ pub(crate) mod tests {
         {
             let mut block = state.world.block();
             {
-                let mut transaction = block.transaction_without_telemetry(
-                    iroha_config::parameters::actual::LaneConfig::default(),
-                    0,
-                );
+                let mut transaction =
+                    block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
                 transaction
                     .verify_and_advance_global_beacon_pulse(
                         &fixture.session,
@@ -4134,10 +4190,8 @@ pub(crate) mod tests {
         {
             let mut block = world.block();
             {
-                let mut transaction = block.transaction_without_telemetry(
-                    iroha_config::parameters::actual::LaneConfig::default(),
-                    0,
-                );
+                let mut transaction =
+                    block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
                 transaction
                     .global_beacon_key_sessions
                     .insert(pulse.session_id, key_record);
@@ -4214,10 +4268,8 @@ pub(crate) mod tests {
         {
             let mut block = world.block();
             {
-                let mut transaction = block.transaction_without_telemetry(
-                    iroha_config::parameters::actual::LaneConfig::default(),
-                    0,
-                );
+                let mut transaction =
+                    block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
                 transaction
                     .global_beacon_key_sessions
                     .insert(prior.session_id, key_record);

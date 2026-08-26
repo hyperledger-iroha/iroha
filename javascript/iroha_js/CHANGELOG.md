@@ -9,11 +9,16 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   submission and SoraFS pin registration validate it before network I/O, and
   framed, bare, headerless, alternate-layout, opaque-prefix, and raw-entrypoint
   submission fallbacks are removed.
-- Require per-request canonical account authentication for the legacy SoraFS
-  alias and replication inventory helpers, and require an immutable
-  exact-network `OperatorSigningContext` for storage-state and legacy
-  storage-fetch diagnostics. Public live integration no longer performs the
-  retired unsigned diagnostic fetch.
+- Require per-request canonical account authentication for the SoraFS alias
+  and replication inventory helpers, and require an immutable exact-network
+  `OperatorSigningContext` for operator-only storage-state and storage-fetch
+  diagnostics. Public live integration invokes only the signed inventory
+  routes available to account clients.
+- Hard-cut SoraFS alias inventory responses to the closed first-release Torii
+  projection. Attestation, lineage, cache evaluation, successor, governance,
+  status, and policy fields are required and cross-checked; unknown fields,
+  coercive values, stale reason literals, and inconsistent pagination fail
+  closed. `proof_expires_in_seconds` is present only while the proof is live.
 - Add strict signed SoraFS orderbook submit helpers with native route/signature/network preflight, pinned Norito receipt authentication, exact identity headers, one-shot deadlines, and non-resubmittable ambiguous-admission errors.
 - Hard-cut SoraFS pin listing to finalized, byte-bounded exclusive-keyset
   pages. The client rejects `offset`, legacy attestation/full-record payloads,
@@ -371,12 +376,10 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   `options` payloads are rejected before hitting Torii, and added Jest coverage
   to exercise the new JS-04 validation paths across the registry, PoR, storage,
   DA ingest, and Space Directory surfaces.【javascript/iroha_js/src/toriiClient.js:889】【javascript/iroha_js/src/toriiClient.js:5320】【javascript/iroha_js/test/toriiClient.test.js:1872】
-- `ToriiClient.getSorafsPinManifest` now treats `404 Not Found` as `null`
-  so callers can distinguish between "missing" and "malformed" responses, and
-  `getSorafsPinManifestTyped` raises an explicit error when Torii cannot locate
-  the requested digest. README guidance and Jest coverage document the stricter
-  behaviour to keep JS-04 validation aligned with the SoraFS rollout
-  requirements.【javascript/iroha_js/src/toriiClient.js:1438】【javascript/iroha_js/test/toriiClient.test.js:1515】【javascript/iroha_js/README.md:903】
+- `ToriiClient.getSorafsPinManifest` now returns the exact finalized native
+  `{ finalized_cursor, manifest }` response (or `null` for `404`), validates
+  approval history, and exposes only the native manifest record. Alias and
+  replication inventories are queried through their dedicated endpoints.
 - Added `ToriiClient.getUaidPortfolio`, `getUaidBindings`, and `getUaidManifests`
   plus TypeScript definitions, README docs, and Jest coverage so the JS SDK
   mirrors the Nexus NX-16 UAID portfolio and Space Directory manifest APIs
@@ -496,9 +499,9 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   parity remains strict across runtimes. Tests now assert both happy-path
   normalisation and failure diagnostics.
 - Added `listSorafsPinManifests` to `ToriiClient` plus typed DTOs for the pin
-  registry so SDK consumers can page `/v1/sorafs/pin` with status filters and
-  attestation metadata, completing the registry listing coverage called out in
-  the pin-registry plan.
+  registry so SDK consumers can page strict finalized summaries from
+  `/v1/sorafs/pin` with status filters, bounded keyset pagination, and
+  consensus-maintained charged usage totals.
 - Added `listSorafsAliases` and `listSorafsReplicationOrders` to `ToriiClient`
   so the JS SDK can page the `/v1/sorafs/aliases` and `/v1/sorafs/replication`
   endpoints with typed attestation metadata, fulfilling the remaining JS-07

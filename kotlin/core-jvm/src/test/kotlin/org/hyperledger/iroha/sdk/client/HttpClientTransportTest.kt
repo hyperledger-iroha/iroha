@@ -1936,7 +1936,8 @@ class HttpClientTransportTest {
             """.trimIndent().toByteArray(StandardCharsets.UTF_8),
         )
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
-        val auth = ToriiCanonicalRequestAuth("alice@universal", keyPair.private, 1_700_000_000_020L, "fee-quote-1")
+        val authority = testAccountId(0x18)
+        val auth = ToriiCanonicalRequestAuth(authority, keyPair.private, 1_700_000_000_020L, "fee-quote-1")
         val transport = HttpClientTransport.withExecutor(
             executor = executor,
             config = signedClientConfig("https://torii.example/api"),
@@ -1946,7 +1947,7 @@ class HttpClientTransportTest {
                 "kind" to "network",
                 "value" to verifyingKeyNetworkId.literal,
             ),
-            "authority" to "alice",
+            "authority" to authority,
             "fee_payment" to testFeePayment(9_000L).toJsonMap(),
         )
 
@@ -1964,7 +1965,10 @@ class HttpClientTransportTest {
 
         val requestCount = executor.requestCount
         assertFailsWith<IllegalArgumentException> {
-            transport.quoteFees(unsignedPayload, ToriiCanonicalRequestAuth("bob@universal", keyPair.private))
+            transport.quoteFees(
+                unsignedPayload,
+                ToriiCanonicalRequestAuth(testAccountId(0x19), keyPair.private),
+            )
         }
         assertEquals(requestCount, executor.requestCount)
     }
@@ -1994,13 +1998,14 @@ class HttpClientTransportTest {
             config = signedClientConfig("https://torii.example"),
         )
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
-        val auth = ToriiCanonicalRequestAuth("alice@universal", keyPair.private)
+        val authority = testAccountId(0x1a)
+        val auth = ToriiCanonicalRequestAuth(authority, keyPair.private)
         fun validPayload(): MutableMap<String, Any?> = linkedMapOf(
             "domain" to linkedMapOf(
                 "kind" to "network",
                 "value" to verifyingKeyNetworkId.literal,
             ),
-            "authority" to "alice",
+            "authority" to authority,
             "fee_payment" to testFeePayment(9_000L).toJsonMap(),
         )
 
@@ -2038,7 +2043,8 @@ class HttpClientTransportTest {
     fun quoteFeesRejectsPayerRevisionAndGasSubstitution() {
         val sponsor = testMultisigAccountId()
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
-        val auth = ToriiCanonicalRequestAuth("alice@universal", keyPair.private)
+        val authority = testAccountId(0x1b)
+        val auth = ToriiCanonicalRequestAuth(authority, keyPair.private)
         val sponsorIntent = FeePaymentIntent.sponsor(
             FeeSponsorProgramId(sponsor, "wallet_fx"),
             3,
@@ -2070,7 +2076,7 @@ class HttpClientTransportTest {
                             "kind" to "network",
                             "value" to verifyingKeyNetworkId.literal,
                         ),
-                        "authority" to "alice",
+                        "authority" to authority,
                         "fee_payment" to requested.toJsonMap(),
                     ),
                     auth,

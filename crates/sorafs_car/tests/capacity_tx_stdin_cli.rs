@@ -35,8 +35,6 @@ fn tx_stdin_builder_wraps_capacity_declaration_summaries() {
                 "{{\n",
                 "  \"declaration_b64\": \"{declaration_b64}\",\n",
                 "  \"registered_epoch\": 580,\n",
-                "  \"valid_from_epoch\": 580,\n",
-                "  \"valid_until_epoch\": 10580,\n",
                 "  \"metadata\": {{\n",
                 "    \"sorafs.owner_account_id\": \"testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\"\n",
                 "  }}\n",
@@ -57,7 +55,30 @@ fn tx_stdin_builder_wraps_capacity_declaration_summaries() {
         .expect("register capacity declaration");
     assert_eq!(declaration.record.provider_id.as_bytes(), &[0x11; 32],);
     assert_eq!(declaration.record.registered_epoch, 580);
-    assert_eq!(declaration.record.valid_until_epoch, 10_580);
+    assert_eq!(declaration.record.valid_from_epoch, 1_700_000_000);
+    assert_eq!(declaration.record.valid_until_epoch, 1_700_086_400);
+}
+#[test]
+fn tx_stdin_builder_rejects_redundant_capacity_validity_summary() {
+    let temp = tempdir().expect("tempdir");
+    let summary_path = temp.path().join("redundant_declaration_summary.json");
+    let declaration_b64 =
+        BASE64_STD.encode(to_bytes(&sample_declaration()).expect("serialize declaration"));
+    fs::write(
+        &summary_path,
+        format!(
+            "{{\n  \"declaration_b64\": \"{declaration_b64}\",\n  \"registered_epoch\": 580,\n  \"valid_from_epoch\": 580\n}}\n"
+        ),
+    )
+    .expect("write declaration summary");
+    let stderr = run_builder_failure([
+        "capacity-declaration".to_owned(),
+        format!("--summary={}", summary_path.display()),
+    ]);
+    assert!(
+        stderr.contains("valid_from_epoch") && stderr.contains("must be omitted"),
+        "payload validity must be authoritative: {stderr}"
+    );
 }
 #[test]
 fn tx_stdin_builder_wraps_replication_order_summaries() {
@@ -73,16 +94,14 @@ fn tx_stdin_builder_wraps_replication_order_summaries() {
     let payload = run_builder([
         "replication-order".to_owned(),
         format!("--summary={}", summary_path.display()),
-        "--issued-epoch=580".to_owned(),
-        "--deadline-epoch=2580".to_owned(),
     ]);
     let instruction = decode_single_instruction(payload);
     let order = instruction
         .as_any()
         .downcast_ref::<iroha_data_model::isi::sorafs::IssueReplicationOrder>()
         .expect("issue replication order");
-    assert_eq!(order.issued_epoch, 580);
-    assert_eq!(order.deadline_epoch, 2_580);
+    assert_eq!(order.issued_epoch, 1_700_000_000);
+    assert_eq!(order.deadline_epoch, 1_700_003_600);
     assert_eq!(order.order_id.as_bytes(), &[0x55; 32]);
     assert_eq!(order.musubi_archive, None);
 }
@@ -100,8 +119,6 @@ fn tx_stdin_builder_binds_replication_order_to_musubi_archive() {
     let payload = run_builder([
         "replication-order".to_owned(),
         format!("--summary={}", summary_path.display()),
-        "--issued-epoch=580".to_owned(),
-        "--deadline-epoch=2580".to_owned(),
         format!("--musubi-archive-id-hex={}", "a5".repeat(32)),
     ]);
     let instruction = decode_single_instruction(payload);
@@ -115,6 +132,41 @@ fn tx_stdin_builder_binds_replication_order_to_musubi_archive() {
     );
 }
 #[test]
+fn tx_stdin_builder_rejects_reserved_automatic_order_id() {
+    let temp = tempdir().expect("tempdir");
+    let summary_path = temp.path().join("reserved_order_summary.json");
+    let mut order = sample_replication_order();
+    order.order_id[0] |= 0x80;
+    let order_b64 = BASE64_STD.encode(to_bytes(&order).expect("serialize reserved order"));
+    fs::write(
+        &summary_path,
+        format!("{{\n  \"replication_order_b64\": \"{order_b64}\"\n}}\n"),
+    )
+    .expect("write order summary");
+    let stderr = run_builder_failure([
+        "replication-order".to_owned(),
+        format!("--summary={}", summary_path.display()),
+    ]);
+    assert!(
+        stderr.contains("reserved automatic order id"),
+        "generic builder must reject the automatic namespace: {stderr}"
+    );
+}
+#[test]
+fn tx_stdin_builder_rejects_redundant_replication_epoch_options() {
+    for option in ["--issued-epoch=580", "--deadline-epoch=2580"] {
+        let stderr = run_builder_failure([
+            "replication-order".to_owned(),
+            "--summary=unused.json".to_owned(),
+            option.to_owned(),
+        ]);
+        assert!(
+            stderr.contains("unknown option") && stderr.contains(option.split('=').next().unwrap()),
+            "payload timestamps are authoritative and {option} must be rejected: {stderr}"
+        );
+    }
+}
+#[test]
 fn tx_stdin_builder_rejects_noncanonical_musubi_archive_id_hex() {
     for value in [
         "a5".repeat(31),
@@ -125,8 +177,6 @@ fn tx_stdin_builder_rejects_noncanonical_musubi_archive_id_hex() {
         let stderr = run_builder_failure([
             "replication-order".to_owned(),
             "--summary=unused.json".to_owned(),
-            "--issued-epoch=580".to_owned(),
-            "--deadline-epoch=2580".to_owned(),
             format!("--musubi-archive-id-hex={value}"),
         ]);
         assert!(
@@ -173,24 +223,6 @@ fn tx_stdin_builder_emits_expiration_instruction() {
 #[test]
 fn tx_stdin_builder_rejects_noncanonical_epoch_flags() {
     for (args, expected) in [
-        (
-            vec![
-                "replication-order",
-                "--summary=unused.json",
-                "--issued-epoch=0580",
-                "--deadline-epoch=2580",
-            ],
-            "--issued-epoch",
-        ),
-        (
-            vec![
-                "replication-order",
-                "--summary=unused.json",
-                "--issued-epoch=580",
-                "--deadline-epoch=+2580",
-            ],
-            "--deadline-epoch",
-        ),
         (
             vec![
                 "complete-order",
@@ -248,11 +280,10 @@ fn tx_stdin_builder_rejects_duplicate_options() {
         (
             vec![
                 "replication-order",
-                "--summary=unused.json",
-                "--issued-epoch=580",
-                "--issued-epoch=581",
+                "--summary=one.json",
+                "--summary=two.json",
             ],
-            "--issued-epoch",
+            "--summary",
         ),
         (
             vec![
@@ -313,10 +344,16 @@ fn sample_declaration() -> CapacityDeclarationV1 {
         pricing: None,
         valid_from: 1_700_000_000,
         valid_until: 1_700_086_400,
-        metadata: vec![CapacityMetadataEntry {
-            key: "sorafs.owner_account_id".to_owned(),
-            value: "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".to_owned(),
-        }],
+        metadata: vec![
+            CapacityMetadataEntry {
+                key: "sorafs.owner_account_id".to_owned(),
+                value: "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".to_owned(),
+            },
+            CapacityMetadataEntry {
+                key: "sorafs.storage_class".to_owned(),
+                value: "hot".to_owned(),
+            },
+        ],
     }
 }
 fn sample_replication_order() -> ReplicationOrderV1 {
