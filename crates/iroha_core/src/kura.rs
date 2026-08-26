@@ -3953,11 +3953,6 @@ impl Kura {
     }
     fn resolve_canonical_storage_before_mutation(&self) -> Result<()> {
         self.durable_mutation_authorized()?;
-        if self.emergency_fast_startup_enabled() {
-            return Err(Error::EmergencyFastAuxiliaryUnavailable {
-                subsystem: "canonical mutation",
-            });
-        }
         if self.store_root.as_os_str().is_empty() {
             return Ok(());
         }
@@ -5238,6 +5233,7 @@ impl Kura {
     /// # Errors
     /// Returns an [`Error`] if the snapshot changes the active primary storage
     /// paths or any restored lane storage cannot be validated or provisioned.
+    #[cfg(test)]
     pub fn restore_lane_segments(&self, lane_config: &LaneConfig) -> Result<()> {
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
@@ -5706,6 +5702,7 @@ impl Kura {
         );
         Ok(())
     }
+    #[cfg(test)]
     fn prepare_lane_storage_resolved(&self, entry: &LaneConfigEntry) -> Result<()> {
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         let blocks_dir = entry.blocks_dir(&self.store_root);
@@ -7608,6 +7605,9 @@ impl Kura {
         namespace: &BoundProgressNamespace,
         kind: &str,
     ) -> bool {
+        if self.emergency_fast_startup_enabled() {
+            return false;
+        }
         for (index, directory) in namespace.directories.iter().enumerate() {
             let result = if index == 0 {
                 sync_indexed_sidecar_dir_handle(&directory.file)
@@ -7649,6 +7649,9 @@ impl Kura {
         ) && self.bound_progress_namespace_unchanged(namespace)
     }
     fn sync_bound_progress_sidecar(&self, bound: &BoundProgressSidecar, kind: &str) -> bool {
+        if self.emergency_fast_startup_enabled() {
+            return false;
+        }
         if let Err(err) = sync_indexed_sidecar_data(&bound.data) {
             iroha_logger::warn!(?err, path = ?bound.namespace.data_path, kind, "failed to sync progress sidecar payload");
             return false;
@@ -8922,6 +8925,7 @@ impl Kura {
                     .to_owned(),
             ));
         }
+        self.durable_mutation_authorized()?;
         let durable_count = self.exact_durable_blocks_count()?;
         {
             let _prune_guard = self.prune_lock.lock();
@@ -11940,19 +11944,17 @@ impl Kura {
         accounting_mutation.finish();
         Ok(())
     }
-    /// Start a thread that receives and stores new blocks
     /// Start the background block writer after all provisional startup authority is finalized.
     ///
     /// # Errors
-    /// Returns an error when the immutable local peer identity has not been
-    /// bound, while signed snapshot authentication is pending, or canonical
-    /// storage is fail-stop poisoned.
+    /// Returns an error in read-only emergency Fast mode, when the immutable
+    /// local peer identity has not been bound, while signed snapshot
+    /// authentication is pending, or canonical storage is fail-stop poisoned.
     pub fn start(kura: Arc<Self>, shutdown_signal: ShutdownSignal) -> Result<Child> {
+        kura.durable_mutation_authorized()?;
         if kura.local_peer_id.get().is_none() {
             return Err(Error::KuraReplicaLocalPeerUnbound);
         }
-        kura.ensure_snapshot_bootstrap_authenticated()?;
-        kura.ensure_canonical_storage_not_poisoned()?;
         let shutdown_notify_tx = kura.block_notify_tx.clone();
         let shutdown_signal_clone = shutdown_signal.clone();
         tokio::spawn(async move {
@@ -13361,6 +13363,11 @@ impl Kura {
     /// Authorize a durable sidecar or journal mutation which does not require
     /// canonical block-stage recovery.
     fn durable_mutation_authorized(&self) -> Result<()> {
+        if self.emergency_fast_startup_enabled() {
+            return Err(Error::EmergencyFastAuxiliaryUnavailable {
+                subsystem: "canonical mutation",
+            });
+        }
         self.ensure_snapshot_bootstrap_authenticated()?;
         self.ensure_canonical_storage_not_poisoned()
     }
@@ -17368,21 +17375,13 @@ impl Kura {
         let path = self.active_merge_path.lock().clone();
         Self::file_len_or_zero(&path)
     }
-    fn sidecar_tracked_bytes(
-        data_path: &Path,
-        index_path: &Path,
-        json_path: Option<&Path>,
-    ) -> Result<u64> {
+    fn sidecar_tracked_bytes(data_path: &Path, index_path: &Path) -> Result<u64> {
         let data_tmp = data_path.with_extension("norito.tmp");
         let index_tmp = index_path.with_extension("index.tmp");
-        let mut total = Self::file_len_or_zero(data_path)?
+        Ok(Self::file_len_or_zero(data_path)?
             .saturating_add(Self::file_len_or_zero(index_path)?)
             .saturating_add(Self::file_len_or_zero(&data_tmp)?)
-            .saturating_add(Self::file_len_or_zero(&index_tmp)?);
-        if let Some(path) = json_path {
-            total = total.saturating_add(Self::file_len_or_zero(path)?);
-        }
-        Ok(total)
+            .saturating_add(Self::file_len_or_zero(&index_tmp)?))
     }
     fn block_required_bytes(block: &SignedBlock) -> Result<u64> {
         let wire = block.canonical_wire()?;
@@ -23774,7 +23773,7 @@ impl Kura {
         }
         let mut accounting_complete = checkpoint.tracked_bytes_before.is_some();
         if let Some(before_bytes) = checkpoint.tracked_bytes_before {
-            match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
+            match Self::sidecar_tracked_bytes(&data_path, &index_path) {
                 Ok(after_bytes) => self.update_disk_usage_delta(before_bytes, after_bytes),
                 Err(err) => {
                     accounting_complete = false;
@@ -23845,7 +23844,7 @@ impl Kura {
                 .ok()?;
             Some(buf)
         });
-        let tracked_bytes_before = match Self::sidecar_tracked_bytes(data_path, index_path, None) {
+        let tracked_bytes_before = match Self::sidecar_tracked_bytes(data_path, index_path) {
             Ok(bytes) => Some(bytes),
             Err(err) => {
                 iroha_logger::warn!(
@@ -23875,7 +23874,7 @@ impl Kura {
     ) -> Result<()> {
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         let tracked_bytes_after_write =
-            Self::sidecar_tracked_bytes(&checkpoint.data_path, &checkpoint.index_path, None).ok();
+            Self::sidecar_tracked_bytes(&checkpoint.data_path, &checkpoint.index_path).ok();
         if checkpoint.data_existed {
             let data = std::fs::OpenOptions::new()
                 .create(true)
@@ -24031,7 +24030,7 @@ impl Kura {
         if let (Some(after_write), Some(before_write)) =
             (tracked_bytes_after_write, checkpoint.tracked_bytes_before)
             && let Ok(after_rollback) =
-                Self::sidecar_tracked_bytes(&checkpoint.data_path, &checkpoint.index_path, None)
+                Self::sidecar_tracked_bytes(&checkpoint.data_path, &checkpoint.index_path)
         {
             self.update_disk_usage_delta(after_write, after_rollback);
             if after_rollback != before_write {
@@ -24401,7 +24400,7 @@ impl Kura {
             );
         }
         drop(existing_pair);
-        let before_bytes = Self::sidecar_tracked_bytes(&data_path, &index_path, None).ok();
+        let before_bytes = Self::sidecar_tracked_bytes(&data_path, &index_path).ok();
         let payload = artifact.encode_framed()?;
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         if !Self::append_indexed_progress_sidecar(
@@ -24454,7 +24453,7 @@ impl Kura {
             ));
         }
         if let Some(before_bytes) = before_bytes
-            && let Ok(after_bytes) = Self::sidecar_tracked_bytes(&data_path, &index_path, None)
+            && let Ok(after_bytes) = Self::sidecar_tracked_bytes(&data_path, &index_path)
         {
             self.update_disk_usage_delta(before_bytes, after_bytes);
             accounting_mutation.finish();
@@ -24830,7 +24829,7 @@ impl Kura {
             }
             return Ok(());
         }
-        let before_bytes = match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
+        let before_bytes = match Self::sidecar_tracked_bytes(&data_path, &index_path) {
             Ok(bytes) => Some(bytes),
             Err(err) => {
                 iroha_logger::warn!(
@@ -24879,7 +24878,7 @@ impl Kura {
         }
         let mut accounting_complete = before_bytes.is_some();
         if let Some(before_bytes) = before_bytes {
-            match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
+            match Self::sidecar_tracked_bytes(&data_path, &index_path) {
                 Ok(after_bytes) => self.update_disk_usage_delta(before_bytes, after_bytes),
                 Err(err) => {
                     accounting_complete = false;
@@ -25177,23 +25176,25 @@ impl Kura {
         }
         #[cfg(test)]
         run_latest_certified_frontier_post_validation_hook_for_tests();
-        if let Err(error) = self.recover_certified_lane_block_pair_from_frontier_locked(
-            &entry,
-            &frontier_read.frontier.artifact,
-            authority,
-        ) {
-            iroha_logger::warn!(
-                ?error,
-                lane = %lane_id.as_u32(),
-                lane_block_height = frontier_read
-                    .frontier
-                    .artifact
-                    .proposal
-                    .descriptor
-                    .lane_block_height,
-                "failed to recover certified lane block pair from its durable frontier"
-            );
-            return None;
+        if !self.emergency_fast_startup_enabled() {
+            if let Err(error) = self.recover_certified_lane_block_pair_from_frontier_locked(
+                &entry,
+                &frontier_read.frontier.artifact,
+                authority,
+            ) {
+                iroha_logger::warn!(
+                    ?error,
+                    lane = %lane_id.as_u32(),
+                    lane_block_height = frontier_read
+                        .frontier
+                        .artifact
+                        .proposal
+                        .descriptor
+                        .lane_block_height,
+                    "failed to recover certified lane block pair from its durable frontier"
+                );
+                return None;
+            }
         }
         if let Err(error) = self.confirm_latest_certified_lane_block_frontier_read_locked(
             &entry,
@@ -25240,6 +25241,13 @@ impl Kura {
     where
         F: FnMut(&CertifiedLaneBlockArtifact) -> bool,
     {
+        if self.emergency_fast_startup_enabled() {
+            return self
+                .latest_certified_lane_block_artifacts_matching_without_sidecar_repair(
+                    lane_id, 1, accept,
+                )
+                .pop();
+        }
         if self.prune_recovery_is_required() {
             return None;
         }
@@ -25335,6 +25343,9 @@ impl Kura {
     where
         F: FnMut(&CertifiedLaneBlockArtifact) -> bool,
     {
+        if self.emergency_fast_startup_enabled() {
+            return None;
+        }
         if self.prune_recovery_is_required() {
             return None;
         }
@@ -25420,6 +25431,11 @@ impl Kura {
     where
         F: FnMut(&CertifiedLaneBlockArtifact) -> bool,
     {
+        if self.emergency_fast_startup_enabled() {
+            return self.latest_certified_lane_block_artifacts_matching_without_sidecar_repair(
+                lane_id, limit, accept,
+            );
+        }
         if limit == 0 || self.prune_recovery_is_required() {
             return Vec::new();
         }
@@ -25523,7 +25539,7 @@ impl Kura {
     where
         F: FnMut(&CertifiedLaneBlockArtifact) -> bool,
     {
-        if self.prune_recovery_is_required() {
+        if self.emergency_fast_startup_enabled() || self.prune_recovery_is_required() {
             return Vec::new();
         }
         let _geometry_guard = self.lane_geometry_lock.lock();
@@ -25597,6 +25613,8 @@ impl Kura {
         index_path: &Path,
         recover: bool,
     ) -> Option<CertifiedLaneBlockArtifact> {
+        let passive = self.emergency_fast_startup_enabled();
+        let recover = recover && !passive;
         if recover
             && !self.recover_bound_progress_sidecar_artifacts(
                 data_path,
@@ -25605,6 +25623,18 @@ impl Kura {
             )
         {
             return None;
+        }
+        if passive {
+            let namespace = self
+                .open_bound_progress_namespace(data_path, index_path)
+                .ok()?;
+            self.ensure_bound_progress_pair_has_no_recovery_artifacts_locked(
+                &namespace,
+                data_path,
+                index_path,
+                "certified lane block",
+            )
+            .ok()?;
         }
         let mut pair = match self.open_bound_progress_pair(data_path, index_path) {
             Ok(pair) => pair,
@@ -25620,7 +25650,9 @@ impl Kura {
         };
         match &mut pair {
             BoundProgressPair::Absent(namespace) => {
-                self.sync_bound_progress_absence(namespace, "certified lane block");
+                if !passive {
+                    self.sync_bound_progress_absence(namespace, "certified lane block");
+                }
                 None
             }
             BoundProgressPair::Present(bound) => {
@@ -25629,9 +25661,12 @@ impl Kura {
                     lane_block_height,
                     bound,
                 );
-                self.sync_bound_progress_sidecar(bound, "certified lane block")
-                    .then_some(artifact)
-                    .flatten()
+                let stable = if passive {
+                    self.bound_progress_sidecar_unchanged(bound)
+                } else {
+                    self.sync_bound_progress_sidecar(bound, "certified lane block")
+                };
+                stable.then_some(artifact).flatten()
             }
         }
     }
@@ -32064,6 +32099,7 @@ impl Kura {
         expected_epoch: u64,
         recover: bool,
     ) -> Option<AutonomousLaneBlockArtifact> {
+        let recover = recover && !self.emergency_fast_startup_enabled();
         if recover {
             let _prune_guard = self.prune_lock.lock();
             self.ensure_prune_recovery_not_required().ok()?;
@@ -33441,6 +33477,8 @@ impl Kura {
         lane_block_height: u64,
         repair_missing_sidecars: bool,
     ) -> Option<LaneBlockExecutionInputArtifact> {
+        let repair_missing_sidecars =
+            repair_missing_sidecars && !self.emergency_fast_startup_enabled();
         if self.prune_recovery_is_required() {
             return None;
         }
@@ -33732,7 +33770,7 @@ impl Kura {
                 "overwriting stale lane execution preflight sidecar"
             );
         }
-        let before_bytes = match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
+        let before_bytes = match Self::sidecar_tracked_bytes(&data_path, &index_path) {
             Ok(bytes) => Some(bytes),
             Err(err) => {
                 iroha_logger::warn!(
@@ -33762,7 +33800,7 @@ impl Kura {
         }
         let mut accounting_complete = before_bytes.is_some();
         if let Some(before_bytes) = before_bytes {
-            match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
+            match Self::sidecar_tracked_bytes(&data_path, &index_path) {
                 Ok(after_bytes) => self.update_disk_usage_delta(before_bytes, after_bytes),
                 Err(err) => {
                     accounting_complete = false;
@@ -37363,7 +37401,7 @@ impl Kura {
                 "overwriting stale lane application receipt after global evidence changed"
             );
         }
-        let before_bytes = match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
+        let before_bytes = match Self::sidecar_tracked_bytes(&data_path, &index_path) {
             Ok(bytes) => Some(bytes),
             Err(err) => {
                 iroha_logger::warn!(
@@ -37436,7 +37474,7 @@ impl Kura {
         }
         let mut accounting_complete = before_bytes.is_some();
         if let Some(before_bytes) = before_bytes {
-            match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
+            match Self::sidecar_tracked_bytes(&data_path, &index_path) {
                 Ok(after_bytes) => self.update_disk_usage_delta(before_bytes, after_bytes),
                 Err(err) => {
                     accounting_complete = false;
@@ -37480,6 +37518,12 @@ impl Kura {
     ) -> Option<LaneBlockApplicationReceiptArtifact> {
         if self.prune_recovery_is_required() {
             return None;
+        }
+        if self.emergency_fast_startup_enabled() {
+            return self.read_lane_block_application_receipt_without_sidecar_repair(
+                lane_id,
+                lane_block_height,
+            );
         }
         let artifact = self.read_active_lane_block_application_receipt_structural(
             lane_id,
@@ -37644,7 +37688,7 @@ impl Kura {
     pub fn direct_lane_block_application_receipts_snapshot(
         &self,
     ) -> Vec<LaneBlockApplicationReceiptArtifact> {
-        if self.prune_recovery_is_required() {
+        if self.emergency_fast_startup_enabled() || self.prune_recovery_is_required() {
             return Vec::new();
         }
         let Some(candidates) = self.active_lane_block_application_receipts_structural_snapshot()
@@ -37689,6 +37733,9 @@ impl Kura {
     fn active_lane_block_application_receipts_structural_snapshot(
         &self,
     ) -> Option<Vec<LaneBlockApplicationReceiptArtifact>> {
+        if self.emergency_fast_startup_enabled() {
+            return None;
+        }
         let _geometry_guard = self.lane_geometry_lock.lock();
         let entries = self
             .lane_storage_entries
@@ -37816,6 +37863,7 @@ impl Kura {
         proposal: &LaneBlockProposalV1,
         repair_sidecars: bool,
     ) -> bool {
+        let repair_sidecars = repair_sidecars && !self.emergency_fast_startup_enabled();
         let artifact = if repair_sidecars {
             self.read_lane_block_application_receipt(
                 proposal.descriptor.lane_id,
@@ -37875,6 +37923,8 @@ impl Kura {
         proposal: &LaneBlockProposalV1,
         repair_missing_sidecar: bool,
     ) -> bool {
+        let repair_missing_sidecar =
+            repair_missing_sidecar && !self.emergency_fast_startup_enabled();
         let Some(preflight) = self.read_lane_block_execution_preflight_with_repair_policy(
             proposal.descriptor.lane_id,
             proposal.descriptor.lane_block_height,
@@ -38053,6 +38103,7 @@ impl Kura {
         )?;
         Ok(Some(frontier))
     }
+    #[cfg(test)]
     fn autonomous_auxiliary_lane_height(name: &str) -> Option<u64> {
         Self::autonomous_one_height_coordinate(name, AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_PREFIX)
             .or_else(|| {
@@ -38067,22 +38118,7 @@ impl Kura {
                 .map(|(lane_height, _)| lane_height)
             })
     }
-    #[allow(dead_code)] // Reserved for a future durable whole-unit compaction intent.
-    fn remove_terminal_autonomous_auxiliary_files_locked(
-        &self,
-        entry: &LaneConfigEntry,
-        terminal_height: u64,
-    ) -> Result<bool> {
-        // Reuse the configured sidecar maintenance window as the per-pass
-        // mutation budget. The merge frontier and synced unlinks are the
-        // durable cursor, so this bounds each pass without bounding lifetime
-        // history.
-        self.remove_terminal_autonomous_auxiliary_files_with_budget_locked(
-            entry,
-            terminal_height,
-            self.lane_history_retention.get(),
-        )
-    }
+    #[cfg(test)]
     fn remove_terminal_autonomous_auxiliary_files_with_budget_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -38324,6 +38360,8 @@ impl Kura {
         index_path: &Path,
         recover: bool,
     ) -> Option<LaneBlockApplicationReceiptArtifact> {
+        let passive = self.emergency_fast_startup_enabled();
+        let recover = recover && !passive;
         if recover
             && !self.recover_bound_progress_sidecar_artifacts(
                 data_path,
@@ -38332,6 +38370,18 @@ impl Kura {
             )
         {
             return None;
+        }
+        if passive {
+            let namespace = self
+                .open_bound_progress_namespace(data_path, index_path)
+                .ok()?;
+            self.ensure_bound_progress_pair_has_no_recovery_artifacts_locked(
+                &namespace,
+                data_path,
+                index_path,
+                "lane block application receipt",
+            )
+            .ok()?;
         }
         let mut pair = match self.open_bound_progress_pair(data_path, index_path) {
             Ok(pair) => pair,
@@ -38347,7 +38397,9 @@ impl Kura {
         };
         match &mut pair {
             BoundProgressPair::Absent(namespace) => {
-                self.sync_bound_progress_absence(namespace, "lane block application receipt");
+                if !passive {
+                    self.sync_bound_progress_absence(namespace, "lane block application receipt");
+                }
                 None
             }
             BoundProgressPair::Present(bound) => {
@@ -38356,9 +38408,12 @@ impl Kura {
                     lane_block_height,
                     bound,
                 );
-                self.sync_bound_progress_sidecar(bound, "lane block application receipt")
-                    .then_some(artifact)
-                    .flatten()
+                let stable = if passive {
+                    self.bound_progress_sidecar_unchanged(bound)
+                } else {
+                    self.sync_bound_progress_sidecar(bound, "lane block application receipt")
+                };
+                stable.then_some(artifact).flatten()
             }
         }
     }
@@ -38449,6 +38504,7 @@ impl Kura {
         lane_block_height: u64,
         recover: bool,
     ) -> Option<LaneBlockArtifact> {
+        let recover = recover && !self.emergency_fast_startup_enabled();
         let _geometry_guard = self.lane_geometry_lock.lock();
         let entry = self.lane_storage_entry(lane_id).ok()?;
         let (data_path, index_path) = Self::lane_artifact_paths_for_entry(&entry, &self.store_root);
@@ -38501,6 +38557,8 @@ impl Kura {
         proposal: &LaneBlockProposalV1,
         repair_missing_sidecar: bool,
     ) -> Result<RecoveredLaneBlockPayload, LaneBlockPayloadAvailability> {
+        let repair_missing_sidecar =
+            repair_missing_sidecar && !self.emergency_fast_startup_enabled();
         let (artifact, block) = self.lane_block_payload_artifact_and_block_with_sidecar_repair(
             proposal,
             repair_missing_sidecar,
@@ -38556,6 +38614,8 @@ impl Kura {
         expected_epoch: u64,
         repair_missing_sidecar: bool,
     ) -> Result<RecoveredLaneBlockPayload, LaneBlockPayloadAvailability> {
+        let repair_missing_sidecar =
+            repair_missing_sidecar && !self.emergency_fast_startup_enabled();
         let artifact = self
             .read_autonomous_lane_block_artifact_with_recovery_policy(
                 proposal.descriptor.lane_id,
@@ -38673,6 +38733,8 @@ impl Kura {
         proposal: &LaneBlockProposalV1,
         repair_missing_sidecar: bool,
     ) -> Option<(LaneBlockArtifact, Arc<SignedBlock>)> {
+        let repair_missing_sidecar =
+            repair_missing_sidecar && !self.emergency_fast_startup_enabled();
         let descriptor = &proposal.descriptor;
         {
             let _geometry_guard = self.lane_geometry_lock.lock();
@@ -38825,6 +38887,7 @@ impl Kura {
         if limit == 0 {
             return Vec::new();
         }
+        let repair_missing_sidecars = !self.emergency_fast_startup_enabled();
         let Some(height) = usize::try_from(proposal_height)
             .ok()
             .and_then(NonZeroUsize::new)
@@ -38874,6 +38937,7 @@ impl Kura {
                         );
                         None
                     }
+                    None if !repair_missing_sidecars => Some(artifact),
                     None if self.persist_recovered_lane_block_artifact(&artifact) => self
                         .read_lane_block_artifact(ownership.lane_id, ownership.lane_block_height)
                         .filter(|persisted| persisted == &artifact),
@@ -38921,6 +38985,9 @@ impl Kura {
     }
     #[cfg(test)]
     fn active_lane_block_artifacts_structural_snapshot(&self) -> Vec<LaneBlockArtifact> {
+        if self.emergency_fast_startup_enabled() {
+            return Vec::new();
+        }
         let _geometry_guard = self.lane_geometry_lock.lock();
         let entries = self
             .lane_storage_entries
@@ -39008,6 +39075,10 @@ impl Kura {
     where
         F: FnMut(&LaneBlockArtifact) -> bool,
     {
+        if self.emergency_fast_startup_enabled() {
+            return self
+                .latest_lane_block_artifact_matching_without_sidecar_repair(lane_id, accept);
+        }
         if self.prune_recovery_is_required() {
             return None;
         }
@@ -42112,7 +42183,7 @@ impl BlockStore {
     ///
     /// # Errors
     /// IO Error.
-    pub fn read_block_index(&mut self, block_height: u64) -> Result<BlockIndex> {
+    pub(crate) fn read_block_index(&mut self, block_height: u64) -> Result<BlockIndex> {
         let mut index = BlockIndex {
             start: 0,
             length: 0,
@@ -42150,7 +42221,7 @@ impl BlockStore {
     ///
     /// # Errors
     /// Returns any durable marker/journal integrity or underlying I/O error.
-    pub fn read_durable_index_count(&mut self) -> Result<u64> {
+    pub(crate) fn read_durable_index_count(&mut self) -> Result<u64> {
         self.read_exact_durable_index_count()
     }
     /// Read and validate the exact durable boundary without repair or fallback.
@@ -42261,7 +42332,7 @@ impl BlockStore {
     ///
     /// # Errors
     /// IO Error.
-    pub fn read_block_hashes(
+    pub(crate) fn read_block_hashes(
         &mut self,
         start_block_height: u64,
         block_count: usize,
@@ -42305,7 +42376,7 @@ impl BlockStore {
     /// The most common reason this function fails is
     /// that you did not call `create_files_if_they_do_not_exist`.
     #[allow(clippy::integer_division)]
-    pub fn read_hashes_count(&mut self) -> Result<u64> {
+    pub(crate) fn read_hashes_count(&mut self) -> Result<u64> {
         let hashes_file = self.ensure_hashes_file()?;
         let len = hashes_file.try_io(|file| file.metadata().map(|meta| meta.len()))?;
         Ok(len / SIZE_OF_BLOCK_HASH)
@@ -42376,7 +42447,7 @@ impl BlockStore {
     ///
     /// # Errors
     /// Propagates I/O errors when the metadata cannot be read.
-    pub fn data_file_len(&mut self) -> Result<u64> {
+    pub(crate) fn data_file_len(&mut self) -> Result<u64> {
         let data_file = self.ensure_data_file()?;
         data_file.try_io(|file| file.metadata().map(|meta| meta.len()))
     }
@@ -42384,7 +42455,7 @@ impl BlockStore {
     ///
     /// # Errors
     /// Propagates I/O errors when the metadata cannot be read.
-    pub fn index_file_len(&mut self) -> Result<u64> {
+    pub(crate) fn index_file_len(&mut self) -> Result<u64> {
         let index_file = self.ensure_index_file()?;
         index_file.try_io(|file| file.metadata().map(|meta| meta.len()))
     }
@@ -42392,7 +42463,7 @@ impl BlockStore {
     ///
     /// # Errors
     /// Propagates I/O errors when the metadata cannot be read.
-    pub fn hashes_file_len(&mut self) -> Result<u64> {
+    pub(crate) fn hashes_file_len(&mut self) -> Result<u64> {
         let hashes_file = self.ensure_hashes_file()?;
         hashes_file.try_io(|file| file.metadata().map(|meta| meta.len()))
     }
@@ -42423,7 +42494,13 @@ impl BlockStore {
     ///
     /// # Errors
     /// IO Error.
-    pub fn write_block_index(&mut self, block_height: u64, start: u64, length: u64) -> Result<()> {
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    pub(crate) fn write_block_index(
+        &mut self,
+        block_height: u64,
+        start: u64,
+        length: u64,
+    ) -> Result<()> {
         let index_file = self.ensure_index_file()?;
         let start_location = block_height * BlockIndex::SIZE;
         let new_len = start_location + BlockIndex::SIZE;
@@ -42450,7 +42527,8 @@ impl BlockStore {
     ///
     /// Note that if there is an error, you can be quite sure all other
     /// read and write operations will also fail.
-    pub fn write_index_count(&mut self, new_count: u64) -> Result<()> {
+    #[cfg(test)]
+    pub(crate) fn write_index_count(&mut self, new_count: u64) -> Result<()> {
         let index_file = self.ensure_index_file()?;
         let new_byte_size = new_count * BlockIndex::SIZE;
         index_file.try_io(|file| file.set_len(new_byte_size))?;
@@ -42462,7 +42540,8 @@ impl BlockStore {
     ///
     /// # Errors
     /// IO Error.
-    pub fn write_block_data(
+    #[cfg(test)]
+    pub(crate) fn write_block_data(
         &mut self,
         start_location_in_data_file: u64,
         block_data: &[u8],
@@ -42487,7 +42566,12 @@ impl BlockStore {
     ///
     /// # Errors
     /// IO Error.
-    pub fn write_block_hash(&mut self, block_height: u64, hash: HashOf<BlockHeader>) -> Result<()> {
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    pub(crate) fn write_block_hash(
+        &mut self,
+        block_height: u64,
+        hash: HashOf<BlockHeader>,
+    ) -> Result<()> {
         let hashes_file = self.ensure_hashes_file()?;
         let start_location = block_height * SIZE_OF_BLOCK_HASH;
         let end = start_location + SIZE_OF_BLOCK_HASH;
@@ -42506,7 +42590,7 @@ impl BlockStore {
     ///
     /// # Errors
     /// IO Error.
-    pub fn overwrite_block_hashes(&mut self, hashes: &[HashOf<BlockHeader>]) -> Result<()> {
+    pub(crate) fn overwrite_block_hashes(&mut self, hashes: &[HashOf<BlockHeader>]) -> Result<()> {
         let hashes_file = self.ensure_hashes_file()?;
         hashes_file.try_io(|file| {
             file.set_len(0)?;
@@ -42739,6 +42823,9 @@ impl BlockStore {
     /// Create the index and data files if they do not
     /// already exist.
     ///
+    /// This public entry point is for constructing an offline store. Live-node storage must be
+    /// initialized through [`Kura`], which owns the process lock and recovery authority.
+    ///
     /// # Errors
     /// Fails if any of the files don't exist and couldn't be
     /// created.
@@ -42761,6 +42848,9 @@ impl BlockStore {
     /// the data to the data file and then create a new index
     /// for it in the index file.
     ///
+    /// This public entry point is for offline store construction. Live nodes must append through
+    /// [`Kura::store_block`] so canonical mutation authorization cannot be bypassed.
+    ///
     /// # Errors
     /// Fails if any of the required platform-specific functions
     /// fail.
@@ -42775,7 +42865,7 @@ impl BlockStore {
     ///
     /// # Errors
     /// Propagates I/O and encoding errors.
-    pub fn append_block_batch(&mut self, blocks: &[Arc<SignedBlock>]) -> Result<()> {
+    pub(crate) fn append_block_batch(&mut self, blocks: &[Arc<SignedBlock>]) -> Result<()> {
         let start_height = self.read_index_count()?;
         self.append_block_batch_at(start_height, blocks, 0)
     }

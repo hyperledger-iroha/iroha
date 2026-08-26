@@ -16,10 +16,7 @@ use crate::{
 use blake2::{Blake2b, digest::consts::U32};
 use hex;
 use iroha_config::{
-    parameters::{
-        actual::{Snapshot as Config, SnapshotBootstrapPolicy, SnapshotResourcePolicy},
-        defaults,
-    },
+    parameters::actual::{Snapshot as Config, SnapshotBootstrapPolicy, SnapshotResourcePolicy},
     snapshot::Mode,
 };
 use iroha_crypto::{
@@ -378,8 +375,6 @@ std::thread_local! {
     static SNAPSHOT_BLOCK_HASH_VECTOR_CLONES: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
 }
-/// Default chunk size used to derive snapshot Merkle metadata.
-const _DEFAULT_MERKLE_CHUNK_SIZE: NonZeroUsize = defaults::snapshot::MERKLE_CHUNK_SIZE_BYTES;
 #[derive(thiserror::Error, Debug, displaydoc::Display)]
 enum SnapshotMerkleError {
     /// Snapshot Merkle metadata missing

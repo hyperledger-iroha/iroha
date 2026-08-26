@@ -306,7 +306,7 @@ impl Kura {
                 ));
             }
         }
-        let before_bytes = match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
+        let before_bytes = match Self::sidecar_tracked_bytes(&data_path, &index_path) {
             Ok(bytes) => Some(bytes),
             Err(err) => {
                 iroha_logger::warn!(
@@ -336,7 +336,7 @@ impl Kura {
         }
         let mut accounting_complete = before_bytes.is_some();
         if let Some(before_bytes) = before_bytes {
-            match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
+            match Self::sidecar_tracked_bytes(&data_path, &index_path) {
                 Ok(after_bytes) => self.update_disk_usage_delta(before_bytes, after_bytes),
                 Err(err) => {
                     accounting_complete = false;

@@ -4,6 +4,10 @@ from . import client as _client
 from . import governance_proposals as _governance_proposals
 from . import sccp as _sccp
 from . import transaction_submission as _transaction_submission
+from .client import *  # noqa: F403
+from .governance_proposals import *  # noqa: F403
+from .sccp import *  # noqa: F403
+from .transaction_submission import *  # noqa: F403
 
 __all__ = list(
     dict.fromkeys(
@@ -15,6 +19,3 @@ __all__ = list(
         )
     )
 )
-for _module in (_client, _governance_proposals, _sccp, _transaction_submission):
-    for _name in _module.__all__:
-        globals()[_name] = getattr(_module, _name)

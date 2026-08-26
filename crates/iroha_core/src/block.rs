@@ -13241,6 +13241,18 @@ pub(crate) mod valid {
                             "pipeline recovery sidecar rejected while Kura is actively pruning or requires prune recovery restart"
                         );
                     }
+                    PipelineSidecarEnqueueResult::RejectedEmergencyFast => {
+                        iroha_logger::debug!(
+                            height,
+                            "pipeline recovery sidecar disabled in read-only emergency Fast mode"
+                        );
+                    }
+                    PipelineSidecarEnqueueResult::RejectedUnauthorized => {
+                        iroha_logger::warn!(
+                            height,
+                            "pipeline recovery sidecar rejected while Kura output is unauthorized"
+                        );
+                    }
                 }
             }
             // DSF prepass: union adjacent conflicting read/write relations to find independent components

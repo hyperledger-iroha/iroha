@@ -15107,7 +15107,7 @@ mod kagemusha_bridge_tests {
         assert!(one_bytes.len() <= OFFLINE_RECIPIENT_OFFER_MAX_PEER_BYTES);
         assert_eq!(
             one_bytes.len() + OFFLINE_RECIPIENT_OFFER_PEER_WIRE_HEADER_BYTES,
-            12_507
+            12_519
         );
         assert!(
             one_bytes.len() + OFFLINE_RECIPIENT_OFFER_PEER_WIRE_HEADER_BYTES

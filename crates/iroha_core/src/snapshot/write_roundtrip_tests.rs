@@ -296,7 +296,7 @@ async fn signed_snapshot_roundtrip_preserves_authoritative_alias_revert_maps() {
     )
     .expect("read signed snapshot without canonical payload drift");
     let mut roundtrip = String::new();
-    serialize_state_snapshot(&restored, &mut roundtrip, true);
+    serialize_state_snapshot(&restored, &mut roundtrip);
     assert_eq!(
         roundtrip.as_bytes(),
         payload,
@@ -392,7 +392,7 @@ async fn signed_snapshot_rejects_unknown_root_and_world_fields() {
         let kura = Kura::blank_kura_for_testing();
         let state = state_factory_with_kura(Arc::clone(&kura));
         let mut serialized = String::new();
-        serialize_state_snapshot(&state, &mut serialized, true);
+        serialize_state_snapshot(&state, &mut serialized);
         let mut snapshot: json::Value =
             json::from_str(&serialized).expect("valid baseline snapshot JSON");
         let json::Value::Object(snapshot_object) = &mut snapshot else {
@@ -459,7 +459,7 @@ async fn signed_semantically_valid_wsv_tampering_is_rejected_by_kura_checkpoint(
         .expect("persist canonical WSV checkpoint");
     let key_pair = checked_random_snapshot_keypair();
     let mut serialized = String::new();
-    serialize_state_snapshot(&state, &mut serialized, true);
+    serialize_state_snapshot(&state, &mut serialized);
     write_snapshot_bundle_from_bytes(&store_dir, serialized.as_bytes(), &key_pair);
     let restored = try_read_snapshot(
         &store_dir,
@@ -496,7 +496,7 @@ async fn signed_semantically_valid_wsv_tampering_is_rejected_by_kura_checkpoint(
         "hostile WSV mutation must affect its checkpoint"
     );
     serialized.clear();
-    serialize_state_snapshot(&state, &mut serialized, true);
+    serialize_state_snapshot(&state, &mut serialized);
     write_snapshot_bundle_from_bytes(&store_dir, serialized.as_bytes(), &key_pair);
     let error = match try_read_snapshot(
         &store_dir,
@@ -551,7 +551,7 @@ async fn signed_hostile_sccp_registry_snapshots_are_rejected_before_acceptance()
             iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1),
         );
         let mut serialized = String::new();
-        serialize_state_snapshot(&state, &mut serialized, true);
+        serialize_state_snapshot(&state, &mut serialized);
         let mut snapshot: json::Value =
             json::from_str(&serialized).expect("valid baseline snapshot JSON");
         let json::Value::Object(snapshot_object) = &mut snapshot else {
@@ -766,7 +766,7 @@ async fn signed_hostile_sccp_revert_stores_are_rejected_without_mutation() {
         let (state, key, pending_record) =
             state_with_exact_pending_sccp_snapshot_fixture(Arc::clone(&kura));
         let mut serialized = String::new();
-        serialize_state_snapshot(&state, &mut serialized, true);
+        serialize_state_snapshot(&state, &mut serialized);
         let mut snapshot: json::Value =
             json::from_str(&serialized).expect("valid baseline snapshot JSON");
         let json::Value::Object(snapshot_object) = &mut snapshot else {

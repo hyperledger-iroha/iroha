@@ -12,7 +12,7 @@ impl BlockStore {
     ///
     /// - If files do not exist (call [`Self::create_files_if_they_do_not_exist`])
     /// - Other IO errors
-    pub fn prune(&mut self, height: u64) -> Result<()> {
+    pub(crate) fn prune(&mut self, height: u64) -> Result<()> {
         self.prune_with_failpoint(height, 0)
     }
     fn maybe_fail_prune_after_stage(fail_stage: usize, stage: usize) {

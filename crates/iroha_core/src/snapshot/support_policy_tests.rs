@@ -10,9 +10,12 @@ use iroha_config::{
     kura::FsyncMode,
     parameters::{
         actual::{Kura as KuraConfig, LaneConfig},
-        defaults::kura::{
-            FSYNC_INTERVAL, MAX_DISK_USAGE_BYTES, MERGE_LEDGER_CACHE_CAPACITY,
-            REPLICA_ADVERT_POLICY,
+        defaults::{
+            self,
+            kura::{
+                FSYNC_INTERVAL, MAX_DISK_USAGE_BYTES, MERGE_LEDGER_CACHE_CAPACITY,
+                REPLICA_ADVERT_POLICY,
+            },
         },
     },
 };
@@ -1302,12 +1305,21 @@ fn signed_block_after_transaction(
 }
 fn legacy_snapshot_bytes_without_space_directory_section(state: &State) -> Vec<u8> {
     let mut payload = String::new();
-    serialize_state_snapshot(state, &mut payload, false);
-    payload.into_bytes()
+    serialize_state_snapshot(state, &mut payload);
+    let mut snapshot: json::Value =
+        json::from_str(&payload).expect("canonical snapshot must be valid JSON");
+    snapshot
+        .as_object_mut()
+        .expect("snapshot root must be an object")
+        .remove("space_directory_manifests")
+        .expect("canonical snapshot must carry Space Directory manifests");
+    json::to_json(&snapshot)
+        .expect("retired snapshot test fixture must encode")
+        .into_bytes()
 }
 fn exact_snapshot_payload_bytes(state: &State) -> Vec<u8> {
     let mut payload = String::new();
-    serialize_state_snapshot(state, &mut payload, true);
+    serialize_state_snapshot(state, &mut payload);
     payload.into_bytes()
 }
 fn publish_test_snapshot_generation(

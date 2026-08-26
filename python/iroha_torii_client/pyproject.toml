@@ -47,6 +47,7 @@ ignore = ["E203", "E501"]
 
 [tool.mypy]
 python_version = "3.9"
+exclude = "(^|/)build/"
 strict = false
 warn_unused_ignores = true
 show_error_codes = true

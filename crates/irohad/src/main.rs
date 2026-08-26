@@ -3856,9 +3856,7 @@ async fn run_emergency_fast_network_relay(shared: Arc<NetworkRelayShared>) {
                 .handle_message(peer, authenticated_via, payload, payload_bytes)
                 .await;
         }
-        iroha_logger::warn!(
-            "emergency Fast peer/trust subscriber closed; restarting subscription"
-        );
+        iroha_logger::warn!("emergency Fast peer/trust subscriber closed; restarting subscription");
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
@@ -7509,9 +7507,9 @@ impl Iroha {
                 ))
             })?
         };
+        // Log detailed backtraces if a lock-order deadlock occurs so we can
+        // diagnose stalls during long-running scenarios (e.g., integration tests).
         if !emergency_fast {
-            // Log detailed backtraces if a lock-order deadlock occurs so we can
-            // diagnose stalls during long-running scenarios (e.g., integration tests).
             std::thread::spawn(|| {
                 loop {
                     std::thread::sleep(Duration::from_secs(10));
@@ -9205,7 +9203,6 @@ impl Iroha {
             supervisor.monitor(child);
             tx_gossiper
         };
-<<<<<<< HEAD
         if !emergency_fast {
             let signing_key = config.snapshot.signing_private_key.as_ref().map_or_else(
                 || config.common.key_pair.clone(),
@@ -9216,13 +9213,6 @@ impl Iroha {
             {
                 supervisor.monitor(snapshot_maker.start(supervisor.shutdown_signal()));
             }
-=======
-        if !emergency_fast
-            && let Some(snapshot_maker) =
-                SnapshotMaker::from_config(&config.snapshot, Arc::clone(&state), signing_key)
-        {
-            supervisor.monitor(snapshot_maker.start(supervisor.shutdown_signal()));
->>>>>>> origin/optimizations
         }
         let sorafs_storage_config = if emergency_fast {
             sorafs_node::config::StorageConfig::builder()
@@ -15600,13 +15590,14 @@ mod tests {
         assert!(compact_source.contains(
             "letlive_query_store=ifemergency_fast{live_query_store.into_inert_handle()}else{let(handle,child)=live_query_store.start();supervisor.monitor(child);handle};"
         ));
-<<<<<<< HEAD
         assert!(compact_source.contains(
             "lettelemetry_profile=if!emergency_fast&&config.telemetry_enabled{config.telemetry_profile}else{iroha_config::parameters::actual::TelemetryProfile::Disabled};"
         ));
-        assert!(compact_source.contains(
-            "if!emergency_fast{start_telemetry(&logger,&config,&mutsupervisor).await?;"
-        ));
+        assert!(
+            compact_source.contains(
+                "if!emergency_fast{start_telemetry(&logger,&config,&mutsupervisor).await?;"
+            )
+        );
         assert!(compact_source.contains(
             "lettelemetry=ifemergency_fast{iroha_core::telemetry::Telemetry::from(state_telemetry.clone())}else{"
         ));
@@ -15643,11 +15634,6 @@ mod tests {
         assert!(compact_source.contains(
             "letmutacceleration=config.accel.clone();acceleration.enable_simd=false;acceleration.enable_metal=false;acceleration.enable_cuda=false;acceleration.max_gpus=Some(0);apply_ivm_acceleration_config(&acceleration);rs16::set_simd_enabled(false);"
         ));
-=======
-        assert!(
-            compact_source.contains("!emergency_fast&&telemetry_capabilities.metrics_enabled(),")
-        );
->>>>>>> origin/optimizations
         assert!(compact_source.contains(
             "if!emergency_fast{iroha_core::time::start(network.clone(),iroha_core::time::Params::from(&config.nts));}"
         ));

@@ -550,6 +550,65 @@ fn pipeline_sidecar_roundtrip() {
     assert_eq!(got.format_label(), "pipeline.recovery");
 }
 #[test]
+fn fast_pipeline_read_leaves_recovery_artifacts_byte_exact() {
+    let (_temp_dir, mut config, kura, block_hash, sidecar) = default_pipeline_sidecar_fixture();
+    kura.write_pipeline_metadata(&sidecar);
+
+    let mut pipeline_dir = kura.store_dir().expect("pipeline store dir");
+    pipeline_dir.push(PIPELINE_DIR_NAME);
+    let data_path = pipeline_dir.join(PIPELINE_SIDECARS_DATA_FILE);
+    let index_path = pipeline_dir.join(PIPELINE_SIDECARS_INDEX_FILE);
+    let temp_data_path = data_path.with_extension("norito.tmp");
+    let temp_index_path = index_path.with_extension("index.tmp");
+    let staged = PipelineRecoverySidecar::new(
+        1,
+        block_hash,
+        PipelineDagSnapshot {
+            fingerprint: [0xA5; 32],
+            key_count: 7,
+        },
+        Vec::new(),
+    )
+    .encode_framed()
+    .expect("encode staged recovery sidecar");
+    fs::write(&temp_data_path, &staged).expect("write staged recovery payload");
+    let mut staged_index = SidecarIndexLayout::base_header(1).to_vec();
+    staged_index.extend_from_slice(
+        &SidecarIndexEntry {
+            offset: 0,
+            len: u64::try_from(staged.len()).unwrap(),
+        }
+        .to_bytes(),
+    );
+    fs::write(&temp_index_path, &staged_index).expect("write staged recovery index");
+
+    let paths = [&data_path, &index_path, &temp_data_path, &temp_index_path];
+    let before = paths
+        .iter()
+        .map(fs::read)
+        .collect::<std::io::Result<Vec<_>>>()
+        .expect("snapshot pipeline files before Fast read");
+    drop(kura);
+
+    config.init_mode = InitMode::Fast;
+    let (fast, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("open emergency Fast Kura");
+    let got = fast
+        .read_pipeline_metadata(1)
+        .expect("Fast may read the stable sidecar without recovery");
+    assert_eq!(got.dag.fingerprint, sidecar.dag.fingerprint);
+    let after = paths
+        .iter()
+        .map(fs::read)
+        .collect::<std::io::Result<Vec<_>>>()
+        .expect("snapshot pipeline files after Fast read");
+    assert_eq!(
+        after, before,
+        "Fast read must not promote or rewrite recovery files"
+    );
+}
+#[test]
 fn framed_pipeline_sidecar_boundaries_are_canonical_and_ambient_independent() {
     let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
         b"canonical framed sidecar boundary",
@@ -712,12 +771,10 @@ fn pipeline_sidecar_canonical_boundary_rejects_missing_current_fields() {
     let schema_end = schema_start + schema.len();
     assert!(bytes.len() >= Header::SIZE);
     bytes[schema_start..schema_end].copy_from_slice(&schema);
-    let decoded: PipelineRecoverySidecar = norito::decode_from_bytes(&bytes)
-        .expect("ordinary decoding accepts the pre-release defaulted field");
-    assert_eq!(decoded.height, pre_release.height);
-    assert_eq!(decoded.block_hash, pre_release.block_hash);
-    assert!(decoded.proofs.is_empty());
-    assert!(decoded.fastpq_proofs.is_empty());
+    assert!(
+        norito::decode_from_bytes::<PipelineRecoverySidecar>(&bytes).is_err(),
+        "first-release decoding must require every current sidecar field"
+    );
     assert!(
         norito::decode_canonical::<PipelineRecoverySidecar>(&bytes).is_err(),
         "the durable V1 boundary must reject a byte layout missing current fields"
@@ -787,6 +844,52 @@ fn pipeline_sidecar_enqueue_flushes() {
     let got = kura.read_pipeline_metadata(1).expect("sidecar exists");
     assert_eq!(got.height, 1);
     assert_eq!(got.block_hash, block_hash);
+}
+#[test]
+fn sidecar_queues_reject_unauthorized_output_and_flush_without_draining() {
+    let (_temp_dir, _config, kura, block_hash, sidecar) = default_pipeline_sidecar_fixture();
+
+    *kura.provisional_snapshot_bootstrap.lock() =
+        SnapshotBootstrapRuntimeState::Pending(provisional_snapshot_metadata(1));
+    assert_eq!(
+        kura.enqueue_pipeline_metadata(sidecar.clone()),
+        PipelineSidecarEnqueueResult::RejectedUnauthorized
+    );
+    assert_eq!(
+        kura.enqueue_fastpq_proof_snapshot(sample_fastpq_snapshot(1, block_hash, 8)),
+        FastpqProofEnqueueResult::RejectedUnauthorized
+    );
+
+    *kura.provisional_snapshot_bootstrap.lock() = SnapshotBootstrapRuntimeState::Authenticated;
+    kura.canonical_storage_poisoned
+        .store(true, Ordering::Release);
+    assert_eq!(
+        kura.enqueue_pipeline_metadata(sidecar.clone()),
+        PipelineSidecarEnqueueResult::RejectedUnauthorized
+    );
+    assert_eq!(
+        kura.enqueue_fastpq_proof_snapshot(sample_fastpq_snapshot(1, block_hash, 8)),
+        FastpqProofEnqueueResult::RejectedUnauthorized
+    );
+    assert!(kura.pipeline_sidecar_queue.lock().is_empty());
+    assert!(kura.fastpq_proof_queue.lock().is_empty());
+
+    kura.canonical_storage_poisoned
+        .store(false, Ordering::Release);
+    assert_eq!(
+        kura.enqueue_pipeline_metadata(sidecar),
+        PipelineSidecarEnqueueResult::Enqueued { queue_depth: 1 }
+    );
+    assert_eq!(
+        kura.enqueue_fastpq_proof_snapshot(sample_fastpq_snapshot(1, block_hash, 8)),
+        FastpqProofEnqueueResult::Enqueued { queue_depth: 1 }
+    );
+    kura.canonical_storage_poisoned
+        .store(true, Ordering::Release);
+    assert_eq!(kura.flush_pipeline_sidecars(), 0);
+    assert_eq!(kura.flush_fastpq_proof_snapshots(), 0);
+    assert_eq!(kura.pipeline_sidecar_queue.lock().len(), 1);
+    assert_eq!(kura.fastpq_proof_queue.lock().len(), 1);
 }
 #[test]
 fn pipeline_sidecar_enqueue_coalesces_writer_notifications() {

@@ -462,9 +462,14 @@ pub enum PipelineSidecarEnqueueResult {
     },
     /// A canonical prune is active or prune recovery requires a process restart.
     RejectedPruneRecovery,
+    /// Emergency Fast mode is read-only and never starts a persistence worker.
+    RejectedEmergencyFast,
+    /// Snapshot authentication is pending or canonical storage is poisoned.
+    RejectedUnauthorized,
 }
 /// Result of enqueueing a FASTPQ proof snapshot for sidecar persistence.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[must_use]
 pub enum FastpqProofEnqueueResult {
     /// The snapshot was accepted.
     Enqueued {
@@ -490,6 +495,10 @@ pub enum FastpqProofEnqueueResult {
     },
     /// A canonical prune is active or prune recovery requires a process restart.
     RejectedPruneRecovery,
+    /// Emergency Fast mode is read-only and never starts a persistence worker.
+    RejectedEmergencyFast,
+    /// Snapshot authentication is pending or canonical storage is poisoned.
+    RejectedUnauthorized,
     /// Shutdown began before the snapshot's queue insertion was committed.
     RejectedShutdown,
 }
@@ -607,7 +616,6 @@ pub(crate) struct WsvCheckpoint {
     block_hash: HashOf<BlockHeader>,
     state_hash: Hash,
     /// Digest of the complete commit manifest written after this checkpoint, when available.
-    #[norito(default)]
     commit_manifest_hash: Option<Hash>,
 }
 impl WsvCheckpoint {
@@ -641,7 +649,6 @@ pub(crate) struct CommitManifest {
     ///
     /// A sole interrupted pending-tip window may temporarily omit this field until startup binds
     /// the exact authenticated v2 finality authority.
-    #[norito(default)]
     commit_authority_hash: Option<Hash>,
 }
 /// Relationship between a durable manifest and the digest slot in its WSV checkpoint.

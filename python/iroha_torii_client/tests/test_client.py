@@ -7,47 +7,36 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional, Union, get_args, get_type_hints
+from typing import Any, Callable, Dict, List, Mapping, Optional, get_args, get_type_hints
 from urllib.parse import quote
 
 import pytest
 import requests
-
+from client_test_support import (
+    CANONICAL_OWNER,
+    CANONICAL_OWNER_HEADER,
+)
+from client_test_support import (
+    app_api_transaction_draft as _app_api_transaction_draft,
+)
+from client_test_support import (
+    authority_fee_payment as _authority_fee_payment,
+)
+from client_test_support import (
+    canonical_hash as _canonical_hash,
+)
+from client_test_support import (
+    sponsor_fee_payment as _sponsor_fee_payment,
+)
 from sumeragi_exact_json_test_support import (
     RecordingSession,
     StubResponse,
     sumeragi_exact_json_response_cases,
 )
-from client_test_support import (
-    CANONICAL_OWNER,
-    CANONICAL_OWNER_HEADER,
-    app_api_transaction_draft as _app_api_transaction_draft,
-    authority_fee_payment as _authority_fee_payment,
-    canonical_hash as _canonical_hash,
-    sponsor_fee_payment as _sponsor_fee_payment,
-)
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 if str(PACKAGE_ROOT) not in sys.path:
     sys.path.insert(0, str(PACKAGE_ROOT))
-
-from offline_test_support import (  # noqa: E402
-    OFFLINE_NETWORK_ID,
-    OFFLINE_OPERATION_BYTES,
-    OFFLINE_OPERATION_ID,
-    OFFLINE_OTHER_NETWORK_ID,
-    OFFLINE_STATUS_URI,
-    OFFLINE_TRANSACTION_HASH,
-    offline_applied_top_up_status as _offline_applied_top_up_status,
-    offline_capability_payload as _offline_capability_payload,
-    offline_fixed_bytes as _offline_fixed_bytes,
-    offline_operation_reference as _offline_operation_reference,
-    offline_redeem_request as _offline_redeem_request,
-    offline_rejected_status as _offline_rejected_status,
-    offline_top_up_anchor as _offline_top_up_anchor,
-    offline_top_up_finality_proof as _offline_top_up_finality_proof,
-    offline_top_up_request as _offline_top_up_request,
-)
 
 import iroha_torii_client as torii_module  # noqa: E402
 import iroha_torii_client.client as client_module  # noqa: E402
@@ -80,7 +69,6 @@ from iroha_torii_client import (  # noqa: E402  (import depends on sys.path muta
     VpnSessionCreateRequest,
     build_canonical_request_headers,
     canonical_network_request_signature_message,
-    decode_pdp_commitment_header,
 )
 from iroha_torii_client.mock import ToriiMockServer  # noqa: E402
 from iroha_torii_client.native_amx import (  # noqa: E402
@@ -88,6 +76,41 @@ from iroha_torii_client.native_amx import (  # noqa: E402
     compute_native_amx_participant_settlement_hash,
     compute_native_amx_proposal_hash,
     compute_native_amx_validator_set_hash,
+)
+from offline_test_support import (  # noqa: E402
+    OFFLINE_NETWORK_ID,
+    OFFLINE_OPERATION_BYTES,
+    OFFLINE_OPERATION_ID,
+    OFFLINE_OTHER_NETWORK_ID,
+    OFFLINE_STATUS_URI,
+    OFFLINE_TRANSACTION_HASH,
+)
+from offline_test_support import (  # noqa: E402
+    offline_applied_top_up_status as _offline_applied_top_up_status,
+)
+from offline_test_support import (  # noqa: E402
+    offline_capability_payload as _offline_capability_payload,
+)
+from offline_test_support import (  # noqa: E402
+    offline_fixed_bytes as _offline_fixed_bytes,
+)
+from offline_test_support import (  # noqa: E402
+    offline_operation_reference as _offline_operation_reference,
+)
+from offline_test_support import (  # noqa: E402
+    offline_redeem_request as _offline_redeem_request,
+)
+from offline_test_support import (  # noqa: E402
+    offline_rejected_status as _offline_rejected_status,
+)
+from offline_test_support import (  # noqa: E402
+    offline_top_up_anchor as _offline_top_up_anchor,
+)
+from offline_test_support import (  # noqa: E402
+    offline_top_up_finality_proof as _offline_top_up_finality_proof,
+)
+from offline_test_support import (  # noqa: E402
+    offline_top_up_request as _offline_top_up_request,
 )
 
 CANONICAL_LARGE_FRACTION = "18446744073709551616.25"

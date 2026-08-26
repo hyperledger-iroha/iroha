@@ -3407,6 +3407,7 @@ impl Kura {
         if self.store_root.as_os_str().is_empty() {
             return Ok(LaneGeometryGcSummary::default());
         }
+        self.durable_mutation_authorized()?;
         self.ensure_nonzero_lineage_root(lineage_root)?;
         if snapshot_height == 0
             || snapshot_block_hash.is_none()

@@ -82,7 +82,11 @@ Completed history lives in [`status.md`](./status.md).
   those write paths before a Strict restart, first add an atomically published merge-log
   count/length/tip marker and durable latest-route summary; Fast must never recover that authority
   by decoding every historical frame. Read-only Fast startup must not require the deferred merge
-  log or inspect auxiliary recovery artifacts; it leaves them untouched for Strict.
+  log or inspect auxiliary recovery artifacts; it leaves them untouched for Strict. Preserve the
+  library-level writer-start, durable-mutation, and sidecar-queue rejection tests so a daemon
+  refactor cannot accidentally make Fast producing. Preserve byte-exact recovery-artifact tests
+  for public Fast reads and authorization-transition tests proving queued work is never drained
+  after Kura becomes poisoned or unauthenticated.
 - Add large-history startup benchmarks that separately report marker preflight, hash-journal
   binding, five-artifact metadata binding, bounded-manifest authentication, exact-tip validation,
   minimal-State construction, merge metadata, Sumeragi replay planning, and recursive disk

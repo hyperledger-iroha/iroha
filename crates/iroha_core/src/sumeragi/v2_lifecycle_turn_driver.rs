@@ -6,8 +6,9 @@ use super::super::{
 use super::*;
 use crate::sumeragi::v2_lifecycle_coordinator::{
     AdmissionDecision, CertifiedServeSchedulerObservationV1, LifecycleIngressSelectorError,
-    LifecycleLedgerV1, LifecycleValidateSidecarDriveV1, ReadyValidateSuccessorDispatchV1,
-    SelectedCertifiedResponsePriorityV1, WaitSource, WaitToken, claim_certified_serve_turn_v1,
+    LifecycleLedgerV1, LifecycleValidateSidecarDriveV1, ProductionIngressCapacityStatus,
+    ReadyValidateSuccessorDispatchV1, SelectedCertifiedResponsePriorityV1, WaitSource, WaitToken,
+    claim_certified_serve_turn_v1,
 };
 #[cfg(test)]
 pub(in crate::sumeragi) use crate::sumeragi::v2_runner::ordinary_ingress_consumer::ProductionPreparedCertifiedServeTestSettlementV1;
