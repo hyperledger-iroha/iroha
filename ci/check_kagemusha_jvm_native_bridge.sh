@@ -624,16 +624,20 @@ printf '[kagemusha-jvm-native] building fresh host ABI-23 bridge for %s\n' "$HOS
 source_seal verify --root "$ROOT_DIR" --platform android --snapshot "$SOURCE_SNAPSHOT"
 
 case "$HOST_TRIPLE" in
-  *-apple-*) NATIVE_LIBRARY="$CARGO_TARGET_DIR/$HOST_TRIPLE/debug/libconnect_norito_bridge.dylib" ;;
-  *-windows-*) NATIVE_LIBRARY="$CARGO_TARGET_DIR/$HOST_TRIPLE/debug/connect_norito_bridge.dll" ;;
-  *) NATIVE_LIBRARY="$CARGO_TARGET_DIR/$HOST_TRIPLE/debug/libconnect_norito_bridge.so" ;;
+  *-apple-*) NATIVE_LIBRARY_NAME="libconnect_norito_bridge.dylib" ;;
+  *-windows-*) NATIVE_LIBRARY_NAME="connect_norito_bridge.dll" ;;
+  *) NATIVE_LIBRARY_NAME="libconnect_norito_bridge.so" ;;
 esac
-[[ -f "$NATIVE_LIBRARY" && ! -L "$NATIVE_LIBRARY" ]] \
-  || fail "fresh host bridge library is missing: $NATIVE_LIBRARY"
-NATIVE_LIBRARY_DIR="${NATIVE_LIBRARY%/*}"
+CARGO_NATIVE_LIBRARY="$CARGO_TARGET_DIR/$HOST_TRIPLE/debug/$NATIVE_LIBRARY_NAME"
+[[ -f "$CARGO_NATIVE_LIBRARY" && ! -L "$CARGO_NATIVE_LIBRARY" ]] \
+  || fail "fresh host bridge library is missing: $CARGO_NATIVE_LIBRARY"
+NATIVE_LIBRARY_DIR="$BUILD_SESSION/native-runtime"
+mkdir -m 0700 -- "$NATIVE_LIBRARY_DIR"
+NATIVE_LIBRARY="$NATIVE_LIBRARY_DIR/$NATIVE_LIBRARY_NAME"
 NATIVE_EVIDENCE="$BUILD_SESSION/c-jni-native-abi22.json"
 "$PYTHON_BINARY" -I -S "$ABI22_ARTIFACT_CHECKER" record \
-  --artifact "$NATIVE_LIBRARY" \
+  --artifact "$CARGO_NATIVE_LIBRARY" \
+  --stage-artifact "$NATIVE_LIBRARY" \
   --manifest "$NATIVE_EVIDENCE" \
   --source-root "$ROOT_DIR" \
   --sdk c-jni \

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -16,6 +17,16 @@ from scripts import check_native_sdk_abi22_artifact as checker
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+DESCRIPTOR_STAGING_SUPPORTED = (
+    os.name == "posix"
+    and bool(getattr(os, "O_DIRECTORY", 0))
+    and bool(getattr(os, "O_NOFOLLOW", 0))
+    and os.open in getattr(os, "supports_dir_fd", ())
+)
+requires_descriptor_staging = pytest.mark.skipif(
+    not DESCRIPTOR_STAGING_SUPPORTED,
+    reason="descriptor-relative Unix staging is unavailable",
+)
 
 NATIVE_ESCROW_SHARED_TRIGGER_PATHS = {
     "Cargo.lock",
@@ -203,6 +214,563 @@ def test_checker_cli_loads_manifest_helper_under_python_isolation(
     assert completed.returncode == 0, completed.stderr
     assert "{record,verify}" in completed.stdout
     assert "--source-root" in completed.stdout
+
+
+@requires_descriptor_staging
+def test_stage_unique_artifact_accepts_cargo_hardlink_and_preserves_strict_auth(
+    tmp_path: Path,
+) -> None:
+    """A Cargo-style hard-linked output becomes one unique authenticated file."""
+
+    deps_artifact = tmp_path / "cargo-target/debug/deps/libbridge-hash.so"
+    deps_artifact.parent.mkdir(parents=True)
+    deps_artifact.write_bytes(b"fresh native bridge bytes")
+    cargo_artifact = tmp_path / "cargo-target/debug/libbridge.so"
+    os.link(deps_artifact, cargo_artifact)
+    staged = tmp_path / "native-runtime/libbridge.so"
+    staged.parent.mkdir(mode=0o700)
+    with pytest.raises(checker.ArtifactContractError, match="one hard link"):
+        checker.stable_artifact_identity(cargo_artifact)
+    actual_path, pinned_digest, pinned_size = checker.stage_unique_artifact(
+        cargo_artifact,
+        staged,
+    )
+
+    assert actual_path == staged
+    assert pinned_digest == hashlib.sha256(cargo_artifact.read_bytes()).hexdigest()
+    assert pinned_size == len(b"fresh native bridge bytes")
+    assert staged.stat().st_nlink == 1
+    assert checker.stable_artifact_identity(staged) == (
+        pinned_digest,
+        pinned_size,
+    )
+
+
+@requires_descriptor_staging
+def test_stage_unique_artifact_rejects_source_symlink(tmp_path: Path) -> None:
+    """Staging never follows the source path's final component."""
+
+    source = native_artifact(tmp_path)
+    source_link = tmp_path / "native-link.bin"
+    source_link.symlink_to(source)
+    stage_directory = tmp_path / "native-runtime"
+    stage_directory.mkdir(mode=0o700)
+
+    with pytest.raises(checker.ArtifactContractError, match="staging source"):
+        checker.stage_unique_artifact(
+            source_link,
+            stage_directory / "native.bin",
+        )
+
+
+@pytest.mark.parametrize("destination_kind", ("file", "symlink"))
+@requires_descriptor_staging
+def test_stage_unique_artifact_rejects_existing_destination(
+    tmp_path: Path,
+    destination_kind: str,
+) -> None:
+    """Staging exclusively creates its destination and never replaces a link."""
+
+    source = native_artifact(tmp_path)
+    stage_directory = tmp_path / "native-runtime"
+    stage_directory.mkdir(mode=0o700)
+    destination = stage_directory / "native.bin"
+    if destination_kind == "file":
+        destination.write_bytes(b"pre-existing artifact")
+    else:
+        destination.symlink_to(source)
+
+    with pytest.raises(checker.ArtifactContractError, match="fresh path"):
+        checker.stage_unique_artifact(source, destination)
+    if destination_kind == "file":
+        assert destination.read_bytes() == b"pre-existing artifact"
+    else:
+        assert destination.is_symlink()
+
+
+@requires_descriptor_staging
+def test_stage_unique_artifact_pins_each_canonical_parent_component(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An ancestor swap between validation and open cannot redirect staging."""
+
+    source = native_artifact(tmp_path)
+    stage_root = tmp_path / "stage-root"
+    stage_directory = stage_root / "native-runtime"
+    stage_directory.mkdir(parents=True, mode=0o700)
+    detached_root = tmp_path / "detached-stage-root"
+    redirect_root = tmp_path / "redirect-root"
+    redirect_directory = redirect_root / "native-runtime"
+    redirect_directory.mkdir(parents=True, mode=0o700)
+    destination = stage_directory / "native.bin"
+    real_open = os.open
+    original_dir_fd_support = frozenset(os.supports_dir_fd)
+    swapped = False
+
+    def swap_ancestor_before_parent_open(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal swapped
+        path_text = os.fsdecode(path)
+        if not swapped and (
+            (dir_fd is None and Path(path_text) == stage_directory)
+            or (dir_fd is not None and path_text == stage_directory.name)
+        ):
+            swapped = True
+            stage_root.rename(detached_root)
+            stage_root.symlink_to(redirect_root, target_is_directory=True)
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(checker.os, "open", swap_ancestor_before_parent_open)
+    monkeypatch.setattr(
+        checker.os,
+        "supports_dir_fd",
+        original_dir_fd_support | {swap_ancestor_before_parent_open},
+    )
+    with pytest.raises(
+        checker.ArtifactContractError,
+        match="staging directory changed before creation",
+    ):
+        checker.stage_unique_artifact(source, destination)
+
+    assert swapped
+    assert not (detached_root / "native-runtime/native.bin").exists()
+    assert not (redirect_directory / "native.bin").exists()
+
+
+@pytest.mark.parametrize("race", ("replace", "mutate"))
+@requires_descriptor_staging
+def test_stage_unique_artifact_rejects_source_revision_race(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    race: str,
+) -> None:
+    """Source replacement and in-place mutation invalidate the pinned revision."""
+
+    source = tmp_path / "native.bin"
+    source.write_bytes(b"original native artifact bytes")
+    stage_directory = tmp_path / "native-runtime"
+    stage_directory.mkdir(mode=0o700)
+    destination = stage_directory / "native.bin"
+    replacement = tmp_path / "replacement.bin"
+    replacement.write_bytes(source.read_bytes())
+    real_read = os.read
+    raced = False
+
+    def race_during_read(descriptor: int, count: int) -> bytes:
+        nonlocal raced
+        if not raced:
+            raced = True
+            if race == "replace":
+                os.replace(replacement, source)
+            else:
+                with source.open("r+b") as handle:
+                    handle.write(b"x" * len(b"original native artifact bytes"))
+                    handle.flush()
+                    os.fsync(handle.fileno())
+        return real_read(descriptor, count)
+
+    monkeypatch.setattr(checker.os, "read", race_during_read)
+    with pytest.raises(checker.ArtifactContractError, match="source changed"):
+        checker.stage_unique_artifact(source, destination)
+    assert destination.is_file()
+
+    monkeypatch.setattr(checker.os, "read", real_read)
+    with pytest.raises(checker.ArtifactContractError, match="fresh path"):
+        checker.stage_unique_artifact(source, destination)
+
+
+@requires_descriptor_staging
+def test_failed_stage_does_not_unlink_replaced_destination(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cleanup never unlinks a different inode installed at the staged name."""
+
+    source = tmp_path / "native.bin"
+    source.write_bytes(b"original native artifact bytes")
+    stage_directory = tmp_path / "native-runtime"
+    stage_directory.mkdir(mode=0o700)
+    destination = stage_directory / "native.bin"
+    replacement_payload = b"different destination inode"
+    real_read = os.read
+    raced = False
+
+    def replace_destination_during_read(descriptor: int, count: int) -> bytes:
+        nonlocal raced
+        if not raced:
+            raced = True
+            destination.unlink()
+            destination.write_bytes(replacement_payload)
+            with source.open("r+b") as handle:
+                handle.write(b"x" * len(b"original native artifact bytes"))
+                handle.flush()
+                os.fsync(handle.fileno())
+        return real_read(descriptor, count)
+
+    monkeypatch.setattr(checker.os, "read", replace_destination_during_read)
+    with pytest.raises(checker.ArtifactContractError, match="source changed"):
+        checker.stage_unique_artifact(source, destination)
+    assert destination.read_bytes() == replacement_payload
+
+
+@requires_descriptor_staging
+def test_stage_unique_artifact_rejects_destination_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A destination-only replacement reaches and fails its identity check."""
+
+    source = tmp_path / "native.bin"
+    source.write_bytes(b"original native artifact bytes")
+    stage_directory = tmp_path / "native-runtime"
+    stage_directory.mkdir(mode=0o700)
+    destination = stage_directory / "native.bin"
+    replacement_payload = b"different destination inode"
+    real_read = os.read
+    raced = False
+
+    def replace_destination_during_read(descriptor: int, count: int) -> bytes:
+        nonlocal raced
+        if not raced:
+            raced = True
+            destination.unlink()
+            destination.write_bytes(replacement_payload)
+        return real_read(descriptor, count)
+
+    monkeypatch.setattr(checker.os, "read", replace_destination_during_read)
+    with pytest.raises(checker.ArtifactContractError, match="staged native artifact changed"):
+        checker.stage_unique_artifact(source, destination)
+    assert raced
+    assert destination.read_bytes() == replacement_payload
+
+
+@requires_descriptor_staging
+def test_failed_stage_never_pathname_unlinks_after_inode_check(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Failure retains its name rather than racing a replacement before unlink."""
+
+    source = tmp_path / "native.bin"
+    source.write_bytes(b"original native artifact bytes")
+    stage_directory = tmp_path / "native-runtime"
+    stage_directory.mkdir(mode=0o700)
+    destination = stage_directory / "native.bin"
+    replacement = tmp_path / "replacement.bin"
+    replacement.write_bytes(b"replacement must never be unlinked")
+    real_read = os.read
+    real_unlink = os.unlink
+    read_raced = False
+    cleanup_attempted = False
+
+    def mutate_source_during_read(descriptor: int, count: int) -> bytes:
+        nonlocal read_raced
+        if not read_raced:
+            read_raced = True
+            with source.open("r+b") as handle:
+                handle.write(b"x" * len(b"original native artifact bytes"))
+                handle.flush()
+                os.fsync(handle.fileno())
+        return real_read(descriptor, count)
+
+    def swap_immediately_before_unlink(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        *,
+        dir_fd: int | None = None,
+    ) -> None:
+        nonlocal cleanup_attempted
+        cleanup_attempted = True
+        os.replace(replacement, destination)
+        real_unlink(path, dir_fd=dir_fd)
+
+    monkeypatch.setattr(checker.os, "read", mutate_source_during_read)
+    monkeypatch.setattr(checker.os, "unlink", swap_immediately_before_unlink)
+    with pytest.raises(checker.ArtifactContractError, match="source changed"):
+        checker.stage_unique_artifact(source, destination)
+
+    assert read_raced
+    assert not cleanup_attempted
+    assert destination.is_file()
+    assert replacement.is_file()
+
+
+@requires_descriptor_staging
+def test_record_cli_stages_cargo_hardlink_before_authentication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Record binds evidence to the unique staged copy of a Cargo output."""
+
+    source_root = clean_source(tmp_path)
+    cargo_artifact = native_artifact(tmp_path)
+    os.link(cargo_artifact, tmp_path / "native-deps.bin")
+    stage_directory = tmp_path / "native-runtime"
+    stage_directory.mkdir(mode=0o700)
+    staged = stage_directory / "native.bin"
+    manifest_path = tmp_path / "manifest.json"
+
+    def cli_probe(
+        _sdk: str,
+        _path: Path,
+        *,
+        node: str,
+        python: str,
+    ) -> int:
+        del node, python
+        return checker.REQUIRED_BRIDGE_ABI_VERSION
+
+    monkeypatch.setattr(checker, "probe_artifact", cli_probe)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "check_native_sdk_abi22_artifact.py",
+            "record",
+            "--artifact",
+            str(cargo_artifact),
+            "--stage-artifact",
+            str(staged),
+            "--manifest",
+            str(manifest_path),
+            "--source-root",
+            str(source_root),
+            "--sdk",
+            "python",
+            "--target",
+            "linux-x64-python312",
+        ],
+    )
+
+    assert checker.main() == 0
+    manifest = checker.load_manifest(manifest_path)
+    assert staged.stat().st_nlink == 1
+    assert (manifest["artifact_sha256"], manifest["artifact_size"]) == (
+        hashlib.sha256(cargo_artifact.read_bytes()).hexdigest(),
+        cargo_artifact.stat().st_size,
+    )
+
+
+@requires_descriptor_staging
+def test_record_cli_rejects_staged_bytes_not_matching_pinned_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A staging/source digest mismatch fails before evidence is recorded."""
+
+    source_root = clean_source(tmp_path)
+    cargo_artifact = native_artifact(tmp_path)
+    stage_directory = tmp_path / "native-runtime"
+    stage_directory.mkdir(mode=0o700)
+    staged = stage_directory / "native.bin"
+    manifest_path = tmp_path / "manifest.json"
+    real_stage = checker.stage_unique_artifact
+
+    def stage_with_forged_source_digest(
+        source: Path,
+        destination: Path,
+    ) -> tuple[Path, str, int]:
+        path, _digest, size = real_stage(source, destination)
+        return path, "0" * 64, size
+
+    def cli_probe(
+        _sdk: str,
+        _path: Path,
+        *,
+        node: str,
+        python: str,
+    ) -> int:
+        del node, python
+        return checker.REQUIRED_BRIDGE_ABI_VERSION
+
+    monkeypatch.setattr(checker, "stage_unique_artifact", stage_with_forged_source_digest)
+    monkeypatch.setattr(checker, "probe_artifact", cli_probe)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "check_native_sdk_abi22_artifact.py",
+            "record",
+            "--artifact",
+            str(cargo_artifact),
+            "--stage-artifact",
+            str(staged),
+            "--manifest",
+            str(manifest_path),
+            "--source-root",
+            str(source_root),
+            "--sdk",
+            "python",
+            "--target",
+            "linux-x64-python312",
+        ],
+    )
+
+    with pytest.raises(checker.ArtifactContractError, match="pinned staging source"):
+        checker.main()
+    assert not manifest_path.exists()
+
+
+@requires_descriptor_staging
+def test_record_cli_uses_authorized_canonical_parent_after_alias_retarget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A retargeted parent alias cannot change the authorized stage directory."""
+
+    source_root = clean_source(tmp_path)
+    cargo_artifact = native_artifact(tmp_path)
+    safe_parent = tmp_path / "safe-native-runtime"
+    safe_parent.mkdir(mode=0o700)
+    parent_alias = tmp_path / "native-runtime-alias"
+    parent_alias.symlink_to(safe_parent, target_is_directory=True)
+    manifest_path = tmp_path / "manifest.json"
+    expected_stage = safe_parent.resolve(strict=True) / "native.bin"
+    real_stage = checker.stage_unique_artifact
+    observed_destinations: list[Path] = []
+
+    def retarget_alias_then_stage(
+        source: Path,
+        canonical_destination: Path,
+    ) -> tuple[Path, str, int]:
+        observed_destinations.append(canonical_destination)
+        parent_alias.unlink()
+        parent_alias.symlink_to(source_root, target_is_directory=True)
+        return real_stage(source, canonical_destination)
+
+    def cli_probe(
+        _sdk: str,
+        _path: Path,
+        *,
+        node: str,
+        python: str,
+    ) -> int:
+        del node, python
+        return checker.REQUIRED_BRIDGE_ABI_VERSION
+
+    monkeypatch.setattr(checker, "stage_unique_artifact", retarget_alias_then_stage)
+    monkeypatch.setattr(checker, "probe_artifact", cli_probe)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "check_native_sdk_abi22_artifact.py",
+            "record",
+            "--artifact",
+            str(cargo_artifact),
+            "--stage-artifact",
+            str(parent_alias / "native.bin"),
+            "--manifest",
+            str(manifest_path),
+            "--source-root",
+            str(source_root),
+            "--sdk",
+            "python",
+            "--target",
+            "linux-x64-python312",
+        ],
+    )
+
+    assert checker.main() == 0
+    assert observed_destinations == [expected_stage]
+    assert expected_stage.is_file()
+    assert not (source_root / "native.bin").exists()
+
+
+def test_descriptor_staging_support_failure_is_scoped_to_stage_operation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unsupported hosts reject staging while ordinary record/verify still work."""
+
+    source_root = clean_source(tmp_path)
+    artifact = native_artifact(tmp_path)
+    manifest_path = tmp_path / "manifest.json"
+    monkeypatch.setattr(checker.os, "supports_dir_fd", frozenset())
+
+    with pytest.raises(
+        checker.ArtifactContractError,
+        match="requires Unix dir_fd, O_DIRECTORY, and O_NOFOLLOW support",
+    ):
+        checker.stage_unique_artifact(artifact, tmp_path / "staged.bin")
+
+    def cli_probe(
+        _sdk: str,
+        _path: Path,
+        *,
+        node: str,
+        python: str,
+    ) -> int:
+        del node, python
+        return checker.REQUIRED_BRIDGE_ABI_VERSION
+
+    monkeypatch.setattr(checker, "probe_artifact", cli_probe)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "check_native_sdk_abi22_artifact.py",
+            "record",
+            "--artifact",
+            str(artifact),
+            "--manifest",
+            str(manifest_path),
+            "--source-root",
+            str(source_root),
+            "--sdk",
+            "python",
+            "--target",
+            "linux-x64-python312",
+        ],
+    )
+    assert checker.main() == 0
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "check_native_sdk_abi22_artifact.py",
+            "verify",
+            "--artifact",
+            str(artifact),
+            "--manifest",
+            str(manifest_path),
+            "--source-root",
+            str(source_root),
+        ],
+    )
+    assert checker.main() == 0
+
+
+def test_verify_cli_rejects_stage_artifact_argument(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only record mode may materialize a Cargo build output."""
+
+    source_root = clean_source(tmp_path)
+    artifact = native_artifact(tmp_path)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "check_native_sdk_abi22_artifact.py",
+            "verify",
+            "--artifact",
+            str(artifact),
+            "--stage-artifact",
+            str(tmp_path / "staged.bin"),
+            "--manifest",
+            str(tmp_path / "missing-manifest.json"),
+            "--source-root",
+            str(source_root),
+        ],
+    )
+
+    with pytest.raises(
+        checker.ArtifactContractError,
+        match="verify mode does not accept --stage-artifact",
+    ):
+        checker.main()
 
 
 def exact_probe(_sdk: str, _path: Path) -> int:
@@ -1689,6 +2257,21 @@ def test_repository_wires_exact_abi23_release_contract() -> None:
         in jni_lane
     )
     assert 'ABI22_ARTIFACT_CHECKER="$ROOT_DIR/scripts/check_native_sdk_abi22_artifact.py"' in jni_lane
+    assert (
+        'CARGO_NATIVE_LIBRARY="$CARGO_TARGET_DIR/$HOST_TRIPLE/debug/'
+        '$NATIVE_LIBRARY_NAME"' in jni_lane
+    )
+    assert 'NATIVE_LIBRARY_DIR="$BUILD_SESSION/native-runtime"' in jni_lane
+    record_call = jni_lane.index('"$ABI22_ARTIFACT_CHECKER" record')
+    verify_call = jni_lane.index('"$ABI22_ARTIFACT_CHECKER" verify')
+    assert (
+        record_call
+        < jni_lane.index('--artifact "$CARGO_NATIVE_LIBRARY"', record_call)
+        < jni_lane.index('--stage-artifact "$NATIVE_LIBRARY"', record_call)
+        < verify_call
+        < jni_lane.index('--artifact "$NATIVE_LIBRARY"', verify_call)
+    )
+    assert '/bin/cp -- "$CARGO_NATIVE_LIBRARY" "$NATIVE_LIBRARY"' not in jni_lane
     assert "resolve_trusted_python312()" in jni_lane
     assert "MOBILE_SDK_PYTHON_BINARY" in jni_lane
     assert "sys.version_info[:2] != (3, 12)" in jni_lane
