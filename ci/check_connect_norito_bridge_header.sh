@@ -111,6 +111,9 @@ KAGEMUSHA_EXPORTS = {
     "connect_norito_kagemusha_request_authorization_signing_bytes_v2",
     "connect_norito_kagemusha_topup_finality_verify_v4",
     "connect_norito_kagemusha_topup_shield_build_unsigned_v4",
+    "connect_norito_kagemusha_project_top_up_submission_request_v4",
+    "connect_norito_kagemusha_project_redeem_submission_request_v4",
+    "connect_norito_kagemusha_validate_operation_status_v4",
     "connect_norito_kagemusha_secret_free_buffer",
 }
 KAGEMUSHA_CANDIDATE_LAB_EXPORTS = {

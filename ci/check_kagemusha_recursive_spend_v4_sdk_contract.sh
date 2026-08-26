@@ -395,14 +395,14 @@ v4_case_names = (
     "stepEpBootstrapWitness",
 )
 sdk_schema_types = {
-    "InitRequestV4": "KagemushaRecursiveSpendInitLocalRequestV4",
-    "AppendRequestV4": "KagemushaRecursiveSpendAppendLocalRequestV4",
-    "VerifyRequestV4": "KagemushaRecursiveSpendVerifyLocalRequestV4",
-    "RedeemRequestV4": "KagemushaRecursiveSpendRedeemLocalRequestV4",
-    "InitResultV4": "KagemushaRecursiveSpendInitResultV4",
-    "SplitResultV4": "KagemushaRecursiveSpendSplitResultV4",
-    "VerifyResultV4": "KagemushaRecursiveSpendVerifyResultV4",
-    "RedeemBuildResultV4": "KagemushaRecursiveSpendRedeemBuildResultV4",
+    "InitRequestV4": "connect_norito_bridge::KagemushaRecursiveSpendInitLocalRequestV4",
+    "AppendRequestV4": "connect_norito_bridge::KagemushaRecursiveSpendAppendLocalRequestV4",
+    "VerifyRequestV4": "connect_norito_bridge::KagemushaRecursiveSpendVerifyLocalRequestV4",
+    "RedeemRequestV4": "connect_norito_bridge::KagemushaRecursiveSpendRedeemLocalRequestV4",
+    "InitResultV4": "iroha_data_model::offline::model::KagemushaRecursiveSpendInitResultV4",
+    "SplitResultV4": "iroha_data_model::offline::model::KagemushaRecursiveSpendSplitResultV4",
+    "VerifyResultV4": "iroha_data_model::offline::model::KagemushaRecursiveSpendVerifyResultV4",
+    "RedeemBuildResultV4": "iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemBuildResultV4",
 }
 
 native_methods = (
@@ -627,7 +627,7 @@ swift_v4_types = (
 for type_name in swift_v4_types:
     require_regex(
         "swift_v4",
-        rf"public\s+struct\s+{re.escape(type_name)}\b",
+        rf"package\s+struct\s+{re.escape(type_name)}\b",
         f"distinct Swift carrier {type_name}",
     )
 
@@ -742,7 +742,7 @@ for encoder, wire_name in (
 
 require_regex(
     "swift",
-    r"public\s+struct\s+KagemushaRecursiveSpendInstalledArtifactSetV4\b[\s\S]{0,500}?KagemushaRecursiveSpendArtifactBindingV4",
+    r"package\s+struct\s+KagemushaRecursiveSpendInstalledArtifactSetV4\b[\s\S]{0,500}?KagemushaRecursiveSpendArtifactBindingV4",
     "Swift V4-only installed artifact set",
 )
 require_regex(
@@ -812,17 +812,17 @@ for label in ("kotlin", "java"):
     )
     require_regex(
         label,
-        r"class\s+BundleV4\b[\s\S]{0,500}?\"KagemushaRecursiveSpendBundleV4\"",
+        r"class\s+BundleV4\b[\s\S]{0,500}?\"iroha_data_model::offline::model::KagemushaRecursiveSpendBundleV4\"",
         "distinct BundleV4 wrapper",
     )
     require_regex(
         label,
-        r"class\s+TopUpAnchorV4\b[\s\S]{0,500}?\"KagemushaRecursiveSpendTopUpAnchorV4\"",
+        r"class\s+TopUpAnchorV4\b[\s\S]{0,500}?\"iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpAnchorV4\"",
         "distinct TopUpAnchorV4 wrapper",
     )
     require_regex(
         label,
-        r"class\s+TopUpFinalityEvidenceV4\b[\s\S]{0,500}?\"KagemushaRecursiveSpendTopUpFinalityEvidenceV4\"",
+        r"class\s+TopUpFinalityEvidenceV4\b[\s\S]{0,500}?\"iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpFinalityEvidenceV4\"",
         "distinct TopUpFinalityEvidenceV4 wrapper",
     )
     if re.search(
@@ -956,7 +956,7 @@ if java_files != v4_files:
     errors.append(f"{paths['java']}: V4 files are not canonical: {java_files!r}")
 
 swift_role_enum = re.search(
-    r"public\s+enum\s+KagemushaRecursiveSpendArtifactRoleV4\b(.*?)public\s+var\s+fileName",
+    r"package\s+enum\s+KagemushaRecursiveSpendArtifactRoleV4\b(.*?)public\s+var\s+fileName",
     texts["swift"],
     re.MULTILINE | re.DOTALL,
 )
@@ -1169,11 +1169,14 @@ c_symbols = (
     "connect_norito_kagemusha_recursive_spend_topup_unsigned_payload_digest_v4",
     "connect_norito_kagemusha_recursive_spend_topup_finalize_request_v4",
     "connect_norito_kagemusha_recursive_spend_topup_v4",
+    "connect_norito_kagemusha_project_top_up_submission_request_v4",
     "connect_norito_kagemusha_recursive_spend_append_v4",
     "connect_norito_kagemusha_recursive_spend_verify_v4",
     "connect_norito_kagemusha_recursive_spend_redeem_unsigned_payload_digest_v4",
     "connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v4",
     "connect_norito_kagemusha_recursive_spend_redeem_v4",
+    "connect_norito_kagemusha_project_redeem_submission_request_v4",
+    "connect_norito_kagemusha_validate_operation_status_v4",
     "connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v4",
     "connect_norito_kagemusha_secret_free_buffer",
     "connect_norito_kagemusha_receiver_key_reference_v2",
@@ -1239,7 +1242,7 @@ def parse_manifest_symbol_inventory(label: str) -> tuple[str, ...]:
 actual_kagemusha_symbols = parse_shell_symbol_array("mobile_check", "KAGEMUSHA_C_SYMBOLS")
 if actual_kagemusha_symbols != c_symbols:
     errors.append(
-        f"{paths['mobile_check']}: exact ordered 48-symbol Kagemusha C inventory mismatch "
+        f"{paths['mobile_check']}: exact ordered 49-symbol Kagemusha C inventory mismatch "
         f"(found {len(actual_kagemusha_symbols)})"
     )
 
