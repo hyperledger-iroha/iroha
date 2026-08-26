@@ -178,7 +178,7 @@ jobs:
     timeout-minutes: 120
     env:
       IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"
-      PRIVACY_PRODUCTION_ENABLED: ${{ env.APPLE_PRIVACY_PRODUCTION_ENABLED }}
+      PRIVACY_PRODUCTION_ENABLED: "false"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -357,7 +357,7 @@ jobs:
     env:
       IROHA_NATIVE_LIBRARY_PATH: ${{ github.workspace }}/target/debug
       IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"
-      PRIVACY_PRODUCTION_ENABLED: ${{ env.ANDROID_PRIVACY_PRODUCTION_ENABLED }}
+      PRIVACY_PRODUCTION_ENABLED: "false"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6

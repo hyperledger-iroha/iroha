@@ -107,6 +107,15 @@ class PrivacyCsharpNativeContractTests(unittest.TestCase):
     def test_workflow_builds_authenticates_and_consumes_bridge(self) -> None:
         source = read(".github/workflows/pr_privacy_sdk_guard.yml")
         csharp = workflow_job(source, "privacy_csharp_sdk_tests")
+        job_header = csharp[: csharp.index("    steps:\n")]
+        test_step_start = csharp.index(
+            "      - name: Privacy C# SDK tests through authenticated ABI23"
+        )
+        test_step_end = csharp.index(
+            "      - name: Revalidate ABI23 C# privacy input after execution",
+            test_step_start,
+        )
+        test_step = csharp[test_step_start:test_step_end]
 
         for path in (
             '      - "scripts/check_native_sdk_abi22_artifact.py"',
@@ -128,6 +137,12 @@ class PrivacyCsharpNativeContractTests(unittest.TestCase):
             "run: ci/check_privacy_csharp_sdk.sh",
         ):
             self.assertIn(marker, csharp)
+
+        self.assertNotIn("${{ runner.temp }}", job_header)
+        self.assertIn(
+            "LD_LIBRARY_PATH: ${{ runner.temp }}/privacy-jvm-native-abi22",
+            test_step,
+        )
 
         ordered = (
             csharp.index("actions/setup-dotnet@"),
