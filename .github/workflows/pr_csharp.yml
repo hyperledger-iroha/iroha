@@ -26,7 +26,6 @@ on:
       - "fixtures/sorafs_manifest/reference_sdk/**"
       - "fixtures/sorafs_manifest/reference_sdk_validation_inventory_v1.json"
       - "fixtures/kagemusha_recursive_spend_abi6/**"
-      - "fixtures/kagemusha_recursive_spend_abi7/**"
       - "integration_tests/tests/native_escrow.rs"
       - "scripts/check_sorafs_reference_sdk_fixtures.py"
       - "scripts/check_native_sdk_abi22_artifact.py"

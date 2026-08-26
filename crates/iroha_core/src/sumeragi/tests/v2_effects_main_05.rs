@@ -1763,7 +1763,7 @@ fn install_recovered_validate_retry_seal(
     let owner = RecoveredDurableValidateRetryOwnerV1::for_test(
         effect.clone(),
         durable.clone(),
-        pending,
+        &pending,
         ordinal,
         None,
     )
@@ -2192,7 +2192,7 @@ fn install_bound_validate_retry_authority_for_cleanup(
             let owner = RecoveredDurableValidateRetryOwnerV1::for_test(
                 effect,
                 durable,
-                pending,
+                &pending,
                 lifecycle_ordinal,
                 None,
             )

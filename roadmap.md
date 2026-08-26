@@ -2100,7 +2100,7 @@ strict verification and token release. Missing, substituted, stale, drifting,
 revoked, or test-marked providers fail closed. Focused Cargo/workspace
 validation and reviewed reference-HSM deployment evidence remain open.
 
-The mandatory SoraFS ABI-22 Python native reference lane is now pinned to exact
+The mandatory SoraFS ABI-23 Python native reference lane is now pinned to exact
 Python 3.12. The obsolete tracked `_crypto.cpython-39-darwin.so` is removed, and
 the runner rejects any tracked package `.so`, `.so.*`, `.dylib`, `.pyd`, or
 `.dll`, activates its selected virtual environment, covers the
@@ -2113,20 +2113,20 @@ appeal-finance `CancelAssetLock` files are mandatory. The current non-native
 hard-cut slice passes 85 focused Python tests, seven static guards, 36
 fixture-workflow trigger tests, and 53 native-artifact contract cases; managed
 Kotlin/JVM, mirrored Java Android, and C# parity is green. No checked-in,
-clean-source, five-target ABI-22 inventory or
+clean-source, five-target ABI-23 inventory or
 authenticated native replay record exists, so no native-dependent SDK suite is
 qualified. Clean native rebuilds, unskipped fixture replay, and source-bound
 provenance across all five release targets remain open. Kotlin/JVM and mirrored
-Java Android now require both exact bridge ABI 22 and `NativeSignerBridge` JNI
+Java Android now require both exact bridge ABI 23 and `NativeSignerBridge` JNI
 contract revision 5 before
 making any native signer call; the Android artifact gate requires both
 revision-probe exports, preventing a stale same-ABI JNI descriptor from passing
 package qualification. Swift package admission now requires an embedded
-`NoritoBridge.artifacts.json` declaring exact ABI 22, and its runtime loader
+`NoritoBridge.artifacts.json` declaring exact ABI 23, and its runtime loader
 rejects missing or stale manifest ABI metadata before accepting a matching
 artifact hash. Ignored or locally rebuilt artifacts remain unqualified
 regardless of their reported ABI: no checked-in, clean-source, five-target
-ABI-22 inventory or authenticated execution record exists. The separate
+ABI-23 inventory or authenticated execution record exists. The separate
 SoraFS pin-register SDK workflow, runner, and guard are also exact Python 3.12
 and install only the hash-locked, binary-only `requirements-ci.lock`; a fresh
 isolated CPython 3.12.13 venv is green at 3/3, including positive static
@@ -2138,7 +2138,7 @@ compatibility probe. The remaining Kotlin/JVM and Java core failures are
 explicit stale-ABI-22 native failures; rebuild and rerun them before `G-FINAL`.
 Seven focused Rust `EscrowId` hard-cut regressions are green across lowercase
 checksum parsing, canonical JSON/Norito/schema handling, noncanonical query
-rejection, and typed public-selector roundtrip. The clean ABI-22 native rebuild
+rejection, and typed public-selector roundtrip. The clean ABI-23 native rebuild
 and qualification remain required before the wire/SDK cut can be closed.
 
 The SoraFS monitoring source slice is green under checksum-verified
@@ -2369,7 +2369,7 @@ native bridges and runtimes available.
   divergence.
 - Re-run the complete Swift package suite with a bridge artifact accepted by
   the active Swift compiler. Keep Kagemusha native-canonical bytes and bridge
-  ABI 22 unchanged while platform delivery adapters converge on the shared
+  ABI 23 unchanged while platform delivery adapters converge on the shared
   peer-message core. Do not add a backend endpoint or backend reconciliation
   fallback to close a device-only evidence gap.
 
@@ -2408,7 +2408,7 @@ Neither extension may be implemented as a sender fallback or an unscoped
 aggregate balance check.
 
 Kagemusha transport and proof admission are fail-closed for the first release.
-It is the only offline-spend protocol. Exact bridge ABI 22 and governed schema
+It is the only offline-spend protocol. Exact bridge ABI 23 and governed schema
 `kagemusha.offline.recursive_spend.artifact_manifest.v4` are the current
 artifact and readiness contract, not a runtime product selector. Runtime,
 wallet, and readiness surfaces remain selector-free. Each authenticated V4
@@ -2418,7 +2418,7 @@ final-key selector-zero bootstrap witness for each parity. Bounded circuit
 parameters are authenticated inline in the two profiles rather than represented
 as additional streamed artifacts.
 The unreleased recursive state boundary carrier remains V2 without changing
-bridge ABI 22 or manifest V4, while its nested compact profile is V5. The
+bridge ABI 23 or manifest V4, while its nested compact profile is V5. The
 boundary is the complete 138-limb canonical state, including the public
 append-only `next_zero_leaf_index`; each fixed Eq/Ep public-input schema is 66
 field elements.
@@ -4194,7 +4194,7 @@ excluded from the first release.
   data-model, bridge, Torii, CLI, SDK, mobile, packaging, and documentation
   surface must expose exact readiness only, with no runtime product, version,
   or compatibility selector. The current artifact/readiness contract is exact
-  bridge ABI 22 and manifest V4 with exactly eight external Eq/Ep artifacts;
+  bridge ABI 23 and manifest V4 with exactly eight external Eq/Ep artifacts;
   bounded circuit parameters remain authenticated inline. Versioned type names
   are internal wire and artifact schemas, not selectable products.
   Proof-gated init, append, verify, top-up, redeem, and change are selected by
@@ -9170,7 +9170,7 @@ excluded from the first release.
   payloads through `validate_hedging_payload_bytes`, and `sorafs-validate
   hedging`/`billing` provides local operator validation for those artifacts.
   The source bridge surface now exposes the same validator through
-	  `sorafs_reference_validate_hedging_json`, Connect C/JNI ABI 22
+	  `sorafs_reference_validate_hedging_json`, Connect C/JNI ABI 23
   `connect_norito_sorafs_reference_validate_hedging_json`, and Kotlin/JVM,
   Java Android, and Swift SDK wrappers. `sorafs_node` now also exports the
   durable `HedgingBillingService`, and standard `irohad` can supervise it under
@@ -17965,7 +17965,7 @@ digest-bound pending-XSD source probe summaries for reviewed
   variables, then available `python3.11`/Homebrew Python 3.11 candidates before
   falling back to `python3` for the existing fail-closed version check, with
   override and resolver drift pinned by negative controls. The mandatory SoraFS
-	  ABI-22 native reference and pin-register SDK lanes are separately pinned to
+	  ABI-23 native reference and pin-register SDK lanes are separately pinned to
   exact Python 3.12; their runners must activate and report their 3.12 venvs
   before any native build or pytest execution. Pin-register dependencies must
   come only from `requirements-ci.lock` under
@@ -20654,7 +20654,7 @@ digest-bound pending-XSD source probe summaries for reviewed
   `zk-trace/mock-proof` artifacts while the real transparent IVM trace prover
   remains future work.
   Kagemusha is the single mode-free offline-cash protocol. Its current artifact
-	  and readiness contract is exact bridge ABI 22 with authenticated manifest V4
+	  and readiness contract is exact bridge ABI 23 with authenticated manifest V4
   artifacts: exactly eight external Eq/Ep roles with circuit parameters inline.
   Versioned type names are internal wire and artifact schema identifiers only.
   Runtime, SDK, CLI,
@@ -25609,7 +25609,7 @@ signed ancestor-linked solid-block header proof,
   `b5f11fd22856f69165a0c2a6906cea5beeaa46a1aee6c322ed18abc0acefee72`.
 - Swift's direct current-source Numeric harness passes 6/6, but official
   SwiftPM/native-framework qualification remains blocked by checked-in
-  NoritoBridge ABI21 versus package ABI22. The guarded ABI22 build was rejected
+  NoritoBridge ABI21 versus package ABI23. The guarded ABI22 build was rejected
   after relevant source drift and admitted no artifact.
 - C# cached-current Release runtime checks pass 4/4 and 13/13. Fresh compilation
   remains blocked because `global.json` pins .NET SDK 8.0.419 while this host

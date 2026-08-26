@@ -11355,14 +11355,12 @@ impl SumeragiV2Adapter {
                 .execution_commitment(current_round, locked.subject())
                 .is_ok_and(|commitment| commitment == vote.execution_commitment)
     }
-    /// Return the one current-view unchanged-lock body statement which may
-    /// cross an already-due timeout boundary by immediately staging
-    /// `LockAndCommit`.
+    /// Return the one current-view unchanged-lock body statement whose exact
+    /// Prepare witnesses may cross an already-due timeout boundary.
     ///
-    /// This is only a target projection. The arriving PrepareQC must still be
-    /// converted through the ordinary wire registry and applied to a cloned
-    /// reducer by [`Self::pre_timeout_locked_prepare_qc_stages_lock_and_commit`]
-    /// before it can acquire the bounded scheduler exception.
+    /// This is only a target projection. Every arriving Prepare vote or QC
+    /// must still pass the ordinary wire/authentication checks and a cloned
+    /// reducer preview before it can acquire the bounded scheduler exception.
     pub(crate) fn pre_timeout_locked_prepare_qc_target(
         &self,
     ) -> Option<super::v2_runtime::PreTimeoutLockedPrepareQcTargetV1> {
@@ -11378,6 +11376,7 @@ impl SumeragiV2Adapter {
             || durable.timeout_intent(current_round).is_some()
             || durable.commit_intent(current_round).is_some()
             || self.reducer.local_validator().is_none()
+            || !self.reducer.local_candidate_body_is_eligible()
             || self.reducer.pending_persistence_record().is_some()
             || self.reducer.awaiting_signature().is_some()
             || self.reducer.body_state(current_round, locked.subject())
@@ -11447,6 +11446,118 @@ impl SumeragiV2Adapter {
                     && vote.phase() == reducer::Phase::Commit
                     && vote.subject() == core_certificate.subject()
         )
+    }
+    /// Deep-preview one exact authenticated current-view Prepare witness for
+    /// the unchanged older lock.
+    ///
+    /// A successful preview proves that the ordinary reducer transition adds
+    /// exactly this previously absent signer to the target Prepare pool. The
+    /// transition may be a pre-quorum stutter at the effect boundary, or it
+    /// may form the exact PrepareQC and immediately stage `LockAndCommit`.
+    /// No live registry, admission table, vote pool, or WAL state is mutated.
+    fn pre_timeout_locked_reproposal_prepare_vote_advances(
+        &self,
+        vote: &wire::Vote,
+        target: super::v2_runtime::PreTimeoutLockedPrepareQcTargetV1,
+    ) -> bool {
+        if vote.phase != wire::GlobalPhase::Prepare
+            || vote.round != target.round
+            || vote.proposal_round != target.round
+            || vote.subject != target.subject
+            || vote.execution_commitment != target.execution_commitment
+            || !self.is_exact_locked_reproposal_prepare_vote(vote)
+            || self.pre_timeout_locked_prepare_qc_target() != Some(target)
+        {
+            return false;
+        }
+        let message =
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(vote.clone()));
+        if verify_authenticated_message(
+            &self.wire_context,
+            self.parent_verification.as_ref(),
+            &message,
+            &self.proofs_of_possession,
+        )
+        .is_err()
+        {
+            return false;
+        }
+        let mut registry = self.registry.clone();
+        let Ok(core_vote) = registry.vote_to_core(vote, &self.wire_context) else {
+            return false;
+        };
+        let vote_statement = core_vote.vote();
+        let pool_signers = |reducer: &reducer::Reducer| {
+            reducer
+                .vote_pool_snapshots()
+                .into_iter()
+                .find(|pool| {
+                    pool.round == vote_statement.round()
+                        && pool.proposal_round == vote_statement.proposal_round()
+                        && pool.phase == reducer::Phase::Prepare
+                        && pool.subject == vote_statement.subject()
+                })
+                .map_or_else(Vec::new, |pool| pool.signers)
+        };
+        let before = pool_signers(&self.reducer);
+        if before.contains(&vote_statement.signer()) {
+            return false;
+        }
+        let mut reducer = self.reducer.clone();
+        let Ok(outcome) = reducer.step(reducer::Event::VoteReceived {
+            tag: reducer.current_tag(),
+            vote: core_vote,
+        }) else {
+            return false;
+        };
+        let after = pool_signers(&reducer);
+        if outcome.disposition() != reducer::StepDisposition::Applied
+            || after.len() != before.len().saturating_add(1)
+            || !after.contains(&vote_statement.signer())
+            || !before.iter().all(|signer| after.contains(signer))
+        {
+            return false;
+        }
+        match outcome.effects() {
+            [] => true,
+            [
+                reducer::Effect::Broadcast(reducer::ConsensusMessageV2::QuorumCertificate(
+                    certificate,
+                )),
+                reducer::Effect::Persist { entry, .. },
+            ] => matches!(
+                entry.record(),
+                reducer::WalRecord::LockAndCommit { prepare, vote }
+                    if prepare == certificate
+                        && certificate.phase() == reducer::Phase::Prepare
+                        && certificate.round() == vote_statement.round()
+                        && certificate.proposal_round() == vote_statement.proposal_round()
+                        && certificate.subject() == vote_statement.subject()
+                        && vote.context_id() == certificate.reference().context_id()
+                        && vote.round() == certificate.round()
+                        && vote.proposal_round() == certificate.proposal_round()
+                        && vote.phase() == reducer::Phase::Commit
+                        && vote.subject() == certificate.subject()
+            ),
+            _ => false,
+        }
+    }
+    /// Return whether one fixed-cut carrier is productive exact locked-body
+    /// Prepare progress in the current adapter state.
+    pub(crate) fn pre_timeout_locked_prepare_progress_is_exact(
+        &self,
+        payload: &wire::ConsensusMessageV2Payload,
+        target: super::v2_runtime::PreTimeoutLockedPrepareQcTargetV1,
+    ) -> bool {
+        match payload {
+            wire::ConsensusMessageV2Payload::Vote(vote) => {
+                self.pre_timeout_locked_reproposal_prepare_vote_advances(vote, target)
+            }
+            wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) => {
+                self.pre_timeout_locked_prepare_qc_stages_lock_and_commit(certificate, target)
+            }
+            _ => false,
+        }
     }
     fn deferred_owns_ingress(
         &self,

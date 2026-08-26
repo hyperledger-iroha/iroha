@@ -218,9 +218,9 @@ opening residual is not an IPA decision. Native/in-circuit transcript parity,
 substitution tests, both outer proofs, recursive accumulation, and both terminal
 decisions are mandatory before `CircuitVerifierUnavailable` can be removed.
 
-## ABI-21 and artifact V4 contract
+## ABI-21/V4 lifecycle and native bridge ABI-23 contract
 
-The current contract is bridge ABI `22`, manifest schema
+The current contract is bridge ABI `23`, manifest schema
 `kagemusha.offline.recursive_spend.artifact_manifest.v4`, proof backend
 `halo2/ipa-pasta-cycle-compact-v5`, and transcript profile
 `kagemusha-pasta-cycle-poseidon-compact-v5`. These values carry no mode field. The two

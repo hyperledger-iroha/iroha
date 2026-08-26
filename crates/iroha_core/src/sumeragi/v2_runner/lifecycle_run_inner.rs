@@ -1159,7 +1159,12 @@ fn run_lifecycle_active_height(
 
         let apply_terminal_settled = producer_claim.apply_terminal_settled();
         if apply_terminal_settled && !ready_to_finish {
+            let blockers = activated.with_runner_runtime(
+                &mut active_runner,
+                |_owner, executor, _services, _local_proposal| executor.ready_to_finish_blockers(),
+            );
             iroha_logger::error!(
+                ?blockers,
                 "recovered Apply terminal settlement did not leave the executor ready for rollover"
             );
             output_guard.close_admission_for_restart();

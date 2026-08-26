@@ -84,6 +84,22 @@ impl PendingLifecycleOutputAdmissionV1 {
         self.ownership.owner().clone()
     }
 
+    /// Authenticate this exact periodic CommitQC output as the first member
+    /// of the retained Apply's two-effect reducer batch.
+    pub(in crate::sumeragi) fn exactly_precedes_periodic_retransmit_apply(
+        &self,
+        apply: &AdapterEffect,
+        apply_ownership: &RuntimeEffectOwnership,
+    ) -> bool {
+        self.ownership
+            .exactly_binds_periodic_retransmit_broadcast(&self.effect)
+            && apply_ownership.exactly_follows_two_effect_batch(
+                &self.ownership,
+                &self.effect,
+                apply,
+            )
+    }
+
     /// Recheck an exact retry without replacing the retained move-only owner.
     pub(in crate::sumeragi) fn exactly_matches_retry(
         &self,

@@ -331,6 +331,16 @@ pub(in crate::sumeragi) use work_registry::{
     RecoveredDurableValidateRetryOwnerV1, RecoveredLifecycleSignDispatchIdentityV1,
     RecoveredLifecycleSignDispatchKeyV1,
 };
+pub(in crate::sumeragi) use work_registry::{
+    AttestedLifecycleDecisionApplySuccessorOutputsV1, DurableStoreTerminalRetrySealV1,
+    LifecycleOutputAdmissionKeyV1, PendingDurableValidateAdmissionV1,
+    PendingLifecycleOutputAdmissionV1, PendingLiveWalSignAdmissionV1,
+    PreparedApplyTerminalDirectBroadcastV1, PreparedAuthenticatedGenesisFetchReplayPreAdmission,
+    PreparedAuthenticatedGenesisStoreReplayPreAdmission,
+    PreparedAuthenticatedGenesisStoredReplayPreAdmission,
+    PreparedLocalBodyValidateReplayPreAdmission, PreparedRemoteProposalFetchReplayPreAdmission,
+    PreparedRemoteProposalStoreReplayPreAdmission, PreparedRemoteProposalStoredReplayPreAdmission,
+};
 #[allow(unused_imports, reason = "reviewed recovered-WAL registry namespace")]
 pub(crate) use work_registry::{
     AuthenticatedRecoveredWalValidateLifecycleRepair,
@@ -354,16 +364,6 @@ pub(in crate::sumeragi) use work_registry::{
     PreparedLiveValidateReportRegistryWork, PreparedLiveValidateSignRegistryWork,
     PreparedReadyDurableValidateAdapterPreview, ReadyDurableValidateAdapterPreviewError,
     ReadyValidateSuccessorV1, ReadyValidatedExecutorCatalogAuthorityV1,
-};
-pub(in crate::sumeragi) use work_registry::{
-    DurableStoreTerminalRetrySealV1, LifecycleOutputAdmissionKeyV1,
-    PendingDurableValidateAdmissionV1, PendingLifecycleOutputAdmissionV1,
-    PendingLiveWalSignAdmissionV1, PreparedApplyTerminalDirectBroadcastV1,
-    PreparedAuthenticatedGenesisFetchReplayPreAdmission,
-    PreparedAuthenticatedGenesisStoreReplayPreAdmission,
-    PreparedAuthenticatedGenesisStoredReplayPreAdmission,
-    PreparedLocalBodyValidateReplayPreAdmission, PreparedRemoteProposalFetchReplayPreAdmission,
-    PreparedRemoteProposalStoreReplayPreAdmission, PreparedRemoteProposalStoredReplayPreAdmission,
 };
 const MAX_PENDING_ADMISSION_WAITS: usize = 64;
 /// Sole allocator and writer of logical Sumeragi lifecycle state.

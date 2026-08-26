@@ -107,9 +107,9 @@ use super::{
         LocalProposalIntentReplayEvidenceV1, LocalProposalReadyReplayEvidenceV1,
     },
     v2_lifecycle_coordinator::{
-        AdmissionDecision, DurableStoreTerminalRetrySealV1,
-        InstalledAuthenticatedGenesisReplayAuthorityV1, LifecycleContext,
-        LifecycleDecisionApplyDispatchKeyV1, LifecycleDecisionApplyLineageV1,
+        AdmissionDecision, AttestedLifecycleDecisionApplySuccessorOutputsV1,
+        DurableStoreTerminalRetrySealV1, InstalledAuthenticatedGenesisReplayAuthorityV1,
+        LifecycleContext, LifecycleDecisionApplyDispatchKeyV1, LifecycleDecisionApplyLineageV1,
         LifecycleOutputAdmissionKeyV1, LifecycleOutputServiceDispositionV1,
         LifecycleValidateDispatchKeyV1, LiveLifecycleDecisionApplyReconciliationAuthorityV1,
         PendingDurableValidateAdmissionV1, PendingLifecycleOutputAdmissionV1,
@@ -1991,7 +1991,7 @@ pub(crate) trait EffectRuntime {
         Ok(())
     }
     /// Freeze one already-due timeout owner for an exact fixed-cut
-    /// unchanged-lock PrepareQC scan.
+    /// unchanged-lock Prepare-progress scan.
     fn freeze_pre_timeout_locked_prepare_qc_cut(
         &mut self,
         _now: Instant,
@@ -2006,7 +2006,7 @@ pub(crate) trait EffectRuntime {
     ) -> bool {
         false
     }
-    /// Dispatch at most one exact already-admitted pre-cut PrepareQC.
+    /// Dispatch at most one exact already-admitted pre-cut Prepare carrier.
     fn step_pre_timeout_locked_prepare_qc_effects(
         &mut self,
         _now: Instant,
@@ -2761,6 +2761,10 @@ pub(crate) struct V2EffectExecutor<R = SerializedV2Runtime> {
     /// Signed/diagnostic outputs awaiting exact lifecycle-row execution.
     pending_lifecycle_output_admissions:
         BTreeMap<LifecycleOutputAdmissionKeyV1, PendingLifecycleOutputAdmissionV1>,
+    /// Exact direct-Broadcast census which must remain pending until its
+    /// globally earlier lifecycle Decision Apply terminalizes.
+    lifecycle_decision_apply_successor_outputs:
+        Option<AttestedLifecycleDecisionApplySuccessorOutputsV1>,
     /// Non-Clone authority beside exact cloneable `LocalProposalReady` commands.
     local_proposal_ready_replay:
         BTreeMap<LocalProposalReadyCommandIdentity, LocalProposalReadyReplayEvidenceV1>,
@@ -3433,25 +3437,63 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         !self.runtime.lifecycle_live_clocks_are_armed()
     }
 
+    /// Borrow the complete pending-output census only for lifecycle registry
+    /// attestation. No output service or ownership transfer is exposed.
+    pub(in crate::sumeragi) fn pending_lifecycle_output_admission_census(
+        &self,
+    ) -> impl ExactSizeIterator<Item = &PendingLifecycleOutputAdmissionV1> {
+        self.pending_lifecycle_output_admissions.values()
+    }
+
     /// Return whether one typed Decision Apply can enter its terminal worker barrier.
     ///
-    /// Queued ingress is inert and may remain buffered. Every active
-    /// executor/runtime mutation owner must be empty before the worker can make
-    /// Kura durable. Pending-Kura recovery additionally requires its closed
-    /// ingress queue to remain empty.
+    /// Every admitted runtime command must drain before the worker can make
+    /// Kura durable. This preserves ordinary serialized settlement for the
+    /// finite pre-Apply FIFO while the Ready Apply retains its exact owner.
     pub(in crate::sumeragi) fn lifecycle_decision_apply_dispatch_available(
         &self,
+        successor_outputs: Option<&AttestedLifecycleDecisionApplySuccessorOutputsV1>,
     ) -> Result<bool, EffectExecutorError> {
         self.ensure_open()?;
-        let queued_ingress_is_allowed =
-            self.pending_tip_recovery.is_none() || self.runtime.queued_commands() == 0;
-        Ok(self.pending_work() == 0
-            && self.recovered_decision_fetch_request_index_is_exact_and_empty()
-            && self.retained_effect_batch.is_none()
-            && self.parked_effect_batch.is_none()
-            && self.finality_completion.is_none()
-            && queued_ingress_is_allowed
-            && self.runtime.lifecycle_decision_apply_dispatch_available())
+        let successor_debt_is_exact = match successor_outputs {
+            None => {
+                self.pending_lifecycle_output_admissions.is_empty()
+                    && self.retained_effect_batch.is_none()
+            }
+            Some(attestation) => {
+                self.lifecycle_decision_apply_successor_outputs.is_none()
+                    && attestation.pending_count() == self.pending_lifecycle_output_admissions.len()
+                    && attestation.exactly_matches_pending_keys(
+                        self.pending_lifecycle_output_admissions.keys(),
+                    )
+                    && self
+                        .pending_lifecycle_output_admissions
+                        .values()
+                        .next()
+                        .is_some_and(|pending_output| {
+                            self.retained_effect_batch.as_ref().is_some_and(|batch| {
+                                batch.effects.len() == 1
+                                    && batch.effects.front().is_some_and(|owned| {
+                                        attestation.exactly_matches_retransmit_apply(&owned.effect)
+                                            && pending_output
+                                                .exactly_precedes_periodic_retransmit_apply(
+                                                    &owned.effect,
+                                                    &owned.ownership,
+                                                )
+                                    })
+                            })
+                        })
+            }
+        };
+        Ok(
+            self.pending_work() == self.pending_lifecycle_output_admissions.len()
+                && successor_debt_is_exact
+                && self.recovered_decision_fetch_request_index_is_exact_and_empty()
+                && self.parked_effect_batch.is_none()
+                && self.finality_completion.is_none()
+                && self.runtime.queued_commands() == 0
+                && self.runtime.lifecycle_decision_apply_dispatch_available(),
+        )
     }
 
     /// Bind lifecycle Decision Apply queue publication to pending-Kura stage ownership.
@@ -3463,17 +3505,37 @@ impl V2EffectExecutor<SerializedV2Runtime> {
     pub(in crate::sumeragi) fn prepare_lifecycle_decision_apply_executor_dispatch<'executor>(
         &'executor mut self,
         prepared: &PreparedLifecycleDecisionApplyDispatchV1<'_>,
+        successor_outputs: Option<AttestedLifecycleDecisionApplySuccessorOutputsV1>,
     ) -> Result<PreparedLifecycleDecisionApplyExecutorDispatchV1<'executor>, EffectExecutorError>
     {
         self.ensure_open()?;
-        if !self.lifecycle_decision_apply_dispatch_available()? {
+        if successor_outputs
+            .as_ref()
+            .is_some_and(|attestation| attestation.dispatch_key() != prepared.dispatch_key())
+            || !self.lifecycle_decision_apply_dispatch_available(successor_outputs.as_ref())?
+        {
             return Err(EffectExecutorError::Contract(
                 "lifecycle Apply dispatch overtook retained executor work".to_owned(),
             ));
         }
         let Some(evidence) = self.pending_tip_recovery.as_ref() else {
-            return Ok(PreparedLifecycleDecisionApplyExecutorDispatchV1 { pending: None });
+            let successor_outputs = successor_outputs.map(|attestation| {
+                PendingLifecycleDecisionApplySuccessorOutputsTransitionV1 {
+                    installed: &mut self.lifecycle_decision_apply_successor_outputs,
+                    retained_effect_batch: &mut self.retained_effect_batch,
+                    attestation,
+                }
+            });
+            return Ok(PreparedLifecycleDecisionApplyExecutorDispatchV1 {
+                pending: None,
+                successor_outputs,
+            });
         };
+        if successor_outputs.is_some() {
+            return Err(EffectExecutorError::Contract(
+                "recovered lifecycle Apply borrowed a live post-Apply output census".to_owned(),
+            ));
+        }
         let exact = evidence.stage() == PendingKuraApplyRecoveryStage::Apply
             && evidence.is_exact(&self.context)
             && evidence.replay_tag() == self.current_tag()
@@ -3499,6 +3561,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
                 evidence,
                 last_result: pending_tip_recovery_last_result,
             }),
+            successor_outputs: None,
         })
     }
 
@@ -3688,11 +3751,20 @@ impl V2EffectExecutor<SerializedV2Runtime> {
                         authority.exactly_matches_owned_apply(&owned.effect, &owned.ownership)
                     })
             });
-            let owner_is_exact = self
+            let predecessor_ordinal = self
                 .live_lifecycle_validate_successor
                 .as_ref()
-                .is_some_and(|owner| owner.exactly_precedes_live_apply(&authority));
-            if !retained_is_exact || !owner_is_exact {
+                .filter(|owner| owner.exactly_precedes_live_apply(&authority))
+                .map(|owner| owner.dispatch_key.lifecycle_ordinal());
+            let Some(predecessor_ordinal) = predecessor_ordinal else {
+                return Err(self.close(
+                    EffectExecutorError::Contract(
+                        "Validate-to-Apply upgrade changed its retained authority".to_owned(),
+                    ),
+                    services,
+                ));
+            };
+            if !retained_is_exact {
                 return Err(self.close(
                     EffectExecutorError::Contract(
                         "Validate-to-Apply upgrade changed its retained authority".to_owned(),
@@ -3700,8 +3772,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
                     services,
                 ));
             }
-            if let Err(error) =
-                self.release_live_lifecycle_validate_successor(dispatch_key.lifecycle_ordinal())
+            if let Err(error) = self.release_live_lifecycle_validate_successor(predecessor_ordinal)
             {
                 return Err(self.close(error, services));
             }
@@ -3775,8 +3846,6 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         authority: LifecycleDecisionApplyAdapterCompletionAuthorityV1,
     ) -> Result<PreparedLifecycleDecisionApplyAdapterCompletionV1<'_>, EffectExecutorError> {
         self.ensure_open()?;
-        let recovered_requires_empty_ingress =
-            authority.lineage() == LifecycleDecisionApplyLineageV1::Recovered;
         let pending_recovery_is_exact = self.pending_tip_recovery.as_ref().is_none_or(|evidence| {
             authority.exactly_matches_pending_kura_recovery(&self.context, evidence)
         });
@@ -3797,13 +3866,26 @@ impl V2EffectExecutor<SerializedV2Runtime> {
                 self.live_lifecycle_decision_apply.is_none()
             }
         };
-        if self.pending_work() != 0
+        let successor_outputs_are_exact =
+            match self.lifecycle_decision_apply_successor_outputs.as_ref() {
+                None => self.pending_lifecycle_output_admissions.is_empty(),
+                Some(attestation) => {
+                    attestation.dispatch_key() == authority.dispatch_key()
+                        && attestation.pending_count()
+                            == self.pending_lifecycle_output_admissions.len()
+                        && attestation.exactly_matches_pending_keys(
+                            self.pending_lifecycle_output_admissions.keys(),
+                        )
+                }
+            };
+        if self.pending_work() != self.pending_lifecycle_output_admissions.len()
+            || !successor_outputs_are_exact
             || !self.recovered_decision_fetch_request_index_is_exact_and_empty()
             || self.retained_effect_batch.is_some()
             || self.parked_effect_batch.is_some()
             || !pending_recovery_is_exact
             || self.finality_completion.is_some()
-            || (recovered_requires_empty_ingress && self.runtime.queued_commands() != 0)
+            || self.runtime.queued_commands() != 0
             || !lineage_owner_is_exact
         {
             return Err(EffectExecutorError::Contract(
@@ -3852,10 +3934,23 @@ impl V2EffectExecutor<SerializedV2Runtime> {
                 self.live_lifecycle_decision_apply.is_none()
             }
         };
+        let successor_outputs_are_exact =
+            match self.lifecycle_decision_apply_successor_outputs.as_ref() {
+                None => self.pending_lifecycle_output_admissions.is_empty(),
+                Some(attestation) => {
+                    attestation.dispatch_key() == dispatch_key
+                        && attestation.pending_count()
+                            == self.pending_lifecycle_output_admissions.len()
+                        && attestation.exactly_matches_pending_keys(
+                            self.pending_lifecycle_output_admissions.keys(),
+                        )
+                }
+            };
         assert!(
             lineage_owner_is_exact
                 && self.finality_completion.is_none()
-                && self.pending_work() == 0
+                && self.pending_work() == self.pending_lifecycle_output_admissions.len()
+                && successor_outputs_are_exact
                 && self.recovered_decision_fetch_request_index_is_exact_and_empty()
                 && pending_recovery_is_exact
                 && dispatch_key.matches_height_context(&self.context)
@@ -4259,6 +4354,76 @@ impl V2EffectExecutor<SerializedV2Runtime> {
             "completion-authority lineage substitution must leave executor and runtime inert"
         );
     }
+    /// List the exact census owners preventing the explicit rollover transaction.
+    pub(crate) fn ready_to_finish_blockers(&self) -> Vec<&'static str> {
+        let mut blockers = Vec::new();
+        macro_rules! record {
+            ($blocked:expr, $name:literal) => {
+                if $blocked {
+                    blockers.push($name);
+                }
+            };
+        }
+        record!(self.output_guard.restart_required(), "restart-required");
+        record!(self.finality_completion.is_none(), "finality-missing");
+        record!(
+            self.pending_runner_decision_cleanup.is_some(),
+            "runner-decision-cleanup"
+        );
+        record!(
+            self.live_lifecycle_decision_apply.is_some(),
+            "live-apply-owner"
+        );
+        record!(
+            self.live_lifecycle_validate_successor.is_some(),
+            "live-validate-successor"
+        );
+        record!(
+            self.retained_effect_batch.is_some(),
+            "retained-effect-batch"
+        );
+        record!(self.parked_effect_batch.is_some(), "parked-effect-batch");
+        record!(
+            self.runtime.has_dormant_remote_proposal_replay(),
+            "dormant-remote-proposal-replay"
+        );
+        record!(
+            !self.remote_proposal_replay.is_empty(),
+            "remote-proposal-replay"
+        );
+        record!(
+            !self.authenticated_genesis_replay.is_empty(),
+            "authenticated-genesis-replay"
+        );
+        record!(
+            !self.pending_durable_validate_admissions.is_empty(),
+            "durable-validate-admission"
+        );
+        record!(
+            !self.durable_validate_retry_seals_are_finalization_inert(),
+            "durable-validate-retry-seal"
+        );
+        record!(
+            self.pending_live_wal_sign_admission.is_some(),
+            "live-wal-sign-admission"
+        );
+        record!(
+            !self.pending_lifecycle_output_admissions.is_empty(),
+            "lifecycle-output-admission"
+        );
+        record!(
+            self.lifecycle_decision_apply_successor_outputs.is_some(),
+            "post-apply-output-census"
+        );
+        record!(
+            !self.recovered_decision_fetch_request_index_is_exact_and_empty(),
+            "recovered-decision-fetch"
+        );
+        record!(self.runtime.queued_commands() != 0, "runtime-command");
+        record!(!self.runtime.driver().ready_to_finish(), "runtime-driver");
+        blockers
+    }
+
     /// Whether application completion has drained through the reducer and the
     /// height is ready for the explicit rollover transaction.
     pub(crate) fn ready_to_finish(&self) -> bool {
@@ -4276,6 +4441,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
             && self.durable_validate_retry_seals_are_finalization_inert()
             && self.pending_live_wal_sign_admission.is_none()
             && self.pending_lifecycle_output_admissions.is_empty()
+            && self.lifecycle_decision_apply_successor_outputs.is_none()
             && self.recovered_decision_fetch_request_index_is_exact_and_empty()
             && self.runtime.queued_commands() == 0
             && self.runtime.driver().ready_to_finish()
@@ -4766,6 +4932,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             last_runtime_step_observation: None,
             pending_live_wal_sign_admission: None,
             pending_lifecycle_output_admissions: BTreeMap::new(),
+            lifecycle_decision_apply_successor_outputs: None,
             local_proposal_ready_replay: BTreeMap::new(),
             local_proposal_intent_replay: BTreeMap::new(),
             deferred_merge_work: BTreeMap::new(),
@@ -7526,8 +7693,8 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         Ok(count)
     }
     /// Freeze the already-due timeout owner and its fixed fair-ingress cut
-    /// only when the reducer exposes an immediately actionable unchanged-lock
-    /// PrepareQC target.
+    /// only when the reducer exposes an actionable unchanged-lock Prepare
+    /// target.
     pub(crate) fn freeze_pre_timeout_locked_prepare_qc_cut(
         &mut self,
         now: Instant,
@@ -7557,8 +7724,8 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         self.runtime
             .wire_previews_pre_timeout_locked_prepare_qc(cut, payload)
     }
-    /// Dispatch one exact already-admitted pre-cut PrepareQC and consume its
-    /// effects through the ordinary Progress-root executor path.
+    /// Dispatch one exact already-admitted pre-cut Prepare carrier and consume
+    /// its effects through the ordinary Progress-root executor path.
     pub(crate) fn step_pre_timeout_locked_prepare_qc_once<S: V2EffectServices>(
         &mut self,
         now: Instant,

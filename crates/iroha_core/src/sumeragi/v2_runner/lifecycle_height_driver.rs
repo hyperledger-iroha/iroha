@@ -19,7 +19,8 @@ fn completion_selection_retries_before_runtime(
 ) -> bool {
     matches!(
         selection,
-        super::super::v2_lifecycle_coordinator::ProductionLifecycleCompletionSelectionV1::LifecycleValidatePublished { .. }
+        super::super::v2_lifecycle_coordinator::ProductionLifecycleCompletionSelectionV1::LifecycleDecisionApplyApplied
+            | super::super::v2_lifecycle_coordinator::ProductionLifecycleCompletionSelectionV1::LifecycleValidatePublished { .. }
             | super::super::v2_lifecycle_coordinator::ProductionLifecycleCompletionSelectionV1::LifecycleValidateSidecarWoken { .. }
             | super::super::v2_lifecycle_coordinator::ProductionLifecycleCompletionSelectionV1::ApplyTerminalDirectBroadcastCompleted
             | super::super::v2_lifecycle_coordinator::ProductionLifecycleCompletionSelectionV1::ApplyTerminalDirectBroadcastDeferred
@@ -980,9 +981,10 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                     },
                 )?;
                 if pre_timeout_advanced {
-                    // The exact already-admitted QC staged LockAndCommit ahead
-                    // of the frozen timeout owner. Re-enter Completion/Runtime
-                    // so the existing WAL fence settles before any Producer or
+                    // One exact already-admitted Prepare carrier advanced
+                    // ahead of the frozen timeout owner. Re-enter
+                    // Completion/Runtime so either the next pre-cut witness or
+                    // the resulting WAL fence settles before any Producer or
                     // ordinary timeout turn.
                     return Ok(LifecycleV2IngressDrainDispositionV1::retry_before_producer(
                         producer_claim,
@@ -1023,7 +1025,7 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                                 ),
                             );
                         }
-                        PreTimeoutIngress::ExactPrepareQc(prepared) => {
+                        PreTimeoutIngress::ExactPrepareProgress(prepared) => {
                             let consumption = activated.consume_prepared_ordinary_ingress_turn(
                                 runner,
                                 prepared,
@@ -1039,7 +1041,7 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                             match consumption {
                                 super::ordinary_ingress_consumer::ProductionPreparedOrdinaryIngressConsumptionV1::Continue => {}
                             }
-                            let advanced = activated.with_runner_runtime(
+                            activated.with_runner_runtime(
                                 runner,
                                 |_owner, executor, services, _local_proposal| match executor
                                     .step_pre_timeout_locked_prepare_qc_once(
@@ -1047,25 +1049,25 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                                         &pre_timeout_cut,
                                         services,
                                     )? {
-                                    EffectExecutorStep::Idle => Ok::<_, V2RunnerError>(false),
+                                    EffectExecutorStep::Idle => Ok::<_, V2RunnerError>(()),
                                     EffectExecutorStep::Advanced { .. } => {
                                         let _ = reconcile_executor_locked_body(executor, services)?;
-                                        Ok(true)
+                                        Ok(())
                                     }
                                 },
                             )?;
-                            if advanced {
-                                return Ok(
-                                    LifecycleV2IngressDrainDispositionV1::retry_before_producer(
-                                        producer_claim,
-                                    ),
-                                );
-                            }
-                            // Authentication or ordinary ingress admission may
-                            // have retired the previewed carrier without
-                            // queueing the exact runtime command. Grant no
-                            // further grace; the ordinary step below emits the
-                            // already-owned timeout in this same Runtime turn.
+                            // Authentication or ordinary admission can retire
+                            // a previewed duplicate/version-mismatched carrier
+                            // without queueing the runtime command. Whether it
+                            // advanced or stuttered, retry the same frozen
+                            // physical prefix: its roster-bounded rank strictly
+                            // decreased, so this cannot admit a post-cut
+                            // carrier or defer the timeout forever.
+                            return Ok(
+                                LifecycleV2IngressDrainDispositionV1::retry_before_producer(
+                                    producer_claim,
+                                ),
+                            );
                         }
                     }
                 }
@@ -1371,6 +1373,9 @@ mod tests {
 
         assert!(completion_selection_retries_before_runtime(
             &Completion::LifecycleValidatePublished { ordinal: 7 }
+        ));
+        assert!(completion_selection_retries_before_runtime(
+            &Completion::LifecycleDecisionApplyApplied
         ));
         assert!(!completion_selection_retries_before_runtime(
             &Completion::CompletionIoDispatch(Ok(Dispatch::BodyStageAdvanced {

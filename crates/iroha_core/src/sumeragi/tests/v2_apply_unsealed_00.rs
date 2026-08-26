@@ -338,17 +338,27 @@ fn install_fixture_validator_authority(
         .map(|validator| validator.validator.clone())
         .collect::<Vec<_>>();
     expected.sort();
-    let mut actual = state
+    let mut manifest = state
+        .manifest_lane_validator_bindings_at_height(LaneId::SINGLE, context.height)
+        .into_iter()
+        .map(|binding| binding.peer_id)
+        .collect::<Vec<_>>();
+    manifest.sort();
+    assert_eq!(
+        manifest, expected,
+        "fixture lane manifest must expose every authenticated validator"
+    );
+    let mut resolved = state
         .resolve_lane_committee_at_height(
             crate::state::LaneAuthorityRoute::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             context.height,
         )
         .expect("fixture lane authority must resolve")
         .into_validators();
-    actual.sort();
+    resolved.sort();
     assert_eq!(
-        actual, expected,
-        "fixture must expose every authenticated validator as lane authority"
+        resolved, expected,
+        "fixture lane/dataspace authority must match the active height roster"
     );
 }
 fn install_fixture_kagemusha_runtime_lifecycle(
@@ -2098,17 +2108,27 @@ fn install_recreatable_reservation_lane(
         .map(|validator| validator.validator.clone())
         .collect::<Vec<_>>();
     expected.sort();
-    let mut actual = state
+    let mut manifest = state
+        .manifest_lane_validator_bindings_at_height(lane.id, 1)
+        .into_iter()
+        .map(|binding| binding.peer_id)
+        .collect::<Vec<_>>();
+    manifest.sort();
+    assert_eq!(
+        manifest, expected,
+        "recreatable reservation lane manifest must bind the fixture roster"
+    );
+    let mut resolved = state
         .resolve_lane_committee_at_height(
             crate::state::LaneAuthorityRoute::new(lane.id, lane.dataspace_id),
             1,
         )
         .expect("recreatable reservation lane authority must resolve")
         .into_validators();
-    actual.sort();
+    resolved.sort();
     assert_eq!(
-        actual, expected,
-        "recreatable reservation lane must have authenticated fixture authority"
+        resolved, expected,
+        "recreatable reservation lane/dataspace authority must match the fixture roster"
     );
     lane
 }

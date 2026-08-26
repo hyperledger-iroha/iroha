@@ -1058,6 +1058,16 @@ fn durable_local_validate_store_fixture_at_view(
 }
 
 #[cfg(feature = "bls")]
+fn durable_admission_validate_fixture_at_view(
+    marker: u8,
+    view: wire::View,
+) -> DurableValidateFixture {
+    let (fixture, _directory, _store, _durable) =
+        durable_local_validate_store_fixture_at_view(marker, view);
+    fixture
+}
+
+#[cfg(feature = "bls")]
 fn durable_validate_sidecar_store_fixture(
     marker: u8,
 ) -> (
@@ -1452,8 +1462,8 @@ fn readdress_durable_validate_fixture(fixture: &mut DurableValidateFixture, ordi
 #[cfg(feature = "bls")]
 #[test]
 fn recovered_ready_validate_census_is_complete_plural_and_rejects_aliases() {
-    let mut first = durable_validate_fixture_at_view(0x31, 2);
-    let mut second = durable_validate_fixture_at_view(0x31, 3);
+    let mut first = durable_admission_validate_fixture_at_view(0x31, 2);
+    let mut second = durable_admission_validate_fixture_at_view(0x31, 3);
     let second_ordinal = first
         .lease
         .ordinal()
@@ -1485,7 +1495,7 @@ fn recovered_ready_validate_census_is_complete_plural_and_rejects_aliases() {
         "one non-alias member cannot drift its physical digest inside a plural census"
     );
 
-    let mut canonical = durable_validate_fixture_at_view(0x32, 2);
+    let mut canonical = durable_admission_validate_fixture_at_view(0x32, 2);
     let mut alias = durable_validate_fixture_at_view(0x32, 2);
     readdress_durable_validate_fixture(
         &mut alias,
@@ -1507,6 +1517,49 @@ fn recovered_ready_validate_census_is_complete_plural_and_rejects_aliases() {
         Err(RecoveredDurableValidateRetryOwnerErrorV1::MultipleCarriers),
         "two physical carriers for one logical body must fail before startup"
     );
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn recovered_ready_validate_retry_owners_are_disjoint_by_replay_lineage() {
+    let mut published = durable_validate_fixture_at_view(0x34, 2);
+    let mut admission = durable_admission_validate_fixture_at_view(0x34, 3);
+    let admission_ordinal = published
+        .lease
+        .ordinal()
+        .checked_add(1)
+        .expect("admission-owned Validate ordinal");
+    readdress_durable_validate_fixture(&mut admission, admission_ordinal);
+    let coordinator = ready_durable_validate_coordinator(&[&published, &admission]);
+    published
+        .registry
+        .entries
+        .append(&mut admission.registry.entries);
+
+    let census = published
+        .registry
+        .project_recovered_durable_validate_retry_census(&coordinator, None)
+        .expect("partition exact cold Validate retry owners");
+    assert_eq!(
+        census.len_for_test(),
+        2,
+        "both Ready lineages belong to the complete marker-deferral census"
+    );
+    assert_eq!(
+        census.owner_class_counts_for_test(),
+        (1, 1),
+        "the census must install one seal and defer one published marker"
+    );
+    let markers = published
+        .registry
+        .recovered_published_validate_retry_markers()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        markers.len(),
+        1,
+        "only the direct Store successor belongs to the published-marker path"
+    );
+    assert_eq!(markers[0].3, published.lease.ordinal());
 }
 
 #[cfg(feature = "bls")]

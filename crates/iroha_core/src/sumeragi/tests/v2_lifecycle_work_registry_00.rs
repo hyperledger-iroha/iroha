@@ -191,6 +191,7 @@ fn assert_production_ready_validate_cold_open(
     active_context: LifecycleContext,
     parent_ordinal: u128,
     expected_successor_ordinal: Option<u128>,
+    expected_apply_successor_broadcast_ordinal: Option<u128>,
 ) {
     use super::super::schema::DurableContinuation;
 
@@ -208,6 +209,10 @@ fn assert_production_ready_validate_cold_open(
         "{row:?}"
     );
     if row.is_busy() {
+        assert!(
+            expected_apply_successor_broadcast_ordinal.is_none(),
+            "{row:?}: a Busy Validate cannot retain a post-Apply Broadcast"
+        );
         assert_eq!(records.len(), 1, "{row:?}");
         assert_eq!(ledger.high_water(), parent_ordinal, "{row:?}");
         assert_eq!(parent.terminal(), Some(None), "{row:?}");
@@ -226,6 +231,10 @@ fn assert_production_ready_validate_cold_open(
     );
     match row.successor() {
         None => {
+            assert!(
+                expected_apply_successor_broadcast_ordinal.is_none(),
+                "{row:?}: a Validate without a successor cannot retain a post-Apply Broadcast"
+            );
             assert_eq!(records.len(), 1, "{row:?}");
             assert_eq!(ledger.high_water(), parent_ordinal, "{row:?}");
             assert_eq!(
@@ -238,8 +247,29 @@ fn assert_production_ready_validate_cold_open(
             let child_ordinal = expected_successor_ordinal
                 .expect("successor publication sampled one actor-global ordinal");
             assert!(child_ordinal > parent_ordinal, "{row:?}");
-            assert_eq!(records.len(), 2, "{row:?}");
-            assert_eq!(ledger.high_water(), child_ordinal, "{row:?}");
+            let apply_successor_broadcast_ordinal =
+                if matches!(row, ProductionReadyValidateDispatchRow::ValidatedApply) {
+                    Some(
+                        expected_apply_successor_broadcast_ordinal
+                            .expect("ValidatedApply retains its terminal periodic CommitQC row"),
+                    )
+                } else {
+                    assert!(
+                        expected_apply_successor_broadcast_ordinal.is_none(),
+                        "{row:?}: only ValidatedApply can retain a post-Apply Broadcast"
+                    );
+                    None
+                };
+            assert_eq!(
+                records.len(),
+                2 + usize::from(apply_successor_broadcast_ordinal.is_some()),
+                "{row:?}"
+            );
+            assert_eq!(
+                ledger.high_water(),
+                apply_successor_broadcast_ordinal.unwrap_or(child_ordinal),
+                "{row:?}"
+            );
             assert_eq!(
                 parent.continuation(),
                 Some(DurableContinuation::successor(edge, child_ordinal)),
@@ -256,6 +286,36 @@ fn assert_production_ready_validate_cold_open(
                 Some(DurableContinuation::None),
                 "{row:?}"
             );
+            if let Some(broadcast_ordinal) = apply_successor_broadcast_ordinal {
+                assert!(broadcast_ordinal > child_ordinal, "{row:?}");
+                let broadcast = &records[2];
+                assert_eq!(broadcast.ordinal(), broadcast_ordinal, "{row:?}");
+                assert_eq!(
+                    broadcast.work_class(),
+                    Some(LifecycleWorkClass::Broadcast),
+                    "{row:?}"
+                );
+                assert_eq!(
+                    broadcast.key().map(|key| key.phase()),
+                    Some(LifecyclePhase::BroadcastCommitQc),
+                    "{row:?}"
+                );
+                assert_eq!(
+                    broadcast.stage().map(|stage| stage.kind()),
+                    Some(LifecycleStageKind::BroadcastCommitQc),
+                    "{row:?}"
+                );
+                assert_eq!(
+                    broadcast.terminal(),
+                    Some(Some(TerminalOutcome::Advanced)),
+                    "{row:?}"
+                );
+                assert_eq!(
+                    broadcast.continuation(),
+                    Some(DurableContinuation::None),
+                    "{row:?}"
+                );
+            }
         }
     }
 }
@@ -285,7 +345,7 @@ fn owned_production_ready_validate_fixture(
 struct ProductionRecoveredApplyReadyFixture {
     owned: OwnedReadyDurableValidateFixture,
     commit_qc: wire::QuorumCertificate,
-    validator_keys: Vec<KeyPair>,
+    retry_census: RecoveredDurableValidateRetryCensusV1,
 }
 
 #[cfg(feature = "bls")]
@@ -302,14 +362,34 @@ fn production_recovered_apply_ready_fixture(marker: u8) -> ProductionRecoveredAp
     } = crate::sumeragi::v2_apply::production_recovered_decision_apply_fixture_v1();
     let fixture =
         durable_validate_fixture_from_material(marker, verified, manifest, canonical_wire);
-    let waiting =
-        waiting_durable_validate_fixture_from_store(durable_validate_store_fixture_from_existing(
-            fixture,
-            directory,
-            body_store,
-            durable,
-            Some(commit_qc.execution_commitment),
-        ));
+    assert_eq!(
+        validator_keys.len(),
+        fixture.verified.context().roster.len(),
+        "recovered Apply fixture retains one signing key per validator"
+    );
+    let store_fixture = durable_validate_store_fixture_from_existing(
+        fixture,
+        directory,
+        body_store,
+        durable,
+        Some(commit_qc.execution_commitment),
+    );
+    let cold = ready_durable_validate_coordinator(&[&store_fixture.0]);
+    let retry_census = store_fixture
+        .0
+        .registry
+        .project_recovered_durable_validate_retry_census(
+            &cold,
+            Some((
+                commit_qc.round,
+                commit_qc.proposal_round,
+                commit_qc.subject,
+                commit_qc.execution_commitment,
+            )),
+        )
+        .expect("project the exact pre-completion Validate retry owner");
+    assert_eq!(retry_census.len_for_test(), 1);
+    let waiting = waiting_durable_validate_fixture_from_store(store_fixture);
     let owned = owned_ready_durable_validate_fixture_from_waiting_with_commitment(
         waiting,
         ReadyDurableValidateFixtureOutcome::Validated,
@@ -318,34 +398,8 @@ fn production_recovered_apply_ready_fixture(marker: u8) -> ProductionRecoveredAp
     ProductionRecoveredApplyReadyFixture {
         owned,
         commit_qc,
-        validator_keys,
+        retry_census,
     }
-}
-
-#[cfg(feature = "bls")]
-fn signed_ready_validate_timeout_vote(
-    context: &wire::HeightContext,
-    keys: &[KeyPair],
-    view: wire::View,
-    signer: wire::ValidatorIndex,
-) -> wire::ConsensusMessageV2 {
-    let mut vote = wire::TimeoutVote {
-        round: wire::ConsensusRound {
-            context_id: context.id(),
-            height: context.height,
-            view,
-        },
-        highest_prepare_qc: None,
-        signer,
-        signature: Vec::new(),
-    };
-    vote.signature = iroha_crypto::Signature::new(
-        keys[usize::try_from(signer).expect("small Ready Validate signer index")].private_key(),
-        &vote.signature_preimage(),
-    )
-    .payload()
-    .to_vec();
-    wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::TimeoutVote(vote))
 }
 
 #[cfg(feature = "bls")]
@@ -460,16 +514,20 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
     crate::sumeragi::status::clear_v2_status();
     let marker = production_ready_validate_dispatch_marker();
     for row in ProductionReadyValidateDispatchRow::ALL {
-        let (owned, recovered_apply) =
+        let (owned, recovered_apply, recovered_validate_retry_census) =
             if matches!(row, ProductionReadyValidateDispatchRow::ValidatedApply) {
                 let ProductionRecoveredApplyReadyFixture {
                     owned,
                     commit_qc,
-                    validator_keys,
+                    retry_census,
                 } = production_recovered_apply_ready_fixture(marker);
-                (owned, Some((commit_qc, validator_keys)))
+                (owned, Some(commit_qc), Some(retry_census))
             } else {
-                (owned_production_ready_validate_fixture(row, marker), None)
+                (
+                    owned_production_ready_validate_fixture(row, marker),
+                    None,
+                    None,
+                )
             };
         let OwnedReadyDurableValidateFixture {
             mut ready,
@@ -533,7 +591,7 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                 row,
                 marker,
                 &ready,
-                recovered_apply.as_ref().map(|(commit_qc, _)| commit_qc),
+                recovered_apply.as_ref(),
                 &mut adapter,
             );
         }
@@ -603,7 +661,6 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                 runtime_ordinal_authority,
             );
         let lifecycle_ordinal_observer = lifecycle_ordinals.clone();
-        let leader_wire_lifecycle_ordinals = lifecycle_ordinals.clone();
         let (runtime, returned_startup) =
             crate::sumeragi::v2_runtime::SerializedV2Runtime::new_with_lifecycle_ordinals(
                 adapter,
@@ -614,20 +671,58 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                 lifecycle_ordinals,
             )
             .unwrap_or_else(|error| panic!("{row:?}: wrap exact serialized runtime: {error}"));
+        let retransmit_interval = runtime.retransmit_interval();
         let ledger_root = owner_directory.path().join("ledger");
         let ledger_path = ledger_root.join("lifecycle-ledger-v1.norito");
         let ledger_before = std::fs::read(&ledger_path)
             .unwrap_or_else(|error| panic!("{row:?}: read pre-dispatch LedgerV1: {error}"));
         let (mut services, _keys) = crate::sumeragi::v2_worker::tests::fixture();
         let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
-        let (mut executor, mut planner_io) = owner
-            .bind_body_store_to_lifecycle_completion_io_for_test(
+        let (mut executor, mut planner_io) = if let Some(retry_census) =
+            recovered_validate_retry_census
+        {
+            owner.bind_body_store_to_lifecycle_completion_io_with_validate_retry_census_for_test(
                 &mut services,
                 runtime,
                 std::sync::Arc::clone(&output_guard),
                 local_validator,
                 2,
-            );
+                retry_census,
+            )
+        } else {
+            owner.bind_body_store_to_lifecycle_completion_io_for_test(
+                &mut services,
+                runtime,
+                std::sync::Arc::clone(&output_guard),
+                local_validator,
+                2,
+            )
+        };
+        if matches!(row, ProductionReadyValidateDispatchRow::ValidatedApply) {
+            // Production retains this exact marker continuously from the
+            // durable Store-to-Validate publication. This focused fixture
+            // constructs its executor only after the volatile Validate worker
+            // completion, so reinstall the same closed parent authority before
+            // exercising the live Validate-to-Apply upgrade.
+            let work = owner
+                .registry
+                .registry_for_test()
+                .entries
+                .get(&fixture.address)
+                .expect("ValidatedApply fixture retains its exact completion carrier");
+            let ConcreteLifecycleWorkKind::DurableValidateCompletion(completion) = &work.kind
+            else {
+                panic!("ValidatedApply fixture must retain a completed Validate parent")
+            };
+            executor
+                .install_recovered_published_lifecycle_validate_retry_marker(
+                    &completion.incumbent.effect,
+                    &completion.incumbent.pending,
+                    &completion.incumbent.durable_receipt,
+                    lease.ordinal(),
+                )
+                .expect("restore the exact long-lived Validate retry marker");
+        }
         if matches!(row, ProductionReadyValidateDispatchRow::LocalValidatedBusy) {
             let keys = durable_store_keys(marker);
             let signer = usize::try_from(local_validator)
@@ -659,10 +754,9 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
             )
             .unwrap_or_else(|error| panic!("{row:?}: arm exact runtime clocks: {error}"));
         if matches!(row, ProductionReadyValidateDispatchRow::ValidatedApply) {
-            let commit_qc = &recovered_apply
+            let commit_qc = recovered_apply
                 .as_ref()
-                .expect("ValidatedApply retains its exact production fixture")
-                .0;
+                .expect("ValidatedApply retains its exact production fixture");
             let validate_attestation = owner
                 .coordinator
                 .attest_ready_validate_demand(&owner.registry, lease.ordinal())
@@ -688,39 +782,22 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                 "{row:?}: executor protection must match the adapter's decided body"
             );
         }
-        let mut _queued_apply_ingress_guard = None;
         let queued_apply_snapshot =
             matches!(row, ProductionReadyValidateDispatchRow::ValidatedApply).then(|| {
-                let keys = &recovered_apply
+                let commit_qc = recovered_apply
                     .as_ref()
-                    .expect("ValidatedApply retains its exact production fixture")
-                    .1;
-                let signer = 3;
-                let queued_progress =
-                    signed_ready_validate_timeout_vote(&context, keys, row.view(), signer);
-                let semantic_origin = context.roster
-                    [usize::try_from(signer).expect("small Ready Validate signer index")]
-                .validator
-                .clone();
-                let (directory, ingress, mut ownerships) =
-                    crate::sumeragi::v2_runtime::tests::preowned_leader_wire_ownerships(
-                        &context,
-                        &[(queued_progress.clone(), semantic_origin)],
-                        leader_wire_lifecycle_ordinals.clone(),
-                    );
-                let ownership = ownerships
-                    .pop()
-                    .expect("one gated TimeoutVote retains runtime ownership");
-                assert!(ownerships.is_empty());
+                    .expect("ValidatedApply retains its exact production fixture");
+                let queued_progress = wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::QuorumCertificate(commit_qc.clone()),
+                );
                 executor
-                    .enqueue_network_with_ingress_ownership(queued_progress, ownership)
+                    .enqueue_network(queued_progress)
                     .expect("queue authenticated runtime ingress beside typed live Apply");
                 let snapshot = executor.runtime_queue_snapshot_for_test(now);
                 assert_eq!(
                     snapshot.progress.depth, 1,
                     "ValidatedApply fixture retains one authentic Progress wire"
                 );
-                _queued_apply_ingress_guard = Some((directory, ingress));
                 snapshot
             });
         let expected_reducer_fence_wait = row.is_busy().then(|| {
@@ -877,6 +954,7 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
             assert!(!settled_status.fail_closed, "{row:?}");
             assert!(!output_guard.restart_required(), "{row:?}");
         }
+        let mut expected_apply_successor_broadcast_ordinal = None;
         if let Some(child_ordinal) = expected_successor_ordinal {
             assert_eq!(owner.coordinator.high_water(), child_ordinal, "{row:?}");
             assert!(
@@ -902,6 +980,130 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                 apply_ordinal,
                 "{row:?}: registry Apply authority must bind the sampled shared ordinal"
             );
+            let blocked = owner
+                .dispatch_completion_for_test(&mut services, &mut executor, 0)
+                .unwrap_or_else(|error| {
+                    panic!("{row:?}: classify live Apply behind runtime ingress: {error:?}")
+                });
+            assert_eq!(
+                blocked,
+                super::super::ProductionCompletionDispatchV1::CapacityUnavailable {
+                    protected_live_apply_ordinal: Some(apply_ordinal),
+                },
+                "{row:?}: live Apply must retain its exact Ready owner until the finite runtime FIFO drains"
+            );
+            assert_eq!(
+                Some(executor.runtime_queue_snapshot_for_test(now)),
+                queued_apply_snapshot,
+                "{row:?}: the blocked Apply probe cannot consume or reorder runtime ingress"
+            );
+            assert!(matches!(
+                owner.coordinator.records[&apply_ordinal].state,
+                super::super::LifecycleState::Ready
+            ));
+
+            executor.step(now, &mut services).unwrap_or_else(|error| {
+                panic!("{row:?}: drain the pre-Apply authenticated runtime command: {error}")
+            });
+            let drained_queue = executor.runtime_queue_snapshot_for_test(now);
+            assert_eq!(drained_queue.progress.depth, 0, "{row:?}");
+            assert_eq!(
+                executor.status().queued_runtime_completions,
+                0,
+                "{row:?}: normal Runtime must settle the finite pre-Apply FIFO"
+            );
+
+            let periodic_due = now
+                .checked_add(retransmit_interval)
+                .expect("ValidatedApply periodic deadline remains representable");
+            let periodic_step =
+                executor
+                    .step(periodic_due, &mut services)
+                    .unwrap_or_else(|error| {
+                        panic!("{row:?}: execute the exact decided-body periodic retry: {error}")
+                    });
+            assert!(
+                matches!(
+                    periodic_step,
+                    crate::sumeragi::v2_effects::EffectExecutorStep::Advanced { effects: 1 }
+                ),
+                "{row:?}: periodic [CommitQC Broadcast, Apply] must park its first effect and retain its second: {periodic_step:?}"
+            );
+            let periodic_observation = executor
+                .last_runtime_step_observation_for_test()
+                .expect("ValidatedApply periodic step retains its raw reducer observation");
+            assert_eq!(
+                periodic_observation.selected(),
+                Some(crate::sumeragi::v2_runtime::RuntimeSelectedOwnerKind::PeriodicTimer),
+                "{row:?}"
+            );
+            assert_eq!(periodic_observation.effect_count(), 2, "{row:?}");
+            assert_eq!(periodic_observation.validate_count(), 0, "{row:?}");
+            assert_eq!(
+                periodic_observation.non_validate_class(),
+                Some(crate::sumeragi::v2_effects::RuntimeEffectClassV1::Multiple),
+                "{row:?}: the real periodic retry must retain its two distinct output/Apply effects"
+            );
+            let periodic_status = executor.status();
+            assert_eq!(periodic_status.pending_outputs, 1, "{row:?}");
+            assert_eq!(
+                periodic_status.effect_dispatch_queue.depth, 1,
+                "{row:?}: the exact retransmit Apply remains at the retained FIFO head"
+            );
+
+            let generic_settlement = executor
+                .settle_pending_lifecycle_output_admissions(&mut owner, &mut services)
+                .unwrap_or_else(|error| {
+                    panic!("{row:?}: generically admit the periodic CommitQC output: {error}")
+                });
+            assert_eq!(generic_settlement.newly_completed(), 0, "{row:?}");
+            assert_eq!(generic_settlement.already_completed(), 0, "{row:?}");
+            assert!(
+                executor.has_pending_lifecycle_output_admissions(),
+                "{row:?}: generic output service must defer behind the globally earlier Apply"
+            );
+            let mut exact_commit_qc_broadcasts =
+                owner.coordinator.records.iter().filter(|(_, record)| {
+                    record.work_class == LifecycleWorkClass::Broadcast
+                        && record.key.phase() == LifecyclePhase::BroadcastCommitQc
+                        && record.stage.kind() == LifecycleStageKind::BroadcastCommitQc
+                });
+            let (&broadcast_ordinal, broadcast_record) = exact_commit_qc_broadcasts
+                .next()
+                .expect("periodic CommitQC generic admission installs one exact Broadcast row");
+            assert!(
+                exact_commit_qc_broadcasts.next().is_none(),
+                "{row:?}: the periodic episode installs one CommitQC Broadcast carrier"
+            );
+            assert!(broadcast_ordinal > apply_ordinal, "{row:?}");
+            assert_eq!(
+                broadcast_record.state,
+                super::super::LifecycleState::Ready,
+                "{row:?}"
+            );
+            assert_eq!(
+                owner
+                    .coordinator
+                    .ready_index
+                    .iter()
+                    .copied()
+                    .collect::<Vec<_>>(),
+                vec![apply_ordinal, broadcast_ordinal],
+                "{row:?}: lifecycle order must keep Apply ahead of its periodic CommitQC output"
+            );
+            expected_apply_successor_broadcast_ordinal = Some(broadcast_ordinal);
+            let commit_qc = recovered_apply
+                .as_ref()
+                .expect("ValidatedApply retains its exact CommitQC");
+            let commit_qc_envelope = wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::QuorumCertificate(commit_qc.clone()),
+            );
+            assert_eq!(
+                services.consensus_broadcast_count_for_test(&commit_qc_envelope),
+                0,
+                "{row:?}: ordinal deferral must precede CommitQC service I/O"
+            );
+
             let dispatched = owner
                 .dispatch_completion_for_test(&mut services, &mut executor, 0)
                 .unwrap_or_else(|error| {
@@ -913,6 +1115,11 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                     ordinal: apply_ordinal,
                 },
                 "{row:?}: live Validate child must enter the dedicated Apply worker"
+            );
+            assert_eq!(
+                executor.status().effect_dispatch_queue.depth,
+                0,
+                "{row:?}: scheduler dispatch consumes only the byte-exact retransmit Apply suffix"
             );
             planner_io
                 .execute_one_lifecycle_decision_apply_fixture(std::sync::Arc::clone(&output_guard));
@@ -936,10 +1143,60 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                 ),
                 Ok(super::super::ProductionLifecycleDecisionApplyCompletionV1::Applied)
             ));
+            assert!(
+                !executor.ready_to_finish(),
+                "{row:?}: the attested post-Apply Broadcast must remain a rollover blocker"
+            );
+            let post_apply_blockers = executor.ready_to_finish_blockers();
+            assert!(
+                post_apply_blockers.contains(&"lifecycle-output-admission")
+                    && post_apply_blockers.contains(&"post-apply-output-census"),
+                "{row:?}: terminal Apply lost its exact successor-output blockers: {post_apply_blockers:?}"
+            );
+            assert!(matches!(
+                owner.coordinator.records[&apply_ordinal].state,
+                super::super::LifecycleState::Terminal(TerminalOutcome::Advanced)
+            ));
             assert_eq!(
-                Some(executor.runtime_queue_snapshot_for_test(now)),
-                queued_apply_snapshot,
-                "{row:?}: Apply completion must preserve runtime FIFO count and order"
+                owner.coordinator.records[&broadcast_ordinal].state,
+                super::super::LifecycleState::Ready,
+                "{row:?}"
+            );
+
+            services.set_exact_output_admission_hook(|_post, _ticket| Ok(()));
+            let prepared_broadcast = owner
+                .prepare_apply_terminal_direct_broadcast()
+                .expect("bind the exact post-Apply CommitQC Broadcast carrier");
+            assert_eq!(prepared_broadcast.ordinal(), broadcast_ordinal, "{row:?}");
+            assert_eq!(
+                executor
+                    .settle_apply_terminal_direct_broadcast(
+                        &mut owner,
+                        &mut services,
+                        prepared_broadcast,
+                    )
+                    .unwrap_or_else(|error| {
+                        panic!("{row:?}: settle the dedicated post-Apply Broadcast: {error}")
+                    }),
+                crate::sumeragi::v2_effects::ProductionApplyTerminalDirectBroadcastSettlementV1::Completed,
+                "{row:?}"
+            );
+            assert_eq!(
+                services.consensus_broadcast_count_for_test(&commit_qc_envelope),
+                1,
+                "{row:?}: dedicated settlement services the deferred CommitQC exactly once"
+            );
+            assert!(!executor.has_pending_lifecycle_output_admissions());
+            assert!(matches!(
+                owner.coordinator.records[&broadcast_ordinal].state,
+                super::super::LifecycleState::Terminal(TerminalOutcome::Advanced)
+            ));
+            assert!(owner.coordinator.ready_index.is_empty(), "{row:?}");
+            assert!(owner.coordinator.active_lease.is_none(), "{row:?}");
+            assert!(
+                executor.ready_to_finish(),
+                "{row:?}: settled post-Apply Broadcast retained rollover blockers: {:?}",
+                executor.ready_to_finish_blockers()
             );
             crate::sumeragi::status::clear_v2_status();
         }
@@ -1003,6 +1260,7 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                 active_context,
                 lease.ordinal(),
                 expected_successor_ordinal,
+                expected_apply_successor_broadcast_ordinal,
             );
         }
         drop(adapter_directory);

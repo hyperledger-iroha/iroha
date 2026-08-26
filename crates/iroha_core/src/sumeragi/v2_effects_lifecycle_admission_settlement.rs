@@ -1766,6 +1766,19 @@ impl V2EffectExecutor<SerializedV2Runtime> {
     ) -> Result<ProductionApplyTerminalDirectBroadcastSettlementV1, EffectExecutorError> {
         self.ensure_open()?;
         let key = prepared.pending_key();
+        if self
+            .lifecycle_decision_apply_successor_outputs
+            .as_ref()
+            .is_some_and(|attestation| {
+                !attestation.exactly_matches_terminal_preparation(&prepared)
+            })
+        {
+            let error = EffectExecutorError::Contract(format!(
+                "post-Apply direct Broadcast ordinal {} changed its attested pending owner",
+                prepared.ordinal()
+            ));
+            return Err(self.close(error, services));
+        }
         let Some(pending) = self.pending_lifecycle_output_admissions.remove(&key) else {
             let error = EffectExecutorError::Contract(format!(
                 "post-Apply direct Broadcast ordinal {} lost its exact pending owner",
@@ -1779,6 +1792,10 @@ impl V2EffectExecutor<SerializedV2Runtime> {
             });
         match settlement {
             ProductionLifecycleOutputAdmissionSettlementV1::Completed => {
+                // The sealed proof is singleton and was checked before output
+                // service. Consume it only after the terminal publication and
+                // service transaction have completed.
+                self.lifecycle_decision_apply_successor_outputs = None;
                 Ok(ProductionApplyTerminalDirectBroadcastSettlementV1::Completed)
             }
             ProductionLifecycleOutputAdmissionSettlementV1::Deferred(pending) => {

@@ -5076,6 +5076,30 @@ pub(in crate::sumeragi) enum DurableValidateReplayEvidenceV1 {
     /// Recovered WAL Decision origin retaining its exact locator and CommitQC lineage.
     RecoveredDecision(RecoveredDecisionValidateReplayEvidenceV1),
 }
+/// Mutually exclusive cold owner installed for one durable Validate carrier.
+///
+/// Admission and standalone rows retain their retry seal directly. Rows
+/// published as an exact Store successor instead retain the predecessor marker
+/// which authorizes that already-published lifecycle edge. Startup must never
+/// install both owners for one carrier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ColdValidateRetryOwnerClassV1 {
+    AdmissionCensus,
+    PublishedStoreSuccessor,
+}
+impl DurableValidateReplayEvidenceV1 {
+    /// Classify the sole cold retry owner from the authenticated replay lineage.
+    pub(super) const fn cold_retry_owner_class(&self) -> ColdValidateRetryOwnerClassV1 {
+        match self {
+            Self::Certified(_) | Self::RecoveredDecision(_) => {
+                ColdValidateRetryOwnerClassV1::PublishedStoreSuccessor
+            }
+            Self::RemoteProposal(_) | Self::LocalBody(_) | Self::RecoveredStandalone(_) => {
+                ColdValidateRetryOwnerClassV1::AdmissionCensus
+            }
+        }
+    }
+}
 #[derive(Clone, Debug)]
 pub(super) struct RecoveredStandaloneValidateSourceV1 {
     source: BodyPipelineReplaySourceV1,

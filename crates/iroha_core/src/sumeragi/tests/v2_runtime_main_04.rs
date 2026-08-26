@@ -2921,6 +2921,31 @@ fn signed_prepare_qc_for_runtime_statement(
     }
 }
 
+fn signed_prepare_vote_for_runtime_statement(
+    keys: &[KeyPair],
+    round: wire::ConsensusRound,
+    subject: wire::BlockSubject,
+    execution_commitment: wire::ExecutionCommitment,
+    signer: wire::ValidatorIndex,
+) -> wire::ConsensusMessageV2 {
+    let mut vote = wire::Vote {
+        round,
+        proposal_round: round,
+        phase: wire::GlobalPhase::Prepare,
+        subject,
+        execution_commitment,
+        signer,
+        signature: Vec::new(),
+    };
+    vote.signature = Signature::new(
+        keys[usize::try_from(signer).expect("small Prepare-vote signer index")].private_key(),
+        &vote.signature_preimage(),
+    )
+    .payload()
+    .to_vec();
+    wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(vote))
+}
+
 fn signed_timeout_certificate_with_highest_prepare_qc(
     keys: &[KeyPair],
     highest_prepare_qc: wire::QuorumCertificate,
@@ -3320,6 +3345,304 @@ fn due_timeout_dispatches_an_exact_admitted_pre_cut_locked_prepare_qc_first() {
         .take_effect_ownership(effects.len())
         .expect("take the pre-timeout Commit signer ownership");
     drop(runtime.take_leader_wire_runtime_terminals());
+    assert!(!runtime.fail_closed);
+}
+
+#[test]
+fn due_timeout_drains_two_exact_pre_cut_locked_prepare_votes_to_commit() {
+    let directory = TempDir::new().expect("temporary pre-cut Prepare-vote runtime directory");
+    let PreTimeoutLockedPrepareQcRuntimeFixture {
+        mut runtime,
+        context,
+        keys,
+        now,
+        target,
+    } = pre_timeout_locked_prepare_qc_runtime_fixture(&directory);
+    let local_validator = context.leader(target.round.view);
+    let remote_signers = (0..u32::try_from(context.roster.len()).expect("small fixture roster"))
+        .filter(|signer| *signer != local_validator)
+        .take(2)
+        .collect::<Vec<_>>();
+    let [first_signer, second_signer]: [wire::ValidatorIndex; 2] = remote_signers
+        .try_into()
+        .expect("four-validator fixture has two remote Prepare witnesses");
+    let first_message = signed_prepare_vote_for_runtime_statement(
+        &keys,
+        target.round,
+        target.subject,
+        target.execution_commitment,
+        first_signer,
+    );
+    let second_message = signed_prepare_vote_for_runtime_statement(
+        &keys,
+        target.round,
+        target.subject,
+        target.execution_commitment,
+        second_signer,
+    );
+    let lifecycle_ordinals = runtime.ingress.lifecycle_ordinals.clone();
+    let (_leader_wire_directory, leader_wire_ingress, ownerships) = preowned_leader_wire_ownerships(
+        &context,
+        &[
+            (
+                first_message.clone(),
+                context.roster[usize::try_from(first_signer).expect("small signer")]
+                    .validator
+                    .clone(),
+            ),
+            (
+                second_message.clone(),
+                context.roster[usize::try_from(second_signer).expect("small signer")]
+                    .validator
+                    .clone(),
+            ),
+        ],
+        lifecycle_ordinals,
+    );
+    let physical_cut = leader_wire_ingress.next_physical_admission_ordinal();
+    runtime
+        .set_ingress_physical_cut(physical_cut)
+        .expect("publish the receiver cut after both exact Prepare votes");
+    for (message, ownership) in [first_message.clone(), second_message.clone()]
+        .into_iter()
+        .zip(ownerships)
+    {
+        assert!(
+            ownership
+                .physical_admission_ordinal()
+                .is_some_and(|ordinal| u128::from(ordinal) < physical_cut)
+        );
+        runtime
+            .enqueue_network_with_ingress_ownership(message, ownership)
+            .expect("authenticate and admit one exact pre-cut Prepare vote");
+    }
+
+    let deadline = now + runtime.round_timeout();
+    let cut = runtime
+        .freeze_pre_timeout_locked_prepare_qc_cut(deadline)
+        .expect("freeze the already-due timeout owner")
+        .expect("the unchanged locked body mints one fixed-cut episode");
+    assert_eq!(cut.physical_cut(), physical_cut);
+    assert!(runtime.wire_previews_pre_timeout_locked_prepare_qc(&cut, &first_message.payload,));
+    assert!(runtime.wire_previews_pre_timeout_locked_prepare_qc(&cut, &second_message.payload,));
+
+    let Some(RuntimeStep::Advanced(first_effects)) = runtime
+        .try_step_pre_timeout_locked_prepare_qc(deadline, &cut)
+        .expect("dispatch the first exact pre-cut Prepare vote")
+    else {
+        panic!("first exact pre-cut Prepare vote did not advance")
+    };
+    assert!(
+        first_effects.is_empty(),
+        "the first remote witness only grows the partial Prepare pool",
+    );
+    let first_scheduler = runtime
+        .take_last_scheduler_ownership()
+        .expect("the first Prepare vote publishes scheduler evidence");
+    assert_eq!(
+        first_scheduler.selected,
+        RuntimeSelectedOwnerKind::PreTimeoutLockedPrepareQc
+    );
+    assert_eq!(
+        first_scheduler.pre_timeout_locked_prepare_qc_physical_cut,
+        Some(physical_cut)
+    );
+    assert_eq!(first_scheduler.validate_exact(), Ok(()));
+    assert_eq!(runtime.take_effect_ownership(0), Ok(Vec::new()));
+    drop(runtime.take_leader_wire_runtime_terminals());
+    assert!(!runtime.timeout_emitted);
+    assert!(runtime.wire_previews_pre_timeout_locked_prepare_qc(&cut, &second_message.payload,));
+
+    let Some(RuntimeStep::Advanced(second_effects)) = runtime
+        .try_step_pre_timeout_locked_prepare_qc(deadline, &cut)
+        .expect("dispatch the quorum-completing pre-cut Prepare vote")
+    else {
+        panic!("quorum-completing pre-cut Prepare vote did not advance")
+    };
+    assert_eq!(second_effects.len(), 2);
+    assert!(second_effects.iter().any(|effect| matches!(
+        effect,
+        AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
+            payload: wire::ConsensusMessageV2Payload::QuorumCertificate(certificate),
+            ..
+        }) if certificate.phase == wire::GlobalPhase::Prepare
+            && certificate.round == target.round
+            && certificate.proposal_round == target.round
+            && certificate.subject == target.subject
+            && certificate.execution_commitment == target.execution_commitment
+    )));
+    assert!(second_effects.iter().any(|effect| matches!(
+        effect,
+        AdapterEffect::Sign {
+            request: SignRequest::Vote(vote),
+            ..
+        } if vote.phase == wire::GlobalPhase::Commit
+            && vote.round == target.round
+            && vote.proposal_round == target.round
+            && vote.subject == target.subject
+            && vote.execution_commitment == target.execution_commitment
+    )));
+    let second_scheduler = runtime
+        .take_last_scheduler_ownership()
+        .expect("the quorum-completing vote publishes scheduler evidence");
+    assert_eq!(
+        second_scheduler.selected,
+        RuntimeSelectedOwnerKind::PreTimeoutLockedPrepareQc
+    );
+    assert_eq!(
+        second_scheduler.pre_timeout_locked_prepare_qc_physical_cut,
+        Some(physical_cut)
+    );
+    assert_eq!(second_scheduler.validate_exact(), Ok(()));
+    runtime
+        .take_effect_ownership(second_effects.len())
+        .expect("take the exact PrepareQC broadcast and Commit signer ownership");
+    drop(runtime.take_leader_wire_runtime_terminals());
+    assert!(!runtime.timeout_emitted);
+    assert_eq!(runtime.queued_commands(), 0);
+    assert!(!runtime.fail_closed);
+}
+
+#[test]
+fn exhausted_pre_cut_prepare_votes_do_not_grace_a_post_cut_quorum_witness() {
+    let directory = TempDir::new().expect("temporary fixed-cut Prepare-vote directory");
+    let PreTimeoutLockedPrepareQcRuntimeFixture {
+        mut runtime,
+        context,
+        keys,
+        now,
+        target,
+    } = pre_timeout_locked_prepare_qc_runtime_fixture(&directory);
+    let local_validator = context.leader(target.round.view);
+    let remote_signers = (0..u32::try_from(context.roster.len()).expect("small fixture roster"))
+        .filter(|signer| *signer != local_validator)
+        .take(2)
+        .collect::<Vec<_>>();
+    let [first_signer, post_cut_signer]: [wire::ValidatorIndex; 2] = remote_signers
+        .try_into()
+        .expect("four-validator fixture has two remote Prepare witnesses");
+    let first_message = signed_prepare_vote_for_runtime_statement(
+        &keys,
+        target.round,
+        target.subject,
+        target.execution_commitment,
+        first_signer,
+    );
+    let post_cut_message = signed_prepare_vote_for_runtime_statement(
+        &keys,
+        target.round,
+        target.subject,
+        target.execution_commitment,
+        post_cut_signer,
+    );
+    let lifecycle_ordinals = runtime.ingress.lifecycle_ordinals.clone();
+    let (_leader_wire_directory, leader_wire_ingress, ownerships) = preowned_leader_wire_ownerships(
+        &context,
+        &[(
+            first_message.clone(),
+            context.roster[usize::try_from(first_signer).expect("small signer")]
+                .validator
+                .clone(),
+        )],
+        lifecycle_ordinals,
+    );
+    let [first_ownership]: [FairV2IngressOwnershipEvidence; 1] = ownerships
+        .try_into()
+        .expect("one pre-cut Prepare vote has one fair-ingress owner");
+    let physical_cut = leader_wire_ingress.next_physical_admission_ordinal();
+    runtime
+        .set_ingress_physical_cut(physical_cut)
+        .expect("publish the receiver cut after the first Prepare vote");
+    runtime
+        .enqueue_network_with_ingress_ownership(first_message, first_ownership)
+        .expect("authenticate and admit the sole pre-cut Prepare vote");
+    let deadline = now + runtime.round_timeout();
+    let cut = runtime
+        .freeze_pre_timeout_locked_prepare_qc_cut(deadline)
+        .expect("freeze the already-due timeout owner")
+        .expect("mint the fixed-cut locked-Prepare episode");
+    assert_eq!(cut.physical_cut(), physical_cut);
+
+    assert!(matches!(
+        leader_wire_ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            BlockMessage::V2(post_cut_message.clone()),
+            context.roster[usize::try_from(post_cut_signer).expect("small signer")]
+                .validator
+                .clone(),
+        )),
+        Ok(super::super::FairV2IngressPushDisposition::Enqueued)
+    ));
+    let mut post_cut_inbound = leader_wire_ingress
+        .try_recv()
+        .expect("dequeue the exact post-cut Prepare vote");
+    let post_cut_ownership = post_cut_inbound
+        .take_ingress_ownership()
+        .expect("the post-cut vote retains exact fair ownership");
+    assert!(
+        post_cut_ownership
+            .physical_admission_ordinal()
+            .is_some_and(|ordinal| u128::from(ordinal) >= physical_cut)
+    );
+    runtime
+        .set_ingress_physical_cut(leader_wire_ingress.next_physical_admission_ordinal())
+        .expect("refresh the live receiver high-watermark after the post-cut vote");
+    runtime
+        .enqueue_network_with_ingress_ownership(post_cut_message.clone(), post_cut_ownership)
+        .expect("authenticate and admit the exact post-cut Prepare vote");
+
+    let Some(RuntimeStep::Advanced(first_effects)) = runtime
+        .try_step_pre_timeout_locked_prepare_qc(deadline, &cut)
+        .expect("dispatch the one exact pre-cut Prepare vote")
+    else {
+        panic!("the exact pre-cut Prepare vote did not advance")
+    };
+    assert!(first_effects.is_empty());
+    let first_scheduler = runtime
+        .take_last_scheduler_ownership()
+        .expect("the pre-cut vote publishes scheduler evidence");
+    assert_eq!(
+        first_scheduler.selected,
+        RuntimeSelectedOwnerKind::PreTimeoutLockedPrepareQc
+    );
+    assert_eq!(first_scheduler.validate_exact(), Ok(()));
+    assert_eq!(runtime.take_effect_ownership(0), Ok(Vec::new()));
+    drop(runtime.take_leader_wire_runtime_terminals());
+    assert!(runtime.wire_previews_pre_timeout_locked_prepare_qc(&cut, &post_cut_message.payload,));
+    assert!(
+        runtime
+            .try_step_pre_timeout_locked_prepare_qc(deadline, &cut)
+            .expect("fixed-cut exhaustion is a successful stutter")
+            .is_none()
+    );
+    assert!(runtime.take_last_scheduler_ownership().is_none());
+
+    let RuntimeStep::Advanced(timeout_effects) = runtime
+        .step(deadline)
+        .expect("dispatch the already-owned timeout after fixed-cut exhaustion")
+    else {
+        panic!("ordinary due timeout unexpectedly idled")
+    };
+    assert!(matches!(
+        timeout_effects.as_slice(),
+        [AdapterEffect::Sign {
+            request: SignRequest::TimeoutVote(vote),
+            ..
+        }] if vote.round == target.round
+    ));
+    let timeout_scheduler = runtime
+        .take_last_scheduler_ownership()
+        .expect("the exhausted episode publishes the timeout owner");
+    assert_eq!(
+        timeout_scheduler.selected,
+        RuntimeSelectedOwnerKind::Timeout
+    );
+    assert!(timeout_scheduler.timeout_due);
+    assert_eq!(timeout_scheduler.validate_exact(), Ok(()));
+    assert!(runtime.timeout_emitted);
+    assert_eq!(runtime.queued_commands(), 1);
+    runtime
+        .take_effect_ownership(timeout_effects.len())
+        .expect("take the TimeoutIntent signer ownership");
     assert!(!runtime.fail_closed);
 }
 
