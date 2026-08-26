@@ -1637,6 +1637,12 @@ def test_repository_wires_exact_abi23_release_contract() -> None:
         assert "verify" in lane
     assert 'PYTHON_VERSION}" != "3.12"' in python_lane
     assert "sys.version_info.major}{sys.version_info.minor}" in python_lane
+    kagemusha_workflow = read(".github/workflows/pr_kagemusha_payload_bench.yml")
+    assert (
+        "IROHA_PYTHON_SKIP_RUNTIME_LINK=1 python -m maturin build --locked "
+        '--release --interpreter python --out "${wheel_dir}"'
+        in kagemusha_workflow
+    )
     node_lane = read("ci/sdk_sorafs_orchestrator.sh")
     assert "native/iroha_js_host.node" in node_lane
     assert "--sdk node" in node_lane
@@ -1650,6 +1656,15 @@ def test_repository_wires_exact_abi23_release_contract() -> None:
     assert "check_mobile_sdk_artifacts.sh --apple-only" in mobile_workflow
     assert "check_kagemusha_jvm_native_bridge.sh" in mobile_workflow
     jni_lane = read("ci/check_kagemusha_jvm_native_bridge.sh")
+    assert (
+        'REQUIRED_NATIVE_ASSERTION="A freshly built connect_norito_bridge ABI 23 '
+        'artifact-streaming library is required"'
+        in jni_lane
+    )
+    assert (
+        'grep -R -F -q "$REQUIRED_NATIVE_ASSERTION" "$log_file" "$result_directory"'
+        in jni_lane
+    )
     assert 'ABI22_ARTIFACT_CHECKER="$ROOT_DIR/scripts/check_native_sdk_abi22_artifact.py"' in jni_lane
     assert "resolve_trusted_python312()" in jni_lane
     assert "MOBILE_SDK_PYTHON_BINARY" in jni_lane
