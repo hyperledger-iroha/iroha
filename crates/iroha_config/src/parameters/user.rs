@@ -6719,9 +6719,9 @@ impl SoranetHandshake {
         let relay_uses_defaults =
             matches!(relay_capabilities.origin(), ParameterOrigin::Default { .. })
                 && relay_capabilities.value().0.as_slice() == DEFAULT_RELAY_CAPABILITIES;
-        let descriptor_commit = descriptor_commit.map(Into::into);
-        let mut client_capabilities = client_capabilities.map(Into::into);
-        let mut relay_capabilities = relay_capabilities.map(Into::into);
+        let descriptor_commit = descriptor_commit.map(|value| value.0);
+        let mut client_capabilities = client_capabilities.map(|value| value.0);
+        let mut relay_capabilities = relay_capabilities.map(|value| value.0);
         Self::synchronize_default_capabilities(
             descriptor_commit.value(),
             resolved_kem_id,
