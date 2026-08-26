@@ -1006,14 +1006,14 @@ impl Kura {
         let append_build_metadata = append_build
             .as_ref()
             .map(|file| {
-                file.metadata()
+                secure_file_metadata::from_file(file)
                     .map_err(|error| Error::IO(error, append_build_path.clone()))
             })
             .transpose()?;
         let append_intent_metadata = append_intent
             .as_ref()
             .map(|file| {
-                file.metadata()
+                secure_file_metadata::from_file(file)
                     .map_err(|error| Error::IO(error, append_intent_path.clone()))
             })
             .transpose()?;
@@ -1098,11 +1098,10 @@ impl Kura {
             }
         }
         let file_unchanged =
-            |file: &std::fs::File, path: &Path, before: &std::fs::Metadata| -> Result<bool> {
-                let opened_after = file
-                    .metadata()
+            |file: &std::fs::File, path: &Path, before: &SecureMetadata| -> Result<bool> {
+                let opened_after = secure_file_metadata::from_file(file)
                     .map_err(|error| Error::IO(error, path.to_path_buf()))?;
-                let path_after = std::fs::symlink_metadata(path)
+                let path_after = secure_file_metadata::from_path(path)
                     .map_err(|error| Error::IO(error, path.to_path_buf()))?;
                 Ok(Self::sidecar_file_metadata_unchanged(before, &opened_after)
                     && Self::sidecar_file_metadata_unchanged(&opened_after, &path_after))
@@ -1128,11 +1127,11 @@ impl Kura {
         }
         let physical_temp_bytes = append_build_metadata
             .as_ref()
-            .map_or(0, std::fs::Metadata::len)
+            .map_or(0, |metadata| metadata.len())
             .checked_add(
                 append_intent_metadata
                     .as_ref()
-                    .map_or(0, std::fs::Metadata::len),
+                    .map_or(0, |metadata| metadata.len()),
             )
             .ok_or_else(|| {
                 Self::invalid_lane_artifact_error(

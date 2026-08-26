@@ -1,5 +1,8 @@
 //! Lane compliance policy evaluation and loading.
-use crate::interlane::LanePrivacyRegistryHandle;
+use crate::{
+    interlane::LanePrivacyRegistryHandle,
+    secure_file_metadata::{self, SecureMetadata},
+};
 use iroha_crypto::{Hash, privacy::LaneCommitmentId};
 use iroha_data_model::{
     account::AccountId,
@@ -99,7 +102,7 @@ impl LaneComplianceEngine {
         audit_only: bool,
         limits: LaneComplianceLoadLimits,
     ) -> Result<Self, LaneComplianceLoadError> {
-        let directory_metadata = match fs::symlink_metadata(dir) {
+        let directory_metadata = match secure_file_metadata::from_path(dir) {
             Ok(metadata) => metadata,
             Err(source) if source.kind() == io::ErrorKind::NotFound => {
                 return Err(LaneComplianceLoadError::MissingDirectory(dir.to_path_buf()));
@@ -355,10 +358,11 @@ fn read_bounded_policy_file(
     path: &Path,
     maximum: usize,
 ) -> Result<Vec<u8>, LaneComplianceLoadError> {
-    let before = fs::symlink_metadata(path).map_err(|source| LaneComplianceLoadError::Io {
-        path: path.to_path_buf(),
-        source,
-    })?;
+    let before =
+        secure_file_metadata::from_path(path).map_err(|source| LaneComplianceLoadError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
     if policy_metadata_is_symlink_or_reparse(&before) || !before.is_file() {
         return Err(LaneComplianceLoadError::NotRegularFile(path.to_path_buf()));
     }
@@ -389,9 +393,8 @@ fn read_bounded_policy_file(
             path: path.to_path_buf(),
             source,
         })?;
-    let opened = file
-        .metadata()
-        .map_err(|source| LaneComplianceLoadError::Io {
+    let opened =
+        secure_file_metadata::from_file(&file).map_err(|source| LaneComplianceLoadError::Io {
             path: path.to_path_buf(),
             source,
         })?;
@@ -432,16 +435,16 @@ fn read_bounded_policy_file(
             maximum,
         });
     }
-    let opened_after = file
-        .metadata()
-        .map_err(|source| LaneComplianceLoadError::Io {
+    let opened_after =
+        secure_file_metadata::from_file(&file).map_err(|source| LaneComplianceLoadError::Io {
             path: path.to_path_buf(),
             source,
         })?;
-    let path_after = fs::symlink_metadata(path).map_err(|source| LaneComplianceLoadError::Io {
-        path: path.to_path_buf(),
-        source,
-    })?;
+    let path_after =
+        secure_file_metadata::from_path(path).map_err(|source| LaneComplianceLoadError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
     if policy_metadata_is_symlink_or_reparse(&path_after)
         || !path_after.is_file()
         || !policy_file_metadata_unchanged(&opened, &opened_after)
@@ -458,13 +461,12 @@ fn read_bounded_policy_file(
     }
     Ok(bytes)
 }
-fn policy_metadata_is_symlink_or_reparse(metadata: &fs::Metadata) -> bool {
+fn policy_metadata_is_symlink_or_reparse(metadata: &SecureMetadata) -> bool {
     if metadata.file_type().is_symlink() {
         return true;
     }
     #[cfg(windows)]
     {
-        use std::os::windows::fs::MetadataExt as _;
         const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
         return metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
     }
@@ -472,7 +474,7 @@ fn policy_metadata_is_symlink_or_reparse(metadata: &fs::Metadata) -> bool {
     false
 }
 #[cfg(unix)]
-fn policy_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+fn policy_file_metadata_unchanged(left: &SecureMetadata, right: &SecureMetadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
     left.dev() == right.dev()
         && left.ino() == right.ino()
@@ -483,8 +485,7 @@ fn policy_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> 
         && left.ctime_nsec() == right.ctime_nsec()
 }
 #[cfg(windows)]
-fn policy_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt as _;
+fn policy_file_metadata_unchanged(left: &SecureMetadata, right: &SecureMetadata) -> bool {
     let left_identity = (left.volume_serial_number(), left.file_index());
     left_identity.0.is_some()
         && left_identity.1.is_some()
@@ -494,7 +495,7 @@ fn policy_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> 
         && left.creation_time() == right.creation_time()
 }
 #[cfg(not(any(unix, windows)))]
-fn policy_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+fn policy_file_metadata_unchanged(left: &SecureMetadata, right: &SecureMetadata) -> bool {
     left.len() == right.len() && left.modified().ok() == right.modified().ok()
 }
 fn selector_matches(selector: &ParticipantSelector, ctx: &LaneComplianceContext<'_>) -> bool {

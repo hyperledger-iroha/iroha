@@ -6,7 +6,7 @@ const FORBIDDEN_ROOT_ATOMIC_TEMP_PREFIX: &str = ".kura-sidecar-";
 #[derive(Debug)]
 struct CanonicalPruneIntentArtifact {
     path: PathBuf,
-    metadata: std::fs::Metadata,
+    metadata: SecureMetadata,
     file: std::fs::File,
     bytes: Vec<u8>,
     intent: KuraPruneIntentV3,
@@ -242,8 +242,8 @@ impl Kura {
     }
     #[cfg(unix)]
     fn canonical_prune_intent_metadata_unchanged(
-        left: &std::fs::Metadata,
-        right: &std::fs::Metadata,
+        left: &SecureMetadata,
+        right: &SecureMetadata,
         links: u64,
     ) -> bool {
         use std::os::unix::fs::MetadataExt as _;
@@ -258,11 +258,10 @@ impl Kura {
     }
     #[cfg(windows)]
     fn canonical_prune_intent_metadata_unchanged(
-        left: &std::fs::Metadata,
-        right: &std::fs::Metadata,
+        left: &SecureMetadata,
+        right: &SecureMetadata,
         links: u64,
     ) -> bool {
-        use std::os::windows::fs::MetadataExt as _;
         u32::try_from(links).ok().is_some_and(|links| {
             Self::sidecar_metadata_same_object(left, right)
                 && left.number_of_links() == Some(links)
@@ -274,13 +273,13 @@ impl Kura {
     }
     #[cfg(all(not(unix), not(windows)))]
     fn canonical_prune_intent_metadata_unchanged(
-        _left: &std::fs::Metadata,
-        _right: &std::fs::Metadata,
+        _left: &SecureMetadata,
+        _right: &SecureMetadata,
         _links: u64,
     ) -> bool {
         false
     }
-    fn canonical_prune_intent_link_count(metadata: &std::fs::Metadata) -> Option<u64> {
+    fn canonical_prune_intent_link_count(metadata: &SecureMetadata) -> Option<u64> {
         if Self::sidecar_has_link_count(metadata, 1) {
             Some(1)
         } else if Self::sidecar_has_link_count(metadata, 2) {
@@ -335,7 +334,7 @@ impl Kura {
                 "escapes its descriptor-bound root namespace",
             ));
         }
-        let before = match std::fs::symlink_metadata(path) {
+        let before = match secure_file_metadata::from_path(path) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(Error::IO(error, path.to_path_buf())),
@@ -390,8 +389,7 @@ impl Kura {
                 .open(path)
                 .map_err(|error| Error::IO(error, path.to_path_buf()))?
         };
-        let opened_before = file
-            .metadata()
+        let opened_before = secure_file_metadata::from_file(&file)
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
         if !opened_before.is_file()
             || !Self::canonical_prune_intent_metadata_unchanged(&before, &opened_before, links)
@@ -406,10 +404,9 @@ impl Kura {
             .take(u64::try_from(PRUNE_INTENT_MAX_BYTES).unwrap_or(u64::MAX) + 1)
             .read_to_end(&mut bytes)
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
-        let opened_after = file
-            .metadata()
+        let opened_after = secure_file_metadata::from_file(&file)
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
-        let after = std::fs::symlink_metadata(path)
+        let after = secure_file_metadata::from_path(path)
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
         if bytes.len() != usize::try_from(before.len()).unwrap_or(usize::MAX)
             || !Self::canonical_prune_intent_metadata_unchanged(&before, &opened_after, links)
@@ -491,9 +488,7 @@ impl Kura {
                 "has no direct entry name for removal",
             )
         })?;
-        let opened = artifact
-            .file
-            .metadata()
+        let opened = secure_file_metadata::from_file(&artifact.file)
             .map_err(|error| Error::IO(error, artifact.path.clone()))?;
         if !Self::canonical_prune_intent_metadata_unchanged(
             &artifact.metadata,
@@ -529,7 +524,7 @@ impl Kura {
         }
         #[cfg(not(unix))]
         {
-            let current = std::fs::symlink_metadata(&artifact.path)
+            let current = secure_file_metadata::from_path(&artifact.path)
                 .map_err(|error| Error::IO(error, artifact.path.clone()))?;
             if current.file_type().is_symlink()
                 || !current.is_file()
@@ -705,7 +700,7 @@ impl Kura {
             data_path.with_extension("norito.tmp"),
             index_path.with_extension("index.tmp"),
         ] {
-            match std::fs::symlink_metadata(&path) {
+            match secure_file_metadata::from_path(&path) {
                 Ok(metadata) => {
                     if metadata.file_type().is_symlink()
                         || !metadata.file_type().is_file()
@@ -878,7 +873,7 @@ impl Kura {
             ));
         }
         let marker_path = store.commit_marker_path();
-        let marker_stable_bytes = match std::fs::symlink_metadata(&marker_path) {
+        let marker_stable_bytes = match secure_file_metadata::from_path(&marker_path) {
             Ok(metadata) => {
                 if metadata.file_type().is_symlink()
                     || !metadata.file_type().is_file()

@@ -257,7 +257,7 @@ struct StableCanonicalBlockStoreMetadata {
 struct StableSidecarDirectoryMetadata {
     expected_path: PathBuf,
     canonical_path: Option<PathBuf>,
-    metadata: Option<std::fs::Metadata>,
+    metadata: Option<SecureMetadata>,
 }
 #[derive(Debug, Clone)]
 struct StableSidecarDirectoryInventory {
@@ -346,8 +346,8 @@ pub(crate) struct V2StartupFinalityVerificationSession<'a> {
 #[derive(Debug, Clone)]
 struct StableSidecarMetadata {
     canonical_path: PathBuf,
-    file: std::fs::Metadata,
-    directory: std::fs::Metadata,
+    file: SecureMetadata,
+    directory: SecureMetadata,
 }
 #[derive(Debug)]
 struct StableSidecarRead {
@@ -374,7 +374,7 @@ struct BoundProgressDirectory {
     /// Entry name relative to the next bound ancestor; `None` only for Kura root.
     entry_name: Option<std::ffi::OsString>,
     file: std::fs::File,
-    metadata: std::fs::Metadata,
+    metadata: SecureMetadata,
 }
 #[derive(Debug)]
 struct BoundProgressNamespace {
