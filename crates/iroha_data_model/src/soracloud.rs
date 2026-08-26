@@ -17,8 +17,7 @@ use crate::{
     peer::PeerId,
     proof::ProofAttachment,
     sorafs::pin_registry::{
-        MANIFEST_ROOT_CID_LENGTH, ManifestDigest, ManifestRootCid, ReplicationOrderId,
-        StorageClass, derive_sorafs_auto_replication_order_id_v1,
+        MANIFEST_ROOT_CID_LENGTH, ManifestDigest, ManifestRootCid, ReplicationOrderId, StorageClass,
     },
     zk::{BackendTag, OpenVerifyEnvelope, OpenVerifyEnvelopeBounds, StarkFriOpenProofV1},
 };
@@ -259,6 +258,8 @@ pub const SORA_PRIVATE_QUANTIZED_CPU_MAX_OUTPUTS_V1: usize = 4_096;
 pub const SORA_PRIVATE_QUANTIZED_CPU_MAX_WEIGHTS_V1: usize = 64 * 1024 * 1024;
 /// Schema version for [`SoraPrivateUploadedModelExecutionReceiptV1`].
 pub const SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraPrivateUploadedModelExecutionClaimV1`].
+pub const SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_CLAIM_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraHfSourceRecordV1`].
 pub const SORA_HF_SOURCE_RECORD_VERSION_V1: u16 = 1;
 /// Maximum byte length of one canonical, fully-qualified Hugging Face repository identifier.

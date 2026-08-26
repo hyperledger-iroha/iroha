@@ -274,13 +274,17 @@ data class SoracloudPrivateUploadedModelExecutionReceipt(
     @JvmField val attestingValidator: SoracloudRuntimeDeterministicValidatorHost,
     @JvmField val inputArtifact: SoracloudPrivateModelArtifactRef,
     @JvmField val outputArtifact: SoracloudPrivateModelArtifactRef,
+    @JvmField val outputReplicationOrderId: SoracloudImmutableList<Int>,
     @JvmField val inputCommitment: String,
     @JvmField val outputCommitment: String,
     @JvmField val outputRecipient: SoracloudUploadedModelEncryptionRecipient,
     @JvmField val requestCommitment: String,
     @JvmField val resultCommitment: String,
+    @JvmField val authorizationClaimBlockHeight: BigInteger,
+    @JvmField val authorizationClaimEpoch: BigInteger,
     @JvmField val emittedSequence: BigInteger,
     @JvmField val emittedBlockHeight: BigInteger,
+    @JvmField val emittedEpoch: BigInteger,
 ) {
     /** Build a receipt while taking an immutable snapshot of its manifest digest. */
     constructor(
@@ -299,13 +303,17 @@ data class SoracloudPrivateUploadedModelExecutionReceipt(
         attestingValidator: SoracloudRuntimeDeterministicValidatorHost,
         inputArtifact: SoracloudPrivateModelArtifactRef,
         outputArtifact: SoracloudPrivateModelArtifactRef,
+        outputReplicationOrderId: List<Int>,
         inputCommitment: String,
         outputCommitment: String,
         outputRecipient: SoracloudUploadedModelEncryptionRecipient,
         requestCommitment: String,
         resultCommitment: String,
+        authorizationClaimBlockHeight: BigInteger,
+        authorizationClaimEpoch: BigInteger,
         emittedSequence: BigInteger,
         emittedBlockHeight: BigInteger,
+        emittedEpoch: BigInteger,
     ) : this(
         schemaVersion,
         networkId,
@@ -322,18 +330,26 @@ data class SoracloudPrivateUploadedModelExecutionReceipt(
         attestingValidator,
         inputArtifact,
         outputArtifact,
+        SoracloudImmutableList.copyOf(outputReplicationOrderId),
         inputCommitment,
         outputCommitment,
         outputRecipient,
         requestCommitment,
         resultCommitment,
+        authorizationClaimBlockHeight,
+        authorizationClaimEpoch,
         emittedSequence,
         emittedBlockHeight,
+        emittedEpoch,
     )
 
     init {
         require(schemaVersion == 1L) { "schemaVersion must equal 1" }
         requireManifestDigest(modelManifestDigest, "modelManifestDigest")
+        requireManifestDigest(outputReplicationOrderId, "outputReplicationOrderId")
+        require(outputReplicationOrderId.any { it != 0 }) {
+            "outputReplicationOrderId must not be all zero"
+        }
         require(NetworkId.parse(networkId).literal == networkId) {
             "networkId must be an exact canonical checksummed 32-byte NetworkId literal"
         }
@@ -370,13 +386,35 @@ data class SoracloudPrivateUploadedModelExecutionReceipt(
         require(inputArtifact.artifactHash != outputArtifact.artifactHash) {
             "outputArtifact.artifactHash must differ from inputArtifact.artifactHash"
         }
-        requireSoracloudU64(emittedSequence, "emittedSequence")
-        requireSoracloudU64(emittedBlockHeight, "emittedBlockHeight")
+        for ((field, value) in listOf(
+            "authorizationClaimBlockHeight" to authorizationClaimBlockHeight,
+            "authorizationClaimEpoch" to authorizationClaimEpoch,
+            "emittedSequence" to emittedSequence,
+            "emittedBlockHeight" to emittedBlockHeight,
+            "emittedEpoch" to emittedEpoch,
+        )) {
+            requireSoracloudU64(value, field)
+        }
         require(
-            (emittedSequence == BigInteger.ZERO && emittedBlockHeight == BigInteger.ZERO) ||
-                (emittedSequence > BigInteger.ZERO && emittedBlockHeight > BigInteger.ZERO)
+            (authorizationClaimBlockHeight == BigInteger.ZERO &&
+                authorizationClaimEpoch == BigInteger.ZERO &&
+                emittedSequence == BigInteger.ZERO &&
+                emittedBlockHeight == BigInteger.ZERO &&
+                emittedEpoch == BigInteger.ZERO) ||
+                (authorizationClaimBlockHeight > BigInteger.ZERO &&
+                    authorizationClaimEpoch > BigInteger.ZERO &&
+                    emittedSequence > BigInteger.ZERO &&
+                    emittedBlockHeight > BigInteger.ZERO &&
+                    emittedEpoch > BigInteger.ZERO)
         ) {
-            "emittedSequence and emittedBlockHeight must both be zero or both be positive"
+            "authorization and emission coordinates must all be zero or all be positive"
+        }
+        require(
+            authorizationClaimBlockHeight == BigInteger.ZERO ||
+                (emittedBlockHeight >= authorizationClaimBlockHeight &&
+                    emittedEpoch >= authorizationClaimEpoch)
+        ) {
+            "emission coordinates must not precede authorization claim coordinates"
         }
     }
 }
@@ -413,23 +451,26 @@ data class SoracloudPrivateUploadedModelExecuteResponse(
             "submissionStatus must equal submitted or committed"
         }
         transactionHash?.let { requireSoracloudHashLiteral(it, "transactionHash") }
-        require(submissionStatus != "submitted" || transactionHash != null) {
-            "transactionHash is required for submitted"
-        }
         require(submissionStatus != "committed" || transactionHash == null) {
             "transactionHash must be null for committed"
         }
         require(
             submissionStatus != "submitted" ||
-                (receipt.emittedSequence == BigInteger.ZERO &&
-                    receipt.emittedBlockHeight == BigInteger.ZERO)
+                (receipt.authorizationClaimBlockHeight == BigInteger.ZERO &&
+                    receipt.authorizationClaimEpoch == BigInteger.ZERO &&
+                    receipt.emittedSequence == BigInteger.ZERO &&
+                    receipt.emittedBlockHeight == BigInteger.ZERO &&
+                    receipt.emittedEpoch == BigInteger.ZERO)
         ) {
             "submitted receipt must use zero ledger coordinates"
         }
         require(
             submissionStatus != "committed" ||
-                (receipt.emittedSequence > BigInteger.ZERO &&
-                    receipt.emittedBlockHeight > BigInteger.ZERO)
+                (receipt.authorizationClaimBlockHeight > BigInteger.ZERO &&
+                    receipt.authorizationClaimEpoch > BigInteger.ZERO &&
+                    receipt.emittedSequence > BigInteger.ZERO &&
+                    receipt.emittedBlockHeight > BigInteger.ZERO &&
+                    receipt.emittedEpoch > BigInteger.ZERO)
         ) {
             "committed receipt must use positive ledger coordinates"
         }
@@ -508,8 +549,11 @@ data class SoracloudPrivateUploadedModelReceiptListResponse(
         }
         require(
             receipts.all {
-                it.emittedSequence > BigInteger.ZERO &&
-                    it.emittedBlockHeight > BigInteger.ZERO
+                it.authorizationClaimBlockHeight > BigInteger.ZERO &&
+                    it.authorizationClaimEpoch > BigInteger.ZERO &&
+                    it.emittedSequence > BigInteger.ZERO &&
+                    it.emittedBlockHeight > BigInteger.ZERO &&
+                    it.emittedEpoch > BigInteger.ZERO
             }
         ) {
             "receipt-list entries must have positive ledger coordinates"

@@ -23,13 +23,17 @@ public final class SoracloudPrivateUploadedModelExecutionReceipt {
   private final SoracloudRuntimeDeterministicValidatorHost attestingValidator;
   private final SoracloudPrivateModelArtifactRef inputArtifact;
   private final SoracloudPrivateModelArtifactRef outputArtifact;
+  private final byte[] outputReplicationOrderId;
   private final String inputCommitment;
   private final String outputCommitment;
   private final SoracloudUploadedModelEncryptionRecipient outputRecipient;
   private final String requestCommitment;
   private final String resultCommitment;
+  private final BigInteger authorizationClaimBlockHeight;
+  private final BigInteger authorizationClaimEpoch;
   private final BigInteger emittedSequence;
   private final BigInteger emittedBlockHeight;
+  private final BigInteger emittedEpoch;
 
   public SoracloudPrivateUploadedModelExecutionReceipt(
       final long schemaVersion,
@@ -47,13 +51,17 @@ public final class SoracloudPrivateUploadedModelExecutionReceipt {
       final SoracloudRuntimeDeterministicValidatorHost attestingValidator,
       final SoracloudPrivateModelArtifactRef inputArtifact,
       final SoracloudPrivateModelArtifactRef outputArtifact,
+      final byte[] outputReplicationOrderId,
       final String inputCommitment,
       final String outputCommitment,
       final SoracloudUploadedModelEncryptionRecipient outputRecipient,
       final String requestCommitment,
       final String resultCommitment,
+      final BigInteger authorizationClaimBlockHeight,
+      final BigInteger authorizationClaimEpoch,
       final BigInteger emittedSequence,
-      final BigInteger emittedBlockHeight) {
+      final BigInteger emittedBlockHeight,
+      final BigInteger emittedEpoch) {
     SoracloudPrivateModelValidation.requireSchemaVersion(schemaVersion, "schemaVersion");
     this.schemaVersion = schemaVersion;
     this.networkId = SoracloudPrivateModelValidation.requireNetworkId(networkId, "networkId");
@@ -90,6 +98,15 @@ public final class SoracloudPrivateUploadedModelExecutionReceipt {
       throw new IllegalArgumentException(
           "outputArtifact.artifactHash must differ from inputArtifact.artifactHash");
     }
+    this.outputReplicationOrderId =
+        canonicalFixedBytes32(outputReplicationOrderId, "outputReplicationOrderId");
+    boolean nonzeroReplicationOrderId = false;
+    for (final byte value : this.outputReplicationOrderId) {
+      nonzeroReplicationOrderId |= value != 0;
+    }
+    if (!nonzeroReplicationOrderId) {
+      throw new IllegalArgumentException("outputReplicationOrderId must not be all zero");
+    }
     this.inputCommitment =
         SoracloudPrivateModelValidation.requireSoracloudHash(
             inputCommitment, "inputCommitment");
@@ -103,9 +120,17 @@ public final class SoracloudPrivateUploadedModelExecutionReceipt {
     this.resultCommitment =
         SoracloudPrivateModelValidation.requireSoracloudHash(
             resultCommitment, "resultCommitment");
-    SoracloudPrivateModelValidation.requireCoordinatePair(emittedSequence, emittedBlockHeight);
+    SoracloudPrivateModelValidation.requireLedgerCoordinates(
+        authorizationClaimBlockHeight,
+        authorizationClaimEpoch,
+        emittedSequence,
+        emittedBlockHeight,
+        emittedEpoch);
+    this.authorizationClaimBlockHeight = authorizationClaimBlockHeight;
+    this.authorizationClaimEpoch = authorizationClaimEpoch;
     this.emittedSequence = emittedSequence;
     this.emittedBlockHeight = emittedBlockHeight;
+    this.emittedEpoch = emittedEpoch;
   }
 
   public long schemaVersion() { return schemaVersion; }
@@ -140,6 +165,8 @@ public final class SoracloudPrivateUploadedModelExecutionReceipt {
 
   public SoracloudPrivateModelArtifactRef outputArtifact() { return outputArtifact; }
 
+  public byte[] outputReplicationOrderId() { return outputReplicationOrderId.clone(); }
+
   public String inputCommitment() { return inputCommitment; }
 
   public String outputCommitment() { return outputCommitment; }
@@ -150,15 +177,28 @@ public final class SoracloudPrivateUploadedModelExecutionReceipt {
 
   public String resultCommitment() { return resultCommitment; }
 
+  /** Unsigned 64-bit block height at which consensus froze the execution authorization. */
+  public BigInteger authorizationClaimBlockHeight() { return authorizationClaimBlockHeight; }
+
+  /** Unsigned 64-bit consensus epoch at which execution authorization was frozen. */
+  public BigInteger authorizationClaimEpoch() { return authorizationClaimEpoch; }
+
   /** Unsigned 64-bit ledger sequence, represented without signed narrowing. */
   public BigInteger emittedSequence() { return emittedSequence; }
 
   /** Unsigned 64-bit block height, represented without signed narrowing. */
   public BigInteger emittedBlockHeight() { return emittedBlockHeight; }
 
+  /** Unsigned 64-bit consensus Unix-seconds epoch, represented without signed narrowing. */
+  public BigInteger emittedEpoch() { return emittedEpoch; }
+
   private static byte[] canonicalManifestDigest(final byte[] value) {
+    return canonicalFixedBytes32(value, "modelManifestDigest");
+  }
+
+  private static byte[] canonicalFixedBytes32(final byte[] value, final String field) {
     if (value == null || value.length != 32) {
-      throw new IllegalArgumentException("modelManifestDigest must contain exactly 32 bytes");
+      throw new IllegalArgumentException(field + " must contain exactly 32 bytes");
     }
     return value.clone();
   }

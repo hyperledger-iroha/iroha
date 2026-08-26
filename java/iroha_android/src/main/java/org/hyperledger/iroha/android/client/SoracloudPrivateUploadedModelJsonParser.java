@@ -38,13 +38,17 @@ public final class SoracloudPrivateUploadedModelJsonParser {
           "attesting_validator",
           "input_artifact",
           "output_artifact",
+          "output_replication_order_id",
           "input_commitment",
           "output_commitment",
           "output_recipient",
           "request_commitment",
           "result_commitment",
+          "authorization_claim_block_height",
+          "authorization_claim_epoch",
           "emitted_sequence",
-          "emitted_block_height");
+          "emitted_block_height",
+          "emitted_epoch");
   private static final Set<String> ARTIFACT_FIELDS =
       fields(
           "schema_version",
@@ -182,6 +186,15 @@ public final class SoracloudPrivateUploadedModelJsonParser {
         unsigned64Integer(root.get("emitted_sequence"), context + ".emitted_sequence");
     final BigInteger emittedBlockHeight =
         unsigned64Integer(root.get("emitted_block_height"), context + ".emitted_block_height");
+    final BigInteger emittedEpoch =
+        unsigned64Integer(root.get("emitted_epoch"), context + ".emitted_epoch");
+    final BigInteger authorizationClaimBlockHeight =
+        unsigned64Integer(
+            root.get("authorization_claim_block_height"),
+            context + ".authorization_claim_block_height");
+    final BigInteger authorizationClaimEpoch =
+        unsigned64Integer(
+            root.get("authorization_claim_epoch"), context + ".authorization_claim_epoch");
     return new SoracloudPrivateUploadedModelExecutionReceipt(
         schemaVersion(root.get("schema_version"), context + ".schema_version"),
         networkId(root.get("network_id"), context + ".network_id"),
@@ -207,6 +220,9 @@ public final class SoracloudPrivateUploadedModelJsonParser {
             expectObject(root.get("output_artifact"), context + ".output_artifact"),
             context + ".output_artifact",
             "output"),
+        fixedBytes32(
+            root.get("output_replication_order_id"),
+            context + ".output_replication_order_id"),
         requiredHash(root.get("input_commitment"), context + ".input_commitment"),
         requiredHash(root.get("output_commitment"), context + ".output_commitment"),
         parseOutputRecipient(
@@ -214,8 +230,11 @@ public final class SoracloudPrivateUploadedModelJsonParser {
             context + ".output_recipient"),
         requiredHash(root.get("request_commitment"), context + ".request_commitment"),
         requiredHash(root.get("result_commitment"), context + ".result_commitment"),
+        authorizationClaimBlockHeight,
+        authorizationClaimEpoch,
         emittedSequence,
-        emittedBlockHeight);
+        emittedBlockHeight,
+        emittedEpoch);
   }
 
   private static SoracloudPrivateModelArtifactRef parseArtifact(

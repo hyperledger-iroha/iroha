@@ -26,7 +26,6 @@ use iroha_core::soracloud_runtime::{
     HF_GENERATED_AGENT_AUTONOMY_BUDGET_UNITS, HF_GENERATED_AGENT_LEASE_BLOCKS,
     SORACLOUD_APARTMENT_AUTONOMY_EXECUTION_SUMMARY_MAX_BYTES_V1,
     SORACLOUD_PRIVATE_UPLOADED_MODEL_EXECUTION_JOURNAL_VERSION_V1,
-    SORACLOUD_PRIVATE_UPLOADED_MODEL_EXECUTION_MAX_SUBMISSION_ATTEMPTS_V1,
     SoracloudApartmentAutonomyExecutionSummaryV1, SoracloudApartmentExecutionRequest,
     SoracloudLocalReadKind, SoracloudPrivateUploadedModelExecutionJournalPhaseV1,
     SoracloudPrivateUploadedModelExecutionJournalV1,
@@ -56,7 +55,8 @@ use iroha_data_model::{
         CiphertextQuerySpecV1, DecryptionAuthorityPolicyV1, DecryptionRequestV1, FheJobSpecV1,
         SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1,
         SORA_PRIVATE_MODEL_ENCRYPTED_ARTIFACT_MAX_BYTES_V1,
-        SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1, SecretEnvelopeEncryptionV1,
+        SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1,
+        SORACLOUD_PRIVATE_OUTPUT_MIN_RETENTION_SECS_V1, SecretEnvelopeEncryptionV1,
         SecretEnvelopeV1, SoraAgentApartmentActionV1, SoraAgentApartmentAuditEventV1,
         SoraAgentApartmentRecordV1, SoraAgentArtifactAllowRuleV1, SoraAgentAutonomyRunRecordV1,
         SoraAgentMailboxMessageV1, SoraAgentRuntimeStatusV1, SoraAppInfraAuditEventV1,
@@ -120,8 +120,8 @@ use iroha_data_model::{
     },
     sorafs::pin_registry::{
         ManifestDigest, ManifestRootCid, PinManifestRecord, PinStatus, StorageClass,
+        derive_sorafs_auto_replication_order_id_v1,
     },
-    transaction::SignedTransaction,
 };
 use iroha_primitives::{
     json::Json,
@@ -1316,9 +1316,11 @@ pub(crate) struct PrivateUploadedModelExecuteRequest {
 pub(crate) struct PrivateUploadedModelExecuteResponse {
     pub schema_version: u16,
     pub status: UploadedModelStatusResponse,
-    /// `submitted` after atomic transaction admission, or `committed` for an exact replay.
+    /// `submitted` while durable Prepare/Receipt recovery is active, or `committed` for an exact
+    /// replay.
     pub submission_status: String,
-    /// Canonical signed transaction hash for a newly submitted atomic pin-and-receipt mutation.
+    /// Canonical signed transaction hash for the current Prepare or Receipt phase, or absent while
+    /// durable recovery waits for output approval and replication quorum.
     #[norito(required)]
     pub transaction_hash: Option<Hash>,
     pub receipt: SoraPrivateUploadedModelExecutionReceiptV1,
@@ -1336,7 +1338,6 @@ enum PrivateExecutionSubmissionState {
     },
     Submitted {
         request_fingerprint: Hash,
-        response: PrivateUploadedModelExecuteResponse,
         submitted_at: Instant,
     },
 }
@@ -1358,12 +1359,11 @@ struct PrivateExecutionSubmissionGuard {
 }
 
 impl PrivateExecutionSubmissionGuard {
-    fn complete(mut self, response: PrivateUploadedModelExecuteResponse) {
+    fn complete(mut self) {
         self.tracker.entries.lock().insert(
             self.key.clone(),
             PrivateExecutionSubmissionState::Submitted {
                 request_fingerprint: self.request_fingerprint,
-                response,
                 submitted_at: Instant::now(),
             },
         );
@@ -1387,10 +1387,6 @@ impl Drop for PrivateExecutionSubmissionGuard {
     }
 }
 
-enum PrivateExecutionSubmissionClaim {
-    Acquired(PrivateExecutionSubmissionGuard),
-    Cached(PrivateUploadedModelExecuteResponse),
-}
 #[derive(Clone, Debug, Default, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct PrivateUploadedModelReceiptQuery {
@@ -5936,9 +5932,68 @@ struct PrivateOutputManifest {
     plan: sorafs_car::CarBuildPlan,
 }
 
+fn derive_private_output_paid_retention_epoch(
+    candidate_epoch: u64,
+    prepare_attempt_secs: u64,
+    settlement_window_secs: u64,
+    maximum_retention_epoch: Option<u64>,
+) -> Result<u64, SoracloudError> {
+    let retention_window_secs =
+        settlement_window_secs.max(SORACLOUD_PRIVATE_OUTPUT_MIN_RETENTION_SECS_V1);
+    let retention_epoch = candidate_epoch
+        .checked_add(prepare_attempt_secs)
+        .ok_or_else(|| SoracloudError::unavailable("private output Prepare horizon overflowed"))?
+        .checked_add(retention_window_secs)
+        .ok_or_else(|| SoracloudError::unavailable("private output retention epoch overflowed"))?;
+    if let Some(maximum) = maximum_retention_epoch
+        && retention_epoch > maximum
+    {
+        return Err(SoracloudError::conflict(format!(
+            "governed SoraFS maximum retention epoch {maximum} cannot admit the private output recovery horizon ending at {retention_epoch}"
+        )));
+    }
+    Ok(retention_epoch)
+}
+
+fn private_output_paid_retention_epoch(
+    app: &SharedAppState,
+    prepare_attempt_secs: u64,
+) -> Result<u64, SoracloudError> {
+    let wall_epoch = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| SoracloudError::unavailable("system clock is before the Unix epoch"))?
+        .as_secs();
+    let finalized_epoch = app
+        .state
+        .latest_block_header_fast()
+        .map_or(0, |header| header.creation_time_ms / 1_000);
+    // Prepare executes in a future block. Basing the finite lease on the later of wall time and
+    // finalized consensus time, plus one second and a complete signed-attempt lifetime, prevents
+    // a locally stale view or near-deadline commit from shortening the post-claim paid recovery
+    // window below the governed settlement interval.
+    let candidate_epoch = wall_epoch
+        .max(finalized_epoch)
+        .checked_add(1)
+        .ok_or_else(|| SoracloudError::unavailable("private output epoch overflowed"))?;
+    let settlement_window_secs = app
+        .state
+        .view()
+        .world()
+        .sorafs_pricing()
+        .credit
+        .settlement_window_secs;
+    derive_private_output_paid_retention_epoch(
+        candidate_epoch,
+        prepare_attempt_secs,
+        settlement_window_secs,
+        app.state.gov.sorafs_pin_policy.max_retention_epoch,
+    )
+}
+
 fn build_private_output_manifest(
     encrypted_output: &[u8],
     input_pin: &PinManifestRecord,
+    retention_epoch: u64,
 ) -> Result<PrivateOutputManifest, SoracloudError> {
     if encrypted_output.is_empty()
         || encrypted_output.len() > SORA_PRIVATE_MODEL_ENCRYPTED_ARTIFACT_MAX_BYTES_V1
@@ -5999,7 +6054,10 @@ fn build_private_output_manifest(
         .pin_policy(sorafs_manifest::PinPolicy {
             min_replicas: input_pin.policy.min_replicas,
             storage_class,
-            retention_epoch: input_pin.policy.retention_epoch,
+            // Private outputs pay the normal public-pin fee for a finite governed recovery
+            // window. The caller derives this absolute epoch from the authoritative pricing
+            // settlement window rather than inheriting an arbitrary source-pin horizon.
+            retention_epoch,
         })
         .build()
         .map_err(|err| {
@@ -6082,26 +6140,60 @@ fn committed_private_execution_response(
 ) -> Result<Option<PrivateUploadedModelExecuteResponse>, SoracloudError> {
     let state_view = app.state.view();
     let world = state_view.world();
-    let existing = world
-        .soracloud_private_uploaded_model_execution_receipts()
-        .iter()
-        .find_map(|(_receipt_id, receipt)| {
-            (receipt.service_name.as_ref() == request.service_name
-                && receipt.decryption_request_id == request.decryption_request_id)
-                .then(|| receipt.clone())
-        });
-    let Some(receipt) = existing else {
+    let claim_key = (
+        request.service_name.clone(),
+        request.decryption_request_id.clone(),
+    );
+    let Some(claim) = world
+        .soracloud_private_uploaded_model_execution_claims()
+        .get(&claim_key)
+    else {
         return Ok(None);
     };
-    // Commitment makes execution idempotent, not public: authenticate before exposing the
-    // receipt or allowing the caller to clean up recovery state.
+    // Authenticate before exposing whether this private claim has already committed a receipt.
     let _authorized_record =
         require_private_uploaded_model_release_signer(world, request, verified_request_signers)?;
+    claim.validate().map_err(|error| {
+        SoracloudError::internal(format!(
+            "authoritative private execution claim is invalid: {error}"
+        ))
+    })?;
+    if claim.receipt.service_name.as_ref() != request.service_name
+        || claim.receipt.decryption_request_id != request.decryption_request_id
+    {
+        return Err(SoracloudError::internal(
+            "authoritative private execution claim key does not match its receipt",
+        ));
+    }
+    // A valid claim without a receipt is the normal asynchronous replication state. Once the
+    // receipt exists, its canonical id gives an O(log n) exact lookup and every ledger-owned
+    // coordinate must project the same immutable claim evidence.
+    let Some(receipt) = world
+        .soracloud_private_uploaded_model_execution_receipts()
+        .get(&claim.receipt.receipt_id)
+        .cloned()
+    else {
+        return Ok(None);
+    };
     receipt.validate().map_err(|err| {
         SoracloudError::internal(format!(
             "committed private execution receipt is invalid: {err}"
         ))
     })?;
+    let mut submission = receipt.clone();
+    submission.authorization_claim_block_height = 0;
+    submission.authorization_claim_epoch = 0;
+    submission.emitted_sequence = 0;
+    submission.emitted_block_height = 0;
+    submission.emitted_epoch = 0;
+    if submission != claim.receipt
+        || receipt.authorization_claim_block_height != claim.claimed_block_height
+        || receipt.authorization_claim_epoch != claim.claimed_epoch
+    {
+        return Err(SoracloudError::internal(
+            "committed private execution receipt does not exactly project its authoritative claim",
+        ));
+    }
     let bundle = &status.bundle;
     if receipt.service_version != request.service_version
         || receipt.model_id != bundle.model_id
@@ -6127,10 +6219,109 @@ fn committed_private_execution_response(
     }))
 }
 
+fn authoritative_private_claim_without_journal_error(
+    decryption_request_id: &str,
+    output_pin: &PinManifestRecord,
+    consensus_epoch: u64,
+) -> SoracloudError {
+    if let PinStatus::Retired(retired_epoch) = output_pin.status {
+        return SoracloudError::conflict(format!(
+            "prepared private output for decryption request `{decryption_request_id}` retired at epoch {retired_epoch}; the claimed request cannot be re-executed"
+        ));
+    }
+    if output_pin.policy.retention_epoch <= consensus_epoch {
+        return SoracloudError::conflict(format!(
+            "prepared private output for decryption request `{decryption_request_id}` expired at epoch {}; the claimed request cannot be re-executed",
+            output_pin.policy.retention_epoch
+        ));
+    }
+    let Some(minimum_retention_epoch) =
+        consensus_epoch.checked_add(SORACLOUD_PRIVATE_OUTPUT_MIN_RETENTION_SECS_V1)
+    else {
+        return SoracloudError::conflict(format!(
+            "prepared private output recovery horizon for decryption request `{decryption_request_id}` overflowed; the claimed request cannot be re-executed"
+        ));
+    };
+    if output_pin.policy.retention_epoch < minimum_retention_epoch {
+        return SoracloudError::conflict(format!(
+            "prepared private output for decryption request `{decryption_request_id}` closes at epoch {}, before the protocol recovery floor {minimum_retention_epoch}; the claimed request cannot be re-executed",
+            output_pin.policy.retention_epoch
+        ));
+    }
+    SoracloudError::unavailable(format!(
+        "decryption request `{decryption_request_id}` has an active authoritative prepared claim but its exact durable recovery journal is unavailable on this validator"
+    ))
+}
+
+fn reject_authoritative_private_execution_claim_without_journal(
+    app: &SharedAppState,
+    status: &UploadedModelStatusResponse,
+    request: &PrivateUploadedModelExecuteRequest,
+) -> Result<(), SoracloudError> {
+    let state_view = app.state.view();
+    let world = state_view.world();
+    let claim_key = (
+        request.service_name.clone(),
+        request.decryption_request_id.clone(),
+    );
+    let Some(claim) = world
+        .soracloud_private_uploaded_model_execution_claims()
+        .get(&claim_key)
+    else {
+        return Ok(());
+    };
+    claim.validate().map_err(|error| {
+        SoracloudError::internal(format!(
+            "authoritative private execution claim is invalid: {error}"
+        ))
+    })?;
+    let receipt = &claim.receipt;
+    let bundle = &status.bundle;
+    if receipt.service_name.as_ref() != request.service_name
+        || receipt.service_version != request.service_version
+        || receipt.model_id != bundle.model_id
+        || receipt.weight_version != bundle.weight_version
+        || receipt.model_manifest_digest != bundle.sorafs_manifest_digest
+        || receipt.model_bundle_root != bundle.bundle_root
+        || receipt.policy_id != bundle.decryption_policy_ref
+        || receipt.decryption_request_id != request.decryption_request_id
+        || receipt.input_artifact != request.input_artifact
+        || receipt.output_recipient != request.output_recipient
+    {
+        return Err(SoracloudError::conflict(format!(
+            "decryption request `{}` already has an authoritative prepared claim for different private execution evidence",
+            request.decryption_request_id
+        )));
+    }
+
+    let output = &receipt.output_artifact;
+    let Some(pin) = world.pin_manifests().get(&output.sorafs_manifest_digest) else {
+        return Err(SoracloudError::internal(format!(
+            "authoritative private execution claim `{}` references a missing output pin",
+            request.decryption_request_id
+        )));
+    };
+    if pin.digest != output.sorafs_manifest_digest
+        || pin.root_cid != output.sorafs_root_cid
+        || pin.content_length != output.ciphertext_bytes
+    {
+        return Err(SoracloudError::internal(format!(
+            "authoritative private execution claim `{}` does not match its output pin",
+            request.decryption_request_id
+        )));
+    }
+    let consensus_epoch = state_view.authenticated_query_ledger_time_ms().unwrap_or(0) / 1_000;
+    Err(authoritative_private_claim_without_journal_error(
+        &request.decryption_request_id,
+        pin,
+        consensus_epoch,
+    ))
+}
+
 fn claim_private_execution_submission(
     app: &SharedAppState,
     request: &PrivateUploadedModelExecuteRequest,
-) -> Result<PrivateExecutionSubmissionClaim, SoracloudError> {
+) -> Result<PrivateExecutionSubmissionGuard, SoracloudError> {
     let key = (
         request.service_name.clone(),
         request.decryption_request_id.clone(),
@@ -6158,32 +6349,17 @@ fn claim_private_execution_submission(
             }
             PrivateExecutionSubmissionState::Submitted {
                 request_fingerprint: submitted_fingerprint,
-                response,
-                submitted_at,
+                ..
             } => {
-                let terminal_failure = response.transaction_hash.is_some_and(|hash| {
-                    let typed_hash = HashOf::<SignedTransaction>::from_untyped_unchecked(hash);
-                    app.pipeline_status_cache
-                        .lookup(&typed_hash)
-                        .is_some_and(|status| {
-                            matches!(
-                                status.kind,
-                                crate::PipelineStatusKind::Rejected
-                                    | crate::PipelineStatusKind::Expired
-                            )
-                        })
-                });
-                let expired = now.saturating_duration_since(*submitted_at)
-                    >= PRIVATE_EXECUTION_SUBMISSION_CACHE_TTL;
-                if !terminal_failure && !expired {
-                    if *submitted_fingerprint != request_fingerprint {
-                        return Err(SoracloudError::conflict(format!(
-                            "decryption request `{}` already has a pending transaction with different private evidence",
-                            request.decryption_request_id
-                        )));
-                    }
-                    return Ok(PrivateExecutionSubmissionClaim::Cached(response.clone()));
+                if *submitted_fingerprint != request_fingerprint {
+                    return Err(SoracloudError::conflict(format!(
+                        "decryption request `{}` already has durable submitted evidence for a different execution request",
+                        request.decryption_request_id
+                    )));
                 }
+                // The durable journal, not this process-local response cache, is authoritative
+                // after submission. Reacquire the key so exactly one retry can observe and
+                // advance its current Prepare/Receipt phase while concurrent retries coalesce.
             }
         }
         entries.remove(&key);
@@ -6209,14 +6385,12 @@ fn claim_private_execution_submission(
         },
     );
     drop(entries);
-    Ok(PrivateExecutionSubmissionClaim::Acquired(
-        PrivateExecutionSubmissionGuard {
-            tracker,
-            key,
-            request_fingerprint,
-            completed: false,
-        },
-    ))
+    Ok(PrivateExecutionSubmissionGuard {
+        tracker,
+        key,
+        request_fingerprint,
+        completed: false,
+    })
 }
 
 fn validate_private_execution_journal_for_request(
@@ -6308,8 +6482,20 @@ fn recover_private_execution_submission(
     submission_guard
         .take()
         .expect("private execution recovery owns its submission claim")
-        .complete(response.clone());
+        .complete();
     Ok(Some((StatusCode::ACCEPTED, response)))
+}
+
+fn private_execution_required_retention_margin(
+    signed_attempt_lifetime: Duration,
+    recovery_interval: Duration,
+) -> Duration {
+    // Source artifacts must survive execution, durable Prepare publication, and at least one
+    // complete signed-attempt observation cycle. Once Prepare commits, the separately paid output
+    // pin carries the governed recovery horizon and the source artifacts may retire.
+    signed_attempt_lifetime
+        .saturating_add(recovery_interval.saturating_mul(4))
+        .saturating_add(Duration::from_secs(60))
 }
 
 fn authoritative_private_uploaded_model_execute_response(
@@ -6357,22 +6543,23 @@ fn authoritative_private_uploaded_model_execute_response(
             status.bundle.model_id, status.bundle.weight_version
         )));
     }
-    require_private_uploaded_model_release_policy(
-        app,
-        &status.bundle,
-        &request,
-        verified_request_signers,
-    )?;
-    require_active_sorafs_uploaded_model_pin(app, &status.bundle)?;
+    // Recovery can outlive the release window and the model pin that were both live when the
+    // immutable ledger claim was prepared. Authenticate the caller against the authoritative
+    // release before consulting private journal state, then let the runtime require the exact
+    // claim and journal binding. Mutable current-state policy and pin checks remain mandatory for
+    // a fresh execution when no exact journal exists.
+    {
+        let state_view = app.state.view();
+        require_private_uploaded_model_release_signer(
+            state_view.world(),
+            &request,
+            verified_request_signers,
+        )?;
+    }
     let runtime = app.soracloud_runtime.as_ref().ok_or_else(|| {
         SoracloudError::unavailable("qualified Soracloud private runtime is not available")
     })?;
-    let mut submission_guard = match claim_private_execution_submission(app, &request)? {
-        PrivateExecutionSubmissionClaim::Acquired(guard) => Some(guard),
-        PrivateExecutionSubmissionClaim::Cached(response) => {
-            return Ok((StatusCode::ACCEPTED, response));
-        }
-    };
+    let mut submission_guard = Some(claim_private_execution_submission(app, &request)?);
     let request_fingerprint = Hash::new(request.encode());
     if let Some(recovered) = recover_private_execution_submission(
         app,
@@ -6384,29 +6571,41 @@ fn authoritative_private_uploaded_model_execute_response(
     )? {
         return Ok(recovered);
     }
+    // Prepare is the one-way execution boundary. If consensus already contains a claim, a
+    // missing local journal must never fall through into a second inference. An active output can
+    // be recovered by the preparing validator; an expired or retired output is terminal.
+    reject_authoritative_private_execution_claim_without_journal(app, &status, &request)?;
+    require_private_uploaded_model_release_policy(
+        app,
+        &status.bundle,
+        &request,
+        verified_request_signers,
+    )?;
+    require_active_sorafs_uploaded_model_pin(app, &status.bundle)?;
     let submission_guard = submission_guard
         .take()
         .expect("fresh private execution retains its submission claim");
     let signed_attempt_lifetime = iroha_data_model::transaction::DEFAULT_TRANSACTION_TIME_TO_LIVE
         .min(app.queue.tx_time_to_live);
-    let required_retention_margin = signed_attempt_lifetime
-        .saturating_mul(u32::from(
-            SORACLOUD_PRIVATE_UPLOADED_MODEL_EXECUTION_MAX_SUBMISSION_ATTEMPTS_V1,
-        ))
-        .saturating_add(
-            runtime
-                .private_execution_recovery_interval()
-                .saturating_mul(2),
-        )
-        .saturating_add(Duration::from_secs(60));
+    let signed_attempt_lifetime_seconds = signed_attempt_lifetime
+        .as_secs()
+        .saturating_add(u64::from(signed_attempt_lifetime.subsec_nanos() != 0));
+    let required_retention_margin = private_execution_required_retention_margin(
+        signed_attempt_lifetime,
+        runtime.private_execution_recovery_interval(),
+    );
     let required_retention_margin_seconds = required_retention_margin
         .as_secs()
         .saturating_add(u64::from(required_retention_margin.subsec_nanos() != 0));
-    let input_pin = require_active_private_model_artifact_pin(
+    require_active_private_model_artifact_pin(
         app,
         &request.input_artifact,
         required_retention_margin_seconds,
     )?;
+    // Reject an incompatible governed pin-policy cap before paying the inference cost. The exact
+    // absolute epoch is recomputed after inference so a slow execution still receives the full
+    // paid settlement window.
+    private_output_paid_retention_epoch(app, signed_attempt_lifetime_seconds)?;
     let encrypted_model_artifact_bytes = read_admitted_private_model_payload(
         app,
         &status.bundle.sorafs_manifest_digest,
@@ -6446,9 +6645,12 @@ fn authoritative_private_uploaded_model_execute_response(
         &request.input_artifact,
         required_retention_margin_seconds,
     )?;
+    let output_retention_epoch =
+        private_output_paid_retention_epoch(app, signed_attempt_lifetime_seconds)?;
     let output = build_private_output_manifest(
         result.encrypted_output_artifact_bytes.as_slice(),
         &input_pin,
+        output_retention_epoch,
     )?;
     if output.artifact.artifact_hash == request.input_artifact.artifact_hash {
         return Err(SoracloudError::internal(
@@ -6468,8 +6670,9 @@ fn authoritative_private_uploaded_model_execute_response(
         &request.input_artifact,
         required_retention_margin_seconds,
     )?;
-    // Close the state-change race before enqueueing. Consensus performs this validation again at
-    // the exact execution height inside the same transaction as output-pin registration.
+    // Close the state-change race before publishing the outbox. Consensus validates release
+    // authorization again for each phase transaction and independently gates the receipt on the
+    // exact replicated output pin at its execution height.
     require_private_uploaded_model_release_policy(
         app,
         &status.bundle,
@@ -6493,13 +6696,19 @@ fn authoritative_private_uploaded_model_execute_response(
         attesting_validator: result.attesting_validator,
         input_artifact: request.input_artifact,
         output_artifact: output.artifact.clone(),
+        output_replication_order_id: derive_sorafs_auto_replication_order_id_v1(
+            &output.artifact.sorafs_manifest_digest,
+        ),
         input_commitment: result.input_commitment,
         output_commitment: result.output_commitment,
         output_recipient: result.output_recipient,
         request_commitment: placeholder,
         result_commitment: placeholder,
+        authorization_claim_block_height: 0,
+        authorization_claim_epoch: 0,
         emitted_sequence: 0,
         emitted_block_height: 0,
+        emitted_epoch: 0,
     };
     receipt.request_commitment = derive_soracloud_private_model_request_commitment_v1(&receipt);
     receipt.result_commitment = derive_soracloud_private_model_result_commitment_v1(&receipt);
@@ -6516,7 +6725,7 @@ fn authoritative_private_uploaded_model_execute_response(
         request_fingerprint,
         output_manifest_payload: output.manifest_payload.clone(),
         receipt: receipt.clone(),
-        phase: SoracloudPrivateUploadedModelExecutionJournalPhaseV1::OutputPin,
+        phase: SoracloudPrivateUploadedModelExecutionJournalPhaseV1::Prepare,
         transaction_hash: None,
         signed_transaction: None,
         submission_attempt: 0,
@@ -6535,7 +6744,7 @@ fn authoritative_private_uploaded_model_execute_response(
         output_artifact: output.artifact,
         receipt,
     };
-    submission_guard.complete(response.clone());
+    submission_guard.complete();
     Ok((StatusCode::ACCEPTED, response))
 }
 fn authoritative_private_uploaded_model_receipts_response(
@@ -13520,6 +13729,18 @@ mod tests {
         path::{Path, PathBuf},
         sync::Arc,
     };
+    #[test]
+    fn private_execution_retention_covers_initial_prepare_observation() {
+        let attempt_lifetime = Duration::from_secs(100);
+        let recovery_interval = Duration::from_secs(10);
+        let expected = attempt_lifetime
+            .saturating_add(recovery_interval.saturating_mul(4))
+            .saturating_add(Duration::from_secs(60));
+        assert_eq!(
+            private_execution_required_retention_margin(attempt_lifetime, recovery_interval,),
+            expected,
+        );
+    }
     #[cfg(any(unix, windows))]
     #[test]
     fn autonomy_summary_reader_accepts_v1_limit_and_rejects_first_overflow_byte() {
@@ -14081,6 +14302,85 @@ mod tests {
             Err(SoracloudRuntimeExecutionError::new(
                 SoracloudRuntimeExecutionErrorKind::Unavailable,
                 "test hf runtime handle exposes only the runtime snapshot",
+            ))
+        }
+    }
+    struct TestPrivateExecutionRecoveryRuntime {
+        snapshot: SoracloudRuntimeSnapshot,
+        state_dir: PathBuf,
+        journal: Option<SoracloudPrivateUploadedModelExecutionJournalV1>,
+        transaction_hash: Hash,
+    }
+    impl SoracloudRuntimeReadHandle for TestPrivateExecutionRecoveryRuntime {
+        fn snapshot(&self) -> SoracloudRuntimeSnapshot {
+            self.snapshot.clone()
+        }
+        fn state_dir(&self) -> PathBuf {
+            self.state_dir.clone()
+        }
+        fn load_private_uploaded_model_execution_journal(
+            &self,
+            service_name: &Name,
+            decryption_request_id: &str,
+        ) -> Result<
+            Option<SoracloudPrivateUploadedModelExecutionJournalV1>,
+            SoracloudRuntimeExecutionError,
+        > {
+            Ok(self.journal.as_ref().and_then(|journal| {
+                (journal.service_name == *service_name
+                    && journal.decryption_request_id == decryption_request_id)
+                    .then(|| journal.clone())
+            }))
+        }
+        fn advance_private_uploaded_model_execution(
+            &self,
+            output_manifest_payload: Vec<u8>,
+            receipt: SoraPrivateUploadedModelExecutionReceiptV1,
+        ) -> Result<Option<Hash>, SoracloudRuntimeExecutionError> {
+            let Some(journal) = self.journal.as_ref() else {
+                return Err(SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+                    "test recovery runtime has no durable journal to advance",
+                ));
+            };
+            if output_manifest_payload != journal.output_manifest_payload
+                || receipt != journal.receipt
+            {
+                return Err(SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+                    "test recovery runtime received evidence different from its durable journal",
+                ));
+            }
+            Ok(Some(self.transaction_hash))
+        }
+    }
+    impl SoracloudRuntime for TestPrivateExecutionRecoveryRuntime {
+        fn execute_local_read(
+            &self,
+            _request: SoracloudLocalReadRequest,
+        ) -> Result<SoracloudLocalReadResponse, SoracloudRuntimeExecutionError> {
+            Err(SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::Unavailable,
+                "test private recovery runtime exposes only durable journal recovery",
+            ))
+        }
+        fn execute_ordered_mailbox(
+            &self,
+            _request: SoracloudOrderedMailboxExecutionRequest,
+        ) -> Result<SoracloudOrderedMailboxExecutionResult, SoracloudRuntimeExecutionError>
+        {
+            Err(SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::Unavailable,
+                "test private recovery runtime exposes only durable journal recovery",
+            ))
+        }
+        fn execute_apartment(
+            &self,
+            _request: SoracloudApartmentExecutionRequest,
+        ) -> Result<SoracloudApartmentExecutionResult, SoracloudRuntimeExecutionError> {
+            Err(SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::Unavailable,
+                "test private recovery runtime exposes only durable journal recovery",
             ))
         }
     }
@@ -15070,12 +15370,18 @@ mod tests {
                 "output",
                 receipt_seed.wrapping_add(4),
             ),
+            output_replication_order_id: derive_sorafs_auto_replication_order_id_v1(
+                &ManifestDigest::new([receipt_seed.wrapping_add(4); 32]),
+            ),
             input_commitment: Hash::new([receipt_seed.wrapping_add(5); 32]),
             output_commitment: Hash::new([receipt_seed.wrapping_add(6); 32]),
             request_commitment: placeholder,
             result_commitment: placeholder,
+            authorization_claim_block_height: emitted_sequence,
+            authorization_claim_epoch: emitted_sequence,
             emitted_sequence,
             emitted_block_height: emitted_sequence,
+            emitted_epoch: emitted_sequence,
         };
         receipt.request_commitment = derive_soracloud_private_model_request_commitment_v1(&receipt);
         receipt.result_commitment = derive_soracloud_private_model_result_commitment_v1(&receipt);
@@ -15337,25 +15643,56 @@ mod tests {
                 .bundle
                 .upload_recipient,
         };
-        let first = match claim_private_execution_submission(&app, &request)
-            .expect("first exact private execution must acquire the request key")
-        {
-            PrivateExecutionSubmissionClaim::Acquired(guard) => guard,
-            PrivateExecutionSubmissionClaim::Cached(_) => {
-                panic!("a fresh private execution must not be cached")
-            }
-        };
+        let first = claim_private_execution_submission(&app, &request)
+            .expect("first exact private execution must acquire the request key");
         let duplicate = claim_private_execution_submission(&app, &request)
             .err()
             .expect("an exact concurrent retry must be coalesced");
         assert_eq!(duplicate.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert!(duplicate.message.contains("already executing"));
         drop(first);
-        assert!(matches!(
-            claim_private_execution_submission(&app, &request)
-                .expect("a failed execution guard must release its request key"),
-            PrivateExecutionSubmissionClaim::Acquired(_)
-        ));
+        claim_private_execution_submission(&app, &request)
+            .expect("a failed execution guard must release its request key");
+    }
+    #[test]
+    fn private_execution_submission_tracker_reacquires_submitted_exact_request() {
+        let app = mk_app_state_for_tests();
+        let request = PrivateUploadedModelExecuteRequest {
+            service_name: "private_model_host".to_owned(),
+            service_version: "1.0.0".to_owned(),
+            weight_version: "v1".to_owned(),
+            model_id: Some("upload-1".to_owned()),
+            model_name: None,
+            bundle_root: Some(Hash::new(b"uploaded-model-bundle")),
+            decryption_request_id: "decrypt-upload-submitted".to_owned(),
+            input_artifact: sample_private_model_artifact_ref("input", 0xD2),
+            output_recipient: sample_uploaded_model_register_payload()
+                .bundle
+                .upload_recipient,
+        };
+        claim_private_execution_submission(&app, &request)
+            .expect("fresh request acquires its key")
+            .complete();
+
+        let reacquired = claim_private_execution_submission(&app, &request)
+            .expect("an exact submitted retry must reacquire for durable journal recovery");
+        let concurrent = claim_private_execution_submission(&app, &request)
+            .err()
+            .expect("a concurrent recovery retry must remain coalesced");
+        assert_eq!(concurrent.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(concurrent.message.contains("already executing"));
+        drop(reacquired);
+
+        claim_private_execution_submission(&app, &request)
+            .expect("exact retry reacquires after a failed recovery")
+            .complete();
+        let mut mismatched = request;
+        mismatched.input_artifact.artifact_hash = Hash::new(b"different submitted evidence");
+        let conflict = claim_private_execution_submission(&app, &mismatched)
+            .err()
+            .expect("submitted durable evidence must reject a different fingerprint");
+        assert_eq!(conflict.status(), StatusCode::CONFLICT);
+        assert!(conflict.message.contains("durable submitted evidence"));
     }
     #[test]
     fn rollout_response_mirrors_are_closed_and_require_explicit_baseline() {
@@ -18349,6 +18686,125 @@ mod tests {
         }
         record
     }
+    #[test]
+    fn private_output_paid_retention_uses_governed_window_and_cap() {
+        let candidate_epoch = 1_000;
+        let prepare_attempt_secs = 100;
+        let settlement_window = SORACLOUD_PRIVATE_OUTPUT_MIN_RETENTION_SECS_V1 + 60;
+        let expected_retention_epoch = candidate_epoch + prepare_attempt_secs + settlement_window;
+        assert_eq!(
+            derive_private_output_paid_retention_epoch(
+                candidate_epoch,
+                prepare_attempt_secs,
+                settlement_window,
+                Some(expected_retention_epoch),
+            )
+            .expect("governance cap admits the exact paid settlement window"),
+            expected_retention_epoch
+        );
+        assert_eq!(
+            derive_private_output_paid_retention_epoch(
+                candidate_epoch,
+                prepare_attempt_secs,
+                1,
+                None,
+            )
+            .expect("protocol floor replaces a shorter pricing window"),
+            candidate_epoch + prepare_attempt_secs + SORACLOUD_PRIVATE_OUTPUT_MIN_RETENTION_SECS_V1
+        );
+        let rejected = derive_private_output_paid_retention_epoch(
+            candidate_epoch,
+            prepare_attempt_secs,
+            settlement_window,
+            Some(expected_retention_epoch - 1),
+        )
+        .expect_err("governance cap below the paid horizon must reject before inference");
+        assert_eq!(rejected.status(), StatusCode::CONFLICT);
+        assert!(rejected.message.contains("cannot admit"));
+    }
+    #[test]
+    fn private_output_manifest_uses_exact_paid_recovery_horizon() {
+        let mut input_pin = sample_uploaded_model_pin_record(
+            ManifestDigest::new([0xE1; 32]),
+            128,
+            PinStatus::Approved(1),
+        );
+        input_pin.policy.retention_epoch = 42;
+        let paid_retention_epoch = 42 + SORACLOUD_PRIVATE_OUTPUT_MIN_RETENTION_SECS_V1;
+
+        let output = build_private_output_manifest(
+            b"encrypted-private-output",
+            &input_pin,
+            paid_retention_epoch,
+        )
+        .expect("build private output manifest");
+
+        assert_eq!(
+            output.manifest.pin_policy.retention_epoch,
+            paid_retention_epoch
+        );
+        assert_eq!(
+            output.manifest.pin_policy.min_replicas,
+            input_pin.policy.min_replicas
+        );
+    }
+    #[test]
+    fn claimed_request_without_journal_never_falls_through_to_reexecution() {
+        let mut active = sample_uploaded_model_pin_record(
+            ManifestDigest::new([0xE2; 32]),
+            128,
+            PinStatus::Approved(1),
+        );
+        let consensus_epoch = 100;
+        active.policy.retention_epoch =
+            consensus_epoch + SORACLOUD_PRIVATE_OUTPUT_MIN_RETENTION_SECS_V1;
+
+        let unavailable = authoritative_private_claim_without_journal_error(
+            "decrypt-active",
+            &active,
+            consensus_epoch,
+        );
+        assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(
+            unavailable
+                .message
+                .contains("active authoritative prepared claim")
+        );
+
+        let mut physically_expired = active.clone();
+        physically_expired.policy.retention_epoch = consensus_epoch;
+        let expired = authoritative_private_claim_without_journal_error(
+            "decrypt-expired",
+            &physically_expired,
+            consensus_epoch,
+        );
+        assert_eq!(expired.status(), StatusCode::CONFLICT);
+        assert!(expired.message.contains("expired at epoch 100"));
+        assert!(expired.message.contains("cannot be re-executed"));
+
+        let mut below_floor = active.clone();
+        below_floor.policy.retention_epoch -= 1;
+        let below_floor_error = authoritative_private_claim_without_journal_error(
+            "decrypt-below-floor",
+            &below_floor,
+            consensus_epoch,
+        );
+        assert_eq!(below_floor_error.status(), StatusCode::CONFLICT);
+        assert!(
+            below_floor_error
+                .message
+                .contains("protocol recovery floor")
+        );
+        assert!(below_floor_error.message.contains("cannot be re-executed"));
+
+        let mut retired = active;
+        retired.retire(50, None);
+        let retired_error =
+            authoritative_private_claim_without_journal_error("decrypt-retired", &retired, 60);
+        assert_eq!(retired_error.status(), StatusCode::CONFLICT);
+        assert!(retired_error.message.contains("retired at epoch 50"));
+        assert!(retired_error.message.contains("cannot be re-executed"));
+    }
     fn insert_uploaded_model_finalization_projection(
         world: &mut iroha_core::state::World,
         payload: &UploadedModelRegisterPayload,
@@ -18748,6 +19204,335 @@ mod tests {
         );
     }
     #[test]
+    fn claimed_private_execution_journal_recovers_after_release_and_model_pin_retirement() {
+        use iroha_core::state::World;
+
+        let mut payload = sample_uploaded_model_register_payload();
+        payload.bundle.runtime_format =
+            SoraUploadedModelRuntimeFormatV1::DeterministicQuantizedCpuV1;
+        let policy = fixture_decryption_authority_policy();
+        payload.bundle.decryption_policy_ref = policy.policy_name.to_string();
+        let service_name = payload.bundle.service_name.clone();
+        let mut service_revision = fixture_bundle("1.0.0");
+        service_revision
+            .container
+            .capabilities
+            .allow_model_inference = true;
+        service_revision.service.container.manifest_hash =
+            service_revision.container_manifest_hash();
+
+        let input_digest = ManifestDigest::new([0xD8; 32]);
+        let input_pin = sample_uploaded_model_pin_record(input_digest, 64, PinStatus::Approved(1));
+        let input_artifact = SoraPrivateModelArtifactRefV1 {
+            schema_version: iroha_data_model::soracloud::SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1,
+            sorafs_manifest_digest: input_digest,
+            sorafs_root_cid: input_pin.root_cid,
+            artifact_hash: Hash::new(b"recoverable-expired-release-input"),
+            ciphertext_bytes: 64,
+            artifact_role: "input".to_owned(),
+        };
+        let output_ciphertext = vec![0xE7; 97];
+        let output_retention_epoch = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("test clock after Unix epoch")
+            .as_secs()
+            .checked_add(SORACLOUD_PRIVATE_OUTPUT_MIN_RETENTION_SECS_V1 * 2)
+            .expect("test output retention epoch");
+        let output =
+            build_private_output_manifest(&output_ciphertext, &input_pin, output_retention_epoch)
+                .expect("build recoverable private output manifest");
+
+        let mut decryption_request = fixture_decryption_request();
+        decryption_request.request_id = "decrypt-claimed-recovery".to_owned();
+        decryption_request.ciphertext_commitment = input_artifact.artifact_hash;
+        decryption_request.requested_ttl_blocks =
+            NonZeroU32::new(1).expect("one-block recovery authorization");
+        let release_signer = checked_test_keypair(0xD8);
+        let release = SoraDecryptionRequestRecordV1 {
+            schema_version: iroha_data_model::soracloud::SORA_DECRYPTION_REQUEST_RECORD_VERSION_V1,
+            service_name: service_name.clone(),
+            service_version: service_revision.service.service_version.clone(),
+            policy,
+            request: decryption_request,
+            sequence: 11,
+            signer: release_signer.public_key().clone(),
+        };
+        release
+            .validate()
+            .expect("canonical claimed-recovery release");
+        let release_event = fixture_private_decryption_audit_event(&service_revision, &release);
+        release_event
+            .validate()
+            .expect("canonical claimed-recovery release event");
+
+        let request = PrivateUploadedModelExecuteRequest {
+            service_name: service_name.to_string(),
+            service_version: release.service_version.clone(),
+            weight_version: payload.bundle.weight_version.clone(),
+            model_id: Some(payload.bundle.model_id.clone()),
+            model_name: None,
+            bundle_root: Some(payload.bundle.bundle_root),
+            decryption_request_id: release.request.request_id.clone(),
+            input_artifact: input_artifact.clone(),
+            output_recipient: payload.bundle.upload_recipient.clone(),
+        };
+        let (_, mut receipt) = sample_private_uploaded_model_receipt_for_pagination(
+            crate::signed_query_test_network_id(),
+            12,
+            0xD8,
+            service_name.as_ref(),
+            &payload.bundle.model_id,
+            &payload.bundle.weight_version,
+        );
+        receipt.service_version = request.service_version.clone();
+        receipt.model_manifest_digest = payload.bundle.sorafs_manifest_digest;
+        receipt.model_bundle_root = payload.bundle.bundle_root;
+        receipt.policy_id = payload.bundle.decryption_policy_ref.clone();
+        receipt.decryption_request_id = request.decryption_request_id.clone();
+        receipt.input_artifact = input_artifact;
+        receipt.output_artifact = output.artifact.clone();
+        receipt.output_replication_order_id = derive_sorafs_auto_replication_order_id_v1(
+            &receipt.output_artifact.sorafs_manifest_digest,
+        );
+        receipt.output_recipient = request.output_recipient.clone();
+        receipt.authorization_claim_block_height = 0;
+        receipt.authorization_claim_epoch = 0;
+        receipt.emitted_sequence = 0;
+        receipt.emitted_block_height = 0;
+        receipt.emitted_epoch = 0;
+        receipt.request_commitment = derive_soracloud_private_model_request_commitment_v1(&receipt);
+        receipt.result_commitment = derive_soracloud_private_model_result_commitment_v1(&receipt);
+        receipt.receipt_id =
+            derive_soracloud_private_uploaded_model_execution_receipt_id_v1(&receipt);
+        receipt
+            .validate_submission()
+            .expect("canonical claimed-recovery receipt submission");
+        let journal = SoracloudPrivateUploadedModelExecutionJournalV1 {
+            schema_version: SORACLOUD_PRIVATE_UPLOADED_MODEL_EXECUTION_JOURNAL_VERSION_V1,
+            service_name: service_name.clone(),
+            decryption_request_id: request.decryption_request_id.clone(),
+            request_fingerprint: Hash::new(request.encode()),
+            output_manifest_payload: output.manifest_payload.clone(),
+            receipt: receipt.clone(),
+            phase: SoracloudPrivateUploadedModelExecutionJournalPhaseV1::Prepare,
+            transaction_hash: None,
+            signed_transaction: None,
+            submission_attempt: 0,
+        };
+        journal
+            .validate()
+            .expect("canonical claimed-recovery journal");
+        let mut output_policy = input_pin.policy.clone();
+        output_policy.retention_epoch = output.manifest.pin_policy.retention_epoch;
+        let mut output_pin = PinManifestRecord::new(
+            output.artifact.sorafs_manifest_digest,
+            output.artifact.sorafs_root_cid,
+            ChunkerProfileHandle {
+                profile_id: output.manifest.chunking.profile_id.0,
+                namespace: output.manifest.chunking.namespace.clone(),
+                name: output.manifest.chunking.name.clone(),
+                semver: output.manifest.chunking.semver.clone(),
+                multihash_code: output.manifest.chunking.multihash_code,
+            },
+            output.manifest.chunk_digest_sha3_256,
+            output.manifest.por_root,
+            output.artifact.ciphertext_bytes,
+            output_policy,
+            ALICE_ID.clone(),
+            1,
+            None,
+            None,
+            Metadata::default(),
+        );
+        output_pin.approve(1, None);
+
+        let mut world = World::default();
+        insert_revision(
+            &mut world,
+            &service_revision,
+            service_name.as_ref().to_owned(),
+        );
+        world
+            .soracloud_uploaded_model_bundles_mut_for_testing()
+            .insert(
+                (
+                    service_name.as_ref().to_owned(),
+                    payload.bundle.model_id.clone(),
+                    payload.bundle.weight_version.clone(),
+                ),
+                payload.bundle.clone(),
+            );
+        insert_uploaded_model_finalization_projection(
+            &mut world,
+            &payload,
+            &service_revision.service.service_version,
+        );
+        world.pin_manifests_mut_for_testing().insert(
+            payload.bundle.sorafs_manifest_digest,
+            sample_uploaded_model_pin_record(
+                payload.bundle.sorafs_manifest_digest,
+                payload.bundle.ciphertext_bytes,
+                PinStatus::Retired(2),
+            ),
+        );
+        world
+            .pin_manifests_mut_for_testing()
+            .insert(input_digest, input_pin);
+        world
+            .pin_manifests_mut_for_testing()
+            .insert(output.artifact.sorafs_manifest_digest, output_pin);
+        world
+            .soracloud_decryption_request_records_mut_for_testing()
+            .insert(
+                (
+                    service_name.as_ref().to_owned(),
+                    request.decryption_request_id.clone(),
+                ),
+                release,
+            );
+        world
+            .soracloud_service_audit_events_mut_for_testing()
+            .insert(release_event.sequence, release_event);
+        world
+            .soracloud_private_uploaded_model_execution_claims_mut_for_testing()
+            .insert(
+                (
+                    service_name.as_ref().to_owned(),
+                    request.decryption_request_id.clone(),
+                ),
+                iroha_data_model::soracloud::SoraPrivateUploadedModelExecutionClaimV1 {
+                    schema_version: iroha_data_model::soracloud::SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_CLAIM_VERSION_V1,
+                    receipt: receipt.clone(),
+                    claimed_block_height: 1,
+                    claimed_epoch: 1,
+                },
+            );
+
+        let mut app = mk_app_state_for_tests_with_world(world);
+        {
+            let mut block_hashes = app.state.block_hashes.block();
+            block_hashes.push_for_tests(
+                HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(Hash::new(
+                    b"claimed recovery height one",
+                )),
+            );
+            block_hashes.commit_for_tests();
+        }
+        let release_error = require_private_uploaded_model_release_policy(
+            &app,
+            &payload.bundle,
+            &request,
+            std::slice::from_ref(release_signer.public_key()),
+        )
+        .expect_err("claimed-recovery release fixture must already be expired");
+        assert!(
+            release_error
+                .message
+                .contains("outside its half-open authorization window")
+        );
+        let model_pin_error = require_active_sorafs_uploaded_model_pin(&app, &payload.bundle)
+            .expect_err("claimed-recovery model pin fixture must already be retired");
+        assert!(model_pin_error.message.contains("retired at epoch"));
+        let sorafs_storage_dir = tempfile::tempdir().expect("private recovery SoraFS storage");
+        let sorafs_storage_path = sorafs_storage_dir
+            .path()
+            .canonicalize()
+            .expect("canonical private recovery SoraFS storage path");
+        let sorafs_node = sorafs_node::NodeHandle::new(
+            sorafs_node::config::StorageConfig::builder()
+                .enabled(true)
+                .data_dir(sorafs_storage_path.join("storage"))
+                .build(),
+        );
+        Arc::get_mut(&mut app)
+            .expect("unique claimed-recovery app before runtime attachment")
+            .sorafs_node = sorafs_node;
+        ingest_private_output_manifest(&app, &output, &output_ciphertext)
+            .expect("ingest recoverable encrypted output");
+
+        let runtime_state_dir = tempfile::tempdir().expect("private recovery runtime state dir");
+        let recovered_transaction_hash = Hash::new(b"claimed private recovery transaction");
+        let no_journal_runtime = TestPrivateExecutionRecoveryRuntime {
+            snapshot: SoracloudRuntimeSnapshot::default(),
+            state_dir: runtime_state_dir.path().to_path_buf(),
+            journal: None,
+            transaction_hash: recovered_transaction_hash,
+        };
+        Arc::get_mut(&mut app)
+            .expect("unique claimed-recovery app state")
+            .soracloud_runtime = Some(Arc::new(no_journal_runtime));
+
+        let unavailable = authoritative_private_uploaded_model_execute_response(
+            &app,
+            request.clone(),
+            std::slice::from_ref(release_signer.public_key()),
+        )
+        .expect_err("an active authoritative claim without its exact journal must not re-execute");
+        assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(
+            unavailable
+                .message
+                .contains("active authoritative prepared claim")
+        );
+
+        let recovery_runtime = TestPrivateExecutionRecoveryRuntime {
+            snapshot: SoracloudRuntimeSnapshot::default(),
+            state_dir: runtime_state_dir.path().to_path_buf(),
+            journal: Some(journal),
+            transaction_hash: recovered_transaction_hash,
+        };
+        Arc::get_mut(&mut app)
+            .expect("unique claimed-recovery app state after no-journal check")
+            .soracloud_runtime = Some(Arc::new(recovery_runtime));
+
+        let wrong_signer = checked_test_keypair(0xD9);
+        let unauthorized = authoritative_private_uploaded_model_execute_response(
+            &app,
+            request.clone(),
+            std::slice::from_ref(wrong_signer.public_key()),
+        )
+        .expect_err("journal recovery must retain exact release-signer authentication");
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+        assert!(unauthorized.message.contains("exact signer"));
+
+        let mut mismatched_request = request.clone();
+        mismatched_request.input_artifact.artifact_hash =
+            Hash::new(b"mismatched claimed-recovery input");
+        let mismatch = authoritative_private_uploaded_model_execute_response(
+            &app,
+            mismatched_request,
+            std::slice::from_ref(release_signer.public_key()),
+        )
+        .expect_err("journal recovery must retain exact request fingerprint binding");
+        assert_eq!(mismatch.status(), StatusCode::CONFLICT);
+        assert!(mismatch.message.contains("different execution request"));
+
+        app.soracloud_private_execution_submissions
+            .entries
+            .lock()
+            .insert(
+                (
+                    request.service_name.clone(),
+                    request.decryption_request_id.clone(),
+                ),
+                PrivateExecutionSubmissionState::Submitted {
+                    request_fingerprint: Hash::new(request.encode()),
+                    submitted_at: Instant::now(),
+                },
+            );
+        let (status, response) = authoritative_private_uploaded_model_execute_response(
+            &app,
+            request,
+            std::slice::from_ref(release_signer.public_key()),
+        )
+        .expect("exact claimed journal must recover after release and model-pin retirement");
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert_eq!(response.submission_status, "submitted");
+        assert_eq!(response.transaction_hash, Some(recovered_transaction_hash));
+        assert_eq!(response.output_artifact, output.artifact);
+        assert_eq!(response.receipt, receipt);
+    }
+    #[test]
     fn committed_private_uploaded_model_execute_replay_rejects_wrong_signer_before_cleanup() {
         use iroha_core::state::World;
 
@@ -18840,6 +19625,26 @@ mod tests {
         world
             .soracloud_private_uploaded_model_execution_receipts_mut_for_testing()
             .insert(receipt.receipt_id, receipt.clone());
+        let mut claimed_receipt = receipt.clone();
+        claimed_receipt.authorization_claim_block_height = 0;
+        claimed_receipt.authorization_claim_epoch = 0;
+        claimed_receipt.emitted_sequence = 0;
+        claimed_receipt.emitted_block_height = 0;
+        claimed_receipt.emitted_epoch = 0;
+        world
+            .soracloud_private_uploaded_model_execution_claims_mut_for_testing()
+            .insert(
+                (
+                    request.service_name.clone(),
+                    request.decryption_request_id.clone(),
+                ),
+                iroha_data_model::soracloud::SoraPrivateUploadedModelExecutionClaimV1 {
+                    schema_version: iroha_data_model::soracloud::SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_CLAIM_VERSION_V1,
+                    receipt: claimed_receipt,
+                    claimed_block_height: receipt.authorization_claim_block_height,
+                    claimed_epoch: receipt.authorization_claim_epoch,
+                },
+            );
         let app = mk_app_state_for_tests_with_world(world);
         let submission_key = (
             request.service_name.clone(),

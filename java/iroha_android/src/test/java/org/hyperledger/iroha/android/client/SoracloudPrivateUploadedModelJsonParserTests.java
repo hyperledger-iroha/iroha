@@ -75,6 +75,8 @@ public final class SoracloudPrivateUploadedModelJsonParserTests {
         : "validator peer";
     assert "input".equals(response.receipt().inputArtifact().artifactRole()) : "input role";
     assert "output".equals(response.receipt().outputArtifact().artifactRole()) : "output role";
+    assert response.receipt().outputReplicationOrderId().length == 32
+        : "output replication order id width";
     assert response.receipt().inputArtifact().sorafsRootCid().size() == 36 : "root CID width";
     assert response.receipt().inputArtifact().sorafsRootCid().subList(0, 4)
         .equals(Arrays.asList(1, 113, 31, 32)) : "root CID framing";
@@ -87,8 +89,14 @@ public final class SoracloudPrivateUploadedModelJsonParserTests {
     assert response.receipt().outputRecipient().publicKeyBytes().length == 32 : "recipient key";
     assert BigInteger.ZERO.equals(response.receipt().emittedSequence())
         : "submission sequence sentinel";
+    assert BigInteger.ZERO.equals(response.receipt().authorizationClaimBlockHeight())
+        : "submission authorization height sentinel";
+    assert BigInteger.ZERO.equals(response.receipt().authorizationClaimEpoch())
+        : "submission authorization epoch sentinel";
     assert BigInteger.ZERO.equals(response.receipt().emittedBlockHeight())
         : "submission height sentinel";
+    assert BigInteger.ZERO.equals(response.receipt().emittedEpoch())
+        : "submission epoch sentinel";
   }
 
   private static void modelsDefensivelyCopyManifestDigests() {
@@ -116,6 +124,11 @@ public final class SoracloudPrivateUploadedModelJsonParserTests {
     receiptView[1] = 0;
     assert receipt.modelManifestDigest()[1] == (byte) 0x55
         : "receipt getter must copy manifest digest";
+
+    final byte[] orderView = response.receipt().outputReplicationOrderId();
+    orderView[0] = 0;
+    assert response.receipt().outputReplicationOrderId()[0] == (byte) 0x5D
+        : "receipt getter must copy output replication order id";
 
     assertThrows(
         () -> artifactWithManifestDigest(response.outputArtifact(), new byte[31]),
@@ -211,8 +224,15 @@ public final class SoracloudPrivateUploadedModelJsonParserTests {
                     .replace(
                         "\"transaction_hash\":\"" + TRANSACTION_HASH + "\"",
                         "\"transaction_hash\":null")
+                    .replace(
+                        "\"authorization_claim_block_height\":0",
+                        "\"authorization_claim_block_height\":499")
+                    .replace(
+                        "\"authorization_claim_epoch\":0",
+                        "\"authorization_claim_epoch\":1699999900")
                     .replace("\"emitted_sequence\":0", "\"emitted_sequence\":17")
-                    .replace("\"emitted_block_height\":0", "\"emitted_block_height\":501")));
+                    .replace("\"emitted_block_height\":0", "\"emitted_block_height\":501")
+                    .replace("\"emitted_epoch\":0", "\"emitted_epoch\":1700000000")));
 
     assert "committed".equals(response.submissionStatus()) : "committed replay";
     assert response.transactionHash() == null : "committed transaction hash";
@@ -220,6 +240,8 @@ public final class SoracloudPrivateUploadedModelJsonParserTests {
         : "committed sequence";
     assert BigInteger.valueOf(501L).equals(response.receipt().emittedBlockHeight())
         : "committed height";
+    assert BigInteger.valueOf(1_700_000_000L).equals(response.receipt().emittedEpoch())
+        : "committed epoch";
   }
 
   private static void parsesPrivateReceiptListPaginationMetadata() {
@@ -227,8 +249,15 @@ public final class SoracloudPrivateUploadedModelJsonParserTests {
         + "\"schema_version\":1,"
         + "\"receipts\":["
         + receiptJson()
+            .replace(
+                "\"authorization_claim_block_height\":0",
+                "\"authorization_claim_block_height\":499")
+            .replace(
+                "\"authorization_claim_epoch\":0",
+                "\"authorization_claim_epoch\":1699999900")
             .replace("\"emitted_sequence\":0", "\"emitted_sequence\":17")
             .replace("\"emitted_block_height\":0", "\"emitted_block_height\":501")
+            .replace("\"emitted_epoch\":0", "\"emitted_epoch\":1700000000")
         + "],"
         + "\"total\":3,"
         + "\"returned_items\":1,"
@@ -358,12 +387,14 @@ public final class SoracloudPrivateUploadedModelJsonParserTests {
         () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
             bytes(executeResponseJson().replace("\"submission_status\":\"submitted\"", "\"submission_status\":\"pending\""))),
         "expected unknown submission status rejection");
-    assertThrows(
-        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+    final SoracloudPrivateUploadedModelExecuteResponse awaitingDurability =
+        SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
             bytes(executeResponseJson().replace(
                 "\"transaction_hash\":\"" + TRANSACTION_HASH + "\"",
-                "\"transaction_hash\":null"))),
-        "expected submitted response hash rejection");
+                "\"transaction_hash\":null")));
+    assert "submitted".equals(awaitingDurability.submissionStatus())
+        : "awaiting-durability status";
+    assert awaitingDurability.transactionHash() == null : "awaiting-durability hash";
     assertThrows(
         () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
             bytes(executeResponseJson().replace("\"submission_status\":\"submitted\"", "\"submission_status\":\"committed\""))),
@@ -417,8 +448,17 @@ public final class SoracloudPrivateUploadedModelJsonParserTests {
         "expected missing output_recipient rejection");
     assertThrows(
         () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace(
+                "\"output_replication_order_id\":" + fixedBytesJson(0x5D, 32) + ",", ""))),
+        "expected missing output_replication_order_id rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
             bytes(executeResponseJson().replace(",\"emitted_block_height\":0", ""))),
         "expected missing emitted_block_height rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace(",\"emitted_epoch\":0", ""))),
+        "expected missing emitted_epoch rejection");
   }
 
   private static void rejectsNonCanonicalReceiptNetworkIdentity() {
@@ -629,6 +669,16 @@ public final class SoracloudPrivateUploadedModelJsonParserTests {
         "expected ciphertext_bytes above 72 MiB rejection");
     assertThrows(
         () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace(
+                "\"authorization_claim_block_height\":0,", ""))),
+        "expected missing authorization_claim_block_height rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace(
+                "\"authorization_claim_epoch\":0", "\"authorization_claim_epoch\":-1"))),
+        "expected negative authorization_claim_epoch rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
             bytes(executeResponseJson().replace("\"emitted_sequence\":0", "\"emitted_sequence\":-1"))),
         "expected negative emitted_sequence rejection");
     assertThrows(
@@ -637,8 +687,36 @@ public final class SoracloudPrivateUploadedModelJsonParserTests {
         "expected negative emitted_block_height rejection");
     assertThrows(
         () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace("\"emitted_epoch\":0", "\"emitted_epoch\":-1"))),
+        "expected negative emitted_epoch rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
             bytes(executeResponseJson().replace("\"emitted_sequence\":0", "\"emitted_sequence\":1"))),
         "expected mixed zero and positive ledger coordinates rejection");
+    assertThrows(
+        () ->
+            SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+                bytes(
+                    executeResponseJson()
+                        .replace(
+                            "\"submission_status\":\"submitted\"",
+                            "\"submission_status\":\"committed\"")
+                        .replace(
+                            "\"transaction_hash\":\"" + TRANSACTION_HASH + "\"",
+                            "\"transaction_hash\":null")
+                        .replace(
+                            "\"authorization_claim_block_height\":0",
+                            "\"authorization_claim_block_height\":502")
+                        .replace(
+                            "\"authorization_claim_epoch\":0",
+                            "\"authorization_claim_epoch\":1700000001")
+                        .replace("\"emitted_sequence\":0", "\"emitted_sequence\":17")
+                        .replace(
+                            "\"emitted_block_height\":0",
+                            "\"emitted_block_height\":501")
+                        .replace(
+                            "\"emitted_epoch\":0", "\"emitted_epoch\":1700000000"))),
+        "expected emission-before-authorization rejection");
     assertThrows(
         () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
             bytes(executeResponseJson().replace(
@@ -667,15 +745,28 @@ public final class SoracloudPrivateUploadedModelJsonParserTests {
                     .replace(
                         "\"transaction_hash\":\"" + TRANSACTION_HASH + "\"",
                         "\"transaction_hash\":null")
+                    .replace(
+                        "\"authorization_claim_block_height\":0",
+                        "\"authorization_claim_block_height\":" + u64Max)
+                    .replace(
+                        "\"authorization_claim_epoch\":0",
+                        "\"authorization_claim_epoch\":" + u64Max)
                     .replace("\"emitted_sequence\":0", "\"emitted_sequence\":" + u64Max)
                     .replace(
                         "\"emitted_block_height\":0",
-                        "\"emitted_block_height\":" + u64Max)));
+                        "\"emitted_block_height\":" + u64Max)
+                    .replace("\"emitted_epoch\":0", "\"emitted_epoch\":" + u64Max)));
 
     assert SoracloudPrivateModelValidation.U64_MAX.equals(
         response.receipt().emittedSequence()) : "maximum u64 sequence";
     assert SoracloudPrivateModelValidation.U64_MAX.equals(
+        response.receipt().authorizationClaimBlockHeight()) : "maximum u64 claim height";
+    assert SoracloudPrivateModelValidation.U64_MAX.equals(
+        response.receipt().authorizationClaimEpoch()) : "maximum u64 claim epoch";
+    assert SoracloudPrivateModelValidation.U64_MAX.equals(
         response.receipt().emittedBlockHeight()) : "maximum u64 height";
+    assert SoracloudPrivateModelValidation.U64_MAX.equals(
+        response.receipt().emittedEpoch()) : "maximum u64 epoch";
   }
 
   private static void rejectsInvalidManifestDigests() {
@@ -704,6 +795,16 @@ public final class SoracloudPrivateUploadedModelJsonParserTests {
             bytes(executeResponseJson().replace(
                 fixedBytesJson(0x11, 32), fixedBytesJson(0x11, 32).replaceFirst("17", "17.0")))),
         "expected non-integer manifest digest byte rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace(
+                fixedBytesJson(0x5D, 32), fixedBytesJson(0x5D, 31)))),
+        "expected short output replication order id rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace(
+                fixedBytesJson(0x5D, 32), fixedBytesJson(0, 32)))),
+        "expected zero output replication order id rejection");
   }
 
   private static void rejectsNonCanonicalHashFieldsAndFingerprintMismatch() {
@@ -870,12 +971,14 @@ public final class SoracloudPrivateUploadedModelJsonParserTests {
             RESULT_COMMITMENT),
         "expected direct recipient fingerprint mismatch rejection");
     assertThrows(
-        () -> receiptWithCoordinates(receipt, BigInteger.ONE, BigInteger.ZERO),
+        () -> receiptWithCoordinates(
+            receipt, BigInteger.ONE, BigInteger.ZERO, BigInteger.ZERO),
         "expected direct receipt mixed coordinates rejection");
     assertThrows(
         () -> receiptWithCoordinates(
             receipt,
             SoracloudPrivateModelValidation.U64_MAX.add(BigInteger.ONE),
+            SoracloudPrivateModelValidation.U64_MAX,
             SoracloudPrivateModelValidation.U64_MAX),
         "expected direct receipt coordinate above u64 rejection");
     assertThrows(
@@ -893,15 +996,16 @@ public final class SoracloudPrivateUploadedModelJsonParserTests {
     assertThrows(
         () -> receiptWithSelectors(receipt, repeated('v', 257), "model-id", "v1"),
         "expected direct receipt oversized service version rejection");
-    assertThrows(
-        () -> new SoracloudPrivateUploadedModelExecuteResponse(
+    final SoracloudPrivateUploadedModelExecuteResponse awaitingDurability =
+        new SoracloudPrivateUploadedModelExecuteResponse(
             1L,
             parsed.status(),
             "submitted",
             null,
             receipt,
-            output),
-        "expected direct submitted response without transaction hash rejection");
+            output);
+    assert awaitingDurability.transactionHash() == null
+        : "direct awaiting-durability response hash";
     assertThrows(
         () -> new SoracloudPrivateUploadedModelReceiptListResponse(
             1L,
@@ -939,10 +1043,17 @@ public final class SoracloudPrivateUploadedModelJsonParserTests {
       final String receiptId, final long emittedSequence, final long emittedBlockHeight) {
     return receiptJson()
         .replace("\"receipt_id\":\"" + RECEIPT_ID + "\"", "\"receipt_id\":\"" + receiptId + "\"")
+        .replace(
+            "\"authorization_claim_block_height\":0",
+            "\"authorization_claim_block_height\":" + emittedBlockHeight)
+        .replace(
+            "\"authorization_claim_epoch\":0",
+            "\"authorization_claim_epoch\":" + emittedBlockHeight)
         .replace("\"emitted_sequence\":0", "\"emitted_sequence\":" + emittedSequence)
         .replace(
             "\"emitted_block_height\":0",
-            "\"emitted_block_height\":" + emittedBlockHeight);
+            "\"emitted_block_height\":" + emittedBlockHeight)
+        .replace("\"emitted_epoch\":0", "\"emitted_epoch\":" + emittedBlockHeight);
   }
 
   private static String executeResponseJson() {
@@ -988,13 +1099,17 @@ public final class SoracloudPrivateUploadedModelJsonParserTests {
         + "\"artifact_role\":\"input\""
         + "},"
         + "\"output_artifact\":" + outputArtifactJson() + ","
+        + "\"output_replication_order_id\":" + fixedBytesJson(0x5D, 32) + ","
         + "\"input_commitment\":\"" + INPUT_COMMITMENT + "\","
         + "\"output_commitment\":\"" + OUTPUT_COMMITMENT + "\","
         + outputRecipientField()
         + "\"request_commitment\":\"" + REQUEST_COMMITMENT + "\","
         + "\"result_commitment\":\"" + RESULT_COMMITMENT + "\","
+        + "\"authorization_claim_block_height\":0,"
+        + "\"authorization_claim_epoch\":0,"
         + "\"emitted_sequence\":0,"
-        + "\"emitted_block_height\":0"
+        + "\"emitted_block_height\":0,"
+        + "\"emitted_epoch\":0"
         + "}";
   }
 
@@ -1069,19 +1184,22 @@ public final class SoracloudPrivateUploadedModelJsonParserTests {
         manifestDigest,
         template.serviceName(),
         template.emittedSequence(),
-        template.emittedBlockHeight());
+        template.emittedBlockHeight(),
+        template.emittedEpoch());
   }
 
   private static SoracloudPrivateUploadedModelExecutionReceipt receiptWithCoordinates(
       final SoracloudPrivateUploadedModelExecutionReceipt template,
       final BigInteger emittedSequence,
-      final BigInteger emittedBlockHeight) {
+      final BigInteger emittedBlockHeight,
+      final BigInteger emittedEpoch) {
     return copyReceipt(
         template,
         template.modelManifestDigest(),
         template.serviceName(),
         emittedSequence,
-        emittedBlockHeight);
+        emittedBlockHeight,
+        emittedEpoch);
   }
 
   private static SoracloudPrivateUploadedModelExecutionReceipt receiptWithServiceName(
@@ -1092,7 +1210,8 @@ public final class SoracloudPrivateUploadedModelJsonParserTests {
         template.modelManifestDigest(),
         serviceName,
         template.emittedSequence(),
-        template.emittedBlockHeight());
+        template.emittedBlockHeight(),
+        template.emittedEpoch());
   }
 
   private static SoracloudPrivateUploadedModelExecutionReceipt receiptWithSelectors(
@@ -1116,13 +1235,17 @@ public final class SoracloudPrivateUploadedModelJsonParserTests {
         template.attestingValidator(),
         template.inputArtifact(),
         template.outputArtifact(),
+        template.outputReplicationOrderId(),
         template.inputCommitment(),
         template.outputCommitment(),
         template.outputRecipient(),
         template.requestCommitment(),
         template.resultCommitment(),
+        template.authorizationClaimBlockHeight(),
+        template.authorizationClaimEpoch(),
         template.emittedSequence(),
-        template.emittedBlockHeight());
+        template.emittedBlockHeight(),
+        template.emittedEpoch());
   }
 
   private static SoracloudPrivateUploadedModelExecutionReceipt copyReceipt(
@@ -1130,7 +1253,8 @@ public final class SoracloudPrivateUploadedModelJsonParserTests {
       final byte[] manifestDigest,
       final String serviceName,
       final BigInteger emittedSequence,
-      final BigInteger emittedBlockHeight) {
+      final BigInteger emittedBlockHeight,
+      final BigInteger emittedEpoch) {
     return new SoracloudPrivateUploadedModelExecutionReceipt(
         template.schemaVersion(),
         template.networkId(),
@@ -1147,13 +1271,17 @@ public final class SoracloudPrivateUploadedModelJsonParserTests {
         template.attestingValidator(),
         template.inputArtifact(),
         template.outputArtifact(),
+        template.outputReplicationOrderId(),
         template.inputCommitment(),
         template.outputCommitment(),
         template.outputRecipient(),
         template.requestCommitment(),
         template.resultCommitment(),
+        template.authorizationClaimBlockHeight(),
+        template.authorizationClaimEpoch(),
         emittedSequence,
-        emittedBlockHeight);
+        emittedBlockHeight,
+        emittedEpoch);
   }
 
   private static void assertThrows(final Runnable runnable, final String message) {

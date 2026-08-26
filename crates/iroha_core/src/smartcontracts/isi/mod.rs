@@ -389,6 +389,9 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::soracloud::RecordSoracloudRuntimeReceipt>,
     dispatch_instruction::<iroha_data_model::isi::soracloud::ApplySoracloudOrderedMailboxResult>,
     dispatch_instruction::<
+        iroha_data_model::isi::soracloud::PrepareSoracloudPrivateUploadedModelExecution
+    >,
+    dispatch_instruction::<
         iroha_data_model::isi::soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt
     >,
     dispatch_instruction::<iroha_data_model::isi::oracle::RegisterOracleFeed>,

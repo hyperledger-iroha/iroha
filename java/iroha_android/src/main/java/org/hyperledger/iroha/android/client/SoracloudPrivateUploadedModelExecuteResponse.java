@@ -42,7 +42,7 @@ public final class SoracloudPrivateUploadedModelExecuteResponse {
 
   public String submissionStatus() { return submissionStatus; }
 
-  /** Signed transaction hash for `submitted`; absent for an already `committed` replay. */
+  /** Current phase transaction hash when signed; absent while awaiting output durability or committed. */
   public String transactionHash() { return transactionHash; }
 
   public SoracloudPrivateUploadedModelExecutionReceipt receipt() { return receipt; }

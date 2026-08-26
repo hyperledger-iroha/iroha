@@ -2984,6 +2984,16 @@ pub struct SoraPrivateUploadedModelExecutionReceiptV1 {
     pub request_commitment: Hash,
     /// Commitment over the runtime result envelope.
     pub result_commitment: Hash,
+    /// Ledger block height at which authorization was frozen by the prepared claim.
+    ///
+    /// A submission and the claim's embedded receipt must set this to zero. Receipt finalization
+    /// copies the authoritative non-zero coordinate from the exact ledger claim.
+    pub authorization_claim_block_height: u64,
+    /// Ledger consensus Unix-seconds epoch at which authorization was frozen by the claim.
+    ///
+    /// A submission and the claim's embedded receipt must set this to zero. Receipt finalization
+    /// copies the authoritative non-zero coordinate from the exact ledger claim.
+    pub authorization_claim_epoch: u64,
     /// Ledger-assigned Soracloud sequence that persisted the receipt.
     ///
     /// A `RecordSoracloudPrivateUploadedModelExecutionReceipt` submission must set this to zero;
@@ -2994,6 +3004,11 @@ pub struct SoraPrivateUploadedModelExecutionReceiptV1 {
     /// A submission must set this to zero. Ledger execution records the exact block height so
     /// snapshot restore can prove that the decryption authorization was still active.
     pub emitted_block_height: u64,
+    /// Ledger-assigned consensus Unix-seconds epoch at which the receipt was persisted.
+    ///
+    /// A submission must set this to zero. The ledger records the block epoch so snapshot restore
+    /// can re-evaluate the exact output retention and replication invariant at commit time.
+    pub emitted_epoch: u64,
 }
 
 fn append_private_uploaded_model_receipt_transcript_part<T: Encode>(
@@ -3105,7 +3120,8 @@ pub fn derive_soracloud_private_model_result_commitment_v1(
 /// Derive the canonical sequence-independent V1 private uploaded-model receipt identifier.
 ///
 /// The identifier binds every immutable receipt field while excluding the identifier itself and
-/// both ledger-assigned coordinates (`emitted_sequence` and `emitted_block_height`).
+/// all ledger-assigned coordinates (`authorization_claim_block_height`,
+/// `authorization_claim_epoch`, `emitted_sequence`, `emitted_block_height`, and `emitted_epoch`).
 #[must_use]
 pub fn derive_soracloud_private_uploaded_model_execution_receipt_id_v1(
     receipt: &SoraPrivateUploadedModelExecutionReceiptV1,
@@ -3259,10 +3275,31 @@ impl SoraPrivateUploadedModelExecutionReceiptV1 {
                 "must be assigned by the ledger before persistence",
             ));
         }
+        if require_assigned_sequence && self.authorization_claim_block_height == 0 {
+            return Err(invalid_field(
+                "sora private uploaded model execution receipt",
+                "authorization_claim_block_height",
+                "must be copied from the prepared ledger claim before persistence",
+            ));
+        }
+        if require_assigned_sequence && self.authorization_claim_epoch == 0 {
+            return Err(invalid_field(
+                "sora private uploaded model execution receipt",
+                "authorization_claim_epoch",
+                "must be copied from the prepared ledger claim before persistence",
+            ));
+        }
         if require_assigned_sequence && self.emitted_block_height == 0 {
             return Err(invalid_field(
                 "sora private uploaded model execution receipt",
                 "emitted_block_height",
+                "must be assigned by the ledger before persistence",
+            ));
+        }
+        if require_assigned_sequence && self.emitted_epoch == 0 {
+            return Err(invalid_field(
+                "sora private uploaded model execution receipt",
+                "emitted_epoch",
                 "must be assigned by the ledger before persistence",
             ));
         }
@@ -3273,11 +3310,42 @@ impl SoraPrivateUploadedModelExecutionReceiptV1 {
                 "must be zero before ledger submission",
             ));
         }
+        if !require_assigned_sequence && self.authorization_claim_block_height != 0 {
+            return Err(invalid_field(
+                "sora private uploaded model execution receipt",
+                "authorization_claim_block_height",
+                "must be zero before ledger submission",
+            ));
+        }
+        if !require_assigned_sequence && self.authorization_claim_epoch != 0 {
+            return Err(invalid_field(
+                "sora private uploaded model execution receipt",
+                "authorization_claim_epoch",
+                "must be zero before ledger submission",
+            ));
+        }
         if !require_assigned_sequence && self.emitted_block_height != 0 {
             return Err(invalid_field(
                 "sora private uploaded model execution receipt",
                 "emitted_block_height",
                 "must be zero before ledger submission",
+            ));
+        }
+        if !require_assigned_sequence && self.emitted_epoch != 0 {
+            return Err(invalid_field(
+                "sora private uploaded model execution receipt",
+                "emitted_epoch",
+                "must be zero before ledger submission",
+            ));
+        }
+        if require_assigned_sequence
+            && (self.emitted_block_height < self.authorization_claim_block_height
+                || self.emitted_epoch < self.authorization_claim_epoch)
+        {
+            return Err(invalid_field(
+                "sora private uploaded model execution receipt",
+                "emitted_block_height",
+                "receipt persistence coordinates must not precede the authorization claim",
             ));
         }
         self.input_artifact.validate()?;
@@ -3342,6 +3410,56 @@ impl SoraPrivateUploadedModelExecutionReceiptV1 {
                 "sora private uploaded model execution receipt",
                 "receipt_id",
                 "must equal the canonical sequence-independent receipt identifier",
+            ));
+        }
+        Ok(())
+    }
+}
+/// Ledger-owned authorization claim that freezes one private execution before replication.
+///
+/// The embedded receipt remains in submission form. Consensus assigns the claim coordinates in
+/// the same atomic instruction that ensures the exact output pin exists, while the original
+/// decryption authorization and validator placement are still active. Final receipt persistence
+/// later requires this exact claim instead of attempting to recreate authorization-time state.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+pub struct SoraPrivateUploadedModelExecutionClaimV1 {
+    /// Schema version; must equal
+    /// [`SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_CLAIM_VERSION_V1`].
+    pub schema_version: u16,
+    /// Exact immutable receipt submission frozen by the claim.
+    pub receipt: SoraPrivateUploadedModelExecutionReceiptV1,
+    /// One-based ledger block height at which authorization was claimed.
+    pub claimed_block_height: u64,
+    /// Consensus Unix-seconds epoch at which authorization was claimed.
+    pub claimed_epoch: u64,
+}
+
+impl SoraPrivateUploadedModelExecutionClaimV1 {
+    /// Validate a persisted private-execution claim.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when the claim or embedded submission is malformed.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        validate_schema_version(
+            "sora private uploaded model execution claim",
+            self.schema_version,
+            SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_CLAIM_VERSION_V1,
+        )?;
+        self.receipt.validate_submission()?;
+        if self.claimed_block_height == 0 {
+            return Err(invalid_field(
+                "sora private uploaded model execution claim",
+                "claimed_block_height",
+                "must be assigned by the ledger",
+            ));
+        }
+        if self.claimed_epoch == 0 {
+            return Err(invalid_field(
+                "sora private uploaded model execution claim",
+                "claimed_epoch",
+                "must be assigned by the ledger",
             ));
         }
         Ok(())

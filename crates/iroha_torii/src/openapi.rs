@@ -901,6 +901,12 @@ mod tests {
             operation_response_schema_ref(execute, "202", "private uploaded-model execute",),
             "#/components/schemas/PrivateUploadedModelExecuteResponse"
         );
+        assert_eq!(
+            execute["responses"]["202"]["description"].as_str(),
+            Some(
+                "Encrypted output durably ingested. Prepare atomically ensures its paid pin and freezes authorization; Receipt follows only after pin approval and replication quorum"
+            )
+        );
         assert_strict_object_schema(
             schemas,
             "PrivateUploadedModelExecuteRequest",
@@ -963,16 +969,55 @@ mod tests {
                 "attesting_validator",
                 "input_artifact",
                 "output_artifact",
+                "output_replication_order_id",
                 "input_commitment",
                 "output_commitment",
                 "output_recipient",
                 "request_commitment",
                 "result_commitment",
+                "authorization_claim_block_height",
+                "authorization_claim_epoch",
                 "emitted_sequence",
                 "emitted_block_height",
+                "emitted_epoch",
             ],
             &[],
         );
+        let output_replication_order_id = &component_properties(
+            schemas,
+            "SoraPrivateUploadedModelExecutionReceiptV1",
+        )["output_replication_order_id"];
+        assert_eq!(
+            output_replication_order_id
+                .get("minItems")
+                .and_then(Value::as_u64),
+            Some(32)
+        );
+        assert_eq!(
+            output_replication_order_id
+                .get("maxItems")
+                .and_then(Value::as_u64),
+            Some(32)
+        );
+        for coordinate in [
+            "authorization_claim_block_height",
+            "authorization_claim_epoch",
+            "emitted_epoch",
+        ] {
+            let property =
+                &component_properties(schemas, "SoraPrivateUploadedModelExecutionReceiptV1")
+                    [coordinate];
+            assert_eq!(
+                property.get("format").and_then(Value::as_str),
+                Some("uint64"),
+                "{coordinate} must retain its unsigned 64-bit wire format"
+            );
+            assert_eq!(
+                property.get("minimum").and_then(Value::as_u64),
+                Some(0),
+                "{coordinate} must admit the zero submission sentinel"
+            );
+        }
         assert_strict_object_schema(
             schemas,
             "SoraPrivateModelArtifactRefV1",

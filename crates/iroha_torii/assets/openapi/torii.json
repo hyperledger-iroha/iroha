@@ -32379,10 +32379,25 @@
           "attesting_validator": {
             "$ref": "#/components/schemas/SoraRuntimeDeterministicValidatorHostV1"
           },
+          "authorization_claim_block_height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "authorization_claim_epoch": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "decryption_request_id": {
             "type": "string"
           },
           "emitted_block_height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "emitted_epoch": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -32418,6 +32433,18 @@
           },
           "output_recipient": {
             "$ref": "#/components/schemas/SoraUploadedModelEncryptionRecipientV1"
+          },
+          "output_replication_order_id": {
+            "description": "Canonical 32-byte SoraFS replication order identifier.",
+            "items": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "minItems": 32,
+            "type": "array"
           },
           "policy_id": {
             "type": "string"
@@ -32464,13 +32491,17 @@
           "attesting_validator",
           "input_artifact",
           "output_artifact",
+          "output_replication_order_id",
           "input_commitment",
           "output_commitment",
           "output_recipient",
           "request_commitment",
           "result_commitment",
+          "authorization_claim_block_height",
+          "authorization_claim_epoch",
           "emitted_sequence",
-          "emitted_block_height"
+          "emitted_block_height",
+          "emitted_epoch"
         ],
         "type": "object"
       },
@@ -72666,7 +72697,7 @@
                 }
               }
             },
-            "description": "Encrypted output durably ingested and atomic pin-plus-receipt transaction submitted"
+            "description": "Encrypted output durably ingested. Prepare atomically ensures its paid pin and freezes authorization; Receipt follows only after pin approval and replication quorum"
           }
         },
         "summary": "Execute a private uploaded model.",

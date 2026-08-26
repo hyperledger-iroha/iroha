@@ -244,20 +244,48 @@ final class SoracloudPrivateModelValidation {
     }
   }
 
-  static void requireCoordinatePair(final BigInteger sequence, final BigInteger blockHeight) {
+  static void requireLedgerCoordinates(
+      final BigInteger authorizationClaimBlockHeight,
+      final BigInteger authorizationClaimEpoch,
+      final BigInteger sequence,
+      final BigInteger blockHeight,
+      final BigInteger epoch) {
+    Objects.requireNonNull(authorizationClaimBlockHeight, "authorizationClaimBlockHeight");
+    Objects.requireNonNull(authorizationClaimEpoch, "authorizationClaimEpoch");
     Objects.requireNonNull(sequence, "emittedSequence");
     Objects.requireNonNull(blockHeight, "emittedBlockHeight");
-    if (sequence.signum() < 0
+    Objects.requireNonNull(epoch, "emittedEpoch");
+    if (authorizationClaimBlockHeight.signum() < 0
+        || authorizationClaimEpoch.signum() < 0
+        || sequence.signum() < 0
         || blockHeight.signum() < 0
+        || epoch.signum() < 0
+        || authorizationClaimBlockHeight.compareTo(U64_MAX) > 0
+        || authorizationClaimEpoch.compareTo(U64_MAX) > 0
         || sequence.compareTo(U64_MAX) > 0
-        || blockHeight.compareTo(U64_MAX) > 0) {
+        || blockHeight.compareTo(U64_MAX) > 0
+        || epoch.compareTo(U64_MAX) > 0) {
       throw new IllegalArgumentException(
-          "emittedSequence and emittedBlockHeight must fit unsigned 64-bit integers");
+          "authorization and emission coordinates must fit unsigned 64-bit integers");
     }
-    if (!((sequence.signum() == 0 && blockHeight.signum() == 0)
-        || (sequence.signum() > 0 && blockHeight.signum() > 0))) {
+    if (!((authorizationClaimBlockHeight.signum() == 0
+            && authorizationClaimEpoch.signum() == 0
+            && sequence.signum() == 0
+            && blockHeight.signum() == 0
+            && epoch.signum() == 0)
+        || (authorizationClaimBlockHeight.signum() > 0
+            && authorizationClaimEpoch.signum() > 0
+            && sequence.signum() > 0
+            && blockHeight.signum() > 0
+            && epoch.signum() > 0))) {
       throw new IllegalArgumentException(
-          "emittedSequence and emittedBlockHeight must both be zero or both be positive");
+          "authorization and emission coordinates must all be zero or all be positive");
+    }
+    if (authorizationClaimBlockHeight.signum() > 0
+        && (blockHeight.compareTo(authorizationClaimBlockHeight) < 0
+            || epoch.compareTo(authorizationClaimEpoch) < 0)) {
+      throw new IllegalArgumentException(
+          "emission coordinates must not precede authorization claim coordinates");
     }
   }
 
@@ -375,20 +403,23 @@ final class SoracloudPrivateModelValidation {
     final String canonicalStatus = requireSubmissionStatus(submissionStatus, "submissionStatus");
     Objects.requireNonNull(receipt, "receipt");
     Objects.requireNonNull(outputArtifact, "outputArtifact");
-    if ("submitted".equals(canonicalStatus) && transactionHash == null) {
-      throw new IllegalArgumentException("transactionHash is required for submitted");
-    }
     if ("committed".equals(canonicalStatus) && transactionHash != null) {
       throw new IllegalArgumentException("transactionHash must be null for committed");
     }
     if ("submitted".equals(canonicalStatus)
-        && (receipt.emittedSequence().signum() != 0
-            || receipt.emittedBlockHeight().signum() != 0)) {
+        && (receipt.authorizationClaimBlockHeight().signum() != 0
+            || receipt.authorizationClaimEpoch().signum() != 0
+            || receipt.emittedSequence().signum() != 0
+            || receipt.emittedBlockHeight().signum() != 0
+            || receipt.emittedEpoch().signum() != 0)) {
       throw new IllegalArgumentException("submitted receipt must use zero ledger coordinates");
     }
     if ("committed".equals(canonicalStatus)
-        && (receipt.emittedSequence().signum() <= 0
-            || receipt.emittedBlockHeight().signum() <= 0)) {
+        && (receipt.authorizationClaimBlockHeight().signum() <= 0
+            || receipt.authorizationClaimEpoch().signum() <= 0
+            || receipt.emittedSequence().signum() <= 0
+            || receipt.emittedBlockHeight().signum() <= 0
+            || receipt.emittedEpoch().signum() <= 0)) {
       throw new IllegalArgumentException("committed receipt must use positive ledger coordinates");
     }
     if (!sameArtifact(outputArtifact, receipt.outputArtifact())) {
@@ -425,8 +456,11 @@ final class SoracloudPrivateModelValidation {
     SoracloudPrivateUploadedModelExecutionReceipt previous = null;
     for (final SoracloudPrivateUploadedModelExecutionReceipt receipt : receipts) {
       if (receipt == null
+          || receipt.authorizationClaimBlockHeight().signum() <= 0
+          || receipt.authorizationClaimEpoch().signum() <= 0
           || receipt.emittedSequence().signum() <= 0
-          || receipt.emittedBlockHeight().signum() <= 0) {
+          || receipt.emittedBlockHeight().signum() <= 0
+          || receipt.emittedEpoch().signum() <= 0) {
         throw new IllegalArgumentException(
             "receipt-list entries must have positive ledger coordinates");
       }

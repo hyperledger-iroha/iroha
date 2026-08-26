@@ -1209,10 +1209,8 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
         schema_version: iroha_data_model::soracloud::SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1,
         sorafs_manifest_digest: ManifestDigest::new([byte; 32]),
         sorafs_root_cid:
-            iroha_data_model::sorafs::pin_registry::ManifestRootCid::from_blake3_digest([
-                byte; 32
-            ])
-            .expect("fixture root CID"),
+            iroha_data_model::sorafs::pin_registry::ManifestRootCid::from_blake3_digest([byte; 32])
+                .expect("fixture root CID"),
         artifact_hash: Hash::new([byte; 32]),
         ciphertext_bytes: 64,
         artifact_role: role.to_string(),
@@ -1248,10 +1246,13 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
         output_commitment: Hash::new(b"output-commitment"),
         request_commitment: Hash::prehashed([0; 32]),
         result_commitment: Hash::prehashed([0; 32]),
+        authorization_claim_block_height: 0,
+        authorization_claim_epoch: 0,
         emitted_sequence: 0,
         emitted_block_height: 0,
+        emitted_epoch: 0,
     };
-    let (private_output_manifest_payload, private_output_manifest_digest) =
+    let (_private_output_manifest_payload, private_output_manifest_digest) =
         private_artifact_manifest_fixture(0xD3, private_receipt.output_artifact.ciphertext_bytes);
     private_receipt.output_artifact.sorafs_manifest_digest = private_output_manifest_digest;
     private_receipt.output_replication_order_id =

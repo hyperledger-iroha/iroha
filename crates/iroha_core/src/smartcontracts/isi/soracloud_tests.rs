@@ -15392,6 +15392,84 @@ fn private_artifact_manifest_fixture(seed: u8, content_length: u64) -> (Vec<u8>,
         .expect("encode private output manifest fixture");
     (payload, digest)
 }
+fn private_output_replication_order_fixture(
+    receipt: &SoraPrivateUploadedModelExecutionReceiptV1,
+    pin: &iroha_data_model::sorafs::pin_registry::PinManifestRecord,
+    completed: bool,
+) -> iroha_data_model::sorafs::pin_registry::ReplicationOrderRecord {
+    let provider = iroha_data_model::sorafs::capacity::ProviderId::new([0xE1; 32]);
+    let order = sorafs_manifest::capacity::ReplicationOrderV1 {
+        version: sorafs_manifest::capacity::REPLICATION_ORDER_VERSION_V1,
+        order_id: *receipt.output_replication_order_id.as_bytes(),
+        manifest_cid: pin.root_cid.as_bytes().to_vec(),
+        manifest_digest: *pin.digest.as_bytes(),
+        chunking_profile: pin.chunker.to_handle(),
+        target_replicas: pin.policy.min_replicas,
+        assignments: vec![sorafs_manifest::capacity::ReplicationAssignmentV1 {
+            provider_id: *provider.as_bytes(),
+            slice_gib: 1,
+            lane: None,
+        }],
+        issued_at: 1_700_000_000,
+        deadline_at: 1_700_086_400,
+        sla: sorafs_manifest::capacity::ReplicationOrderSlaV1 {
+            ingest_deadline_secs: 86_400,
+            min_availability_percent_milli: 99_500,
+            min_por_success_percent_milli: 98_000,
+        },
+        metadata: Vec::new(),
+    };
+    order.validate().expect("valid private replication order");
+    let completion_epoch = pin.submitted_epoch;
+    let provider_completions = completed
+        .then(|| {
+            vec![iroha_data_model::sorafs::pin_registry::ReplicationOrderCompletionRecord {
+                provider_id: provider,
+                completed_by: ALICE_ID.clone(),
+                completion_epoch,
+                assignment_revision: 1,
+                completion_authority:
+                    iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionAuthorityV1::new(
+                        ALICE_ID.clone(),
+                        iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1 {
+                            policy_id: [0xE2; 32],
+                            revision: 1,
+                            predecessor_digest: None,
+                            policy_digest: [0xE3; 32],
+                        },
+                    ),
+                finalized_anchor:
+                    iroha_data_model::sorafs::pin_registry::ProviderIngestFinalizedAnchorV1 {
+                        height: 1,
+                        block_hash: [0xE4; 32],
+                    },
+            }]
+        })
+        .unwrap_or_default();
+    iroha_data_model::sorafs::pin_registry::ReplicationOrderRecord {
+        order_id: receipt.output_replication_order_id,
+        manifest_digest: pin.digest,
+        manifest_root_cid: pin.root_cid,
+        musubi_archive: None,
+        issued_by: ALICE_ID.clone(),
+        issued_epoch: pin.submitted_epoch,
+        deadline_epoch: pin
+            .submitted_epoch
+            .checked_add(86_400)
+            .expect("private replication deadline"),
+        canonical_order: norito::encode_canonical(&order)
+            .expect("canonical private replication order"),
+        assignment_revision: 1,
+        provider_completions,
+        status: if completed {
+            iroha_data_model::sorafs::pin_registry::ReplicationOrderStatus::Completed(
+                completion_epoch,
+            )
+        } else {
+            iroha_data_model::sorafs::pin_registry::ReplicationOrderStatus::Pending
+        },
+    }
+}
 fn insert_uploaded_model_pin_record(
     state_transaction: &mut StateTransaction<'_, '_>,
     storage_key_digest: ManifestDigest,
@@ -25440,7 +25518,8 @@ fn soracloud_uploaded_model_register_rejects_missing_pending_or_retired_sorafs_p
 #[test]
 fn private_uploaded_model_execution_receipt_persists_idempotently_from_exact_artifacts()
 -> Result<(), eyre::Report> {
-    permissioned_soracloud_transaction!(kura, state, state_block, stx);
+    permissioned_soracloud_state!(kura, state);
+    soracloud_transaction_at!(state, block_header, state_block, stx, 1_700_000_000_000);
     let mut service_bundle = sample_training_bundle("portal", "1.0.0");
     service_bundle.container.capabilities.allow_model_inference = true;
     service_bundle.service.container.manifest_hash = service_bundle.container_manifest_hash();
@@ -25520,6 +25599,7 @@ fn private_uploaded_model_execution_receipt_persists_idempotently_from_exact_art
     release_request.policy_name = policy.policy_name.clone();
     release_request.ciphertext_commitment = input_artifact.artifact_hash;
     release_request.jurisdiction_tag = policy.jurisdiction_tag.clone();
+    release_request.requested_ttl_blocks = NonZeroU32::new(1).expect("one-block release");
     let release = iroha_data_model::soracloud::SoraDecryptionRequestRecordV1 {
         schema_version: iroha_data_model::soracloud::SORA_DECRYPTION_REQUEST_RECORD_VERSION_V1,
         service_name: bundle.service_name.clone(),
@@ -25601,14 +25681,18 @@ fn private_uploaded_model_execution_receipt_persists_idempotently_from_exact_art
         output_commitment: Hash::new(b"output-commitment"),
         request_commitment: Hash::prehashed([0; 32]),
         result_commitment: Hash::prehashed([0; 32]),
+        authorization_claim_block_height: 0,
+        authorization_claim_epoch: 0,
         emitted_sequence: 0,
         emitted_block_height: 0,
+        emitted_epoch: 0,
     };
     receipt.request_commitment = derive_soracloud_private_model_request_commitment_v1(&receipt);
     receipt.result_commitment = derive_soracloud_private_model_result_commitment_v1(&receipt);
     receipt.receipt_id = derive_soracloud_private_uploaded_model_execution_receipt_id_v1(&receipt);
 
-    let unfinalized_error = isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
+    let unfinalized_error = isi::PrepareSoracloudPrivateUploadedModelExecution {
+        output_manifest_payload: output_manifest_payload.clone(),
         receipt: receipt.clone(),
     }
     .execute(&ALICE_ID, &mut stx)
@@ -25637,7 +25721,8 @@ fn private_uploaded_model_execution_receipt_persists_idempotently_from_exact_art
         .get_mut(&finalized_artifact_key)
         .expect("finalized artifact projection")
         .dataset_ref = "dataset://different".to_string();
-    let linkage_error = isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
+    let linkage_error = isi::PrepareSoracloudPrivateUploadedModelExecution {
+        output_manifest_payload: output_manifest_payload.clone(),
         receipt: receipt.clone(),
     }
     .execute(&ALICE_ID, &mut stx)
@@ -25660,7 +25745,8 @@ fn private_uploaded_model_execution_receipt_persists_idempotently_from_exact_art
         .registered_sequence
         .checked_add(2)
         .expect("fixture sequence increment");
-    let sequence_pair_error = isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
+    let sequence_pair_error = isi::PrepareSoracloudPrivateUploadedModelExecution {
+        output_manifest_payload: output_manifest_payload.clone(),
         receipt: receipt.clone(),
     }
     .execute(&ALICE_ID, &mut stx)
@@ -25690,7 +25776,8 @@ fn private_uploaded_model_execution_receipt_persists_idempotently_from_exact_art
         .get_mut(&finalized_weight_key)
         .expect("finalized weight projection")
         .registered_sequence = u64::MAX;
-    let sequence_overflow_error = isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
+    let sequence_overflow_error = isi::PrepareSoracloudPrivateUploadedModelExecution {
+        output_manifest_payload: output_manifest_payload.clone(),
         receipt: receipt.clone(),
     }
     .execute(&ALICE_ID, &mut stx)
@@ -25715,7 +25802,8 @@ fn private_uploaded_model_execution_receipt_persists_idempotently_from_exact_art
     stx.world
         .soracloud_service_audit_events
         .insert(2, mismatched_sequence_event);
-    let sequence_error = isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
+    let sequence_error = isi::PrepareSoracloudPrivateUploadedModelExecution {
+        output_manifest_payload: output_manifest_payload.clone(),
         receipt: receipt.clone(),
     }
     .execute(&ALICE_ID, &mut stx)
@@ -25730,7 +25818,8 @@ fn private_uploaded_model_execution_receipt_persists_idempotently_from_exact_art
     stx.world
         .soracloud_service_audit_events
         .insert(2, overflowing_ttl_event);
-    let ttl_error = isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
+    let ttl_error = isi::PrepareSoracloudPrivateUploadedModelExecution {
+        output_manifest_payload: output_manifest_payload.clone(),
         receipt: receipt.clone(),
     }
     .execute(&ALICE_ID, &mut stx)
@@ -25742,26 +25831,388 @@ fn private_uploaded_model_execution_receipt_persists_idempotently_from_exact_art
     ));
     stx.world
         .soracloud_service_audit_events
-        .insert(2, original_release_event);
+        .insert(2, original_release_event.clone());
+
+    let missing_claim_error = isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
+        receipt: receipt.clone(),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("receipt finalization must require a prepared authorization claim");
+    assert!(matches!(
+        missing_claim_error,
+        InstructionExecutionError::InvariantViolation(ref message)
+            if message.contains("no prepared authorization claim")
+    ));
+
+    let (mismatched_manifest_payload, mismatched_manifest_digest) =
+        private_artifact_manifest_fixture(0xD4, 64);
+    let mismatched_manifest_error = isi::PrepareSoracloudPrivateUploadedModelExecution {
+        output_manifest_payload: mismatched_manifest_payload,
+        receipt: receipt.clone(),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("prepare must bind the exact receipt output manifest");
+    assert!(matches!(
+        mismatched_manifest_error,
+        InstructionExecutionError::InvariantViolation(ref message)
+            if message.contains("does not match the prepared receipt")
+    ));
+    assert!(
+        stx.world
+            .pin_manifests
+            .get(&mismatched_manifest_digest)
+            .is_none(),
+        "mismatched manifest must not register a pin"
+    );
+
+    let mut not_yet_active_event = original_release_event.clone();
+    not_yet_active_event.block_height = stx.block_height().saturating_add(1);
+    stx.world
+        .soracloud_service_audit_events
+        .insert(2, not_yet_active_event);
+    let not_yet_active_error = isi::PrepareSoracloudPrivateUploadedModelExecution {
+        output_manifest_payload: output_manifest_payload.clone(),
+        receipt: receipt.clone(),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("prepare must reject a release that is not active yet");
+    assert!(matches!(
+        not_yet_active_error,
+        InstructionExecutionError::InvariantViolation(ref message)
+            if message.contains("authorization is not active")
+    ));
+    stx.world
+        .soracloud_service_audit_events
+        .insert(2, original_release_event.clone());
+
+    let mut wrong_order_receipt = receipt.clone();
+    wrong_order_receipt.output_replication_order_id =
+        iroha_data_model::sorafs::pin_registry::ReplicationOrderId::new([0xFA; 32]);
+    wrong_order_receipt.request_commitment =
+        derive_soracloud_private_model_request_commitment_v1(&wrong_order_receipt);
+    wrong_order_receipt.result_commitment =
+        derive_soracloud_private_model_result_commitment_v1(&wrong_order_receipt);
+    wrong_order_receipt.receipt_id =
+        derive_soracloud_private_uploaded_model_execution_receipt_id_v1(&wrong_order_receipt);
+    let wrong_order_error = isi::PrepareSoracloudPrivateUploadedModelExecution {
+        output_manifest_payload: output_manifest_payload.clone(),
+        receipt: wrong_order_receipt,
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("prepare must bind the deterministic output replication order");
+    assert!(matches!(
+        wrong_order_error,
+        InstructionExecutionError::InvariantViolation(ref message)
+            if message.contains("deterministic replication order")
+    ));
+
+    isi::PrepareSoracloudPrivateUploadedModelExecution {
+        output_manifest_payload: output_manifest_payload.clone(),
+        receipt: receipt.clone(),
+    }
+    .execute(&ALICE_ID, &mut stx)?;
+    let claim_key = (
+        receipt.service_name.as_ref().to_owned(),
+        receipt.decryption_request_id.clone(),
+    );
+    let claim_before_retry = stx
+        .world
+        .soracloud_private_uploaded_model_execution_claims
+        .get(&claim_key)
+        .cloned()
+        .expect("prepare persists an authorization claim");
+    assert_eq!(claim_before_retry.receipt, receipt);
+    let output_digest = receipt.output_artifact.sorafs_manifest_digest;
+    let output_pin_before_prepare_retry = stx
+        .world
+        .pin_manifests
+        .get(&output_digest)
+        .cloned()
+        .expect("prepare ensures the output pin");
+    isi::PrepareSoracloudPrivateUploadedModelExecution {
+        output_manifest_payload: output_manifest_payload.clone(),
+        receipt: receipt.clone(),
+    }
+    .execute(&ALICE_ID, &mut stx)?;
+    assert_eq!(
+        stx.world
+            .soracloud_private_uploaded_model_execution_claims
+            .get(&claim_key),
+        Some(&claim_before_retry),
+        "exact prepare retry must not replace the claim"
+    );
+    assert_eq!(
+        stx.world.pin_manifests.get(&output_digest),
+        Some(&output_pin_before_prepare_retry),
+        "exact prepare retry must not mutate the output pin"
+    );
+    stx.world
+        .replication_orders
+        .remove(receipt.output_replication_order_id);
+    let approved_output_status = stx
+        .world
+        .pin_manifests
+        .get(&output_digest)
+        .expect("separately registered output pin")
+        .status;
+    stx.world
+        .pin_manifests
+        .get_mut(&output_digest)
+        .expect("registered output pin")
+        .status = PinStatus::Pending;
+    let pending_pin_error = isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
+        receipt: receipt.clone(),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("receipt commit must wait for output pin approval");
+    assert!(matches!(
+        pending_pin_error,
+        InstructionExecutionError::InvariantViolation(ref message)
+            if message.contains("AwaitingPinApproval")
+    ));
+    stx.world
+        .pin_manifests
+        .get_mut(&output_digest)
+        .expect("registered output pin")
+        .status = approved_output_status;
+
+    let missing_order_error = isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
+        receipt: receipt.clone(),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("receipt commit must wait for the deterministic replication order");
+    assert!(matches!(
+        missing_order_error,
+        InstructionExecutionError::InvariantViolation(ref message)
+            if message.contains("AwaitingReplicationOrder")
+    ));
+    let output_pin = stx
+        .world
+        .pin_manifests
+        .get(&output_digest)
+        .cloned()
+        .expect("registered output pin");
+    stx.world.replication_orders.insert(
+        receipt.output_replication_order_id,
+        private_output_replication_order_fixture(&receipt, &output_pin, false),
+    );
+    let pending_quorum_error = isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
+        receipt: receipt.clone(),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("receipt commit must wait for provider ingest quorum");
+    assert!(matches!(
+        pending_quorum_error,
+        InstructionExecutionError::InvariantViolation(ref message)
+            if message.contains("AwaitingReplicationQuorum")
+    ));
+
+    let original_retention_epoch = output_pin.policy.retention_epoch;
+    let receipt_epoch = stx.block_unix_timestamp_ms() / 1_000;
+    stx.world
+        .pin_manifests
+        .get_mut(&output_digest)
+        .expect("registered output pin")
+        .policy
+        .retention_epoch = receipt_epoch
+        .checked_add(
+            iroha_data_model::soracloud::SORACLOUD_PRIVATE_OUTPUT_MIN_RETENTION_SECS_V1 - 1,
+        )
+        .expect("short output retention epoch");
+    let short_retention_error = isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
+        receipt: receipt.clone(),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("receipt commit must retain the production output horizon");
+    assert!(matches!(
+        short_retention_error,
+        InstructionExecutionError::InvariantViolation(ref message)
+            if message.contains("below required epoch")
+    ));
+    stx.world
+        .pin_manifests
+        .get_mut(&output_digest)
+        .expect("registered output pin")
+        .policy
+        .retention_epoch = original_retention_epoch;
+    stx.world.replication_orders.insert(
+        receipt.output_replication_order_id,
+        private_output_replication_order_fixture(&receipt, &output_pin, true),
+    );
+
+    stx.apply();
+    state_block.commit()?;
+    let second_block_header = iroha_data_model::block::BlockHeader::new(
+        NonZeroU64::new(3).expect("non-zero post-claim block height"),
+        None,
+        None,
+        None,
+        1_700_000_001_000,
+        0,
+    );
+    let mut second_state_block = state.block(second_block_header);
+    let mut second_stx = second_state_block.transaction();
+    assert_eq!(second_stx.block_height(), 3);
+    let primary_release = second_stx
+        .world
+        .soracloud_decryption_request_records
+        .get(&claim_key)
+        .expect("primary private release persisted");
+    assert!(
+        second_stx.block_height()
+            >= original_release_event
+                .block_height
+                .checked_add(u64::from(
+                    primary_release.request.requested_ttl_blocks.get(),
+                ))
+                .expect("primary release expiry height"),
+        "receipt finalization fixture must run after its prepared authorization expires"
+    );
+
+    let mut expired_release = second_stx
+        .world
+        .soracloud_decryption_request_records
+        .get(&claim_key)
+        .cloned()
+        .expect("primary private release persisted");
+    expired_release.request.request_id = "decrypt-upload-expired".to_owned();
+    let expired_sequence = second_stx
+        .world
+        .soracloud_sequence_watermark
+        .get()
+        .checked_add(1)
+        .expect("expired release sequence");
+    expired_release.sequence = expired_sequence;
+    assert_eq!(
+        expired_release.request.requested_ttl_blocks.get(),
+        1,
+        "expired fixture must retain its one-block authorization"
+    );
+    expired_release
+        .validate()
+        .expect("canonical expired private release fixture");
+    let mut expired_release_event = original_release_event.clone();
+    expired_release_event.sequence = expired_sequence;
+    expired_release_event.block_height = second_stx.block_height().saturating_sub(1);
+    assert!(
+        second_stx.block_height()
+            >= expired_release_event.block_height.saturating_add(u64::from(
+                expired_release.request.requested_ttl_blocks.get()
+            )),
+        "expired fixture must execute outside its authorization window"
+    );
+    expired_release_event
+        .validate()
+        .expect("canonical expired private release event fixture");
+    second_stx
+        .world
+        .soracloud_service_audit_events
+        .insert(expired_sequence, expired_release_event);
+    second_stx
+        .world
+        .soracloud_decryption_request_records
+        .insert(
+            (
+                expired_release.service_name.as_ref().to_owned(),
+                expired_release.request.request_id.clone(),
+            ),
+            expired_release,
+        );
+    *second_stx.world.soracloud_sequence_watermark.get_mut() = expired_sequence;
+    let mut expired_receipt = receipt.clone();
+    expired_receipt.decryption_request_id = "decrypt-upload-expired".to_owned();
+    expired_receipt.request_commitment =
+        derive_soracloud_private_model_request_commitment_v1(&expired_receipt);
+    expired_receipt.result_commitment =
+        derive_soracloud_private_model_result_commitment_v1(&expired_receipt);
+    expired_receipt.receipt_id =
+        derive_soracloud_private_uploaded_model_execution_receipt_id_v1(&expired_receipt);
+    let expired_prepare_error = isi::PrepareSoracloudPrivateUploadedModelExecution {
+        output_manifest_payload: output_manifest_payload.clone(),
+        receipt: expired_receipt.clone(),
+    }
+    .execute(&ALICE_ID, &mut second_stx)
+    .expect_err("prepare must reject an expired release");
+    assert!(matches!(
+        expired_prepare_error,
+        InstructionExecutionError::InvariantViolation(ref message)
+            if message.contains("authorization is not active")
+    ));
+    assert!(
+        second_stx
+            .world
+            .soracloud_private_uploaded_model_execution_claims
+            .get(&(
+                expired_receipt.service_name.as_ref().to_owned(),
+                expired_receipt.decryption_request_id.clone(),
+            ))
+            .is_none(),
+        "expired prepare must not persist a claim"
+    );
+
+    let claim = second_stx
+        .world
+        .soracloud_private_uploaded_model_execution_claims
+        .get(&claim_key)
+        .cloned()
+        .expect("prepared claim survives the next block");
+    let retired_epoch = claim.claimed_epoch.saturating_add(1);
+    second_stx
+        .world
+        .pin_manifests
+        .get_mut(&receipt.input_artifact.sorafs_manifest_digest)
+        .expect("private input pin")
+        .status = PinStatus::Retired(retired_epoch);
+    second_stx
+        .world
+        .pin_manifests
+        .get_mut(&receipt.model_manifest_digest)
+        .expect("private model pin")
+        .status = PinStatus::Retired(retired_epoch);
+    second_stx
+        .world
+        .public_lane_validators
+        .get_mut(&(LaneId::SINGLE, ALICE_ID.clone()))
+        .expect("private execution attester")
+        .status = PublicLaneValidatorStatus::Exited;
+
+    // Exact Prepare retries are authorized by the immutable claim, not mutable current state.
+    isi::PrepareSoracloudPrivateUploadedModelExecution {
+        output_manifest_payload: output_manifest_payload.clone(),
+        receipt: receipt.clone(),
+    }
+    .execute(&ALICE_ID, &mut second_stx)?;
 
     isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
         receipt: receipt.clone(),
     }
-    .execute(&ALICE_ID, &mut stx)?;
-    let persisted = stx
+    .execute(&ALICE_ID, &mut second_stx)?;
+    let persisted = second_stx
         .world
         .soracloud_private_uploaded_model_execution_receipts
         .get(&receipt.receipt_id)
         .expect("private receipt persisted");
-    assert_eq!(persisted.emitted_sequence, 5);
-    assert_eq!(persisted.emitted_block_height, stx.block_height());
-    assert_eq!(*stx.world.soracloud_sequence_watermark.get(), 5);
-    let output_pin_before_replay = stx
+    assert_eq!(persisted.emitted_sequence, expired_sequence + 1);
+    assert_eq!(
+        persisted.authorization_claim_block_height,
+        claim.claimed_block_height
+    );
+    assert_eq!(persisted.authorization_claim_epoch, claim.claimed_epoch);
+    assert_eq!(persisted.emitted_block_height, second_stx.block_height());
+    assert_eq!(
+        persisted.emitted_epoch,
+        second_stx.block_unix_timestamp_ms() / 1_000
+    );
+    assert_eq!(
+        *second_stx.world.soracloud_sequence_watermark.get(),
+        expired_sequence + 1
+    );
+    let output_pin_before_replay = second_stx
         .world
         .pin_manifests
         .get(&receipt.output_artifact.sorafs_manifest_digest)
         .cloned()
-        .expect("atomic private commit registered the output pin");
+        .expect("separate private output pin remains authoritative");
     assert_eq!(
         output_pin_before_replay.root_cid,
         receipt.output_artifact.sorafs_root_cid
@@ -25775,14 +26226,15 @@ fn private_uploaded_model_execution_receipt_persists_idempotently_from_exact_art
     isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
         receipt: receipt.clone(),
     }
-    .execute(&ALICE_ID, &mut stx)?;
+    .execute(&ALICE_ID, &mut second_stx)?;
     assert_eq!(
-        *stx.world.soracloud_sequence_watermark.get(),
-        5,
+        *second_stx.world.soracloud_sequence_watermark.get(),
+        expired_sequence + 1,
         "exact retries must not consume another ledger sequence"
     );
     assert_eq!(
-        stx.world
+        second_stx
+            .world
             .pin_manifests
             .get(&receipt.output_artifact.sorafs_manifest_digest),
         Some(&output_pin_before_replay),
@@ -25806,7 +26258,8 @@ fn private_uploaded_model_execution_receipt_persists_idempotently_from_exact_art
     conflicting.receipt_id =
         derive_soracloud_private_uploaded_model_execution_receipt_id_v1(&conflicting);
     assert!(
-        stx.world
+        second_stx
+            .world
             .pin_manifests
             .get(&conflicting.output_artifact.sorafs_manifest_digest)
             .is_none(),
@@ -25815,15 +26268,16 @@ fn private_uploaded_model_execution_receipt_persists_idempotently_from_exact_art
     let error = isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
         receipt: conflicting.clone(),
     }
-    .execute(&ALICE_ID, &mut stx)
+    .execute(&ALICE_ID, &mut second_stx)
     .expect_err("one committed decryption request must not acquire two receipts");
     assert!(matches!(
         error,
         InstructionExecutionError::InvariantViolation(ref message)
-            if message.contains("already has an authoritative private execution receipt")
+            if message.contains("does not exactly match its prepared claim")
     ));
     assert!(
-        stx.world
+        second_stx
+            .world
             .pin_manifests
             .get(&conflicting.output_artifact.sorafs_manifest_digest)
             .is_none(),

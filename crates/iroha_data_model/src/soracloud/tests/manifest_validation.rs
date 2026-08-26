@@ -2733,8 +2733,11 @@ fn runtime_receipt_validation_separates_submission_and_persisted_sequence_states
 #[test]
 fn private_runtime_receipt_validation_separates_submission_and_persisted_sequence_states() {
     let mut receipt = sample_private_uploaded_model_execution_receipt();
+    receipt.authorization_claim_block_height = 0;
+    receipt.authorization_claim_epoch = 0;
     receipt.emitted_sequence = 0;
     receipt.emitted_block_height = 0;
+    receipt.emitted_epoch = 0;
     receipt
         .validate_submission()
         .expect("an unassigned private receipt is valid for ledger submission");
@@ -2749,14 +2752,71 @@ fn private_runtime_receipt_validation_separates_submission_and_persisted_sequenc
     assert_soracloud_invalid_field(error, "emitted_sequence");
     let error = receipt
         .validate()
+        .expect_err("a persisted private receipt requires its authorization claim block height");
+    assert_soracloud_invalid_field(error, "authorization_claim_block_height");
+    receipt.authorization_claim_block_height = 1;
+    let error = receipt
+        .validate()
+        .expect_err("a persisted private receipt requires its authorization claim epoch");
+    assert_soracloud_invalid_field(error, "authorization_claim_epoch");
+    receipt.authorization_claim_epoch = 1;
+    let error = receipt
+        .validate()
         .expect_err("a persisted private receipt requires a ledger-assigned block height");
     assert_soracloud_invalid_field(error, "emitted_block_height");
+    receipt.emitted_block_height = 1;
+    let error = receipt
+        .validate()
+        .expect_err("a persisted private receipt requires a ledger-assigned consensus epoch");
+    assert_soracloud_invalid_field(error, "emitted_epoch");
     receipt.emitted_sequence = 0;
+    receipt.authorization_claim_block_height = 0;
+    receipt.authorization_claim_epoch = 0;
     receipt.emitted_block_height = 1;
     let error = receipt
         .validate_submission()
         .expect_err("a private receipt submission must not select its authoritative block height");
     assert_soracloud_invalid_field(error, "emitted_block_height");
+    receipt.emitted_block_height = 0;
+    receipt.emitted_epoch = 1;
+    let error = receipt.validate_submission().expect_err(
+        "a private receipt submission must not select its authoritative consensus epoch",
+    );
+    assert_soracloud_invalid_field(error, "emitted_epoch");
+}
+
+#[test]
+fn private_execution_claim_requires_submission_receipt_and_ledger_coordinates() {
+    let mut receipt = sample_private_uploaded_model_execution_receipt();
+    receipt.authorization_claim_block_height = 0;
+    receipt.authorization_claim_epoch = 0;
+    receipt.emitted_sequence = 0;
+    receipt.emitted_block_height = 0;
+    receipt.emitted_epoch = 0;
+    let mut claim = SoraPrivateUploadedModelExecutionClaimV1 {
+        schema_version: SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_CLAIM_VERSION_V1,
+        receipt,
+        claimed_block_height: 2,
+        claimed_epoch: 3,
+    };
+    claim.validate().expect("canonical prepared claim");
+    claim.claimed_block_height = 0;
+    let error = claim
+        .validate()
+        .expect_err("claim block height is ledger-owned and nonzero");
+    assert_soracloud_invalid_field(error, "claimed_block_height");
+    claim.claimed_block_height = 2;
+    claim.claimed_epoch = 0;
+    let error = claim
+        .validate()
+        .expect_err("claim epoch is ledger-owned and nonzero");
+    assert_soracloud_invalid_field(error, "claimed_epoch");
+    claim.claimed_epoch = 3;
+    claim.receipt.emitted_sequence = 1;
+    let error = claim
+        .validate()
+        .expect_err("claim must retain the exact submission-form receipt");
+    assert_soracloud_invalid_field(error, "emitted_sequence");
 }
 #[test]
 fn runtime_receipt_validate_rejects_invalid_host_attribution() {
