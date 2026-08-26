@@ -2,6 +2,7 @@
 #[derive(Clone, Copy, Debug)]
 enum ProductionReadyValidateDispatchRow {
     ValidatedBusy,
+    LocalValidatedBusy,
     ValidatedInactive,
     ValidatedNoEffect,
     ValidatedApply,
@@ -14,8 +15,9 @@ enum ProductionReadyValidateDispatchRow {
 
 #[cfg(feature = "bls")]
 impl ProductionReadyValidateDispatchRow {
-    const ALL: [Self; 9] = [
+    const ALL: [Self; 10] = [
         Self::ValidatedBusy,
+        Self::LocalValidatedBusy,
         Self::ValidatedInactive,
         Self::ValidatedNoEffect,
         Self::ValidatedApply,
@@ -28,7 +30,9 @@ impl ProductionReadyValidateDispatchRow {
 
     const fn publication_kind(self) -> ReadyDurableValidateAdapterPublicationKind {
         match self {
-            Self::ValidatedBusy => ReadyDurableValidateAdapterPublicationKind::ValidatedBusy,
+            Self::ValidatedBusy | Self::LocalValidatedBusy => {
+                ReadyDurableValidateAdapterPublicationKind::ValidatedBusy
+            }
             Self::ValidatedInactive => {
                 ReadyDurableValidateAdapterPublicationKind::ValidatedInactive
             }
@@ -47,6 +51,7 @@ impl ProductionReadyValidateDispatchRow {
     const fn fixture_outcome(self) -> ReadyDurableValidateFixtureOutcome {
         match self {
             Self::ValidatedBusy
+            | Self::LocalValidatedBusy
             | Self::ValidatedInactive
             | Self::ValidatedNoEffect
             | Self::ValidatedApply
@@ -59,7 +64,10 @@ impl ProductionReadyValidateDispatchRow {
     }
 
     const fn uses_local_origin(self) -> bool {
-        matches!(self, Self::ValidatedInactive | Self::RejectedInactive)
+        matches!(
+            self,
+            Self::LocalValidatedBusy | Self::ValidatedInactive | Self::RejectedInactive
+        )
     }
 
     const fn requires_set_b(self) -> bool {
@@ -83,7 +91,10 @@ impl ProductionReadyValidateDispatchRow {
     }
 
     const fn is_busy(self) -> bool {
-        matches!(self, Self::ValidatedBusy | Self::RejectedBusy)
+        matches!(
+            self,
+            Self::ValidatedBusy | Self::LocalValidatedBusy | Self::RejectedBusy
+        )
     }
 
     const fn certificate_phase(self) -> Option<wire::GlobalPhase> {
@@ -91,6 +102,7 @@ impl ProductionReadyValidateDispatchRow {
             Self::ValidatedApply => Some(wire::GlobalPhase::Commit),
             Self::ValidatedPersist | Self::RejectedReport => Some(wire::GlobalPhase::Prepare),
             Self::ValidatedBusy
+            | Self::LocalValidatedBusy
             | Self::ValidatedInactive
             | Self::ValidatedNoEffect
             | Self::RejectedBusy
@@ -121,6 +133,7 @@ impl ProductionReadyValidateDispatchRow {
                 LifecycleWorkClass::InvalidBodyReport,
             )),
             Self::ValidatedBusy
+            | Self::LocalValidatedBusy
             | Self::ValidatedInactive
             | Self::ValidatedNoEffect
             | Self::RejectedBusy
@@ -138,11 +151,13 @@ impl ProductionReadyValidateDispatchRow {
         use super::super::ProductionCompletionDispatchV1 as Dispatch;
 
         match self {
-            Self::ValidatedBusy | Self::RejectedBusy => Dispatch::ReducerFenceWait {
-                ordinal,
-                wait: reducer_fence_wait
-                    .expect("busy Ready Validate row retains its exact reducer fence"),
-            },
+            Self::ValidatedBusy | Self::LocalValidatedBusy | Self::RejectedBusy => {
+                Dispatch::ReducerFenceWait {
+                    ordinal,
+                    wait: reducer_fence_wait
+                        .expect("busy Ready Validate row retains its exact reducer fence"),
+                }
+            }
             Self::ValidatedInactive
             | Self::ValidatedNoEffect
             | Self::RejectedInactive
@@ -436,22 +451,6 @@ fn register_production_ready_validate_remote_body(
             "{row:?}: a certificate beside a Durable body has no immediate successor"
         );
     }
-    if row.is_busy() {
-        let sign = adapter
-            .timeout_elapsed(adapter.current_tag())
-            .unwrap_or_else(|error| panic!("{row:?}: open exact reducer fence: {error}"))
-            .into_effects();
-        assert!(
-            matches!(
-                sign.as_slice(),
-                [AdapterEffect::Sign {
-                    tag: effect_tag,
-                    request: SignRequest::TimeoutVote(_),
-                }] if *effect_tag == tag
-            ),
-            "{row:?}: timeout must retain one exact Sign fence: {sign:?}"
-        );
-    }
 }
 
 #[cfg(feature = "bls")]
@@ -504,10 +503,11 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
         let AdapterEffect::ValidateBody { tag, .. } = &ready.fixture.effect else {
             unreachable!("Ready fixture retains one Validate effect")
         };
+        let tag = *tag;
         let adapter_directory =
             TempDir::new().expect("temporary production Ready Validate adapter");
         let wal_path = adapter_directory.path().join("safety.wal");
-        let (mut adapter, startup) = SumeragiV2Adapter::open(
+        let (mut adapter, mut startup) = SumeragiV2Adapter::open(
             &wal_path,
             ready.fixture.verified.clone(),
             Some(local_validator),
@@ -536,6 +536,25 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                 recovered_apply.as_ref().map(|(commit_qc, _)| commit_qc),
                 &mut adapter,
             );
+        }
+        if row.is_busy() {
+            let sign = adapter
+                .timeout_elapsed(adapter.current_tag())
+                .unwrap_or_else(|error| panic!("{row:?}: open exact reducer fence: {error}"))
+                .into_effects();
+            assert!(
+                matches!(
+                    sign.as_slice(),
+                    [AdapterEffect::Sign {
+                        tag: effect_tag,
+                        request: SignRequest::TimeoutVote(_),
+                    }] if *effect_tag == tag
+                ),
+                "{row:?}: timeout must retain one exact Sign fence: {sign:?}"
+            );
+            if matches!(row, ProductionReadyValidateDispatchRow::LocalValidatedBusy) {
+                startup = sign;
+            }
         }
         {
             let prepared = ready
@@ -584,6 +603,7 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                 runtime_ordinal_authority,
             );
         let lifecycle_ordinal_observer = lifecycle_ordinals.clone();
+        let leader_wire_lifecycle_ordinals = lifecycle_ordinals.clone();
         let (runtime, returned_startup) =
             crate::sumeragi::v2_runtime::SerializedV2Runtime::new_with_lifecycle_ordinals(
                 adapter,
@@ -594,10 +614,6 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                 lifecycle_ordinals,
             )
             .unwrap_or_else(|error| panic!("{row:?}: wrap exact serialized runtime: {error}"));
-        assert!(
-            returned_startup.is_empty(),
-            "{row:?}: empty WAL cannot return startup effects"
-        );
         let ledger_root = owner_directory.path().join("ledger");
         let ledger_path = ledger_root.join("lifecycle-ledger-v1.norito");
         let ledger_before = std::fs::read(&ledger_path)
@@ -612,6 +628,30 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                 local_validator,
                 2,
             );
+        if matches!(row, ProductionReadyValidateDispatchRow::LocalValidatedBusy) {
+            let keys = durable_store_keys(marker);
+            let signer = usize::try_from(local_validator)
+                .expect("local Busy validator index is representable");
+            crate::sumeragi::v2_worker::tests::install_local_signer_for_test(
+                &mut services,
+                &keys[signer],
+            );
+            assert_eq!(
+                executor
+                    .consume_effects(returned_startup, &mut services)
+                    .unwrap_or_else(|error| {
+                        panic!("{row:?}: dispatch the real timeout Sign fence: {error}")
+                    }),
+                1,
+                "{row:?}: the recovered timeout owns one physical Sign"
+            );
+            assert_eq!(executor.status().pending_signatures, 1, "{row:?}");
+        } else {
+            assert!(
+                returned_startup.is_empty(),
+                "{row:?}: only local Busy retains a startup Sign effect"
+            );
+        }
         executor
             .arm_live_clocks(
                 crate::sumeragi::v2_lifecycle_coordinator::ProductionLifecycleLiveClockActivationPermitV1::for_test(),
@@ -648,17 +688,40 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                 "{row:?}: executor protection must match the adapter's decided body"
             );
         }
+        let mut _queued_apply_ingress_guard = None;
         let queued_apply_snapshot =
             matches!(row, ProductionReadyValidateDispatchRow::ValidatedApply).then(|| {
                 let keys = &recovered_apply
                     .as_ref()
                     .expect("ValidatedApply retains its exact production fixture")
                     .1;
-                let unrelated = signed_ready_validate_timeout_vote(&context, keys, row.view(), 3);
+                let signer = 3;
+                let queued_progress =
+                    signed_ready_validate_timeout_vote(&context, keys, row.view(), signer);
+                let semantic_origin = context.roster
+                    [usize::try_from(signer).expect("small Ready Validate signer index")]
+                .validator
+                .clone();
+                let (directory, ingress, mut ownerships) =
+                    crate::sumeragi::v2_runtime::tests::preowned_leader_wire_ownerships(
+                        &context,
+                        &[(queued_progress.clone(), semantic_origin)],
+                        leader_wire_lifecycle_ordinals.clone(),
+                    );
+                let ownership = ownerships
+                    .pop()
+                    .expect("one gated TimeoutVote retains runtime ownership");
+                assert!(ownerships.is_empty());
                 executor
-                    .enqueue_network(unrelated)
+                    .enqueue_network_with_ingress_ownership(queued_progress, ownership)
                     .expect("queue authenticated runtime ingress beside typed live Apply");
-                executor.runtime_queue_snapshot_for_test(now)
+                let snapshot = executor.runtime_queue_snapshot_for_test(now);
+                assert_eq!(
+                    snapshot.progress.depth, 1,
+                    "ValidatedApply fixture retains one authentic Progress wire"
+                );
+                _queued_apply_ingress_guard = Some((directory, ingress));
+                snapshot
             });
         let expected_reducer_fence_wait = row.is_busy().then(|| {
             let reducer_fence = executor.lifecycle_reducer_fence_observation();
@@ -685,6 +748,135 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
             ),
             "{row:?}"
         );
+        if matches!(row, ProductionReadyValidateDispatchRow::LocalValidatedBusy) {
+            let parked_queue = executor.runtime_queue_snapshot_for_test(now);
+            assert_eq!(
+                parked_queue.normal.depth, 0,
+                "{row:?}: local Busy publication cannot create ordinary ingress"
+            );
+            assert_eq!(
+                parked_queue.progress.depth, 0,
+                "{row:?}: local Busy publication cannot create progress ingress"
+            );
+            assert_eq!(
+                parked_queue.completion.depth, 1,
+                "{row:?}: local Busy publication retains one exact LocalProposalReady command"
+            );
+            let parked_status = executor.status();
+            assert_eq!(parked_status.queued_runtime_completions, 1, "{row:?}");
+            assert_eq!(parked_status.pending_stores, 0, "{row:?}");
+            assert_eq!(parked_status.pending_validations, 0, "{row:?}");
+            assert!(!parked_status.fail_closed, "{row:?}");
+            assert!(!output_guard.restart_required(), "{row:?}");
+
+            executor
+                .step(std::time::Instant::now(), &mut services)
+                .unwrap_or_else(|error| {
+                    panic!("{row:?}: park LocalProposalReady behind the Sign fence: {error}")
+                });
+            let initial_deferred_completion_depth = crate::sumeragi::status::v2_status()
+                .and_then(|status| {
+                    status.liveness.queues.into_iter().find_map(|queue| {
+                        (queue.queue == wire::SumeragiV2QueueKind::DeferredCompletion)
+                            .then_some(queue.depth)
+                    })
+                })
+                .unwrap_or(0);
+            assert_eq!(
+                initial_deferred_completion_depth, 1,
+                "{row:?}: LocalProposalReady must enter DeferredCompletion before Sign service"
+            );
+            planner_io.execute_one_consensus_sign_fixture(&services);
+
+            let mut wait = expected_reducer_fence_wait
+                .expect("local Busy retains its exact initial reducer fence");
+            let completion_deadline = std::time::Instant::now()
+                .checked_add(std::time::Duration::from_secs(5))
+                .expect("local Busy completion deadline is representable");
+            let resolved = loop {
+                loop {
+                    services
+                        .drain_completions(&mut executor)
+                        .unwrap_or_else(|error| {
+                            panic!("{row:?}: drain the real Sign worker completion: {error}")
+                        });
+                    executor
+                        .step(std::time::Instant::now(), &mut services)
+                        .unwrap_or_else(|error| {
+                            panic!("{row:?}: advance the fenced serialized runtime: {error}")
+                        });
+                    let fence = executor.lifecycle_reducer_fence_observation();
+                    let status = executor.status();
+                    let deferred_completion_depth = crate::sumeragi::status::v2_status()
+                        .and_then(|status| {
+                            status.liveness.queues.into_iter().find_map(|queue| {
+                                (queue.queue == wire::SumeragiV2QueueKind::DeferredCompletion)
+                                    .then_some(queue.depth)
+                            })
+                        })
+                        .unwrap_or(0);
+                    if fence.source() == wait.source()
+                        && fence.generation() > wait.observed_generation()
+                        && status.pending_signatures == 0
+                        && status.queued_runtime_completions == 0
+                        && deferred_completion_depth == 0
+                    {
+                        break;
+                    }
+                    assert!(!status.fail_closed, "{row:?}");
+                    assert!(!output_guard.restart_required(), "{row:?}");
+                    if std::time::Instant::now() >= completion_deadline {
+                        panic!(
+                            "{row:?}: timed out draining the Sign/fence bridge: \
+                             fence={fence:?}, wait={wait:?}, status={status:?}"
+                        );
+                    }
+                    std::thread::yield_now();
+                }
+
+                let next = owner
+                    .dispatch_completion_for_test(&mut services, &mut executor, 0)
+                    .unwrap_or_else(|error| {
+                        panic!("{row:?}: retry the exact same-ordinal Validate: {error:?}")
+                    });
+                match next {
+                    super::super::ProductionCompletionDispatchV1::ReducerFenceWait {
+                        ordinal,
+                        wait: next_wait,
+                    } => {
+                        assert_eq!(ordinal, lease.ordinal(), "{row:?}");
+                        assert_eq!(next_wait.source(), wait.source(), "{row:?}");
+                        assert!(
+                            next_wait.observed_generation() > wait.observed_generation(),
+                            "{row:?}: a repeated Busy must bind a newly advanced fence"
+                        );
+                        wait = next_wait;
+                    }
+                    resolved => break resolved,
+                }
+            };
+            assert!(
+                !matches!(
+                    resolved,
+                    super::super::ProductionCompletionDispatchV1::ReducerFenceWait { .. }
+                ),
+                "{row:?}: the exact same-ordinal successor must resolve after Sign completion"
+            );
+            assert!(
+                matches!(
+                    owner.coordinator.records[&lease.ordinal()].state,
+                    super::super::LifecycleState::Terminal(_)
+                ),
+                "{row:?}: the parked Validate parent must terminalize exactly once"
+            );
+            let settled_queue = executor.runtime_queue_snapshot_for_test(std::time::Instant::now());
+            assert_eq!(settled_queue.completion.depth, 0, "{row:?}");
+            let settled_status = executor.status();
+            assert_eq!(settled_status.queued_runtime_completions, 0, "{row:?}");
+            assert_eq!(settled_status.pending_signatures, 0, "{row:?}");
+            assert!(!settled_status.fail_closed, "{row:?}");
+            assert!(!output_guard.restart_required(), "{row:?}");
+        }
         if let Some(child_ordinal) = expected_successor_ordinal {
             assert_eq!(owner.coordinator.high_water(), child_ordinal, "{row:?}");
             assert!(
@@ -754,7 +946,7 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
 
         let ledger_after = std::fs::read(&ledger_path)
             .unwrap_or_else(|error| panic!("{row:?}: read post-dispatch LedgerV1: {error}"));
-        if row.is_busy() {
+        if row.is_busy() && !matches!(row, ProductionReadyValidateDispatchRow::LocalValidatedBusy) {
             assert_eq!(
                 ledger_after, ledger_before,
                 "{row:?}: reducer-fence parking is deliberately volatile"
@@ -767,7 +959,12 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
         }
         let wal_after = std::fs::read(&wal_path)
             .unwrap_or_else(|error| panic!("{row:?}: read post-dispatch WAL: {error}"));
-        if row.grows_safety_wal() {
+        if matches!(row, ProductionReadyValidateDispatchRow::LocalValidatedBusy) {
+            assert!(
+                wal_after.starts_with(&wal_before),
+                "{row:?}: real Sign settlement may only append to the safety WAL"
+            );
+        } else if row.grows_safety_wal() {
             assert!(
                 wal_after.len() > wal_before.len() && wal_after != wal_before,
                 "{row:?}: Validate-to-Sign must append the safety WAL"
@@ -785,13 +982,29 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
         planner_io.detach(&mut services);
         drop(executor);
         drop(owner);
-        assert_production_ready_validate_cold_open(
-            row,
-            &ledger_root,
-            active_context,
-            lease.ordinal(),
-            expected_successor_ordinal,
-        );
+        if matches!(row, ProductionReadyValidateDispatchRow::LocalValidatedBusy) {
+            let (_store, ledger) =
+                super::super::ledger::LifecycleLedgerStoreV1::open(&ledger_root, active_context)
+                    .unwrap_or_else(|error| panic!("{row:?}: cold-open settled LedgerV1: {error}"));
+            let parent = ledger
+                .records()
+                .first()
+                .unwrap_or_else(|| panic!("{row:?}: settled LedgerV1 retains its parent"));
+            assert_eq!(parent.ordinal(), lease.ordinal(), "{row:?}");
+            assert_eq!(
+                parent.terminal(),
+                Some(Some(TerminalOutcome::Advanced)),
+                "{row:?}: the real fence bridge durably advances its parent"
+            );
+        } else {
+            assert_production_ready_validate_cold_open(
+                row,
+                &ledger_root,
+                active_context,
+                lease.ordinal(),
+                expected_successor_ordinal,
+            );
+        }
         drop(adapter_directory);
         drop(_directory);
     }

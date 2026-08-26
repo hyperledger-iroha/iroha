@@ -698,6 +698,10 @@ fn run_lifecycle_active_height(
     let mut producer_claim = LifecycleProducerClaimDispositionV1::initial();
     let mut canonical_lane_body_recovered = false;
     let mut finalized_ingress_closed = false;
+    let scheduler_stall_diagnostic_age = round_timeout.max(Duration::from_secs(5));
+    let mut next_scheduler_stall_diagnostic =
+        deadline_after(height_started_at, scheduler_stall_diagnostic_age);
+    let mut last_advance_executor_yield = None;
 
     loop {
         cleanup_supervisor.reap_finished();
@@ -708,7 +712,27 @@ fn run_lifecycle_active_height(
             activated.into_clean_shutdown(&mut active_runner)?;
             return Ok(None);
         }
-        liveness_watchdog.poll(Instant::now());
+        let now = Instant::now();
+        liveness_watchdog.poll(now);
+        let ingress_snapshot = receiver.snapshot_at(now);
+        if ingress_snapshot.depth == 0 {
+            next_scheduler_stall_diagnostic = deadline_after(now, scheduler_stall_diagnostic_age);
+        } else if ingress_snapshot
+            .oldest_age
+            .is_some_and(|age| age >= scheduler_stall_diagnostic_age)
+            && now >= next_scheduler_stall_diagnostic
+        {
+            activated.log_scheduler_stall_diagnostic(
+                &mut active_runner,
+                producer_claim,
+                receiver,
+                ingress_snapshot.oldest_age,
+                ingress_snapshot.service_idle_age,
+                last_advance_executor_yield
+                    .map(|(phase, reason, at)| (phase, reason, now.saturating_duration_since(at))),
+            );
+            next_scheduler_stall_diagnostic = deadline_after(now, Duration::from_secs(30));
+        }
 
         let lane_only_completion_barrier = producer_claim.blocks_runtime();
         if lane_only_completion_barrier {
@@ -989,6 +1013,9 @@ fn run_lifecycle_active_height(
             producer_claim,
         )?;
         producer_claim = drain_disposition.producer_claim();
+        if let Some(reason) = drain_disposition.advance_executor_yield() {
+            last_advance_executor_yield = Some(("pre-ingress", reason, Instant::now()));
+        }
         if discovery_was_outstanding && block_sync_request.is_none() {
             admitted_discovered_commit_qc = true;
         }
@@ -997,13 +1024,16 @@ fn run_lifecycle_active_height(
             continue;
         }
 
-        let (ready_to_finish, lifecycle_yield) = if drain_disposition
+        let (ready_to_finish, executor_slice) = if drain_disposition
             .terminal_settlement_stops_runtime()
         {
             activated.with_runner_runtime(
                 &mut active_runner,
                 |_owner, executor, _services, _local_proposal| {
-                    Ok::<_, V2RunnerError>((executor.ready_to_finish(), false))
+                    Ok::<_, V2RunnerError>((
+                        executor.ready_to_finish(),
+                        AdvanceExecutorSliceOutcomeV1::Idle,
+                    ))
                 },
             )?
         } else {
@@ -1052,14 +1082,14 @@ fn run_lifecycle_active_height(
                         services,
                         control_queue_capacity,
                     )?;
-                    if advance_executor(
-                        receiver,
-                        owner,
-                        executor,
-                        services,
-                        control_queue_capacity,
-                    )? {
-                        return Ok::<_, V2RunnerError>((false, true));
+                    // Bound this tail before the Producer point to one reducer
+                    // macrostep. Exact output can be waiting behind an
+                    // actor-owned admission rank; consuming the whole command
+                    // capacity here would postpone its next retry for that
+                    // entire synchronous batch.
+                    let executor_slice = advance_executor(receiver, owner, executor, services, 1)?;
+                    if let AdvanceExecutorSliceOutcomeV1::Yielded(_) = executor_slice {
+                        return Ok::<_, V2RunnerError>((false, executor_slice));
                     }
                     let _ = retry_exact_output_and_apply_sidecar_admissions(
                         &mut lane_work,
@@ -1114,12 +1144,17 @@ fn run_lifecycle_active_height(
                     services
                         .replay_buffered_chunks(executor)
                         .map_err(V2RunnerError::Service)?;
-                    Ok::<_, V2RunnerError>((executor.ready_to_finish(), false))
+                    Ok::<_, V2RunnerError>((executor.ready_to_finish(), executor_slice))
                 },
             )?
         };
-        if lifecycle_yield {
-            continue;
+        match executor_slice {
+            AdvanceExecutorSliceOutcomeV1::Idle
+            | AdvanceExecutorSliceOutcomeV1::AdvancedAtSliceBoundary => {}
+            AdvanceExecutorSliceOutcomeV1::Yielded(reason) => {
+                last_advance_executor_yield = Some(("post-ingress", reason, Instant::now()));
+                continue;
+            }
         }
 
         let apply_terminal_settled = producer_claim.apply_terminal_settled();
@@ -1205,8 +1240,11 @@ fn run_lifecycle_active_height(
             }
         }
 
-        let finalization_ready =
-            ready_to_finish && activated.ready_for_finalized_rollover(&mut active_runner);
+        let finalization_ready = if ready_to_finish {
+            activated.ready_for_finalized_rollover(&mut active_runner)?
+        } else {
+            false
+        };
         let rollover_ready = if finalization_ready {
             activated.with_runner_runtime(
                 &mut active_runner,

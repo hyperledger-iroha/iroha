@@ -1117,6 +1117,212 @@ pub(in crate::sumeragi) struct PreparedAuthenticatedGenesisStoredReplayPreAdmiss
     durable_receipt: DurableBodyReceipt,
     replay_evidence: super::replay_authority::AuthenticatedGenesisStoredReplayEvidenceV1,
 }
+
+/// Inert exact owner of one durable Store terminal after its replay authority
+/// has moved forward into Validate admission.
+///
+/// This seal owns no lifecycle row, service work, or replay evidence.  Its sole
+/// operation projects a same-body Store retransmission onto the immutable
+/// physical owner which minted the durable receipt.  Construction requires an
+/// already-bound runtime Store owner, and the origin-specific Stored replay
+/// cuts below recheck that owner before permitting the seal to outlive them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) struct DurableStoreTerminalRetrySealV1 {
+    store_effect: AdapterEffect,
+    durable_receipt: DurableBodyReceipt,
+    ownership: RuntimeEffectOwnership,
+}
+
+impl DurableStoreTerminalRetrySealV1 {
+    /// Seal an exact durable Store owner without exposing any constructor for
+    /// lifecycle or replay authority.
+    pub(in crate::sumeragi) fn seal_exact(
+        store_effect: &AdapterEffect,
+        ownership: &RuntimeEffectOwnership,
+        durable_receipt: &DurableBodyReceipt,
+    ) -> Option<Self> {
+        let AdapterEffect::StoreBody {
+            tag,
+            round,
+            subject,
+        } = store_effect
+        else {
+            return None;
+        };
+        ownership
+            .exact_pending_adapter_effect_binding(store_effect)
+            .ok()?;
+        if tag.height() != round.height
+            || durable_receipt.context_id() != round.context_id
+            || durable_receipt.round() != *round
+            || durable_receipt.subject() != *subject
+        {
+            return None;
+        }
+        Some(Self {
+            store_effect: store_effect.clone(),
+            durable_receipt: durable_receipt.clone(),
+            ownership: ownership.clone(),
+        })
+    }
+
+    /// Recover the inert Store predecessor already carried by one exact
+    /// reducer-produced Validate owner.
+    ///
+    /// This inverse is deliberately closed over the reviewed Store-to-Validate
+    /// projection: rebuilding the Store binding and projecting it forward must
+    /// reproduce the byte-identical Validate binding. The returned value owns
+    /// no executable row or replay evidence; it can only authenticate a later
+    /// same-body Store retry against the physical lifecycle root which emitted
+    /// `BodyStored`.
+    pub(in crate::sumeragi) fn seal_validate_predecessor(
+        validate_effect: &AdapterEffect,
+        validate_ownership: &RuntimeEffectOwnership,
+        durable_receipt: &DurableBodyReceipt,
+    ) -> Option<Self> {
+        let AdapterEffect::ValidateBody {
+            tag,
+            round,
+            subject,
+        } = validate_effect
+        else {
+            return None;
+        };
+        let store_effect = AdapterEffect::StoreBody {
+            tag: *tag,
+            round: *round,
+            subject: *subject,
+        };
+        let validate_pending = validate_ownership
+            .exact_pending_adapter_effect_binding(validate_effect)
+            .ok()?;
+        let projected_store_pending = validate_pending
+            .project_validate_store_predecessor(validate_effect, &store_effect)?;
+        let store_ownership = validate_ownership
+            .rebind_as_inherited_adapter_effect(&store_effect)
+            .ok()?;
+        let store_pending = store_ownership
+            .exact_pending_adapter_effect_binding(&store_effect)
+            .ok()?;
+        (store_pending == projected_store_pending).then_some(())?;
+        Self::seal_exact(&store_effect, &store_ownership, durable_receipt)
+    }
+
+    fn validates(&self) -> bool {
+        let AdapterEffect::StoreBody {
+            tag,
+            round,
+            subject,
+        } = &self.store_effect
+        else {
+            return false;
+        };
+        tag.height() == round.height
+            && self.durable_receipt.context_id() == round.context_id
+            && self.durable_receipt.round() == *round
+            && self.durable_receipt.subject() == *subject
+            && self
+                .ownership
+                .exact_pending_adapter_effect_binding(&self.store_effect)
+                .is_ok()
+    }
+
+    /// Prove that this Store terminal is the exact durable predecessor of one
+    /// same-body Validate carrier in the same or a later reducer view.
+    pub(in crate::sumeragi) fn exactly_precedes_validate(
+        &self,
+        validate_effect: &AdapterEffect,
+    ) -> bool {
+        let (
+            AdapterEffect::StoreBody {
+                tag: store_tag,
+                round: store_round,
+                subject: store_subject,
+            },
+            AdapterEffect::ValidateBody {
+                tag: validate_tag,
+                round: validate_round,
+                subject: validate_subject,
+            },
+        ) = (&self.store_effect, validate_effect)
+        else {
+            return false;
+        };
+        self.validates()
+            && store_tag.height() == validate_tag.height()
+            && (store_tag == validate_tag || validate_tag.strictly_advances(*store_tag))
+            && store_round == validate_round
+            && store_subject == validate_subject
+    }
+
+    /// Rebind one later exact Store carrier to the durable terminal's physical
+    /// lifecycle owner.  The shared typed adoption primitive still rejects
+    /// another body, stage, regressed tag, or incomparable authority.
+    pub(in crate::sumeragi) fn project_retry_ownership(
+        &self,
+        durable_receipt: &DurableBodyReceipt,
+        effect: &AdapterEffect,
+        incoming: &RuntimeEffectOwnership,
+    ) -> Option<RuntimeEffectOwnership> {
+        (self.validates() && self.durable_receipt == *durable_receipt).then_some(())?;
+        let store_pending = self
+            .ownership
+            .exact_pending_adapter_effect_binding(&self.store_effect)
+            .ok()?;
+        project_incumbent_store_retry_ownership(
+            &self.store_effect,
+            &store_pending,
+            &self.ownership,
+            effect,
+            incoming,
+        )
+    }
+}
+
+/// Rebind one immutable Store task to a same-body carrier in the same or a
+/// strictly later reducer incarnation while retaining its causal owner.
+fn project_incumbent_store_retry_ownership(
+    incumbent_effect: &AdapterEffect,
+    incumbent_pending: &PendingRuntimeEffectBinding,
+    incumbent_ownership: &RuntimeEffectOwnership,
+    incoming_effect: &AdapterEffect,
+    incoming_ownership: &RuntimeEffectOwnership,
+) -> Option<RuntimeEffectOwnership> {
+    let (
+        AdapterEffect::StoreBody {
+            tag: incumbent_tag,
+            round: incumbent_round,
+            subject: incumbent_subject,
+        },
+        AdapterEffect::StoreBody {
+            tag: incoming_tag,
+            round: incoming_round,
+            subject: incoming_subject,
+        },
+    ) = (incumbent_effect, incoming_effect)
+    else {
+        return None;
+    };
+    if incumbent_tag.height() != incoming_tag.height()
+        || (incumbent_tag != incoming_tag && !incoming_tag.strictly_advances(*incumbent_tag))
+        || incumbent_round != incoming_round
+        || incumbent_subject != incoming_subject
+        || incumbent_ownership
+            .exact_pending_adapter_effect_binding(incumbent_effect)
+            .ok()
+            .as_ref()
+            != Some(incumbent_pending)
+    {
+        return None;
+    }
+    incoming_ownership
+        .exact_pending_adapter_effect_binding(incoming_effect)
+        .ok()?;
+    let adopted = incumbent_ownership
+        .adopt_incumbent_body_stage_for_retry_or_authority(incoming_ownership, incoming_effect)
+        .ok()?;
+    Some(adopted)
+}
 /// Closed canonical Validate replay evidence from one signed remote Proposal.
 #[must_use = "remote Proposal Validate replay evidence has not entered lifecycle admission"]
 pub(in crate::sumeragi) struct PreparedRemoteProposalValidateReplayPreAdmission {
@@ -1352,6 +1558,15 @@ pub(in crate::sumeragi) struct LocalBodyValidateReplayPreAdmissionError {
     _durable_receipt: DurableBodyReceipt,
     _replay_evidence: LocalValidateReplayEvidenceV1,
 }
+/// Ownership-preserving failure while resealing one historical protected-lock Validate.
+#[derive(Debug)]
+pub(in crate::sumeragi) struct ProtectedLockValidateReplayPreAdmissionError {
+    _effect: AdapterEffect,
+    _ownership: RuntimeEffectOwnership,
+    _manifest: wire::PayloadManifest,
+    _durable_receipt: DurableBodyReceipt,
+    _certificate: wire::QuorumCertificate,
+}
 impl RemoteProposalStoreReplayPreAdmissionError {
     /// Return the exact Fetch owner when Store projection does not commit.
     pub(in crate::sumeragi) fn into_fetch(self) -> PreparedRemoteProposalFetchReplayPreAdmission {
@@ -1500,6 +1715,23 @@ impl PreparedAuthenticatedGenesisStoreReplayPreAdmission {
                 self.validates() && self.effect == *effect && self.pending == pending
             })
     }
+    /// Adopt a same-body Store carrier from a strictly later reducer view
+    /// without replacing the authenticated-genesis replay root.
+    pub(in crate::sumeragi) fn project_retry_ownership(
+        &self,
+        incumbent_ownership: &RuntimeEffectOwnership,
+        effect: &AdapterEffect,
+        incoming_ownership: &RuntimeEffectOwnership,
+    ) -> Option<RuntimeEffectOwnership> {
+        self.validates().then_some(())?;
+        project_incumbent_store_retry_ownership(
+            &self.effect,
+            &self.pending,
+            incumbent_ownership,
+            effect,
+            incoming_ownership,
+        )
+    }
     /// Join the exact store-minted BodyFrame without exposing either input.
     #[allow(clippy::result_large_err)]
     pub(in crate::sumeragi) fn bind_durable_body(
@@ -1569,6 +1801,40 @@ impl PreparedAuthenticatedGenesisStoredReplayPreAdmission {
                 self.exactly_matches_retry(&self.store_effect, durable_receipt)
                     && pending == self.store_pending
             })
+    }
+    /// Freeze only the exact physical Store terminal owner before this
+    /// origin-specific replay token advances into Validate admission.
+    pub(in crate::sumeragi) fn seal_store_terminal_retry(
+        &self,
+        durable_receipt: &DurableBodyReceipt,
+        ownership: &RuntimeEffectOwnership,
+    ) -> Option<DurableStoreTerminalRetrySealV1> {
+        self.exactly_retains_owned_store(durable_receipt, ownership)
+            .then_some(())?;
+        DurableStoreTerminalRetrySealV1::seal_exact(
+            &self.store_effect,
+            ownership,
+            durable_receipt,
+        )
+    }
+    /// Adopt a same-body durable Store carrier from a strictly later reducer
+    /// view while the original Store-to-Validate replay root stays sealed.
+    pub(in crate::sumeragi) fn project_retry_ownership(
+        &self,
+        durable_receipt: &DurableBodyReceipt,
+        incumbent_ownership: &RuntimeEffectOwnership,
+        effect: &AdapterEffect,
+        incoming_ownership: &RuntimeEffectOwnership,
+    ) -> Option<RuntimeEffectOwnership> {
+        self.exactly_retains_owned_store(durable_receipt, incumbent_ownership)
+            .then_some(())?;
+        project_incumbent_store_retry_ownership(
+            &self.store_effect,
+            &self.store_pending,
+            incumbent_ownership,
+            effect,
+            incoming_ownership,
+        )
     }
     /// Derive the same-body Validate runtime owner from this exact Store owner.
     pub(in crate::sumeragi) fn project_incumbent_validate_ownership(
@@ -1838,6 +2104,23 @@ impl PreparedRemoteProposalStoreReplayPreAdmission {
                         .exactly_matches_store_pending(effect, &pending)
             })
     }
+    /// Adopt a same-body Store carrier from a strictly later reducer view
+    /// without replacing the signed-Proposal replay root.
+    pub(in crate::sumeragi) fn project_retry_ownership(
+        &self,
+        incumbent_ownership: &RuntimeEffectOwnership,
+        effect: &AdapterEffect,
+        incoming_ownership: &RuntimeEffectOwnership,
+    ) -> Option<RuntimeEffectOwnership> {
+        self.validates().then_some(())?;
+        project_incumbent_store_retry_ownership(
+            &self.effect,
+            &self.pending,
+            incumbent_ownership,
+            effect,
+            incoming_ownership,
+        )
+    }
     /// Join the exact store-minted BodyFrame without exposing either input.
     #[allow(clippy::result_large_err)]
     pub(in crate::sumeragi) fn bind_durable_body(
@@ -1919,6 +2202,40 @@ impl PreparedRemoteProposalStoredReplayPreAdmission {
                 self.exactly_matches_retry(&self.store_effect, durable_receipt)
                     && pending == self.store_pending
             })
+    }
+    /// Freeze only the exact physical Store terminal owner before this
+    /// origin-specific replay token advances into Validate admission.
+    pub(in crate::sumeragi) fn seal_store_terminal_retry(
+        &self,
+        durable_receipt: &DurableBodyReceipt,
+        ownership: &RuntimeEffectOwnership,
+    ) -> Option<DurableStoreTerminalRetrySealV1> {
+        self.exactly_retains_owned_store(durable_receipt, ownership)
+            .then_some(())?;
+        DurableStoreTerminalRetrySealV1::seal_exact(
+            &self.store_effect,
+            ownership,
+            durable_receipt,
+        )
+    }
+    /// Adopt a same-body durable Store carrier from a strictly later reducer
+    /// view while the original Store-to-Validate replay root stays sealed.
+    pub(in crate::sumeragi) fn project_retry_ownership(
+        &self,
+        durable_receipt: &DurableBodyReceipt,
+        incumbent_ownership: &RuntimeEffectOwnership,
+        effect: &AdapterEffect,
+        incoming_ownership: &RuntimeEffectOwnership,
+    ) -> Option<RuntimeEffectOwnership> {
+        self.exactly_retains_owned_store(durable_receipt, incumbent_ownership)
+            .then_some(())?;
+        project_incumbent_store_retry_ownership(
+            &self.store_effect,
+            &self.store_pending,
+            incumbent_ownership,
+            effect,
+            incoming_ownership,
+        )
     }
     /// Derive the only same-body Validate incumbent from the retained Store
     /// owner without releasing the replay token or minting a new causal root.
@@ -2199,6 +2516,82 @@ impl PreparedRemoteProposalValidateReplayPreAdmission {
     }
 }
 impl PreparedLocalBodyValidateReplayPreAdmission {
+    /// Reseal one exact historical protected-lock Validate after its original
+    /// signed-Proposal replay owner has retired.
+    ///
+    /// This admits no Fetch or Store shortcut. The supplied PrepareQC must
+    /// exactly match the runtime candidate statement and durable body family;
+    /// lifecycle admission reauthenticates its full signature and roster.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn seal_exact_protected_lock_validate(
+        effect: AdapterEffect,
+        ownership: RuntimeEffectOwnership,
+        manifest: wire::PayloadManifest,
+        durable_receipt: DurableBodyReceipt,
+        certificate: wire::QuorumCertificate,
+    ) -> Result<Self, ProtectedLockValidateReplayPreAdmissionError> {
+        let failed = |effect, ownership, manifest, durable_receipt, certificate| {
+            ProtectedLockValidateReplayPreAdmissionError {
+                _effect: effect,
+                _ownership: ownership,
+                _manifest: manifest,
+                _durable_receipt: durable_receipt,
+                _certificate: certificate,
+            }
+        };
+        let Ok(pending) = ownership.exact_pending_adapter_effect_binding(&effect) else {
+            return Err(failed(
+                effect,
+                ownership,
+                manifest,
+                durable_receipt,
+                certificate,
+            ));
+        };
+        let Ok(replay_pending) = ownership.exact_pending_adapter_effect_binding(&effect) else {
+            unreachable!("an unchanged exact ownership binding projects deterministically")
+        };
+        let Some(replay_evidence) =
+            LocalValidateReplayEvidenceV1::from_exact_protected_lock_validate(
+                &effect,
+                &manifest,
+                &durable_receipt,
+                &certificate,
+                replay_pending,
+            )
+        else {
+            return Err(failed(
+                effect,
+                ownership,
+                manifest,
+                durable_receipt,
+                certificate,
+            ));
+        };
+        let prepared = Self {
+            effect,
+            pending,
+            durable_receipt,
+            replay_evidence,
+        };
+        if !prepared.validates() {
+            let Self {
+                effect,
+                pending: _,
+                durable_receipt,
+                replay_evidence: _,
+            } = prepared;
+            return Err(failed(
+                effect,
+                ownership,
+                manifest,
+                durable_receipt,
+                certificate,
+            ));
+        }
+        Ok(prepared)
+    }
+
     /// Consume the exact local Validate owner and its Store-projected replay seal.
     #[allow(clippy::result_large_err)]
     pub(in crate::sumeragi) fn seal_exact_validate(
@@ -2610,7 +3003,7 @@ impl PendingDurableValidateAdmissionV1 {
     #[cfg(test)]
     /// Check the retained origin class and exact Validate effect without
     /// exposing either production owner.
-    pub(super) fn exactly_retains_for_test(
+    pub(in crate::sumeragi) fn exactly_retains_for_test(
         &self,
         effect: &AdapterEffect,
         remote_proposal: bool,

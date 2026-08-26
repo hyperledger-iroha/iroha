@@ -329,14 +329,14 @@ pub(super) fn run_vega_stage_v1(
             refresh_vega_device_authentication_digest_v1(&mut wrong_issuer_key, genesis_hash)?;
             let mut wrong_network = statement.clone();
             wrong_network.context.network_id = release_network_id_from_genesis_hash([0xa8; 32]);
-            refresh_vega_device_authentication_digest_v1(&mut wrong_network, genesis_hash)?;
             let mut wrong_action_index = statement.clone();
             wrong_action_index.context.action_index = wrong_action_index
                 .context
                 .action_index
                 .checked_add(1)
                 .ok_or(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
-            refresh_vega_device_authentication_digest_v1(&mut wrong_action_index, genesis_hash)?;
+            // These are binding mutations, so they deliberately retain the canonical statement's
+            // H_dev. Re-derivation correctly refuses the wrong network and sole-action index.
             for issuer_mutation in [
                 &stale_epoch,
                 &wrong_issuer,

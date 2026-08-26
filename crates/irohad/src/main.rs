@@ -813,6 +813,16 @@ pub struct StartupArgs {
     #[arg(long, value_name = "HEX", requires = "config")]
     pub config_blake3: Option<String>,
 }
+
+#[cfg(feature = "test-network-parliament-signers")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
+enum TestNetworkParliamentBeaconSignerMode {
+    #[default]
+    Valid,
+    Absent,
+    Invalid,
+}
+
 /// Complete command-line arguments for the Iroha server.
 #[derive(Parser, Debug)]
 #[command(
@@ -851,6 +861,14 @@ pub struct Args {
     /// Enable Sora Nexus feature profile (`SoraFS`, `SoraNet` handshake, multi-lane consensus)
     #[arg(long, env = "IROHA_SORA_PROFILE")]
     pub sora: bool,
+    #[cfg(feature = "test-network-parliament-signers")]
+    #[arg(
+        long = "test-network-parliament-beacon-signer-mode",
+        value_enum,
+        default_value_t,
+        hide = true
+    )]
+    test_network_parliament_beacon_signer_mode: TestNetworkParliamentBeaconSignerMode,
     /// Override FASTPQ prover execution mode (`cpu` or `gpu`).
     #[arg(
         long = "fastpq-execution-mode",
@@ -6344,9 +6362,7 @@ fn snapshot_failure_allows_empty_state_fallback(
     provisional_imported_prefix: bool,
     emergency_fast: bool,
 ) -> bool {
-    !emergency_fast
-        && !provisional_imported_prefix
-        && snapshot_read_error_is_recoverable(error)
+    !emergency_fast && !provisional_imported_prefix && snapshot_read_error_is_recoverable(error)
 }
 fn preflight_empty_state_snapshot_fallback(
     kura: &Kura,
@@ -8115,8 +8131,9 @@ impl Iroha {
         };
         if config.kura.init_mode == InitMode::Fast {
             queue.enter_emergency_fast_startup().map_err(|err| {
-                Report::new(StartError::InitKura)
-                    .attach(format!("failed to quarantine the emergency Fast queue: {err}"))
+                Report::new(StartError::InitKura).attach(format!(
+                    "failed to quarantine the emergency Fast queue: {err}"
+                ))
             })?;
             iroha_logger::warn!(
                 "emergency Fast startup left queue journals untouched and disabled transaction admission and proposal selection until a Strict restart"
@@ -8182,8 +8199,8 @@ impl Iroha {
         let compliance_policy_digest = state
             .lane_compliance_engine()
             .map(|engine| engine.consensus_policy_digest());
-        let lane_manifest_policy_digest = (!emergency_fast)
-            .then(|| state.lane_manifests.read().consensus_policy_digest());
+        let lane_manifest_policy_digest =
+            (!emergency_fast).then(|| state.lane_manifests.read().consensus_policy_digest());
         let config_caps = if emergency_fast {
             build_consensus_config_caps(
                 &config.nexus,
@@ -8331,7 +8348,10 @@ impl Iroha {
             .manifest_json
             .as_ref()
             .map(WithOrigin::resolve_relative_path);
-        if !emergency_fast && !snapshot_bootstrap_active && let Some(json_path) = cfg_manifest {
+        if !emergency_fast
+            && !snapshot_bootstrap_active
+            && let Some(json_path) = cfg_manifest
+        {
             let manifest = read_genesis_manifest(&json_path)?;
             if let Err(err) = ensure_manifest_crypto_matches(&manifest, &config) {
                 return Err(Report::new(StartError::InitKura).attach(format!(
@@ -9098,8 +9118,7 @@ impl Iroha {
                 } else {
                     genesis
                 };
-            let local_consensus_peer =
-                config.common.trusted_peers.value().myself.id().clone();
+            let local_consensus_peer = config.common.trusted_peers.value().myself.id().clone();
             match validate_threshold_signer_startup_readiness_v1(
                 &state,
                 &local_consensus_peer,
@@ -9190,6 +9209,7 @@ impl Iroha {
             supervisor.monitor(child);
             tx_gossiper
         };
+<<<<<<< HEAD
         if !emergency_fast {
             let signing_key = config.snapshot.signing_private_key.as_ref().map_or_else(
                 || config.common.key_pair.clone(),
@@ -9200,6 +9220,13 @@ impl Iroha {
             {
                 supervisor.monitor(snapshot_maker.start(supervisor.shutdown_signal()));
             }
+=======
+        if !emergency_fast
+            && let Some(snapshot_maker) =
+                SnapshotMaker::from_config(&config.snapshot, Arc::clone(&state), signing_key)
+        {
+            supervisor.monitor(snapshot_maker.start(supervisor.shutdown_signal()));
+>>>>>>> origin/optimizations
         }
         let sorafs_storage_config = if emergency_fast {
             sorafs_node::config::StorageConfig::builder()
@@ -9354,32 +9381,32 @@ impl Iroha {
                 config.torii.sorafs_gateway.compliance.as_ref(),
                 sorafs_gateway_compliance_feed_transport.as_ref(),
             ) {
-            (Some(_), None) => {
-                return Err(Report::new(StartError::StartTorii).attach(
+                (Some(_), None) => {
+                    return Err(Report::new(StartError::StartTorii).attach(
                     "enabled SoraFS gateway compliance requires the exact deployment-owned authenticated feed transport",
                 ));
-            }
-            (None, Some(_)) => {
-                return Err(Report::new(StartError::StartTorii).attach(
-                    "disabled SoraFS gateway compliance rejects an unexpected feed transport",
-                ));
-            }
+                }
+                (None, Some(_)) => {
+                    return Err(Report::new(StartError::StartTorii).attach(
+                        "disabled SoraFS gateway compliance rejects an unexpected feed transport",
+                    ));
+                }
                 (Some(_), Some(_)) | (None, None) => {}
             }
             match (
                 config.torii.sorafs_gateway.acme.provider.as_ref(),
                 sorafs_gateway_acme_client.as_ref(),
             ) {
-            (Some(_), None) => {
-                return Err(Report::new(StartError::StartTorii).attach(
+                (Some(_), None) => {
+                    return Err(Report::new(StartError::StartTorii).attach(
                     "configured SoraFS gateway ACME automation requires the exact deployment-owned ACME client",
                 ));
-            }
-            (None, Some(_)) => {
-                return Err(Report::new(StartError::StartTorii).attach(
-                    "unconfigured SoraFS gateway ACME automation rejects an unexpected client",
-                ));
-            }
+                }
+                (None, Some(_)) => {
+                    return Err(Report::new(StartError::StartTorii).attach(
+                        "unconfigured SoraFS gateway ACME automation rejects an unexpected client",
+                    ));
+                }
                 (Some(_), Some(_)) | (None, None) => {}
             }
         }
@@ -9908,25 +9935,23 @@ impl Iroha {
                 .with_local_host_identity(local_validator_account_id, local_peer_id),
                 Arc::clone(&state),
             )
-            .with_sorafs_node(
-                sorafs_node::NodeHandle::clone(
-                    sorafs_node
-                        .as_ref()
-                        .expect("Soracloud is disabled during emergency Fast startup"),
-                ),
-            )
+            .with_sorafs_node(sorafs_node::NodeHandle::clone(
+                sorafs_node
+                    .as_ref()
+                    .expect("Soracloud is disabled during emergency Fast startup"),
+            ))
             .with_remote_stream_token_operator_from_config(&config);
             let runtime_manager = if let Some(store) = soracloud_operator_preseed_store {
                 runtime_manager.with_operator_preseed_store(store)
             } else {
                 runtime_manager
             };
-            let runtime_manager =
-                if let Some(provider) = soracloud_hf_inference_credential_provider {
-                    runtime_manager.with_hf_inference_credential_provider(provider)
-                } else {
-                    runtime_manager
-                };
+            let runtime_manager = if let Some(provider) = soracloud_hf_inference_credential_provider
+            {
+                runtime_manager.with_hf_inference_credential_provider(provider)
+            } else {
+                runtime_manager
+            };
             let runtime_manager = if let Some(signer) = soracloud_runtime_mutation_signer {
                 let runtime_mutation_sink = QueuedSoracloudRuntimeMutationSink::new(
                     Arc::clone(&queue),
@@ -9999,8 +10024,9 @@ impl Iroha {
             Report::new(StartError::StartTorii)
                 .attach(format!("failed to derive Torii receipt signer: {err}"))
         })?;
-        let (vpn_relay_trust, vpn_operator_signer) =
-            if !emergency_fast && config.network.soranet_vpn.enabled {
+        let (vpn_relay_trust, vpn_operator_signer) = if !emergency_fast
+            && config.network.soranet_vpn.enabled
+        {
             let vpn = &config.network.soranet_vpn;
             let operator_signer = vpn.operator_key_pair.clone().ok_or_else(|| {
                 Report::new(StartError::StartTorii)
@@ -10045,9 +10071,9 @@ impl Iroha {
             )
             .map_err(|error| Report::new(StartError::StartTorii).attach(error))?;
             (Some(trust), Some(operator_signer))
-            } else {
-                (None, None)
-            };
+        } else {
+            (None, None)
+        };
         let musubi_publication_context = sorafs_node.as_ref().map(|sorafs_node| {
             musubi_publication_service::MusubiPublicationPrivateServiceContextV1::new(
                 NetworkId::from_genesis_hash(config.genesis.expected_hash),
@@ -12320,8 +12346,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             "Strict startup must reject an incomplete enabled runtime"
         );
         config.kura.init_mode = InitMode::Fast;
-        validate_startup_config(&config)
-            .expect("Fast disables SoraFS before runtime construction");
+        validate_startup_config(&config).expect("Fast disables SoraFS before runtime construction");
         validate_startup_config_offline(&config)
             .expect("Fast must not resolve disabled runtime providers");
     }
@@ -13638,37 +13663,52 @@ fn run_main_with_config_guard(
         if emergency_fast {
             runtime_deps
         } else {
-        if runtime_deps.sumeragi_global_beacon_partial_signer.is_some()
-            || runtime_deps.parliament_tle_partial_release_signer.is_some()
-        {
-            return Err(Report::new(MainError::Config)
-                .attach("the test-network Parliament signers reject a second injected provider"));
-        }
-        let ordered_roster = filter_validators_from_trusted(config.common.trusted_peers.value());
-        let test_network_id = NetworkId::from_genesis_hash(config.genesis.expected_hash);
-        let beacon_signer = iroha_core::beacon::parliament_test_network_signer::
-            TestNetworkParliamentBeaconPartialSignerV1::try_new(
-                test_network_id,
-                ordered_roster.clone(),
-                &config.common.peer.id,
-            )
-            .map_err(|_| Report::new(MainError::Config))
-            .attach(
-                "failed to bind the feature-isolated Parliament beacon signer to the exact local validator seat",
-            )?;
-        let tle_signer = iroha_core::tle_release::parliament_test_network_signer::
-            TestNetworkParliamentTlePartialReleaseSignerV1::try_new(
-                test_network_id,
-                ordered_roster,
-                &config.common.peer.id,
-            )
-            .map_err(|_| Report::new(MainError::Config))
-            .attach(
-                "failed to bind the feature-isolated Parliament TLE signer to the exact local validator seat",
-            )?;
-        runtime_deps
-            .with_sumeragi_global_beacon_partial_signer(Arc::new(beacon_signer))
-            .with_parliament_tle_partial_release_signer(Arc::new(tle_signer))
+            if runtime_deps.sumeragi_global_beacon_partial_signer.is_some()
+                || runtime_deps.parliament_tle_partial_release_signer.is_some()
+            {
+                return Err(Report::new(MainError::Config).attach(
+                    "the test-network Parliament signers reject a second injected provider",
+                ));
+            }
+            let ordered_roster =
+                filter_validators_from_trusted(config.common.trusted_peers.value());
+            let test_network_id = NetworkId::from_genesis_hash(config.genesis.expected_hash);
+            let beacon_signer = iroha_core::beacon::parliament_test_network_signer::
+                TestNetworkParliamentBeaconPartialSignerV1::try_new(
+                    test_network_id,
+                    ordered_roster.clone(),
+                    &config.common.peer.id,
+                )
+                .map_err(|_| Report::new(MainError::Config))
+                .attach(
+                    "failed to bind the feature-isolated Parliament beacon signer to the exact local validator seat",
+                )?;
+            let beacon_signer: Option<
+                Arc<dyn iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1>,
+            > = match args.test_network_parliament_beacon_signer_mode {
+                TestNetworkParliamentBeaconSignerMode::Valid => Some(Arc::new(beacon_signer)),
+                TestNetworkParliamentBeaconSignerMode::Absent => None,
+                TestNetworkParliamentBeaconSignerMode::Invalid => {
+                    Some(Arc::new(beacon_signer.with_deliberately_invalid_outbound()))
+                }
+            };
+            let tle_signer = iroha_core::tle_release::parliament_test_network_signer::
+                TestNetworkParliamentTlePartialReleaseSignerV1::try_new(
+                    test_network_id,
+                    ordered_roster,
+                    &config.common.peer.id,
+                )
+                .map_err(|_| Report::new(MainError::Config))
+                .attach(
+                    "failed to bind the feature-isolated Parliament TLE signer to the exact local validator seat",
+                )?;
+            let runtime_deps =
+                runtime_deps.with_parliament_tle_partial_release_signer(Arc::new(tle_signer));
+            if let Some(beacon_signer) = beacon_signer {
+                runtime_deps.with_sumeragi_global_beacon_partial_signer(beacon_signer)
+            } else {
+                runtime_deps
+            }
         }
     };
     let musubi_publication_factory = if emergency_fast {
@@ -15472,9 +15512,10 @@ mod tests {
             .0;
         assert!(catalog_setup.contains("if emergency_fast"));
         assert!(catalog_setup.contains("KagemushaReleaseCatalogV4::empty()"));
-        assert!(catalog_setup.contains(
-            "install_configured_kagemusha_release_catalog(&mut state, &config)"
-        ));
+        assert!(
+            catalog_setup
+                .contains("install_configured_kagemusha_release_catalog(&mut state, &config)")
+        );
 
         let confidential_setup = startup
             .split_once(") = if emergency_fast {")
@@ -15483,7 +15524,14 @@ mod tests {
             .split_once("} else {")
             .expect("Strict confidential-feature branch");
         assert!(confidential_setup.0.contains("state.zk_snapshot()"));
-        assert!(confidential_setup.0.contains("state.sccp_registry_snapshot()"));
+        assert!(
+            confidential_setup
+                .0
+                .contains("state.sccp_policy_hash_snapshot()")
+        );
+        assert!(!confidential_setup
+            .0
+            .contains("state.sccp_registry_snapshot()"));
         assert!(!confidential_setup.0.contains("state.view()"));
         assert!(confidential_setup.1.contains("let view = state.view()"));
         assert!(
@@ -15523,16 +15571,19 @@ mod tests {
             .expect("runtime-dependency startup entry")
             .1;
 
-        assert!(startup.contains(
-            "if !emergency_fast && !snapshot_bootstrap_active && block_count.0 > 0"
-        ));
-        assert!(startup.contains(
-            "if !emergency_fast\n            && state.committed_height() > 0"
-        ));
+        assert!(
+            startup
+                .contains("if !emergency_fast && !snapshot_bootstrap_active && block_count.0 > 0")
+        );
+        assert!(
+            startup.contains("if !emergency_fast\n            && state.committed_height() > 0")
+        );
         assert!(startup.contains("if !emergency_fast && !snapshot_bootstrap_active {\n            verify_genesis_metadata("));
-        assert!(startup.contains(
-            "if !emergency_fast && !snapshot_bootstrap_active && let Some(json_path)"
-        ));
+        assert!(
+            startup.contains(
+                "if !emergency_fast && !snapshot_bootstrap_active && let Some(json_path)"
+            )
+        );
         assert!(startup.contains(
             "if !emergency_fast\n            && !snapshot_bootstrap_active\n            && let Some(genesis_block)"
         ));
@@ -15564,6 +15615,7 @@ mod tests {
         assert!(compact_source.contains(
             "letlive_query_store=ifemergency_fast{live_query_store.into_inert_handle()}else{let(handle,child)=live_query_store.start();supervisor.monitor(child);handle};"
         ));
+<<<<<<< HEAD
         assert!(compact_source.contains(
             "lettelemetry_profile=if!emergency_fast&&config.telemetry_enabled{config.telemetry_profile}else{iroha_config::parameters::actual::TelemetryProfile::Disabled};"
         ));
@@ -15606,6 +15658,11 @@ mod tests {
         assert!(compact_source.contains(
             "letmutacceleration=config.accel.clone();acceleration.enable_simd=false;acceleration.enable_metal=false;acceleration.enable_cuda=false;acceleration.max_gpus=Some(0);apply_ivm_acceleration_config(&acceleration);rs16::set_simd_enabled(false);"
         ));
+=======
+        assert!(
+            compact_source.contains("!emergency_fast&&telemetry_capabilities.metrics_enabled(),")
+        );
+>>>>>>> origin/optimizations
         assert!(compact_source.contains(
             "if!emergency_fast{iroha_core::time::start(network.clone(),iroha_core::time::Params::from(&config.nts));}"
         ));
@@ -15646,8 +15703,9 @@ mod tests {
             .split_once("if !emergency_fast")
             .expect("snapshot-maker boundary")
             .0;
-        assert!(transaction_gossip
-            .contains("TransactionGossiperHandle::emergency_fast_disabled()"));
+        assert!(
+            transaction_gossip.contains("TransactionGossiperHandle::emergency_fast_disabled()")
+        );
         assert!(transaction_gossip.contains("TransactionGossiper::from_config"));
 
         let compact_source: String = include_str!("main.rs")
@@ -15658,9 +15716,10 @@ mod tests {
             "ifshared.emergency_fast{run_emergency_fast_network_relay(shared).await;return;}"
         ));
         assert!(compact_source.contains("spawn_network_relay_worker(&shared,&sumeragi_ingress,"));
-        assert!(compact_source.contains(
-            "lettorii=ifemergency_fast{torii}else{torii.with_p2p(network.clone())};"
-        ));
+        assert!(
+            compact_source
+                .contains("lettorii=ifemergency_fast{torii}else{torii.with_p2p(network.clone())};")
+        );
 
         let fast_relay = include_str!("main.rs")
             .split_once("async fn run_emergency_fast_network_relay")
@@ -19274,6 +19333,9 @@ mod tests {
                 terminal_colors: false,
                 language: None,
                 sora: false,
+                #[cfg(feature = "test-network-parliament-signers")]
+                test_network_parliament_beacon_signer_mode:
+                    TestNetworkParliamentBeaconSignerMode::Valid,
                 fastpq_execution_mode: None,
                 fastpq_poseidon_mode: None,
                 fastpq_device_class: None,

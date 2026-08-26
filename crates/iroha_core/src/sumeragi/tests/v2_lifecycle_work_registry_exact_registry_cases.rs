@@ -339,6 +339,9 @@ crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
     remote_proposal_replay_pre_admission_is_closed_exact_and_live
 );
 crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
+    stored_replay_store_coalescing_and_cleanup_are_owner_closed
+);
+crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
     invalid_body_replay_pre_admission_is_closed_exact_and_lifecycle_owned
 );
 crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(

@@ -2653,6 +2653,7 @@ fn certified_view_transition_resets_fast_path_before_new_set_a_fanout() {
         .entered_view(
             new_tag,
             timeout_certificate_at_view(&service, old_round.view),
+            None,
         )
         .expect("install certified successor view");
     assert!(service.fast_path_proposals.is_empty());

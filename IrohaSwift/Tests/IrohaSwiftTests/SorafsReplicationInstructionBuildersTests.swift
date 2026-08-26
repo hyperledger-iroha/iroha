@@ -3,7 +3,7 @@ import XCTest
 @testable import IrohaSwift
 
 final class SorafsReplicationInstructionBuildersTests: XCTestCase {
-    private let orderId = String(repeating: "ab", count: 32)
+    private let orderId = String(repeating: "2b", count: 32)
     private let providerId = String(repeating: "10", count: 32)
     private let providerOwner =
         "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"

@@ -1663,6 +1663,7 @@ fn retiring_the_sole_certificate_does_not_fake_completion_headroom() {
         .pop_pacemaker_progress_with_ownership(
             |_| true,
             |command| command.is_certified_fence_escape(),
+            None,
         )
         .expect("the certified priority seam remains exact")
         .expect("the retained CommitQC is selectable");

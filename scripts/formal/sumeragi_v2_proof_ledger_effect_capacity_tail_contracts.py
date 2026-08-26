@@ -1,5 +1,10 @@
 # Executed lexically in check_sumeragi_v2_proof_ledger.py.
 
+_RETAINED_EFFECT_PACEMAKER_PROGRESS_REGRESSION_SHA256 = (
+    "316bd1d4d3d9771f3566abaf6e77f07ad80d1d74fb1f5186875a4a3d30d1b88c"
+)
+
+
 def _effect_capacity_terminal_retirement_source_fidelity_errors(
     effects_path: Path,
     source: str,
@@ -643,6 +648,127 @@ fn retained_dispatch_allows_network_ingress(
         "retained dispatch transport completion and certified fence-escape policy",
         errors,
     )
+
+    retained_debt_regression_name = (
+        "retained_effect_debt_admits_only_pacemaker_progress_leader_wires"
+    )
+    retained_debt_regression = _require_rust_item(
+        effects_path,
+        source,
+        retained_debt_regression_name,
+        errors,
+    )
+    _require_rust_item_context(
+        effects_path,
+        retained_debt_regression,
+        (
+            (
+                "#",
+                "[",
+                "cfg",
+                "(",
+                "test",
+                ")",
+                "]",
+                "mod",
+                "tests",
+            ),
+        ),
+        "retained-effect pacemaker Progress cross-layer regression",
+        errors,
+        expected_attributes=("#[test]",),
+    )
+    _require_rust_item_token_sha256(
+        effects_path,
+        retained_debt_regression,
+        _RETAINED_EFFECT_PACEMAKER_PROGRESS_REGRESSION_SHA256,
+        "retained-effect pacemaker Progress cross-layer regression",
+        errors,
+    )
+    for required, description in (
+        (
+            """
+assert!(executor.retained_effect_batch.is_some());
+executor.runtime.protected_commit = Some((
+    fixture.manifest.round,
+    fixture.manifest.subject,
+    fixture_execution_commitment(),
+));
+executor.runtime.protected_prepare = Some((
+    fixture.manifest.round,
+    fixture.manifest.subject,
+    fixture_execution_commitment(),
+));
+""",
+            "retained debt must install the exact protected Commit and locked-reproposal Prepare authorities",
+        ),
+        (
+            """
+let inbound = crate::sumeragi::fair_v2_ingress_admit_for_test(
+    InboundBlockMessage::from_authenticated_peer(
+        BlockMessage::V2(message.clone()),
+        sender.clone(),
+    ),
+);
+v2_ingress_head_can_drain(&inbound, executor, None)
+""",
+            "the effects regression must cross fair ingress and the executor-aware drain gate",
+        ),
+        (
+            """
+let mut prepare_vote = vote(&fixture);
+prepare_vote.signature = vec![0x73];
+let prepare_vote =
+    wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(prepare_vote));
+let mut mismatched_prepare_vote = vote(&fixture);
+mismatched_prepare_vote.subject.block_hash =
+    HashOf::from_untyped_unchecked(Hash::new(b"effects retained-debt mismatched Prepare"));
+mismatched_prepare_vote.signature = vec![0x76];
+let mismatched_prepare_vote = wire::ConsensusMessageV2::new(
+    wire::ConsensusMessageV2Payload::Vote(mismatched_prepare_vote),
+);
+""",
+            "the negative Prepare witness must differ from the protected locked-reproposal subject",
+        ),
+        (
+            """
+assert!(
+    can_drain(executor, &prepare_vote),
+    "the exact current locked-reproposal PrepareVote reaches Progress across {debt} debt"
+);
+""",
+            "the protected locked-reproposal Prepare must be admitted under effect debt",
+        ),
+        (
+            """
+assert!(
+    !can_drain(executor, &mismatched_prepare_vote),
+    "an unrelated PrepareVote remains ordinary ingress across {debt} debt"
+);
+""",
+            "a mismatched Prepare must remain behind effect debt",
+        ),
+        (
+            """
+assert_matrix(&executor, "retained");
+assert!(executor.retained_effect_batch.is_some());
+executor
+    .park_retained_effect_batch()
+    .expect("park the exact ordinary suffix behind protected Progress");
+assert!(executor.retained_effect_batch.is_none());
+assert!(executor.parked_effect_batch.is_some());
+assert_matrix(&executor, "parked");
+""",
+            "the exact admission matrix must hold for retained and parked effect debt",
+        ),
+    ):
+        _require_rust_token_sequence(
+            effects_path,
+            retained_debt_regression,
+            required,
+            description,
+            errors,
+        )
 
     for item_name, required, description in (
         (

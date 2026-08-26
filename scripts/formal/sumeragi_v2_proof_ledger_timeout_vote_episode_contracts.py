@@ -72,7 +72,24 @@ def _timeout_vote_episode_source_fidelity_errors(
         ),
     )
     runtime_test_context = (
-        ("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),
+        (
+            "#",
+            "[",
+            "cfg",
+            "(",
+            "test",
+            ")",
+            "]",
+            "pub",
+            "(",
+            "in",
+            "crate",
+            "::",
+            "sumeragi",
+            ")",
+            "mod",
+            "tests",
+        ),
     )
     items: dict[str, RustItem | None] = {}
 
@@ -192,8 +209,12 @@ def _timeout_vote_episode_source_fidelity_errors(
             "runtime-owned timeout-vote candidate projection",
         ),
         (
+            "timeout_vote_origin_binding",
+            "timeout-vote token and authenticated signer-origin classifier",
+        ),
+        (
             "timeout_vote_recovery_candidate",
-            "timeout-vote signer, token, and cut classifier",
+            "timeout-vote authenticated-origin result and cut classifier",
         ),
         (
             "timeout_vote_episode_admission_plan",
@@ -230,6 +251,7 @@ def _timeout_vote_episode_source_fidelity_errors(
         "runtime::timeout_recovery_episode_allows_clock_blockers",
         "runtime::timeout_vote_recovery_candidate_from_fair",
         "runtime::timeout_vote_recovery_candidate_from_runtime",
+        "runtime::timeout_vote_origin_binding",
         "runtime::timeout_vote_recovery_candidate",
         "runtime::timeout_vote_episode_admission_plan",
         "runtime::enqueue_network_with_ingress_ownership",
@@ -321,10 +343,14 @@ self.try_recv_if_at_checked_classified(
         queue_gate,
         """
 let timeout_control_dependency = leader_wire_barrier.is_some_and(|owner| {
-    fair_v2_ingress_timeout_control_advances_owner(&owner.token, &entry.inbound)
+    fair_v2_ingress_timeout_control_advances_owner(
+        &owner.token,
+        entry.leader_wire_token.as_ref(),
+        &entry.inbound,
+    )
 });
 """,
-        "TimeoutVote dependency classification must derive solely from the current durable owner",
+        "TimeoutVote dependency classification must derive from the current durable owner and the candidate's exact leader-wire token",
         errors,
     )
     _require_rust_token_sequence(
@@ -555,24 +581,74 @@ match (token, physical) {
         "runtime candidate projection must reject partial leader-wire ownership",
         errors,
     )
+    origin_binding = items["runtime::timeout_vote_origin_binding"]
+    for sequence, description in (
+        (
+            """
+let roster = context
+    .roster
+    .iter()
+    .map(|entry| entry.validator.clone())
+    .collect::<BTreeSet<_>>();
+if !token.validate_exact(
+    context.id(),
+    context.height,
+    &roster,
+    context.da_layout.max_chunk_count,
+) || token.identity.phase != FairV2IngressLeaderWirePhase::TimeoutVote
+    || token.identity.context_id != vote.round.context_id
+    || token.identity.height != vote.round.height
+    || token.identity.view != vote.round.view
+    || token.identity.subject_hash != iroha_crypto::Hash::new([])
+{
+    return Err(EnqueueError::FailClosed);
+}
+""",
+            "TimeoutVote origin classification must first validate the complete local token, including its slot/origin equality, against the frozen roster and round",
+        ),
+        (
+            """
+let Ok(signer_index) = usize::try_from(vote.signer) else {
+    return Ok(RuntimeTimeoutVoteOriginBinding::UnauthenticatedSignerIndex);
+};
+let Some(signer) = context.roster.get(signer_index) else {
+    return Ok(RuntimeTimeoutVoteOriginBinding::UnauthenticatedSignerIndex);
+};
+""",
+            "TimeoutVote signer resolution must remain a bounded frozen-roster lookup with an explicit unauthenticated-index result",
+        ),
+        (
+            """
+if token.identity.semantic_origin != signer.validator {
+    return Ok(RuntimeTimeoutVoteOriginBinding::Mismatch {
+        signer: vote.signer,
+        semantic_origin: token.identity.semantic_origin.clone(),
+    });
+}
+Ok(RuntimeTimeoutVoteOriginBinding::Exact)
+""",
+            "the authenticated TimeoutVote signer must exactly equal the already-validated token identity and source slot",
+        ),
+    ):
+        _require_rust_token_sequence(
+            runtime_path,
+            origin_binding,
+            sequence,
+            description,
+            errors,
+        )
+
     candidate = items["runtime::timeout_vote_recovery_candidate"]
     for sequence, description in (
         (
             """
-let signer_index = usize::try_from(vote.signer).map_err(|_| EnqueueError::FailClosed)?;
-let signer = context
-    .roster
-    .get(signer_index)
-    .ok_or(EnqueueError::FailClosed)?;
+if self.timeout_vote_origin_binding(payload, Some(token))?
+    != RuntimeTimeoutVoteOriginBinding::Exact
+{
+    return Err(EnqueueError::FailClosed);
+}
 """,
-            "TimeoutVote signer must resolve through a bounded frozen-roster lookup",
-        ),
-        (
-            """
-|| token.identity.semantic_origin != signer.validator
-|| token.slot.semantic_origin != signer.validator
-""",
-            "the token identity and source slot must equal the resolved TimeoutVote signer",
+            "the finite recovery episode must consume only an exact authenticated TimeoutVote origin binding",
         ),
         (
             """

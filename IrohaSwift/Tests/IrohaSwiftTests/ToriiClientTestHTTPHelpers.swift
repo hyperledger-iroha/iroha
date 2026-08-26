@@ -49,10 +49,10 @@ func toriiClientTestConnectSessionResponse(sid: String,
                                            appPublicKey: String,
                                            nonce: String,
                                            node: String) -> ToriiClientTestConnectResponse {
-    let tokenApp = String(repeating: "A", count: 43)
-    let tokenWallet = String(repeating: "B", count: 43)
-    let tokenManagement = String(repeating: "C", count: 43)
-    let tokenRelay = String(repeating: "D", count: 43)
+    let tokenApp = toriiClientTestBase64URL(Data(repeating: 0xA1, count: 32))
+    let tokenWallet = toriiClientTestBase64URL(Data(repeating: 0xB2, count: 32))
+    let tokenManagement = toriiClientTestBase64URL(Data(repeating: 0xC3, count: 32))
+    let tokenRelay = toriiClientTestBase64URL(Data(repeating: 0xD4, count: 32))
     func uri(role: String, token: String) -> String {
         var components = URLComponents()
         components.scheme = "iroha"

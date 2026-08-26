@@ -1784,6 +1784,21 @@ impl ProductionLifecycleOwnerV1 {
             }
         };
         let (tag, manifest) = execution.adapter_preview_inputs();
+        let retry_marker = match executor
+            .prepare_published_lifecycle_store_retry_marker(execution.durable_body_receipt())
+        {
+            Ok(marker) => marker,
+            Err(error) => {
+                iroha_logger::error!(
+                    ?error,
+                    ordinal,
+                    "certified Fetch-to-Store retry marker preflight failed"
+                );
+                drop(execution);
+                assert!(self.coordinator.rollback_unpublished_turn(&lease));
+                return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
+            }
+        };
         let adapter = match executor.prepare_certified_fetch_store_adapter(tag, manifest) {
             Ok(crate::sumeragi::v2::CertifiedFetchStoreAdapterPreparationV1::Applied(adapter)) => {
                 adapter
@@ -1844,6 +1859,21 @@ impl ProductionLifecycleOwnerV1 {
                 return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
             }
         };
+        let retry_marker = match retry_marker
+            .bind_store_successor(successor.store_effect(), successor.pending_effect_binding())
+        {
+            Ok(marker) => marker,
+            Err(error) => {
+                iroha_logger::error!(
+                    %error,
+                    ordinal,
+                    "certified Fetch-to-Store retry marker sealing failed"
+                );
+                drop(successor);
+                assert!(self.coordinator.rollback_unpublished_turn(&lease));
+                return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
+            }
+        };
         let transition = match self.coordinator.prepare_sealed_fetch_store_transition(
             &lease,
             &self.verified,
@@ -1876,6 +1906,7 @@ impl ProductionLifecycleOwnerV1 {
             return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
         }
         transition.commit_after_publication();
+        executor.commit_published_lifecycle_store_retry_marker(retry_marker);
         operation.complete();
         Ok(ProductionCompletionDispatchV1::BodyStageAdvanced {
             parent_ordinal: ordinal,

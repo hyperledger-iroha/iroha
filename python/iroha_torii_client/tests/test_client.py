@@ -3634,6 +3634,55 @@ def test_mock_server_advertises_current_data_model_version() -> None:
         server.stop()
 
 
+def test_mock_server_pipeline_receipt_keeps_explicit_signed_hash_slot() -> None:
+    server = ToriiMockServer().start()
+    try:
+        base_url = server.base_url.rstrip("/")
+        transaction_hash = "a" * 64
+        config = requests.post(
+            f"{base_url}/__mock__/pipeline/config",
+            json={
+                "hash": transaction_hash,
+                "statuses": [{"kind": "Rejected"}],
+            },
+            timeout=5.0,
+        )
+        config.raise_for_status()
+        response = requests.post(
+            f"{base_url}/v1/pipeline/transactions",
+            data=b"signed-transaction",
+            timeout=5.0,
+        )
+        response.raise_for_status()
+
+        payload = response.json()["payload"]
+        assert payload["entrypoint_hash"] == transaction_hash
+        assert "signed_transaction_hash" in payload
+        assert payload["signed_transaction_hash"] is None
+
+        status = requests.get(
+            f"{base_url}/v1/pipeline/transactions/status",
+            params={"hash": transaction_hash},
+            timeout=5.0,
+        )
+        status.raise_for_status()
+        assert status.json() == {
+            "hash": transaction_hash,
+            "status": {"kind": "Rejected"},
+            "scope": "global",
+            "resolved_from": "state",
+        }
+
+        retired = requests.post(
+            f"{base_url}/__mock__/pipeline/config",
+            json={"statuses": [{"kind": "Rejected", "summary": "retired"}]},
+            timeout=5.0,
+        )
+        assert retired.status_code == 400
+    finally:
+        server.stop()
+
+
 def test_mock_server_seeds_sumeragi_status_snapshot() -> None:
     server = ToriiMockServer().start()
     try:

@@ -510,6 +510,9 @@ fn authenticated_proposal_fetch_ownership(
     lifecycle_ordinal: u128,
 ) -> RuntimeEffectOwnership {
     let AdapterEffect::FetchBody {
+        tag: replay_tag,
+        round,
+        subject,
         manifest: Some(manifest),
         certificate: None,
         ..
@@ -520,8 +523,11 @@ fn authenticated_proposal_fetch_ownership(
     let wire::ConsensusMessageV2Payload::Proposal(mut proposal) = proposal(fixture).payload else {
         unreachable!("Proposal fixture has one Proposal payload")
     };
+    proposal.round = *round;
+    proposal.proposer = fixture.context.leader(round.view);
+    proposal.subject = *subject;
     proposal.manifest.clone_from(manifest);
-    let mut ownership = bound_test_effect_ownership(effect, tag(0), lifecycle_ordinal);
+    let mut ownership = bound_test_effect_ownership(effect, *replay_tag, lifecycle_ordinal);
     assert!(ownership.bind_authenticated_remote_proposal_replay_for_test(proposal, effect));
     ownership
 }

@@ -33,6 +33,7 @@ This document contains the help content for the `kagami` command-line program.
 * [`kagami privacy-bootstrap`↴](#kagami-privacy-bootstrap)
 * [`kagami privacy-bootstrap emit-taira-v1`↴](#kagami-privacy-bootstrap-emit-taira-v1)
 * [`kagami privacy-bootstrap validate-taira-v1`↴](#kagami-privacy-bootstrap-validate-taira-v1)
+* [`kagami privacy-bootstrap validate-taira-nevo-review-v1`↴](#kagami-privacy-bootstrap-validate-taira-nevo-review-v1)
 * [`kagami privacy-bootstrap render-taira-release-v1`↴](#kagami-privacy-bootstrap-render-taira-release-v1)
 * [`kagami verify`↴](#kagami-verify)
 * [`kagami advanced`↴](#kagami-advanced)
@@ -669,6 +670,7 @@ Emit and validate fail-closed Taira exact-12 privacy bootstrap artifacts
 
 * `emit-taira-v1` — Emit all twelve compiled governance activation templates atomically
 * `validate-taira-v1` — Validate an emitted exact-12 instruction set and its digest inventory
+* `validate-taira-nevo-review-v1` — Validate a reviewed Taira NEVO unsigned genesis without creating release artifacts
 * `render-taira-release-v1` — Compose a complete secret-free Taira release plan, config, and genesis
 
 
@@ -696,6 +698,19 @@ Validate an emitted exact-12 instruction set and its digest inventory
 
 * `--instructions <INSTRUCTIONS>` — Canonical genesis instruction JSON array emitted by this command group
 * `--report <REPORT>` — Canonical digest inventory emitted alongside the instruction array
+
+
+
+## `kagami privacy-bootstrap validate-taira-nevo-review-v1`
+
+Validate a reviewed Taira NEVO unsigned genesis without creating release artifacts
+
+**Usage:** `kagami privacy-bootstrap validate-taira-nevo-review-v1 --unsigned-genesis <UNSIGNED_GENESIS> --review <REVIEW>`
+
+###### **Options:**
+
+* `--unsigned-genesis <UNSIGNED_GENESIS>` — Exact unsigned NEVO genesis bound by the review manifest
+* `--review <REVIEW>` — Deterministic public NEVO review manifest binding the unsigned genesis
 
 
 

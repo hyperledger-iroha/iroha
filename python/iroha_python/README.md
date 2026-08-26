@@ -2168,18 +2168,14 @@ canonical Norito artifacts. Set `SKIP_LINT=1`, `SKIP_TESTS=1`, or
 Run the Rust unit tests for the bindings with:
 
 ```bash
-./python/iroha_python/scripts/test_rs.sh
+PYO3_PYTHON=/absolute/path/to/python3 cargo test -p iroha_python_rs
 ```
 
-The helper script wraps `cargo test -p iroha_python_rs`, automatically loading a
-local CPython runtime when needed.
-
-The script first looks for an explicit path in
-`python/iroha_python/iroha_python_rs/python-runtime-path`. If that file is
-absent, it tries to auto-detect the shared library by querying `${PYTHON_BIN:-python3}`
-via `sysconfig`. Set `PYTHON_BIN` to point at a specific interpreter (for
-example, a virtualenv) before running the script if you need to override the
-default.
+The build reads `PYO3_PYTHON` to select the interpreter and discovers its shared
+library through `sysconfig`. If discovery is unavailable, set
+`IROHA_PYTHON_RUNTIME_PATH` to the exact CPython shared library or record that
+path in the ignored
+`python/iroha_python/iroha_python_rs/python-runtime-path` file.
 
 ### macOS runtime configuration
 
@@ -2187,9 +2183,9 @@ When running tests on macOS the binary embeds CPython directly. If your system
 Python does not expose the shared library globally (for example, the
 Xcode-provided interpreter), create a `python-runtime-path` file alongside
 `python/iroha_python/iroha_python_rs/Cargo.toml` containing the absolute path to
-the CPython dynamic library. The `test_rs.sh` wrapper reads this file and sets
-the necessary dynamic loader environment variables for you. Lines starting with
-`#` are treated as comments, so the file can also include short notes.
+the CPython dynamic library. The Rust build reads this file directly. Lines
+starting with `#` are treated as comments, so the file can also include short
+notes.
 
 Example `python-runtime-path`:
 

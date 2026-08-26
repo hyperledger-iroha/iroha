@@ -67,7 +67,7 @@ final class ToriiKagemushaReceiverLineageAuthTests: XCTestCase {
         let requestURL = try XCTUnwrap(request.url)
         XCTAssertEqual(request.httpMethod, "POST")
         XCTAssertEqual(requestURL.path, "/v1/offline/receiver-lineage")
-        XCTAssertEqual(request.httpBody, query.noritoArchive)
+        XCTAssertEqual(toriiClientTestBodyData(from: request), query.noritoArchive)
         XCTAssertEqual(
             request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerAccount),
             try AccountAddress.parseEncoded(accountId).canonicalHex()

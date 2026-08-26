@@ -53,7 +53,10 @@ final class ToriiDaIngestTests: XCTestCase {
         XCTAssertEqual(codec, ["application/octet-stream"])
         let erasure = try XCTUnwrap(json["erasure_profile"] as? [String: Any])
         XCTAssertEqual(erasure["row_parity_stripes"] as? Int, 0)
-        XCTAssertEqual(json["compression"] as? String, "Identity")
+        let compression = try XCTUnwrap(json["compression"] as? [String: Any])
+        XCTAssertEqual(Set(compression.keys), ["kind", "value"])
+        XCTAssertEqual(compression["kind"] as? String, "Identity")
+        XCTAssertTrue(compression["value"] is NSNull)
         XCTAssertTrue(json["norito_manifest"] is NSNull)
 
         let digestTuple = try XCTUnwrap(json["client_blob_id"] as? [[NSNumber]])

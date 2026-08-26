@@ -560,6 +560,7 @@ impl V2EffectServices for ProductionV2Services {
         &mut self,
         tag: EventTag,
         certificate: wire::TimeoutCertificate,
+        protected_lock: Option<(wire::ConsensusRound, wire::BlockSubject)>,
     ) -> Result<(), Self::Error> {
         let output_guard = Arc::clone(&self.output_guard);
         let _permit = output_guard
@@ -577,7 +578,7 @@ impl V2EffectServices for ProductionV2Services {
         }
         let next_recovery_authority = self
             .leader_wire_recovery_authority
-            .advance_view(tag.view())?;
+            .advance_view(tag.view(), protected_lock)?;
         self.leader_wire_ingress
             .advance_leader_wire_recovery_cut(next_recovery_authority)?;
         self.leader_wire_recovery_authority = next_recovery_authority;

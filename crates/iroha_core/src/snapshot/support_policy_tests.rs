@@ -361,6 +361,48 @@ fn assert_snapshot_bundle_absent(store_dir: &Path) {
         "rejected snapshot must not leave a selectable immutable generation"
     );
 }
+#[test]
+fn emergency_fast_manifest_decode_requires_canonical_v1_boundary() {
+    let path = Path::new(SNAPSHOT_FAST_MANIFEST_FILE_NAME);
+    let valid = EmergencyFastSnapshotManifestV1 {
+        version: SNAPSHOT_FAST_MANIFEST_VERSION,
+        payload_len: 4096,
+        chain_id: ChainId::from(TEST_CHAIN_ID),
+        network_id: snapshot_test_network_id(),
+        committed_height: 1,
+        tip_hash: Some(dummy_block_hash(0xA5)),
+        sccp_policy_hash: [0x5A; 32],
+        has_snapshot_bootstrap_lineage: false,
+    };
+    let bytes = valid.encode();
+    assert!(
+        u64::try_from(bytes.len()).expect("manifest length fits u64")
+            <= SNAPSHOT_FAST_MANIFEST_MAX_BYTES
+    );
+    assert_eq!(
+        decode_emergency_fast_manifest(&bytes, path).expect("canonical V1 manifest"),
+        valid
+    );
+
+    let mut trailing = bytes;
+    trailing.push(0);
+    assert!(
+        decode_emergency_fast_manifest(&trailing, path).is_err(),
+        "trailing Norito bytes must fail exact decode"
+    );
+
+    let mut unsupported = valid.clone();
+    unsupported.version = SNAPSHOT_FAST_MANIFEST_VERSION.saturating_add(1);
+    assert!(decode_emergency_fast_manifest(&unsupported.encode(), path).is_err());
+
+    let mut missing_tip = valid.clone();
+    missing_tip.tip_hash = None;
+    assert!(decode_emergency_fast_manifest(&missing_tip.encode(), path).is_err());
+
+    let mut unexpected_tip = valid;
+    unexpected_tip.committed_height = 0;
+    assert!(decode_emergency_fast_manifest(&unexpected_tip.encode(), path).is_err());
+}
 #[tokio::test]
 async fn bounded_snapshot_reader_rejects_oversized_regular_file() {
     let root = tempdir().expect("tempdir");

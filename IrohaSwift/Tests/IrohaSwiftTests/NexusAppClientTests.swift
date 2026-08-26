@@ -1,12 +1,16 @@
 import Foundation
+import CryptoKit
 import XCTest
 @testable import IrohaSwift
 
 final class NexusAppClientTests: XCTestCase {
     private static let accountChainDiscriminant: UInt16 = 753
     private static let assetDefinitionID = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1"
-    private static let publicKey = Data(hexString: "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737")!
-    private static let walletSignature = Data(hexString: "d39065822f28108f70f8089f64357cc33a0072e45aa65f6b3e2696b93a3d9779d376ddf19c8e7dabce79a484275b681dea5213df060848d8fe098edeebcc3c07")!
+    private static let signingKey = try! Curve25519.Signing.PrivateKey(
+        rawRepresentation: Data(repeating: 0x11, count: 32)
+    )
+    private static let publicKey = signingKey.publicKey.rawRepresentation
+    private static let placeholderSignature = Data(repeating: 7, count: 64)
     private static let accountID = "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB"
     private static let destinationAccountID = "sorauﾛ1Prﾇuﾉﾉ4ﾒdﾛﾑｲﾄn5tﾆﾒrsR9ﾋ2Gｷ7gWeFzyﾁﾋﾁAHﾌTJQQ4L"
 
@@ -14,7 +18,7 @@ final class NexusAppClientTests: XCTestCase {
         let connect = FakeConnect()
         let torii = FakeToriiSubmitter()
         let client = NexusAppClient(
-            config: NexusAppConfig(chainId: "test-chain",
+            config: NexusAppConfig(networkId: TestNetworkIds.canonical,
                                    accountChainDiscriminant: Self.accountChainDiscriminant,
                                    appId: "sample-app",
                                    signingPublicKey: Self.publicKey),
@@ -43,7 +47,7 @@ final class NexusAppClientTests: XCTestCase {
 
     func testBuildTransferDraftFailsClosedWithoutSigningPublicKey() throws {
         let client = NexusAppClient(
-            config: NexusAppConfig(chainId: "test-chain",
+            config: NexusAppConfig(networkId: TestNetworkIds.canonical,
                                    accountChainDiscriminant: Self.accountChainDiscriminant,
                                    authority: Self.accountID)
         )
@@ -59,7 +63,7 @@ final class NexusAppClientTests: XCTestCase {
         let fixture = try Self.sharedNexusFixture()
         let client = NexusAppClient(
             config: NexusAppConfig(
-                chainId: fixture.chainID,
+                networkId: fixture.networkID,
                 accountChainDiscriminant: fixture.accountChainDiscriminant,
                 authority: fixture.authority,
                 signingPublicKey: fixture.signingPublicKey
@@ -83,7 +87,7 @@ final class NexusAppClientTests: XCTestCase {
         )
         let client = NexusAppClient(
             config: NexusAppConfig(
-                chainId: fixture.chainID,
+                networkId: fixture.networkID,
                 accountChainDiscriminant: fixture.accountChainDiscriminant,
                 authority: fixture.authority,
                 signingPublicKey: fixture.signingPublicKey
@@ -127,7 +131,7 @@ final class NexusAppClientTests: XCTestCase {
         )
         let approvalClient = NexusAppClient(
             config: NexusAppConfig(
-                chainId: fixture.chainID,
+                networkId: fixture.networkID,
                 accountChainDiscriminant: fixture.accountChainDiscriminant
             ),
             connectTransport: ApprovalConnect(
@@ -151,7 +155,7 @@ final class NexusAppClientTests: XCTestCase {
     func testBuildTransferDraftRejectsInvalidQuantityBeforeCustomCodec() throws {
         let client = NexusAppClient(
             config: NexusAppConfig(
-                chainId: "test-chain",
+                networkId: TestNetworkIds.canonical,
                 accountChainDiscriminant: Self.accountChainDiscriminant,
                 authority: Self.accountID,
                 signingPublicKey: Self.publicKey
@@ -177,7 +181,7 @@ final class NexusAppClientTests: XCTestCase {
         let torii = FakeToriiSubmitter()
         let client = NexusAppClient(
             config: NexusAppConfig(
-                chainId: fixture.chainID,
+                networkId: fixture.networkID,
                 accountChainDiscriminant: fixture.accountChainDiscriminant,
                 authority: fixture.authority,
                 signingPublicKey: fixture.signingPublicKey
@@ -202,7 +206,7 @@ final class NexusAppClientTests: XCTestCase {
         let torii = FakeToriiSubmitter()
         let client = NexusAppClient(
             config: NexusAppConfig(
-                chainId: fixture.chainID,
+                networkId: fixture.networkID,
                 accountChainDiscriminant: fixture.accountChainDiscriminant,
                 authority: fixture.authority,
                 signingPublicKey: fixture.signingPublicKey
@@ -228,7 +232,7 @@ final class NexusAppClientTests: XCTestCase {
 
     func testFinalizeAndSubmitRejectsUnsupportedSignatureAlgorithm() async throws {
         let client = NexusAppClient(
-            config: NexusAppConfig(chainId: "test-chain",
+            config: NexusAppConfig(networkId: TestNetworkIds.canonical,
                                    accountChainDiscriminant: Self.accountChainDiscriminant,
                                    authority: Self.accountID,
                                    signingPublicKey: Self.publicKey),
@@ -296,7 +300,7 @@ final class NexusAppClientTests: XCTestCase {
             let signableError = await expectNexusErrorAsync {
                 _ = try await client.finalizeAndSubmit(
                     signable: signable,
-                    signature: NexusWalletSignature(signature: Self.walletSignature)
+                    signature: NexusWalletSignature(signature: Self.placeholderSignature)
                 )
             }
             XCTAssertEqual(signableError.code, "unsupported_signature_algorithm", String(reflecting: algorithm))
@@ -314,9 +318,9 @@ final class NexusAppClientTests: XCTestCase {
                                                 signingPublicKey: Self.publicKey)
 
         for algorithm in ["", "ed25519 ", " 0", "ED25519", "ed\u{200B}25519"] {
-            let connect = SignatureConnect(signature: Self.walletSignature)
+            let connect = SignatureConnect(signature: Self.placeholderSignature)
             let client = NexusAppClient(config: NexusAppConfig(
-                chainId: "test-chain",
+                networkId: TestNetworkIds.canonical,
                 accountChainDiscriminant: Self.accountChainDiscriminant
             ),
                                         connectTransport: connect)
@@ -336,11 +340,11 @@ final class NexusAppClientTests: XCTestCase {
 
         for algorithm in ["ed25519 ", " 0", "\u{FF10}", "ed\u{0000}25519", "\u{0435}d25519"] {
             let connect = SignatureConnect(
-                signature: Self.walletSignature,
+                signature: Self.placeholderSignature,
                 algorithm: algorithm
             )
             let client = NexusAppClient(config: NexusAppConfig(
-                chainId: "test-chain",
+                networkId: TestNetworkIds.canonical,
                 accountChainDiscriminant: Self.accountChainDiscriminant
             ),
                                         connectTransport: connect)
@@ -356,7 +360,7 @@ final class NexusAppClientTests: XCTestCase {
 
     func testAwaitApprovalRejectsMissingAccountAndSigningKey() async throws {
         let missingAccount = NexusAppClient(
-            config: NexusAppConfig(chainId: "test-chain",
+            config: NexusAppConfig(networkId: TestNetworkIds.canonical,
                                    accountChainDiscriminant: Self.accountChainDiscriminant),
             connectTransport: ApprovalConnect(
                 approval: NexusApprovedAccount(accountID: "")
@@ -371,7 +375,7 @@ final class NexusAppClientTests: XCTestCase {
         XCTAssertEqual(accountError.code, "approval_missing_account")
 
         let missingKey = NexusAppClient(
-            config: NexusAppConfig(chainId: "test-chain",
+            config: NexusAppConfig(networkId: TestNetworkIds.canonical,
                                    accountChainDiscriminant: Self.accountChainDiscriminant),
             connectTransport: ApprovalConnect(
                 approval: NexusApprovedAccount(accountID: Self.accountID)
@@ -386,7 +390,7 @@ final class NexusAppClientTests: XCTestCase {
         XCTAssertEqual(keyError.code, "missing_signing_public_key")
 
         let invalidKey = NexusAppClient(
-            config: NexusAppConfig(chainId: "test-chain",
+            config: NexusAppConfig(networkId: TestNetworkIds.canonical,
                                    accountChainDiscriminant: Self.accountChainDiscriminant),
             connectTransport: ApprovalConnect(
                 approval: NexusApprovedAccount(accountID: Self.accountID,
@@ -410,6 +414,9 @@ final class NexusAppClientTests: XCTestCase {
             transferFixture["account_chain_discriminant"] as? NSNumber
         )
         let chainDiscriminant = UInt16(discriminantNumber.uint64Value)
+        let networkID = try NetworkId(
+            literal: XCTUnwrap(transferFixture["network_id"] as? String)
+        )
         let callerSessionID = try XCTUnwrap(connectFixture["sid"] as? String)
         let callerWalletLaunchURIText = try XCTUnwrap(
             connectFixture["wallet_launch_uri"] as? String
@@ -427,7 +434,7 @@ final class NexusAppClientTests: XCTestCase {
         let keyApproval = try XCTUnwrap(keyCase["approval_frame"] as? [String: Any])
         let keyClient = NexusAppClient(
             config: NexusAppConfig(
-                chainId: try XCTUnwrap(connectFixture["chain_id"] as? String),
+                networkId: networkID,
                 accountChainDiscriminant: chainDiscriminant
             ),
             connectTransport: ApprovalConnect(
@@ -454,7 +461,7 @@ final class NexusAppClientTests: XCTestCase {
         let substituted = try XCTUnwrap(sessionApproval["session"] as? [String: Any])
         let sessionClient = NexusAppClient(
             config: NexusAppConfig(
-                chainId: try XCTUnwrap(connectFixture["chain_id"] as? String),
+                networkId: networkID,
                 accountChainDiscriminant: chainDiscriminant
             ),
             connectTransport: ApprovalConnect(
@@ -490,7 +497,7 @@ final class NexusAppClientTests: XCTestCase {
     func testTransferWithWalletRejectsAuthorityMismatchBeforeSigning() async throws {
         let connect = FakeConnect()
         let client = NexusAppClient(
-            config: NexusAppConfig(chainId: "test-chain",
+            config: NexusAppConfig(networkId: TestNetworkIds.canonical,
                                    accountChainDiscriminant: Self.accountChainDiscriminant,
                                    signingPublicKey: Self.publicKey),
             connectTransport: connect,
@@ -519,7 +526,7 @@ final class NexusAppClientTests: XCTestCase {
 
     func testFinalizeAndSubmitRejectsInvalidSignatureLength() async throws {
         let client = NexusAppClient(
-            config: NexusAppConfig(chainId: "test-chain",
+            config: NexusAppConfig(networkId: TestNetworkIds.canonical,
                                    accountChainDiscriminant: Self.accountChainDiscriminant,
                                    authority: Self.accountID,
                                    signingPublicKey: Self.publicKey),
@@ -539,7 +546,7 @@ final class NexusAppClientTests: XCTestCase {
 
     func testFinalizeAndSubmitRejectsInvalidSignatureBytes() async throws {
         let client = NexusAppClient(
-            config: NexusAppConfig(chainId: "test-chain",
+            config: NexusAppConfig(networkId: TestNetworkIds.canonical,
                                    accountChainDiscriminant: Self.accountChainDiscriminant,
                                    authority: Self.accountID,
                                    signingPublicKey: Self.publicKey),
@@ -559,17 +566,21 @@ final class NexusAppClientTests: XCTestCase {
 
     func testFinalizeAndSubmitRejectsHashMismatchAndMapsSubmitStatusFailures() async throws {
         let draftClient = NexusAppClient(
-            config: NexusAppConfig(chainId: "test-chain",
+            config: NexusAppConfig(networkId: TestNetworkIds.canonical,
                                    accountChainDiscriminant: Self.accountChainDiscriminant,
                                    authority: Self.accountID,
                                    signingPublicKey: Self.publicKey),
             toriiSubmitter: FakeToriiSubmitter()
         )
         let draft = try draftClient.buildTransferDraft(input: sampleInput())
-        let signature = NexusWalletSignature(signature: Self.walletSignature)
+        let signature = NexusWalletSignature(
+            signature: try Self.signingKey.signature(
+                for: IrohaHash.hash(draft.signable.payloadBytes)
+            )
+        )
 
         let mismatchClient = NexusAppClient(
-            config: NexusAppConfig(chainId: "test-chain",
+            config: NexusAppConfig(networkId: TestNetworkIds.canonical,
                                    accountChainDiscriminant: Self.accountChainDiscriminant),
             toriiSubmitter: FakeToriiSubmitter(responseHash: String(repeating: "f", count: 64))
         )
@@ -580,7 +591,7 @@ final class NexusAppClientTests: XCTestCase {
         XCTAssertEqual(mismatchError.code, "transaction_hash_mismatch")
 
         let submitFailureClient = NexusAppClient(
-            config: NexusAppConfig(chainId: "test-chain",
+            config: NexusAppConfig(networkId: TestNetworkIds.canonical,
                                    accountChainDiscriminant: Self.accountChainDiscriminant),
             toriiSubmitter: FakeToriiSubmitter(submitError: FakeToriiError.down)
         )
@@ -591,7 +602,7 @@ final class NexusAppClientTests: XCTestCase {
         XCTAssertEqual(submitError.code, "submit_failed")
 
         let statusFailureClient = NexusAppClient(
-            config: NexusAppConfig(chainId: "test-chain",
+            config: NexusAppConfig(networkId: TestNetworkIds.canonical,
                                    accountChainDiscriminant: Self.accountChainDiscriminant),
             toriiSubmitter: FakeToriiSubmitter(statusError: FakeToriiError.timeout)
         )
@@ -602,7 +613,7 @@ final class NexusAppClientTests: XCTestCase {
         XCTAssertEqual(statusError.code, "status_wait_failed")
 
         let committedStatusClient = NexusAppClient(
-            config: NexusAppConfig(chainId: "test-chain",
+            config: NexusAppConfig(networkId: TestNetworkIds.canonical,
                                    accountChainDiscriminant: Self.accountChainDiscriminant),
             toriiSubmitter: FakeToriiSubmitter(status: "Committed")
         )
@@ -615,7 +626,7 @@ final class NexusAppClientTests: XCTestCase {
 
     func testSwiftTransferCodecRejectsNoncanonicalQuantitiesBeforeEncoding() throws {
         let codec = SwiftNexusTransactionCodec()
-        let config = NexusAppConfig(chainId: "test-chain",
+        let config = NexusAppConfig(networkId: TestNetworkIds.canonical,
                                     accountChainDiscriminant: Self.accountChainDiscriminant)
         for quantity in ["-1", "01", "1.0", "1.2300", " 1", "1e0"] {
             let input = NexusTransferInput(
@@ -647,7 +658,7 @@ final class NexusAppClientTests: XCTestCase {
     }
 
     private struct SharedNexusFixture {
-        let chainID: String
+        let networkID: NetworkId
         let accountChainDiscriminant: UInt16
         let authority: String
         let signingPublicKey: Data
@@ -700,7 +711,9 @@ final class NexusAppClientTests: XCTestCase {
             metadata: metadata
         )
         return SharedNexusFixture(
-            chainID: try XCTUnwrap(connect["chain_id"] as? String),
+            networkID: try NetworkId(
+                literal: XCTUnwrap(transfer["network_id"] as? String)
+            ),
             accountChainDiscriminant: discriminant,
             authority: authority,
             signingPublicKey: try hexData(
@@ -829,7 +842,11 @@ final class NexusAppClientTests: XCTestCase {
                               config: NexusAppConfig) async throws -> NexusWalletSignature {
             lastSignable = signable
             XCTAssertEqual(signable.signatureAlgorithm, NexusSignatureAlgorithmEd25519)
-            return NexusWalletSignature(signature: NexusAppClientTests.walletSignature)
+            return NexusWalletSignature(
+                signature: try NexusAppClientTests.signingKey.signature(
+                    for: IrohaHash.hash(signable.payloadBytes)
+                )
+            )
         }
     }
 

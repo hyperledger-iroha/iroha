@@ -7,7 +7,7 @@ use super::*;
 use crate::sumeragi::v2_lifecycle_coordinator::{
     AdmissionDecision, CertifiedServeSchedulerObservationV1, LifecycleIngressSelectorError,
     LifecycleLedgerV1, LifecycleValidateSidecarDriveV1, ReadyValidateSuccessorDispatchV1,
-    SelectedCertifiedResponsePriorityV1, WaitToken, claim_certified_serve_turn_v1,
+    SelectedCertifiedResponsePriorityV1, WaitSource, WaitToken, claim_certified_serve_turn_v1,
 };
 #[cfg(test)]
 pub(in crate::sumeragi) use crate::sumeragi::v2_runner::ordinary_ingress_consumer::ProductionPreparedCertifiedServeTestSettlementV1;
@@ -18,6 +18,7 @@ use crate::sumeragi::v2_runner::ordinary_ingress_consumer::{
     ProductionPreparedCertifiedServeV1, ProductionPreparedOrdinaryIngressConsumptionV1,
     consume_prepared_dequeued_v2_ingress, prepare_current_certified_serve_pre_admission,
 };
+use crate::sumeragi::v2_runtime::PreTimeoutLockedPrepareQcCutV1;
 
 /// Closed result of servicing one recovered Sign completion.
 ///
@@ -402,6 +403,19 @@ pub(in crate::sumeragi) enum ProductionLifecycleIngressTurnV1<'cursor> {
     Ordinary(ProductionPreparedOrdinaryIngressTurnV1),
     /// Recovered Decision Fetch work consumed this Ingress turn.
     Selected(ProductionLifecycleIngressSelectionV1),
+}
+
+/// Closed fair-ingress result under one runtime-frozen pre-timeout cut.
+#[must_use = "the fixed-cut pre-timeout ingress result must be consumed"]
+pub(in crate::sumeragi) enum ProductionPreTimeoutLockedPrepareQcIngressTurnV1 {
+    /// No pre-cut exact target or ordinary obsolete predecessor is selectable.
+    Empty,
+    /// One WAL-obsolete pre-cut predecessor crossed the ordinary dequeue tail.
+    ObsoletePredecessor(ProductionPreparedOrdinaryIngressTurnV1),
+    /// The exact deeply-previewed PrepareQC crossed the ordinary dequeue tail.
+    ExactPrepareQc(ProductionPreparedOrdinaryIngressTurnV1),
+    /// Queue ownership or exact dequeue authority failed closed.
+    RestartRequired,
 }
 
 fn lifecycle_context_for_ingress(
@@ -929,21 +943,22 @@ fn prepare_and_dispatch_current_certified_serve<'cursor>(
     )
 }
 
-fn dequeue_prepared_ordinary_ingress<'cursor>(
+enum PreparedOrdinaryIngressDequeueV1 {
+    Prepared(ProductionPreparedOrdinaryIngressTurnV1),
+    RestartRequired,
+}
+
+fn prepare_ordinary_ingress_dequeue(
     receiver: &std::sync::Arc<FairV2Ingress>,
     cut: FairIngressTurnCut<'_>,
-    runner: LifecycleCurrentRunnerTurn<'cursor>,
     prepared_serve: Option<ProductionPreparedCertifiedServeV1>,
     terminal_subject: Option<iroha_data_model::block::consensus_v2::BlockSubject>,
     services: &ProductionV2Services,
-) -> ProductionLifecycleIngressTurnV1<'cursor> {
+) -> PreparedOrdinaryIngressDequeueV1 {
     let output_guard = services.lifecycle_output_guard();
     let Some(operation) = output_guard.begin_fail_stop_operation() else {
         drop(cut);
-        drop(runner);
-        return ProductionLifecycleIngressTurnV1::Selected(
-            ProductionLifecycleIngressSelectionV1::RestartRequired,
-        );
+        return PreparedOrdinaryIngressDequeueV1::RestartRequired;
     };
     match cut.dequeue_exact_retaining() {
         Ok((inbound, disposition)) => {
@@ -956,8 +971,7 @@ fn dequeue_prepared_ordinary_ingress<'cursor>(
                 std::sync::Arc::clone(&output_guard),
             );
             operation.complete();
-            drop(runner);
-            ProductionLifecycleIngressTurnV1::Ordinary(turn)
+            PreparedOrdinaryIngressDequeueV1::Prepared(turn)
         }
         Err((error, retained)) => {
             iroha_logger::error!(
@@ -966,7 +980,27 @@ fn dequeue_prepared_ordinary_ingress<'cursor>(
             );
             drop(operation);
             drop(retained);
-            drop(runner);
+            PreparedOrdinaryIngressDequeueV1::RestartRequired
+        }
+    }
+}
+
+fn dequeue_prepared_ordinary_ingress<'cursor>(
+    receiver: &std::sync::Arc<FairV2Ingress>,
+    cut: FairIngressTurnCut<'_>,
+    runner: LifecycleCurrentRunnerTurn<'cursor>,
+    prepared_serve: Option<ProductionPreparedCertifiedServeV1>,
+    terminal_subject: Option<iroha_data_model::block::consensus_v2::BlockSubject>,
+    services: &ProductionV2Services,
+) -> ProductionLifecycleIngressTurnV1<'cursor> {
+    let prepared =
+        prepare_ordinary_ingress_dequeue(receiver, cut, prepared_serve, terminal_subject, services);
+    drop(runner);
+    match prepared {
+        PreparedOrdinaryIngressDequeueV1::Prepared(turn) => {
+            ProductionLifecycleIngressTurnV1::Ordinary(turn)
+        }
+        PreparedOrdinaryIngressDequeueV1::RestartRequired => {
             ProductionLifecycleIngressTurnV1::Selected(
                 ProductionLifecycleIngressSelectionV1::RestartRequired,
             )
@@ -1261,6 +1295,40 @@ impl LaunchedProductionLifecycleV1 {
             crate::sumeragi::v2_runner::LifecycleRunnerRankTarget::Completion,
         ) {
             return ProductionLifecycleCompletionPreGateV1::Ordinary(runner);
+        }
+
+        let current_validate_fence_wait =
+            self.pending_lifecycle_completion
+                .as_ref()
+                .and_then(|pending| match pending {
+                    PendingLifecycleCompletionV1::ReadyValidateSuccessor(successor) => {
+                        successor.reducer_fence_wait()
+                    }
+                    _ => None,
+                });
+        if let Some(wait) = current_validate_fence_wait {
+            let fence = self.executor.lifecycle_reducer_fence_observation();
+            if fence.source() == wait.source() && fence.generation() <= wait.observed_generation() {
+                match self
+                    .services
+                    .prepare_ordinary_completion_behind_validate_fence()
+                {
+                    Ok(true) => {
+                        return ProductionLifecycleCompletionPreGateV1::Ordinary(runner);
+                    }
+                    Ok(false) => {}
+                    Err(reason) => {
+                        iroha_logger::error!(
+                            %reason,
+                            "ordinary Completion fence bypass classification failed closed"
+                        );
+                        self.close_output_for_restart();
+                        return ProductionLifecycleCompletionPreGateV1::Selected(
+                            ProductionLifecycleCompletionSelectionV1::RestartRequired,
+                        );
+                    }
+                }
+            }
         }
 
         if let Some(pending) = self.pending_lifecycle_completion.take() {
@@ -1624,6 +1692,82 @@ impl LaunchedProductionLifecycleV1 {
             }
             ProductionLifecycleCompletionPreGateV1::Ready(ready) => {
                 self.drive_ready_completion_turn(ready)
+            }
+        }
+    }
+
+    /// Move at most one fair-ingress row under an already-frozen timeout cut.
+    ///
+    /// The exact PrepareQC predicate is a read-only runtime preview. Ordinary
+    /// obsolete retirement remains enabled only to release a durable
+    /// leader-wire predecessor; every non-obsolete row must match the exact
+    /// preview, and the queue's Blocked verdict is never bypassed.
+    pub(in crate::sumeragi) fn prepare_pre_timeout_locked_prepare_qc_ingress_turn(
+        &mut self,
+        cut: &PreTimeoutLockedPrepareQcCutV1,
+    ) -> ProductionPreTimeoutLockedPrepareQcIngressTurnV1 {
+        let terminal_subject = match self.executor.lifecycle_terminal_subject() {
+            Ok(subject) => subject,
+            Err(error) => {
+                iroha_logger::error!(
+                    %error,
+                    "pre-timeout PrepareQC terminal-subject projection failed closed"
+                );
+                self.close_output_for_restart();
+                return ProductionPreTimeoutLockedPrepareQcIngressTurnV1::RestartRequired;
+            }
+        };
+        let ingress = std::sync::Arc::clone(&self.leader_wire_ingress_binding.ingress);
+        let captured = {
+            let executor = &self.executor;
+            ingress.capture_next_ingress_turn_cut_before_with_obsolete_retirement(
+                cut.physical_cut(),
+                |occurrence| {
+                    let crate::sumeragi::message::BlockMessage::V2(message) =
+                        occurrence.inbound().message()
+                    else {
+                        return false;
+                    };
+                    matches!(
+                        &message.payload,
+                        iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload::QuorumCertificate(_)
+                    ) && executor.wire_previews_pre_timeout_locked_prepare_qc(
+                        cut,
+                        &message.payload,
+                    )
+                },
+            )
+        };
+        let Some(captured) = (match captured {
+            Ok(captured) => captured,
+            Err(error) => {
+                iroha_logger::error!(
+                    ?error,
+                    "pre-timeout PrepareQC fair-ingress cut failed closed"
+                );
+                self.close_output_for_restart();
+                return ProductionPreTimeoutLockedPrepareQcIngressTurnV1::RestartRequired;
+            }
+        }) else {
+            return ProductionPreTimeoutLockedPrepareQcIngressTurnV1::Empty;
+        };
+        let obsolete =
+            captured.selected_disposition() == FairV2IngressDequeueDisposition::RetireObsolete;
+        match prepare_ordinary_ingress_dequeue(
+            &ingress,
+            captured,
+            None,
+            terminal_subject,
+            &self.services,
+        ) {
+            PreparedOrdinaryIngressDequeueV1::Prepared(turn) if obsolete => {
+                ProductionPreTimeoutLockedPrepareQcIngressTurnV1::ObsoletePredecessor(turn)
+            }
+            PreparedOrdinaryIngressDequeueV1::Prepared(turn) => {
+                ProductionPreTimeoutLockedPrepareQcIngressTurnV1::ExactPrepareQc(turn)
+            }
+            PreparedOrdinaryIngressDequeueV1::RestartRequired => {
+                ProductionPreTimeoutLockedPrepareQcIngressTurnV1::RestartRequired
             }
         }
     }
@@ -2383,6 +2527,184 @@ impl ActivatedProductionLifecycleV1 {
         runner: LifecycleCurrentRunnerTurn<'cursor>,
     ) -> ProductionLifecycleIngressTurnV1<'cursor> {
         self.launched.drive_ingress_turn(runner)
+    }
+
+    /// Forward one fixed-cut pre-timeout ingress preparation without exposing
+    /// the launched executor or queue owner.
+    pub(in crate::sumeragi) fn prepare_pre_timeout_locked_prepare_qc_ingress_turn(
+        &mut self,
+        cut: &PreTimeoutLockedPrepareQcCutV1,
+    ) -> ProductionPreTimeoutLockedPrepareQcIngressTurnV1 {
+        self.launched
+            .prepare_pre_timeout_locked_prepare_qc_ingress_turn(cut)
+    }
+
+    /// Emit a read-only, rate-limited ownership census when a non-empty fair
+    /// ingress has retained its oldest owner for a full liveness interval.
+    ///
+    /// These owners are intentionally private to the launched lifecycle and
+    /// worker service. Keeping the diagnostic here preserves that boundary
+    /// while making a stale claim, parked capacity wait, blocked I/O FIFO, and
+    /// selector barrier distinguishable in one operator record.
+    pub(in crate::sumeragi) fn log_scheduler_stall_diagnostic(
+        &mut self,
+        _runner: &mut crate::sumeragi::v2_runner::ProductionLifecycleActiveRunnerBorrowV1,
+        producer_claim: crate::sumeragi::v2_runner::LifecycleProducerClaimDispositionV1,
+        ingress: &FairV2Ingress,
+        ingress_oldest_age: Option<Duration>,
+        ingress_service_idle_age: Option<Duration>,
+        last_advance_executor_yield: Option<(
+            &'static str,
+            crate::sumeragi::v2_runner::AdvanceExecutorYieldV1,
+            Duration,
+        )>,
+    ) {
+        use crate::sumeragi::v2_runner::LifecycleProducerClaimDispositionV1 as Claim;
+
+        let (
+            producer_claim_kind,
+            producer_claim_ordinal,
+            producer_claim_child_ordinal,
+            producer_claim_wait_source,
+            producer_claim_wait_generation,
+        ) = match producer_claim {
+            Claim::Eligible => ("Eligible", None, None, None, None),
+            Claim::AwaitingValidateSuccessor { ordinal } => {
+                ("AwaitingValidateSuccessor", Some(ordinal), None, None, None)
+            }
+            Claim::AwaitingValidateFence { ordinal, wait } => {
+                let source = match wait.source() {
+                    WaitSource::Capacity(_) => "Capacity",
+                    WaitSource::External(_) => "External",
+                    WaitSource::Recovery(_) => "Recovery",
+                    WaitSource::ProducerTurn(_) => "ProducerTurn",
+                };
+                (
+                    "AwaitingValidateFence",
+                    Some(ordinal),
+                    None,
+                    Some(source),
+                    Some(wait.observed_generation()),
+                )
+            }
+            Claim::AwaitingLiveApplyQueue {
+                parent_ordinal,
+                child_ordinal,
+            } => (
+                "AwaitingLiveApplyQueue",
+                Some(parent_ordinal),
+                Some(child_ordinal),
+                None,
+                None,
+            ),
+            Claim::AwaitingCompletion => ("AwaitingCompletion", None, None, None, None),
+            Claim::AwaitingValidateSidecar => ("AwaitingValidateSidecar", None, None, None, None),
+            Claim::AwaitingApplyCompletion => ("AwaitingApplyCompletion", None, None, None, None),
+            Claim::ApplyTerminalSettled => ("ApplyTerminalSettled", None, None, None, None),
+            Claim::AwaitingReplayCompletion => ("AwaitingReplayCompletion", None, None, None, None),
+        };
+        let active_lease = self
+            .launched
+            .owner
+            .lifecycle_active_lease_scheduler_snapshot();
+        let (active_lease_ordinal, active_lease_work_class, active_lease_stage) = active_lease
+            .map_or((None, None, None), |(ordinal, work_class, stage)| {
+                (Some(ordinal), Some(work_class), Some(stage))
+            });
+        let pending_completion =
+            self.launched
+                .pending_lifecycle_completion
+                .as_ref()
+                .map(|pending| match pending {
+                    PendingLifecycleCompletionV1::LifecycleDecisionApplyDeferred(_) => {
+                        "LifecycleDecisionApplyDeferred"
+                    }
+                    PendingLifecycleCompletionV1::CertifiedFetch(_) => "CertifiedFetch",
+                    PendingLifecycleCompletionV1::RecoveredDecisionFetch(_) => {
+                        "RecoveredDecisionFetch"
+                    }
+                    PendingLifecycleCompletionV1::RecoveredSign(_) => "RecoveredSign",
+                    PendingLifecycleCompletionV1::Validate(_) => "Validate",
+                    PendingLifecycleCompletionV1::ReadyValidateSuccessor(_) => {
+                        "ReadyValidateSuccessor"
+                    }
+                    PendingLifecycleCompletionV1::DeferredValidate(_) => "DeferredValidate",
+                    PendingLifecycleCompletionV1::RegisteredDeferredValidate(_) => {
+                        "RegisteredDeferredValidate"
+                    }
+                });
+        let pending_capacity = self
+            .launched
+            .pending_ingress_capacity
+            .as_ref()
+            .map(|pending| match pending {
+                PendingIngressCapacityV1::CertifiedFetch(wait) => (
+                    "CertifiedFetch",
+                    format!("{:?}", wait.capacity_status(&self.launched.services)),
+                ),
+                PendingIngressCapacityV1::RecoveredDecisionFetch(wait) => (
+                    "RecoveredDecisionFetch",
+                    format!("{:?}", wait.capacity_status(&self.launched.services)),
+                ),
+                PendingIngressCapacityV1::CertifiedServe(wait) => (
+                    "CertifiedServe",
+                    format!("{:?}", wait.status(&self.launched.services)),
+                ),
+            });
+        let (pending_capacity_kind, pending_capacity_status) = pending_capacity
+            .as_ref()
+            .map_or((None, None), |(kind, status)| {
+                (Some(*kind), Some(status.as_str()))
+            });
+        let executor_status = self.launched.executor.status();
+        let io = self.launched.services.lifecycle_io_scheduler_snapshot();
+        let exact_output = self.launched.services.exact_output_scheduler_snapshot();
+        let recovered_lifecycle_outputs = self.launched.owner.recovered_lifecycle_output_count();
+        let fair_selector = ingress
+            .scheduler_stall_diagnostic()
+            .unwrap_or_else(|error| format!("unavailable: {error}"));
+        iroha_logger::warn!(
+            height = self.launched.executor.context().height,
+            context_id = ?self.launched.executor.context().id(),
+            producer_claim_kind,
+            ?producer_claim_ordinal,
+            ?producer_claim_child_ordinal,
+            ?producer_claim_wait_source,
+            ?producer_claim_wait_generation,
+            ?active_lease_ordinal,
+            ?active_lease_work_class,
+            ?active_lease_stage,
+            ?ingress_oldest_age,
+            ?ingress_service_idle_age,
+            ?last_advance_executor_yield,
+            recovered_lifecycle_outputs,
+            pending_completion = ?pending_completion,
+            pending_capacity_kind = ?pending_capacity_kind,
+            pending_capacity_status = ?pending_capacity_status,
+            pending_live_wal_sign = self
+                .launched
+                .executor
+                .has_pending_live_wal_sign_admission(),
+            pending_lifecycle_output_admission = self
+                .launched
+                .executor
+                .has_pending_lifecycle_output_admissions(),
+            pending_durable_validate_admission = self
+                .launched
+                .executor
+                .has_pending_durable_validate_admissions(),
+            pending_signatures = executor_status.pending_signatures,
+            pending_fetches = executor_status.pending_fetches,
+            pending_stores = executor_status.pending_stores,
+            pending_validations = executor_status.pending_validations,
+            pending_outputs = executor_status.pending_outputs,
+            pending_applications = executor_status.pending_applications,
+            queued_runtime_completions = executor_status.queued_runtime_completions,
+            ?io,
+            ?exact_output,
+            fair_selector = %fair_selector,
+            "Sumeragi v2 outer scheduler starvation ownership census"
+        );
     }
 
     /// Consume one opaque ordinary handoff through the exact runner-owned tail.

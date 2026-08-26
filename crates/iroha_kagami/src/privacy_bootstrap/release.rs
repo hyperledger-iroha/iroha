@@ -569,149 +569,6 @@ fn expected_nevo_genesis_v1(
     Ok(expected)
 }
 
-#[allow(dead_code)]
-#[expect(
-    clippy::too_many_lines,
-    reason = "the legacy renderer is an unrelated fixed-schema compatibility surface whose exact field order must remain intact"
-)]
-fn expected_nevo_genesis_v1_legacy(
-    onboarding: &str,
-    api_signer: &str,
-) -> color_eyre::Result<JsonValue> {
-    let program = norito::json!({
-        "sponsor": GENESIS_AUTHORITY_V1,
-        "name": NEVO_FEE_SPONSOR_PROGRAM_NAME_V1,
-    });
-    let quote_guard = norito::json!({
-        "expected_policy_version": (2_u64),
-        "expected_payment_asset": NEVO_FEE_ASSET_DEFINITION_ID_V1,
-        "max_amount": "0.5",
-        "valid_until_ms": (u64::MAX),
-    });
-    let transaction = norito::json!({
-        "instructions": [
-            {
-                "Register": {
-                    "Account": {
-                        "id": (onboarding),
-                        "metadata": {"purpose": "nevo_taira_onboarding_authority"},
-                    },
-                },
-            },
-            {
-                "Register": {
-                    "Account": {
-                        "id": (api_signer),
-                        "metadata": {"purpose": "nevo_dpn_api_signer"},
-                    },
-                },
-            },
-            {
-                "Mint": {
-                    "Asset": {
-                        "destination": (format!("{NEVO_FEE_ASSET_DEFINITION_ID_V1}#{onboarding}")),
-                        "object": "1000000",
-                    },
-                },
-            },
-            {
-                "Mint": {
-                    "Asset": {
-                        "destination": (format!("{NEVO_FEE_ASSET_DEFINITION_ID_V1}#{api_signer}")),
-                        "object": "1000000",
-                    },
-                },
-            },
-            {
-                "EnsureAlias": {
-                    "intent": {
-                        "kind": "dataspace",
-                        "intent": {
-                            "dataspace": {"canonical_name": "dpn", "dataspace_id": 10_u64},
-                            "owner": (onboarding),
-                        },
-                    },
-                    "acquisition": {"term_years": 1_u64, "pricing_class_hint": null},
-                    "quote_guard": (quote_guard.clone()),
-                },
-            },
-            {
-                "EnsureAlias": {
-                    "intent": {
-                        "kind": "dataspace",
-                        "intent": {
-                            "dataspace": {
-                                "canonical_name": "is2",
-                                "dataspace_id": 8_477_022_798_449_861_195_u64,
-                            },
-                            "owner": (onboarding),
-                        },
-                    },
-                    "acquisition": {"term_years": 1_u64, "pricing_class_hint": null},
-                    "quote_guard": (quote_guard.clone()),
-                },
-            },
-            {
-                "EnsureAlias": {
-                    "intent": {
-                        "kind": "domain",
-                        "intent": {
-                            "domain": {"canonical_name": "nevo.dpn", "dataspace_id": 10_u64},
-                            "owner": (onboarding),
-                        },
-                    },
-                    "acquisition": {"term_years": 1_u64, "pricing_class_hint": null},
-                    "quote_guard": (quote_guard),
-                },
-            },
-            {
-                "Grant": {
-                    "Permission": {
-                        "destination": (onboarding),
-                        "object": {
-                            "name": "CanRegisterAccount",
-                            "payload": {"domain": "nevo.dpn"},
-                        },
-                    },
-                },
-            },
-            {
-                "Grant": {
-                    "Permission": {
-                        "destination": (onboarding),
-                        "object": {
-                            "name": "CanEnrollFeeSponsorProgram",
-                            "payload": {"program_id": (program.clone())},
-                        },
-                    },
-                },
-            },
-            {
-                "EnrollFeeSponsorBeneficiary": {
-                    "program_id": (program.clone()),
-                    "beneficiary": (onboarding),
-                },
-            },
-            {
-                "EnrollFeeSponsorBeneficiary": {
-                    "program_id": (program),
-                    "beneficiary": (api_signer),
-                },
-            },
-        ],
-        "ivm_triggers": [],
-        "topology": [],
-    });
-    let mut expected: JsonValue = norito::json::from_slice(CANONICAL_GENESIS_TEMPLATE_V1)
-        .wrap_err("failed to decode the source-pinned Taira genesis")?;
-    expected
-        .get_mut("transactions")
-        .and_then(JsonValue::as_array_mut)
-        .ok_or_else(|| eyre!("source-pinned Taira genesis has no transaction array"))?
-        .push(transaction);
-    Ok(expected)
-}
-
 #[expect(
     clippy::too_many_lines,
     reason = "broker export admission keeps canonical-byte, identity, digest, policy, and instruction checks in one ordered verification pass"
@@ -1503,40 +1360,31 @@ fn validate_secret_free_config_template_v1(config: &toml::Value) -> color_eyre::
     if credentials.len() != expected_credentials.len() {
         bail!("Taira config template must contain exactly two placeholder onboarding credentials");
     }
-    for (credential, (expected_id, expected_dataspace, expected_token_hash)) in
-        credentials.iter().zip(expected_credentials)
+    for (index, (credential, (expected_id, expected_dataspace, expected_token_hash))) in
+        credentials.iter().zip(expected_credentials).enumerate()
     {
+        let label = format!("Taira onboarding credential {index}");
         let credential = credential
             .as_table()
-            .ok_or_else(|| eyre!("Taira onboarding credential must be a table"))?;
-        if credential
+            .ok_or_else(|| eyre!("{label} must be a table"))?;
+        let actual_keys = credential
             .keys()
             .map(String::as_str)
-            .collect::<BTreeSet<_>>()
-            != ["id", "scope", "token_hash"]
-                .into_iter()
-                .collect::<BTreeSet<_>>()
-        {
-            bail!("Taira onboarding credential must have the exact first-release field set");
+            .collect::<BTreeSet<_>>();
+        let expected_keys = ["id", "scope", "token_hash"]
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        if actual_keys != expected_keys {
+            bail!("{label} must have the exact first-release field set: id, scope, token_hash");
         }
-        expect_toml_string_v1(
-            credential,
-            "id",
-            expected_id,
-            "Taira onboarding credential identifier",
-        )?;
-        expect_toml_string_v1(
-            credential,
-            "token_hash",
-            expected_token_hash,
-            "Taira onboarding token digest",
-        )?;
-        let scope = toml_table_field_v1(credential, "scope", "Taira onboarding credential")?;
+        expect_toml_string_v1(credential, "id", expected_id, &label)?;
+        expect_toml_string_v1(credential, "token_hash", expected_token_hash, &label)?;
+        let scope = toml_table_field_v1(credential, "scope", &label)?;
         if scope.len() != 1
             || scope.get("dataspace").and_then(toml::Value::as_str) != Some(expected_dataspace)
         {
             bail!(
-                "Taira onboarding credential scope differs from the exact first-release dataspace"
+                "{label} scope differs from the exact first-release dataspace `{expected_dataspace}`"
             );
         }
     }
@@ -1936,84 +1784,6 @@ mod tests {
             GOLDEN_NEVO_UNSIGNED_V2.to_vec(),
             GOLDEN_NEVO_REVIEW_V2.to_vec(),
         )
-    }
-    #[allow(dead_code)]
-    fn nevo_fixture_legacy_v1() -> (Vec<u8>, Vec<u8>) {
-        let is2_token_hash = format!("blake3:{}", "11".repeat(32));
-        let dpn_token_hash = format!("blake3:{}", "22".repeat(32));
-        let genesis = json_pretty_bytes_v1(
-            &expected_nevo_genesis_v1(
-                NEVO_ONBOARDING_ACCOUNT_V1,
-                NEVO_API_SIGNER_ACCOUNT_V1,
-                GOLDEN_NEVO_INORI_V2,
-                GOLDEN_NEVO_EPR_GUARD_V2,
-            )
-            .expect("compose native NEVO fixture genesis"),
-            "native NEVO fixture genesis",
-        )
-        .expect("render native NEVO fixture genesis");
-        let public_inputs_sha256 = nevo_public_inputs_sha256_v1(
-            NEVO_ONBOARDING_ACCOUNT_V1,
-            NEVO_API_SIGNER_ACCOUNT_V1,
-            GOLDEN_NEVO_INORI_V2,
-            GOLDEN_NEVO_EPR_GUARD_V2,
-            &is2_token_hash,
-            &dpn_token_hash,
-        )
-        .expect("derive native NEVO public-input digest");
-        let review = norito::json!({
-            "schema": "iroha.taira.nevo-reset-review.v1",
-            "chain": CHAIN_ID_V1,
-            "chain_discriminant": CHAIN_DISCRIMINANT_V1,
-            "state": "unsigned_operator_review_required",
-            "public_inputs_sha256": (public_inputs_sha256),
-            "base_genesis_sha256": (hex::encode(sha256(CANONICAL_GENESIS_TEMPLATE_V1))),
-            "base_config_sha256": (hex::encode(sha256(CANONICAL_CONFIG_TEMPLATE_V1))),
-            "unsigned_genesis_sha256": (hex::encode(sha256(&genesis))),
-            "public_identities": {
-                "onboarding_authority_account_id": NEVO_ONBOARDING_ACCOUNT_V1,
-                "api_signer_account_id": NEVO_API_SIGNER_ACCOUNT_V1,
-            },
-            "credential_hash_bindings": [
-                {"scope": {"dataspace": "is2"}, "token_hash": (is2_token_hash)},
-                {"scope": {"dataspace": "dpn"}, "token_hash": (dpn_token_hash)},
-            ],
-            "genesis_overlay": {
-                "transaction_count": 1_u64,
-                "instruction_count": 11_u64,
-                "dataspace_roots": [
-                    {"alias": "dpn", "id": 10_u64},
-                    {"alias": "is2", "id": 8_477_022_798_449_861_195_u64},
-                ],
-                "domain": "nevo.dpn",
-                "fee_asset_definition_id": NEVO_FEE_ASSET_DEFINITION_ID_V1,
-                "account_funding_amount": "1000000",
-                "fee_sponsor_program_id": (format!(
-                    "{GENESIS_AUTHORITY_V1}/{NEVO_FEE_SPONSOR_PROGRAM_NAME_V1}"
-                )),
-                "ensure_alias_derived_owner_permissions": [
-                    "CanManageAccountAlias",
-                    "CanDelegateAccountAliasResolution",
-                    "CanResolveAccountAlias",
-                ],
-            },
-            "secret_boundary": {
-                "raw_tokens_accepted": false,
-                "private_keys_accepted": false,
-                "genesis_signed": false,
-            },
-            "required_next_steps": [
-                "review the exact unsigned genesis and this digest record",
-                "bind validator runtime credentials to these exact token hashes",
-                "validate the unsigned manifest with the source-matched Kagami binary",
-                "sign only through the independently provisioned digest-pinned external signer",
-                "deploy and pin the reviewed NEVO contract after the reset finalizes",
-                "initialize the application factoring policy after API deployment",
-            ],
-        });
-        let review = json_pretty_bytes_v1(&review, "NEVO fixture review")
-            .expect("render NEVO fixture review");
-        (genesis, review)
     }
     fn mutate_nevo_review_v1(review: &[u8], mutation: impl FnOnce(&mut JsonMap)) -> Vec<u8> {
         let mut value: JsonValue =

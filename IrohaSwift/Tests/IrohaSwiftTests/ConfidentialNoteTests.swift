@@ -386,7 +386,7 @@ final class ConfidentialNoteTests: XCTestCase {
                 )
             ),
             (
-                "networkId",
+                "plaintext",
                 plaintext(
                     ownerTag: ownerTag,
                     asset: Data("rose#wonderland".utf8),
@@ -414,7 +414,7 @@ final class ConfidentialNoteTests: XCTestCase {
             ),
             ("plaintext.trailing", trailingPlaintext),
             ("amount", truncatedPlaintext),
-            ("varint", overflowingVarint)
+            ("plaintext", overflowingVarint)
         ]
 
         for malformed in malformedPlaintexts {

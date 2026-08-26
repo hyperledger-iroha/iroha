@@ -1496,7 +1496,7 @@ def test_async_source_fidelity_rejects_old_progress_shortcuts(tmp_path: Path) ->
     )
     errors = module._async_source_fidelity_errors(formal_dir)
     assert any(
-        "retained effect construction must zip each retained effect with its immutable owner"
+        "retained effect construction must enumerate each immutable owner"
         in error
         for error in errors
     ), errors
@@ -1773,14 +1773,14 @@ def test_lifecycle_decision_apply_corridor_semantics_survive_effect_item_reseal(
             "drain_retained_effect_batch",
             "|| !self.pending_durable_validate_admissions.is_empty()",
             "|| false",
-            "stop behind every lifecycle admission owner before consume_one",
+            "carry its highest-Prepare cleanup sidecar into consume_one",
         ),
         (
             "retain_effect_batch_at_frontier",
             "self.published_lifecycle_validate_retry_markers = "
             "retained_published_validate_retry_markers;",
             "let _ = retained_published_validate_retry_markers;",
-            "atomically commit both retry-owner maps",
+            "atomically commit the durable Validate, published Store, and published Validate marker maps",
         ),
         (
             "ready_to_finish",
@@ -1869,7 +1869,7 @@ def test_decision_apply_runner_cleanup_semantics_survive_effect_item_reseal(
             "                    || !self.pending_durable_validate_admissions.is_empty()",
             "false\n"
             "                    || !self.pending_durable_validate_admissions.is_empty()",
-            "stop at the runner-cleanup fence before consume_one",
+            "stop at the runner-cleanup fence and carry its highest-Prepare cleanup sidecar",
         ),
         (
             "step",

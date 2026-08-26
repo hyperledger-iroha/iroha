@@ -603,10 +603,12 @@ impl From<ProducerContinuationTerminalToken> for LeaderWireStableTerminalEvidenc
 /// The generic ingress snapshot is opened only after safety-WAL replay. This
 /// capability lets it retire view-scoped control records made obsolete by a
 /// certified view advance or durable Decision without treating its own
-/// terminal projection as authority. Manifest chunks and historical certified-
-/// body responses are transport completions; the reducer can make Decision
-/// durable before obtaining the exact body, so neither cut can obsolete them.
-/// The capability is process-local and never enters either snapshot format.
+/// terminal projection as authority. The exact durable-lock Commit statement
+/// and any CommitQC remain reducer progress across view changes. Manifest
+/// chunks and historical certified-body responses are transport completions;
+/// the reducer can make Decision durable before obtaining the exact body, so
+/// neither cut can obsolete them. The capability is process-local and never
+/// enters either snapshot format.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct LeaderWireRecoveryAuthority {
     context_id: wire::HeightContextId,
@@ -614,6 +616,12 @@ pub(crate) struct LeaderWireRecoveryAuthority {
     owner: [u8; 32],
     durable_view: wire::View,
     decision_durable: bool,
+    /// Exact durable lock whose historical Commit votes remain reducer inputs.
+    ///
+    /// This projection is process-local safety-WAL authority. It is deliberately
+    /// absent from the leader-wire snapshot: replay reconstructs it from the
+    /// authenticated PrepareQC before opening this adjacent store.
+    protected_lock: Option<(wire::ConsensusRound, wire::BlockSubject)>,
 }
 impl LeaderWireRecoveryAuthority {
     /// Mint the recovery cut only from a replay-complete adapter.
@@ -630,7 +638,43 @@ impl LeaderWireRecoveryAuthority {
             owner,
             durable_view,
             decision_durable,
+            protected_lock: None,
         }
+    }
+    fn protected_lock_is_well_formed(
+        self,
+        protected_lock: (wire::ConsensusRound, wire::BlockSubject),
+    ) -> bool {
+        let (round, _) = protected_lock;
+        round.context_id == self.context_id
+            && round.height == self.height
+            && round.view <= self.durable_view
+    }
+    fn protected_lock_monotonically_extends(self, previous: Self) -> bool {
+        match (previous.protected_lock, self.protected_lock) {
+            (None, _) => true,
+            (Some(_), None) => false,
+            (Some(previous), Some(next)) => next == previous || next.0.view > previous.0.view,
+        }
+    }
+    /// Attach the exact replayed durable lock before opening the adjacent store.
+    pub(super) fn with_protected_lock(
+        self,
+        protected_lock: Option<(wire::ConsensusRound, wire::BlockSubject)>,
+    ) -> Result<Self, String> {
+        let next = Self {
+            protected_lock,
+            ..self
+        };
+        if protected_lock.is_some_and(|lock| !next.protected_lock_is_well_formed(lock)) {
+            return Err(
+                "leader-wire recovery authority carried a future protected lock".to_owned(),
+            );
+        }
+        if !next.protected_lock_monotonically_extends(self) {
+            return Err("leader-wire recovery authority regressed its protected lock".to_owned());
+        }
+        Ok(next)
     }
     fn matches_geometry(
         self,
@@ -641,14 +685,28 @@ impl LeaderWireRecoveryAuthority {
         self.context_id == context_id && self.height == height && self.owner == owner
     }
     /// Advance this WAL-derived authority to a certified durable view.
-    pub(super) fn advance_view(self, durable_view: wire::View) -> Result<Self, String> {
+    pub(super) fn advance_view(
+        self,
+        durable_view: wire::View,
+        protected_lock: Option<(wire::ConsensusRound, wire::BlockSubject)>,
+    ) -> Result<Self, String> {
         if durable_view < self.durable_view {
             return Err("leader-wire recovery authority regressed its durable view".to_owned());
         }
-        Ok(Self {
+        let next = Self {
             durable_view,
+            protected_lock,
             ..self
-        })
+        };
+        if protected_lock.is_some_and(|lock| !next.protected_lock_is_well_formed(lock)) {
+            return Err(
+                "leader-wire recovery authority carried a future protected lock".to_owned(),
+            );
+        }
+        if !next.protected_lock_monotonically_extends(self) {
+            return Err("leader-wire recovery authority regressed its protected lock".to_owned());
+        }
+        Ok(next)
     }
     /// Refine this WAL-derived authority after Decision is durable.
     pub(super) const fn with_durable_decision(self) -> Self {
@@ -663,28 +721,50 @@ impl LeaderWireRecoveryAuthority {
             && self.owner == previous.owner
             && self.durable_view >= previous.durable_view
             && (!previous.decision_durable || self.decision_durable)
+            && self
+                .protected_lock
+                .is_none_or(|lock| self.protected_lock_is_well_formed(lock))
+            && self.protected_lock_monotonically_extends(previous)
+    }
+    fn protects_commit_vote(self, identity: &FairV2IngressLeaderWireIdentity) -> bool {
+        identity.phase == FairV2IngressLeaderWirePhase::CommitVote
+            && self.protected_lock.is_some_and(|(round, subject)| {
+                identity.context_id == round.context_id
+                    && identity.height == round.height
+                    && identity.view == round.view
+                    && identity.subject_hash == Hash::new(subject.encode())
+            })
     }
     /// Return whether this durable cut retires one stored lifecycle owner.
     pub(super) fn retires(self, token: &FairV2IngressLeaderWireToken) -> bool {
         self.retires_stored_identity(&token.identity)
     }
     fn retires_stored_identity(self, identity: &FairV2IngressLeaderWireIdentity) -> bool {
-        identity.phase.source_class() == FairV2IngressLeaderWireSourceClass::Control
-            && (self.decision_durable || identity.view < self.durable_view)
+        if identity.phase.source_class() != FairV2IngressLeaderWireSourceClass::Control {
+            return false;
+        }
+        self.decision_durable
+            || (identity.view < self.durable_view
+                && identity.phase != FairV2IngressLeaderWirePhase::CommitQc
+                && !self.protects_commit_vote(identity))
     }
     /// Return whether this durable cut still admits new ingress of this identity.
     fn admits_ingress_identity(self, identity: &FairV2IngressLeaderWireIdentity) -> bool {
-        // A certified view or Decision closes reducer-producing control, not
-        // transport completion. The selected block can still be missing when
-        // Decision becomes durable, so its exact chunk/body response must
-        // reach the downstream fetch, manifest, request, and subject checks.
+        // A certified view closes ordinary old-view control, but the reducer
+        // still accepts the exact locked Commit statement and terminal
+        // CommitQC. Decision closes every control class, not transport
+        // completion. The selected block can still be missing when Decision
+        // becomes durable, so its exact chunk/body response must reach the
+        // downstream fetch, manifest, request, and subject checks.
         if identity.phase.source_class() != FairV2IngressLeaderWireSourceClass::Control {
             return true;
         }
         if self.decision_durable {
             return false;
         }
-        identity.view >= self.durable_view
+        identity.phase == FairV2IngressLeaderWirePhase::CommitQc
+            || self.protects_commit_vote(identity)
+            || identity.view >= self.durable_view
             || (identity.phase == FairV2IngressLeaderWirePhase::TimeoutCertificate
                 && identity.view.saturating_add(1) == self.durable_view)
     }

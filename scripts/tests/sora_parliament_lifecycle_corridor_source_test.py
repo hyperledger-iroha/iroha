@@ -13,6 +13,75 @@ RUNNER = ROOT / "ci/check_sora_parliament_lifecycle.sh"
 WORKFLOW = ROOT / ".github/workflows/pr.yml"
 MANIFEST = ROOT / "integration_tests/Cargo.toml"
 CORRIDOR = ROOT / "integration_tests/tests/sora_parliament_lifecycle_smoke.rs"
+TEST_NETWORK = ROOT / "crates/iroha_test_network/src/lib.rs"
+DAEMON = ROOT / "crates/irohad/src/main.rs"
+BEACON = ROOT / "crates/iroha_core/src/beacon.rs"
+BEACON_LIFECYCLE = ROOT / "crates/iroha_core/src/sumeragi/v2_beacon.rs"
+MANDATORY_NPOS_TEST_NAME = (
+    "four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_gate"
+)
+FAIL_CLOSED_NPOS_TEST_NAME = (
+    "four_validator_mandatory_npos_beacon_fails_closed_below_threshold"
+)
+PARLIAMENT_LIFECYCLE_TEST_NAME = (
+    "four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn"
+)
+MANDATORY_NPOS_TEST_ATTRIBUTE = (
+    '#[tokio::test(flavor = "multi_thread", worker_threads = 4)]'
+)
+PARLIAMENT_LIFECYCLE_TEST = re.compile(
+    rf"(?ms)^{re.escape(MANDATORY_NPOS_TEST_ATTRIBUTE)}\n"
+    rf"async fn {PARLIAMENT_LIFECYCLE_TEST_NAME}\(\) -> Result<\(\)> \{{\n"
+    r".*?^\}\n"
+    rf"(?=\n{re.escape(MANDATORY_NPOS_TEST_ATTRIBUTE)}\n"
+    rf"async fn {MANDATORY_NPOS_TEST_NAME}\(\))"
+)
+MANDATORY_NPOS_TEST = re.compile(
+    rf"(?ms)^{re.escape(MANDATORY_NPOS_TEST_ATTRIBUTE)}\n"
+    rf"async fn {MANDATORY_NPOS_TEST_NAME}\(\) -> Result<\(\)>\n"
+    r"\{\n.*?^\}\n"
+    rf"(?=\n{re.escape(MANDATORY_NPOS_TEST_ATTRIBUTE)}\n"
+    rf"async fn {FAIL_CLOSED_NPOS_TEST_NAME}\(\))"
+)
+FAIL_CLOSED_NPOS_TEST = re.compile(
+    rf"(?ms)^{re.escape(MANDATORY_NPOS_TEST_ATTRIBUTE)}\n"
+    rf"async fn {FAIL_CLOSED_NPOS_TEST_NAME}\(\) -> Result<\(\)> \{{\n"
+    r".*?^\}\n"
+    r"(?=\n#\[test\]\nfn parliament_network_corridor_has_no_legacy_or_consensus_bypass_surface\(\))"
+)
+AUTONOMOUS_SORTITION_PULSE_PROGRESSION = '''network.ensure_blocks(sortition_pulse_height).await?;
+    assert_eq!(
+        current_height(&client)?,
+        sortition_pulse_height,
+        "the demanded sortition threshold-beacon effect must autonomously finalize its exact height",
+    );'''
+AUTONOMOUS_BALLOT_RELEASE_PULSE_PROGRESSION = '''network.ensure_blocks(release_height).await?;
+    assert_eq!(
+        current_height(&client)?,
+        release_height,
+        "the demanded ballot-release threshold-beacon effect must autonomously finalize its exact height",
+    );'''
+AUTONOMOUS_PULSE_PROGRESSION = '''network.ensure_blocks(pulse_height).await?;
+    assert_eq!(
+        current_height(&client)?,
+        pulse_height,
+        "the mandatory threshold-beacon effect must autonomously finalize its exact pre-boundary height",
+    );'''
+BOUNDARY_PROGRESSION = '''assert_eq!(
+        tick(&client, "commit mandatory NPoS boundary")?,
+        boundary_height
+    );'''
+SUCCESSOR_PROGRESSION = '''assert_eq!(
+        tick(&client, "prove successor epoch can finalize")?,
+        boundary_height + 1
+    );
+    network.ensure_blocks(boundary_height + 1).await?;'''
+SUCCESSOR_SEED_EQUALITY = (
+    "assert_eq!(status.height_context.epoch_seed, successor_seed);"
+)
+POSITIVE_BEACON_MODES = """constPOSITIVE_BEACON_SIGNER_MODES:[ParliamentBeaconSignerMode;VALIDATOR_COUNT]=[ParliamentBeaconSignerMode::Valid,ParliamentBeaconSignerMode::Valid,ParliamentBeaconSignerMode::Absent,ParliamentBeaconSignerMode::Invalid,];"""
+FAIL_CLOSED_BEACON_MODES = """constFAIL_CLOSED_BEACON_SIGNER_MODES:[ParliamentBeaconSignerMode;VALIDATOR_COUNT]=[ParliamentBeaconSignerMode::Valid,ParliamentBeaconSignerMode::Absent,ParliamentBeaconSignerMode::Absent,ParliamentBeaconSignerMode::Invalid,];"""
+FAIL_CLOSED_TIMEOUT = """letunexpected_pulse_height=tokio::time::timeout(FAIL_CLOSED_BEACON_OBSERVATION_WINDOW,network.peers()[0].once_block(pulse_height),).await;"""
 
 
 class ContractError(AssertionError):
@@ -73,19 +142,244 @@ def validate_workflow(source: str) -> None:
     require("--release" not in body, "Parliament PR job must not consume release binaries")
 
 
+def parliament_lifecycle_test(source: str) -> tuple[re.Match[str], str]:
+    """Return the one exact executable Parliament lifecycle test item."""
+
+    matches = list(PARLIAMENT_LIFECYCLE_TEST.finditer(source))
+    require(len(matches) == 1, "Parliament lifecycle corridor is not one exact test item")
+    match = matches[0]
+    previous_item_end = source.rfind("\n}\n", 0, match.start())
+    require(previous_item_end >= 0, "Parliament lifecycle test has no preceding item boundary")
+    leading = source[previous_item_end + len("\n}\n") : match.start()]
+    require(
+        "#[" not in leading,
+        "Parliament lifecycle corridor gained an extra attribute",
+    )
+    return match, match.group(0)
+
+
+def mutate_parliament_lifecycle_test(source: str, old: str, new: str = "") -> str:
+    """Apply one exact mutation only inside the Parliament lifecycle test item."""
+
+    match, test = parliament_lifecycle_test(source)
+    require(old in test, f"Parliament lifecycle mutation target is absent: `{old}`")
+    mutated = test.replace(old, new, 1)
+    return source[: match.start()] + mutated + source[match.end() :]
+
+
+def validate_optional_parliament_pulse_progression(source: str) -> None:
+    """Require autonomous finalization for both demanded optional pulses."""
+
+    _, test = parliament_lifecycle_test(source)
+    for marker in (
+        AUTONOMOUS_SORTITION_PULSE_PROGRESSION,
+        AUTONOMOUS_BALLOT_RELEASE_PULSE_PROGRESSION,
+    ):
+        require(marker in test, f"Parliament lifecycle test lost `{marker}`")
+    for retired_tick in (
+        'tick(&client, "finalize the demanded sortition pulse")',
+        'tick(&client, "finalize the demanded ballot-release pulse")',
+    ):
+        require(
+            retired_tick not in test,
+            f"demanded Parliament pulse regained racing tick `{retired_tick}`",
+        )
+
+
+def mandatory_npos_test(source: str) -> tuple[re.Match[str], str]:
+    """Return the one exact executable mandatory-NPoS test item."""
+
+    matches = list(MANDATORY_NPOS_TEST.finditer(source))
+    require(len(matches) == 1, "mandatory NPoS beacon corridor is not one exact test item")
+    match = matches[0]
+    previous_item_end = source.rfind("\n}\n", 0, match.start())
+    require(previous_item_end >= 0, "mandatory NPoS test has no preceding item boundary")
+    leading = source[previous_item_end + len("\n}\n") : match.start()]
+    require(
+        "#[" not in leading,
+        "mandatory NPoS beacon corridor gained an extra attribute",
+    )
+    return match, match.group(0)
+
+
+def mutate_mandatory_npos_test(source: str, old: str, new: str = "") -> str:
+    """Apply one exact mutation only inside the mandatory-NPoS test item."""
+
+    match, test = mandatory_npos_test(source)
+    require(old in test, f"mandatory NPoS mutation target is absent: `{old}`")
+    mutated = test.replace(old, new, 1)
+    return source[: match.start()] + mutated + source[match.end() :]
+
+
+def fail_closed_npos_test(source: str) -> tuple[re.Match[str], str]:
+    """Return the one exact executable below-threshold NPoS test item."""
+
+    matches = list(FAIL_CLOSED_NPOS_TEST.finditer(source))
+    require(len(matches) == 1, "fail-closed NPoS beacon corridor is not one exact test item")
+    match = matches[0]
+    previous_item_end = source.rfind("\n}\n", 0, match.start())
+    require(previous_item_end >= 0, "fail-closed NPoS test has no preceding item boundary")
+    leading = source[previous_item_end + len("\n}\n") : match.start()]
+    require(
+        "#[" not in leading,
+        "fail-closed NPoS beacon corridor gained an extra attribute",
+    )
+    return match, match.group(0)
+
+
+def mutate_fail_closed_npos_test(source: str, old: str, new: str = "") -> str:
+    """Apply one exact mutation only inside the fail-closed NPoS test item."""
+
+    match, test = fail_closed_npos_test(source)
+    require(old in test, f"fail-closed NPoS mutation target is absent: `{old}`")
+    mutated = test.replace(old, new, 1)
+    return source[: match.start()] + mutated + source[match.end() :]
+
+
+def compact(source: str) -> str:
+    """Remove formatting whitespace while retaining exact Rust tokens."""
+
+    return re.sub(r"\s+", "", source)
+
+
 def validate_mandatory_npos_boundary(source: str) -> None:
-    """Require the genuine four-validator pre-boundary beacon corridor."""
+    """Require the exact executable four-validator pre-boundary beacon corridor."""
+
+    _, test = mandatory_npos_test(source)
+    require(
+        source.count("const MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS: u64 = 8;") == 1,
+        "mandatory NPoS epoch length is not one exact eight-block constant",
+    )
+    require(
+        source.count("const VALIDATOR_COUNT: usize = 4;") == 1,
+        "Parliament corridor validator count is not one exact four-peer constant",
+    )
+    required = (
+        "SumeragiNposParameters::default()",
+        ".with_peers(VALIDATOR_COUNT)",
+        ".with_npos_consensus()",
+        ".with_parliament_beacon_signer_modes(POSITIVE_BEACON_SIGNER_MODES)",
+        "assert_eq!(network.peers().len(), VALIDATOR_COUNT);",
+        "assert_eq!(beacon_record.session.committee_size, 4);",
+        "assert_eq!(beacon_record.session.threshold, 2);",
+        "let boundary_height = MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS;",
+        "pulse_height = boundary_height - 1",
+        AUTONOMOUS_PULSE_PROGRESSION,
+        "verify_finalized_global_threshold_beacon_pulse_v1(",
+        "let successor_epoch = 1;",
+        "global_threshold_beacon_npos_successor_seed_v1(",
+        BOUNDARY_PROGRESSION,
+        SUCCESSOR_PROGRESSION,
+        "assert_eq!(status.height_context.epoch, successor_epoch);",
+        SUCCESSOR_SEED_EQUALITY,
+    )
+    for marker in required:
+        require(marker in test, f"mandatory NPoS beacon test lost `{marker}`")
+    require(
+        ".with_permissioned_consensus()" not in test,
+        "mandatory NPoS beacon test selected permissioned consensus",
+    )
+    require(
+        'tick(&client, "commit mandatory pre-boundary pulse")' not in test,
+        "mandatory pre-boundary pulse must not race a user transaction",
+    )
+
+
+def validate_beacon_mode_profiles(source: str) -> None:
+    """Freeze exact 4-seat/2-threshold positive and fail-closed mode profiles."""
+
+    compacted = compact(source)
+    require(
+        compacted.count(POSITIVE_BEACON_MODES) == 1,
+        "positive beacon mode profile is not exact valid/valid/absent/invalid",
+    )
+    require(
+        compacted.count(FAIL_CLOSED_BEACON_MODES) == 1,
+        "fail-closed beacon mode profile is not exact valid/absent/absent/invalid",
+    )
+    _, parliament = parliament_lifecycle_test(source)
+    require(
+        ".with_parliament_beacon_signer_modes(POSITIVE_BEACON_SIGNER_MODES)"
+        in parliament,
+        "optional Parliament pulses lost the positive fault profile",
+    )
+
+
+def validate_fail_closed_npos_boundary(source: str) -> None:
+    """Require four live validators to stall exactly below a mandatory pulse."""
+
+    _, test = fail_closed_npos_test(source)
+    required = (
+        "SumeragiNposParameters::default()",
+        ".with_peers(VALIDATOR_COUNT)",
+        ".with_npos_consensus()",
+        ".with_parliament_beacon_signer_modes(FAIL_CLOSED_BEACON_SIGNER_MODES)",
+        "assert_eq!(network.peers().len(), VALIDATOR_COUNT);",
+        "assert_eq!(beacon_record.session.committee_size, 4);",
+        "assert_eq!(beacon_record.session.threshold, 2);",
+        "filter(|mode| **mode == ParliamentBeaconSignerMode::Valid)",
+        "let pulse_height = MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS - 1;",
+        "let predecessor_height = pulse_height - 1;",
+        "unexpected_pulse_height.is_err()",
+        "peer.is_running()",
+        "assert_eq!(status.last_committed_height, predecessor_height);",
+        "assert_eq!(status.height_context.height, pulse_height);",
+    )
+    for marker in required:
+        require(marker in test, f"fail-closed NPoS beacon test lost `{marker}`")
+    require(
+        FAIL_CLOSED_TIMEOUT in compact(test),
+        "fail-closed NPoS beacon test lost its bounded no-block observation",
+    )
+    require(
+        ".with_permissioned_consensus()" not in test,
+        "fail-closed beacon test selected permissioned consensus",
+    )
+    require(
+        ".with_parliament_test_signers()" not in test,
+        "fail-closed beacon test replaced the exact per-peer fault profile",
+    )
+    require(
+        "network.shutdown().await;" in test,
+        "fail-closed beacon test must shut down all still-live validators",
+    )
+
+
+def validate_feature_only_fault_wiring(
+    test_network: str,
+    daemon: str,
+    beacon: str,
+    lifecycle: str,
+) -> None:
+    """Pin the hidden child arg and receiver-side invalid-share corridor."""
 
     for marker in (
-        "async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_gate()",
-        "SumeragiNposParameters::default()",
-        "const MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS: u64 = 8;",
-        "pulse_height = boundary_height - 1",
-        "global_threshold_beacon_npos_successor_seed_v1(",
-        "status.height_context.epoch_seed",
-        "verify_finalized_global_threshold_beacon_pulse_v1(",
+        "pub enum ParliamentBeaconSignerMode",
+        "with_parliament_beacon_signer_modes",
+        '"--test-network-parliament-beacon-signer-mode"',
+        "append_parliament_beacon_signer_mode_arg",
     ):
-        require(marker in source, f"mandatory NPoS beacon corridor lost `{marker}`")
+        require(marker in test_network, f"test-network signer wiring lost `{marker}`")
+    for marker in (
+        '#[cfg(feature = "test-network-parliament-signers")]\n#[derive(',
+        "enum TestNetworkParliamentBeaconSignerMode",
+        'long = "test-network-parliament-beacon-signer-mode"',
+        "hide = true",
+        "TestNetworkParliamentBeaconSignerMode::Absent => None",
+        "with_deliberately_invalid_outbound()",
+    ):
+        require(marker in daemon, f"feature-only daemon signer wiring lost `{marker}`")
+    require(
+        "test_network_emit_invalid_outbound_partial_v1" in beacon,
+        "beacon signer trait lost the feature-only outbound hook",
+    )
+    for marker in (
+        '#[cfg(feature = "test-network-parliament-signers")]',
+        "test_network_emit_invalid_outbound_partial_v1()",
+        "partial.signature_share[0] ^= 1;",
+        "let _ = active.aggregator.accept_partial(partial)?;",
+    ):
+        require(marker in lifecycle, f"feature-only beacon lifecycle lost `{marker}`")
 
 
 class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
@@ -136,20 +430,181 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
             "MarkEnacted",
         ):
             require(retired not in corridor, f"corridor regained retired `{retired}`")
+        validate_optional_parliament_pulse_progression(corridor)
+        validate_beacon_mode_profiles(corridor)
         validate_mandatory_npos_boundary(corridor)
+        validate_fail_closed_npos_boundary(corridor)
+        validate_feature_only_fault_wiring(
+            TEST_NETWORK.read_text(encoding="utf-8"),
+            DAEMON.read_text(encoding="utf-8"),
+            BEACON.read_text(encoding="utf-8"),
+            BEACON_LIFECYCLE.read_text(encoding="utf-8"),
+        )
 
-    def test_mandatory_npos_boundary_rejects_each_removed_security_marker(self) -> None:
+    def test_optional_pulse_progression_rejects_adversarial_mutations(self) -> None:
         corridor = CORRIDOR.read_text(encoding="utf-8")
-        for marker in (
-            "async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_gate()",
-            "SumeragiNposParameters::default()",
-            "const MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS: u64 = 8;",
-            "pulse_height = boundary_height - 1",
-            "global_threshold_beacon_npos_successor_seed_v1(",
-            "status.height_context.epoch_seed",
-        ):
-            with self.subTest(marker=marker), self.assertRaises(ContractError):
-                validate_mandatory_npos_boundary(corridor.replace(marker, "", 1))
+        mutations = {
+            "missing sortition autonomous progression": mutate_parliament_lifecycle_test(
+                corridor, AUTONOMOUS_SORTITION_PULSE_PROGRESSION
+            ),
+            "sortition pulse transaction race": mutate_parliament_lifecycle_test(
+                corridor,
+                AUTONOMOUS_SORTITION_PULSE_PROGRESSION,
+                '''assert_eq!(
+        tick(&client, "finalize the demanded sortition pulse")?,
+        sortition_pulse_height,
+    );
+    network.ensure_blocks(sortition_pulse_height).await?;''',
+            ),
+            "missing ballot-release autonomous progression": mutate_parliament_lifecycle_test(
+                corridor, AUTONOMOUS_BALLOT_RELEASE_PULSE_PROGRESSION
+            ),
+            "ballot-release pulse transaction race": mutate_parliament_lifecycle_test(
+                corridor,
+                AUTONOMOUS_BALLOT_RELEASE_PULSE_PROGRESSION,
+                '''assert_eq!(
+        tick(&client, "finalize the demanded ballot-release pulse")?,
+        release_height,
+    );
+    network.ensure_blocks(release_height).await?;''',
+            ),
+        }
+        for label, mutated in mutations.items():
+            with self.subTest(label=label), self.assertRaises(ContractError):
+                validate_optional_parliament_pulse_progression(mutated)
+
+    def test_mandatory_npos_boundary_rejects_adversarial_mutations(self) -> None:
+        corridor = CORRIDOR.read_text(encoding="utf-8")
+        mutations = {
+            "renamed test": mutate_mandatory_npos_test(
+                corridor, MANDATORY_NPOS_TEST_NAME, f"{MANDATORY_NPOS_TEST_NAME}_disabled"
+            ),
+            "ignored test": mutate_mandatory_npos_test(
+                corridor,
+                MANDATORY_NPOS_TEST_ATTRIBUTE,
+                f"#[ignore]\n{MANDATORY_NPOS_TEST_ATTRIBUTE}",
+            ),
+            "permissioned consensus": mutate_mandatory_npos_test(
+                corridor, ".with_npos_consensus()", ".with_permissioned_consensus()"
+            ),
+            "one peer": mutate_mandatory_npos_test(
+                corridor, ".with_peers(VALIDATOR_COUNT)", ".with_peers(1)"
+            ),
+            "one-peer validator constant": corridor.replace(
+                "const VALIDATOR_COUNT: usize = 4;",
+                "const VALIDATOR_COUNT: usize = 1;",
+                1,
+            ),
+            "missing epoch constant": corridor.replace(
+                "const MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS: u64 = 8;", "", 1
+            ),
+            "non-autonomous pulse": mutate_mandatory_npos_test(
+                corridor,
+                "network.ensure_blocks(pulse_height).await?;",
+                'tick(&client, "commit mandatory pre-boundary pulse")?;',
+            ),
+            "missing autonomous-height equality": mutate_mandatory_npos_test(
+                corridor, AUTONOMOUS_PULSE_PROGRESSION
+            ),
+            "missing boundary progression": mutate_mandatory_npos_test(
+                corridor, BOUNDARY_PROGRESSION
+            ),
+            "missing successor progression": mutate_mandatory_npos_test(
+                corridor, SUCCESSOR_PROGRESSION
+            ),
+            "seed read without equality": mutate_mandatory_npos_test(
+                corridor,
+                SUCCESSOR_SEED_EQUALITY,
+                "let _ = (status.height_context.epoch_seed, successor_seed);",
+            ),
+            "missing pulse verifier": mutate_mandatory_npos_test(
+                corridor, "verify_finalized_global_threshold_beacon_pulse_v1("
+            ),
+            "missing committee assertion": mutate_mandatory_npos_test(
+                corridor, "assert_eq!(beacon_record.session.committee_size, 4);"
+            ),
+            "missing threshold assertion": mutate_mandatory_npos_test(
+                corridor, "assert_eq!(beacon_record.session.threshold, 2);"
+            ),
+        }
+        for label, mutated in mutations.items():
+            with self.subTest(label=label), self.assertRaises(ContractError):
+                validate_mandatory_npos_boundary(mutated)
+
+    def test_beacon_mode_profiles_reject_adversarial_mutations(self) -> None:
+        corridor = CORRIDOR.read_text(encoding="utf-8")
+        mutations = {
+            "positive invalid becomes valid": corridor.replace(
+                "const POSITIVE_BEACON_SIGNER_MODES",
+                "const MUTATED_POSITIVE_BEACON_SIGNER_MODES",
+                1,
+            ),
+            "fail-closed second absent becomes valid": corridor.replace(
+                "const FAIL_CLOSED_BEACON_SIGNER_MODES",
+                "const MUTATED_FAIL_CLOSED_BEACON_SIGNER_MODES",
+                1,
+            ),
+            "optional lifecycle returns to all-valid shorthand": mutate_parliament_lifecycle_test(
+                corridor,
+                ".with_parliament_beacon_signer_modes(POSITIVE_BEACON_SIGNER_MODES)",
+                ".with_parliament_test_signers()",
+            ),
+        }
+        for label, mutated in mutations.items():
+            with self.subTest(label=label), self.assertRaises(ContractError):
+                validate_beacon_mode_profiles(mutated)
+
+    def test_fail_closed_npos_boundary_rejects_adversarial_mutations(self) -> None:
+        corridor = CORRIDOR.read_text(encoding="utf-8")
+        mutations = {
+            "renamed test": mutate_fail_closed_npos_test(
+                corridor,
+                FAIL_CLOSED_NPOS_TEST_NAME,
+                f"{FAIL_CLOSED_NPOS_TEST_NAME}_disabled",
+            ),
+            "ignored test": mutate_fail_closed_npos_test(
+                corridor,
+                MANDATORY_NPOS_TEST_ATTRIBUTE,
+                f"#[ignore]\n{MANDATORY_NPOS_TEST_ATTRIBUTE}",
+            ),
+            "permissioned consensus": mutate_fail_closed_npos_test(
+                corridor,
+                ".with_npos_consensus()",
+                ".with_permissioned_consensus()",
+            ),
+            "one peer": mutate_fail_closed_npos_test(
+                corridor,
+                ".with_peers(VALIDATOR_COUNT)",
+                ".with_peers(1)",
+            ),
+            "all-valid shorthand": mutate_fail_closed_npos_test(
+                corridor,
+                ".with_parliament_beacon_signer_modes(FAIL_CLOSED_BEACON_SIGNER_MODES)",
+                ".with_parliament_test_signers()",
+            ),
+            "threshold weakened": mutate_fail_closed_npos_test(
+                corridor,
+                "assert_eq!(beacon_record.session.threshold, 2);",
+                "assert_eq!(beacon_record.session.threshold, 1);",
+            ),
+            "unbounded block wait": mutate_fail_closed_npos_test(
+                corridor,
+                "let unexpected_pulse_height = tokio::time::timeout(",
+                "let unexpected_pulse_height = passthrough(",
+            ),
+            "validator liveness omitted": mutate_fail_closed_npos_test(
+                corridor,
+                "peer.is_running()",
+                "true",
+            ),
+            "stalled height omitted": mutate_fail_closed_npos_test(
+                corridor,
+                "assert_eq!(status.last_committed_height, predecessor_height);",
+            ),
+        }
+        for label, mutated in mutations.items():
+            with self.subTest(label=label), self.assertRaises(ContractError):
+                validate_fail_closed_npos_boundary(mutated)
 
 
 if __name__ == "__main__":

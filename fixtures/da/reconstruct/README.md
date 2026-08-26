@@ -5,7 +5,7 @@ This directory contains the canonical RS parity fixture referenced by the
 It is generated via the ignored test
 
 ```
-cargo test -p sorafs_car --features da_harness regenerate_da_reconstruct_fixture_assets -- --ignored --nocapture
+cargo test -p sorafs_car --features 'dev-tools,da_harness' --bin da_reconstruct regenerate_da_reconstruct_fixture_assets -- --ignored --nocapture
 ```
 
 Artifacts:

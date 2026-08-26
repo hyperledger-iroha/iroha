@@ -159,8 +159,8 @@ impl LocalProposalDirective {
 ///
 /// Construction is restricted to a fully replayed adapter, so a checksummed
 /// body-store marker cannot select itself for recovery. The bounded key set is
-/// derived only from the durable lock/decision and the adapter's first replay
-/// batch.
+/// derived only from the durable highest Prepare certificate, lock/decision,
+/// and the adapter's first replay batch.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RecoveredValidationAuthority {
     context_id: wire::HeightContextId,

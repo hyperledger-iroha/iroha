@@ -544,20 +544,27 @@ if !runtime_terminal_commits.is_empty() {
             and len(terminal_schedule_positions) == 1
             and len(terminal_commit_positions) == 1
             and len(count_positions) == 1
-            and len(admission_positions) == 5
-            and len(projection_positions) == 5
-            and len(checked_positions) == 5
+            and len(admission_positions) == 7
+            and len(projection_positions) == 7
+            and len(checked_positions) == 7
             and len(fetch_adoption_positions) == 1
-            and len(body_stage_adoption_positions) == 1
+            and len(body_stage_adoption_positions) == 2
             and len(match_positions) == 1
             and len(publication_positions) == 2
             and len(validate_retry_publication_positions) == 1
-            and admission_positions[0]
+            and body_stage_adoption_positions[0]
+            < admission_positions[0]
             < projection_positions[0]
             < checked_positions[0]
             < admission_positions[1]
             < projection_positions[1]
             < checked_positions[1]
+            < admission_positions[2]
+            < projection_positions[2]
+            < checked_positions[2]
+            < admission_positions[3]
+            < projection_positions[3]
+            < checked_positions[3]
             < validate_retry_publication_positions[0]
             < exact_incumbent_positions[0]
             and exact_incumbent_positions[0]
@@ -565,17 +572,17 @@ if !runtime_terminal_commits.is_empty() {
             < terminal_plan_positions[0]
             < terminal_adoption_positions[0]
             < count_positions[0]
-            < admission_positions[2]
-            < projection_positions[2]
-            < checked_positions[2]
-            < fetch_adoption_positions[0]
-            < admission_positions[3]
-            < projection_positions[3]
-            < checked_positions[3]
-            < body_stage_adoption_positions[0]
             < admission_positions[4]
             < projection_positions[4]
             < checked_positions[4]
+            < fetch_adoption_positions[0]
+            < admission_positions[5]
+            < projection_positions[5]
+            < checked_positions[5]
+            < body_stage_adoption_positions[-1]
+            < admission_positions[6]
+            < projection_positions[6]
+            < checked_positions[6]
             < match_positions[0]
             < publication_positions[-1]
             < terminal_schedule_positions[0]
@@ -764,6 +771,15 @@ pub(crate) fn consume_effects<S: V2EffectServices>(
         consume_effects,
         """
 self.ensure_open()?;
+if effects.len() > MAX_EFFECTS_PER_STEP {
+    return Err(self.close(
+        EffectExecutorError::Contract(format!(
+            "one adapter macro-step emitted {} effects above the adapter bound {MAX_EFFECTS_PER_STEP}",
+            effects.len()
+        )),
+        services,
+    ));
+}
 if self.pending_runner_decision_cleanup.is_some() {
     return Err(self.close(
         EffectExecutorError::Contract(
@@ -1216,9 +1232,14 @@ if matches!(&owned.effect, AdapterEffect::Apply { .. })
     break;
 }
 let pending_work_producer = Self::pending_work_producer(&owned.effect);
-match self.consume_one(owned.effect, owned.ownership, services)
+match self.consume_one(
+    owned.effect,
+    owned.ownership,
+    owned.highest_prepare_retention,
+    services,
+)
 """,
-        "retained Apply dispatch must stop at the runner-cleanup fence before entering consume_one",
+        "retained Apply dispatch must stop at the runner-cleanup fence and carry its highest-Prepare cleanup sidecar into consume_one",
         errors,
     )
 
@@ -1290,6 +1311,15 @@ fn consume_pacemaker_effects<S: V2EffectServices>(
         consume_pacemaker,
         """
 self.ensure_open()?;
+if effects.len() > MAX_EFFECTS_PER_STEP {
+    return Err(self.close(
+        EffectExecutorError::Contract(format!(
+            "one pacemaker adapter macro-step emitted {} effects above the adapter bound {MAX_EFFECTS_PER_STEP}",
+            effects.len()
+        )),
+        services,
+    ));
+}
 if self.pending_runner_decision_cleanup.is_some() {
     return Err(self.close(
         EffectExecutorError::Contract(

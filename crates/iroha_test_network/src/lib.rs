@@ -911,6 +911,36 @@ pub enum Program {
     /// Iroha Client CLI
     Iroha,
 }
+
+/// Feature-isolated global-beacon signer behavior for one validator child.
+///
+/// The mode changes only the test daemon's runtime beacon-share provider. The
+/// validator remains online, retains its full consensus vote, and always keeps
+/// the proof-valid Parliament TLE signer installed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ParliamentBeaconSignerMode {
+    /// Produce and broadcast the proof-valid share for the exact local seat.
+    #[default]
+    Valid,
+    /// Do not install a global-beacon partial signer for this validator.
+    Absent,
+    /// Broadcast a deliberately proof-invalid share without admitting it locally.
+    Invalid,
+}
+
+const PARLIAMENT_BEACON_SIGNER_MODE_ARG: &str = "--test-network-parliament-beacon-signer-mode";
+const PARLIAMENT_TEST_SIGNER_VALIDATOR_COUNT: usize = 4;
+
+impl ParliamentBeaconSignerMode {
+    const fn child_arg(self) -> &'static str {
+        match self {
+            Self::Valid => "valid",
+            Self::Absent => "absent",
+            Self::Invalid => "invalid",
+        }
+    }
+}
+
 #[derive(Debug)]
 struct ProgramSpec {
     name: &'static str,
@@ -5386,6 +5416,28 @@ where
             .fetch_add(u64::try_from(read).unwrap_or(u64::MAX), Ordering::Relaxed);
     }
 }
+#[derive(Clone)]
+enum ParliamentTestSignerSelection {
+    AllValid,
+    PerPeer(Vec<ParliamentBeaconSignerMode>),
+}
+
+impl ParliamentTestSignerSelection {
+    fn resolve(&self, validator_count: usize) -> Vec<ParliamentBeaconSignerMode> {
+        match self {
+            Self::AllValid => vec![ParliamentBeaconSignerMode::Valid; validator_count],
+            Self::PerPeer(modes) => {
+                assert_eq!(
+                    modes.len(),
+                    validator_count,
+                    "Parliament beacon signer modes must name every validator exactly once",
+                );
+                modes.clone()
+            }
+        }
+    }
+}
+
 /// Builder of [`Network`].
 ///
 /// Cloning copies only the deterministic network recipe. Every call to
@@ -5412,7 +5464,7 @@ pub struct NetworkBuilder {
     auto_populate_trusted_peer_pops: bool,
     npos_genesis_bootstrap_stake: Option<Quantity>,
     consensus_message_control: bool,
-    parliament_test_signers: bool,
+    parliament_test_signers: Option<ParliamentTestSignerSelection>,
     initial_consensus_message_control: Option<InitialConsensusMessageControl>,
 }
 type InitialConsensusMessageControlFactory =
@@ -6385,7 +6437,7 @@ impl NetworkBuilder {
                 SumeragiNposParameters::default().min_self_bond().clone(),
             ),
             consensus_message_control: false,
-            parliament_test_signers: false,
+            parliament_test_signers: None,
             initial_consensus_message_control: None,
         };
         let mut default_layer = Table::new();
@@ -6412,12 +6464,27 @@ impl NetworkBuilder {
     /// Set the exact revision-4 `3f + 1` validator count for the network.
     ///
     /// Four by default. Invalid or out-of-range committee sizes panic before
-    /// any peer, signed genesis, or runtime configuration is constructed.
+    /// any peer, signed genesis, or runtime configuration is constructed. Once
+    /// a feature-isolated Parliament signer fixture is selected, every count
+    /// other than its exact four-validator roster also panics.
     pub fn with_peers(mut self, n_peers: usize) -> Self {
         assert!(
             is_valid_committee_size(n_peers),
             "validator peer count must be an exact revision-4 3f + 1 committee in {MIN_VALIDATORS_PER_HEIGHT}..={MAX_VALIDATORS_PER_HEIGHT}, got {n_peers}"
         );
+        if let Some(selection) = &self.parliament_test_signers {
+            assert_eq!(
+                n_peers, PARLIAMENT_TEST_SIGNER_VALIDATOR_COUNT,
+                "the feature-isolated Parliament signer fixture requires exactly four validators",
+            );
+            if let ParliamentTestSignerSelection::PerPeer(modes) = selection {
+                assert_eq!(
+                    modes.len(),
+                    n_peers,
+                    "Parliament beacon signer modes must name every validator exactly once",
+                );
+            }
+        }
         if let Some(max_validator_capacity) = self.max_validator_capacity {
             assert!(
                 n_peers <= max_validator_capacity,
@@ -6481,7 +6548,7 @@ impl NetworkBuilder {
     /// authenticated Sumeragi v2 message control for adversarial network tests.
     pub fn with_consensus_message_control(mut self) -> Self {
         assert!(
-            !self.parliament_test_signers,
+            self.parliament_test_signers.is_none(),
             "the feature-isolated Parliament signer has a separate daemon binary"
         );
         self.consensus_message_control = true;
@@ -6491,12 +6558,51 @@ impl NetworkBuilder {
     /// returns one proof-valid global-beacon share and one proof-valid TLE share
     /// for each validator's exact local seat. Consensus and release validation
     /// remain unchanged.
+    ///
+    /// # Panics
+    ///
+    /// Panics when message control is already selected or the builder does not
+    /// name the fixture's exact four-validator roster.
     pub fn with_parliament_test_signers(mut self) -> Self {
         assert!(
             !self.consensus_message_control,
             "the Parliament signer and message-control daemons are separate test binaries"
         );
-        self.parliament_test_signers = true;
+        assert_eq!(
+            self.n_peers, PARLIAMENT_TEST_SIGNER_VALIDATOR_COUNT,
+            "the feature-isolated Parliament signer fixture requires exactly four validators",
+        );
+        self.parliament_test_signers = Some(ParliamentTestSignerSelection::AllValid);
+        self
+    }
+
+    /// Use the feature-isolated Parliament daemon with one exact beacon signer
+    /// mode for every validator, while keeping every TLE signer proof-valid.
+    ///
+    /// # Panics
+    ///
+    /// Panics before network construction when message control was selected or
+    /// when the builder does not name exactly four validators or `modes` does
+    /// not contain exactly one entry for each validator.
+    pub fn with_parliament_beacon_signer_modes(
+        mut self,
+        modes: impl IntoIterator<Item = ParliamentBeaconSignerMode>,
+    ) -> Self {
+        assert!(
+            !self.consensus_message_control,
+            "the Parliament signer and message-control daemons are separate test binaries"
+        );
+        assert_eq!(
+            self.n_peers, PARLIAMENT_TEST_SIGNER_VALIDATOR_COUNT,
+            "the feature-isolated Parliament signer fixture requires exactly four validators",
+        );
+        let modes = modes.into_iter().collect::<Vec<_>>();
+        assert_eq!(
+            modes.len(),
+            self.n_peers,
+            "Parliament beacon signer modes must name every validator exactly once",
+        );
+        self.parliament_test_signers = Some(ParliamentTestSignerSelection::PerPeer(modes));
         self
     }
     /// Stage receiver-local authenticated consensus rules before controlled
@@ -6514,7 +6620,7 @@ impl NetworkBuilder {
         F: Fn(usize, &[PeerId]) -> Vec<ConsensusMessageControlRule> + Send + Sync + 'static,
     {
         assert!(
-            !self.parliament_test_signers,
+            self.parliament_test_signers.is_none(),
             "the feature-isolated Parliament signer has a separate daemon binary"
         );
         self.consensus_message_control = true;
@@ -6527,7 +6633,9 @@ impl NetworkBuilder {
     /// Ensure the network has the smallest revision-4 committee with at least `min_peers` peers.
     ///
     /// Values between valid committee sizes round up. A zero minimum or a
-    /// minimum above the protocol ceiling panics before construction.
+    /// minimum above the protocol ceiling panics before construction. When a
+    /// feature-isolated Parliament signer fixture is selected, a minimum that
+    /// rounds to any count other than four also panics.
     pub fn with_min_peers(mut self, min_peers: usize) -> Self {
         assert_ne!(min_peers, 0);
         let target_peers = revision4_committee_at_least(min_peers).unwrap_or_else(|| {
@@ -6535,6 +6643,12 @@ impl NetworkBuilder {
                 "minimum validator peer count must not exceed revision-4 ceiling {MAX_VALIDATORS_PER_HEIGHT}, got {min_peers}"
             )
         });
+        if self.parliament_test_signers.is_some() {
+            assert_eq!(
+                target_peers, PARLIAMENT_TEST_SIGNER_VALIDATOR_COUNT,
+                "the feature-isolated Parliament signer fixture requires exactly four validators",
+            );
+        }
         if let Some(max_validator_capacity) = self.max_validator_capacity {
             assert!(
                 target_peers <= max_validator_capacity,
@@ -6904,7 +7018,13 @@ impl NetworkBuilder {
             }
             config_layers.push(nexus_accounts_layer);
         }
-        let validator_program = match (consensus_message_control, parliament_test_signers) {
+        let parliament_beacon_signer_modes = parliament_test_signers
+            .as_ref()
+            .map(|selection| selection.resolve(n_peers));
+        let validator_program = match (
+            consensus_message_control,
+            parliament_beacon_signer_modes.is_some(),
+        ) {
             (false, false) => Program::Irohad,
             (true, false) => Program::IrohadMessageControl,
             (false, true) => Program::IrohadParliamentSigners,
@@ -6915,6 +7035,11 @@ impl NetworkBuilder {
                 let seed = seed.as_ref().map(|x| format!("{x}-peer-{i}"));
                 NetworkPeerBuilder::new()
                     .with_seed(seed.as_ref().map(|x| x.as_bytes()))
+                    .with_parliament_beacon_signer_mode(
+                        parliament_beacon_signer_modes
+                            .as_ref()
+                            .map(|modes| modes[i]),
+                    )
                     .build_with_program(&env, validator_program)
             })
             .collect();
@@ -7725,6 +7850,7 @@ pub struct NetworkPeer {
     startup_probe: Arc<StdMutex<PeerStartupProbe>>,
     start_context: Arc<StdMutex<Option<PeerStartContext>>>,
     program: Program,
+    parliament_beacon_signer_mode: Option<ParliamentBeaconSignerMode>,
     consensus_message_control: Option<Arc<ConsensusMessageControl>>,
     // dropping these the last
     port_p2p: Arc<AllocatedPort>,
@@ -7784,6 +7910,15 @@ impl NetworkPeer {
     /// Return this peer's feature-isolated consensus controller, when requested by the builder.
     pub fn consensus_message_control(&self) -> Option<&ConsensusMessageControl> {
         self.consensus_message_control.as_deref()
+    }
+
+    fn append_parliament_beacon_signer_mode_arg(&self, command: &mut tokio::process::Command) {
+        if let Some(mode) = self.parliament_beacon_signer_mode {
+            debug_assert_eq!(self.program, Program::IrohadParliamentSigners);
+            command
+                .arg(PARLIAMENT_BEACON_SIGNER_MODE_ARG)
+                .arg(mode.child_arg());
+        }
     }
     /// Spawn the child process.
     ///
@@ -7889,6 +8024,7 @@ impl NetworkPeer {
             if use_sora_profile {
                 cmd.arg("--sora");
             }
+            self.append_parliament_beacon_signer_mode_arg(&mut cmd);
             if std::env::var_os("IROHA_SKIP_BIND_CHECKS").is_none() {
                 cmd.env("IROHA_SKIP_BIND_CHECKS", "1");
             }
@@ -9259,6 +9395,7 @@ impl PartialEq for NetworkPeer {
 pub struct NetworkPeerBuilder {
     mnemonic: String,
     seed: Option<Vec<u8>>,
+    parliament_beacon_signer_mode: Option<ParliamentBeaconSignerMode>,
 }
 impl NetworkPeerBuilder {
     #[allow(clippy::new_without_default)] // has side effects
@@ -9272,17 +9409,34 @@ impl NetworkPeerBuilder {
                 .collect::<Vec<_>>()
                 .join("_"),
             seed: None,
+            parliament_beacon_signer_mode: None,
         }
     }
     pub fn with_seed(mut self, seed: Option<impl Into<Vec<u8>>>) -> Self {
         self.seed = seed.map(Into::into);
         self
     }
+    fn with_parliament_beacon_signer_mode(
+        mut self,
+        mode: Option<ParliamentBeaconSignerMode>,
+    ) -> Self {
+        self.parliament_beacon_signer_mode = mode;
+        self
+    }
     pub fn build(self, env: &Environment) -> NetworkPeer {
         self.build_with_program(env, Program::Irohad)
     }
     fn build_with_program(self, env: &Environment, program: Program) -> NetworkPeer {
-        let NetworkPeerBuilder { mnemonic, seed } = self;
+        let NetworkPeerBuilder {
+            mnemonic,
+            seed,
+            parliament_beacon_signer_mode,
+        } = self;
+        assert_eq!(
+            parliament_beacon_signer_mode.is_some(),
+            matches!(program, Program::IrohadParliamentSigners),
+            "a Parliament beacon signer mode belongs only to its feature-isolated daemon",
+        );
         let streaming_key_pair = seed
             .as_ref()
             .map(|seed_bytes| checked_key_pair_from_seed(seed_bytes.clone(), Algorithm::Ed25519))
@@ -9356,6 +9510,7 @@ impl NetworkPeerBuilder {
             startup_probe: Arc::new(StdMutex::new(PeerStartupProbe::default())),
             start_context: Arc::new(StdMutex::new(None)),
             program,
+            parliament_beacon_signer_mode,
             consensus_message_control,
             port_p2p: Arc::new(port_p2p),
             port_api: Arc::new(port_api),
@@ -10242,6 +10397,7 @@ mod tests {
             startup_probe: Arc::new(StdMutex::new(PeerStartupProbe::default())),
             start_context: Arc::new(StdMutex::new(None)),
             program: Program::Irohad,
+            parliament_beacon_signer_mode: None,
             consensus_message_control: None,
             port_p2p: Arc::new(AllocatedPort::new()),
             port_api: Arc::new(AllocatedPort::new()),
@@ -10284,6 +10440,7 @@ mod tests {
             startup_probe: Arc::new(StdMutex::new(PeerStartupProbe::default())),
             start_context: Arc::new(StdMutex::new(None)),
             program: Program::Irohad,
+            parliament_beacon_signer_mode: None,
             consensus_message_control: None,
             port_p2p: Arc::new(AllocatedPort::new()),
             port_api: Arc::new(AllocatedPort::new()),
@@ -10330,6 +10487,7 @@ mod tests {
             startup_probe: Arc::new(StdMutex::new(PeerStartupProbe::default())),
             start_context: Arc::new(StdMutex::new(None)),
             program: Program::Irohad,
+            parliament_beacon_signer_mode: None,
             consensus_message_control: None,
             port_p2p: Arc::new(AllocatedPort::new()),
             port_api: Arc::new(AllocatedPort::new()),
@@ -14020,6 +14178,121 @@ mod tests {
                 );
             }
         }
+    }
+    #[test]
+    fn parliament_beacon_signer_modes_are_exact_and_restart_stable() {
+        let modes = [
+            ParliamentBeaconSignerMode::Valid,
+            ParliamentBeaconSignerMode::Valid,
+            ParliamentBeaconSignerMode::Absent,
+            ParliamentBeaconSignerMode::Invalid,
+        ];
+        let network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_peers(4)
+                .with_parliament_beacon_signer_modes(modes),
+        );
+        assert_eq!(network.peers().len(), modes.len());
+
+        for (peer, expected) in network.peers().iter().zip(modes) {
+            assert_eq!(peer.parliament_beacon_signer_mode, Some(expected));
+            let child_args = |peer: &NetworkPeer| {
+                let mut command = tokio::process::Command::new("iroha3d");
+                peer.append_parliament_beacon_signer_mode_arg(&mut command);
+                command
+                    .as_std()
+                    .get_args()
+                    .map(|arg| arg.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>()
+            };
+            let first_run = child_args(peer);
+            assert_eq!(
+                first_run,
+                vec![
+                    PARLIAMENT_BEACON_SIGNER_MODE_ARG.to_owned(),
+                    expected.child_arg().to_owned(),
+                ],
+            );
+            peer.runs_count.fetch_add(1, Ordering::Relaxed);
+            assert_eq!(
+                child_args(peer),
+                first_run,
+                "a normal peer restart must preserve its exact child-only signer mode",
+            );
+        }
+    }
+    #[test]
+    fn parliament_beacon_signer_modes_require_one_entry_per_validator() {
+        let too_short = std::panic::catch_unwind(|| {
+            NetworkBuilder::new()
+                .with_peers(4)
+                .with_parliament_beacon_signer_modes([
+                    ParliamentBeaconSignerMode::Valid,
+                    ParliamentBeaconSignerMode::Absent,
+                    ParliamentBeaconSignerMode::Invalid,
+                ])
+        });
+        assert!(too_short.is_err());
+
+        let exact = NetworkBuilder::new()
+            .with_peers(4)
+            .with_parliament_beacon_signer_modes([
+                ParliamentBeaconSignerMode::Valid,
+                ParliamentBeaconSignerMode::Valid,
+                ParliamentBeaconSignerMode::Absent,
+                ParliamentBeaconSignerMode::Invalid,
+            ]);
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| exact.with_peers(7))).is_err()
+        );
+
+        let all_valid = NetworkBuilder::new()
+            .with_peers(PARLIAMENT_TEST_SIGNER_VALIDATOR_COUNT)
+            .with_parliament_test_signers();
+        assert_eq!(
+            all_valid
+                .parliament_test_signers
+                .as_ref()
+                .expect("all-valid shorthand remains selected")
+                .resolve(PARLIAMENT_TEST_SIGNER_VALIDATOR_COUNT),
+            vec![ParliamentBeaconSignerMode::Valid; PARLIAMENT_TEST_SIGNER_VALIDATOR_COUNT],
+        );
+        assert!(
+            std::panic::catch_unwind(|| {
+                NetworkBuilder::new()
+                    .with_peers(7)
+                    .with_parliament_test_signers()
+            })
+            .is_err(),
+            "selecting the all-valid fixture after a seven-validator committee must fail early",
+        );
+        assert!(
+            std::panic::catch_unwind(|| {
+                NetworkBuilder::new()
+                    .with_parliament_test_signers()
+                    .with_peers(7)
+            })
+            .is_err(),
+            "changing an all-valid fixture to seven validators must fail early",
+        );
+        assert!(
+            std::panic::catch_unwind(|| {
+                NetworkBuilder::new()
+                    .with_parliament_test_signers()
+                    .with_min_peers(5)
+            })
+            .is_err(),
+            "raising an installed Parliament fixture above four validators must fail early",
+        );
+        assert!(
+            std::panic::catch_unwind(|| {
+                NetworkBuilder::new()
+                    .with_min_peers(5)
+                    .with_parliament_test_signers()
+            })
+            .is_err(),
+            "selecting the Parliament fixture after a larger minimum must fail early",
+        );
     }
     #[test]
     fn program_spec_irohad_includes_features_from_env() {

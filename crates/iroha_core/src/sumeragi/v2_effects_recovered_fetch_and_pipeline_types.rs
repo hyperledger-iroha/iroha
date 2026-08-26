@@ -956,6 +956,9 @@ impl LiveLifecycleDecisionApplyOwnerV1 {
 pub(crate) struct RuntimeReconciliationFrontier {
     tag: Option<EventTag>,
     locked_body: Option<(wire::ConsensusRound, wire::BlockSubject)>,
+    /// Strongest durable PrepareQC retained for bounded cleanup authority.
+    /// This is never a voting lock and cannot drive Fetch/rebind behavior.
+    highest_prepare: Option<wire::QuorumCertificateRef>,
     lock_is_authoritative: bool,
     decision: Option<DurableDecision>,
 }
@@ -994,6 +997,11 @@ fn protected_lock_body(
     protected_lock: Option<&wire::QuorumCertificate>,
 ) -> Option<(wire::ConsensusRound, wire::BlockSubject)> {
     protected_lock.map(|certificate| (certificate.proposal_round, certificate.subject))
+}
+fn highest_prepare_body(
+    highest_prepare: Option<wire::QuorumCertificateRef>,
+) -> Option<(wire::ConsensusRound, wire::BlockSubject)> {
+    highest_prepare.map(|certificate| (certificate.proposal_round, certificate.subject))
 }
 /// One adapter macro-step's causal suffix waiting for bounded dispatch capacity.
 ///

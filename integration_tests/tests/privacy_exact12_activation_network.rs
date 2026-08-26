@@ -61,6 +61,7 @@ const PEER_CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(90);
 const RESTART_TIMEOUT: Duration = Duration::from_secs(90);
 const ACTIVATION_ADVANCE_TIMEOUT: Duration = Duration::from_secs(300);
 const TEST_BLOCK_CADENCE: Duration = Duration::from_millis(100);
+const TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES: i64 = 1024 * 1024 * 1024;
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
 const ZK_AMS_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::IrohaZkAmsV1;
 const ZK_ACE_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
@@ -659,7 +660,32 @@ async fn all_unreleased_profiles_fail_closed_across_four_peer_restart() -> Resul
         .with_block_cadence(TEST_BLOCK_CADENCE)
         .with_permissioned_consensus()
         .with_config_layer(|layer| {
-            layer.write(["zk", "stark", "enabled"], true);
+            // Keep the production handshake enabled while minimizing its supported
+            // puzzle cost so this four-peer gate isolates consensus progress.
+            layer
+                .write(["zk", "stark", "enabled"], true)
+                .write(
+                    ["nexus", "storage", "local_budget_bytes"],
+                    TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES,
+                )
+                .write(
+                    [
+                        "network",
+                        "soranet_handshake",
+                        "pow",
+                        "puzzle",
+                        "memory_kib",
+                    ],
+                    i64::from(iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB),
+                )
+                .write(
+                    ["network", "soranet_handshake", "pow", "puzzle", "time_cost"],
+                    1_i64,
+                )
+                .write(
+                    ["network", "soranet_handshake", "pow", "puzzle", "lanes"],
+                    1_i64,
+                );
         });
     let context = stringify!(all_unreleased_profiles_fail_closed_across_four_peer_restart);
     let Some(network) = sandbox::start_network_async_or_skip(builder, context).await? else {
@@ -879,7 +905,10 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
         .with_block_cadence(TEST_BLOCK_CADENCE)
         .with_permissioned_consensus()
         .with_config_layer(|layer| {
-            layer.write(["zk", "stark", "enabled"], true);
+            layer.write(["zk", "stark", "enabled"], true).write(
+                ["nexus", "storage", "local_budget_bytes"],
+                TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES,
+            );
         });
     let Some(network) = sandbox::start_network_async_or_skip(builder, TEST_NAME).await? else {
         return Ok(());

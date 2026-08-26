@@ -1900,7 +1900,9 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             let mut terminal_serve_runner =
                 super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1::for_test();
             assert!(
-                activated.ready_for_finalized_rollover(&mut terminal_serve_runner),
+                activated
+                    .ready_for_finalized_rollover(&mut terminal_serve_runner)
+                    .expect("authenticate the terminal finalization census"),
                 "the terminal fixture must be quiescent before capacity is withheld"
             );
             let terminal_ledger_before =
@@ -1957,7 +1959,9 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 "capacity handoff cannot dequeue or renumber the terminal Serve"
             );
             assert!(
-                !activated.ready_for_finalized_rollover(&mut terminal_serve_runner),
+                !activated
+                    .ready_for_finalized_rollover(&mut terminal_serve_runner)
+                    .expect("authenticate the capacity-blocked finalization census"),
                 "the parked Serve capacity owner must block finalization"
             );
             let permit = activated.with_runner_runtime(
@@ -2028,7 +2032,9 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 "the quiescent Apply barrier cannot retain another Serve owner"
             );
             assert!(
-                activated.ready_for_finalized_rollover(&mut terminal_serve_runner),
+                activated
+                    .ready_for_finalized_rollover(&mut terminal_serve_runner)
+                    .expect("authenticate the released finalization census"),
                 "direct CurrentServe must release the last hidden finalization owner"
             );
             assert!(!output_guard.restart_required());

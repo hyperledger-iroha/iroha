@@ -18229,6 +18229,8 @@ enum ToriiNativeAmxWire {
         "iroha_data_model::block::consensus::LaneBlockProposalPreimage"
     private static let settlementType =
         "iroha_data_model::block::consensus::LaneBlockCommitment"
+    private static let settlementHashDomain =
+        Data("iroha.nexus.lane-relay.settlement.v1".utf8)
     private static let blsKeyAdmissionMessage =
         Data("native-amx:bls-normal-key-admission:v1".utf8)
     /// A valid compressed BLS-Normal signature used only to make the native
@@ -18771,7 +18773,10 @@ enum ToriiNativeAmxWire {
             emptyNexusReceipts,
             emptyNativeReceipts,
         ])
-        return hashLiteral(noritoFrame(typeName: settlementType, payload: payload))
+        var hashPreimage = littleEndian(UInt64(settlementHashDomain.count))
+        hashPreimage.append(settlementHashDomain)
+        hashPreimage.append(noritoFrame(typeName: settlementType, payload: payload))
+        return hashLiteral(hashPreimage)
     }
 }
 
@@ -25004,6 +25009,21 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         }
     }
 
+    private func decodeVerifyingKeyTransactionDraft(
+        _ data: Data
+    ) throws -> ToriiVerifyingKeyTransactionDraftEnvelope {
+        do {
+            return try JSONDecoder().decode(
+                ToriiVerifyingKeyTransactionDraftEnvelope.self,
+                from: data
+            )
+        } catch {
+            throw ToriiClientError.invalidPayload(
+                "verifying-key transaction draft response is invalid: \(error)"
+            )
+        }
+    }
+
     public func registerVerifyingKey(
         _ requestBody: ToriiVerifyingKeyRegisterRequest
     ) async throws -> ToriiVerifyingKeyTransactionDraft {
@@ -25022,10 +25042,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         try ensureStatus(response, equals: 200, responseBody: data)
         try ensureResponseMediaType(response, equals: "application/json")
         try rejectDuplicateJSONKeys(data, context: "verifying-key register response")
-        let envelope = try decodeJSON(
-            ToriiVerifyingKeyTransactionDraftEnvelope.self,
-            from: data
-        )
+        let envelope = try decodeVerifyingKeyTransactionDraft(data)
         return try ToriiVerifyingKeyDraftValidation.validate(
             envelope,
             requestJSON: body,
@@ -25052,10 +25069,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         try ensureStatus(response, equals: 200, responseBody: data)
         try ensureResponseMediaType(response, equals: "application/json")
         try rejectDuplicateJSONKeys(data, context: "verifying-key update response")
-        let envelope = try decodeJSON(
-            ToriiVerifyingKeyTransactionDraftEnvelope.self,
-            from: data
-        )
+        let envelope = try decodeVerifyingKeyTransactionDraft(data)
         return try ToriiVerifyingKeyDraftValidation.validate(
             envelope,
             requestJSON: body,

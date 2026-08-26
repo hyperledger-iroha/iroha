@@ -955,6 +955,37 @@ def _persistent_recovery_cut_source_fidelity_errors(
             return None
         return matches[0]
 
+    def require_item_order(
+        source_name: str,
+        item: RustItem | None,
+        markers: tuple[str, ...],
+        description: str,
+    ) -> None:
+        if item is None:
+            return
+        item_tokens = rust_code_tokens(item.source)
+        cursor = 0
+        for marker in markers:
+            marker_tokens = rust_code_tokens(marker)
+            position = next(
+                (
+                    index
+                    for index in range(
+                        cursor, len(item_tokens) - len(marker_tokens) + 1
+                    )
+                    if item_tokens[index : index + len(marker_tokens)]
+                    == marker_tokens
+                ),
+                -1,
+            )
+            if position < 0:
+                errors.append(
+                    f"{paths[source_name]}:{item.line}: {description} must "
+                    "preserve the exact reviewed production order"
+                )
+                return
+            cursor = position + len(marker_tokens)
+
     adapter_context = (("impl", "SumeragiV2Adapter"),)
     runtime_context = (
         ("impl", "SerializedV2Runtime", "<", "SumeragiV2Adapter", ">"),
@@ -1466,6 +1497,186 @@ if durable_view < self.durable_view {
         "leader-wire view authority must reject regression",
         errors,
     )
+    for sequence, description in (
+        (
+            """
+let next = Self {
+    durable_view,
+    protected_lock,
+    ..self
+};
+if protected_lock.is_some_and(|lock| !next.protected_lock_is_well_formed(lock)) {
+    return Err(
+        "leader-wire recovery authority carried a future protected lock"
+            .to_owned(),
+    );
+}
+if !next.protected_lock_monotonically_extends(self) {
+    return Err("leader-wire recovery authority regressed its protected lock".to_owned());
+}
+""",
+            "leader-wire view authority must carry only a well-formed monotone protected lock",
+        ),
+    ):
+        _require_rust_token_sequence(
+            paths["store"], authority_advance, sequence, description, errors
+        )
+
+    protected_lock_monotonicity = _require_rust_item(
+        paths["store"],
+        sources["store"],
+        "protected_lock_monotonically_extends",
+        errors,
+    )
+    _require_rust_item_context(
+        paths["store"],
+        protected_lock_monotonicity,
+        (("impl", "LeaderWireRecoveryAuthority"),),
+        "monotone protected-lock authority",
+        errors,
+    )
+    _require_rust_token_sequence(
+        paths["store"],
+        protected_lock_monotonicity,
+        """
+match (previous.protected_lock, self.protected_lock) {
+    (None, _) => true,
+    (Some(_), None) => false,
+    (Some(previous), Some(next)) => next == previous || next.0.view > previous.0.view,
+}
+""",
+        "protected-lock authority must permit only introduction, exact reuse, or a higher round",
+        errors,
+    )
+
+    protected_lock_shape = _require_rust_item(
+        paths["store"],
+        sources["store"],
+        "protected_lock_is_well_formed",
+        errors,
+    )
+    _require_rust_token_sequence(
+        paths["store"],
+        protected_lock_shape,
+        """
+round.context_id == self.context_id
+    && round.height == self.height
+    && round.view <= self.durable_view
+""",
+        "protected-lock authority must retain exact context, height, and non-future view",
+        errors,
+    )
+
+    protected_commit = _require_rust_item(
+        paths["store"], sources["store"], "protects_commit_vote", errors
+    )
+    _require_rust_item_context(
+        paths["store"],
+        protected_commit,
+        (("impl", "LeaderWireRecoveryAuthority"),),
+        "exact historical protected-Commit classifier",
+        errors,
+    )
+    _require_rust_token_sequence(
+        paths["store"],
+        protected_commit,
+        """
+identity.phase == FairV2IngressLeaderWirePhase::CommitVote
+    && self.protected_lock.is_some_and(|(round, subject)| {
+        identity.context_id == round.context_id
+            && identity.height == round.height
+            && identity.view == round.view
+            && identity.subject_hash == Hash::new(subject.encode())
+    })
+""",
+        "historical Commit-vote admission must exact-match phase, round, and subject",
+        errors,
+    )
+
+    retire_identity = _require_rust_item(
+        paths["store"], sources["store"], "retires_stored_identity", errors
+    )
+    _require_rust_token_sequence(
+        paths["store"],
+        retire_identity,
+        """
+self.decision_durable
+    || (identity.view < self.durable_view
+        && identity.phase != FairV2IngressLeaderWirePhase::CommitQc
+        && !self.protects_commit_vote(identity))
+""",
+        "view cuts must retain only exact protected Commit votes and historical CommitQCs",
+        errors,
+    )
+
+    admit_identity = _require_rust_item(
+        paths["store"], sources["store"], "admits_ingress_identity", errors
+    )
+    _require_rust_token_sequence(
+        paths["store"],
+        admit_identity,
+        """
+if self.decision_durable {
+    return false;
+}
+identity.phase == FairV2IngressLeaderWirePhase::CommitQc
+    || self.protects_commit_vote(identity)
+    || identity.view >= self.durable_view
+""",
+        "Decision must close control while pre-Decision cuts admit protected Commit progress",
+        errors,
+    )
+
+    replayed_recovery_authority = require_context_item(
+        "adapter",
+        "leader_wire_recovery_authority",
+        adapter_context,
+        "replayed protected-lock recovery authority",
+    )
+    _require_rust_token_sequence(
+        paths["adapter"],
+        replayed_recovery_authority,
+        """
+let protected_lock = self
+    .reducer
+    .durable_state()
+    .locked()
+    .map(|certificate| -> Result<_, AdapterError> {
+        Ok((
+            self.registry
+                .round_to_wire(certificate.proposal_round()),
+            self.registry.subject(certificate.subject())?,
+        ))
+    })
+    .transpose()?;
+""",
+        "startup recovery authority must derive the exact durable lock from replayed state",
+        errors,
+    )
+    _require_rust_token_sequence(
+        paths["adapter"],
+        replayed_recovery_authority,
+        """
+.with_protected_lock(protected_lock)
+.map_err(AdapterError::ServicedCandidateStore)
+""",
+        "startup recovery authority must fail closed while attaching the replayed lock",
+        errors,
+    )
+    require_item_order(
+        "adapter",
+        replayed_recovery_authority,
+        (
+            ".durable_state()",
+            ".locked()",
+            ".round_to_wire(certificate.proposal_round())",
+            ".transpose()?",
+            "LeaderWireRecoveryAuthority::from_replayed_adapter(",
+            ".with_protected_lock(protected_lock)",
+            ".map_err(AdapterError::ServicedCandidateStore)",
+        ),
+        "startup recovery authority lock authentication and attachment",
+    )
 
     store_cut = require_context_item(
         "store",
@@ -1598,13 +1809,70 @@ for slot in &retiring {
         """
 let next_recovery_authority = self
     .leader_wire_recovery_authority
-    .advance_view(tag.view())?;
+    .advance_view(tag.view(), protected_lock)?;
 self.leader_wire_ingress
     .advance_leader_wire_recovery_cut(next_recovery_authority)?;
 self.leader_wire_recovery_authority = next_recovery_authority;
 """,
-        "certified EnterView must publish the gate cut before exposing its authority",
+        "certified EnterView must publish its protected-lock gate cut before exposing authority",
         errors,
+    )
+
+    executor_install_view = require_context_item(
+        "effects",
+        "install_view",
+        executor_context,
+        "validated EnterView protected-lock handoff",
+    )
+    _require_rust_token_sequence(
+        paths["effects"],
+        executor_install_view,
+        """
+protected.validate(&self.context).map_err(|error| {
+    EffectExecutorError::Contract(format!(
+        "EnterView protected lock is invalid: {error}"
+    ))
+})?;
+if protected.phase != wire::GlobalPhase::Prepare
+    || protected.proposal_round.context_id != self.context.id()
+    || protected.proposal_round.height != self.context.height
+    || protected.proposal_round.view >= tag.view()
+""",
+        "effect execution must validate the protected Prepare lock before projection",
+        errors,
+    )
+    _require_rust_token_sequence(
+        paths["effects"],
+        executor_install_view,
+        """
+let protected_body = protected_lock_body(protected_lock.as_ref());
+""",
+        "effect execution must project the validated protected certificate to exact coordinates",
+        errors,
+    )
+    _require_rust_token_sequence(
+        paths["effects"],
+        executor_install_view,
+        """
+services
+    .entered_view(tag, certificate, protected_body)
+    .map_err(service_error)?;
+""",
+        "effect execution must hand the validated protected lock to production services",
+        errors,
+    )
+    require_item_order(
+        "effects",
+        executor_install_view,
+        (
+            "protected.validate(&self.context)",
+            "let protected_body = protected_lock_body(protected_lock.as_ref());",
+            "self.reconcile_protected_lock(tag, protected_body, highest_prepare_body, services)?;",
+            ".reconcile_active_view_producer(tag, retain_local_producer)",
+            ".entered_view(tag, certificate, protected_body)",
+            "self.reconciled_tag = Some(tag);",
+        ),
+        "validated protected-lock reconciliation and installed-view exposure",
     )
 
     finish_runtime_step = require_context_item(
@@ -1680,9 +1948,29 @@ if decided_subject.is_some() {
             "checks live Dormant-only cut, rollback, and high-water retention",
         ),
         (
+            "store",
+            "leader_wire_protected_lock_cut_is_exact_monotone_and_decision_closed",
+            "checks exact protected Commit admission and monotone Decision closure",
+        ),
+        (
+            "adapter",
+            "recovered_current_timeout_then_historical_commit_keeps_intrinsic_vote_round",
+            "checks startup recovery authority preserves the replayed protected Commit round",
+        ),
+        (
+            "ingress",
+            "certified_view_cut_preserves_exact_locked_commit_and_historical_commit_qc",
+            "checks the fair-ingress cut admits only exact historical Commit progress",
+        ),
+        (
             "worker",
             "entered_view_advances_live_leader_wire_recovery_cut",
             "rejects stale wire after live EnterView",
+        ),
+        (
+            "worker",
+            "entered_view_publishes_the_exact_protected_commit_vote_cut",
+            "checks live EnterView publishes the exact protected Commit coordinates",
         ),
         (
             "worker",
@@ -1694,6 +1982,109 @@ if decided_subject.is_some() {
         _require_rust_item(
             paths[source_name], sources[source_name], item_name, errors
         )
+
+    protected_cut_regression = _require_rust_item(
+        paths["store"],
+        sources["store"],
+        "leader_wire_protected_lock_cut_is_exact_monotone_and_decision_closed",
+        errors,
+    )
+    for sequence, description in (
+        (
+            """
+assert!(advanced.retires(&wrong_subject));
+assert!(!advanced.admits_ingress_identity(&wrong_subject.identity));
+""",
+            "protected-lock regression must reject a wrong-subject Commit vote",
+        ),
+        (
+            """
+assert!(advanced.retires(&wrong_round));
+assert!(!advanced.admits_ingress_identity(&wrong_round.identity));
+""",
+            "protected-lock regression must reject a wrong-round Commit vote",
+        ),
+        (
+            """
+assert!(advanced.retires(&wrong_phase));
+assert!(!advanced.admits_ingress_identity(&wrong_phase.identity));
+""",
+            "protected-lock regression must reject a non-Commit phase",
+        ),
+        (
+            """
+assert!(!advanced.retires(&historical_commit_qc));
+assert!(advanced.admits_ingress_identity(&historical_commit_qc.identity));
+""",
+            "protected-lock regression must retain historical CommitQC before Decision",
+        ),
+        (
+            """
+advanced.advance_view(6, None).is_err()
+""",
+            "protected-lock regression must reject lock loss",
+        ),
+        (
+            """
+.advance_view(6, Some((protected_round, conflicting_subject)))
+    .is_err()
+""",
+            "protected-lock regression must reject a same-round conflicting subject",
+        ),
+        (
+            """
+.advance_view(6, Some((lower_round, protected_subject)))
+    .is_err()
+""",
+            "protected-lock regression must reject lock regression",
+        ),
+        (
+            """
+let decision = advanced.with_durable_decision();
+assert!(decision.retires(&protected_commit));
+assert!(!decision.admits_ingress_identity(&protected_commit.identity));
+assert!(decision.retires(&historical_commit_qc));
+assert!(!decision.admits_ingress_identity(&historical_commit_qc.identity));
+""",
+            "protected-lock regression must make Decision dominant over both exceptions",
+        ),
+    ):
+        _require_rust_token_sequence(
+            paths["store"],
+            protected_cut_regression,
+            sequence,
+            description,
+            errors,
+        )
+
+    live_protected_cut_regression = _require_rust_item(
+        paths["worker"],
+        sources["worker"],
+        "entered_view_publishes_the_exact_protected_commit_vote_cut",
+        errors,
+    )
+    _require_rust_token_sequence(
+        paths["worker"],
+        live_protected_cut_regression,
+        """
+.entered_view(
+    next,
+    timeout_certificate_at_view(&service, initial.view()),
+    Some((protected_round, protected_subject)),
+)
+""",
+        "live EnterView regression must publish the exact protected-lock coordinates",
+        errors,
+    )
+    _require_rust_token_sequence(
+        paths["worker"],
+        live_protected_cut_regression,
+        """
+Ok(super::super::FairV2IngressPushDisposition::Enqueued)
+""",
+        "live EnterView regression must enqueue the exact historical Commit vote",
+        errors,
+    )
 
     live_cut_regression = _require_rust_item(
         paths["store"],
@@ -1772,16 +2163,57 @@ assert_restored_stage_seven_retirement_does_not_resurrect(0xBD, false, false, fa
     formal_source = sources["formal"]
     formal_contracts = {
         "AsyncLeaderWireRecoveryCutObsoletesItem": (
+            "item.kind \\in AsyncControlKinds",
             "DeliveryView(item) < nodeView[item.envelope.recipient]",
+            'item.kind # "CommitQC"',
+            "~HistoricalLockedCommitItem(item)",
             "NodeHasDecision(item.envelope.recipient)",
         ),
         "AsyncLeaderWireAtomicAdmissionAllows": (
             "~AsyncLeaderWireRecoveryCutObsoletesItem(item)",
         ),
+        "AsyncControlIngressStageRetired": (
+            "item.kind \\in AsyncControlKinds",
+            "NodeHasDecision(item.envelope.recipient)",
+            "AsyncControlServiceConsumed(item)",
+            'item.kind # "CommitQC"',
+            "~HistoricalLockedCommitItem(item)",
+            "AsyncControlServiceIdentityServicedOrAdvanced(item)",
+        ),
+        "AsyncLeaderWireDrainDeterministicallyRetired": (
+            "record.view < nodeView[record.recipient]",
+            'record.item.kind # "CommitQC"',
+            "~HistoricalLockedCommitItem(record.item)",
+            "NodeHasDecision(record.recipient)",
+            "AsyncCandidateStageRetired(item)",
+            "AsyncControlServiceOccurrenceRetired(item)",
+        ),
+        "AsyncLeaderWireLifecycleDurableControlServiceReceipt": (
+            "AsyncControlIngressStageRetired(record.item)",
+        ),
+        "AsyncLeaderWireLifecycleDurableCoreRetirement": (
+            "record.view < nodeView[record.recipient]",
+            'record.item.kind # "CommitQC"',
+            "~HistoricalLockedCommitItem(record.item)",
+            "NodeHasDecision(record.recipient)",
+        ),
+        "AsyncLeaderWireLifecycleStaleOrDecision": (
+            "record.item.kind \\in AsyncControlKinds",
+            "record.view < nodeView[record.recipient]",
+            'record.item.kind # "CommitQC"',
+            "~HistoricalLockedCommitItem(record.item)",
+            "NodeHasDecision(record.recipient)",
+        ),
         "AsyncLeaderWireLifecycleRecoveryCutObsolete": (
             "AsyncLeaderWireLifecycleDormant(record)",
+            "record.item.kind \\in AsyncControlKinds",
             "record.view < nodeView[record.recipient]",
+            'record.item.kind # "CommitQC"',
+            "~HistoricalLockedCommitItem(record.item)",
             "NodeHasDecision(record.recipient)",
+        ),
+        "AsyncLeaderWireLifecycleConsumerTerminal": (
+            "AsyncControlIngressStageRetired(record.item)",
         ),
         "AsyncLeaderWireLifecycleCanTerminal": (
             "AsyncLeaderWireLifecycleRecoveryCutObsolete(record)",

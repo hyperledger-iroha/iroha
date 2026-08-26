@@ -3,19 +3,20 @@ EXTENDS SumeragiV2AsyncProgressOwnershipProofs
 
 (***************************************************************************
 Protected deferred progress has one semantic slot per validator's exact
-locked Commit delivery and one per validator's TimeoutVote delivery, plus
-PrepareQC, CommitQC, and TC delivery.  Mapping indices to that finite carrier
-makes the 2 * N + 3 reservation bound a theorem of the duplicate exclusion
-rule rather than an independent queue-size guess.
+locked Commit delivery, one per validator's exact current locked-reproposal
+Prepare delivery, and one per validator's TimeoutVote delivery, plus PrepareQC,
+CommitQC, and TC delivery.  Mapping indices to that finite carrier makes the
+3 * N + 3 reservation bound a theorem of the duplicate exclusion rule rather
+than an independent queue-size guess.
 ***************************************************************************)
 
 ProtectedProgressSlotUniverse ==
-  ({"CommitVote", "TimeoutVote"} \X ValidatorIds)
+  ({"CommitVote", "PrepareVote", "TimeoutVote"} \X ValidatorIds)
     \cup ({"PrepareQC", "CommitQC", "TimeoutCertificate"} \X {0})
 
 ProtectedProgressSlot(command) ==
   CASE command.kind = "DeliverVote" ->
-         <<"CommitVote", command.item.envelope.vote.signer>>
+         <<command.item.kind, command.item.envelope.vote.signer>>
     [] command.kind = "DeliverTimeout" ->
          <<"TimeoutVote", command.item.envelope.vote.signer>>
     [] command.kind = "DeliverQC" -> <<command.item.kind, 0>>
@@ -29,12 +30,12 @@ ProtectedProgressSlotMap(node) ==
 THEOREM ProtectedProgressSlotUniverseSize ==
   ModelConfiguration
     => /\ IsFiniteSet(ProtectedProgressSlotUniverse)
-       /\ Cardinality(ProtectedProgressSlotUniverse) = 2 * N + 3
+       /\ Cardinality(ProtectedProgressSlotUniverse) = 3 * N + 3
 PROOF
   <1>1. ASSUME ModelConfiguration
          PROVE /\ IsFiniteSet(ProtectedProgressSlotUniverse)
-               /\ Cardinality(ProtectedProgressSlotUniverse) = 2 * N + 3
-    <2> DEFINE VoteKinds == {"CommitVote", "TimeoutVote"}
+               /\ Cardinality(ProtectedProgressSlotUniverse) = 3 * N + 3
+    <2> DEFINE VoteKinds == {"CommitVote", "PrepareVote", "TimeoutVote"}
     <2> DEFINE VoteSlots == VoteKinds \X ValidatorIds
     <2> DEFINE CertificateKinds ==
            {"PrepareQC", "CommitQC", "TimeoutCertificate"}
@@ -45,10 +46,10 @@ PROOF
       BY <1>1, FS_Interval, SMT
          DEF ValidatorIds, ModelConfiguration, QuorumConfiguration
     <2>2. /\ IsFiniteSet(VoteKinds)
-           /\ Cardinality(VoteKinds) = 2
+           /\ Cardinality(VoteKinds) = 3
       BY FS_EmptySet, FS_AddElement, SMT DEF VoteKinds
     <2>3. /\ IsFiniteSet(VoteSlots)
-           /\ Cardinality(VoteSlots) = 2 * N
+           /\ Cardinality(VoteSlots) = 3 * N
       BY <2>1, <2>2, FS_Product, SMT DEF VoteSlots
     <2>4. /\ IsFiniteSet(CertificateKinds)
            /\ Cardinality(CertificateKinds) = 3
@@ -62,7 +63,7 @@ PROOF
     <2>7. VoteSlots \cap CertificateSlots = {}
       BY Isa DEF VoteSlots, CertificateSlots, CertificateKinds
     <2>8. /\ IsFiniteSet(VoteSlots \cup CertificateSlots)
-           /\ Cardinality(VoteSlots \cup CertificateSlots) = 2 * N + 3
+           /\ Cardinality(VoteSlots \cup CertificateSlots) = 3 * N + 3
       BY <2>3, <2>6, <2>7, FS_Union, FS_EmptySet, SMT
     <2> QED BY <2>8
          DEF ProtectedProgressSlotUniverse, VoteKinds, VoteSlots,
@@ -98,7 +99,7 @@ THEOREM ProtectedDeferredProgressCountFollowsUniqueness ==
            asyncDeferredProgressQueues[node][left],
            asyncDeferredProgressQueues[node][right])
            => left = right
-    => Cardinality(ProtectedDeferredProgressIndices(node)) <= 2 * N + 3
+    => Cardinality(ProtectedDeferredProgressIndices(node)) <= 3 * N + 3
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 ModelConfiguration,
@@ -110,12 +111,12 @@ PROOF
                     asyncDeferredProgressQueues[node][right])
                     => left = right
          PROVE Cardinality(ProtectedDeferredProgressIndices(node))
-                 <= 2 * N + 3
+                 <= 3 * N + 3
     <2> DEFINE Indices == ProtectedDeferredProgressIndices(node)
     <2> DEFINE Slots == ProtectedProgressSlotUniverse
     <2> DEFINE SlotMap == ProtectedProgressSlotMap(node)
     <2>1. /\ IsFiniteSet(Slots)
-           /\ Cardinality(Slots) = 2 * N + 3
+           /\ Cardinality(Slots) = 3 * N + 3
       BY <1>1, ProtectedProgressSlotUniverseSize DEF Slots
     <2>2. \A index \in Indices:
              /\ index \in 1..Len(asyncDeferredProgressQueues[node])
@@ -257,12 +258,14 @@ ProtectedProgressSlotsUniqueIn(queue) ==
 
 ProtectedProgressSlotId(command) ==
   CASE command.kind = "DeliverVote" ->
-         command.item.envelope.vote.signer
+         IF command.item.kind = "CommitVote"
+         THEN command.item.envelope.vote.signer
+         ELSE N + command.item.envelope.vote.signer
     [] command.kind = "DeliverTimeout" ->
-         N + command.item.envelope.vote.signer
+         2 * N + command.item.envelope.vote.signer
     [] command.kind = "DeliverQC" ->
-         IF command.item.kind = "PrepareQC" THEN 2 * N ELSE 2 * N + 1
-    [] OTHER -> 2 * N + 2
+         IF command.item.kind = "PrepareQC" THEN 3 * N ELSE 3 * N + 1
+    [] OTHER -> 3 * N + 2
 
 ProtectedProgressNumericSlotMap(queue) ==
   [index \in ProtectedProgressIndicesIn(queue) |->
@@ -288,7 +291,7 @@ THEOREM TypedProtectedProgressCommandShape ==
     /\ AsyncCandidateTyped(command)
     /\ ProtectedProgressCommand(command)
     => \/ /\ command.kind = "DeliverVote"
-           /\ command.item.kind = "CommitVote"
+           /\ command.item.kind \in {"CommitVote", "PrepareVote"}
            /\ command.item.envelope.vote.signer \in ValidatorIds
        \/ /\ command.kind = "DeliverQC"
            /\ command.item.kind \in {"PrepareQC", "CommitQC"}
@@ -302,7 +305,7 @@ PROOF
                 AsyncCandidateTyped(command),
                 ProtectedProgressCommand(command)
          PROVE \/ /\ command.kind = "DeliverVote"
-                    /\ command.item.kind = "CommitVote"
+                    /\ command.item.kind \in {"CommitVote", "PrepareVote"}
                     /\ command.item.envelope.vote.signer \in ValidatorIds
                \/ /\ command.kind = "DeliverQC"
                     /\ command.item.kind \in {"PrepareQC", "CommitQC"}
@@ -316,7 +319,7 @@ PROOF
          DEF ProtectedProgressCommand, HistoricalLockedCommitItem,
              AsyncCandidateTyped, NoAsyncItem, AsyncBodyEnvelope
     <2>2. CASE command.kind = "DeliverVote"
-      <3>1. command.item.kind = "CommitVote"
+      <3>1. command.item.kind \in {"CommitVote", "PrepareVote"}
         BY <1>1, <2>2
            DEF ProtectedProgressCommand, HistoricalLockedCommitItem
       <3>2. command.item.envelope \in VoteEnvelopeSet
@@ -347,7 +350,7 @@ THEOREM ProtectedProgressSlotIdIsBounded ==
     /\ N \in Nat \ {0}
     /\ AsyncCandidateTyped(command)
     /\ ProtectedProgressCommand(command)
-    => ProtectedProgressSlotId(command) \in 0..(2 * N + 2)
+    => ProtectedProgressSlotId(command) \in 0..(3 * N + 2)
 BY TypedProtectedProgressCommandShape, SMT
    DEF ProtectedProgressSlotId, ValidatorIds
 
@@ -372,7 +375,7 @@ THEOREM UniqueOwnedProtectedSlotsGiveInjection ==
     /\ AsyncCommandQueueOwnership(node, queue)
     /\ ProtectedProgressSlotsUniqueIn(queue)
     => ProtectedProgressNumericSlotMap(queue)
-         \in Injection(ProtectedProgressIndicesIn(queue), 0..(2 * N + 2))
+         \in Injection(ProtectedProgressIndicesIn(queue), 0..(3 * N + 2))
 PROOF
   <1>1. ASSUME NEW node, NEW queue,
                 N \in Nat \ {0},
@@ -381,16 +384,16 @@ PROOF
                 ProtectedProgressSlotsUniqueIn(queue)
          PROVE ProtectedProgressNumericSlotMap(queue)
                  \in Injection(
-                      ProtectedProgressIndicesIn(queue), 0..(2 * N + 2))
+                      ProtectedProgressIndicesIn(queue), 0..(3 * N + 2))
     <2>1. \A index \in ProtectedProgressIndicesIn(queue):
              /\ AsyncCandidateTyped(queue[index])
              /\ queue[index].node = node
-             /\ ProtectedProgressSlotId(queue[index]) \in 0..(2 * N + 2)
+             /\ ProtectedProgressSlotId(queue[index]) \in 0..(3 * N + 2)
       BY <1>1, ProtectedProgressSlotIdIsBounded
          DEF ProtectedProgressIndicesIn, AsyncQueueTyped,
              AsyncCommandQueueOwnership, SequenceSet
     <2>2. ProtectedProgressNumericSlotMap(queue)
-             \in [ProtectedProgressIndicesIn(queue) -> 0..(2 * N + 2)]
+             \in [ProtectedProgressIndicesIn(queue) -> 0..(3 * N + 2)]
       BY <2>1 DEF ProtectedProgressNumericSlotMap
     <2>3. \A left, right \in ProtectedProgressIndicesIn(queue):
              ProtectedProgressNumericSlotMap(queue)[left]
@@ -438,25 +441,25 @@ THEOREM UniqueTypedOwnedProtectedSlotsAreBounded ==
     /\ AsyncQueueTyped(queue)
     /\ AsyncCommandQueueOwnership(node, queue)
     /\ ProtectedProgressSlotsUniqueIn(queue)
-    => Cardinality(ProtectedProgressIndicesIn(queue)) <= 2 * N + 3
+    => Cardinality(ProtectedProgressIndicesIn(queue)) <= 3 * N + 3
 PROOF
   <1>1. ASSUME NEW node, NEW queue,
                 N \in Nat \ {0},
                 AsyncQueueTyped(queue),
                 AsyncCommandQueueOwnership(node, queue),
                 ProtectedProgressSlotsUniqueIn(queue)
-         PROVE Cardinality(ProtectedProgressIndicesIn(queue)) <= 2 * N + 3
+         PROVE Cardinality(ProtectedProgressIndicesIn(queue)) <= 3 * N + 3
     <2>1. ProtectedProgressNumericSlotMap(queue)
              \in Injection(
-                  ProtectedProgressIndicesIn(queue), 0..(2 * N + 2))
+                  ProtectedProgressIndicesIn(queue), 0..(3 * N + 2))
       BY <1>1, UniqueOwnedProtectedSlotsGiveInjection
-    <2>2. IsFiniteSet(0..(2 * N + 2))
+    <2>2. IsFiniteSet(0..(3 * N + 2))
       BY <1>1, FS_Interval, SMT
     <2>3. /\ IsFiniteSet(ProtectedProgressIndicesIn(queue))
            /\ Cardinality(ProtectedProgressIndicesIn(queue))
-                <= Cardinality(0..(2 * N + 2))
+                <= Cardinality(0..(3 * N + 2))
       BY <2>1, <2>2, FS_Injection
-    <2>4. Cardinality(0..(2 * N + 2)) = 2 * N + 3
+    <2>4. Cardinality(0..(3 * N + 2)) = 3 * N + 3
       BY <1>1, FS_Interval, SMT
     <2> QED BY <2>3, <2>4
   <1> QED BY <1>1
@@ -699,11 +702,11 @@ PROOF
     <2>3. \A node \in ValidatorIds:
              Cardinality(
                ProtectedProgressIndicesIn(
-                 asyncDeferredProgressQueues'[node])) <= 2 * N + 3
+                 asyncDeferredProgressQueues'[node])) <= 3 * N + 3
       <3>1. ASSUME NEW node \in ValidatorIds
              PROVE Cardinality(
                      ProtectedProgressIndicesIn(
-                       asyncDeferredProgressQueues'[node])) <= 2 * N + 3
+                       asyncDeferredProgressQueues'[node])) <= 3 * N + 3
         <4>1. /\ AsyncQueueTyped(
                       asyncDeferredProgressQueues'[node])
                /\ AsyncCommandQueueOwnership(
@@ -843,11 +846,11 @@ PROOF
     <2>3. \A node \in ValidatorIds:
              Cardinality(
                ProtectedProgressIndicesIn(
-                 asyncDeferredProgressQueues'[node])) <= 2 * N + 3
+                 asyncDeferredProgressQueues'[node])) <= 3 * N + 3
       <3>1. ASSUME NEW node \in ValidatorIds
              PROVE Cardinality(
                      ProtectedProgressIndicesIn(
-                       asyncDeferredProgressQueues'[node])) <= 2 * N + 3
+                       asyncDeferredProgressQueues'[node])) <= 3 * N + 3
         <4>1. /\ AsyncQueueTyped(
                       asyncDeferredProgressQueues'[node])
                /\ AsyncCommandQueueOwnership(
@@ -908,6 +911,7 @@ ProgressSlotShape(left, right) ==
   /\ left.node = right.node
   /\ CASE left.kind = "DeliverVote" ->
             /\ right.kind = "DeliverVote"
+            /\ left.item.kind = right.item.kind
             /\ left.item.envelope.vote.signer =
                  right.item.envelope.vote.signer
        [] left.kind = "DeliverQC" ->
@@ -942,44 +946,49 @@ PROOF
            /\ prepareQCs' = prepareQCs
       BY <1>1, Isa
     <2>3. CASE command.kind = "DeliverVote"
-      <3>1. /\ command.item.kind = "CommitVote"
-             /\ HistoricalLockedCommitItem(command.item)'
-        BY <1>1, <2>3
-           DEF ProtectedProgressCommand, HistoricalLockedCommitItem
-      <3>1a. command.item # NoAsyncItem
-        BY <3>1 DEF NoAsyncItem, AsyncBodyEnvelope
-      <3>1b. AsyncItemTyped(command.item)
-        BY <1>1, <3>1a DEF AsyncCandidateTyped
-      <3>1c. command.item.envelope.recipient \in ValidatorIds
-        BY <3>1b DEF AsyncItemTyped
-      <3>2. \/ HistoricalLockedCommitItem(command.item)
-             \/ command.item.envelope.vote.view <
-                  lockRank[command.item.envelope.recipient]
-        BY <1>1, <2>3, <3>1 DEF ProgressCommitVoteHistory
-      <3>3. CASE HistoricalLockedCommitItem(command.item)
-        BY <2>3, <3>3 DEF ProtectedProgressCommand
-      <3>4. CASE command.item.envelope.vote.view <
-                     lockRank[command.item.envelope.recipient]
-        <4>0a. command.item.envelope.vote.view \in Views
-          BY <3>1, <3>1b DEF AsyncItemTyped, VoteEnvelopeSet,
-                              VoteRecordSet
-        <4>0b. /\ lockRank \in [ValidatorIds -> Ranks]
-                /\ Ranks \subseteq Int
-          BY <1>1, ModelRanksAreIntegers DEF TypeInvariant
-        <4>0. /\ command.item.envelope.vote.view \in Int
-               /\ lockRank[command.item.envelope.recipient] \in Int
-          BY <3>1c, <4>0a, <4>0b, ViewsAreRanks,
-             FunctionValueHasCodomain, Isa
-        <4>1. lockRank'[command.item.envelope.recipient] >=
-                 lockRank[command.item.envelope.recipient]
-          BY <1>1, <2>2, <3>1c DEF LockMonotonicityAction
-        <4>2. lockRank'[command.item.envelope.recipient] =
-                 command.item.envelope.vote.view
-          BY <3>1 DEF HistoricalLockedCommitItem, LockedPrepareRound
-        <4>3. FALSE
-          BY <3>4, <4>0, <4>1, <4>2, StrictCycleImpossible
-        <4> QED BY <4>3
-      <3> QED BY <3>2, <3>3, <3>4
+      <3>1. CASE command.item.kind = "PrepareVote"
+        BY <1>1, <2>3, <3>1 DEF ProtectedProgressCommand
+      <3>2. CASE command.item.kind = "CommitVote"
+        <4>1. HistoricalLockedCommitItem(command.item)'
+          BY <1>1, <2>3, <3>2
+             DEF ProtectedProgressCommand, HistoricalLockedCommitItem
+        <4>1a. command.item # NoAsyncItem
+          BY <3>2 DEF NoAsyncItem, AsyncBodyEnvelope
+        <4>1b. AsyncItemTyped(command.item)
+          BY <1>1, <4>1a DEF AsyncCandidateTyped
+        <4>1c. command.item.envelope.recipient \in ValidatorIds
+          BY <4>1b DEF AsyncItemTyped
+        <4>2. \/ HistoricalLockedCommitItem(command.item)
+               \/ command.item.envelope.vote.view <
+                    lockRank[command.item.envelope.recipient]
+          BY <1>1, <2>3, <3>2 DEF ProgressCommitVoteHistory
+        <4>3. CASE HistoricalLockedCommitItem(command.item)
+          BY <2>3, <4>3 DEF ProtectedProgressCommand
+        <4>4. CASE command.item.envelope.vote.view <
+                       lockRank[command.item.envelope.recipient]
+          <5>0a. command.item.envelope.vote.view \in Views
+            BY <3>2, <4>1b DEF AsyncItemTyped, VoteEnvelopeSet,
+                                VoteRecordSet
+          <5>0b. /\ lockRank \in [ValidatorIds -> Ranks]
+                  /\ Ranks \subseteq Int
+            BY <1>1, ModelRanksAreIntegers DEF TypeInvariant
+          <5>0. /\ command.item.envelope.vote.view \in Int
+                 /\ lockRank[command.item.envelope.recipient] \in Int
+            BY <4>1c, <5>0a, <5>0b, ViewsAreRanks,
+               FunctionValueHasCodomain, Isa
+          <5>1. lockRank'[command.item.envelope.recipient] >=
+                   lockRank[command.item.envelope.recipient]
+            BY <1>1, <2>2, <4>1c DEF LockMonotonicityAction
+          <5>2. lockRank'[command.item.envelope.recipient] =
+                   command.item.envelope.vote.view
+            BY <4>1 DEF HistoricalLockedCommitItem, LockedPrepareRound
+          <5>3. FALSE
+            BY <4>4, <5>0, <5>1, <5>2, StrictCycleImpossible
+          <5> QED BY <5>3
+        <4> QED BY <4>2, <4>3, <4>4
+      <3>3. CASE command.item.kind \notin {"PrepareVote", "CommitVote"}
+        BY <1>1, <2>3, <3>3, SMT DEF ProtectedProgressCommand
+      <3> QED BY <3>1, <3>2, <3>3
     <2>4. CASE command.kind = "DeliverQC"
       BY <1>1, <2>4 DEF ProtectedProgressCommand
     <2>5. CASE command.kind = "DeliverTimeout"
@@ -1024,7 +1033,8 @@ PROOF
                DeliveryCandidate, AsyncCandidate
       <3>2. CASE ~HistoricalLockedCommitItem(item)
         <4>1. DeliveryClass(item) = "Normal"
-          BY <2>1, <3>2, SMT DEF DeliveryClass
+          BY <2>1, <3>2, SMT
+             DEF DeliveryClass, CurrentLockedReproposalPrepareItem
         <4>2. DeliveryCandidate(item).class # "Progress"
           BY <4>1 DEF DeliveryCandidate, AsyncCandidate
         <4> QED BY <4>2 DEF ProgressCommitSource
@@ -3050,7 +3060,7 @@ PROOF
   <1> QED BY <1>1
 
 ProtectedProgressQueueBoundedUnique(queue) ==
-  /\ Cardinality(ProtectedProgressIndicesIn(queue)) <= 2 * N + 3
+  /\ Cardinality(ProtectedProgressIndicesIn(queue)) <= 3 * N + 3
   /\ ProtectedProgressSlotsUniqueIn(queue)
 
 THEOREM LockAdvancePreservesProtectedProgressQueue ==
@@ -3114,12 +3124,12 @@ PROOF
       <3>3. IsFiniteSet(ProtectedProgressIndicesIn(queue))
         BY <3>1, <3>2, FS_Subset
       <3> QED BY <2>1, <3>3, FS_Subset, FS_CardinalityType
-    <2>3. Cardinality(ProtectedProgressIndicesIn(queue)) <= 2 * N + 3
+    <2>3. Cardinality(ProtectedProgressIndicesIn(queue)) <= 3 * N + 3
       BY <1>1, UniqueTypedOwnedProtectedSlotsAreBounded
-    <2>4. Cardinality(ProtectedProgressIndicesIn(queue)') <= 2 * N + 3
+    <2>4. Cardinality(ProtectedProgressIndicesIn(queue)') <= 3 * N + 3
       <3>1. /\ Cardinality(ProtectedProgressIndicesIn(queue)') \in Nat
              /\ Cardinality(ProtectedProgressIndicesIn(queue)) \in Nat
-             /\ 2 * N + 3 \in Nat
+             /\ 3 * N + 3 \in Nat
         BY <1>1, <2>2, FS_CardinalityType, SMT
       <3> QED BY <2>2, <2>3, <3>1, NaturalWeakOrderTrans
     <2>5. ProtectedProgressSlotsUniqueIn(queue)'
@@ -3178,7 +3188,7 @@ PROOF
          DEF AsyncDeferredTypeInvariant
     <2>2. ASSUME NEW node \in ValidatorIds
            PROVE /\ Cardinality(
-                         ProtectedDeferredProgressIndices(node)') <= 2 * N + 3
+                         ProtectedDeferredProgressIndices(node)') <= 3 * N + 3
                  /\ \A left, right \in
                         ProtectedDeferredProgressIndices(node)':
                       SameProtectedProgressSlot(
@@ -3360,13 +3370,13 @@ PROOF
       <3> QED BY <3>1
     <2>4. \A node \in ValidatorIds:
              Cardinality((ProtectedDeferredProgressIndices(node))')
-               <= 2 * N + 3
+               <= 3 * N + 3
       <3>1. ASSUME NEW node \in ValidatorIds
              PROVE Cardinality(
                      (ProtectedDeferredProgressIndices(node))')
-                     <= 2 * N + 3
+                     <= 3 * N + 3
         <4>1. Cardinality(ProtectedDeferredProgressIndices(node))
-                 <= 2 * N + 3
+                 <= 3 * N + 3
           BY <1>1, <3>1 DEF ProtectedDeferredProgressInvariant
         <4>2. Cardinality(
                  (ProtectedDeferredProgressIndices(node))')
@@ -3377,7 +3387,7 @@ PROOF
                        (ProtectedDeferredProgressIndices(node))') \in Nat
                /\ Cardinality(
                     ProtectedDeferredProgressIndices(node)) \in Nat
-               /\ 2 * N + 3 \in Nat
+               /\ 3 * N + 3 \in Nat
           BY <1>1, <2>3, <3>1, FS_CardinalityType, SMT
         <4> QED BY <4>1, <4>2, <4>3, NaturalWeakOrderTrans
       <3> QED BY <3>1
@@ -3426,7 +3436,7 @@ PROOF
   <1> QED BY <1>1
 
 ProtectedDeferredProgressCardinality(node) ==
-  Cardinality(ProtectedDeferredProgressIndices(node)) <= 2 * N + 3
+  Cardinality(ProtectedDeferredProgressIndices(node)) <= 3 * N + 3
 
 ProtectedDeferredProgressSlot(node, left, right) ==
   SameProtectedProgressSlot(

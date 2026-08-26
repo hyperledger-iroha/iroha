@@ -887,6 +887,8 @@ public final class IrohaSDK: @unchecked Sendable {
 
     public init(baseURL: URL,
                 session: URLSession = .shared,
+                localSigningContext: ToriiLocalSigningContext? = nil,
+                canonicalRequestAuth: ToriiCanonicalRequestAuth? = nil,
                 operatorSigningContext: ToriiOperatorSigningContext? = nil,
                 defaultSigningAlgorithm: SigningAlgorithm = .ed25519,
                 accelerationSettings: AccelerationSettings = AccelerationSettings(),
@@ -899,6 +901,8 @@ public final class IrohaSDK: @unchecked Sendable {
         let client = ToriiClient(
             baseURL: baseURL,
             session: session,
+            localSigningContext: localSigningContext,
+            canonicalRequestAuth: canonicalRequestAuth,
             operatorSigningContext: operatorSigningContext
         )
         self.toriiClient = client

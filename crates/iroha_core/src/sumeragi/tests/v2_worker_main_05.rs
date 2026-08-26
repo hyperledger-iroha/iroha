@@ -2092,6 +2092,7 @@ fn entered_view_accepts_same_view_higher_generation_supersession() {
         .entered_view(
             view_one,
             timeout_certificate_at_view(&service, initial.view()),
+            None,
         )
         .expect("install the first certified successor view");
     let payload = outbound_payload_at_view(&service, view_one.view());
@@ -2103,6 +2104,7 @@ fn entered_view_accepts_same_view_higher_generation_supersession() {
             .entered_view(
                 view_one,
                 timeout_certificate_at_view(&service, view_one.view() - 1),
+                None,
             )
             .is_err(),
         "an equal lifecycle tag is not a supersession"
@@ -2117,6 +2119,7 @@ fn entered_view_accepts_same_view_higher_generation_supersession() {
             .entered_view(
                 rebound,
                 timeout_certificate_at_view(&service, view_one.view()),
+                None,
             )
             .is_err(),
         "the certificate must still identify the immediate predecessor round"
@@ -2125,6 +2128,7 @@ fn entered_view_accepts_same_view_higher_generation_supersession() {
         .entered_view(
             rebound,
             timeout_certificate_at_view(&service, view_one.view() - 1),
+            None,
         )
         .expect("a stricter same-round TC installs a new same-view generation");
     assert_eq!(service.active_tag, rebound);
@@ -2143,7 +2147,11 @@ fn entered_view_advances_live_leader_wire_recovery_cut() {
         Generation::new(initial.generation().get() + 1),
     );
     service
-        .entered_view(next, timeout_certificate_at_view(&service, initial.view()))
+        .entered_view(
+            next,
+            timeout_certificate_at_view(&service, initial.view()),
+            None,
+        )
         .expect("install the certified successor and its live recovery cut");
     let (_, _, stale_proposal, _, stale_sender) =
         productive_chunk_at_view(&service, &keys, initial.view());
@@ -2164,6 +2172,55 @@ fn entered_view_advances_live_leader_wire_recovery_cut() {
                 wire::ConsensusMessageV2Payload::Proposal(current_proposal),
             )),
             current_sender,
+        )),
+        Ok(super::super::FairV2IngressPushDisposition::Enqueued)
+    ));
+}
+#[test]
+fn entered_view_publishes_the_exact_protected_commit_vote_cut() {
+    let (mut service, _) = fixture_with_block_payload();
+    let gate_directory = TempDir::new().expect("temporary protected-Commit gate");
+    let ingress = bind_productive_orphan_test_ingress(&mut service, &gate_directory);
+    let initial = service.active_tag;
+    let protected_round = wire::ConsensusRound {
+        context_id: service.context.id(),
+        height: service.context.height,
+        view: initial.view(),
+    };
+    let protected_subject = locked_candidate_subject(b"live protected Commit vote");
+    let next = EventTag::new(
+        initial.height(),
+        initial.view() + 1,
+        Generation::new(initial.generation().get() + 1),
+    );
+    service
+        .entered_view(
+            next,
+            timeout_certificate_at_view(&service, initial.view()),
+            Some((protected_round, protected_subject)),
+        )
+        .expect("install the certified successor with its exact durable lock");
+    let commit = wire::Vote {
+        round: protected_round,
+        proposal_round: protected_round,
+        phase: wire::GlobalPhase::Commit,
+        subject: protected_subject,
+        execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
+            Hash::new(b"live protected Commit parent state"),
+            Hash::new(b"live protected Commit post state"),
+            Hash::new(b"live protected Commit writes"),
+            1,
+            Hash::new(b"live protected Commit wire"),
+        ),
+        signer: 0,
+        signature: vec![0xA5; 48],
+    };
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            BlockMessage::V2(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::Vote(commit),
+            )),
+            service.context.roster[0].validator.clone(),
         )),
         Ok(super::super::FairV2IngressPushDisposition::Enqueued)
     ));
@@ -2205,7 +2262,7 @@ fn outbound_payload_retention_is_constant_across_many_view_changes() {
         );
         if view != 0 {
             service
-                .entered_view(tag, timeout_certificate_at_view(&service, view - 1))
+                .entered_view(tag, timeout_certificate_at_view(&service, view - 1), None)
                 .expect("install monotonic certified view");
             assert!(
                 service.outbound_chunks.is_empty(),
@@ -2251,6 +2308,7 @@ fn late_stale_proposal_signature_cannot_restore_pruned_outbound_payload() {
         .entered_view(
             new_tag,
             timeout_certificate_at_view(&service, old_tag.view()),
+            None,
         )
         .expect("install next certified view");
     assert!(service.outbound_chunks.is_empty());

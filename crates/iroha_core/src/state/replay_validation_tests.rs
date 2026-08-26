@@ -222,20 +222,6 @@ fn rebind_test_execution_context_validators_and_resign(
         .replace_signatures(std::collections::BTreeSet::from([signature]))
         .expect("replace rebound block signature");
 }
-fn clear_test_execution_context_and_resign(
-    block: &mut SignedBlock,
-    private_key: &iroha_crypto::PrivateKey,
-) {
-    block.set_execution_context(None);
-    let signature = iroha_data_model::block::BlockSignature::new(
-        0,
-        iroha_crypto::SignatureOf::try_from_hash(private_key, block.header().hash())
-            .expect("re-sign legacy replay fixture"),
-    );
-    block
-        .replace_signatures(std::collections::BTreeSet::from([signature]))
-        .expect("replace legacy replay fixture signature");
-}
 fn rebind_test_confidential_features_and_resign(
     block: &mut SignedBlock,
     state: &State,
@@ -472,9 +458,12 @@ fn replay_fixture_state(
     configure_replay_fixture_parameters(&state);
     state
 }
-fn seed_space_directory_manifest_for_legacy_checkpoint_test(state: &State, dataspace: DataSpaceId) {
+fn seed_space_directory_manifest_for_retired_checkpoint_test(
+    state: &State,
+    dataspace: DataSpaceId,
+) {
     let uaid = UniversalAccountId::from_hash(iroha_crypto::Hash::new(
-        b"strict-replay-legacy-checkpoint-surface",
+        b"strict-replay-retired-checkpoint-surface",
     ));
     let manifest = AssetPermissionManifest {
         version: ManifestVersion::default(),
@@ -1454,18 +1443,18 @@ fn replay_rejects_exact_wsv_checkpoint_mismatch_impl() {
     );
 }
 #[test]
-fn replay_rejects_legacy_space_directory_checkpoint_surface() {
+fn replay_rejects_retired_space_directory_checkpoint_surface() {
     run_replay_validation_test_on_stack(
-        "replay_rejects_legacy_checkpoint_surface",
-        replay_rejects_legacy_space_directory_checkpoint_surface_impl,
+        "replay_rejects_retired_checkpoint_surface",
+        replay_rejects_retired_space_directory_checkpoint_surface_impl,
     );
 }
 #[allow(clippy::too_many_lines)]
-fn replay_rejects_legacy_space_directory_checkpoint_surface_impl() {
+fn replay_rejects_retired_space_directory_checkpoint_surface_impl() {
     use iroha_crypto::Algorithm;
     use iroha_primitives::json::Json;
     use std::borrow::Cow;
-    let chain_id = ChainId::from("iroha:test:legacy-route-replay");
+    let chain_id = ChainId::from("iroha:test:retired-route-replay");
     let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
     let lane_id = LaneId::new(3);
     let dataspace_id = DataSpaceId::new(10);
@@ -1476,7 +1465,7 @@ fn replay_rejects_legacy_space_directory_checkpoint_surface_impl() {
     let kura = Kura::blank_kura_for_testing();
     let original_state =
         replay_fixture_state(Arc::clone(&kura), chain_id.clone(), lane_id, dataspace_id);
-    seed_space_directory_manifest_for_legacy_checkpoint_test(&original_state, dataspace_id);
+    seed_space_directory_manifest_for_retired_checkpoint_test(&original_state, dataspace_id);
     let proof_policies = |height| {
         crate::da::active_proof_policy_bundle_at_height(&original_state.nexus_snapshot(), height)
     };
@@ -1545,22 +1534,11 @@ fn replay_rejects_legacy_space_directory_checkpoint_surface_impl() {
         .with_da_proof_policies(Some(proof_policies(2)))
         .sign(leader.private_key())
         .unpack(|_| {});
-    let mut legacy_block: SignedBlock = block.into();
-    clear_test_execution_context_and_resign(&mut legacy_block, leader.private_key());
-    assert!(
-        legacy_block.execution_context().is_none(),
-        "legacy fixture must exercise replay compatibility without an execution context"
-    );
-    let legacy_block = commit_replay_validated_block_with_signature_mode(
-        &original_state,
-        &topology,
-        legacy_block,
-        &genesis_id,
-        true,
-    );
-    assert!(legacy_block.has_results());
-    kura.store_block(Arc::new(legacy_block.clone()))
-        .expect("store legacy block");
+    let block2 =
+        commit_replay_validated_block(&original_state, &topology, block.into(), &genesis_id);
+    assert!(block2.has_results());
+    kura.store_block(Arc::new(block2.clone()))
+        .expect("store block 2");
     let canonical_prefix =
         crate::snapshot::canonical_state_snapshot_bytes_for_tests(&original_state);
     let block3_instructions = vec![
@@ -1585,41 +1563,38 @@ fn replay_rejects_legacy_space_directory_checkpoint_surface_impl() {
     .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
     let block3_accepted = crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(block3_tx));
     let block3 = crate::block::BlockBuilder::new(vec![block3_accepted])
-        .chain(0, Some(&legacy_block))
+        .chain(0, Some(&block2))
         .with_da_proof_policies(Some(proof_policies(3)))
         .sign(leader.private_key())
         .unpack(|_| {});
-    let mut legacy_block3: SignedBlock = block3.into();
-    clear_test_execution_context_and_resign(&mut legacy_block3, leader.private_key());
-    assert!(
-        legacy_block3.execution_context().is_none(),
-        "multi-block legacy fixture must retain missing-context replay compatibility"
-    );
-    let legacy_block3 = commit_replay_validated_block_with_signature_mode(
-        &original_state,
-        &topology,
-        legacy_block3,
-        &genesis_id,
-        true,
-    );
-    assert!(legacy_block3.has_results());
-    kura.store_block(Arc::new(legacy_block3.clone()))
-        .expect("store second legacy block");
+    let block3 =
+        commit_replay_validated_block(&original_state, &topology, block3.into(), &genesis_id);
+    assert!(block3.has_results());
+    kura.store_block(Arc::new(block3.clone()))
+        .expect("store block 3");
     let canonical_checkpoint = crate::snapshot::canonical_state_snapshot_hash(&original_state);
-    let legacy_checkpoint =
-        crate::snapshot::legacy_state_snapshot_hash_without_space_directory_manifests(
-            &original_state,
-        );
+    let mut retired_checkpoint_value: norito::json::Value = norito::json::from_slice(
+        &crate::snapshot::canonical_state_snapshot_bytes_for_tests(&original_state),
+    )
+    .expect("decode exact first-release WSV fixture");
+    retired_checkpoint_value
+        .as_object_mut()
+        .expect("state snapshot must be an object")
+        .remove("space_directory_manifests")
+        .expect("first-release snapshot must carry Space Directory manifests");
+    let retired_checkpoint_bytes = norito::json::to_json(&retired_checkpoint_value)
+        .expect("encode retired checkpoint fixture");
+    let retired_checkpoint = Hash::new(retired_checkpoint_bytes);
     assert_ne!(
-        canonical_checkpoint, legacy_checkpoint,
+        canonical_checkpoint, retired_checkpoint,
         "test fixture must distinguish the exact first-release WSV from the retired surface"
     );
-    kura.overwrite_wsv_checkpoint_without_validation_for_tests(3, legacy_checkpoint, None)
+    kura.overwrite_wsv_checkpoint_without_validation_for_tests(3, retired_checkpoint, None)
         .expect("overwrite final WSV checkpoint with retired surface hash");
     let replay_kura = Kura::blank_kura_for_testing();
     let mut replay_state =
         replay_fixture_state(Arc::clone(&replay_kura), chain_id, lane_id, dataspace_id);
-    seed_space_directory_manifest_for_legacy_checkpoint_test(&replay_state, dataspace_id);
+    seed_space_directory_manifest_for_retired_checkpoint_test(&replay_state, dataspace_id);
     for height in 1..=3 {
         let height_index = NonZeroUsize::new(height).expect("replay height is non-zero");
         let block = kura

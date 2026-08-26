@@ -1888,7 +1888,9 @@ fileprivate extension ToriiParliamentAPIV1 {
     }
 
     static func unsigned(_ value: Any?, field: String) throws -> UInt64 {
-        guard let value, !(value is Bool), let number = value as? NSNumber else {
+        guard let value,
+              let number = value as? NSNumber,
+              CFGetTypeID(number) != CFBooleanGetTypeID() else {
             throw ToriiClientError.invalidPayload("\(field) must be an unsigned integer.")
         }
         let decimal = number.stringValue

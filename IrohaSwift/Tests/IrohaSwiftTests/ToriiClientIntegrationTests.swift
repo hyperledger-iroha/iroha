@@ -4,8 +4,88 @@ import XCTest
 @testable import IrohaSwift
 
 #if os(macOS)
+private final class ToriiLoopbackHTTPSURLProtocol: URLProtocol {
+    private var forwardingSession: URLSession?
+    private var forwardingTask: URLSessionDataTask?
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        request.url?.scheme == "https"
+            && ["127.0.0.1", "localhost", "::1"].contains(request.url?.host ?? "")
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        guard let url = request.url,
+              var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badURL))
+            return
+        }
+        components.scheme = "http"
+        guard let forwardedURL = components.url else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badURL))
+            return
+        }
+        var forwardedRequest = request
+        forwardedRequest.url = forwardedURL
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = []
+        let session = URLSession(configuration: configuration)
+        forwardingSession = session
+        forwardingTask = session.dataTask(with: forwardedRequest) { [weak self] data, response, error in
+            guard let self else { return }
+            defer {
+                session.finishTasksAndInvalidate()
+                self.forwardingSession = nil
+                self.forwardingTask = nil
+            }
+            if let error {
+                self.client?.urlProtocol(self, didFailWithError: error)
+                return
+            }
+            guard let response else {
+                self.client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+                return
+            }
+            let deliveredResponse: URLResponse
+            if let http = response as? HTTPURLResponse {
+                var headers: [String: String] = [:]
+                for (key, value) in http.allHeaderFields {
+                    guard let key = key as? String else { continue }
+                    headers[key] = String(describing: value)
+                }
+                deliveredResponse = HTTPURLResponse(
+                    url: url,
+                    statusCode: http.statusCode,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: headers
+                ) ?? response
+            } else {
+                deliveredResponse = response
+            }
+            self.client?.urlProtocol(
+                self,
+                didReceive: deliveredResponse,
+                cacheStoragePolicy: .notAllowed
+            )
+            if let data { self.client?.urlProtocol(self, didLoad: data) }
+            self.client?.urlProtocolDidFinishLoading(self)
+        }
+        forwardingTask?.resume()
+    }
+
+    override func stopLoading() {
+        forwardingTask?.cancel()
+        forwardingSession?.invalidateAndCancel()
+        forwardingTask = nil
+        forwardingSession = nil
+    }
+}
+
 final class ToriiClientIntegrationTests: XCTestCase {
     private var mock: ToriiMockProcess?
+    private let signingSeed = Data(repeating: 0x41, count: 32)
 
     override func setUpWithError() throws {
         try super.setUpWithError()
@@ -23,14 +103,43 @@ final class ToriiClientIntegrationTests: XCTestCase {
         super.tearDown()
     }
 
+    private func secureMockBaseURL(_ mock: ToriiMockProcess) throws -> URL {
+        var components = try XCTUnwrap(
+            URLComponents(url: mock.baseURL, resolvingAgainstBaseURL: false)
+        )
+        components.scheme = "https"
+        return try XCTUnwrap(components.url)
+    }
+
+    private func secureMockSession() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [ToriiLoopbackHTTPSURLProtocol.self]
+        return URLSession(configuration: configuration)
+    }
+
+    private func makeAuthenticatedMockClient(_ mock: ToriiMockProcess) throws -> ToriiClient {
+        let accountId = try Keypair(privateKeyBytes: signingSeed)
+            .accountId(networkPrefix: AccountId.defaultNetworkPrefix)
+        return ToriiClient(
+            baseURL: try secureMockBaseURL(mock),
+            session: secureMockSession(),
+            localSigningContext: ToriiLocalSigningContext(networkId: TestNetworkIds.canonical),
+            canonicalRequestAuth: ToriiCanonicalRequestAuth(
+                accountId: accountId,
+                privateKey: signingSeed
+            )
+        )
+    }
+
     func testAttachmentLifecycleAgainstMock() throws {
         guard let mock else { return }
-        let session = URLSession(configuration: .ephemeral)
-        let seed = Data(repeating: 0x41, count: 32)
-        let accountId = try Keypair(privateKeyBytes: seed).accountId(networkPrefix: AccountId.defaultNetworkPrefix)
-        let canonicalAuth = ToriiCanonicalRequestAuth(accountId: accountId, privateKey: seed)
-        let client = ToriiClient(baseURL: mock.baseURL, session: session,
-                                 localSigningContext: ToriiLocalSigningContext(networkId: TestNetworkIds.canonical))
+        let accountId = try Keypair(privateKeyBytes: signingSeed)
+            .accountId(networkPrefix: AccountId.defaultNetworkPrefix)
+        let canonicalAuth = ToriiCanonicalRequestAuth(
+            accountId: accountId,
+            privateKey: signingSeed
+        )
+        let client = try makeAuthenticatedMockClient(mock)
         let payload = Data("{\"hello\":\"swift\"}".utf8)
 
         var attachmentId: String?
@@ -105,8 +214,7 @@ final class ToriiClientIntegrationTests: XCTestCase {
                                           hashHex: scenarioHash,
                                           statusKinds: ["Queued", "Approved", "Committed", "Applied"])
         let mock = try XCTUnwrap(self.mock)
-        let session = URLSession(configuration: .ephemeral)
-        let client = ToriiClient(baseURL: mock.baseURL, session: session)
+        let client = try makeAuthenticatedMockClient(mock)
         let sdk = IrohaSDK(toriiClient: client)
         sdk.pipelinePollOptions = PipelineStatusPollOptions(pollInterval: 0.01, timeout: 1)
         let envelope = try tcMakePipelineEnvelope(hashHex: scenarioHash, marker: 0x11)
@@ -120,8 +228,7 @@ final class ToriiClientIntegrationTests: XCTestCase {
         let scenarioHash = "feedfacecafebeefcafedeadbeef000200000000000000000000000000000000"
         try await preparePipelineScenario(.failure, hashHex: scenarioHash)
         let mock = try XCTUnwrap(self.mock)
-        let session = URLSession(configuration: .ephemeral)
-        let client = ToriiClient(baseURL: mock.baseURL, session: session)
+        let client = try makeAuthenticatedMockClient(mock)
         let sdk = IrohaSDK(toriiClient: client)
         sdk.pipelinePollOptions = PipelineStatusPollOptions(pollInterval: 0.01, timeout: 1)
         let envelope = try tcMakePipelineEnvelope(hashHex: scenarioHash, marker: 0x22)
@@ -149,8 +256,7 @@ final class ToriiClientIntegrationTests: XCTestCase {
                                           statusKinds: ["Queued"],
                                           repeatLast: true)
         let mock = try XCTUnwrap(self.mock)
-        let session = URLSession(configuration: .ephemeral)
-        let client = ToriiClient(baseURL: mock.baseURL, session: session)
+        let client = try makeAuthenticatedMockClient(mock)
         let sdk = IrohaSDK(toriiClient: client)
         sdk.pipelinePollOptions = PipelineStatusPollOptions(pollInterval: 0.01,
                                                             timeout: 0.3,
@@ -471,15 +577,13 @@ final class ToriiClientIntegrationTests: XCTestCase {
     private func preparePipelineScenario(_ scenario: PipelineScenario,
                                          hashHex: String,
                                          statusKinds: [String]? = nil,
-                                         repeatLast: Bool? = nil,
-                                         accepted: Bool? = nil) async throws {
+                                         repeatLast: Bool? = nil) async throws {
         let mock = try XCTUnwrap(self.mock)
         try await mock.resetState()
         try await mock.configurePipeline(scenario: scenario.rawValue,
                                          hash: hashHex,
                                          statusKinds: statusKinds,
-                                         repeatLast: repeatLast,
-                                         accepted: accepted)
+                                         repeatLast: repeatLast)
     }
 
     private func makeSampleManifestRaw(storageTicket: String = String(repeating: "aa", count: 32)) -> [String: ToriiJSONValue] {

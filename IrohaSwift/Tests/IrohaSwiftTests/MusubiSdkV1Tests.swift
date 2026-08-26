@@ -330,11 +330,13 @@ final class MusubiSdkV1Tests: XCTestCase {
             let response = try jsonData(route["response"])
             XCTAssertEqual(
                 try roundTripRequest(routePath, data: request),
-                try jsonObject(request)
+                try jsonObject(request),
+                routePath
             )
             XCTAssertEqual(
                 try roundTripResponse(routePath, data: response),
-                try jsonObject(response)
+                try jsonObject(response),
+                routePath
             )
         }
     }
