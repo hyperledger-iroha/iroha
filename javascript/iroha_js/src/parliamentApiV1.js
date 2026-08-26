@@ -2,6 +2,7 @@
 
 import { validateNoritoFrame } from "./norito.js";
 import { sha256 } from "@noble/hashes/sha2";
+import { crc64Xz } from "./crc64Xz.js";
 import { normalizeGovernanceProposalWireV1 } from "./governanceProposalV1.js";
 
 export const PARLIAMENT_API_VERSION_V1 = 1;
@@ -13,6 +14,19 @@ export const PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_READ_PATH_V1 =
   "/v1/gov/parliament/ballots/{ballot_attempt_id}/casting-context";
 export const PARLIAMENT_TIMED_OVN_CASTING_PROOF_PATH_V1 =
   "/v1/gov/parliament/ballots/{ballot_attempt_id}/casting-proof";
+export const PARLIAMENT_TIMED_OVN_CASTING_PROOF_VERSION_V1 = 1;
+export const PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA_NAME_V1 =
+  "iroha.torii.v1.parliament.timed_ovn_casting_proof.request";
+export const PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA_HASH_HEX_V1 =
+  "adccf322a5fcf43040e20bea238f55f3";
+export const PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_NAME_V1 =
+  "iroha.torii.v1.parliament.timed_ovn_casting_proof.response";
+export const PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_HASH_HEX_V1 =
+  "46d29299272433b1299646bee722bd11";
+export const PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_FLAGS_V1 = 0x02;
+export const PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_PAYLOAD_ALIGNMENT_V1 = 8;
+export const PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_PADDING_BYTES_V1 = 0;
+export const PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_BYTES_V1 = 52;
 export const PARLIAMENT_TLE_RELEASE_CONTEXT_READ_PATH_V1 =
   "/v1/gov/parliament/ballots/{ballot_attempt_id}/release-context";
 export const PARLIAMENT_TLE_PARTIAL_RELEASE_PATH_V1 =
@@ -24,6 +38,7 @@ export const PARLIAMENT_ATTEMPT_CREATE_WIRE_ID_V1 =
 export const PARLIAMENT_TRANSITION_SUBMIT_WIRE_ID_V1 =
   "iroha.governance.parliament.transition.submit.v1";
 export const PARLIAMENT_ATTEMPT_STATE_MAX_BYTES_V1 = 16 * 1024 * 1024;
+export const PARLIAMENT_GOVERNANCE_ATTEMPT_SEQUENCE_MAX_V1 = 16;
 export const PARLIAMENT_TIMED_OVN_REGISTRATION_RECORD_BYTES_V1 = 3_624;
 export const PARLIAMENT_TIMED_OVN_BALLOT_RECORD_BYTES_V1 = 2_858;
 // One transition appends a bounded contiguous chunk; the complete corpus may
@@ -88,6 +103,7 @@ export const PARLIAMENT_NO_RESULT_KINDS_V1 = Object.freeze([
   [4, "BallotCommitmentDeadlineExpired"],
   [5, "BallotReleasePulseUnavailable"],
   [6, "BallotOpeningDeadlineExpired"],
+  [7, "SortitionRetriesExhausted"],
 ].map(([noritoIndex, jsonTag]) => Object.freeze({ noritoIndex, jsonTag })));
 
 export const PARLIAMENT_BODY_STATE_FIELDS_V1 = Object.freeze([
@@ -138,7 +154,7 @@ const PUBLIC_TRANSITIONS_BY_TAG = new Map(
 );
 const TRANSITION_PAYLOAD_FIELDS = new Map([
   ["EscalateRisk", ["target"]],
-  ["RegisterSortitionRequest", ["sequence", "request", "candidate_snapshot"]],
+  ["RegisterSortitionRequest", ["requests"]],
   ["ConsumeSortitionPulseBatch", ["request_ids", "beacon_session_id", "pulse_height", "pulse_id"]],
   ["BeginInvitationAcceptance", ["election_attempt_id"]],
   ["FailBodyElectionNoRoster", ["election_attempt_id"]],
@@ -273,6 +289,55 @@ export function parliamentTimedOvnCastingProofPathV1(ballotAttemptId) {
   );
 }
 
+/** Encode one exact compact-length, schema-bound casting-proof request frame. */
+export function encodeParliamentTimedOvnCastingProofRequestV1(trustedCheckpointHeight) {
+  const height = nonZeroU64(trustedCheckpointHeight, "trustedCheckpointHeight");
+  const payload = Buffer.allocUnsafe(12);
+  payload[0] = 2;
+  payload.writeUInt16LE(PARLIAMENT_TIMED_OVN_CASTING_PROOF_VERSION_V1, 1);
+  payload[3] = 8;
+  payload.writeBigUInt64LE(height, 4);
+
+  const frame = Buffer.alloc(PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_BYTES_V1);
+  frame.write("NRT0", 0, "ascii");
+  Buffer.from(
+    PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA_HASH_HEX_V1,
+    "hex",
+  ).copy(frame, 6);
+  frame.writeBigUInt64LE(BigInt(payload.length), 23);
+  frame.writeBigUInt64LE(crc64Xz(payload), 31);
+  frame[39] = PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_FLAGS_V1;
+  payload.copy(frame, 40 + PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_PADDING_BYTES_V1);
+  return frame;
+}
+
+/** Validate and retain one opaque canonical casting-proof response frame. */
+export function validateParliamentTimedOvnCastingProofResponseFrameV1(value) {
+  const frame = Buffer.isBuffer(value)
+    ? Buffer.from(value)
+    : ArrayBuffer.isView(value)
+      ? Buffer.from(value.buffer, value.byteOffset, value.byteLength)
+      : value instanceof ArrayBuffer
+        ? Buffer.from(value)
+        : value;
+  const decoded = validateNoritoFrame(frame, {
+    context: "Parliament casting-proof response",
+    expectedSchemaHash: Buffer.from(
+      PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_HASH_HEX_V1,
+      "hex",
+    ),
+    expectedTypeName: PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_NAME_V1,
+    expectedPaddingLength: 0,
+    requireNonEmptyPayload: true,
+  });
+  if (decoded.flags !== PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_FLAGS_V1) {
+    throw new Error(
+      `Parliament casting-proof response must use canonical Norito flags 0x${PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_FLAGS_V1.toString(16)}`,
+    );
+  }
+  return Buffer.from(frame);
+}
+
 /** Replace the sole release-context placeholder after exact non-zero ID validation. */
 export function parliamentTleReleaseContextReadPathV1(ballotAttemptId) {
   return PARLIAMENT_TLE_RELEASE_CONTEXT_READ_PATH_V1.replace(
@@ -296,7 +361,11 @@ export function buildParliamentAttemptDraftRequestV1(proposal, attemptSequence) 
   return {
     version: PARLIAMENT_API_VERSION_V1,
     proposal: tagged,
-    attempt_sequence: uint(attemptSequence, 0xffff_ffff, "attemptSequence"),
+    attempt_sequence: uint(
+      attemptSequence,
+      PARLIAMENT_GOVERNANCE_ATTEMPT_SEQUENCE_MAX_V1,
+      "attemptSequence",
+    ),
   };
 }
 
@@ -1516,6 +1585,20 @@ function unsigned(value, context) {
   if ((typeof value === "number" && Number.isSafeInteger(value) && value >= 0)
     || (typeof value === "bigint" && value >= 0n)) return value;
   throw new TypeError(`${context} must be a losslessly decoded unsigned integer`);
+}
+
+function nonZeroU64(value, context) {
+  if (
+    (typeof value !== "number" || !Number.isSafeInteger(value))
+    && typeof value !== "bigint"
+  ) {
+    throw new TypeError(`${context} must be a lossless unsigned 64-bit integer`);
+  }
+  const normalized = BigInt(value);
+  if (normalized <= 0n || normalized > 0xffff_ffff_ffff_ffffn) {
+    throw new RangeError(`${context} must be within 1..=18446744073709551615`);
+  }
+  return normalized;
 }
 
 function optionalUnsigned(value, context) {

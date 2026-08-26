@@ -75,8 +75,8 @@ use super::{
         AuthenticatedRecoveredWalValidateLedgerParent, AuthenticatedRecoveredWalVoteProjection,
         DurableCertifiedFetchPendingMintPermit, DurableLifecycleOutputPendingMintPermit,
         DurableStandaloneValidatePendingMintPermit, DurableValidateReplayEvidenceV1,
-        LifecycleDecisionApplyLineageV1, PreparedReadyDurableValidateAdapterPreview,
-        PreparedReadyDurableValidateExecution, ReadyDurableValidateAdapterPreviewError,
+        PreparedReadyDurableValidateAdapterPreview, PreparedReadyDurableValidateExecution,
+        ReadyDurableValidateAdapterPreviewError,
         RecoveredLifecycleNextWalVoteCandidateProjectionV1, RecoveredLifecycleNextWalVoteSealV1,
         RecoveredWalVoteReplayEvidenceV1, RuntimeLifecycleOrdinalAuthority,
         runtime_lifecycle_ordinal_authority_after_high_watermark,
@@ -15368,10 +15368,8 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         &mut self,
         authority: LifecycleDecisionApplyAdapterCompletionAuthorityV1,
     ) -> Result<PreparedLifecycleDecisionApplyAdapterCompletionV1<'_>, AdapterError> {
-        let recovered_requires_empty_ingress =
-            authority.lineage() == LifecycleDecisionApplyLineageV1::Recovered;
         if self.fail_closed
-            || (recovered_requires_empty_ingress && self.ingress.len() != 0)
+            || self.ingress.len() != 0
             || self.pending_effect_ownership.is_some()
             || self.last_scheduler_ownership.is_some()
             || !self.pending_leader_wire_terminals.is_empty()

@@ -42,6 +42,12 @@ on:
       - "rust-toolchain.toml"
   workflow_dispatch:
 
+env:
+  # Keep checkout bytes independent of the Windows runner's system Git policy.
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: core.autocrlf
+  GIT_CONFIG_VALUE_0: "false"
+
 jobs:
   native-release-artifacts:
     strategy:

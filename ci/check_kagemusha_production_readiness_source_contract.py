@@ -1896,11 +1896,13 @@ def static_errors(o: dict[str, str] | None = None) -> list[str]:
             r'&& status\.resolved_from == "state"\s*'
             r'&& status\.status\.kind == "Applied"\s*=>\s*\{\s*'
             r'ReconciledSubmissionStatus::Applied\s*\}\s*'
-            r'Some\(status\) if status\.scope == "global"\s*'
-            r'&& status\.status\.kind == "Rejected" => \{\s*'
+            r'Some\(status\)\s*if status\.scope == "global"\s*'
+            r'&& status\.resolved_from == "state"\s*'
+            r'&& status\.status\.kind == "Rejected"\s*=>\s*\{\s*'
             r'ReconciledSubmissionStatus::Rejected\s*\}\s*'
-            r'Some\(status\) if status\.scope == "global"\s*'
-            r'&& status\.status\.kind == "Expired" => \{\s*'
+            r'Some\(status\)\s*if status\.scope == "global"\s*'
+            r'&& status\.resolved_from == "state"\s*'
+            r'&& status\.status\.kind == "Expired"\s*=>\s*\{\s*'
             r'ReconciledSubmissionStatus::Expired\s*\}\s*'
             r"Some\(_\) \| None => ReconciledSubmissionStatus::Unresolved,"
         ),

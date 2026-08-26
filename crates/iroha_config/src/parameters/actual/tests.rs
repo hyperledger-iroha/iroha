@@ -411,6 +411,12 @@ mod tests {
         changed.gov.plain_voting_enabled = !changed.gov.plain_voting_enabled;
         assert_changed("governance execution policy", changed);
         let mut changed = baseline.clone();
+        changed.gov.parliament_sortition_pulse_delay_blocks = changed
+            .gov
+            .parliament_sortition_pulse_delay_blocks
+            .saturating_add(1);
+        assert_changed("Parliament sortition pulse-delay policy", changed);
+        let mut changed = baseline.clone();
         changed.gov.parliament_timed_ovn.release_delay_blocks = changed
             .gov
             .parliament_timed_ovn

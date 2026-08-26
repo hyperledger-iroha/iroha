@@ -541,9 +541,10 @@ ML-KEM processing:
    binding. The Ed25519 transport key signs its canonical encoding under
    `iroha:p2p:soranet-transport-proof:v5|`. The responder combines this fresh
    proof with the cached BLS certificate and sends the canonical Norito frame
-   behind a big-endian `u16` length. Empty, non-canonical, or larger-than-4,493
-   byte frames are rejected; 4,493 bytes is the exact maximum V5 frame with a
-   present binding.
+   behind a big-endian `u16` length. Empty, non-canonical, or larger-than-4,525
+   byte frames are rejected; 4,525 bytes is the exact maximum V5 frame with a
+   present binding. That bound preserves the current signed V5 Norito layout,
+   including the named challenge array's generic fixed-array encoding.
 4. The initiator performs bounded canonical decoding and verifies the exact
    V5 certificate version, `NetworkId`, expected `PeerId`, challenge, transport
    binding, key algorithms and lengths, BLS certificate signature, certificate

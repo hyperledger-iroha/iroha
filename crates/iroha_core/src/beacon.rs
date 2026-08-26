@@ -2304,6 +2304,10 @@ pub(crate) fn verified_persisted_global_threshold_beacon_pulse_v1(
     pulse: FinalizedGlobalThresholdBeaconPulseV1,
 ) -> Result<FinalizedGlobalThresholdBeaconPulseV1, GlobalThresholdBeaconError> {
     if world.global_beacon_pulses().get(&pulse.pulse_id) != Some(&pulse)
+        || world
+            .global_beacon_pulse_slots()
+            .get(&(pulse.network_id, pulse.height))
+            != Some(&pulse.pulse_id)
         || pulse.network_id != *network_id
         || pulse.finalized_chain_anchor.height.checked_add(1) != Some(pulse.height)
     {
@@ -3145,7 +3149,7 @@ pub(crate) mod tests {
         keys
     }
 
-    fn pending_batched_sortition_attempt(
+    pub(crate) fn pending_batched_sortition_attempt(
         network_id: &NetworkId,
         roster: &[PeerId],
         pulse_height: u64,
@@ -3166,6 +3170,7 @@ pub(crate) mod tests {
                 status: GovernanceAttemptStatusV1::Active,
             },
             1,
+            10,
             [0x42; 32],
             GovernanceExpectedHeadV1::Absent(GovernanceExpectedHeadAbsentV1 {
                 subject_id: [0x43; 32],
@@ -4333,6 +4338,85 @@ pub(crate) mod tests {
             Ok(pulse),
             "the first certified pulse must create the authoritative cursor without a test-seeded origin"
         );
+        let world_view = world.view();
+        assert_eq!(
+            world_view.global_beacon_pulse_at_slot(&pulse.network_id, pulse.height),
+            Some(&pulse),
+            "the authoritative insertion corridor must update the exact slot index atomically"
+        );
+        drop(world_view);
+
+        let mut conflicting_slot = pulse;
+        conflicting_slot.pulse_id[0] ^= 1;
+        let mut block = world.block();
+        let mut transaction = block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
+        assert_eq!(
+            transaction.verify_and_advance_global_beacon_pulse(
+                &fixture.session,
+                conflicting_slot,
+                anchor,
+            ),
+            Err(GlobalThresholdBeaconError::ReusedPulse),
+            "a distinct pulse id cannot claim an already indexed network-height slot"
+        );
+    }
+
+    #[test]
+    fn late_sortition_pulse_is_rejected_after_parliament_transcript_restart_roundtrip() {
+        let (fixture, pulse, _origin, anchor) = signed_pulse_fixture();
+        let roster = live_producer_keys()
+            .into_iter()
+            .map(|key| PeerId::new(key.public_key().clone()))
+            .collect::<Vec<_>>();
+        let (governance_attempt_id, _, mut attempt) =
+            pending_batched_sortition_attempt(&pulse.network_id, &roster, pulse.height);
+        let failed_election_id = BodyElectionAttemptId::derive_v1(
+            governance_attempt_id,
+            ParliamentBody::RulesCommittee,
+            0,
+        );
+        attempt
+            .fail_body_election_no_roster(
+                governance_attempt_id,
+                failed_election_id,
+                false,
+                pulse.height + 1,
+            )
+            .expect("terminally classify the missing initial sortition slot");
+        let logical_session = BeaconSessionId::for_network_v1(&pulse.network_id);
+        assert!(attempt.classifies_beacon_pulse_unavailable_at(logical_session, pulse.height));
+
+        let encoded = norito::json::to_json(&attempt)
+            .expect("serialize the terminal Parliament transcript for restart");
+        let restored_attempt: ParliamentAttemptStateV1 =
+            norito::json::from_str(&encoded).expect("restore the terminal Parliament transcript");
+        restored_attempt
+            .validate()
+            .expect("restored missing-pulse transcript remains canonical");
+        assert!(
+            restored_attempt.classifies_beacon_pulse_unavailable_at(logical_session, pulse.height)
+        );
+
+        let mut key_record =
+            FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(fixture.session.record().clone())
+                .expect("valid finalized beacon key");
+        key_record
+            .activate(key_record.session.adaptive_dkg.finalized_at_height)
+            .expect("activate finalized beacon key");
+        let world = World::new();
+        let mut block = world.block();
+        let mut transaction = block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
+        transaction
+            .global_beacon_key_sessions
+            .insert(pulse.session_id, key_record);
+        transaction
+            .parliament_attempts
+            .insert(governance_attempt_id, restored_attempt);
+        assert_eq!(
+            transaction.verify_and_advance_global_beacon_pulse(&fixture.session, pulse, anchor,),
+            Err(GlobalThresholdBeaconError::PersistenceConflict),
+            "restart must not reopen a sortition slot already closed as unavailable"
+        );
     }
 
     #[test]
@@ -4440,6 +4524,10 @@ pub(crate) mod tests {
                 block
                     .global_beacon_pulses
                     .insert(stored_pulse.pulse_id, stored_pulse);
+                block.global_beacon_pulse_slots.insert(
+                    (stored_pulse.network_id, stored_pulse.height),
+                    stored_pulse.pulse_id,
+                );
                 block
                     .global_beacon_latest_pulse
                     .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, link);
@@ -4582,6 +4670,9 @@ pub(crate) mod tests {
                 .global_beacon_active_session
                 .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, pulse.session_id);
             block.global_beacon_pulses.insert(pulse.pulse_id, pulse);
+            block
+                .global_beacon_pulse_slots
+                .insert((pulse.network_id, pulse.height), pulse.pulse_id);
             block
                 .global_beacon_latest_pulse
                 .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, link);

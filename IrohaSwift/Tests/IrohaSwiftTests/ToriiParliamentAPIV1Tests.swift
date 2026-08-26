@@ -11,6 +11,11 @@ final class ToriiParliamentAPIV1Tests: XCTestCase {
     private let proposalID = String(repeating: "cd", count: 32)
     private let root = [UInt8](repeating: 0x55, count: 32)
 
+    override func tearDown() {
+        ParliamentCastingProofStubURLProtocol.handler = nil
+        super.tearDown()
+    }
+
     private func deployProposal() throws -> ToriiParliamentProposalV1 {
         try ToriiParliamentProposalV1(
             validating: Data(
@@ -34,6 +39,18 @@ final class ToriiParliamentAPIV1Tests: XCTestCase {
             limits["timed_ovn_corpus_entries"],
             ToriiParliamentAPIV1.maximumCorpusEntries
         )
+        XCTAssertEqual(
+            limits["timed_ovn_casting_proof_request_bytes"],
+            ToriiParliamentAPIV1.timedOvnCastingProofRequestBytes
+        )
+        XCTAssertEqual(
+            limits["timed_ovn_casting_proof_response_bytes"],
+            ToriiParliamentAPIV1.maximumTimedOvnCastingProofResponseBytes
+        )
+        XCTAssertEqual(
+            limits["timed_ovn_casting_proof_finality_entries"],
+            ToriiParliamentAPIV1.maximumTimedOvnCastingProofFinalityProofs
+        )
         XCTAssertEqual(routes["attempt_draft"], ToriiParliamentAPIV1.attemptDraftPath)
         XCTAssertEqual(routes["attempt_read"], ToriiParliamentAPIV1.attemptReadPathTemplate)
         XCTAssertEqual(
@@ -53,6 +70,56 @@ final class ToriiParliamentAPIV1Tests: XCTestCase {
             ToriiParliamentAPIV1.tlePartialReleasePathTemplate
         )
         XCTAssertEqual(routes["transition_draft"], ToriiParliamentAPIV1.transitionDraftPath)
+        let nativeWallet = try XCTUnwrap(
+            fixture["timed_ovn_native_wallet"] as? [String: Any]
+        )
+        XCTAssertEqual(
+            nativeWallet["request_norito_schema"] as? String,
+            ToriiParliamentAPIV1.timedOvnCastingProofRequestSchema
+        )
+        XCTAssertEqual(
+            nativeWallet["response_norito_schema"] as? String,
+            ToriiParliamentAPIV1.timedOvnCastingProofResponseSchema
+        )
+        XCTAssertEqual(
+            nativeWallet["casting_proof_request_schema_hash_hex"] as? String,
+            ToriiParliamentAPIV1.timedOvnCastingProofRequestSchemaHashHex
+        )
+        XCTAssertEqual(
+            nativeWallet["casting_proof_response_schema_hash_hex"] as? String,
+            ToriiParliamentAPIV1.timedOvnCastingProofResponseSchemaHashHex
+        )
+        XCTAssertEqual(
+            nativeWallet["casting_proof_request_version"] as? Int,
+            Int(ToriiParliamentAPIV1.timedOvnCastingProofRequestVersion)
+        )
+        XCTAssertEqual(
+            nativeWallet["casting_proof_request_flags"] as? Int,
+            Int(ToriiParliamentAPIV1.timedOvnCastingProofRequestFlags)
+        )
+        XCTAssertEqual(
+            nativeWallet["casting_proof_request_payload_alignment"] as? Int,
+            ToriiParliamentAPIV1.timedOvnCastingProofRequestPayloadAlignment
+        )
+        XCTAssertEqual(
+            nativeWallet["casting_proof_request_padding_bytes"] as? Int,
+            ToriiParliamentAPIV1.timedOvnCastingProofRequestPaddingBytes
+        )
+        let golden = try XCTUnwrap(
+            nativeWallet["casting_proof_request_golden"] as? [String: Any]
+        )
+        XCTAssertEqual(
+            golden["frame_bytes"] as? Int,
+            ToriiParliamentAPIV1.timedOvnCastingProofRequestBytes
+        )
+        XCTAssertEqual(
+            try ToriiParliamentAPIV1.timedOvnCastingProofRequestData(
+                trustedCheckpointHeight: UInt64(
+                    try XCTUnwrap(golden["trusted_checkpoint_height"] as? Int)
+                )
+            ).hexEncodedString(),
+            golden["frame_hex"] as? String
+        )
 
         let transitions = try XCTUnwrap(fixture["public_transitions"] as? [[String: Any]])
         XCTAssertEqual(transitions.count, 21)
@@ -75,6 +142,10 @@ final class ToriiParliamentAPIV1Tests: XCTestCase {
         XCTAssertEqual(
             reasons.compactMap { $0["json_tag"] as? String },
             ToriiParliamentAPIV1.noResultKinds.map(\.jsonTag)
+        )
+        XCTAssertEqual(
+            reasons.compactMap { $0["norito_index"] as? Int },
+            ToriiParliamentAPIV1.noResultKinds.map { Int($0.noritoIndex) }
         )
         let bodyState = try XCTUnwrap(
             fixture["attempt_read_body_state"] as? [String: Any]
@@ -158,6 +229,324 @@ final class ToriiParliamentAPIV1Tests: XCTestCase {
         )
         let tagged = try XCTUnwrap(transitionObject["transition"] as? [String: Any])
         XCTAssertEqual(tagged["transition"] as? String, "FailPublicFindingNoResult")
+    }
+
+    func testAttemptDraftSequenceAcceptsSixteenAndRejectsSeventeen() throws {
+        let accepted = try ToriiParliamentAPIV1.attemptDraftRequestData(
+            proposal: deployProposal(),
+            attemptSequence: ToriiParliamentAPIV1.maximumGovernanceAttemptRetries
+        )
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: accepted) as? [String: Any]
+        )
+        XCTAssertEqual(
+            object["attempt_sequence"] as? Int,
+            Int(ToriiParliamentAPIV1.maximumGovernanceAttemptRetries)
+        )
+        XCTAssertThrowsError(
+            try ToriiParliamentAPIV1.attemptDraftRequestData(
+                proposal: deployProposal(),
+                attemptSequence: ToriiParliamentAPIV1.maximumGovernanceAttemptRetries + 1
+            )
+        )
+    }
+
+    func testCastingProofNoritoPinsU64GoldenAndRejectsNoncanonicalResponses() throws {
+        let golden = try XCTUnwrap(
+            Data(
+                hexString:
+                    "4e5254300000adccf322a5fcf43040e20bea238f55f3000c00000000000000" +
+                    "dfab61022cefc29f02020100081100000000000000"
+            )
+        )
+        XCTAssertEqual(
+            try ToriiParliamentAPIV1.timedOvnCastingProofRequestData(
+                trustedCheckpointHeight: 17
+            ),
+            golden
+        )
+        XCTAssertEqual(
+            try ToriiParliamentTimedOvnCastingProofRequestV1(
+                trustedCheckpointHeight: 17
+            ).noritoData(),
+            golden
+        )
+        let maximum = try ToriiParliamentAPIV1.timedOvnCastingProofRequestData(
+            trustedCheckpointHeight: UInt64.max
+        )
+        XCTAssertEqual(maximum.suffix(8), Data(repeating: 0xff, count: 8))
+        XCTAssertThrowsError(
+            try ToriiParliamentAPIV1.timedOvnCastingProofRequestData(
+                trustedCheckpointHeight: 0
+            )
+        )
+
+        let payload = Data([2, 1, 0, 1])
+        let canonical = noritoEncode(
+            typeName: ToriiParliamentAPIV1.timedOvnCastingProofResponseSchema,
+            payload: payload,
+            flags: NoritoHeader.compactLen
+        )
+        let parsed = try ToriiParliamentAPIV1.decodeTimedOvnCastingProofResponse(canonical)
+        XCTAssertEqual(parsed.canonicalNorito, canonical)
+        XCTAssertEqual(parsed.payload, payload)
+
+        let wrongSchema = noritoEncode(
+            typeName: "iroha.torii.v1.parliament.wrong.response",
+            payload: payload,
+            flags: NoritoHeader.compactLen
+        )
+        var badChecksum = canonical
+        badChecksum[badChecksum.index(before: badChecksum.endIndex)] ^= 1
+        var compressed = canonical
+        compressed[22] = 1
+        let padded = Data(canonical.prefix(NoritoHeader.encodedLength))
+            + Data([0]) + payload
+        let wrongFlags = noritoEncode(
+            typeName: ToriiParliamentAPIV1.timedOvnCastingProofResponseSchema,
+            payload: payload,
+            flags: 0
+        )
+        for hostile in [wrongSchema, badChecksum, compressed, padded, wrongFlags] {
+            XCTAssertThrowsError(
+                try ToriiParliamentAPIV1.decodeTimedOvnCastingProofResponse(hostile)
+            )
+        }
+        XCTAssertThrowsError(
+            try ToriiParliamentAPIV1.decodeTimedOvnCastingProofResponse(
+                Data(
+                    repeating: 0,
+                    count: ToriiParliamentAPIV1.maximumTimedOvnCastingProofResponseBytes + 1
+                )
+            )
+        )
+    }
+
+    func testAtomicSortitionBatchEncodesOnlyTypedRequestsAndRejectsSecrets() throws {
+        let registrations = (0..<10).map { sequence in
+            ToriiParliamentSortitionRequestRegistrationV1(
+                sequence: UInt32(sequence),
+                request: .object(["body": .string("rules-committee")])
+            )
+        }
+        let encoded = try ToriiParliamentAPIV1.transitionDraftRequestData(
+            governanceAttemptId: attemptID,
+            transition: .registerSortitionRequest(requests: registrations)
+        )
+        let root = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        let tagged = try XCTUnwrap(root["transition"] as? [String: Any])
+        let payload = try XCTUnwrap(tagged["payload"] as? [String: Any])
+        XCTAssertEqual(Set(payload.keys), ["requests"])
+        let requests = try XCTUnwrap(payload["requests"] as? [[String: Any]])
+        XCTAssertEqual(requests.count, 10)
+        XCTAssertTrue(requests.allSatisfy { Set($0.keys) == ["sequence", "request"] })
+
+        for invalid in [
+            [ToriiParliamentSortitionRequestRegistrationV1](),
+            Array(repeating: registrations[0], count: 11),
+        ] {
+            XCTAssertThrowsError(
+                try ToriiParliamentAPIV1.transitionDraftRequestData(
+                    governanceAttemptId: attemptID,
+                    transition: .registerSortitionRequest(requests: invalid)
+                )
+            )
+        }
+        XCTAssertThrowsError(
+            try ToriiParliamentAPIV1.transitionDraftRequestData(
+                governanceAttemptId: attemptID,
+                transition: .registerSortitionRequest(
+                    requests: [
+                        .init(
+                            sequence: 0,
+                            request: .object(["private_key": .string("forbidden")])
+                        ),
+                    ]
+                )
+            )
+        )
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testCastingProofTransportIsExactAuthenticatedBoundedAndOneShot() async throws {
+        let responsePayload = Data([2, 1, 0, 1])
+        let responseFrame = noritoEncode(
+            typeName: ToriiParliamentAPIV1.timedOvnCastingProofResponseSchema,
+            payload: responsePayload,
+            flags: NoritoHeader.compactLen
+        )
+        var requestCount = 0
+        let ballotID = identifier(0x33)
+        ParliamentCastingProofStubURLProtocol.handler = { request in
+            requestCount += 1
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(
+                request.url?.path,
+                "/v1/gov/parliament/ballots/\(ballotID)/casting-proof"
+            )
+            XCTAssertEqual(
+                request.value(forHTTPHeaderField: "Content-Type"),
+                "application/x-norito"
+            )
+            XCTAssertEqual(
+                request.value(forHTTPHeaderField: "Accept"),
+                "application/x-norito"
+            )
+            XCTAssertEqual(
+                request.value(forHTTPHeaderField: "Accept-Encoding"),
+                "identity"
+            )
+            XCTAssertNotNil(request.value(forHTTPHeaderField: "X-Iroha-Signature"))
+            XCTAssertEqual(
+                request.httpBody,
+                try ToriiParliamentAPIV1.timedOvnCastingProofRequestData(
+                    trustedCheckpointHeight: 17
+                )
+            )
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: [
+                        "Content-Type": "application/x-norito",
+                        "Content-Length": String(responseFrame.count),
+                    ]
+                )
+            )
+            return (response, responseFrame)
+        }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [ParliamentCastingProofStubURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let seed = Data(repeating: 0x41, count: 32)
+        let auth = ToriiCanonicalRequestAuth(
+            accountId: try Keypair(privateKeyBytes: seed)
+                .accountId(networkPrefix: AccountId.defaultNetworkPrefix),
+            privateKey: seed,
+            timestampMs: 1_700_000_000_100,
+            nonce: "parliament-casting-proof"
+        )
+        let client = ToriiClient(
+            baseURL: URL(string: "https://example.test")!,
+            session: session,
+            localSigningContext: ToriiLocalSigningContext(
+                networkId: TestNetworkIds.canonical
+            )
+        )
+        let response = try await client.getParliamentTimedOvnCastingProofPageV1(
+            ballotAttemptId: ballotID,
+            trustedCheckpointHeight: 17,
+            canonicalAuth: auth
+        )
+        XCTAssertEqual(response.canonicalNorito, responseFrame)
+        XCTAssertEqual(response.payload, responsePayload)
+        XCTAssertEqual(requestCount, 1)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testCastingProofPagingDurablyAdvancesStaleAnchorBeyondSixtyThreeHeights() async throws {
+        let responsePayload = Data([2, 1, 0, 1])
+        let responseFrame = noritoEncode(
+            typeName: ToriiParliamentAPIV1.timedOvnCastingProofResponseSchema,
+            payload: responsePayload,
+            flags: NoritoHeader.compactLen
+        )
+        let recorder = ParliamentCastingProofPagingRecorder()
+        let ballotID = identifier(0x55)
+        ParliamentCastingProofStubURLProtocol.handler = { request in
+            let requestIndex = recorder.recordRequest()
+            let expectedHeight: UInt64 = requestIndex == 0 ? 7 : 70
+            XCTAssertEqual(
+                request.httpBody,
+                try ToriiParliamentAPIV1.timedOvnCastingProofRequestData(
+                    trustedCheckpointHeight: expectedHeight
+                )
+            )
+            if requestIndex == 1 {
+                XCTAssertEqual(recorder.persistedHeights(), [70])
+            }
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: [
+                        "Content-Type": "application/x-norito",
+                        "Content-Length": String(responseFrame.count),
+                    ]
+                )
+            )
+            return (response, responseFrame)
+        }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [ParliamentCastingProofStubURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let seed = Data(repeating: 0x41, count: 32)
+        let client = ToriiClient(
+            baseURL: URL(string: "https://example.test")!,
+            session: session,
+            localSigningContext: ToriiLocalSigningContext(
+                networkId: TestNetworkIds.canonical
+            )
+        )
+        let initialAnchor = try ParliamentTimedOvnCastingTrustAnchorV1(
+            networkID: Data(repeating: 0x01, count: 32),
+            trustedCheckpointHeight: 7,
+            trustedCheckpointContextID: Data(repeating: 0x11, count: 32),
+            expectedBallotAttemptID: Data(repeating: 0x55, count: 32)
+        )
+        let terminal = try await client.requestParliamentTimedOvnCastingProofUntilTerminalV1(
+            ballotAttemptId: ballotID,
+            initialTrustAnchor: initialAnchor,
+            canonicalAuth: ToriiCanonicalRequestAuth(
+                accountId: try Keypair(privateKeyBytes: seed)
+                    .accountId(networkPrefix: AccountId.defaultNetworkPrefix),
+                privateKey: seed
+            ),
+            verifyPage: { _, anchor in
+                switch recorder.nextVerifierCall() {
+                case 0:
+                    XCTAssertEqual(anchor.trustedCheckpointHeight, 7)
+                    XCTAssertEqual(
+                        anchor.trustedCheckpointContextID,
+                        Data(repeating: 0x11, count: 32)
+                    )
+                    return try ParliamentTimedOvnCastingProofPageVerificationV1(
+                        evaluatedBlockHeight: 70,
+                        evaluatedContextID: Data(repeating: 0x22, count: 32),
+                        moreAvailable: true
+                    )
+                case 1:
+                    XCTAssertEqual(anchor.trustedCheckpointHeight, 70)
+                    XCTAssertEqual(
+                        anchor.trustedCheckpointContextID,
+                        Data(repeating: 0x22, count: 32)
+                    )
+                    return try ParliamentTimedOvnCastingProofPageVerificationV1(
+                        evaluatedBlockHeight: 75,
+                        evaluatedContextID: Data(repeating: 0x33, count: 32),
+                        moreAvailable: false
+                    )
+                default:
+                    XCTFail("unexpected casting-proof page")
+                    throw ToriiClientError.invalidResponse
+                }
+            },
+            persistCheckpoint: { anchor in
+                recorder.recordPersistence(anchor.trustedCheckpointHeight)
+            }
+        )
+
+        XCTAssertEqual(recorder.requestCount(), 2)
+        XCTAssertEqual(recorder.persistedHeights(), [70, 75])
+        XCTAssertEqual(terminal.verifiedPageCount, 2)
+        XCTAssertEqual(terminal.verificationAnchor.trustedCheckpointHeight, 70)
+        XCTAssertEqual(terminal.promotedTrustAnchor.trustedCheckpointHeight, 75)
+        XCTAssertEqual(terminal.verification.evaluatedBlockHeight, 75)
+        XCTAssertFalse(terminal.verification.moreAvailable)
     }
 
     func testAttemptDraftRejectsRecognizedTagWithArbitraryPayload() {
@@ -880,4 +1269,75 @@ final class ToriiParliamentAPIV1Tests: XCTestCase {
             JSONSerialization.jsonObject(with: Data(contentsOf: fixture)) as? [String: Any]
         )
     }
+}
+
+private final class ParliamentCastingProofPagingRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var requests = 0
+    private var verifierCalls = 0
+    private var persisted: [UInt64] = []
+
+    func recordRequest() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        let current = requests
+        requests += 1
+        return current
+    }
+
+    func nextVerifierCall() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        let current = verifierCalls
+        verifierCalls += 1
+        return current
+    }
+
+    func recordPersistence(_ height: UInt64) {
+        lock.lock()
+        persisted.append(height)
+        lock.unlock()
+    }
+
+    func requestCount() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return requests
+    }
+
+    func persistedHeights() -> [UInt64] {
+        lock.lock()
+        defer { lock.unlock() }
+        return persisted
+    }
+}
+
+private final class ParliamentCastingProofStubURLProtocol: URLProtocol {
+    static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data?))?
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        guard let handler = Self.handler else {
+            client?.urlProtocol(
+                self,
+                didFailWithError: NSError(domain: "ParliamentCastingProofStub", code: -1)
+            )
+            return
+        }
+        do {
+            let (response, data) = try handler(request)
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            if let data {
+                client?.urlProtocol(self, didLoad: data)
+            }
+            client?.urlProtocolDidFinishLoading(self)
+        } catch {
+            client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+
+    override func stopLoading() {}
 }

@@ -211,6 +211,119 @@ def test_manifest_tracks_executable_mode(tmp_path: Path) -> None:
     assert os.access(script, os.X_OK)
 
 
+def test_native_artifact_manifest_normalizes_windows_checkout_materialization(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_module()
+    init_release_repo(tmp_path)
+    runner = tmp_path / "runner.sh"
+    runner.write_bytes(b"#!/bin/sh\nexit 0\n")
+    runner.chmod(0o755)
+    link = tmp_path / "source-link"
+    link.symlink_to("tracked.txt")
+    if os.chmod in os.supports_follow_symlinks:
+        link.chmod(0o777, follow_symlinks=False)
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    (tree / "payload").write_text("nested source\n", encoding="utf-8")
+    subprocess.run(
+        [
+            "git",
+            "add",
+            "-f",
+            "Cargo.lock",
+            "runner.sh",
+            "source-link",
+            "tree/payload",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+    gitlink_oid = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=tmp_path,
+        check=True,
+        stdout=subprocess.PIPE,
+        text=True,
+    ).stdout.strip()
+    subprocess.run(
+        [
+            "git",
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            "160000",
+            gitlink_oid,
+            "nested",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+    (tmp_path / "nested").mkdir()
+    subprocess.run(
+        ["git", "commit", "-qm", "portable manifest fixture"],
+        cwd=tmp_path,
+        check=True,
+    )
+
+    strict = module.workspace_source_manifest(tmp_path)
+    subprocess.run(
+        ["git", "config", "core.filemode", "false"],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "core.symlinks", "false"],
+        cwd=tmp_path,
+        check=True,
+    )
+    runner.chmod(0o644)
+    link.unlink()
+    link.write_bytes(b"tracked.txt")
+    status = subprocess.run(
+        ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+        cwd=tmp_path,
+        check=True,
+        stdout=subprocess.PIPE,
+        text=True,
+    ).stdout
+    assert status == ""
+
+    monkeypatch.setattr(module.os, "supports_dir_fd", frozenset())
+    assert module.native_artifact_workspace_source_manifest(tmp_path) == strict
+
+    untracked = tmp_path / "untracked.rs"
+    untracked.write_text("fn injected() {}\n", encoding="utf-8")
+    with pytest.raises(module.DirtyReleaseSourceError, match="stage-zero index"):
+        module.native_artifact_workspace_source_manifest(tmp_path)
+    untracked.unlink()
+
+    (tmp_path / "tracked.txt").write_text("dirty\n", encoding="utf-8")
+    with pytest.raises(module.DirtyReleaseSourceError, match="tracked changes"):
+        module.native_artifact_workspace_source_manifest(tmp_path)
+    (tmp_path / "tracked.txt").write_text("source\n", encoding="utf-8")
+    injected = tmp_path / "nested" / "injected"
+    injected.write_text("unsealed\n", encoding="utf-8")
+    with pytest.raises(module.DirtyReleaseSourceError, match="gitlink must be one empty"):
+        module.native_artifact_workspace_source_manifest(tmp_path)
+    injected.unlink()
+
+    retained_tree = tmp_path / ".git" / "retained-tree"
+    tree.rename(retained_tree)
+    tree.symlink_to(".git/retained-tree", target_is_directory=True)
+    with pytest.raises(module.SourceSealError, match="symlink.*parent"):
+        module._portable_clean_index_manifest_snapshot(
+            tmp_path, module._git_index_entries(tmp_path)
+        )
+    tree.unlink()
+    retained_tree.rename(tree)
+
+    (tmp_path / "tracked.txt").write_text("staged\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=tmp_path, check=True)
+    with pytest.raises(module.DirtyReleaseSourceError, match="index is not HEAD"):
+        module.native_artifact_workspace_source_manifest(tmp_path)
+
+
 def test_source_seal_is_deterministic_and_round_trips_exact_closure(
     tmp_path: Path,
 ) -> None:

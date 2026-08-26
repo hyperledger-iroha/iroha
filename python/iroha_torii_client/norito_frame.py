@@ -47,12 +47,54 @@ def schema_hash_for_type_name(type_name: str) -> bytes:
     ).digest()[:16]
 
 
+def encode_norito_frame(
+    payload: bytes,
+    *,
+    type_name: str,
+    flags: int = 0,
+    payload_alignment: int = 1,
+) -> bytes:
+    """Frame one immutable payload with an exact type-name schema binding."""
+
+    if type(payload) is not bytes or not payload:
+        raise TypeError("Norito payload must be non-empty immutable bytes")
+    if type(flags) is not int or flags < 0 or flags > 0xFF:
+        raise TypeError("Norito flags must be one unsigned byte")
+    if flags & ~_SUPPORTED_FLAGS_MASK:
+        raise ValueError(f"unsupported Norito header flags 0x{flags:02x}")
+    required_bitset_flags = _PACKED_STRUCT_FLAG | _COMPACT_LEN_FLAG
+    if flags & _FIELD_BITSET_FLAG and flags & required_bitset_flags != required_bitset_flags:
+        raise ValueError("invalid Norito header flag combination")
+    if (
+        type(payload_alignment) is not int
+        or payload_alignment < 1
+        or payload_alignment > _MAX_HEADER_PADDING_BYTES
+        or payload_alignment & (payload_alignment - 1)
+    ):
+        raise TypeError("Norito payload alignment must be a power of two from 1 through 64")
+    padding_length = (-_HEADER_BYTES) % payload_alignment
+    return b"".join(
+        (
+            b"NRT0",
+            b"\x00\x00",
+            schema_hash_for_type_name(type_name),
+            b"\x00",
+            len(payload).to_bytes(8, "little"),
+            _crc64_xz(payload).to_bytes(8, "little"),
+            flags.to_bytes(1, "little"),
+            bytes(padding_length),
+            payload,
+        )
+    )
+
+
 def _validate_norito_frame(
     body: bytes,
     *,
     context: str,
     expected_type_name: Optional[str],
     expected_padding_length: Optional[int] = None,
+    expected_flags: Optional[int] = None,
     require_nonempty_payload: bool = True,
 ) -> None:
     """Validate one uncompressed Norito frame without decoding its payload."""
@@ -82,6 +124,10 @@ def _validate_norito_frame(
     required_bitset_flags = _PACKED_STRUCT_FLAG | _COMPACT_LEN_FLAG
     if flags & _FIELD_BITSET_FLAG and flags & required_bitset_flags != required_bitset_flags:
         raise ValueError(f"{context} uses an invalid Norito header flag combination")
+    if expected_flags is not None and flags != expected_flags:
+        raise ValueError(
+            f"{context} uses Norito flags 0x{flags:02x}; expected 0x{expected_flags:02x}"
+        )
 
     padding_length = len(body) - _HEADER_BYTES - payload_length
     if padding_length < 0:
@@ -112,6 +158,7 @@ def validate_norito_frame(
     context: str,
     expected_type_name: str,
     expected_padding_length: Optional[int] = None,
+    expected_flags: Optional[int] = None,
     require_nonempty_payload: bool = True,
 ) -> None:
     """Validate one exact-schema, uncompressed Norito frame."""
@@ -121,6 +168,7 @@ def validate_norito_frame(
         context=context,
         expected_type_name=expected_type_name,
         expected_padding_length=expected_padding_length,
+        expected_flags=expected_flags,
         require_nonempty_payload=require_nonempty_payload,
     )
 
@@ -130,6 +178,7 @@ def validate_opaque_norito_frame(
     *,
     context: str,
     expected_padding_length: Optional[int] = None,
+    expected_flags: Optional[int] = None,
     require_nonempty_payload: bool = True,
 ) -> None:
     """Validate framing only for an explicitly opaque, native-decoded envelope."""
@@ -139,5 +188,6 @@ def validate_opaque_norito_frame(
         context=context,
         expected_type_name=None,
         expected_padding_length=expected_padding_length,
+        expected_flags=expected_flags,
         require_nonempty_payload=require_nonempty_payload,
     )

@@ -12,7 +12,6 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
 use crate::{
-    account::AccountId,
     governance::types::{
         AssignmentId, BallotAttemptId, BeaconPulseId, BeaconSessionId, BodyElectionAttemptId,
         BodyInstanceId, DeliberationPhaseV1, GovernanceAttemptId, GovernanceAttemptStatusV1,
@@ -33,6 +32,8 @@ pub const PARLIAMENT_TIMED_OVN_BALLOT_RECORD_BYTES_V1: usize = 2_858;
 /// derives the next survivor offset from committed lifecycle state and seals automatically after
 /// the final chunk, so callers cannot skip, overlap, or reorder records.
 pub const PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1: usize = 32;
+/// Number of distinct Parliament body roles and the maximum atomic sortition batch width.
+pub const MAX_PARLIAMENT_SORTITION_REQUESTS_PER_BATCH_V1: usize = 10;
 
 /// Return the minimum number of blocks needed to admit a configured ballot corpus.
 ///
@@ -117,7 +118,28 @@ pub struct ParliamentEscalateRiskV1 {
     pub target: RiskTierV1,
 }
 
-/// Payload registering one immutable candidate snapshot for future sortition.
+/// One immutable request entry in an atomic future-pulse sortition batch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ParliamentSortitionRequestRegistrationV1 {
+    /// Zero-based retry sequence for this body election.
+    pub sequence: u32,
+    /// Complete canonical future-pulse request.
+    pub request: SortitionRequestV1,
+}
+
+/// Payload registering one atomic future-pulse sortition batch.
+///
+/// Core derives the complete canonical candidate snapshot from authoritative
+/// citizenship state once in the containing block; callers never retransmit
+/// it. The initial batch contains every initially required body. If that shared
+/// initial pulse is objectively unavailable, the exact full initial generation
+/// retries atomically. After any pulse has been consumed, a body-specific
+/// no-roster retry or Confirmation Jury draw contains exactly one fresh request.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 #[cfg_attr(
@@ -125,12 +147,8 @@ pub struct ParliamentEscalateRiskV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct ParliamentRegisterSortitionRequestV1 {
-    /// Zero-based retry sequence for this body election.
-    pub sequence: u32,
-    /// Complete canonical future-pulse request.
-    pub request: SortitionRequestV1,
-    /// Strictly ordered complete account snapshot committed by `candidate_root`.
-    pub candidate_snapshot: Vec<AccountId>,
+    /// Canonically body-ordered requests sharing one candidate snapshot and pulse slot.
+    pub requests: Vec<ParliamentSortitionRequestRegistrationV1>,
 }
 
 /// Payload consuming one finalized threshold-beacon pulse batch.
@@ -530,7 +548,7 @@ pub enum ParliamentLifecycleTransitionV1 {
     /// Finish qualification and enter the first required Parliament body.
     #[codec(index = 1)]
     CompleteQualification,
-    /// Register one immutable candidate snapshot for a future beacon pulse.
+    /// Register one atomic immutable request batch for a future beacon pulse.
     #[codec(index = 2)]
     RegisterSortitionRequest(ParliamentRegisterSortitionRequestV1),
     /// Consume a finalized threshold-beacon pulse for a complete request batch.
@@ -993,9 +1011,10 @@ mod tests {
             ParliamentLifecycleTransitionV1::CompleteQualification,
             ParliamentLifecycleTransitionV1::RegisterSortitionRequest(
                 ParliamentRegisterSortitionRequestV1 {
-                    sequence: 0,
-                    request,
-                    candidate_snapshot,
+                    requests: vec![ParliamentSortitionRequestRegistrationV1 {
+                        sequence: 0,
+                        request,
+                    }],
                 },
             ),
             ParliamentLifecycleTransitionV1::ConsumeSortitionPulseBatch(

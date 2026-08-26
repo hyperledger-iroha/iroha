@@ -1123,6 +1123,7 @@ macro_rules! with_world_overlay_fields {
             global_beacon_active_session,
             global_beacon_latest_pulse,
             global_beacon_pulses,
+            global_beacon_pulse_slots,
             vrf_epochs,
             merge_hint_roots,
             merge_global_state_root,
@@ -3924,6 +3925,13 @@ struct ParliamentTimedOvnResourceReservationV1 {
     cast_capable: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ParliamentTimedOvnResourceReservationErrorV1 {
+    DuplicateBallotAttempt,
+    ResourceScheduleConflict,
+    TooManyConcurrentCastingContexts,
+}
+
 /// The global entity consisting of `domains`, `triggers` and etc.
 /// For example registration of domain, will have this as an ISI target.
 #[derive(Default, JsonSerialize)]
@@ -4560,6 +4568,9 @@ pub struct World {
     /// Append-only finalized beacon pulse history keyed by canonical pulse id.
     pub(crate) global_beacon_pulses:
         Storage<[u8; 32], iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1>,
+    /// Derived unique pulse id keyed by the authoritative `(network, height)` slot.
+    #[norito(skip)]
+    pub(crate) global_beacon_pulse_slots: Storage<(iroha_data_model::NetworkId, u64), [u8; 32]>,
     /// VRF epoch randomness and participation records keyed by epoch index.
     pub(crate) vrf_epochs: Storage<u64, iroha_data_model::consensus::VrfEpochRecord>,
     /// Placeholder buffer of events pending publication to external subscribers.
@@ -5283,6 +5294,10 @@ pub struct WorldBlock<'world> {
         [u8; 32],
         iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1,
     >,
+    /// Derived unique pulse id keyed by the authoritative `(network, height)` slot.
+    #[norito(skip)]
+    pub(crate) global_beacon_pulse_slots:
+        StorageBlock<'world, (iroha_data_model::NetworkId, u64), [u8; 32]>,
     /// VRF epoch randomness and participation records keyed by epoch index.
     pub(crate) vrf_epochs: StorageBlock<'world, u64, iroha_data_model::consensus::VrfEpochRecord>,
     /// Latest lane merge-hint roots observed via the merge ledger during this block.
@@ -5812,6 +5827,7 @@ impl WorldBlock<'_> {
             global_beacon_active_session,
             global_beacon_latest_pulse,
             global_beacon_pulses,
+            global_beacon_pulse_slots,
             vrf_epochs,
         );
         out
@@ -6598,6 +6614,8 @@ pub struct WorldTransaction<'block, 'world> {
         [u8; 32],
         iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1,
     >,
+    pub(crate) global_beacon_pulse_slots:
+        StorageTransaction<'block, 'world, (iroha_data_model::NetworkId, u64), [u8; 32]>,
     pub(crate) vrf_epochs:
         StorageTransaction<'block, 'world, u64, iroha_data_model::consensus::VrfEpochRecord>,
     /// Buffer of events pending publication to external subscribers.
@@ -8653,6 +8671,9 @@ pub struct WorldView<'world> {
         [u8; 32],
         iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1,
     >,
+    /// Derived unique pulse id keyed by the authoritative `(network, height)` slot.
+    pub(crate) global_beacon_pulse_slots:
+        StorageView<'world, (iroha_data_model::NetworkId, u64), [u8; 32]>,
     /// VRF epoch randomness and participation records keyed by epoch index.
     pub(crate) vrf_epochs: StorageView<'world, u64, iroha_data_model::consensus::VrfEpochRecord>,
 }
@@ -17226,7 +17247,9 @@ impl World {
         world
             .rebuild_confidential_policy_transition_index()
             .expect("invalid confidential-policy transition in world constructor");
-        world.rebuild_governance_read_indexes();
+        world
+            .rebuild_governance_read_indexes()
+            .expect("invalid governance read indexes in world constructor");
         world.rebuild_nft_owner_index();
         world.rebuild_rwa_indexes();
         world.rebuild_escrow_indexes();
@@ -17659,7 +17682,7 @@ impl World {
         self.asset_definition_nonzero_holders = nonzero_holders.into_iter().collect();
         Ok(())
     }
-    fn rebuild_governance_read_indexes(&mut self) {
+    fn rebuild_governance_read_indexes(&mut self) -> Result<(), String> {
         let mut lock_expiries =
             BTreeMap::<u64, BTreeSet<(String, iroha_data_model::account::AccountId)>>::new();
         for (referendum_id, locks) in self.governance_locks.view().iter() {
@@ -17684,23 +17707,64 @@ impl World {
             })
             .map(|(proposal_id, proposal)| ((proposal.created_height, *proposal_id), ()))
             .collect();
-        let timed_ovn_resource_reservations = self
-            .parliament_attempts
-            .view()
-            .iter()
-            .flat_map(|(governance_attempt_id, attempt)| {
-                attempt
-                    .ballot_attempts()
-                    .filter_map(move |(ballot_attempt_id, _)| {
-                        parliament_timed_ovn_resource_reservation_v1(
-                            *governance_attempt_id,
-                            attempt,
-                            *ballot_attempt_id,
-                        )
-                    })
-            })
-            .collect();
-        self.parliament_timed_ovn_resource_reservations = timed_ovn_resource_reservations;
+        let mut timed_ovn_resource_reservations = BTreeMap::new();
+        for (governance_attempt_id, attempt) in self.parliament_attempts.view().iter() {
+            for (ballot_attempt_id, _) in attempt.ballot_attempts() {
+                let Some((ballot_attempt_id, reservation)) =
+                    parliament_timed_ovn_resource_reservation_v1(
+                        *governance_attempt_id,
+                        attempt,
+                        *ballot_attempt_id,
+                    )
+                else {
+                    continue;
+                };
+                insert_parliament_timed_ovn_resource_reservation_v1(
+                    &mut timed_ovn_resource_reservations,
+                    ballot_attempt_id,
+                    reservation,
+                )
+                .map_err(|error| {
+                    format!(
+                        "invalid Parliament timed-OVN reservation {governance_attempt_id:?}/{ballot_attempt_id:?}: {error:?}"
+                    )
+                })?;
+            }
+        }
+        self.parliament_timed_ovn_resource_reservations =
+            timed_ovn_resource_reservations.into_iter().collect();
+        Ok(())
+    }
+    /// Rebuild the unique `(network, height)` lookup for finalized global-beacon pulses.
+    ///
+    /// # Errors
+    /// Returns an error when an authoritative pulse is stored under a noncanonical id or two
+    /// distinct pulse records claim the same consensus slot.
+    pub(crate) fn rebuild_global_beacon_pulse_slots(&mut self) -> Result<(), String> {
+        let rebuilt = {
+            let pulses = self.global_beacon_pulses.view();
+            let mut rebuilt = BTreeMap::new();
+            for (stored_pulse_id, pulse) in pulses.iter() {
+                if pulse.pulse_id != *stored_pulse_id {
+                    return Err(format!(
+                        "global beacon pulse {} is stored under noncanonical id {}",
+                        hex::encode(pulse.pulse_id),
+                        hex::encode(stored_pulse_id)
+                    ));
+                }
+                let slot = (pulse.network_id, pulse.height);
+                if let Some(existing_pulse_id) = rebuilt.insert(slot, *stored_pulse_id) {
+                    return Err(format!(
+                        "global beacon pulses {} and {} claim the same network-height slot",
+                        hex::encode(existing_pulse_id),
+                        hex::encode(stored_pulse_id)
+                    ));
+                }
+            }
+            rebuilt
+        };
+        self.global_beacon_pulse_slots = rebuilt.into_iter().collect();
+        Ok(())
     }
     fn rebuild_confidential_policy_transition_index(&mut self) -> core::result::Result<(), String> {
         let mut transitions = BTreeMap::<(u64, AssetDefinitionId), ()>::new();
@@ -18978,6 +19042,9 @@ macro_rules! world_ro_accessors {
             /// Append-only finalized beacon pulse history by pulse id.
             storage global_beacon_pulses:
                 [u8; 32] => iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1;
+            /// Derived unique pulse id keyed by the authoritative `(network, height)` slot.
+            storage global_beacon_pulse_slots:
+                (iroha_data_model::NetworkId, u64) => [u8; 32];
             /// VRF epoch randomness and participation records (read-only) keyed by epoch index.
             storage vrf_epochs: u64 => iroha_data_model::consensus::VrfEpochRecord;
         );
@@ -19195,6 +19262,22 @@ pub trait WorldReadOnly {
         self.global_beacon_active_session()
             .get(&GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY)
             .copied()
+    }
+    /// Resolve one exact global-beacon slot through the authoritative derived index.
+    ///
+    /// This checks the index-to-record binding but intentionally leaves public DKG and final
+    /// signature verification to the caller's purpose-specific cryptographic boundary.
+    fn global_beacon_pulse_at_slot(
+        &self,
+        network_id: &iroha_data_model::NetworkId,
+        height: u64,
+    ) -> Option<&iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1> {
+        let pulse_id = self
+            .global_beacon_pulse_slots()
+            .get(&(*network_id, height))?;
+        let pulse = self.global_beacon_pulses().get(pulse_id)?;
+        (pulse.pulse_id == *pulse_id && pulse.network_id == *network_id && pulse.height == height)
+            .then_some(pulse)
     }
     /// Return the exact TLE key session currently eligible for new ballots.
     fn active_tle_key_session(&self) -> Option<TleKeySessionId> {
@@ -20395,6 +20478,7 @@ impl<'world> WorldBlock<'world> {
             global_beacon_active_session,
             global_beacon_latest_pulse,
             global_beacon_pulses,
+            global_beacon_pulse_slots,
             vrf_epochs,
             merge_hint_roots,
             merge_global_state_root,
@@ -20554,6 +20638,7 @@ impl<'world> WorldBlock<'world> {
         global_beacon_active_session.commit();
         global_beacon_latest_pulse.commit();
         global_beacon_pulses.commit();
+        global_beacon_pulse_slots.commit();
         merge_global_state_root.commit();
         merge_hint_roots.commit();
         vrf_epochs.commit();
@@ -20708,6 +20793,69 @@ fn parliament_timed_ovn_resource_windows_overlap_v1(
             .into_iter()
             .any(|(right_start, right_end)| left_start <= right_end && right_start <= left_end)
     })
+}
+
+/// Insert one derived timed-OVN reservation into a prospective exact index.
+///
+/// Callers build the prospective index off to the side and publish it only
+/// after every reservation passes. This keeps attempt admission and restore
+/// fail-atomic while sharing one exact duplicate, overlap, and capacity rule.
+fn insert_parliament_timed_ovn_resource_reservation_v1(
+    reservations: &mut BTreeMap<BallotAttemptId, ParliamentTimedOvnResourceReservationV1>,
+    ballot_attempt_id: BallotAttemptId,
+    reservation: ParliamentTimedOvnResourceReservationV1,
+) -> Result<(), ParliamentTimedOvnResourceReservationErrorV1> {
+    if reservations.contains_key(&ballot_attempt_id) {
+        return Err(ParliamentTimedOvnResourceReservationErrorV1::DuplicateBallotAttempt);
+    }
+    if reservations.values().any(|existing| {
+        parliament_timed_ovn_resource_windows_overlap_v1(
+            reservation.resource_windows,
+            existing.resource_windows,
+        )
+    }) {
+        return Err(ParliamentTimedOvnResourceReservationErrorV1::ResourceScheduleConflict);
+    }
+    if reservation.cast_capable {
+        let current_count = u32::try_from(
+            reservations
+                .values()
+                .filter(|existing| existing.cast_capable)
+                .count(),
+        )
+        .map_err(|_| {
+            ParliamentTimedOvnResourceReservationErrorV1::TooManyConcurrentCastingContexts
+        })?;
+        if !iroha_data_model::parliament_casting::parliament_timed_ovn_casting_capacity_allows_new_v1(
+            current_count,
+        ) {
+            return Err(
+                ParliamentTimedOvnResourceReservationErrorV1::TooManyConcurrentCastingContexts,
+            );
+        }
+    }
+    reservations.insert(ballot_attempt_id, reservation);
+    Ok(())
+}
+
+fn parliament_timed_ovn_reservation_reducer_error_v1(
+    error: ParliamentTimedOvnResourceReservationErrorV1,
+) -> crate::governance::parliament::ParliamentReducerErrorV1 {
+    use crate::governance::parliament::{ParliamentReducerEntityV1, ParliamentReducerErrorV1};
+
+    match error {
+        ParliamentTimedOvnResourceReservationErrorV1::DuplicateBallotAttempt => {
+            ParliamentReducerErrorV1::DuplicateOrZeroIdentifier(
+                ParliamentReducerEntityV1::BallotAttempt,
+            )
+        }
+        ParliamentTimedOvnResourceReservationErrorV1::ResourceScheduleConflict => {
+            ParliamentReducerErrorV1::TimedOvnResourceScheduleConflict
+        }
+        ParliamentTimedOvnResourceReservationErrorV1::TooManyConcurrentCastingContexts => {
+            ParliamentReducerErrorV1::TooManyConcurrentCastingContexts
+        }
+    }
 }
 
 impl<'block, 'world> WorldTransaction<'block, 'world> {
@@ -21654,6 +21802,28 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
                 parliament_timed_ovn_resource_reservation_v1(id, &attempt, *ballot_attempt_id)
             })
             .collect::<Vec<_>>();
+        let mut next_reservations = BTreeMap::new();
+        for (ballot_attempt_id, reservation) in
+            self.parliament_timed_ovn_resource_reservations.iter()
+        {
+            if reservation.governance_attempt_id == id {
+                continue;
+            }
+            insert_parliament_timed_ovn_resource_reservation_v1(
+                &mut next_reservations,
+                *ballot_attempt_id,
+                *reservation,
+            )
+            .map_err(parliament_timed_ovn_reservation_reducer_error_v1)?;
+        }
+        for (ballot_attempt_id, reservation) in &active_reservations {
+            insert_parliament_timed_ovn_resource_reservation_v1(
+                &mut next_reservations,
+                *ballot_attempt_id,
+                *reservation,
+            )
+            .map_err(parliament_timed_ovn_reservation_reducer_error_v1)?;
+        }
         for ballot_attempt_id in stale_reservations {
             self.parliament_timed_ovn_resource_reservations
                 .remove(ballot_attempt_id);
@@ -21924,23 +22094,20 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         if self.global_beacon_pulses.get(&pulse.pulse_id).is_some() {
             return Err(GlobalThresholdBeaconError::ReusedPulse);
         }
+        let pulse_slot = (pulse.network_id, pulse.height);
+        if self.global_beacon_pulse_slots.len() != self.global_beacon_pulses.len() {
+            return Err(GlobalThresholdBeaconError::InvalidPulseHistory);
+        }
+        if self.global_beacon_pulse_slots.get(&pulse_slot).is_some() {
+            return Err(GlobalThresholdBeaconError::ReusedPulse);
+        }
+        let logical_beacon_session_id =
+            iroha_data_model::governance::types::BeaconSessionId::for_network_v1(&pulse.network_id);
         if self.parliament_attempts.iter().any(|(_, attempt)| {
-            attempt.ballot_attempts().any(|(_, ballot)| {
-                ballot.failure_kind()
-                    == Some(
-                        iroha_data_model::governance::types::ParliamentBallotFailureKindV1::ReleasePulseUnavailable,
-                    )
-                    && ballot.release_beacon_session_id()
-                        == Some(
-                            iroha_data_model::governance::types::BeaconSessionId::for_network_v1(
-                                &pulse.network_id,
-                            ),
-                        )
-                    && ballot.release_height() == Some(pulse.height)
-            })
+            attempt.classifies_beacon_pulse_unavailable_at(logical_beacon_session_id, pulse.height)
         }) {
-            // Once consensus has objectively closed an absent release slot, accepting a
-            // late pulse for that same slot would make the persisted Parliament transcript
+            // Once consensus has objectively closed an absent sortition or release slot,
+            // accepting a late pulse would make the persisted Parliament transcript
             // contradictory and non-restartable.
             return Err(GlobalThresholdBeaconError::PersistenceConflict);
         }
@@ -21956,19 +22123,14 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         } else if self.global_beacon_pulses.iter().next().is_some() {
             return Err(GlobalThresholdBeaconError::InvalidPulseHistory);
         }
-        if self.global_beacon_pulses.iter().any(|(_, existing)| {
-            existing.session_id == pulse.session_id
-                && existing.height == pulse.height
-                && existing.round == pulse.round
-        }) {
-            return Err(GlobalThresholdBeaconError::ReusedPulse);
-        }
         let link =
             verify_finalized_global_threshold_beacon_pulse_v1(session, &pulse, expected_anchor)?;
         if validate_persisted_global_threshold_beacon_pulse_v1(&pulse)? != link {
             return Err(GlobalThresholdBeaconError::InvalidPulseHistory);
         }
         self.global_beacon_pulses.insert(link.pulse_id, pulse);
+        self.global_beacon_pulse_slots
+            .insert(pulse_slot, link.pulse_id);
         self.global_beacon_latest_pulse
             .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, link);
         Ok(link)
@@ -22366,6 +22528,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             global_beacon_active_session,
             global_beacon_latest_pulse,
             global_beacon_pulses,
+            global_beacon_pulse_slots,
             vrf_epochs,
             consensus_evidence,
             external_event_sink,
@@ -22575,6 +22738,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         global_beacon_active_session.apply();
         global_beacon_latest_pulse.apply();
         global_beacon_pulses.apply();
+        global_beacon_pulse_slots.apply();
         vrf_epochs.apply();
         tx_sequences.apply();
         oracle_disputes.apply();
@@ -24977,7 +25141,12 @@ impl State {
             .map_err(|error| {
                 format!("failed to rebuild confidential-policy transition index: {error}")
             })?;
-        self.world.rebuild_governance_read_indexes();
+        self.world
+            .rebuild_governance_read_indexes()
+            .map_err(|error| format!("failed to rebuild governance read indexes: {error}"))?;
+        self.world
+            .rebuild_global_beacon_pulse_slots()
+            .map_err(|error| format!("failed to rebuild global beacon pulse slots: {error}"))?;
         // Defer AXT policy refresh until the runtime lane catalog is applied.
         Ok(())
     }
@@ -25549,6 +25718,8 @@ impl State {
                     iroha_config::parameters::defaults::governance::PARLIAMENT_ALTERNATE_SIZE,
                 parliament_quorum_bps:
                     iroha_config::parameters::defaults::governance::PARLIAMENT_QUORUM_BPS,
+                parliament_sortition_pulse_delay_blocks:
+                    iroha_config::parameters::defaults::governance::PARLIAMENT_SORTITION_PULSE_DELAY_BLOCKS,
                 parliament_invitation_phase_blocks:
                     iroha_config::parameters::defaults::governance::PARLIAMENT_INVITATION_PHASE_BLOCKS,
                 parliament_public_finding_phase_blocks:

@@ -9560,7 +9560,7 @@
         "properties": {
           "attempt_sequence": {
             "format": "uint32",
-            "maximum": 4294967295,
+            "maximum": 16,
             "minimum": 0,
             "type": "integer"
           },
@@ -11426,6 +11426,19 @@
               "reason"
             ],
             "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "reason": {
+                "const": "SortitionRetriesExhausted",
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason"
+            ],
+            "type": "object"
           }
         ]
       },
@@ -11686,30 +11699,37 @@
       "GovernanceParliamentRegisterSortitionRequestPayloadV1": {
         "additionalProperties": false,
         "properties": {
-          "candidate_snapshot": {
+          "requests": {
             "items": {
-              "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+              "$ref": "#/components/schemas/GovernanceParliamentSortitionRequestRegistrationV1"
             },
-            "maxItems": 1000,
+            "maxItems": 10,
             "minItems": 1,
-            "type": "array",
-            "uniqueItems": true
-          },
+            "type": "array"
+          }
+        },
+        "required": [
+          "requests"
+        ],
+        "type": "object"
+      },
+      "GovernanceParliamentSortitionRequestRegistrationV1": {
+        "additionalProperties": false,
+        "properties": {
           "request": {
             "$ref": "#/components/schemas/JsonValue",
             "description": "Exact immutable SortitionRequestV1."
           },
           "sequence": {
             "format": "uint32",
-            "maximum": 4294967295,
+            "maximum": 16,
             "minimum": 0,
             "type": "integer"
           }
         },
         "required": [
           "sequence",
-          "request",
-          "candidate_snapshot"
+          "request"
         ],
         "type": "object"
       },

@@ -34,12 +34,12 @@ use iroha_core::{
         TleProjectedPartialReleaseSignerV1 as _, ValidatedTleReleaseProjectionV1,
     },
 };
+use iroha_crypto::sha256_reader_bounded;
 use iroha_data_model::{
     NetworkId,
     consensus::{GlobalThresholdBeaconKeySessionV1, GlobalThresholdBeaconPartialSignatureV1},
 };
 use norito::{DecodeLimits, NoritoDeserialize, NoritoSerialize};
-use sha2::{Digest as _, Sha256};
 use std::{fmt, io::Read as _, path::Path, sync::Arc};
 use zeroize::{Zeroize as _, Zeroizing};
 
@@ -281,11 +281,23 @@ fn canonical_public_inventory_digest_v1<T: NoritoSerialize>(
     }
     let encoded_len = u64::try_from(encoded.len())
         .map_err(|_| RuntimeConsensusThresholdSignerCredentialErrorV1::Encoding)?;
-    let mut hasher = Sha256::new();
-    hasher.update(CONSENSUS_THRESHOLD_PUBLIC_INVENTORY_DOMAIN_V1);
-    hasher.update(encoded_len.to_be_bytes());
-    hasher.update(encoded);
-    let digest: [u8; 32] = hasher.finalize().into();
+    let encoded_len_bytes = encoded_len.to_be_bytes();
+    let domain_len = u64::try_from(CONSENSUS_THRESHOLD_PUBLIC_INVENTORY_DOMAIN_V1.len())
+        .map_err(|_| RuntimeConsensusThresholdSignerCredentialErrorV1::Encoding)?;
+    let length_prefix_len = u64::try_from(encoded_len_bytes.len())
+        .map_err(|_| RuntimeConsensusThresholdSignerCredentialErrorV1::Encoding)?;
+    let framed_len = domain_len
+        .checked_add(length_prefix_len)
+        .and_then(|prefix_len| prefix_len.checked_add(encoded_len))
+        .ok_or(RuntimeConsensusThresholdSignerCredentialErrorV1::Encoding)?;
+    let framed = CONSENSUS_THRESHOLD_PUBLIC_INVENTORY_DOMAIN_V1
+        .chain(encoded_len_bytes.as_slice())
+        .chain(encoded.as_slice());
+    let (digest, observed_len) = sha256_reader_bounded(framed, framed_len)
+        .map_err(|_| RuntimeConsensusThresholdSignerCredentialErrorV1::Encoding)?;
+    if observed_len != framed_len {
+        return Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Encoding);
+    }
     if digest == [0; 32] {
         return Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected);
     }
@@ -1742,12 +1754,11 @@ pub(crate) mod tests {
             .payload_bytes()
             .try_into()
             .expect("fixed-size TLE identity payload");
-        let identity_digest = Sha256::digest(
+        let identity_digest = iroha_crypto::sha256(
             identity
                 .release_message()
                 .expect("frame TLE release identity"),
-        )
-        .into();
+        );
         let projection = AuthorizedTleReleaseProjectionV1 {
             version: TLE_AUTHORIZED_RELEASE_PROJECTION_VERSION_V1,
             ballot_attempt_id: BallotAttemptId::new([0x63; 32]),

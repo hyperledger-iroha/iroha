@@ -8255,6 +8255,7 @@ construct {
             "ballot_commitment_deadline_expired",
             "ballot_release_pulse_unavailable",
             "ballot_opening_deadline_expired",
+            "sortition_retries_exhausted",
         ] {
             let _ = governance_parliament_no_result_total.with_label_values(&[class]);
         }

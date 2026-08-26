@@ -1732,6 +1732,12 @@ impl LifecycleOutputAdmissionSettlementSummaryV1 {
 }
 
 impl V2EffectExecutor<SerializedV2Runtime> {
+    /// Report whether the exact runner Decision handoff still blocks finalization.
+    #[cfg(test)]
+    pub(in crate::sumeragi) const fn has_pending_runner_decision_cleanup_for_test(&self) -> bool {
+        self.pending_runner_decision_cleanup.is_some()
+    }
+
     /// Return whether a signed/diagnostic output is parked at the lifecycle cut.
     pub(in crate::sumeragi) fn has_pending_lifecycle_output_admissions(&self) -> bool {
         !self.pending_lifecycle_output_admissions.is_empty()

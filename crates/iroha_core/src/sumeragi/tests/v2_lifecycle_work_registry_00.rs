@@ -689,40 +689,38 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
             );
         }
         let mut _queued_apply_ingress_guard = None;
-        let queued_apply_snapshot =
-            matches!(row, ProductionReadyValidateDispatchRow::ValidatedApply).then(|| {
-                let keys = &recovered_apply
-                    .as_ref()
-                    .expect("ValidatedApply retains its exact production fixture")
-                    .1;
-                let signer = 3;
-                let queued_progress =
-                    signed_ready_validate_timeout_vote(&context, keys, row.view(), signer);
-                let semantic_origin = context.roster
-                    [usize::try_from(signer).expect("small Ready Validate signer index")]
-                .validator
-                .clone();
-                let (directory, ingress, mut ownerships) =
-                    crate::sumeragi::v2_runtime::tests::preowned_leader_wire_ownerships(
-                        &context,
-                        &[(queued_progress.clone(), semantic_origin)],
-                        leader_wire_lifecycle_ordinals.clone(),
-                    );
-                let ownership = ownerships
-                    .pop()
-                    .expect("one gated TimeoutVote retains runtime ownership");
-                assert!(ownerships.is_empty());
-                executor
-                    .enqueue_network_with_ingress_ownership(queued_progress, ownership)
-                    .expect("queue authenticated runtime ingress beside typed live Apply");
-                let snapshot = executor.runtime_queue_snapshot_for_test(now);
-                assert_eq!(
-                    snapshot.progress.depth, 1,
-                    "ValidatedApply fixture retains one authentic Progress wire"
+        if matches!(row, ProductionReadyValidateDispatchRow::ValidatedApply) {
+            let keys = &recovered_apply
+                .as_ref()
+                .expect("ValidatedApply retains its exact production fixture")
+                .1;
+            let signer = 3;
+            let queued_progress =
+                signed_ready_validate_timeout_vote(&context, keys, row.view(), signer);
+            let semantic_origin = context.roster
+                [usize::try_from(signer).expect("small Ready Validate signer index")]
+            .validator
+            .clone();
+            let (directory, ingress, mut ownerships) =
+                crate::sumeragi::v2_runtime::tests::preowned_leader_wire_ownerships(
+                    &context,
+                    &[(queued_progress.clone(), semantic_origin)],
+                    leader_wire_lifecycle_ordinals.clone(),
                 );
-                _queued_apply_ingress_guard = Some((directory, ingress));
-                snapshot
-            });
+            let ownership = ownerships
+                .pop()
+                .expect("one gated TimeoutVote retains runtime ownership");
+            assert!(ownerships.is_empty());
+            executor
+                .enqueue_network_with_ingress_ownership(queued_progress, ownership)
+                .expect("queue authenticated runtime ingress beside typed live Apply");
+            let snapshot = executor.runtime_queue_snapshot_for_test(now);
+            assert_eq!(
+                snapshot.progress.depth, 1,
+                "ValidatedApply fixture retains one authentic Progress wire"
+            );
+            _queued_apply_ingress_guard = Some((directory, ingress));
+        }
         let expected_reducer_fence_wait = row.is_busy().then(|| {
             let reducer_fence = executor.lifecycle_reducer_fence_observation();
             super::super::WaitToken::new(
@@ -902,17 +900,47 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                 apply_ordinal,
                 "{row:?}: registry Apply authority must bind the sampled shared ordinal"
             );
+            let blocked = owner
+                .dispatch_completion_for_test(&mut services, &mut executor, 0)
+                .unwrap_or_else(|error| {
+                    panic!("{row:?}: defer typed live Decision Apply: {error:?}")
+                });
+            assert_eq!(
+                blocked,
+                super::super::ProductionCompletionDispatchV1::CapacityUnavailable {
+                    protected_live_apply_ordinal: Some(apply_ordinal),
+                },
+                "{row:?}: queued reducer ingress must precede the terminal Apply worker"
+            );
+            assert_eq!(
+                executor.runtime_queue_snapshot_for_test(now).progress.depth,
+                1,
+                "{row:?}: capacity deferral must retain the exact queued TimeoutVote"
+            );
+            executor
+                .step(std::time::Instant::now(), &mut services)
+                .unwrap_or_else(|error| {
+                    panic!("{row:?}: drain reducer ingress before live Apply: {error}")
+                });
+            assert_eq!(
+                executor
+                    .runtime_queue_snapshot_for_test(std::time::Instant::now())
+                    .progress
+                    .depth,
+                0,
+                "{row:?}: one bounded runtime turn must drain the retained TimeoutVote"
+            );
             let dispatched = owner
                 .dispatch_completion_for_test(&mut services, &mut executor, 0)
                 .unwrap_or_else(|error| {
-                    panic!("{row:?}: dispatch typed live Decision Apply: {error:?}")
+                    panic!("{row:?}: dispatch drained typed live Decision Apply: {error:?}")
                 });
             assert_eq!(
                 dispatched,
                 super::super::ProductionCompletionDispatchV1::ApplyQueued {
                     ordinal: apply_ordinal,
                 },
-                "{row:?}: live Validate child must enter the dedicated Apply worker"
+                "{row:?}: the drained live Validate child must enter the dedicated Apply worker"
             );
             planner_io
                 .execute_one_lifecycle_decision_apply_fixture(std::sync::Arc::clone(&output_guard));
@@ -936,10 +964,9 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                 ),
                 Ok(super::super::ProductionLifecycleDecisionApplyCompletionV1::Applied)
             ));
-            assert_eq!(
-                Some(executor.runtime_queue_snapshot_for_test(now)),
-                queued_apply_snapshot,
-                "{row:?}: Apply completion must preserve runtime FIFO count and order"
+            assert!(
+                executor.ready_to_finish(),
+                "{row:?}: terminal Apply must leave no inherited runtime FIFO debt"
             );
             crate::sumeragi::status::clear_v2_status();
         }

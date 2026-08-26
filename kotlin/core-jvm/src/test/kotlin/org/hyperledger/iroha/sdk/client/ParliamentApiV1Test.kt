@@ -60,6 +60,62 @@ class ParliamentApiV1Test {
             ParliamentApiV1.MAX_TIMED_OVN_CORPUS_ENTRIES,
             (limits["timed_ovn_corpus_entries"] as Number).toInt(),
         )
+        assertEquals(
+            ParliamentApiV1.TIMED_OVN_CASTING_PROOF_REQUEST_BYTES,
+            (limits["timed_ovn_casting_proof_request_bytes"] as Number).toInt(),
+        )
+        assertEquals(
+            ParliamentApiV1.MAX_TIMED_OVN_CASTING_PROOF_RESPONSE_BYTES,
+            (limits["timed_ovn_casting_proof_response_bytes"] as Number).toInt(),
+        )
+        assertEquals(
+            ParliamentApiV1.MAX_TIMED_OVN_CASTING_PROOF_FINALITY_PROOFS,
+            (limits["timed_ovn_casting_proof_finality_entries"] as Number).toInt(),
+        )
+        val nativeWallet = fixture["timed_ovn_native_wallet"] as Map<*, *>
+        assertEquals(
+            ParliamentApiV1.TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA,
+            nativeWallet["request_norito_schema"],
+        )
+        assertEquals(
+            ParliamentApiV1.TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA,
+            nativeWallet["response_norito_schema"],
+        )
+        assertEquals(
+            ParliamentApiV1.TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA_HASH_HEX,
+            nativeWallet["casting_proof_request_schema_hash_hex"],
+        )
+        assertEquals(
+            ParliamentApiV1.TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_HASH_HEX,
+            nativeWallet["casting_proof_response_schema_hash_hex"],
+        )
+        assertEquals(
+            ParliamentApiV1.TIMED_OVN_CASTING_PROOF_REQUEST_VERSION,
+            (nativeWallet["casting_proof_request_version"] as Number).toInt(),
+        )
+        assertEquals(
+            ParliamentApiV1.TIMED_OVN_CASTING_PROOF_REQUEST_FLAGS,
+            (nativeWallet["casting_proof_request_flags"] as Number).toInt(),
+        )
+        assertEquals(
+            ParliamentApiV1.TIMED_OVN_CASTING_PROOF_REQUEST_PAYLOAD_ALIGNMENT,
+            (nativeWallet["casting_proof_request_payload_alignment"] as Number).toInt(),
+        )
+        assertEquals(
+            ParliamentApiV1.TIMED_OVN_CASTING_PROOF_REQUEST_PADDING_BYTES,
+            (nativeWallet["casting_proof_request_padding_bytes"] as Number).toInt(),
+        )
+        val castingGolden = nativeWallet["casting_proof_request_golden"] as Map<*, *>
+        assertEquals(
+            ParliamentApiV1.TIMED_OVN_CASTING_PROOF_REQUEST_BYTES,
+            (castingGolden["frame_bytes"] as Number).toInt(),
+        )
+        assertContentEquals(
+            decodeHex(castingGolden["frame_hex"] as String),
+            ParliamentApiV1.timedOvnCastingProofRequestNorito(
+                BigInteger.valueOf((castingGolden["trusted_checkpoint_height"] as Number).toLong()),
+            ),
+        )
 
         val transitions = fixture["public_transitions"] as List<*>
         assertEquals(ParliamentApiV1.PUBLIC_TRANSITIONS.size, transitions.size)
@@ -133,6 +189,10 @@ class ParliamentApiV1Test {
             ParliamentApiV1.NO_RESULT_KINDS.map { it.jsonTag },
             noResultKinds.map { (it as Map<*, *>)["json_tag"] },
         )
+        assertEquals(
+            ParliamentApiV1.NO_RESULT_KINDS.map { it.noritoIndex },
+            noResultKinds.map { ((it as Map<*, *>)["norito_index"] as Number).toInt() },
+        )
         val bodyState = fixture["attempt_read_body_state"] as Map<*, *>
         assertEquals(ParliamentApiV1.BODY_STATE_FIELDS, bodyState["json_fields"])
         val release = fixture["tle_release_context"] as Map<*, *>
@@ -188,6 +248,26 @@ class ParliamentApiV1Test {
         assertFailsWith<IllegalArgumentException> {
             ParliamentApiV1.Proposal.fromJson(
                 bytes("""{"proposal_kind":"RuntimeUpgrade","payload":{}}"""),
+            )
+        }
+    }
+
+    @Test
+    fun attemptDraftSequenceAcceptsSixteenAndRejectsSeventeen() {
+        val accepted = objectValue(
+            ParliamentApiV1.attemptDraftRequestJson(
+                proposal("RuntimeUpgrade"),
+                ParliamentApiV1.MAX_GOVERNANCE_ATTEMPT_RETRIES.toLong(),
+            ),
+        )
+        assertEquals(
+            ParliamentApiV1.MAX_GOVERNANCE_ATTEMPT_RETRIES.toLong(),
+            accepted["attempt_sequence"],
+        )
+        assertFailsWith<IllegalArgumentException> {
+            ParliamentApiV1.attemptDraftRequestJson(
+                proposal("RuntimeUpgrade"),
+                ParliamentApiV1.MAX_GOVERNANCE_ATTEMPT_RETRIES.toLong() + 1,
             )
         }
     }
@@ -335,6 +415,75 @@ class ParliamentApiV1Test {
         }
         assertFailsWith<IllegalArgumentException> {
             ParliamentApiV1.attemptReadPath(attemptId.uppercase())
+        }
+    }
+
+    @Test
+    fun castingProofNoritoPinsU64GoldenAndRejectsNoncanonicalResponses() {
+        val golden = decodeHex(
+            "4e5254300000adccf322a5fcf43040e20bea238f55f3000c00000000000000" +
+                "dfab61022cefc29f02020100081100000000000000",
+        )
+        assertContentEquals(
+            golden,
+            ParliamentApiV1.timedOvnCastingProofRequestNorito(BigInteger.valueOf(17)),
+        )
+        assertContentEquals(
+            golden,
+            ParliamentTimedOvnCastingProofRequestV1(17).toNoritoBytes(),
+        )
+        val maximum = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
+        val maximumFrame = ParliamentApiV1.timedOvnCastingProofRequestNorito(maximum)
+        assertContentEquals(ByteArray(8) { 0xff.toByte() }, maximumFrame.copyOfRange(44, 52))
+        for (height in listOf(BigInteger.ZERO, BigInteger.valueOf(-1), BigInteger.ONE.shiftLeft(64))) {
+            assertFailsWith<IllegalArgumentException> {
+                ParliamentApiV1.timedOvnCastingProofRequestNorito(height)
+            }
+        }
+
+        val payload = byteArrayOf(2, 1, 0, 1)
+        val header = NoritoHeader(
+            decodeHex(ParliamentApiV1.TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_HASH_HEX),
+            payload.size,
+            CRC64.compute(payload),
+            NoritoHeader.COMPACT_LEN,
+            NoritoHeader.COMPRESSION_NONE,
+        )
+        val canonical = header.encode() + payload
+        val parsed = ParliamentApiV1.parseTimedOvnCastingProofResponse(canonical)
+        assertContentEquals(canonical, parsed.canonicalNorito())
+        assertContentEquals(payload, parsed.payload())
+        parsed.canonicalNorito()[0] = 0
+        parsed.payload()[0] = 0
+        assertContentEquals(canonical, parsed.canonicalNorito())
+        assertContentEquals(payload, parsed.payload())
+
+        val wrongSchema = NoritoHeader(
+            ByteArray(16) { 7 },
+            payload.size,
+            CRC64.compute(payload),
+            NoritoHeader.COMPACT_LEN,
+            NoritoHeader.COMPRESSION_NONE,
+        ).encode() + payload
+        val badChecksum = canonical.copyOf().also { it[it.lastIndex] = (it.last() + 1).toByte() }
+        val compressed = canonical.copyOf().also { it[22] = 1 }
+        val padded = header.encode() + byteArrayOf(0) + payload
+        val wrongFlags = NoritoHeader(
+            decodeHex(ParliamentApiV1.TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_HASH_HEX),
+            payload.size,
+            CRC64.compute(payload),
+            0,
+            NoritoHeader.COMPRESSION_NONE,
+        ).encode() + payload
+        for (hostile in listOf(wrongSchema, badChecksum, compressed, padded, wrongFlags)) {
+            assertFailsWith<IllegalArgumentException> {
+                ParliamentApiV1.parseTimedOvnCastingProofResponse(hostile)
+            }
+        }
+        assertFailsWith<IllegalArgumentException> {
+            ParliamentApiV1.parseTimedOvnCastingProofResponse(
+                ByteArray(ParliamentApiV1.MAX_TIMED_OVN_CASTING_PROOF_RESPONSE_BYTES + 1),
+            )
         }
     }
 
@@ -1119,6 +1268,10 @@ class ParliamentApiV1Test {
     )
 
     private fun bytes(value: String): ByteArray = value.toByteArray(StandardCharsets.UTF_8)
+
+    private fun decodeHex(value: String): ByteArray = ByteArray(value.length / 2) { index ->
+        value.substring(index * 2, index * 2 + 2).toInt(16).toByte()
+    }
 
     private fun stateFrame(): ByteArray {
         val payload = byteArrayOf(1, 2)

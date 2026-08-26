@@ -304,6 +304,202 @@ fn capacity_bypass_records_follow_current_lock_and_timeout_view() {
     assert!(ingress.depth <= ingress.capacity);
 }
 #[test]
+fn adjacent_future_timeout_catch_up_stays_out_of_current_view_status() {
+    let directory = TempDir::new().expect("temporary directory");
+    let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+    assert!(startup.is_empty());
+    let current_tag = adapter.current_tag();
+    let current_round = reducer::Round::new(current_tag.height(), current_tag.view());
+    let current_wire_round = wire::ConsensusRound {
+        context_id: adapter.wire_context.id(),
+        height: current_tag.height(),
+        view: current_tag.view(),
+    };
+    let adjacent_round = wire::ConsensusRound {
+        view: current_wire_round
+            .view
+            .checked_add(reducer::FUTURE_TIMEOUT_VOTE_LOOKAHEAD)
+            .expect("adjacent future view remains in range"),
+        ..current_wire_round
+    };
+    let adjacent_core_round = reducer::Round::new(adjacent_round.height, adjacent_round.view);
+    let previous_progress = (
+        adapter.reducer.generation(),
+        current_round,
+        wire::SumeragiV2ProgressTransition::RecoveryReplayed,
+    );
+    adapter.last_progress = Some(previous_progress);
+
+    let timeout_vote = |signer, marker| {
+        wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::TimeoutVote(
+            wire::TimeoutVote {
+                round: adjacent_round,
+                highest_prepare_qc: None,
+                signer,
+                signature: vec![marker],
+            },
+        ))
+    };
+    let first = adapter
+        .receive_verified(timeout_vote(1, 0xA1))
+        .expect("admit one adjacent-future TimeoutVote for catch-up");
+    assert_eq!(first.disposition(), reducer::StepDisposition::Applied);
+    assert!(
+        adapter
+            .reducer
+            .timeout_pool_snapshots()
+            .iter()
+            .any(|snapshot| snapshot.round == adjacent_core_round && snapshot.signers.len() == 1)
+    );
+    assert_eq!(
+        adapter.last_progress,
+        Some(previous_progress),
+        "future catch-up traffic must not replace current-view public progress"
+    );
+
+    let status = adapter.status().expect("snapshot bounded catch-up status");
+    status
+        .validate()
+        .expect("adjacent-future catch-up must produce structurally valid public status");
+    assert_eq!(status.view, current_wire_round.view);
+    assert!(
+        status
+            .liveness
+            .timeout_quorums
+            .iter()
+            .all(|quorum| quorum.round.view <= status.view),
+        "the reducer's adjacent-future pool is private catch-up state"
+    );
+    assert_eq!(
+        status
+            .liveness
+            .last_progress
+            .expect("the preceding current-view marker remains public")
+            .transition,
+        wire::SumeragiV2ProgressTransition::RecoveryReplayed
+    );
+
+    for (signer, marker) in [(2, 0xA2), (3, 0xA3)] {
+        let admitted = adapter
+            .receive_verified(timeout_vote(signer, marker))
+            .expect("complete the adjacent-future TimeoutCertificate");
+        assert_eq!(admitted.disposition(), reducer::StepDisposition::Applied);
+    }
+    assert_eq!(
+        adapter.current_tag().view(),
+        adjacent_round.view + 1,
+        "the retained private pool must still advance a lagging reducer"
+    );
+    adapter
+        .status()
+        .expect("snapshot caught-up status")
+        .validate()
+        .expect("caught-up status remains structurally valid");
+}
+#[test]
+fn future_finality_progress_is_public_but_body_recovery_progress_is_not() {
+    let directory = TempDir::new().expect("temporary directory");
+    let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+    assert!(startup.is_empty());
+    let current_tag = adapter.current_tag();
+    let current_round = reducer::Round::new(current_tag.height(), current_tag.view());
+    let future_wire_round = wire::ConsensusRound {
+        context_id: adapter.wire_context.id(),
+        height: current_tag.height(),
+        view: current_tag.view() + 1,
+    };
+    let future_round = reducer::Round::new(future_wire_round.height, future_wire_round.view);
+    let future_subject = subject(0xDE);
+    let future_core_subject = reducer::Subject::new(Hash::new(future_subject.encode()).into());
+    let future_commit = wire::QuorumCertificate {
+        round: future_wire_round,
+        proposal_round: future_wire_round,
+        phase: wire::GlobalPhase::Commit,
+        subject: future_subject,
+        execution_commitment: execution_commitment(0xDE),
+        signers: vec![0, 1, 2],
+        aggregate_signature: vec![0xDE; 96],
+    };
+    let wire_context = adapter.wire_context.clone();
+    let future_commit = adapter
+        .registry
+        .qc_to_core(&future_commit, &wire_context)
+        .expect("register the authenticated future-view CommitQC");
+    adapter.last_progress = Some((
+        adapter.reducer.generation(),
+        current_round,
+        wire::SumeragiV2ProgressTransition::RecoveryReplayed,
+    ));
+    adapter.record_reducer_outcome(
+        &reducer::Event::QuorumCertificateReceived {
+            tag: current_tag,
+            certificate: future_commit,
+        },
+        reducer::StepDisposition::Applied,
+        &[],
+    );
+    let future_finality_progress = (
+        adapter.reducer.generation(),
+        future_round,
+        wire::SumeragiV2ProgressTransition::CommitQuorum,
+    );
+    assert_eq!(adapter.last_progress, Some(future_finality_progress));
+    adapter
+        .status()
+        .expect("snapshot future CommitQC progress")
+        .validate()
+        .expect("future CommitQC is an allowed public catch-up marker");
+
+    for event in [
+        reducer::Event::BodyAvailable {
+            tag: current_tag,
+            round: future_round,
+            subject: future_core_subject,
+        },
+        reducer::Event::BodyStored {
+            tag: current_tag,
+            round: future_round,
+            subject: future_core_subject,
+        },
+        reducer::Event::ValidationCompleted {
+            tag: current_tag,
+            round: future_round,
+            subject: future_core_subject,
+            valid: true,
+        },
+    ] {
+        adapter.record_reducer_outcome(&event, reducer::StepDisposition::Applied, &[]);
+        assert_eq!(
+            adapter.last_progress,
+            Some(future_finality_progress),
+            "future-view body recovery must not replace the allowed finality marker"
+        );
+        adapter
+            .status()
+            .expect("snapshot future body recovery")
+            .validate()
+            .expect("future body recovery must not escape through public status");
+    }
+
+    adapter.record_reducer_outcome(
+        &reducer::Event::BodyAvailable {
+            tag: current_tag,
+            round: current_round,
+            subject: future_core_subject,
+        },
+        reducer::StepDisposition::Applied,
+        &[],
+    );
+    assert!(matches!(
+        adapter.last_progress,
+        Some((
+            _,
+            round,
+            wire::SumeragiV2ProgressTransition::BodyAvailable
+        )) if round == current_round
+    ));
+}
+#[test]
 fn enter_view_conversion_uses_effect_carried_lock_not_reducer_lock() {
     let directory = TempDir::new().expect("temporary directory");
     let (mut adapter, startup) = open_test(&directory).expect("open adapter");

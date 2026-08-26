@@ -1065,7 +1065,7 @@ fn fair_v2_ingress_same_control_slot(
         && left_round.context_id == right_round.context_id
         && left_round.height == right_round.height
 }
-/// Whether timeout control can advance past the selected control owner's view.
+/// Whether timeout control can advance past the selected view-scoped owner's view.
 ///
 /// A direct Vote may deliberately remain in fair ingress until its Proposal
 /// binds the execution commitment. Requiring that blocked Vote to cross before
@@ -1073,10 +1073,13 @@ fn fair_v2_ingress_same_control_slot(
 /// assemble the TC which retires the view's proposal and vote work. The same
 /// cycle exists when one validator's already-counted TimeoutVote owns the
 /// barrier, so another validator's exact-view share may cross it. An already
-/// assembled TC for that view or a later one has the same dependency. Every
-/// candidate still crosses normal downstream authentication and quorum checks;
-/// this helper only allows the verifier to observe it when the immutable
-/// control owner is currently inadmissible.
+/// assembled TC for that view or a later one has the same dependency. A
+/// manifest-bound Chunk is also view-scoped: timeout shares must be observable
+/// to form the TC which retires a body whose downstream capacity is blocked.
+/// Certified responses are request-scoped and deliberately remain excluded.
+/// Every candidate still crosses normal downstream authentication and quorum
+/// checks; this helper only allows the verifier to observe it when the
+/// immutable owner is currently inadmissible.
 fn fair_v2_ingress_timeout_control_advances_owner(
     owner: &FairV2IngressLeaderWireToken,
     candidate: Option<&FairV2IngressLeaderWireToken>,
@@ -1091,6 +1094,7 @@ fn fair_v2_ingress_timeout_control_advances_owner(
             | FairV2IngressLeaderWirePhase::PrepareQc
             | FairV2IngressLeaderWirePhase::CommitQc
             | FairV2IngressLeaderWirePhase::TimeoutVote
+            | FairV2IngressLeaderWirePhase::Chunk
     ) {
         return false;
     }
@@ -1130,13 +1134,14 @@ fn fair_v2_ingress_timeout_control_advances_owner(
         && round.height == owner.identity.height
         && view_advances
 }
-/// Whether a certified reducer input can retire the selected control owner.
+/// Whether a certified reducer input can retire the selected leader-wire owner.
 ///
 /// Fair ingress observes only authenticated transport provenance at this
 /// point; the reducer still verifies the certificate and sender before any
 /// state transition. This dependency edge merely prevents a retained
-/// Proposal/Prepare/signing owner from hiding the TC or CommitQC that can
-/// supersede it.
+/// Proposal, vote, or body owner from hiding the TC or CommitQC that can
+/// supersede it. Exact context, height, and nondecreasing-view checks keep the
+/// escape scoped to the owner's own consensus incarnation.
 fn fair_v2_ingress_certified_fence_escape_advances_owner(
     owner: &FairV2IngressLeaderWireToken,
     inbound: &InboundBlockMessage,

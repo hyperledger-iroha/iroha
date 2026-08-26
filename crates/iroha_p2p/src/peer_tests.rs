@@ -95,16 +95,16 @@ mod tests {
         assert_eq!(
             second.canonical_signed_frame.len(),
             super::MAX_SORANET_TRANSPORT_DELEGATION_FRAME_BYTES,
-            "the public-key encodings and present channel binding define the exact V5 cap"
+            "the current signed V5 layout and present channel binding define the exact cap"
         );
         let verified = super::verify_soranet_transport_delegation_v5(
-            &first.canonical_signed_frame,
+            &second.canonical_signed_frame,
             &network_id,
             &node_id,
-            &delegation_test_challenge(0x31),
-            None,
+            &delegation_test_challenge(0x32),
+            Some(TEST_SORANET_TRANSPORT_BINDING),
         )
-        .expect("exact v5 frame");
+        .expect("exact maximum-size v5 frame");
         assert_eq!(
             verified.relay_authentication_verifier.ed25519_public_key(),
             transport.public_key()
@@ -119,7 +119,43 @@ mod tests {
                 .authenticated_binding_digest(),
             &certificate.digest
         );
-        assert_eq!(verified.binding, first.binding);
+        assert_eq!(verified.binding, second.binding);
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn soranet_transport_v5_rejects_oversized_declared_frame_before_payload_read() {
+        use tokio::io::AsyncWriteExt as _;
+
+        let network_id = test_network_id("v5-oversized");
+        let node = delegation_test_key(0x38, Algorithm::BlsNormal);
+        let node_id = iroha_data_model::peer::PeerId::from(node.public_key().clone());
+        let challenge = delegation_test_challenge(0x39);
+        let oversized_len = u16::try_from(
+            super::MAX_SORANET_TRANSPORT_DELEGATION_FRAME_BYTES
+                .checked_add(1)
+                .expect("bounded frame cap"),
+        )
+        .expect("V5 frame cap fits the two-byte length prefix");
+        let (mut sender, mut receiver) = tokio::io::duplex(2);
+        sender
+            .write_all(&oversized_len.to_be_bytes())
+            .await
+            .expect("write only the rejected length prefix");
+
+        let error = super::read_and_verify_soranet_transport_delegation_v5(
+            &mut receiver,
+            &network_id,
+            &node_id,
+            &challenge,
+            Some(TEST_SORANET_TRANSPORT_BINDING),
+        )
+        .await
+        .expect_err("oversized declaration must fail before reading a payload");
+        assert!(matches!(
+            unwrap_delegation_error(error),
+            crate::SoranetTransportDelegationError::FrameTooLarge { found, max }
+                if found == usize::from(oversized_len)
+                    && max == super::MAX_SORANET_TRANSPORT_DELEGATION_FRAME_BYTES
+        ));
     }
     #[test]
     fn soranet_transport_v5_rejects_identity_nonce_binding_and_signature_substitution() {

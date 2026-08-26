@@ -2651,7 +2651,7 @@ ELSE LET candidate ==
         r"""
 /\ owner.phase
      \in {"Proposal", "PrepareVote", "CommitVote",
-          "PrepareQC", "CommitQC", "TimeoutVote"}
+          "PrepareQC", "CommitQC", "TimeoutVote", "Chunk"}
 /\ item.kind \in {"TimeoutVote", "TimeoutCertificate"}
 /\ AsyncControlItemContext(item) = owner.context
 /\ DeliveryHeight(item) = owner.height

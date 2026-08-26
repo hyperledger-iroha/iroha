@@ -30,7 +30,9 @@ from pathlib import Path
 from typing import NoReturn
 
 if __package__:
-    from .compute_workspace_source_manifest import workspace_source_manifest
+    from .compute_workspace_source_manifest import (
+        native_artifact_workspace_source_manifest as workspace_source_manifest,
+    )
 else:
     _manifest_module_path = Path(__file__).resolve(strict=True).with_name(
         "compute_workspace_source_manifest.py"
@@ -45,7 +47,9 @@ else:
         )
     _manifest_module = importlib.util.module_from_spec(_manifest_module_spec)
     _manifest_module_spec.loader.exec_module(_manifest_module)
-    workspace_source_manifest = _manifest_module.workspace_source_manifest
+    workspace_source_manifest = (
+        _manifest_module.native_artifact_workspace_source_manifest
+    )
 
 
 SCHEMA = "iroha.native-sdk-abi22-artifact.v1"

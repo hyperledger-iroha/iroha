@@ -181,6 +181,7 @@ DETACHED_EXPORTS = {
 }
 
 PARLIAMENT_TIMED_OVN_EXPORTS = {
+    "connect_norito_parliament_timed_ovn_verify_casting_proof_page_v1",
     "connect_norito_parliament_timed_ovn_verify_casting_proof_v1",
     "connect_norito_parliament_timed_ovn_ballot_from_proof_v1",
     "connect_norito_parliament_timed_ovn_registration_from_proof_v1",
@@ -641,6 +642,16 @@ if re.search(
     header,
 ) is None:
     raise SystemExit("C Parliament timed-OVN casting-proof bound must be exactly 8 MiB")
+if re.search(
+    r"pub\s+const\s+CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_RESULT_BYTES_V1\s*:\s*usize\s*=\s*41\s*;",
+    rust,
+) is None:
+    raise SystemExit("Rust Parliament timed-OVN casting-proof page result width must be 41")
+if re.search(
+    r"#define\s+CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_RESULT_BYTES_V1\s+41(?:\s|$)",
+    header,
+) is None:
+    raise SystemExit("C Parliament timed-OVN casting-proof page result width must be 41")
 if re.search(
     r"#define\s+CONNECT_NORITO_PARLIAMENT_TIMED_OVN_TRUST_ANCHOR_BYTES_V1\s+32(?:\s|$)",
     header,

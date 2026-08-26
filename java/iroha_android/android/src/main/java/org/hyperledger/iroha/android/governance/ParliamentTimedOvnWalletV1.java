@@ -7,6 +7,7 @@ import android.content.Context;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Objects;
+import org.hyperledger.iroha.android.client.ParliamentApiV1;
 
 /**
  * Java Android facade for secret-local Parliament timed-OVN record generation.
@@ -24,6 +25,9 @@ public final class ParliamentTimedOvnWalletV1 {
 
   /** Maximum complete framed {@code ParliamentTimedOvnCastingProofResponseV1}. */
   public static final int MAXIMUM_CASTING_PROOF_RESPONSE_BYTES = 8 * 1024 * 1024;
+
+  /** Exact native page-verification result width. */
+  public static final int CASTING_PROOF_PAGE_VERIFICATION_BYTES = 41;
 
   /** Exact public registration-record width. */
   public static final int REGISTRATION_RECORD_BYTES = 3_624;
@@ -101,6 +105,44 @@ public final class ParliamentTimedOvnWalletV1 {
         authority,
         handle,
         Objects.requireNonNull(choice, "choice"));
+  }
+
+  /** Authenticates one bounded proof page without opening a seed handle. */
+  public ParliamentApiV1.TimedOvnCastingProofPageVerification verifyCastingProofPageV1(
+      final byte[] castingProofResponseNorito,
+      final ParliamentTimedOvnCastingTrustAnchorV1 trustAnchor) {
+    if (!backend.isAvailable()) {
+      throw new IllegalStateException(NATIVE_UNAVAILABLE_MESSAGE);
+    }
+    final byte[] proof =
+        Objects.requireNonNull(castingProofResponseNorito, "castingProofResponseNorito");
+    if (proof.length == 0 || proof.length > MAXIMUM_CASTING_PROOF_RESPONSE_BYTES) {
+      throw new IllegalArgumentException(
+          "castingProofResponseNorito must contain 1.."
+              + MAXIMUM_CASTING_PROOF_RESPONSE_BYTES
+              + " bytes");
+    }
+    final byte[] proofCopy = proof.clone();
+    try {
+      final ParliamentApiV1.TimedOvnCastingProofPageVerification verification =
+          backend.verifyCastingProofPage(
+              proofCopy,
+              Objects.requireNonNull(trustAnchor, "trustAnchor"));
+      if (verification == null) {
+        throw new IllegalStateException(
+            "Parliament timed-OVN casting-proof page was rejected");
+      }
+      return verification;
+    } catch (final LinkageError error) {
+      throw new IllegalStateException(NATIVE_UNAVAILABLE_MESSAGE);
+    } catch (final IllegalStateException error) {
+      throw error;
+    } catch (final RuntimeException error) {
+      throw new IllegalStateException(
+          "Parliament timed-OVN casting-proof page was rejected");
+    } finally {
+      Arrays.fill(proofCopy, (byte) 0);
+    }
   }
 
   private byte[] publicRecord(
@@ -201,6 +243,12 @@ public final class ParliamentTimedOvnWalletV1 {
 
     boolean deleteSeedHandle(Object handle);
 
+    default ParliamentApiV1.TimedOvnCastingProofPageVerification verifyCastingProofPage(
+        final byte[] proofResponse,
+        final ParliamentTimedOvnCastingTrustAnchorV1 trustAnchor) {
+      return null;
+    }
+
     byte[] registration(
         byte[] proofResponse,
         ParliamentTimedOvnCastingTrustAnchorV1 trustAnchor,
@@ -245,6 +293,20 @@ public final class ParliamentTimedOvnWalletV1 {
     @Override
     public boolean deleteSeedHandle(final Object handle) {
       return delegate.deleteSeedHandle(kotlinHandle(handle));
+    }
+
+    @Override
+    public ParliamentApiV1.TimedOvnCastingProofPageVerification verifyCastingProofPage(
+        final byte[] proofResponse,
+        final ParliamentTimedOvnCastingTrustAnchorV1 trustAnchor) {
+      final org.hyperledger.iroha.sdk.client.ParliamentTimedOvnCastingProofPageVerificationV1
+          verification =
+              delegate.verifyCastingProofPageV1(
+                  proofResponse, kotlinTrustAnchor(trustAnchor));
+      return new ParliamentApiV1.TimedOvnCastingProofPageVerification(
+          verification.getEvaluatedBlockHeight(),
+          verification.evaluatedContextId(),
+          verification.getMoreAvailable());
     }
 
     @Override

@@ -11653,6 +11653,15 @@ fn inrou_egress_reporter_key_digest(
 fn prepare_inrou_egress_checkpoint_dir(path: &Path) -> io::Result<PathBuf> {
     use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _};
 
+    // Runtime configuration deliberately permits peer-local relative state
+    // roots. Anchor them before walking ancestors so `Path::ancestors()` does
+    // not finish at the empty relative path while retaining every custody
+    // check for the actual filesystem path.
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
     let parent = path.parent().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -11678,17 +11687,17 @@ fn prepare_inrou_egress_checkpoint_dir(path: &Path) -> io::Result<PathBuf> {
             ));
         }
     }
-    match fs::symlink_metadata(path) {
+    match fs::symlink_metadata(&path) {
         Ok(_) => {}
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             let mut builder = fs::DirBuilder::new();
             builder.mode(0o700);
-            builder.create(path)?;
+            builder.create(&path)?;
             fs::File::open(parent)?.sync_all()?;
         }
         Err(error) => return Err(error),
     }
-    let named = fs::symlink_metadata(path)?;
+    let named = fs::symlink_metadata(&path)?;
     if named.file_type().is_symlink()
         || !named.is_dir()
         || named.uid() != effective_uid
@@ -11702,7 +11711,7 @@ fn prepare_inrou_egress_checkpoint_dir(path: &Path) -> io::Result<PathBuf> {
             ),
         ));
     }
-    let canonical = fs::canonicalize(path)?;
+    let canonical = fs::canonicalize(&path)?;
     for (index, ancestor) in canonical.ancestors().enumerate() {
         let metadata = fs::metadata(ancestor)?;
         let replaceable = metadata.mode() & 0o022 != 0;
@@ -30155,6 +30164,35 @@ mod tests {
             5,
         )
         .expect_err("a sealed stale checkpoint must not be advanced by a former reporter");
+    }
+    #[cfg(unix)]
+    #[test]
+    fn durable_inrou_egress_checkpoint_accepts_relative_state_root() -> Result<()> {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let temp_dir = tempfile::Builder::new()
+            .prefix(".soracloud-relative-state-")
+            .tempdir_in(".")?;
+        assert!(
+            !temp_dir.path().is_absolute(),
+            "fixture must exercise a relative state root"
+        );
+        let state_dir = temp_dir.path().join("runtime");
+        fs::create_dir(&state_dir)?;
+
+        let checkpoint_dir = prepare_inrou_egress_checkpoint_dir(
+            &state_dir.join(SORACLOUD_INROU_EGRESS_CHECKPOINT_DIR),
+        )?;
+        let metadata = fs::symlink_metadata(&checkpoint_dir)?;
+
+        assert!(checkpoint_dir.is_absolute());
+        assert_eq!(
+            checkpoint_dir,
+            fs::canonicalize(state_dir.join(SORACLOUD_INROU_EGRESS_CHECKPOINT_DIR))?
+        );
+        assert!(metadata.is_dir());
+        assert_eq!(metadata.mode() & 0o077, 0);
+        Ok(())
     }
     #[cfg(unix)]
     #[test]

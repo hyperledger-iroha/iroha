@@ -29,7 +29,8 @@ use iroha_core::{
 use iroha_data_model::{
     governance::types::{
         AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal,
-        ParliamentNoResultKindV1, ProposalContentId, ProposalKind, SccpRouteGovernanceProposal,
+        MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1, ParliamentNoResultKindV1, ProposalContentId,
+        ProposalKind, SccpRouteGovernanceProposal,
     },
     isi::governance::CouncilDerivationKind,
     ministry::{AgendaProposalRecordV1, AgendaProposalV1},
@@ -839,8 +840,9 @@ pub async fn handle_gov_capabilities(
 /// the exact proposal and retry sequence and contains no signing material.
 ///
 /// # Errors
-/// Returns a conversion error for an unsupported request version or a proposal
-/// containing a public JSON integer that is not exactly representable by every SDK.
+/// Returns a conversion error for an unsupported request version, an attempt
+/// sequence above the V1 retry ceiling, or a proposal containing a public JSON
+/// integer that is not exactly representable by every SDK.
 pub async fn handle_gov_parliament_attempt_draft(
     NoritoJson(body): NoritoJson<ParliamentAttemptDraftRequestV1>,
 ) -> Result<JsonBody<ParliamentAttemptDraftResponseV1>, crate::Error> {
@@ -848,6 +850,12 @@ pub async fn handle_gov_parliament_attempt_draft(
         return Err(crate::routing::conversion_error(format!(
             "unsupported Parliament attempt draft version {}; expected {}",
             body.version, PARLIAMENT_API_VERSION_V1
+        )));
+    }
+    if body.attempt_sequence > MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1 {
+        return Err(crate::routing::conversion_error(format!(
+            "Parliament attempt sequence exceeds the V1 retry limit {}",
+            MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1
         )));
     }
     if let Some(reason) = body.proposal.first_release_exact_json_u64_invariant_error() {
@@ -2845,6 +2853,39 @@ mod tests {
         assert_eq!(
             transition_instruction.transition.digest_v1(),
             expected_digest
+        );
+    }
+    #[tokio::test]
+    async fn parliament_attempt_draft_enforces_the_end_to_end_retry_ceiling() {
+        use iroha_data_model::governance::types::{
+            AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal,
+            MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1, ProposalKind,
+        };
+
+        let request = |attempt_sequence| ParliamentAttemptDraftRequestV1 {
+            version: PARLIAMENT_API_VERSION_V1,
+            proposal: ProposalKind::DeployContract(DeployContractProposal {
+                contract_address: sample_contract_address(),
+                code_hash: ContractCodeHash::new([0x11; 32]),
+                abi_hash: ContractAbiHash::new([0x22; 32]),
+                abi_version: AbiVersion::new(1),
+                manifest_provenance: None,
+            }),
+            attempt_sequence,
+        };
+
+        handle_gov_parliament_attempt_draft(NoritoJson(request(
+            MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1,
+        )))
+        .await
+        .expect("the final bounded Parliament attempt draft is admissible");
+        let error = handle_gov_parliament_attempt_draft(NoritoJson(request(
+            MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1 + 1,
+        )))
+        .await
+        .expect_err("an over-limit Parliament attempt must not be framed");
+        assert!(
+            format!("{error:?}").contains("Parliament attempt sequence exceeds the V1 retry limit")
         );
     }
     #[tokio::test]

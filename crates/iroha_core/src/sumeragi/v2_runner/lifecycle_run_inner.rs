@@ -653,6 +653,37 @@ pub(in crate::sumeragi) fn drain_decided_lane_recovery_ingress_for_test(
     .map(|drained| drained.is_some())
 }
 
+/// Retire the exact process-local Decision handoff owned by an Apply-only barrier.
+///
+/// Apply may enter its worker in the same outer batch that installs this fence.
+/// Once the typed Apply claim blocks Runtime, this is the only legal path that
+/// can retire the local Proposal and losing lane owners before acknowledging the
+/// handoff. The sealed permit carries no authority to step the reducer or admit
+/// ordinary ingress.
+pub(in crate::sumeragi) fn settle_apply_barrier_runner_decision_handoff(
+    executor: &mut V2EffectExecutor<SerializedV2Runtime>,
+    local_proposal: &mut ProductionLifecycleLocalProposalStateV1,
+    lane_work: &mut V2LaneWorkAdapter,
+    output_guard: &ConsensusOutputGuard,
+    _permit: &LifecycleDecidedLaneRecoveryPermitV1,
+) -> Result<(), V2RunnerError> {
+    let directive = executor.local_proposal_directive()?;
+    let Some(decided_subject) = directive.decided_subject() else {
+        output_guard.close_admission_for_restart();
+        return Err(V2RunnerError::RestartRequired);
+    };
+    local_proposal
+        .state
+        .reconcile(LocalProposalOwner::from(directive));
+    lane_work.retain_merge_sidecars_for_global_view(
+        directive.tag().view(),
+        directive.locked_subject(),
+        Some(decided_subject),
+    )?;
+    executor.acknowledge_runner_decision_cleanup(directive.tag(), Some(decided_subject))?;
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn run_lifecycle_active_height(
     mut activated: ActivatedProductionLifecycleV1,
@@ -743,16 +774,16 @@ fn run_lifecycle_active_height(
             }
             activated.with_runner_runtime(
                 &mut active_runner,
-                |_owner, executor, services, _local_proposal| {
+                |_owner, executor, services, local_proposal| {
                     // Keep only the lane transport needed to recover an exact
                     // certified sidecar or finish durable output handoff alive.
-                    // In particular, do not reconcile or advance the reducer,
-                    // wake generic deferred Apply work, or admit ordinary
-                    // consensus ingress while the lane-only Completion barrier
-                    // owns the current cut. Once the exact decided Apply is
-                    // dispatched, the decided-lane recovery seam may consume one
-                    // authenticated carrier needed to serve or persist that
-                    // certified artifact, including while Apply completion waits.
+                    // In particular, do not advance the reducer, wake generic
+                    // deferred Apply work, or admit ordinary consensus ingress
+                    // while the lane-only Completion barrier owns the current
+                    // cut. Once the exact decided Apply is dispatched, the
+                    // decided-lane recovery seam may consume one authenticated
+                    // carrier needed to serve or persist that certified artifact,
+                    // including while Apply completion waits.
                     if producer_claim.permits_decided_lane_recovery_ingress() {
                         let permit =
                             producer_claim
@@ -763,6 +794,19 @@ fn run_lifecycle_active_height(
                                             .to_owned(),
                                     )
                                 })?;
+                        // Apply can enter its worker in the same outer batch that
+                        // installs the runner's Decision-cleanup fence. Once the
+                        // typed Apply claim blocks Runtime, no ordinary runner
+                        // suffix remains available to retire that exact fence.
+                        // Settle only the already-decided process-local handoff
+                        // before servicing its certified lane/output seam.
+                        settle_apply_barrier_runner_decision_handoff(
+                            executor,
+                            local_proposal,
+                            &mut lane_work,
+                            output_guard.as_ref(),
+                            &permit,
+                        )?;
                         let _ = retry_decided_lane_recovery_exact_output(permit, || {
                             services.retry_pending_exact_output()
                         })?;
@@ -1159,11 +1203,14 @@ fn run_lifecycle_active_height(
 
         let apply_terminal_settled = producer_claim.apply_terminal_settled();
         if apply_terminal_settled && !ready_to_finish {
-            iroha_logger::error!(
-                "recovered Apply terminal settlement did not leave the executor ready for rollover"
-            );
-            output_guard.close_admission_for_restart();
-            return Err(V2RunnerError::RestartRequired);
+            // Apply is already the reducer terminal, but its causal suffix can
+            // still contain an authenticated Broadcast parked before service
+            // I/O. Re-enter the terminal-only Completion corridor so that the
+            // sealed Ready classifier can settle that exact row. Runtime,
+            // Ingress, and Producer remain fenced by `ApplyTerminalSettled`;
+            // any non-Broadcast Ready owner still fails closed there.
+            let _ = wake_rx.recv_timeout(IDLE_POLL);
+            continue;
         }
 
         if pending_queue_plan_admission_dirty.swap(false, Ordering::AcqRel) {

@@ -8,7 +8,18 @@ The model covers these consensus bindings:
 
 - the eligible-citizen snapshot is frozen before a strictly future finalized
   threshold-beacon pulse, and the initially required bodies are consumed as one
-  simultaneous draw batch;
+  simultaneous draw batch. A sortition pulse may be classified unavailable
+  only strictly after its exact height and only while no authoritative pulse is
+  known. That objective failure records `NoRoster`; a retry supersedes the
+  complete failed initial generation, freezes a fresh snapshot, uses the exact
+  next sequence no earlier than the failure height, and the final permitted
+  sequence rejects the governance attempt;
+- active timed-OVN ballots reserve both heavy-work windows in one global
+  checked set. Admission rejects a duplicate, an intersecting reservation, or
+  the first entry beyond the exact capacity without changing the committed
+  set; terminal release returns the slot. The model explores both a conflicting
+  pair and a nonconflicting pair, while the source-bound Core tests additionally
+  exercise deterministic derived-index rebuild after restore;
 - an absence is an authority-bound declaration for the member's exact seated
   assignment, is immutable, and never lowers original-seat quorum; each seated
   public-body assignment can endorse only one immutable result root, and Core
@@ -87,12 +98,15 @@ The small configuration uses two abstract bodies, two seated assignments, two
 competing public-finding roots, a two-block public-finding deadline, three TLE
 sessions (two with an authoritative release pulse and one with an objectively
 absent pulse), a two-block commitment window, a two-block opening window, and
-two permitted retries. It is
+two permitted sortition retries plus two permitted ballot retries. Its three
+abstract resource reservations include one symmetric conflict pair and an exact
+capacity of two. It is
 intentionally large enough to explore self-absence, early impossible-root
 rejection, conflicting and quorum-matching endorsements, post-deadline
-non-response rejection, success, private deadline/release failure, exhausted
-retry rejection, stale-head supersession, and rollback-isolated effect-failure
-paths.
+non-response rejection, successful and unavailable sortition pulses, fresh
+sortition retries, exhausted sortition rejection, private deadline/release
+failure, exhausted ballot retry rejection, stale-head supersession, and
+rollback-isolated effect-failure paths.
 Run it with a compatible TLA2Tools installation:
 
 ```text

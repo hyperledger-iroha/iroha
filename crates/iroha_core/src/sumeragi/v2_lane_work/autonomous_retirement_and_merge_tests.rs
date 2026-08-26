@@ -1155,6 +1155,10 @@ fn record_production_merge_candidate_for_persistence_retry(
         world
             .global_beacon_pulses
             .insert(beacon_pulse.pulse_id, beacon_pulse);
+        world.global_beacon_pulse_slots.insert(
+            (beacon_pulse.network_id, beacon_pulse.height),
+            beacon_pulse.pulse_id,
+        );
         world.global_beacon_latest_pulse.insert(
             crate::state::GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY,
             beacon_link,

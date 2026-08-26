@@ -883,7 +883,13 @@ const PRE_VERSION: u8 = 5;
 const SORANET_TRANSPORT_DELEGATION_CHALLENGE_BYTES: usize = 32;
 const ML_DSA_65_PUBLIC_KEY_BYTES: usize = 1_952;
 /// Exact first-release allocation ceiling for one complete V5 certificate and proof frame.
-const MAX_SORANET_TRANSPORT_DELEGATION_FRAME_BYTES: usize = 4_493;
+///
+/// The V5 challenge field uses the existing named fixed-array type, whose Norito
+/// layout is the generic fixed-array encoding rather than the specialized direct
+/// byte-array layout. Its canonical footprint is therefore 32 bytes larger than
+/// the original ceiling accounted for. Keep that signed V5 wire layout stable
+/// and bound its actual canonical frame instead of changing the transcript.
+const MAX_SORANET_TRANSPORT_DELEGATION_FRAME_BYTES: usize = 4_525;
 const SORANET_TRANSPORT_CERTIFICATE_SIGNATURE_DOMAIN: &[u8] =
     b"iroha:p2p:soranet-transport-certificate:v5|";
 const SORANET_TRANSPORT_CERTIFICATE_DIGEST_DOMAIN: &[u8] =

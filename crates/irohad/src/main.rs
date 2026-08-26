@@ -113,7 +113,6 @@ use iroha_core::{
     },
 };
 use iroha_crypto::Algorithm;
-use iroha_data_model::query::{self as dm_query, ErasedIterQuery};
 use iroha_data_model::{
     isi::RegisterPeerWithPop,
     parameter::system::{
@@ -635,30 +634,6 @@ pub fn is_coloring_supported() -> bool {
 }
 fn default_terminal_colors_str() -> clap::builder::OsStr {
     is_coloring_supported().to_string().into()
-}
-/// Initialize the global query registry used to decode iterable queries.
-///
-/// Iroha transports iterable queries as type-erased `QueryBox` values. The
-/// receiving side needs a registry to deserialize them back into an erased
-/// representation carrying predicate/selector info. Register all supported
-/// iterable query item types here.
-fn init_query_registry() {
-    use iroha_data_model as dm;
-    dm_query::set_query_registry(dm::query_registry![
-        ErasedIterQuery<dm::domain::Domain>,
-        ErasedIterQuery<dm::account::Account>,
-        ErasedIterQuery<dm::asset::value::Asset>,
-        ErasedIterQuery<dm::asset::definition::AssetDefinition>,
-        ErasedIterQuery<dm::nft::Nft>,
-        ErasedIterQuery<dm::role::Role>,
-        ErasedIterQuery<dm::role::RoleId>,
-        ErasedIterQuery<dm::peer::PeerId>,
-        ErasedIterQuery<dm::trigger::TriggerId>,
-        ErasedIterQuery<dm::trigger::Trigger>,
-        ErasedIterQuery<dm_query::CommittedTransaction>,
-        ErasedIterQuery<dm::block::SignedBlock>,
-        ErasedIterQuery<dm::block::BlockHeader>,
-    ]);
 }
 #[cfg(feature = "telemetry")]
 fn init_global_metrics_handle(
@@ -7507,9 +7482,9 @@ impl Iroha {
                 ))
             })?
         };
+        // Log detailed backtraces if a lock-order deadlock occurs so we can
+        // diagnose stalls during long-running scenarios (e.g., integration tests).
         if !emergency_fast {
-            // Log detailed backtraces if a lock-order deadlock occurs so we can
-            // diagnose stalls during long-running scenarios (e.g., integration tests).
             std::thread::spawn(|| {
                 loop {
                     std::thread::sleep(Duration::from_secs(10));
@@ -13452,7 +13427,6 @@ fn run_main_with_config_guard(
     // read and decode the genesis block. Without this call, decoding the
     // embedded `InstructionBox` values would panic with "instruction registry is not initialized".
     init_genesis_instruction_registry();
-    init_query_registry();
     let (config, genesis, kagemusha_startup_sources) =
         read_config_and_genesis_with_kagemusha_sources(&args)
             .change_context(MainError::Config)

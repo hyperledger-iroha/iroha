@@ -3445,22 +3445,22 @@ impl V2EffectExecutor<SerializedV2Runtime> {
 
     /// Return whether one typed Decision Apply can enter its terminal worker barrier.
     ///
-    /// Queued ingress is inert and may remain buffered. Every active
-    /// executor/runtime mutation owner must be empty before the worker can make
-    /// Kura durable. Pending-Kura recovery additionally requires its closed
-    /// ingress queue to remain empty.
+    /// Queued ingress and the runner's exact Decision-cleanup handoff must drain
+    /// before the worker can make Kura durable. Every active executor/runtime
+    /// mutation owner must be empty at that same cut. This keeps the later Apply
+    /// terminal barrier from inheriting reducer or process-local work which it
+    /// is deliberately forbidden to service.
     pub(in crate::sumeragi) fn lifecycle_decision_apply_dispatch_available(
         &self,
     ) -> Result<bool, EffectExecutorError> {
         self.ensure_open()?;
-        let queued_ingress_is_allowed =
-            self.pending_tip_recovery.is_none() || self.runtime.queued_commands() == 0;
         Ok(self.pending_work() == 0
+            && self.pending_runner_decision_cleanup.is_none()
             && self.recovered_decision_fetch_request_index_is_exact_and_empty()
             && self.retained_effect_batch.is_none()
             && self.parked_effect_batch.is_none()
             && self.finality_completion.is_none()
-            && queued_ingress_is_allowed
+            && self.runtime.queued_commands() == 0
             && self.runtime.lifecycle_decision_apply_dispatch_available())
     }
 
@@ -3785,8 +3785,6 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         authority: LifecycleDecisionApplyAdapterCompletionAuthorityV1,
     ) -> Result<PreparedLifecycleDecisionApplyAdapterCompletionV1<'_>, EffectExecutorError> {
         self.ensure_open()?;
-        let recovered_requires_empty_ingress =
-            authority.lineage() == LifecycleDecisionApplyLineageV1::Recovered;
         let pending_recovery_is_exact = self.pending_tip_recovery.as_ref().is_none_or(|evidence| {
             authority.exactly_matches_pending_kura_recovery(&self.context, evidence)
         });
@@ -3808,12 +3806,13 @@ impl V2EffectExecutor<SerializedV2Runtime> {
             }
         };
         if self.pending_work() != 0
+            || self.pending_runner_decision_cleanup.is_some()
             || !self.recovered_decision_fetch_request_index_is_exact_and_empty()
             || self.retained_effect_batch.is_some()
             || self.parked_effect_batch.is_some()
             || !pending_recovery_is_exact
             || self.finality_completion.is_some()
-            || (recovered_requires_empty_ingress && self.runtime.queued_commands() != 0)
+            || self.runtime.queued_commands() != 0
             || !lineage_owner_is_exact
         {
             return Err(EffectExecutorError::Contract(
@@ -3866,6 +3865,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
             lineage_owner_is_exact
                 && self.finality_completion.is_none()
                 && self.pending_work() == 0
+                && self.pending_runner_decision_cleanup.is_none()
                 && self.recovered_decision_fetch_request_index_is_exact_and_empty()
                 && pending_recovery_is_exact
                 && dispatch_key.matches_height_context(&self.context)

@@ -326,6 +326,8 @@ fn apply_barriers_reconcile_only_current_serve_owners_before_direct_recovery() {
             "producer_claim.decided_lane_recovery_permit()",
             ".reconcile_decided_lane_certified_serve(&mut active_runner, permit)",
             "activated.with_runner_runtime(",
+            "producer_claim.permits_decided_lane_recovery_ingress()",
+            "settle_apply_barrier_runner_decision_handoff(",
             "retry_decided_lane_recovery_exact_output(permit",
             "drain_decided_lane_recovery_ingress(",
         ],

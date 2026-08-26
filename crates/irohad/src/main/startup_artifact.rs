@@ -45,7 +45,6 @@ pub fn read_genesis_unlocked_with_bytes(
     );
     // Tests may call this helper without the ordinary daemon initialization.
     super::init_genesis_instruction_registry();
-    super::init_query_registry();
     let bytes = read_signed_genesis_bytes(path).map_err(|error| {
         Report::new(ConfigError::ReadGenesis).attach(format!(
             "failed to read signed genesis at {}: {error}",

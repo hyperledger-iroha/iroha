@@ -448,7 +448,7 @@ def _stable_regular_reader(
         raise SourceSealError(
             f"{label} must be {requirement}"
         )
-    flags = os.O_RDONLY
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
     try:
@@ -1716,6 +1716,348 @@ def _manifest_snapshot_for_paths(
 
 def _manifest_for_paths(root: Path, paths: Iterable[str]) -> str:
     return _manifest_snapshot_for_paths(root, paths)[0]
+
+
+def _descriptor_source_manifest_supported() -> bool:
+    """Return whether the strict descriptor-relative manifest walk is available."""
+
+    supported = getattr(os, "supports_dir_fd", ())
+    return (
+        os.name == "posix"
+        and bool(getattr(os, "O_DIRECTORY", 0))
+        and bool(getattr(os, "O_NOFOLLOW", 0))
+        and all(function in supported for function in (os.open, os.stat, os.readlink))
+    )
+
+
+def _git_config_bool(root: Path, name: str) -> bool | None:
+    """Read one optional repository-local Git boolean without ambient config."""
+
+    result = subprocess.run(
+        _git_command(root, "config", "--type=bool", "--get", name),
+        cwd=root,
+        check=False,
+        env=_git_read_only_environment(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if result.returncode == 1 and not result.stdout and not result.stderr:
+        return None
+    if result.returncode != 0:
+        raise RuntimeError(f"git could not read {name}: {result.stderr.strip()}")
+    value = result.stdout.strip()
+    if value == "true":
+        return True
+    if value == "false":
+        return False
+    raise RuntimeError(f"git returned a malformed boolean for {name}")
+
+
+def _portable_source_member_path(
+    root: Path, member: bytes
+) -> tuple[Path, list[tuple[Path, os.stat_result]]]:
+    """Resolve one member while rejecting symlink or reparse-point parents."""
+
+    current = root
+    parents = []
+    for component in member.split(b"/")[:-1]:
+        current /= os.fsdecode(component)
+        try:
+            metadata = current.lstat()
+        except OSError as error:
+            raise SourceSealError(
+                "source member has a missing or replaced parent"
+            ) from error
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or stat.S_ISLNK(metadata.st_mode)
+            or bool(getattr(metadata, "st_reparse_tag", 0))
+        ):
+            raise SourceSealError(
+                "source member has a non-directory, symlink, or reparse-point parent"
+            )
+        parents.append((current, metadata))
+    return current / os.fsdecode(member.rsplit(b"/", 1)[-1]), parents
+
+
+def _require_same_portable_source_parents(
+    parents: Iterable[tuple[Path, os.stat_result]],
+) -> None:
+    """Require every pathname parent to retain its inspected identity."""
+
+    for path, expected in parents:
+        try:
+            repeated = path.lstat()
+        except OSError as error:
+            raise SourceSealError(
+                "workspace source parent disappeared while inspected"
+            ) from error
+        if (
+            not stat.S_ISDIR(repeated.st_mode)
+            or stat.S_ISLNK(repeated.st_mode)
+            or bool(getattr(repeated, "st_reparse_tag", 0))
+            or _stable_metadata_changed(expected, repeated)
+        ):
+            raise SourceSealError("workspace source parent changed while inspected")
+
+
+def _portable_clean_index_manifest_snapshot(
+    root: Path,
+    entries: Iterable[tuple[bytes, str, str]],
+) -> str:
+    """Hash one clean stage-zero index through portable pathname operations.
+
+    Windows lacks Python's descriptor-relative ``dir_fd`` APIs.  A clean index
+    nevertheless supplies canonical file kinds and modes, while raw worktree
+    bytes can still be opened and authenticated against every staged Git blob.
+    This keeps the digest identical to a fresh POSIX checkout without weakening
+    the descriptor-relative source-seal implementation.
+    """
+
+    algorithm = _git_stdout(root, "rev-parse", "--show-object-format")
+    expected_oid_length = (
+        40 if algorithm == "sha1" else 64 if algorithm == "sha256" else 0
+    )
+    if not expected_oid_length:
+        raise RuntimeError(f"unsupported Git object format: {algorithm}")
+    materialized_symlinks = _git_config_bool(root, "core.symlinks") is False
+    honor_filemode = _git_config_bool(root, "core.filemode") is not False
+    hasher = hashlib.sha256(_DOMAIN)
+    root_before = root.lstat()
+    if not stat.S_ISDIR(root_before.st_mode) or stat.S_ISLNK(root_before.st_mode):
+        raise SourceSealError("workspace root must be a real directory")
+
+    for member, expected_mode, expected_object_id in sorted(entries):
+        _validate_source_path_bytes(member)
+        relative = os.fsdecode(member)
+        if (
+            len(expected_object_id) != expected_oid_length
+            or any(
+                character not in "0123456789abcdef"
+                for character in expected_object_id
+            )
+        ):
+            raise RuntimeError("Git returned a malformed stage-zero object ID")
+        _frame(hasher, member)
+        path, parents = _portable_source_member_path(root, member)
+
+        if expected_mode in {"100644", "100755"}:
+            try:
+                metadata = path.lstat()
+            except OSError as error:
+                raise DirtyReleaseSourceError(
+                    f"portable clean source has tracked changes: {relative}"
+                ) from error
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or bool(getattr(metadata, "st_reparse_tag", 0))
+                or (
+                    honor_filemode
+                    and bool(metadata.st_mode & 0o111)
+                    != (expected_mode == "100755")
+                )
+            ):
+                raise DirtyReleaseSourceError(
+                    f"portable clean source has tracked changes: {relative}"
+                )
+            canonical_mode = 0o755 if expected_mode == "100755" else 0o644
+            hasher.update(struct.pack(">I", canonical_mode))
+            hasher.update(b"F")
+            hasher.update(struct.pack(">Q", metadata.st_size))
+            object_digest = _git_blob_hasher(algorithm, metadata.st_size)
+            with _stable_regular_reader(
+                path,
+                maximum_size=_MAX_SOURCE_FILE_BYTES,
+                label=f"workspace source {relative}",
+                require_single_link=False,
+            ) as (source, stable_metadata):
+                if stable_metadata.st_size != metadata.st_size:
+                    raise SourceSealError(
+                        f"workspace source changed before it was read: {relative}"
+                    )
+                while chunk := source.read(_COPY_CHUNK_BYTES):
+                    hasher.update(chunk)
+                    object_digest.update(chunk)
+            if object_digest.hexdigest() != expected_object_id:
+                raise DirtyReleaseSourceError(
+                    f"portable clean source has tracked changes: {relative}"
+                )
+            _require_same_portable_source_parents(parents)
+            continue
+
+        if expected_mode == "120000":
+            try:
+                metadata = path.lstat()
+            except OSError as error:
+                raise DirtyReleaseSourceError(
+                    f"portable clean source has tracked changes: {relative}"
+                ) from error
+            if stat.S_ISLNK(metadata.st_mode):
+                try:
+                    target = os.readlink(path)
+                    after = path.lstat()
+                    repeated_target = os.readlink(path)
+                except OSError as error:
+                    raise SourceSealError(
+                        f"workspace symlink changed while inspected: {relative}"
+                    ) from error
+                if (
+                    _stable_metadata_changed(metadata, after)
+                    or repeated_target != target
+                ):
+                    raise SourceSealError(
+                        f"workspace symlink changed while inspected: {relative}"
+                    )
+                target_bytes = target if isinstance(target, bytes) else os.fsencode(target)
+            elif (
+                stat.S_ISREG(metadata.st_mode)
+                and not bool(getattr(metadata, "st_reparse_tag", 0))
+                and materialized_symlinks
+            ):
+                with _stable_regular_reader(
+                    path,
+                    maximum_size=_MAX_SYMLINK_TARGET_BYTES,
+                    label=f"materialized workspace symlink {relative}",
+                    require_single_link=False,
+                ) as (source, _):
+                    target_bytes = source.read(_MAX_SYMLINK_TARGET_BYTES + 1)
+                if len(target_bytes) > _MAX_SYMLINK_TARGET_BYTES:
+                    raise SourceSealError(
+                        f"materialized workspace symlink exceeds its bound: {relative}"
+                    )
+            else:
+                raise DirtyReleaseSourceError(
+                    f"portable clean source has tracked changes: {relative}"
+                )
+            object_digest = _git_blob_hasher(algorithm, len(target_bytes))
+            object_digest.update(target_bytes)
+            if object_digest.hexdigest() != expected_object_id:
+                raise DirtyReleaseSourceError(
+                    f"portable clean source has tracked changes: {relative}"
+                )
+            hasher.update(struct.pack(">I", 0o777))
+            hasher.update(b"L")
+            _frame(hasher, target_bytes)
+            _require_same_portable_source_parents(parents)
+            continue
+
+        if expected_mode == "160000":
+            try:
+                metadata = path.lstat()
+                members = os.listdir(path)
+                after = path.lstat()
+            except OSError as error:
+                raise DirtyReleaseSourceError(
+                    f"portable clean source has tracked changes: {relative}"
+                ) from error
+            if (
+                not stat.S_ISDIR(metadata.st_mode)
+                or stat.S_ISLNK(metadata.st_mode)
+                or bool(getattr(metadata, "st_reparse_tag", 0))
+                or members
+                or _stable_metadata_changed(metadata, after)
+                or bool(getattr(after, "st_reparse_tag", 0))
+            ):
+                raise DirtyReleaseSourceError(
+                    f"portable clean source gitlink must be one empty directory: {relative}"
+                )
+            hasher.update(struct.pack(">I", 0o755))
+            hasher.update(b"G")
+            _require_same_portable_source_parents(parents)
+            continue
+
+        raise RuntimeError(f"unsupported Git index mode: {expected_mode}")
+
+    try:
+        root_after = root.lstat()
+    except OSError as error:
+        raise SourceSealError("workspace root changed while inspected") from error
+    if _stable_metadata_changed(root_before, root_after):
+        raise SourceSealError("workspace root changed while inspected")
+    return hasher.hexdigest()
+
+
+def _portable_clean_index_manifest(root: Path) -> str:
+    """Return a platform-normalized manifest for one exact clean Git index."""
+
+    root = root.resolve()
+    _reject_active_git_operations(root)
+    unmerged = _git_unmerged_paths(root)
+    if unmerged:
+        raise UnmergedSourceError(
+            "workspace contains unresolved merge entries: " + ", ".join(unmerged)
+        )
+    head_commit = _git_stdout(root, "rev-parse", "--verify", "HEAD^{commit}")
+    staged = _git_paths(
+        root,
+        "diff-index",
+        "--cached",
+        "--name-only",
+        "--no-renames",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--ignore-submodules=none",
+        "--ita-visible-in-index",
+        head_commit,
+        "--",
+    )
+    if staged:
+        raise DirtyReleaseSourceError(
+            "portable clean source index is not HEAD: " + ", ".join(staged)
+        )
+    source_paths = {os.fsencode(path) for path in _git_source_paths(root)}
+    entries = _git_index_entries(root)
+    index_paths = {member for member, _, _ in entries}
+    if source_paths != index_paths:
+        differences = sorted(source_paths ^ index_paths)
+        rendered = ", ".join(os.fsdecode(path) for path in differences)
+        raise DirtyReleaseSourceError(
+            "portable clean source is not exactly the stage-zero index: " + rendered
+        )
+
+    manifest = _portable_clean_index_manifest_snapshot(root, entries)
+    if _git_stdout(root, "rev-parse", "--verify", "HEAD^{commit}") != head_commit:
+        raise DirtyReleaseSourceError(
+            "portable clean source HEAD changed during manifest capture"
+        )
+    repeated_staged = _git_paths(
+        root,
+        "diff-index",
+        "--cached",
+        "--name-only",
+        "--no-renames",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--ignore-submodules=none",
+        "--ita-visible-in-index",
+        head_commit,
+        "--",
+    )
+    if repeated_staged or _git_index_entries(root) != entries:
+        raise DirtyReleaseSourceError(
+            "portable clean source index changed during manifest capture"
+        )
+    repeated_paths = {os.fsencode(path) for path in _git_source_paths(root)}
+    if repeated_paths != source_paths:
+        raise DirtyReleaseSourceError(
+            "portable clean source paths changed during manifest capture"
+        )
+    return manifest
+
+
+def native_artifact_workspace_source_manifest(root: Path) -> str:
+    """Return the strongest available manifest for native artifact evidence.
+
+    Source seals keep requiring the strict Unix descriptor walk.  Native
+    artifact record/verify also runs on Windows, where Python documents
+    ``dir_fd`` as unavailable, so a clean-index-only portable walk is used
+    there and authenticates raw bytes against every stage-zero object ID.
+    """
+
+    if _descriptor_source_manifest_supported():
+        return workspace_source_manifest(root)
+    return _portable_clean_index_manifest(root)
 
 
 def _release_workspace_snapshot(root: Path) -> tuple[str, str]:

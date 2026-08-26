@@ -177,10 +177,11 @@ def clean_source(tmp_path: Path) -> Path:
     source = tmp_path / "source"
     source.mkdir()
     (source / "tracked.txt").write_text("reviewed source\n", encoding="utf-8")
+    (source / "Cargo.lock").write_text("version = 3\n", encoding="utf-8")
     git(source, "init", "-q")
     git(source, "config", "user.name", "ABI Contract Test")
     git(source, "config", "user.email", "abi-contract@example.invalid")
-    git(source, "add", "tracked.txt")
+    git(source, "add", "Cargo.lock", "tracked.txt")
     git(source, "commit", "-q", "-m", "fixture")
     return source
 

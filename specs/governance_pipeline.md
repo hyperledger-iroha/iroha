@@ -15,8 +15,12 @@ release qualified.
    preimage hash, and compare-and-set head. A caller cannot supply those fields.
 3. For each body election, Core freezes the complete canonically ordered
    eligible-citizen snapshot in the containing block. The corresponding
-   `SortitionRequestV1` commits that snapshot before a strictly later finalized
-   threshold-beacon pulse for the network's stable logical beacon identifier.
+   `SortitionRequestV1` commits that snapshot before the one exact finalized
+   threshold-beacon pulse at `request_height +
+   parliament_sortition_pulse_delay_blocks` (default 4) for the network's
+   stable logical beacon identifier. Core uses checked addition, freezes the
+   nonzero delay in the attempt, and rejects both nearer and arbitrarily distant
+   pulse heights during live admission and persistence validation.
    The first pulse consumption covers every initially required body in one
    simultaneous batch; a later no-roster retry or a newly required Confirmation
    Jury consumes a fresh pulse slot. Threshold key rotation is independent of
@@ -108,9 +112,11 @@ release qualified.
    `NoResult` on the final permitted sequence rejects the governance attempt
    instead of leaving it active without a legal retry. There is no plaintext,
    manual-opening, public-ballot, or post-freeze recovery fallback.
-   Committed audit events classify both public-finding outcomes and the five
-   private-ballot failures with the closed seven-variant
-   `ParliamentNoResultKindV1`; callers cannot supply that classification.
+   Committed audit events classify sortition retry exhaustion, both
+   public-finding outcomes, and the five private-ballot failures with the closed
+   eight-variant `ParliamentNoResultKindV1`; callers cannot supply that
+   classification. `SortitionRetriesExhausted` is emitted when the final
+   permitted body-election sequence fails before a body instance exists.
 9. Core automatically constructs one `GovernanceCertificateV1` when the final
    required result is accepted, from the exact
    persisted body, sortition, roster, authority-endorsed public-finding,
@@ -171,7 +177,51 @@ label in source remains explicitly draft-derived. The July 2026 CFRG BLS
 document is still an Internet-Draft and specifies base BLS signatures and
 aggregation, not this threshold protocol or its lifecycle.
 
-Research boundary reviewed through 2026-08-24:
+NIST IR 8214C's January 2026 Threshold Call asks submitters for a technical
+specification, reference implementation, and experimental report, followed by
+public analysis and a possible characterization report. It is an evidence-
+gathering process, not a standardization or approval of Parliament's Das--Ren
+profile. The MPTS 2026 workshop likewise records previews and current research
+on BLS security, adaptive and proactive corruption, post-quantum threshold
+schemes, and threshold ZK; a workshop preview is not a conformance or security
+certificate.
+
+The 13 August 2026 Berkeley report on practical witness encryption says that
+general-NP constructions remain prohibitively expensive and rest on strong,
+comparatively lightly scrutinized assumptions, while its practical results are
+special-purpose pairing constructions. Its silent and batched threshold-
+encryption designs are research alternatives, not drop-in replacements for the
+implemented timed-OVN transcript, release identity, corruption model, or
+consensus lifecycle. Adopting one would require a separately specified,
+reviewed, and enacted protocol change.
+
+Recent beacon work also prevents a broader claim than the implementation makes.
+A VDF establishes construction-specific sequential work, not a fixed amount of
+civil time or economic resistance to specialized hardware. A VRF proves one
+key's evaluation, not resistance to key grinding, selective withholding,
+proposer choice, forks, or bias accumulated when one epoch feeds another.
+Parliament instead freezes one network/session/height pulse slot before drawing,
+rejects an unavailable classification once the authoritative slot exists, and
+bounds retries. Release qualification must still exercise selective withholding
+and repeated-retry bias; single-round uniformity is not sufficient evidence.
+
+Likewise, a replicated ledger is only the bulletin board. It does not by itself
+prove cast-as-intended, recorded-as-cast, tallied-as-recorded, client integrity,
+or ballot privacy. The V1 transcript therefore binds the exact proposal,
+attempt, body, participant, survivor corpus, release identity, option, and proof
+domain; every partial and aggregate is independently verified before use. This
+does not claim an ElectionGuard-compatible voter-verification ceremony or close
+the endpoint and coercion boundaries above.
+
+The BLS12-381 threshold release, pairing-based timed-OVN ballot, and classical
+beacon are not post-quantum. Versioned sessions and domain-separated algorithm
+identities provide a migration boundary, but using ML-DSA elsewhere in Iroha
+does not make Parliament post-quantum. Replacing these primitives requires a
+separately specified, reviewed, consensus-enacted protocol revision and new
+fixtures; current lattice DKG/beacon proposals are research inputs, not
+standards or drop-in implementations.
+
+Research boundary reviewed through 2026-08-27:
 
 - Das and Ren, [*Adaptively Secure BLS Threshold Signatures from DDH and
   co-CDH*](https://eprint.iacr.org/2023/1553).
@@ -187,6 +237,27 @@ Research boundary reviewed through 2026-08-24:
 - CFRG, [*BLS Signatures*, draft-irtf-cfrg-bls-signature-07
   (work in progress, 6 July
   2026)](https://datatracker.ietf.org/doc/draft-irtf-cfrg-bls-signature/07/).
+- NIST, [*NIST First Call for Multi-Party Threshold Schemes*, NIST IR
+  8214C](https://doi.org/10.6028/NIST.IR.8214C), January 2026.
+- NIST, [*MPTS 2026: NIST Workshop on Multi-Party Threshold Schemes
+  2026*](https://csrc.nist.gov/Events/2026/mpts2026), January 2026.
+- Policharla, [*Practical Witness Encryption Schemes and
+  Applications*](https://www2.eecs.berkeley.edu/Pubs/TechRpts/2026/EECS-2026-243.html),
+  UCB/EECS-2026-243, 13 August 2026.
+- Glaeser, Seres, Zhu, and Bonneau,
+  [*Cicada: A Framework for Private Non-Interactive On-Chain Auctions and
+  Voting*](https://eprint.iacr.org/2023/1473).
+- Shang and Chen, [*Economic Security of VDF-Based Randomness
+  Beacons*](https://arxiv.org/abs/2604.04744), 6 April 2026.
+- Gaži, Quader, and Russell, [*Taming Iterative Grinding Attacks on
+  Blockchain Beacons*](https://eprint.iacr.org/2025/1974), ASIACRYPT 2025.
+- Microsoft Research, [*ElectionGuard Specification
+  2.1*](https://electionguard.vote/spec/).
+- Cortier, Debant, and Gaudry, [*Breaking Verifiability and Vote
+  Privacy in CHVote*](https://eprint.iacr.org/2025/080), ESORICS 2025.
+- NIST, [*Considerations for Achieving Crypto Agility: Strategies and
+  Practices*, CSWP 39 update
+  1](https://csrc.nist.gov/pubs/cswp/39/upd1/final), 29 June 2026.
 
 # Standalone referendum boundary
 
@@ -203,9 +274,12 @@ mode, client finalization, or client enactment path.
 
 - Settle the merge candidate and pass focused data-model/Core/Torii tests,
   workspace tests, strict Clippy, formatting, and the source/model contract.
-- Complete and qualify the live threshold-beacon pulse producer and partial
-  signature aggregation path that feeds authoritative finalized-pulse history.
-  The implemented boundary verifier and seed consumer do not produce pulses.
+- Qualify the implemented live threshold-beacon partial-share transport,
+  per-session runtime custody, threshold aggregation, candidate-effect
+  assembly, and authoritative finalized-pulse persistence on at least four
+  peers, including missing/invalid shares, restart, idempotent retransmission,
+  mandatory NPoS boundary slots, optional Parliament demand slots, and key
+  rotation.
 - Qualify the implemented authenticated release-context read, bodyless local
   partial request, independently verifying multi-session custody/coordinator,
   canonical combine, ordinary `FinalizeOpenedBallot` submission tooling, and

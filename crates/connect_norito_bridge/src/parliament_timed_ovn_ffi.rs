@@ -6,8 +6,10 @@
 //! registration secret, and returns only public registration or masked-ballot
 //! records. Before the seed is read, the bridge authenticates a terminal
 //! checkpoint-to-tip proof against an independently configured network,
-//! checkpoint context, and ballot attempt. It then replay-validates the Core
-//! archive and requires its compact binding to equal the authenticated leaf.
+//! checkpoint context, and ballot attempt. Intermediate pages can only advance
+//! the caller's durable checkpoint; a terminal page additionally replay-validates
+//! the Core archive and requires its compact binding to equal the authenticated
+//! leaf before any seed-bearing operation is allowed.
 
 use core::ffi::c_char;
 use std::{ptr, slice};
@@ -49,13 +51,19 @@ pub const CONNECT_NORITO_PARLIAMENT_TIMED_OVN_TRUST_ANCHOR_BYTES_V1: usize = 32;
 /// Maximum canonical proof response accepted at the wallet boundary.
 pub const CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_BYTES_V1: usize =
     PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_RESPONSE_BYTES_V1;
+/// Exact fixed width of one authenticated casting-proof page promotion result.
+pub const CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_RESULT_BYTES_V1: usize = 41;
 
 const REGISTRATION_RNG_DOMAIN_V1: &[u8] =
     b"iroha.connect.parliament.timed-ovn.registration-rng.v1\0";
 const BALLOT_RNG_DOMAIN_V1: &[u8] = b"iroha.connect.parliament.timed-ovn.ballot-rng.v1\0";
 const RNG_BLOCK_DOMAIN_V1: &[u8] = b"iroha.connect.parliament.timed-ovn.rng-block.v1\0";
 const PUBLIC_ARCHIVE_NESTING_LIMIT_V1: usize = 64;
+const PUBLIC_ARCHIVE_ALLOCATION_MULTIPLIER_V1: usize = 16;
+const PUBLIC_ARCHIVE_FIXED_ALLOCATION_ALLOWANCE_V1: usize = 64 * 1024;
 const PUBLIC_PROOF_NESTING_LIMIT_V1: usize = 128;
+const PUBLIC_PROOF_ALLOCATION_MULTIPLIER_V1: usize = 16;
+const PUBLIC_PROOF_FIXED_ALLOCATION_ALLOWANCE_V1: usize = 64 * 1024;
 pub(super) const AUTHORITY_UTF8_MAX_BYTES_V1: usize = 8 * 1024;
 
 #[derive(Debug)]
@@ -261,7 +269,13 @@ fn public_archive_decode_limits(encoded_len: usize) -> norito::DecodeLimits {
         encoded_len,
         encoded_len,
         encoded_len,
-        encoded_len.saturating_mul(4),
+        // The validated archive owns large registration and ballot record
+        // collections whose decoded allocation can substantially exceed the
+        // canonical wire size. Keep the allowance explicit and proportional;
+        // the 4 MiB archive ceiling bounds it to 64 MiB plus 64 KiB.
+        encoded_len
+            .saturating_mul(PUBLIC_ARCHIVE_ALLOCATION_MULTIPLIER_V1)
+            .saturating_add(PUBLIC_ARCHIVE_FIXED_ALLOCATION_ALLOWANCE_V1),
         PUBLIC_ARCHIVE_NESTING_LIMIT_V1,
     )
 }
@@ -271,7 +285,15 @@ fn public_proof_decode_limits(encoded_len: usize) -> norito::DecodeLimits {
         encoded_len,
         encoded_len,
         encoded_len,
-        encoded_len.saturating_mul(4),
+        // A bounded finality page contains several owned validator rosters,
+        // signatures, and context records whose decoded allocation can exceed
+        // four times the canonical wire size. The fixed allowance covers owned
+        // enum/collection bookkeeping that is not proportional to a tiny wire
+        // field. The 8 MiB input ceiling keeps this explicit budget bounded to
+        // at most 128 MiB plus 64 KiB.
+        encoded_len
+            .saturating_mul(PUBLIC_PROOF_ALLOCATION_MULTIPLIER_V1)
+            .saturating_add(PUBLIC_PROOF_FIXED_ALLOCATION_ALLOWANCE_V1),
         PUBLIC_PROOF_NESTING_LIMIT_V1,
     )
 }
@@ -296,13 +318,33 @@ fn parse_wallet_authority(authority: &str) -> Result<AccountId, BridgeError> {
         .map_err(|_| BridgeError::Authority)
 }
 
-pub(super) fn verified_casting_context_from_proof_v1(
+pub(super) struct VerifiedCastingProofPageV1 {
+    evaluated_block_height: u64,
+    evaluated_context_id: [u8; 32],
+    more_available: bool,
+    casting_context: Option<ValidatedParliamentTimedOvnCastingContextArchiveV1>,
+}
+
+impl VerifiedCastingProofPageV1 {
+    pub(super) fn canonical_result_bytes_v1(
+        &self,
+    ) -> [u8; CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_RESULT_BYTES_V1] {
+        let mut result =
+            [0_u8; CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_RESULT_BYTES_V1];
+        result[..8].copy_from_slice(&self.evaluated_block_height.to_be_bytes());
+        result[8..40].copy_from_slice(&self.evaluated_context_id);
+        result[40] = u8::from(self.more_available);
+        result
+    }
+}
+
+pub(super) fn verified_casting_proof_page_v1(
     proof_response_bytes: &[u8],
     network_id: [u8; CONNECT_NORITO_PARLIAMENT_TIMED_OVN_TRUST_ANCHOR_BYTES_V1],
     trusted_checkpoint_height: u64,
     trusted_checkpoint_context_id: [u8; CONNECT_NORITO_PARLIAMENT_TIMED_OVN_TRUST_ANCHOR_BYTES_V1],
     expected_ballot_attempt_id: [u8; CONNECT_NORITO_PARLIAMENT_TIMED_OVN_TRUST_ANCHOR_BYTES_V1],
-) -> Result<ValidatedParliamentTimedOvnCastingContextArchiveV1, BridgeError> {
+) -> Result<VerifiedCastingProofPageV1, BridgeError> {
     if proof_response_bytes.is_empty()
         || proof_response_bytes.len()
             > CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_BYTES_V1
@@ -317,9 +359,9 @@ pub(super) fn verified_casting_context_from_proof_v1(
         public_proof_decode_limits(proof_response_bytes.len()),
     )
     .map_err(|_| BridgeError::ParliamentTimedOvn)?;
-    // A promotion page never authorizes secret access. Callers must persist its
-    // returned checkpoint and fetch a separately encoded terminal response.
-    if response.more_available {
+    if response.evaluated_block_height < trusted_checkpoint_height
+        || (response.more_available && response.evaluated_block_height == trusted_checkpoint_height)
+    {
         return Err(BridgeError::ParliamentTimedOvn);
     }
     let network_id = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
@@ -333,17 +375,52 @@ pub(super) fn verified_casting_context_from_proof_v1(
             trusted_checkpoint_context_id,
             expected_ballot_attempt_id,
         )
-        .map_err(|_| BridgeError::ParliamentTimedOvn)?
-        .ok_or(BridgeError::ParliamentTimedOvn)?;
-    let archive_bytes = response
-        .casting_context_archive
-        .as_deref()
-        .ok_or(BridgeError::ParliamentTimedOvn)?;
-    let archive = decode_casting_context(archive_bytes)?;
-    if !archive.matches_compact_binding_v1(binding) {
-        return Err(BridgeError::ParliamentTimedOvn);
-    }
-    Ok(archive)
+        .map_err(|_| BridgeError::ParliamentTimedOvn)?;
+    let casting_context = match binding {
+        None => {
+            if !response.more_available {
+                return Err(BridgeError::ParliamentTimedOvn);
+            }
+            None
+        }
+        Some(binding) => {
+            if response.more_available {
+                return Err(BridgeError::ParliamentTimedOvn);
+            }
+            let archive_bytes = response
+                .casting_context_archive
+                .as_deref()
+                .ok_or(BridgeError::ParliamentTimedOvn)?;
+            let archive = decode_casting_context(archive_bytes)?;
+            if !archive.matches_compact_binding_v1(binding) {
+                return Err(BridgeError::ParliamentTimedOvn);
+            }
+            Some(archive)
+        }
+    };
+    Ok(VerifiedCastingProofPageV1 {
+        evaluated_block_height: response.evaluated_block_height,
+        evaluated_context_id: *response.evaluated_context_id.0.as_ref(),
+        more_available: response.more_available,
+        casting_context,
+    })
+}
+
+pub(super) fn verified_casting_context_from_proof_v1(
+    proof_response_bytes: &[u8],
+    network_id: [u8; CONNECT_NORITO_PARLIAMENT_TIMED_OVN_TRUST_ANCHOR_BYTES_V1],
+    trusted_checkpoint_height: u64,
+    trusted_checkpoint_context_id: [u8; CONNECT_NORITO_PARLIAMENT_TIMED_OVN_TRUST_ANCHOR_BYTES_V1],
+    expected_ballot_attempt_id: [u8; CONNECT_NORITO_PARLIAMENT_TIMED_OVN_TRUST_ANCHOR_BYTES_V1],
+) -> Result<ValidatedParliamentTimedOvnCastingContextArchiveV1, BridgeError> {
+    verified_casting_proof_page_v1(
+        proof_response_bytes,
+        network_id,
+        trusted_checkpoint_height,
+        trusted_checkpoint_context_id,
+        expected_ballot_attempt_id,
+    )
+    .and_then(|page| page.casting_context.ok_or(BridgeError::ParliamentTimedOvn))
 }
 
 pub(super) fn registration_from_verified_context_v1(
@@ -463,6 +540,80 @@ unsafe fn reset_output(
         *out_len = 0;
     }
     Ok(())
+}
+
+/// Verify one bounded consensus-authenticated casting-proof page without reading a seed.
+///
+/// On success `out_page_result` receives exactly 41 canonical bytes: the
+/// evaluated height as big-endian `u64`, the 32-byte evaluated context id, and
+/// a final canonical `0`/`1` `more_available` byte. Intermediate pages contain
+/// no casting archive and can only promote the caller's durable checkpoint;
+/// terminal pages additionally replay and bind the complete casting archive.
+///
+/// # Safety
+///
+/// Every non-null pointer must address the declared number of readable or
+/// writable bytes for the duration of this call. The exact 41-byte output must
+/// not overlap any input storage.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_parliament_timed_ovn_verify_casting_proof_page_v1(
+    proof_response_norito_ptr: *const c_uchar,
+    proof_response_norito_len: c_ulong,
+    network_id_ptr: *const c_uchar,
+    network_id_len: c_ulong,
+    trusted_checkpoint_height: u64,
+    trusted_checkpoint_context_id_ptr: *const c_uchar,
+    trusted_checkpoint_context_id_len: c_ulong,
+    expected_ballot_attempt_id_ptr: *const c_uchar,
+    expected_ballot_attempt_id_len: c_ulong,
+    out_page_result_ptr: *mut c_uchar,
+    out_page_result_len: c_ulong,
+) -> c_int {
+    let result = (|| -> Result<(), BridgeError> {
+        if out_page_result_ptr.is_null()
+            || out_page_result_len
+                != CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_RESULT_BYTES_V1 as c_ulong
+        {
+            return Err(BridgeError::ParliamentTimedOvn);
+        }
+        let output = unsafe {
+            slice::from_raw_parts_mut(
+                out_page_result_ptr,
+                CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_RESULT_BYTES_V1,
+            )
+        };
+        output.fill(0);
+        let proof_response = unsafe {
+            input_bytes(
+                proof_response_norito_ptr,
+                proof_response_norito_len,
+                CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_BYTES_V1,
+            )?
+        };
+        let network_id = unsafe { trust_anchor_from_input(network_id_ptr, network_id_len)? };
+        let checkpoint_context = unsafe {
+            trust_anchor_from_input(
+                trusted_checkpoint_context_id_ptr,
+                trusted_checkpoint_context_id_len,
+            )?
+        };
+        let expected_ballot = unsafe {
+            trust_anchor_from_input(
+                expected_ballot_attempt_id_ptr,
+                expected_ballot_attempt_id_len,
+            )?
+        };
+        let page = verified_casting_proof_page_v1(
+            proof_response,
+            network_id,
+            trusted_checkpoint_height,
+            checkpoint_context,
+            expected_ballot,
+        )?;
+        output.copy_from_slice(&page.canonical_result_bytes_v1());
+        Ok(())
+    })();
+    result.map_or_else(BridgeError::code, |()| 0)
 }
 
 /// Verify one terminal consensus-authenticated casting response without reading a seed.
@@ -1079,6 +1230,33 @@ mod tests {
         call_registration_ffi_bytes(&fixture.canonical_bytes(), &fixture, authority, seed)
     }
 
+    fn call_page_ffi(
+        proof_response: &[u8],
+        anchor: &CastingProofFixture,
+    ) -> (
+        c_int,
+        [u8; CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_RESULT_BYTES_V1],
+    ) {
+        let mut output =
+            [0xA5_u8; CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_RESULT_BYTES_V1];
+        let status = unsafe {
+            connect_norito_parliament_timed_ovn_verify_casting_proof_page_v1(
+                proof_response.as_ptr(),
+                proof_response.len() as c_ulong,
+                anchor.network_id.as_ptr(),
+                anchor.network_id.len() as c_ulong,
+                anchor.checkpoint_height,
+                anchor.checkpoint_context_id.as_ptr(),
+                anchor.checkpoint_context_id.len() as c_ulong,
+                anchor.ballot_attempt_id.as_ptr(),
+                anchor.ballot_attempt_id.len() as c_ulong,
+                output.as_mut_ptr(),
+                output.len() as c_ulong,
+            )
+        };
+        (status, output)
+    }
+
     fn call_registration_ffi_bytes(
         proof_response: &[u8],
         anchor: &CastingProofFixture,
@@ -1291,9 +1469,18 @@ mod tests {
             Err(BridgeError::ParliamentTimedOvn.code())
         );
 
+        let registration_record =
+            registration_record_from_seed(&registered_context, &authority, &seed)
+                .expect("valid registration record");
         let closed_context = casting_context(
             &lifecycle
                 .clone()
+                .register_participant(
+                    participant_hash(&registered_context, &authority),
+                    registration_record,
+                    &tle,
+                )
+                .expect("register participant")
                 .close_registration(&tle)
                 .expect("close registration"),
             &tle,
@@ -1329,6 +1516,42 @@ mod tests {
             )
         };
 
+        let fixture_network = NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(fixture.network_id)),
+        );
+        fixture
+            .response
+            .verify_consensus_page_against(
+                fixture_network,
+                fixture.checkpoint_height,
+                fixture.checkpoint_context_id,
+                BallotAttemptId::new(fixture.ballot_attempt_id),
+            )
+            .expect("portable terminal consensus proof");
+        let fixture_bytes = fixture.canonical_bytes();
+        let decoded_response: ParliamentTimedOvnCastingProofResponseV1 =
+            norito::decode_canonical_with_limits(
+                &fixture_bytes,
+                public_proof_decode_limits(fixture_bytes.len()),
+            )
+            .expect("canonical terminal response");
+        assert_eq!(decoded_response, fixture.response);
+        let replayed_archive = decode_casting_context(
+            decoded_response
+                .casting_context_archive
+                .as_deref()
+                .expect("terminal archive"),
+        )
+        .expect("replayed terminal archive");
+        assert!(
+            replayed_archive.matches_compact_binding_v1(
+                decoded_response
+                    .casting_context_binding
+                    .as_ref()
+                    .expect("terminal compact binding")
+            )
+        );
+
         assert!(
             verify(
                 &fixture.canonical_bytes(),
@@ -1348,6 +1571,29 @@ mod tests {
             )
             .is_err()
         );
+
+        let terminal_page = verified_casting_proof_page_v1(
+            &fixture.canonical_bytes(),
+            fixture.network_id,
+            fixture.checkpoint_height,
+            fixture.checkpoint_context_id,
+            fixture.ballot_attempt_id,
+        )
+        .expect("authenticated terminal page");
+        let terminal_result = terminal_page.canonical_result_bytes_v1();
+        assert_eq!(
+            u64::from_be_bytes(terminal_result[..8].try_into().expect("height bytes")),
+            fixture.response.evaluated_block_height
+        );
+        assert_eq!(
+            &terminal_result[8..40],
+            fixture.response.evaluated_context_id.0.as_ref()
+        );
+        assert_eq!(terminal_result[40], 0);
+        let (terminal_status, ffi_terminal_result) =
+            call_page_ffi(&fixture.canonical_bytes(), &fixture);
+        assert_eq!(terminal_status, 0);
+        assert_eq!(ffi_terminal_result, terminal_result);
         let mut normalized_network_alias = fixture.network_id;
         normalized_network_alias[31] &= !1;
         assert_ne!(normalized_network_alias, fixture.network_id);
@@ -1437,6 +1683,24 @@ mod tests {
         intermediate.response.casting_context_binding = None;
         intermediate.response.context_membership_proof = None;
         intermediate.response.casting_witness = None;
+        let intermediate_page = verified_casting_proof_page_v1(
+            &intermediate.canonical_bytes(),
+            fixture.network_id,
+            fixture.checkpoint_height,
+            fixture.checkpoint_context_id,
+            fixture.ballot_attempt_id,
+        )
+        .expect("authenticated intermediate checkpoint promotion");
+        let intermediate_result = intermediate_page.canonical_result_bytes_v1();
+        assert_eq!(intermediate_result[40], 1);
+        assert_eq!(
+            &intermediate_result[8..40],
+            fixture.response.evaluated_context_id.0.as_ref()
+        );
+        let (intermediate_status, ffi_intermediate_result) =
+            call_page_ffi(&intermediate.canonical_bytes(), &fixture);
+        assert_eq!(intermediate_status, 0);
+        assert_eq!(ffi_intermediate_result, intermediate_result);
         assert!(
             verify(
                 &intermediate.canonical_bytes(),
@@ -1446,6 +1710,78 @@ mod tests {
             )
             .is_err()
         );
+
+        let network_id = NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(fixture.network_id)),
+        );
+        let mut nonadvancing = fixture.clone();
+        nonadvancing.response.finality_chain = finality_chain(
+            network_id,
+            fixture.checkpoint_height,
+            Hash::new(b"unused root"),
+        );
+        let nonadvancing_tip = nonadvancing
+            .response
+            .finality_chain
+            .last()
+            .expect("single checkpoint proof");
+        let nonadvancing_context_id = nonadvancing_tip.finality_artifact.context_id();
+        let nonadvancing_block_hash = nonadvancing_tip.finality_artifact.block_hash;
+        assert_eq!(
+            nonadvancing_context_id.0.as_ref(),
+            &fixture.checkpoint_context_id
+        );
+        nonadvancing.response.evaluated_block_height = fixture.checkpoint_height;
+        nonadvancing.response.evaluated_context_id = nonadvancing_context_id;
+        nonadvancing.response.evaluated_block_hash = hex::encode(nonadvancing_block_hash.as_ref());
+        nonadvancing.response.observed_ledger_tip_height = fixture
+            .checkpoint_height
+            .checked_add(1)
+            .expect("test observed tip");
+        nonadvancing.response.more_available = true;
+        nonadvancing.response.casting_context_archive = None;
+        nonadvancing.response.casting_context_binding = None;
+        nonadvancing.response.context_membership_proof = None;
+        nonadvancing.response.casting_witness = None;
+        assert!(
+            verified_casting_proof_page_v1(
+                &nonadvancing.canonical_bytes(),
+                fixture.network_id,
+                fixture.checkpoint_height,
+                fixture.checkpoint_context_id,
+                fixture.ballot_attempt_id,
+            )
+            .is_err()
+        );
+
+        let mut malformed_page = fixture.canonical_bytes();
+        malformed_page.push(0);
+        let (malformed_status, malformed_output) = call_page_ffi(&malformed_page, &fixture);
+        assert_eq!(malformed_status, BridgeError::ParliamentTimedOvn.code());
+        assert_eq!(
+            malformed_output,
+            [0_u8; CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_RESULT_BYTES_V1]
+        );
+        let mut short_output =
+            [0xA5_u8; CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_RESULT_BYTES_V1 - 1];
+        let canonical_page = fixture.canonical_bytes();
+        let short_status = unsafe {
+            connect_norito_parliament_timed_ovn_verify_casting_proof_page_v1(
+                canonical_page.as_ptr(),
+                canonical_page.len() as c_ulong,
+                fixture.network_id.as_ptr(),
+                fixture.network_id.len() as c_ulong,
+                fixture.checkpoint_height,
+                fixture.checkpoint_context_id.as_ptr(),
+                fixture.checkpoint_context_id.len() as c_ulong,
+                fixture.ballot_attempt_id.as_ptr(),
+                fixture.ballot_attempt_id.len() as c_ulong,
+                short_output.as_mut_ptr(),
+                short_output.len() as c_ulong,
+            )
+        };
+        assert_eq!(short_status, BridgeError::ParliamentTimedOvn.code());
+        assert_eq!(short_output, [0xA5_u8; 40]);
 
         let mut binding_tampering = fixture.clone();
         binding_tampering

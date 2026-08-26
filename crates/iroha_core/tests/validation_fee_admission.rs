@@ -632,6 +632,7 @@ fn test_parliament_authorization(
             status: GovernanceAttemptStatusV1::Active,
         },
         TEST_PARLIAMENT_POLICY_VERSION,
+        10,
         proposal_kind.effect_preimage_hash_v1(),
         expected_head,
         requirements.clone(),

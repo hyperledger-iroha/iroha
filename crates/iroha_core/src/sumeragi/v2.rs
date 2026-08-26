@@ -3762,6 +3762,24 @@ pub(in crate::sumeragi) struct LifecycleDecisionApplyAdapterCompletionAuthorityV
     artifact: wire::finality::V2FinalityArtifact,
 }
 impl LifecycleDecisionApplyAdapterCompletionAuthorityV1 {
+    /// Build recovered completion authority for queue-preflight regression tests.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn recovered_for_queue_preflight_test(
+        tag: reducer::EventTag,
+        subject: wire::BlockSubject,
+        dispatch_key: LifecycleDecisionApplyDispatchKeyV1,
+        artifact: wire::finality::V2FinalityArtifact,
+    ) -> Self {
+        Self {
+            tag,
+            subject,
+            dispatch_key: dispatch_key
+                .with_lineage_for_test(LifecycleDecisionApplyLineageV1::Recovered),
+            receipt: KuraV2CommitReceipt::for_test(&artifact),
+            artifact,
+        }
+    }
+
     /// Return the immutable registry lineage without exposing completion material.
     pub(in crate::sumeragi) const fn lineage(&self) -> LifecycleDecisionApplyLineageV1 {
         self.dispatch_key.lineage()
@@ -14693,6 +14711,7 @@ impl SumeragiV2Adapter {
         let min_signers = u32::try_from(self.reducer.context().minimum_signer_count())
             .map_err(|_| wire::ValidationError::RosterTooLarge)?;
         let total_power = self.reducer.context().total_voting_power().get();
+        let current_view = self.reducer.current_tag().view();
         let mut prepare_quorums = Vec::new();
         let mut commit_quorums = Vec::new();
         for snapshot in self.reducer.vote_pool_snapshots() {
@@ -14718,6 +14737,12 @@ impl SumeragiV2Adapter {
             .reducer
             .timeout_pool_snapshots()
             .into_iter()
+            // The reducer deliberately retains the adjacent-future pool so a
+            // lagging peer can form a TC and catch up. Public liveness status
+            // remains a projection of the reported current view, however;
+            // exposing that private catch-up pool would violate the status
+            // schema's non-future-round contract.
+            .filter(|snapshot| snapshot.round.view() <= current_view)
             .map(|snapshot| {
                 Ok(wire::SumeragiV2TimeoutQuorumStatus {
                     round: self.registry.round_to_wire(snapshot.round),
@@ -14733,14 +14758,19 @@ impl SumeragiV2Adapter {
         let outbound_intents = self.outbound_intent_statuses()?;
         let work = self.local_work_status();
         let queues = self.adapter_queue_statuses();
-        let last_progress = self.last_progress.map(|(generation, round, transition)| {
-            wire::SumeragiV2ProgressTransitionStatus {
-                generation: generation.get(),
-                round: self.registry.round_to_wire(round),
-                transition,
-                age_ms: 0,
-            }
-        });
+        let last_progress = self
+            .last_progress
+            .filter(|(_, round, transition)| {
+                progress_transition_is_public_at_view(*transition, round.view(), current_view)
+            })
+            .map(
+                |(generation, round, transition)| wire::SumeragiV2ProgressTransitionStatus {
+                    generation: generation.get(),
+                    round: self.registry.round_to_wire(round),
+                    transition,
+                    age_ms: 0,
+                },
+            );
         let ignore_counts = ALL_IGNORE_REASONS
             .into_iter()
             .map(|(core, wire)| wire::SumeragiV2IgnoreCount {
@@ -16796,7 +16826,9 @@ impl SumeragiV2Adapter {
             | reducer::Event::ValidationCompleted { valid: false, .. }
             | reducer::Event::PersistenceFailed { .. } => None,
         };
-        if let Some((transition, round)) = progress {
+        if let Some((transition, round)) = progress
+            && progress_transition_is_public_at_view(transition, round.view(), current.view())
+        {
             self.last_progress = Some((self.reducer.generation(), round, transition));
         }
     }
@@ -18142,6 +18174,18 @@ const fn outbound_stage_rank(stage: wire::SumeragiV2OutboundIntentStage) -> u8 {
         wire::SumeragiV2OutboundIntentStage::Queued => 2,
         wire::SumeragiV2OutboundIntentStage::Sent => 3,
     }
+}
+const fn progress_transition_is_public_at_view(
+    transition: wire::SumeragiV2ProgressTransition,
+    progress_view: u64,
+    current_view: u64,
+) -> bool {
+    progress_view <= current_view
+        || matches!(
+            transition,
+            wire::SumeragiV2ProgressTransition::CommitQuorum
+                | wire::SumeragiV2ProgressTransition::DecisionPersisted
+        )
 }
 fn bounded_u32(value: usize) -> u32 {
     u32::try_from(value).unwrap_or(u32::MAX)

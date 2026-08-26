@@ -1375,6 +1375,9 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         lifecycle_run_inner_source,
         &[
             "executor.ready_to_finish()",
+            "if apply_terminal_settled && !ready_to_finish",
+            "sealed Ready classifier can settle that exact row",
+            "let _ = wake_rx.recv_timeout(IDLE_POLL);\n            continue;",
             "if !apply_terminal_settled && (!ready_to_finish || producer_turn.is_some())",
             "schedule_local_proposal(",
             "let finalization_ready =",
@@ -1879,6 +1882,37 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
     assert!(!source.contains("fn body_store("));
     assert!(!source.contains("fn adapter("));
     assert!(!source.contains("debug_assert!(startup_effects.is_empty())"));
+}
+
+#[test]
+fn apply_terminal_settlement_reenters_only_the_completion_corridor() {
+    let source = include_str!("v2_runner/lifecycle_run_inner.rs");
+    let terminal_tail = source_region(
+        source,
+        "let apply_terminal_settled = producer_claim.apply_terminal_settled();",
+        "if pending_queue_plan_admission_dirty.swap(false, Ordering::AcqRel)",
+    );
+
+    assert_source_tokens_in_order(
+        terminal_tail,
+        &[
+            "if apply_terminal_settled && !ready_to_finish",
+            "sealed Ready classifier can settle that exact row",
+            "Runtime,",
+            "Ingress, and Producer remain fenced by `ApplyTerminalSettled`",
+            "let _ = wake_rx.recv_timeout(IDLE_POLL);",
+            "continue;",
+        ],
+    );
+    assert_forbidden_source_tokens(
+        terminal_tail,
+        &[
+            "output_guard.close_admission_for_restart()",
+            "return Err(V2RunnerError::RestartRequired)",
+            "advance_executor_slice(",
+            "schedule_local_proposal(",
+        ],
+    );
 }
 
 #[test]

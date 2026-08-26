@@ -11835,14 +11835,14 @@ mod evidence_http_tests {
         let hash = transaction_hash(0x2f);
         for payload in [
             norito::json!({
-                "hash": hash.to_string(),
+                "hash": (hash.to_string()),
                 "status": { "kind": "Applied", "block_height": 9 },
                 "scope": "global",
                 "resolved_from": "state",
                 "legacy": true,
             }),
             norito::json!({
-                "hash": hash.to_string(),
+                "hash": (hash.to_string()),
                 "status": { "kind": "Applied", "block_height": 9, "legacy": true },
                 "scope": "global",
                 "resolved_from": "state",
@@ -19544,11 +19544,10 @@ impl Client {
             "Failed to get node capabilities",
             " ",
         )?;
-        if !exact_single_response_header(&resp, "content-type")?
-            .eq_ignore_ascii_case(APPLICATION_JSON)
-        {
+        let content_type = exact_single_response_header(&resp, "content-type")?;
+        if !Self::is_exact_json_content_type(content_type) {
             return Err(eyre!(
-                "node capabilities response must contain canonical JSON"
+                "node capabilities response must contain canonical JSON; received `{content_type}`"
             ));
         }
         norito::json::from_slice(resp.body()).wrap_err("failed to decode node capabilities JSON")
@@ -27018,6 +27017,20 @@ mod tests {
             NODE_CAPABILITIES_RESPONSE_MAX_BYTES
         );
         assert_single_accept_header(&store_guard[0], APPLICATION_JSON);
+    }
+    #[test]
+    fn get_node_capabilities_json_accepts_torii_utf8_json_content_type() {
+        let response = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .header("content-type", "application/json; charset=utf-8")
+            .body(compatible_capabilities_body().into_bytes())
+            .expect("capabilities response");
+        let (result, snapshots) = capture_requests(response, || {
+            client_with_base_url(base_url()).get_node_capabilities_json()
+        });
+        result.expect("Torii's canonical UTF-8 JSON response should decode");
+        assert_eq!(snapshots.len(), 1);
+        assert_single_accept_header(&snapshots[0], APPLICATION_JSON);
     }
     #[test]
     fn get_node_capabilities_json_rejects_ambiguous_representation() {

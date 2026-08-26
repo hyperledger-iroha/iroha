@@ -13373,15 +13373,14 @@ AsyncCandidateProducerContinuationRunnerPrefixStepOutcome(node) ==
 (*
 A certified signer-fence escape may expose its downstream verifier while a
 durable ingress owner remains parked.  It never replaces that owner.  Across
-a leader-wire control barrier, the certificate must name the same height
-context and may only close the owner's view or a later view.  Serve barriers
-need no round relation: the reducer independently authenticates the TC or
-CommitQC and the retained Serve carrier stays owned for its later normal
-retirement.
+any leader-wire barrier, the certificate must name the same height context and
+may only close the owner's view or a later view.  The reducer independently
+authenticates the TC or CommitQC, and the retained carrier stays owned for its
+later normal retirement.  Serve barriers need no round relation because they
+do not carry leader-wire round coordinates.
 *)
 AsyncCertifiedFenceEscapeAdvancesLeaderWire(item, owner) ==
   /\ AsyncCertifiedFenceEscapeItem(item)
-  /\ owner.phase \in AsyncControlKinds
   /\ AsyncCertifiedFenceEscapeContext(item) = owner.context
   /\ DeliveryHeight(item) = owner.height
   /\ DeliveryView(item) >= owner.view
@@ -13390,13 +13389,15 @@ AsyncLeaderWireIngressPrefixCleared(owner) ==
   \A predecessorSource \in AsyncIngressSources:
     owner.ingressPredecessors[predecessorSource] = 0
 
-\* Timeout control is a dependency only for a live control owner that it can
-\* advance.  A CertifiedResponse is not such an owner: it remains strict FIFO
-\* work and must leave the queue before a later TimeoutVote can be selected.
+\* Timeout control is a dependency only for a live view-scoped owner that it
+\* can advance.  Chunk is included because a blocked body must not prevent the
+\* shares which form its retiring TC.  A CertifiedResponse is request-scoped,
+\* remains strict FIFO work, and must leave the queue before a later
+\* TimeoutVote can be selected.
 AsyncTimeoutControlDependencyAdvancesLeaderWire(item, owner) ==
   /\ owner.phase
        \in {"Proposal", "PrepareVote", "CommitVote",
-            "PrepareQC", "CommitQC", "TimeoutVote"}
+            "PrepareQC", "CommitQC", "TimeoutVote", "Chunk"}
   /\ item.kind \in {"TimeoutVote", "TimeoutCertificate"}
   /\ AsyncControlItemContext(item) = owner.context
   /\ DeliveryHeight(item) = owner.height

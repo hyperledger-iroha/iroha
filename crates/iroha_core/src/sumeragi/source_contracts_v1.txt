@@ -2944,15 +2944,13 @@ required|adapter_preview|!next_reducer.ready_to_finish()|adapter preview omitted
 required|adapter_preview|core::mem::swap(&mut self.reducer, &mut next_reducer)|adapter preview omitted temporary exact-state installation
 required|adapter_preview|self.last_progress = prior_last_progress|adapter preview failed to restore progress before returning
 forbidden|adapter_preview|self.step(|adapter preview reopened direct reducer stepping
-required|runtime|authority.lineage() == LifecycleDecisionApplyLineageV1::Recovered|runtime lost its recovered-only empty-ingress predicate
-required|runtime|recovered_requires_empty_ingress && self.ingress.len() != 0|runtime no longer permits inert ingress only for live lineage
-required|executor_prepare|authority.lineage() == LifecycleDecisionApplyLineageV1::Recovered|executor lost its recovered-only empty-ingress predicate
+required|runtime|self.ingress.len() != 0|runtime no longer requires an empty serialized ingress cut before Apply completion
 required|executor_prepare|LifecycleDecisionApplyLineageV1::Live|executor preparation omitted the exact live owner branch
 required|executor_prepare|LifecycleDecisionApplyLineageV1::Recovered|executor preparation omitted the recovered no-live-owner branch
 required|executor_prepare|let lineage_owner_is_exact = match authority.lineage()|executor preparation stopped classifying the authority against its concrete lineage owner
 required|executor_prepare|owner.exactly_matches_completion(|live executor preparation stopped joining the complete retained Apply owner
 required|executor_prepare|self.live_lifecycle_decision_apply.is_none()|recovered executor preparation admitted substitution for a live owner
-required|executor_prepare|recovered_requires_empty_ingress && self.runtime.queued_commands() != 0|executor no longer keeps recovered completion ingress empty
+required|executor_prepare|self.runtime.queued_commands() != 0|executor no longer keeps every lifecycle Apply completion ingress cut empty
 required|executor_prepare|!lineage_owner_is_exact|executor preparation stopped failing closed on authority-only lineage substitution
 required|executor_commit|LifecycleDecisionApplyLineageV1::Live|finality commit omitted exact live owner consumption
 required|executor_commit|LifecycleDecisionApplyLineageV1::Recovered|finality commit omitted recovered non-substitution

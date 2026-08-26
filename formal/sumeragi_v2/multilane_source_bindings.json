@@ -7406,12 +7406,12 @@
           "symbol": "V2EffectExecutor<SerializedV2Runtime>::lifecycle_decision_apply_dispatch_available",
           "required_tokens": [
             "self.ensure_open()?",
-            "self.pending_tip_recovery.is_none() || self.runtime.queued_commands() == 0",
             "self.pending_work() == 0",
             "self.recovered_decision_fetch_request_index_is_exact_and_empty()",
             "self.retained_effect_batch.is_none()",
             "self.parked_effect_batch.is_none()",
             "self.finality_completion.is_none()",
+            "self.runtime.queued_commands() == 0",
             "self.runtime.lifecycle_decision_apply_dispatch_available()"
           ]
         },
@@ -7585,13 +7585,13 @@
           "symbol": "V2EffectExecutor<SerializedV2Runtime>::prepare_lifecycle_decision_apply_completion",
           "required_tokens": [
             "self.ensure_open()?",
-            "let recovered_requires_empty_ingress =",
             "let pending_recovery_is_exact =",
             "authority.exactly_matches_pending_kura_recovery(&self.context, evidence)",
             "let lineage_owner_is_exact =",
             "self.recovered_decision_fetch_request_index_is_exact_and_empty()",
             "|| !pending_recovery_is_exact",
             "|| self.finality_completion.is_some()",
+            "|| self.runtime.queued_commands() != 0",
             "|| !lineage_owner_is_exact",
             ".prepare_lifecycle_decision_apply_completion(authority)"
           ]

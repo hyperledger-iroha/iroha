@@ -17,7 +17,11 @@ from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, Tuple
 
 from ._account_id import decode_canonical_i105_account_id
 from .governance_proposals import GovernanceProposalKind
-from .norito_frame import validate_norito_frame, validate_opaque_norito_frame
+from .norito_frame import (
+    encode_norito_frame,
+    validate_norito_frame,
+    validate_opaque_norito_frame,
+)
 
 PARLIAMENT_API_VERSION_V1 = 1
 PARLIAMENT_ATTEMPT_DRAFT_PATH_V1 = "/v1/gov/parliament/attempts/draft"
@@ -50,8 +54,20 @@ PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA_V1 = (
 PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_V1 = (
     "iroha.torii.v1.parliament.timed_ovn_casting_proof.response"
 )
+PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA_HASH_HEX_V1 = (
+    "adccf322a5fcf43040e20bea238f55f3"
+)
+PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_HASH_HEX_V1 = (
+    "46d29299272433b1299646bee722bd11"
+)
+PARLIAMENT_TIMED_OVN_CASTING_PROOF_VERSION_V1 = 1
+PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_FLAGS_V1 = 0x02
+PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_PAYLOAD_ALIGNMENT_V1 = 8
+PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_PADDING_BYTES_V1 = 0
+PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_BYTES_V1 = 52
 
 PARLIAMENT_ATTEMPT_STATE_MAX_BYTES_V1 = 16 * 1024 * 1024
+PARLIAMENT_GOVERNANCE_ATTEMPT_SEQUENCE_MAX_V1 = 16
 PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_ARCHIVE_MAX_BYTES_V1 = 4 * 1024 * 1024
 PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_MAX_BYTES_V1 = 8 * 1024 * 1024
 # A maximal 32 x 2,858-byte freeze call is below 92 KiB before framing and
@@ -62,6 +78,7 @@ PARLIAMENT_TIMED_OVN_BALLOT_RECORD_BYTES_V1 = 2_858
 PARLIAMENT_TIMED_OVN_CORPUS_ENTRIES_V1 = 1_000
 PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1 = 32
 PARLIAMENT_TLE_MAX_COMMITTEE_SIZE_V1 = 31
+_PARLIAMENT_SORTITION_REQUESTS_PER_BATCH_MAX_V1 = 10
 
 _U16_MAX = (1 << 16) - 1
 _U32_MAX = (1 << 32) - 1
@@ -90,6 +107,35 @@ _AMBIENT_AUTH_HEADERS = frozenset(
         "x-iroha-operator-signature",
     }
 )
+
+
+def encode_parliament_timed_ovn_casting_proof_request_v1(
+    trusted_checkpoint_height: int,
+) -> bytes:
+    """Encode the sole canonical V1 checkpoint-promotion request frame."""
+
+    if type(trusted_checkpoint_height) is not int:
+        raise TypeError("trusted_checkpoint_height must be an unsigned 64-bit integer")
+    if trusted_checkpoint_height <= 0 or trusted_checkpoint_height > _U64_MAX:
+        raise ValueError("trusted_checkpoint_height must be within 1..=18446744073709551615")
+    payload = b"".join(
+        (
+            b"\x02",
+            PARLIAMENT_TIMED_OVN_CASTING_PROOF_VERSION_V1.to_bytes(2, "little"),
+            b"\x08",
+            trusted_checkpoint_height.to_bytes(8, "little"),
+        )
+    )
+    frame = encode_norito_frame(
+        payload,
+        type_name=PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA_V1,
+        flags=PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_FLAGS_V1,
+        payload_alignment=PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_PAYLOAD_ALIGNMENT_V1,
+    )
+    if len(frame) != PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_BYTES_V1:
+        raise AssertionError("canonical Parliament casting-proof request width drifted")
+    return frame
+
 
 _PARLIAMENT_ROUTES_V1 = frozenset(
     {
@@ -167,7 +213,7 @@ _CAPABILITIES_FIELDS = frozenset(
 _PUBLIC_TRANSITION_FIELDS = {
     "EscalateRisk": ("target",),
     "CompleteQualification": None,
-    "RegisterSortitionRequest": ("sequence", "request", "candidate_snapshot"),
+    "RegisterSortitionRequest": ("requests",),
     "ConsumeSortitionPulseBatch": (
         "request_ids",
         "beacon_session_id",
@@ -229,21 +275,6 @@ _DELIBERATION_PHASES = frozenset(
         "Vote",
     }
 )
-_ACCOUNT_CURVE_ALGORITHM_ORDER = {
-    1: 0,  # Ed25519
-    4: 1,  # secp256k1
-    3: 2,  # BLS12-381 normal
-    5: 3,  # BLS12-381 small
-    2: 4,  # ML-DSA
-    10: 5,
-    11: 6,
-    12: 7,
-    13: 8,
-    14: 9,
-    15: 10,  # SM2
-}
-
-
 @dataclass(frozen=True)
 class ParliamentInstructionDraftV1:
     """One canonical instruction skeleton for local transaction signing."""
@@ -512,39 +543,6 @@ def _canonical_account_bytes(
         raise TypeError(f"{context} must be a canonical domainless I105 account id") from exc
 
 
-def _account_order_key(canonical: bytes) -> Tuple[Any, ...]:
-    """Mirror `AccountController`/`PublicKey` ordering for a validated V1 address."""
-
-    controller_tag = canonical[1]
-    if controller_tag in (0, 2):
-        curve = canonical[2]
-        if controller_tag == 0:
-            key_length = canonical[3]
-            key_start = 4
-        else:
-            key_length = int.from_bytes(canonical[3:5], "big")
-            key_start = 5
-        public_key = canonical[key_start : key_start + key_length]
-        return (0, _ACCOUNT_CURVE_ALGORITHM_ORDER[curve], public_key)
-
-    version = canonical[2]
-    threshold = int.from_bytes(canonical[3:5], "big")
-    member_count = int.from_bytes(canonical[5:7], "big")
-    cursor = 7
-    members = []
-    for _ in range(member_count):
-        curve = canonical[cursor]
-        weight = int.from_bytes(canonical[cursor + 1 : cursor + 3], "big")
-        key_length = int.from_bytes(canonical[cursor + 3 : cursor + 5], "big")
-        key_start = cursor + 5
-        public_key = canonical[key_start : key_start + key_length]
-        members.append(
-            ((_ACCOUNT_CURVE_ALGORITHM_ORDER[curve], public_key), weight)
-        )
-        cursor = key_start + key_length
-    return (1, version, threshold, tuple(members))
-
-
 def _asset_definition_id(value: Any, context: str) -> str:
     literal = _text(value, context)
     if literal.count("#") != 1 or any(not part for part in literal.split("#")):
@@ -753,7 +751,6 @@ def _validate_sortition_request(
     value: Any,
     *,
     expected_governance_attempt_id: str,
-    candidate_count: Optional[int],
     context: str,
 ) -> Dict[str, Any]:
     request = _exact(
@@ -791,11 +788,9 @@ def _validate_sortition_request(
     request_candidate_count = _uint(
         request["candidate_count"],
         f"{context}.candidate_count",
-        PARLIAMENT_TIMED_OVN_CORPUS_ENTRIES_V1,
+        _U32_MAX,
         minimum=1,
     )
-    if candidate_count is not None and request_candidate_count != candidate_count:
-        raise ValueError(f"{context}.candidate_count differs from candidate_snapshot")
     target_seats = _uint(
         request["target_seats"],
         f"{context}.target_seats",
@@ -864,27 +859,38 @@ def _normalize_transition(
     if tag == "EscalateRisk":
         _tagged_unit(payload["target"], "tier", _RISK_TIERS, "target")
     if tag == "RegisterSortitionRequest":
-        candidates = payload["candidate_snapshot"]
+        requests = payload["requests"]
         if (
-            not isinstance(candidates, list)
-            or not candidates
-            or len(candidates) > PARLIAMENT_TIMED_OVN_CORPUS_ENTRIES_V1
+            not isinstance(requests, list)
+            or not requests
+            or len(requests) > _PARLIAMENT_SORTITION_REQUESTS_PER_BATCH_MAX_V1
         ):
-            raise ValueError("candidate_snapshot must contain one through 1000 accounts")
-        canonical = tuple(
-            _account_order_key(
-                _canonical_account_bytes(item, f"candidate_snapshot[{index}]")
+            raise ValueError("sortition request batch must contain one through 10 requests")
+        previous_body_index = -1
+        common_slot_and_count = None
+        for index, item in enumerate(requests):
+            entry_context = f"transition.RegisterSortitionRequest.payload.requests[{index}]"
+            entry = _exact(item, {"sequence", "request"}, entry_context)
+            _uint(entry["sequence"], f"{entry_context}.sequence", _U32_MAX)
+            request = _validate_sortition_request(
+                entry["request"],
+                expected_governance_attempt_id=expected_governance_attempt_id,
+                context=f"{entry_context}.request",
             )
-            for index, item in enumerate(candidates)
-        )
-        if any(left >= right for left, right in zip(canonical, canonical[1:])):
-            raise TypeError("candidate_snapshot must be unique and strictly ordered")
-        _validate_sortition_request(
-            payload["request"],
-            expected_governance_attempt_id=expected_governance_attempt_id,
-            candidate_count=len(canonical),
-            context="transition.RegisterSortitionRequest.payload.request",
-        )
+            body_index = _BODY_ORDER.index(request["body"])
+            if body_index <= previous_body_index:
+                raise TypeError("sortition request batch must be strictly body-ordered")
+            previous_body_index = body_index
+            slot_and_count = (
+                request["request_height"],
+                request["pulse_height"],
+                request["beacon_session_id"],
+                request["candidate_count"],
+            )
+            if common_slot_and_count is None:
+                common_slot_and_count = slot_and_count
+            elif slot_and_count != common_slot_and_count:
+                raise ValueError("sortition request batch must share one pulse slot and count")
     if tag == "ConsumeSortitionPulseBatch":
         _strict_id_list(payload["request_ids"], "request_ids")
     if tag == "AdvanceBodyPhase":
@@ -1055,6 +1061,7 @@ def _parse_body_states(
         "BallotCommitmentDeadlineExpired",
         "BallotReleasePulseUnavailable",
         "BallotOpeningDeadlineExpired",
+        "SortitionRetriesExhausted",
     }
     parsed = []
     for index, item in enumerate(value):
@@ -1592,7 +1599,6 @@ def _validate_certificate_outer(
         request = _validate_sortition_request(
             binding["sortition_request"],
             expected_governance_attempt_id=attempt["id"],
-            candidate_count=None,
             context=f"{context}.sortition_request",
         )
         if (
@@ -2552,7 +2558,11 @@ class ParliamentApiV1Mixin:
         request = {
             "version": PARLIAMENT_API_VERSION_V1,
             "proposal": normalized_proposal,
-            "attempt_sequence": _uint(attempt_sequence, "attempt_sequence", _U32_MAX),
+            "attempt_sequence": _uint(
+                attempt_sequence,
+                "attempt_sequence",
+                PARLIAMENT_GOVERNANCE_ATTEMPT_SEQUENCE_MAX_V1,
+            ),
         }
         payload = self._parliament_json(
             "POST",
@@ -2609,26 +2619,29 @@ class ParliamentApiV1Mixin:
     def get_parliament_timed_ovn_casting_proof_page_v1(
         self,
         ballot_attempt_id: str,
-        request_norito: bytes,
+        trusted_checkpoint_height: int,
         *,
         canonical_auth: Any,
     ) -> bytes:
         """Transport one canonical casting-proof page for native verification.
 
-        This validates only the request/response Norito framing and byte bounds.
+        The request is derived from the externally trusted nonzero checkpoint
+        height. This validates only request/response framing and byte bounds.
         The returned bytes MUST be passed with the external network, checkpoint
         context, and ballot ID to the ABI-23 native proof verifier before secret
         seed material is accessed.
         """
 
         ballot_id = _id(ballot_attempt_id, "ballot_attempt_id")
-        if type(request_norito) is not bytes or len(request_norito) > 4096:
-            raise TypeError("request_norito must be at most 4096 immutable bytes")
+        request_norito = encode_parliament_timed_ovn_casting_proof_request_v1(
+            trusted_checkpoint_height
+        )
         validate_norito_frame(
             request_norito,
             context="Parliament casting-proof request",
             expected_type_name=PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA_V1,
             expected_padding_length=0,
+            expected_flags=PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_FLAGS_V1,
         )
         path = PARLIAMENT_TIMED_OVN_CASTING_PROOF_PATH_V1.replace(
             "{ballot_attempt_id}", ballot_id
@@ -2648,6 +2661,7 @@ class ParliamentApiV1Mixin:
             context="Parliament casting-proof response",
             expected_type_name=PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_V1,
             expected_padding_length=0,
+            expected_flags=PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_FLAGS_V1,
         )
         return response
 
@@ -2752,12 +2766,20 @@ __all__ = [
     "PARLIAMENT_ATTEMPT_DRAFT_PATH_V1",
     "PARLIAMENT_ATTEMPT_READ_PATH_V1",
     "PARLIAMENT_ATTEMPT_STATE_MAX_BYTES_V1",
+    "PARLIAMENT_GOVERNANCE_ATTEMPT_SEQUENCE_MAX_V1",
     "PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_ARCHIVE_MAX_BYTES_V1",
     "PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_READ_PATH_V1",
     "PARLIAMENT_TIMED_OVN_CASTING_PROOF_PATH_V1",
+    "PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_BYTES_V1",
+    "PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_FLAGS_V1",
+    "PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_PADDING_BYTES_V1",
+    "PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_PAYLOAD_ALIGNMENT_V1",
+    "PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA_HASH_HEX_V1",
     "PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA_V1",
     "PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_MAX_BYTES_V1",
+    "PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_HASH_HEX_V1",
     "PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_V1",
+    "PARLIAMENT_TIMED_OVN_CASTING_PROOF_VERSION_V1",
     "PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1",
     "PARLIAMENT_TLE_PARTIAL_RELEASE_PATH_V1",
     "PARLIAMENT_TLE_RELEASE_CONTEXT_READ_PATH_V1",
@@ -2774,4 +2796,5 @@ __all__ = [
     "ParliamentTlePartialReleaseShareV1",
     "ParliamentTleReleaseContextResponseV1",
     "ParliamentTransitionDraftResponseV1",
+    "encode_parliament_timed_ovn_casting_proof_request_v1",
 ]

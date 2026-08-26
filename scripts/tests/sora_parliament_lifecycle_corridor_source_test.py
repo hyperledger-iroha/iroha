@@ -13,6 +13,7 @@ RUNNER = ROOT / "ci/check_sora_parliament_lifecycle.sh"
 WORKFLOW = ROOT / ".github/workflows/pr.yml"
 MANIFEST = ROOT / "integration_tests/Cargo.toml"
 CORRIDOR = ROOT / "integration_tests/tests/sora_parliament_lifecycle_smoke.rs"
+USER_CONFIG = ROOT / "crates/iroha_config/src/parameters/user.rs"
 TEST_NETWORK = ROOT / "crates/iroha_test_network/src/lib.rs"
 DAEMON = ROOT / "crates/irohad/src/main.rs"
 BEACON = ROOT / "crates/iroha_core/src/beacon.rs"
@@ -26,26 +27,32 @@ FAIL_CLOSED_NPOS_TEST_NAME = (
 PARLIAMENT_LIFECYCLE_TEST_NAME = (
     "four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn"
 )
-MANDATORY_NPOS_TEST_ATTRIBUTE = (
-    '#[tokio::test(flavor = "multi_thread", worker_threads = 4)]'
-)
+PARLIAMENT_NETWORK_TEST_ATTRIBUTE = "#[test]"
 PARLIAMENT_LIFECYCLE_TEST = re.compile(
-    rf"(?ms)^{re.escape(MANDATORY_NPOS_TEST_ATTRIBUTE)}\n"
-    rf"async fn {PARLIAMENT_LIFECYCLE_TEST_NAME}\(\) -> Result<\(\)> \{{\n"
+    rf"(?ms)^{re.escape(PARLIAMENT_NETWORK_TEST_ATTRIBUTE)}\n"
+    rf"fn {PARLIAMENT_LIFECYCLE_TEST_NAME}\(\) -> Result<\(\)> \{{\n"
     r".*?^\}\n"
-    rf"(?=\n{re.escape(MANDATORY_NPOS_TEST_ATTRIBUTE)}\n"
-    rf"async fn {MANDATORY_NPOS_TEST_NAME}\(\))"
+    rf"\nasync fn {PARLIAMENT_LIFECYCLE_TEST_NAME}_impl\(\)\s*"
+    r"-> Result<\(\)>\s*\{\n"
+    r".*?^\}\n"
+    rf"(?=\n{re.escape(PARLIAMENT_NETWORK_TEST_ATTRIBUTE)}\n"
+    rf"fn {MANDATORY_NPOS_TEST_NAME}\(\))"
 )
 MANDATORY_NPOS_TEST = re.compile(
-    rf"(?ms)^{re.escape(MANDATORY_NPOS_TEST_ATTRIBUTE)}\n"
-    rf"async fn {MANDATORY_NPOS_TEST_NAME}\(\) -> Result<\(\)>\n"
-    r"\{\n.*?^\}\n"
-    rf"(?=\n{re.escape(MANDATORY_NPOS_TEST_ATTRIBUTE)}\n"
-    rf"async fn {FAIL_CLOSED_NPOS_TEST_NAME}\(\))"
+    rf"(?ms)^{re.escape(PARLIAMENT_NETWORK_TEST_ATTRIBUTE)}\n"
+    rf"fn {MANDATORY_NPOS_TEST_NAME}\(\) -> Result<\(\)> \{{\n"
+    r".*?^\}\n"
+    rf"\nasync fn {MANDATORY_NPOS_TEST_NAME}_impl\(\)\s*"
+    r"-> Result<\(\)>\s*\{\n.*?^\}\n"
+    rf"(?=\n{re.escape(PARLIAMENT_NETWORK_TEST_ATTRIBUTE)}\n"
+    rf"fn {FAIL_CLOSED_NPOS_TEST_NAME}\(\))"
 )
 FAIL_CLOSED_NPOS_TEST = re.compile(
-    rf"(?ms)^{re.escape(MANDATORY_NPOS_TEST_ATTRIBUTE)}\n"
-    rf"async fn {FAIL_CLOSED_NPOS_TEST_NAME}\(\) -> Result<\(\)> \{{\n"
+    rf"(?ms)^{re.escape(PARLIAMENT_NETWORK_TEST_ATTRIBUTE)}\n"
+    rf"fn {FAIL_CLOSED_NPOS_TEST_NAME}\(\) -> Result<\(\)> \{{\n"
+    r".*?^\}\n"
+    rf"\nasync fn {FAIL_CLOSED_NPOS_TEST_NAME}_impl\(\)\s*"
+    r"-> Result<\(\)>\s*\{\n"
     r".*?^\}\n"
     r"(?=\n#\[test\]\nfn parliament_network_corridor_has_no_legacy_or_consensus_bypass_surface\(\))"
 )
@@ -82,6 +89,14 @@ SUCCESSOR_SEED_EQUALITY = (
 POSITIVE_BEACON_MODES = """constPOSITIVE_BEACON_SIGNER_MODES:[ParliamentBeaconSignerMode;VALIDATOR_COUNT]=[ParliamentBeaconSignerMode::Valid,ParliamentBeaconSignerMode::Valid,ParliamentBeaconSignerMode::Absent,ParliamentBeaconSignerMode::Invalid,];"""
 FAIL_CLOSED_BEACON_MODES = """constFAIL_CLOSED_BEACON_SIGNER_MODES:[ParliamentBeaconSignerMode;VALIDATOR_COUNT]=[ParliamentBeaconSignerMode::Valid,ParliamentBeaconSignerMode::Absent,ParliamentBeaconSignerMode::Absent,ParliamentBeaconSignerMode::Invalid,];"""
 FAIL_CLOSED_TIMEOUT = """letunexpected_pulse_height=tokio::time::timeout(FAIL_CLOSED_BEACON_OBSERVATION_WINDOW,network.peers()[0].once_block(pulse_height),).await;"""
+SORANET_POW_CORRIDOR_MARKERS = (
+    '.write(["network","soranet_handshake","pow","puzzle","memory_kib",],i64::from(iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB),)',
+    '.write(["network","soranet_handshake","pow","puzzle","time_cost"],1_i64,)',
+    '.write(["network","soranet_handshake","pow","puzzle","lanes"],1_i64,)',
+)
+SORANET_POW_REQUIRED_OVERRIDE = (
+    '["network","soranet_handshake","pow","required"]'
+)
 
 
 class ContractError(AssertionError):
@@ -242,6 +257,72 @@ def compact(source: str) -> str:
     return re.sub(r"\s+", "", source)
 
 
+def validate_required_bounded_soranet_pow(source: str) -> None:
+    """Require mandatory, supported-cost SoraNet admission in every corridor."""
+
+    tests = (
+        ("Parliament lifecycle", parliament_lifecycle_test(source)[1]),
+        ("mandatory NPoS", mandatory_npos_test(source)[1]),
+        ("fail-closed NPoS", fail_closed_npos_test(source)[1]),
+    )
+    compacted_source = compact(source)
+    require(
+        SORANET_POW_REQUIRED_OVERRIDE not in compacted_source,
+        "corridor must not override the hard-required SoraNet PoW admission field",
+    )
+    require(
+        "actual::SoranetPow{required:true," in compact(USER_CONFIG.read_text(encoding="utf-8")),
+        "user configuration no longer hard-requires SoraNet PoW admission",
+    )
+    for marker in SORANET_POW_CORRIDOR_MARKERS:
+        require(
+            compacted_source.count(marker) == len(tests),
+            f"SoraNet corridor marker is not present exactly once per builder: `{marker}`",
+        )
+    for label, test in tests:
+        compacted_test = compact(test)
+        for marker in SORANET_POW_CORRIDOR_MARKERS:
+            require(
+                compacted_test.count(marker) == 1,
+                f"{label} corridor lost exact mandatory bounded SoraNet PoW marker `{marker}`",
+            )
+
+
+def validate_consensus_sized_test_stacks(source: str) -> None:
+    """Require every four-validator corridor to run on the bounded large-stack harness."""
+
+    require(
+        source.count("const PARLIAMENT_NETWORK_STACK_BYTES: usize = 32 * 1024 * 1024;")
+        == 1,
+        "Parliament network stack size is not one exact 32 MiB constant",
+    )
+    tests = (
+        (
+            PARLIAMENT_LIFECYCLE_TEST_NAME,
+            parliament_lifecycle_test(source)[1],
+        ),
+        (MANDATORY_NPOS_TEST_NAME, mandatory_npos_test(source)[1]),
+        (FAIL_CLOSED_NPOS_TEST_NAME, fail_closed_npos_test(source)[1]),
+    )
+    for name, test in tests:
+        compacted = compact(test)
+        for marker in (
+            "std::thread::Builder::new()",
+            ".stack_size(PARLIAMENT_NETWORK_STACK_BYTES)",
+            "tokio::runtime::Builder::new_multi_thread()",
+            ".worker_threads(4)",
+            ".thread_stack_size(PARLIAMENT_NETWORK_STACK_BYTES)",
+        ):
+            require(
+                compacted.count(marker) == 1,
+                f"{name} lost exact consensus-sized stack marker `{marker}`",
+            )
+        require(
+            compacted.count(f"{name}_impl()") == 2,
+            f"{name} wrapper no longer invokes its exact async implementation",
+        )
+
+
 def validate_mandatory_npos_boundary(source: str) -> None:
     """Require the exact executable four-validator pre-boundary beacon corridor."""
 
@@ -323,7 +404,7 @@ def validate_fail_closed_npos_boundary(source: str) -> None:
         "unexpected_pulse_height.is_err()",
         "peer.is_running()",
         "assert_eq!(status.last_committed_height, predecessor_height);",
-        "assert_eq!(status.height_context.height, pulse_height);",
+        "assert_eq!(status.height, pulse_height);",
     )
     for marker in required:
         require(marker in test, f"fail-closed NPoS beacon test lost `{marker}`")
@@ -430,6 +511,8 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
             "MarkEnacted",
         ):
             require(retired not in corridor, f"corridor regained retired `{retired}`")
+        validate_required_bounded_soranet_pow(corridor)
+        validate_consensus_sized_test_stacks(corridor)
         validate_optional_parliament_pulse_progression(corridor)
         validate_beacon_mode_profiles(corridor)
         validate_mandatory_npos_boundary(corridor)
@@ -440,6 +523,53 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
             BEACON.read_text(encoding="utf-8"),
             BEACON_LIFECYCLE.read_text(encoding="utf-8"),
         )
+
+    def test_required_bounded_soranet_pow_rejects_adversarial_mutations(self) -> None:
+        corridor = CORRIDOR.read_text(encoding="utf-8")
+        mutations = {
+            "lifecycle PoW override introduced": mutate_parliament_lifecycle_test(
+                corridor,
+                ".with_config_layer(|layer| {",
+                '''.with_config_layer(|layer| {
+            layer.write(
+                ["network", "soranet_handshake", "pow", "required"],
+                false,
+            );''',
+            ),
+            "lifecycle memory cost raised": mutate_parliament_lifecycle_test(
+                corridor,
+                "i64::from(iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB)",
+                "64_i64 * 1024",
+            ),
+            "mandatory NPoS time cost raised": mutate_mandatory_npos_test(
+                corridor, '"time_cost"', '"time_cost_mutated"'
+            ),
+            "fail-closed NPoS lanes raised": mutate_fail_closed_npos_test(
+                corridor, '"lanes"', '"lanes_mutated"'
+            ),
+        }
+        for label, mutated in mutations.items():
+            with self.subTest(label=label), self.assertRaises(ContractError):
+                validate_required_bounded_soranet_pow(mutated)
+
+    def test_consensus_sized_test_stacks_reject_adversarial_mutations(self) -> None:
+        corridor = CORRIDOR.read_text(encoding="utf-8")
+        mutations = {
+            "lifecycle caller stack removed": mutate_parliament_lifecycle_test(
+                corridor, ".stack_size(PARLIAMENT_NETWORK_STACK_BYTES)"
+            ),
+            "mandatory worker stack removed": mutate_mandatory_npos_test(
+                corridor, ".thread_stack_size(PARLIAMENT_NETWORK_STACK_BYTES)"
+            ),
+            "fail-closed wrapper disconnected": mutate_fail_closed_npos_test(
+                corridor,
+                f"{FAIL_CLOSED_NPOS_TEST_NAME}_impl()",
+                f"{FAIL_CLOSED_NPOS_TEST_NAME}_disabled()",
+            ),
+        }
+        for label, mutated in mutations.items():
+            with self.subTest(label=label), self.assertRaises(ContractError):
+                validate_consensus_sized_test_stacks(mutated)
 
     def test_optional_pulse_progression_rejects_adversarial_mutations(self) -> None:
         corridor = CORRIDOR.read_text(encoding="utf-8")
@@ -481,8 +611,8 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
             ),
             "ignored test": mutate_mandatory_npos_test(
                 corridor,
-                MANDATORY_NPOS_TEST_ATTRIBUTE,
-                f"#[ignore]\n{MANDATORY_NPOS_TEST_ATTRIBUTE}",
+                PARLIAMENT_NETWORK_TEST_ATTRIBUTE,
+                f"#[ignore]\n{PARLIAMENT_NETWORK_TEST_ATTRIBUTE}",
             ),
             "permissioned consensus": mutate_mandatory_npos_test(
                 corridor, ".with_npos_consensus()", ".with_permissioned_consensus()"
@@ -564,8 +694,8 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
             ),
             "ignored test": mutate_fail_closed_npos_test(
                 corridor,
-                MANDATORY_NPOS_TEST_ATTRIBUTE,
-                f"#[ignore]\n{MANDATORY_NPOS_TEST_ATTRIBUTE}",
+                PARLIAMENT_NETWORK_TEST_ATTRIBUTE,
+                f"#[ignore]\n{PARLIAMENT_NETWORK_TEST_ATTRIBUTE}",
             ),
             "permissioned consensus": mutate_fail_closed_npos_test(
                 corridor,

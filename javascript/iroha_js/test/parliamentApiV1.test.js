@@ -17,6 +17,7 @@ import {
   PARLIAMENT_ATTEMPT_DRAFT_PATH_V1,
   PARLIAMENT_ATTEMPT_READ_PATH_V1,
   PARLIAMENT_ATTEMPT_STATE_MAX_BYTES_V1,
+  PARLIAMENT_GOVERNANCE_ATTEMPT_SEQUENCE_MAX_V1,
   PARLIAMENT_AUTOMATIC_EXECUTION_OUTCOMES_V1,
   PARLIAMENT_BODY_STATE_FIELDS_V1,
   PARLIAMENT_CERTIFICATE_BODY_BINDING_FIELDS_V1,
@@ -25,6 +26,16 @@ import {
   PARLIAMENT_PUBLIC_TRANSITIONS_V1,
   PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_READ_PATH_V1,
   PARLIAMENT_TIMED_OVN_CASTING_PROOF_PATH_V1,
+  PARLIAMENT_TIMED_OVN_CASTING_PROOF_VERSION_V1,
+  PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA_NAME_V1,
+  PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA_HASH_HEX_V1,
+  PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_NAME_V1,
+  PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_HASH_HEX_V1,
+  PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_FLAGS_V1,
+  PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_PAYLOAD_ALIGNMENT_V1,
+  PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_PADDING_BYTES_V1,
+  PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_BYTES_V1,
+  PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_MAX_BYTES_V1,
   PARLIAMENT_TIMED_OVN_BALLOT_RECORD_BYTES_V1,
   PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1,
   PARLIAMENT_TIMED_OVN_CORPUS_ENTRIES_V1,
@@ -35,6 +46,7 @@ import {
   ToriiClient,
   buildParliamentAttemptDraftRequestV1,
   buildParliamentTransitionDraftRequestV1,
+  encodeParliamentTimedOvnCastingProofRequestV1,
   normalizeParliamentAttemptDraftResponseV1,
   normalizeParliamentAttemptReadResponseV1,
   normalizeParliamentTimedOvnCastingContextResponseV1,
@@ -46,6 +58,7 @@ import {
   parliamentTimedOvnCastingProofPathV1,
   parliamentTlePartialReleasePathV1,
   parliamentTleReleaseContextReadPathV1,
+  validateParliamentTimedOvnCastingProofResponseFrameV1,
 } from "../src/index.js";
 
 const ATTEMPT_ID = "ab".repeat(32);
@@ -72,6 +85,18 @@ const fixturePath = fileURLToPath(
   new URL("../../../fixtures/governance/parliament_api_v1.json", import.meta.url),
 );
 
+function exactNoritoFrame(payload, schemaHashHex, { flags = 0x02, padding = 0 } = {}) {
+  const body = Buffer.from(payload);
+  const frame = Buffer.alloc(40 + padding + body.length);
+  frame.write("NRT0", 0, "ascii");
+  Buffer.from(schemaHashHex, "hex").copy(frame, 6);
+  frame.writeBigUInt64LE(BigInt(body.length), 23);
+  frame.writeBigUInt64LE(crc64Xz(body), 31);
+  frame[39] = flags;
+  body.copy(frame, 40 + padding);
+  return frame;
+}
+
 test("shared Parliament fixture pins routes, all transition inventories, and certificate supporters", () => {
   const fixture = JSON.parse(readFileSync(fixturePath, "utf8"));
   assert.equal(fixture.schema, "iroha.governance.parliament.api_fixture.v1");
@@ -90,6 +115,10 @@ test("shared Parliament fixture pins routes, all transition inventories, and cer
     transition_submit: PARLIAMENT_TRANSITION_SUBMIT_WIRE_ID_V1,
   });
   assert.equal(fixture.limits.attempt_state_bytes, PARLIAMENT_ATTEMPT_STATE_MAX_BYTES_V1);
+  assert.equal(
+    fixture.limits.governance_attempt_sequence_max,
+    PARLIAMENT_GOVERNANCE_ATTEMPT_SEQUENCE_MAX_V1,
+  );
   assert.equal(
     fixture.limits.timed_ovn_ballot_chunk_max_records,
     PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1,
@@ -157,12 +186,22 @@ test("shared Parliament fixture pins routes, all transition inventories, and cer
 test("request builders expose only canonical V1 fields and reject removed aliases", () => {
   const proposal = parliamentProposalFixtures()[0];
   assert.deepEqual(
-    buildParliamentAttemptDraftRequestV1(proposal, 7),
+    buildParliamentAttemptDraftRequestV1(
+      proposal,
+      PARLIAMENT_GOVERNANCE_ATTEMPT_SEQUENCE_MAX_V1,
+    ),
     {
       version: 1,
       proposal,
-      attempt_sequence: 7,
+      attempt_sequence: PARLIAMENT_GOVERNANCE_ATTEMPT_SEQUENCE_MAX_V1,
     },
+  );
+  assert.throws(
+    () => buildParliamentAttemptDraftRequestV1(
+      proposal,
+      PARLIAMENT_GOVERNANCE_ATTEMPT_SEQUENCE_MAX_V1 + 1,
+    ),
+    /attemptSequence/u,
   );
   assert.equal(
     parliamentAttemptReadPathV1(ATTEMPT_ID),
@@ -182,6 +221,91 @@ test("request builders expose only canonical V1 fields and reject removed aliase
       { transition: "CompleteQualification", payload: {} },
     ),
     /unknown, aliased, or missing/u,
+  );
+});
+
+test("casting-proof request and response frames match the shared Rust contract", () => {
+  const fixture = JSON.parse(readFileSync(fixturePath, "utf8"));
+  const wallet = fixture.timed_ovn_native_wallet;
+  const golden = wallet.casting_proof_request_golden;
+  assert.equal(
+    wallet.request_norito_schema,
+    PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA_NAME_V1,
+  );
+  assert.equal(
+    wallet.response_norito_schema,
+    PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_NAME_V1,
+  );
+  assert.equal(
+    wallet.casting_proof_request_schema_hash_hex,
+    PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA_HASH_HEX_V1,
+  );
+  assert.equal(
+    wallet.casting_proof_response_schema_hash_hex,
+    PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_HASH_HEX_V1,
+  );
+  assert.equal(wallet.casting_proof_request_version, PARLIAMENT_TIMED_OVN_CASTING_PROOF_VERSION_V1);
+  assert.equal(wallet.casting_proof_request_flags, PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_FLAGS_V1);
+  assert.equal(
+    wallet.casting_proof_request_payload_alignment,
+    PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_PAYLOAD_ALIGNMENT_V1,
+  );
+  assert.equal(
+    wallet.casting_proof_request_padding_bytes,
+    PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_PADDING_BYTES_V1,
+  );
+  assert.equal(
+    fixture.limits.timed_ovn_casting_proof_request_bytes,
+    PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_BYTES_V1,
+  );
+  assert.equal(
+    fixture.limits.timed_ovn_casting_proof_response_bytes,
+    PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_MAX_BYTES_V1,
+  );
+  assert.equal(golden.frame_bytes, PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_BYTES_V1);
+  const request = encodeParliamentTimedOvnCastingProofRequestV1(
+    golden.trusted_checkpoint_height,
+  );
+  assert.equal(request.toString("hex"), golden.frame_hex);
+  assert.equal(request.subarray(40).toString("hex"), golden.payload_hex);
+
+  for (const invalid of [0, -1, 2 ** 53, -1n, 1n << 64n, "17"]) {
+    assert.throws(
+      () => encodeParliamentTimedOvnCastingProofRequestV1(invalid),
+      /trustedCheckpointHeight/u,
+    );
+  }
+
+  const response = exactNoritoFrame(
+    Buffer.from([1]),
+    PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_HASH_HEX_V1,
+  );
+  assert.deepEqual(validateParliamentTimedOvnCastingProofResponseFrameV1(response), response);
+  assert.throws(
+    () => validateParliamentTimedOvnCastingProofResponseFrameV1(
+      exactNoritoFrame(Buffer.from([1]), PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA_HASH_HEX_V1),
+    ),
+    /schema hash/u,
+  );
+  assert.throws(
+    () => validateParliamentTimedOvnCastingProofResponseFrameV1(
+      exactNoritoFrame(
+        Buffer.from([1]),
+        PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_HASH_HEX_V1,
+        { flags: 0 },
+      ),
+    ),
+    /canonical Norito flags/u,
+  );
+  assert.throws(
+    () => validateParliamentTimedOvnCastingProofResponseFrameV1(
+      exactNoritoFrame(
+        Buffer.from([1]),
+        PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_HASH_HEX_V1,
+        { padding: 1 },
+      ),
+    ),
+    /exactly 0 bytes of header padding/u,
   );
 });
 
@@ -650,9 +774,13 @@ test("casting context is strict, phase-safe, and carries one bounded canonical a
   );
 });
 
-test("ToriiClient exposes all six canonical authenticated Parliament paths", async () => {
+test("ToriiClient exposes every canonical authenticated Parliament path", async () => {
   const canonicalAuth = { accountId: "alice-1@wonderland", privateKey: Buffer.alloc(32, 7) };
   const calls = [];
+  const castingProofResponse = exactNoritoFrame(
+    Buffer.from([1]),
+    PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_HASH_HEX_V1,
+  );
   const client = new ToriiClient("https://example.invalid");
   client._expectStatus = async () => {};
   client._readBoundedLosslessIntegerJson = async (response) => response.payload;
@@ -681,6 +809,12 @@ test("ToriiClient exposes all six canonical authenticated Parliament paths", asy
     if (path.endsWith("/casting-context")) {
       return { payload: timedOvnCastingContextResponse() };
     }
+    if (path.endsWith("/casting-proof")) {
+      return new Response(castingProofResponse, {
+        status: 200,
+        headers: { "Content-Type": "application/x-norito" },
+      });
+    }
     if (path.endsWith("/partial-release")) {
       const context = tleReleaseContextResponse();
       return { payload: tlePartialReleaseResponse(context) };
@@ -698,6 +832,10 @@ test("ToriiClient exposes all six canonical authenticated Parliament paths", asy
   );
   await client.getParliamentAttemptV1(ATTEMPT_ID, { canonicalAuth });
   await client.getParliamentTimedOvnCastingContextV1(ID(0x33), { canonicalAuth });
+  assert.deepEqual(
+    await client.getParliamentTimedOvnCastingProofPageV1(ID(0x33), 17, { canonicalAuth }),
+    castingProofResponse,
+  );
   const releaseContext = await client.getParliamentTleReleaseContextV1(ID(0x33), {
     canonicalAuth,
   });
@@ -716,14 +854,26 @@ test("ToriiClient exposes all six canonical authenticated Parliament paths", asy
     ["POST", PARLIAMENT_ATTEMPT_DRAFT_PATH_V1],
     ["GET", `/v1/gov/parliament/attempts/${ATTEMPT_ID}`],
     ["GET", `/v1/gov/parliament/ballots/${ID(0x33)}/casting-context`],
+    ["POST", `/v1/gov/parliament/ballots/${ID(0x33)}/casting-proof`],
     ["GET", `/v1/gov/parliament/ballots/${ID(0x33)}/release-context`],
     ["POST", `/v1/gov/parliament/ballots/${ID(0x33)}/partial-release`],
     ["POST", PARLIAMENT_TRANSITION_DRAFT_PATH_V1],
   ]);
   const attemptBody = JSON.parse(calls[0].options.body);
   assert.deepEqual(Object.keys(attemptBody), ["version", "proposal", "attempt_sequence"]);
-  assert.equal(calls[4].options.body, undefined);
-  const transitionBody = JSON.parse(calls[5].options.body);
+  assert.equal(
+    Buffer.from(calls[3].options.body).toString("hex"),
+    encodeParliamentTimedOvnCastingProofRequestV1(17).toString("hex"),
+  );
+  assert.deepEqual(calls[3].options.headers, {
+    "Content-Type": "application/x-norito",
+    Accept: "application/x-norito",
+    "Accept-Encoding": "identity",
+  });
+  assert.equal(calls[3].options.disableRetries, true);
+  assert.equal(calls[3].options.redirect, "error");
+  assert.equal(calls[5].options.body, undefined);
+  const transitionBody = JSON.parse(calls[6].options.body);
   assert.deepEqual(Object.keys(transitionBody), ["version", "governance_attempt_id", "transition"]);
 });
 
@@ -874,7 +1024,7 @@ function transitionFixture(tag) {
   const two = ID(2);
   const payloads = {
     EscalateRisk: { target: { tier: "Standard" } },
-    RegisterSortitionRequest: { sequence: 0, request: {}, candidate_snapshot: ["alice"] },
+    RegisterSortitionRequest: { requests: [{ sequence: 0, request: {} }] },
     ConsumeSortitionPulseBatch: { request_ids: [one], beacon_session_id: one, pulse_height: 1, pulse_id: two },
     BeginInvitationAcceptance: { election_attempt_id: one },
     FailBodyElectionNoRoster: { election_attempt_id: one },

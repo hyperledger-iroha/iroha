@@ -212,10 +212,11 @@ attempt = client.get_parliament_attempt_v1(
 )
 ```
 
-`get_parliament_timed_ovn_casting_proof_page_v1(...)` accepts an immutable
-canonical Norito request frame and returns an opaque, schema-bound Norito
-response frame. The lightweight Python package validates media type, schema,
-checksum, and the 8 MiB response bound only. Before any ballot seed is used,
+`get_parliament_timed_ovn_casting_proof_page_v1(...)` accepts an independently
+trusted nonzero checkpoint height, builds the sole canonical Norito request
+frame internally, and returns an opaque, schema-bound Norito response frame.
+The lightweight Python package validates media type, schema, flags, checksum,
+and the 8 MiB response bound only. Before any ballot seed is used,
 pass the response and the independently pinned network ID, checkpoint height,
 checkpoint context ID, and ballot-attempt ID to the ABI-23 native verifier.
 Python does not claim to verify finality, the ordinary-write witness,

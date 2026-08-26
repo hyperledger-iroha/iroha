@@ -527,6 +527,13 @@ jobs:
             >> "$GITHUB_PATH"
       - name: Sumeragi v2 TLAPS, bounded TLC, and production Verus gates
         run: bash ci/check_sumeragi_formal.sh
+      - name: SORA Parliament source contract and bounded TLC model
+        run: |
+          set -euo pipefail
+          python3 scripts/formal/check_sora_parliament_source_contract.py
+          java -cp "$TLA2TOOLS_JAR" tlc2.TLC \
+            -config formal/sora_parliament/SoraParliamentV1.cfg \
+            formal/sora_parliament/SoraParliamentV1.tla
       - name: Upload Sumeragi v2 formal logs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

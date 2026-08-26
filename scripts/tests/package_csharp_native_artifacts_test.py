@@ -293,6 +293,15 @@ class CSharpNativePackageTests(unittest.TestCase):
             workflow.index("  native-package-smoke:")
             : workflow.index("  kagemusha-native-bridge-sdk:")
         ]
+        self.assertIn(
+            'env:\n'
+            '  # Keep checkout bytes independent of the Windows runner\'s system Git policy.\n'
+            '  GIT_CONFIG_COUNT: "1"\n'
+            '  GIT_CONFIG_KEY_0: core.autocrlf\n'
+            '  GIT_CONFIG_VALUE_0: "false"\n\n'
+            'jobs:\n',
+            workflow,
+        )
         for runner, target, rid, library_name in reviewed_rows:
             row = (
                 f"          - os: {runner}\n"
