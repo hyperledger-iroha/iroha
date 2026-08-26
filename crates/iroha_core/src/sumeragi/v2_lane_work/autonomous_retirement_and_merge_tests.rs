@@ -588,6 +588,8 @@ fn authenticated_leader_candidate_recovers_exact_follower_share_after_restart() 
     assert_eq!(
         adapter
             .merge_signing_guard
+            .as_ref()
+            .expect("voting adapter has merge signing guard")
             .authorized_candidate(&merge_signing_context_for_test(&adapter, &candidate))
             .expect("read exact durable candidate"),
         Some((
@@ -630,6 +632,8 @@ fn authenticated_leader_candidate_recovers_exact_follower_share_after_restart() 
     assert_eq!(
         reopened
             .merge_signing_guard
+            .as_ref()
+            .expect("voting adapter has merge signing guard")
             .authorized_candidate(&merge_signing_context_for_test(&reopened, &candidate))
             .expect("read restarted exact durable candidate"),
         Some((recovered.message_digest, candidate, candidate_bytes,))
@@ -676,6 +680,8 @@ fn merge_share_transport_rejects_omission_nonleader_body_and_legacy_version() {
     assert_eq!(
         adapter
             .merge_signing_guard
+            .as_ref()
+            .expect("voting adapter has merge signing guard")
             .authorized_candidate(&merge_signing_context_for_test(&adapter, &candidate))
             .expect("read untouched signing guard"),
         None
@@ -768,6 +774,8 @@ fn merge_leader_candidate_rejects_substitution_outer_epoch_and_oversize_before_j
     assert_eq!(
         adapter
             .merge_signing_guard
+            .as_ref()
+            .expect("voting adapter has merge signing guard")
             .authorized_candidate(&merge_signing_context_for_test(&adapter, &candidate))
             .expect("read untouched signing guard"),
         None
@@ -828,6 +836,8 @@ fn authenticated_execution_candidate_rejects_noncanonical_carrier_context_header
     assert_eq!(
         adapter
             .merge_signing_guard
+            .as_ref()
+            .expect("voting adapter has merge signing guard")
             .authorized_candidate(&merge_signing_context_for_test(&adapter, &candidate))
             .expect("read untouched signing guard"),
         None
@@ -872,6 +882,8 @@ fn authenticated_relay_candidate_cannot_be_relabelled_as_execution() {
     assert_eq!(
         adapter
             .merge_signing_guard
+            .as_ref()
+            .expect("voting adapter has merge signing guard")
             .authorized_candidate(&merge_signing_context_for_test(&adapter, &candidate))
             .expect("read untouched signing guard"),
         None
@@ -922,6 +934,8 @@ fn durable_local_merge_claim_rejects_same_context_candidate_drift() {
     assert_eq!(
         adapter
             .merge_signing_guard
+            .as_ref()
+            .expect("voting adapter has merge signing guard")
             .authorized_digest(&merge_signing_context_for_test(&adapter, &candidate))
             .expect("read durable exact-context decision"),
         Some(first_digest),
@@ -992,6 +1006,8 @@ fn durable_local_merge_claim_rejects_conflict_after_adapter_reopen() {
     assert_eq!(
         reopened
             .merge_signing_guard
+            .as_ref()
+            .expect("voting adapter has merge signing guard")
             .authorized_digest(&merge_signing_context_for_test(&reopened, &candidate))
             .expect("read restarted durable decision"),
         Some(first_digest)
@@ -1364,6 +1380,8 @@ fn merge_signing_rejects_block_first_kura_ahead_crash_image() {
     assert_eq!(
         adapter
             .merge_signing_guard
+            .as_ref()
+            .expect("voting adapter has merge signing guard")
             .authorized_digest(&merge_signing_context_for_test(&adapter, &candidate))
             .expect("read durable signing guard"),
         None

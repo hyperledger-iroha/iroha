@@ -2627,7 +2627,7 @@ fn transaction_dataspace_routing_target_info_with_world<W: WorldReadOnly>(
 /// This is intentionally narrower than route resolution: it preserves the
 /// per-dataspace legs that make a native transaction require a coordinator
 /// route so block commitments can expose deterministic prepare/commit evidence.
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn native_amx_participant_dataspaces_with_world<W: WorldReadOnly>(
     tx: &dyn TransactionRoutingView,
     dataspace_catalog: &DataSpaceCatalog,

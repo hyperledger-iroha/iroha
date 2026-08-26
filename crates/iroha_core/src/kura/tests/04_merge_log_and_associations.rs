@@ -2302,6 +2302,7 @@ fn merge_log_respects_cache_capacity() {
     assert_eq!(snapshot[1].epoch_id, 3);
     assert_eq!(
         kura.merge_ledger_latest_snapshot(1)
+            .expect("read bounded merge snapshot")
             .iter()
             .map(|entry| entry.epoch_id)
             .collect::<Vec<_>>(),
@@ -2310,13 +2311,18 @@ fn merge_log_respects_cache_capacity() {
     );
     assert_eq!(
         kura.merge_ledger_latest_snapshot(2)
+            .expect("read bounded merge snapshot")
             .iter()
             .map(|entry| entry.epoch_id)
             .collect::<Vec<_>>(),
         vec![3, 2],
         "bounded diagnostics suffixes are newest-first and deterministic"
     );
-    assert!(kura.merge_ledger_latest_snapshot(0).is_empty());
+    assert!(
+        kura.merge_ledger_latest_snapshot(0)
+            .expect("read empty bounded merge snapshot")
+            .is_empty()
+    );
 }
 #[test]
 fn merge_log_append_rejects_canonical_storage_poison_without_effects() {

@@ -1073,10 +1073,7 @@ enum KagemushaDeviceAttestationEncoding {
 
     private static func encodeAssetDefinitionAddress(_ bytes: Data) -> Data {
         var writer = CompactNoritoWriter()
-        for byte in bytes {
-            writer.writeLength(1)
-            writer.writeUInt8(byte)
-        }
+        writer.writeByteFields(bytes)
         return writer.data
     }
 

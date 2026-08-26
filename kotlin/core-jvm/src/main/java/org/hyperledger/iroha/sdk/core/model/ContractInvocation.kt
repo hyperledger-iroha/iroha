@@ -1,8 +1,5 @@
 package org.hyperledger.iroha.sdk.core.model
 
-/** Maximum canonical argument-record size accepted by a contract invocation. */
-const val MAX_CONTRACT_ARGUMENT_RECORD_BYTES: Int = 1024 * 1024
-
 /**
  * By-reference invocation of a deployed contract instance.
  *
@@ -35,8 +32,8 @@ class ContractInvocation(
         require(entrypoint.isNotEmpty() && entrypoint == entrypoint.trim()) {
             "entrypoint must be an exact non-empty string"
         }
-        require((_arguments?.size ?: 0) <= MAX_CONTRACT_ARGUMENT_RECORD_BYTES) {
-            "arguments must not exceed $MAX_CONTRACT_ARGUMENT_RECORD_BYTES bytes"
+        require((_arguments?.size ?: 0) <= MAX_ARGUMENT_BYTES) {
+            "arguments must not exceed $MAX_ARGUMENT_BYTES bytes"
         }
     }
 
@@ -65,8 +62,8 @@ class ContractInvocation(
         }
 
     companion object {
-        /** Java-friendly alias for [MAX_CONTRACT_ARGUMENT_RECORD_BYTES]. */
-        const val MAX_ARGUMENT_BYTES: Int = MAX_CONTRACT_ARGUMENT_RECORD_BYTES
+        /** Maximum canonical argument-record size accepted by a contract invocation. */
+        const val MAX_ARGUMENT_BYTES: Int = 1024 * 1024
 
         private const val EXPECTED_CODE_HASH_BYTES = 32
     }

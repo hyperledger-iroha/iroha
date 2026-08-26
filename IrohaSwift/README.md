@@ -1307,7 +1307,7 @@ The confidential-v2 Swift wallet helpers expose
 `ConfidentialNoteDecryption.decryptNoteWithOwnerTag`,
 `PrivacyConfidentialWitnessV1`, typed witness encoders,
 `LocalZkAssetMerklePathProvider`, and
-`ToriiClient.getMerklePathForCommitment(asset:commitment:)`. Every note
+`ToriiClient.getMerklePathForCommitment(asset:commitment:canonicalAuth:)`. Every note
 decryption requires the configured exact `NetworkId` and derives the expected
 owner tag from the supplied spend key; diversified notes must use the explicit
 expected-owner-tag overload. Decrypted note plaintext rejects noncanonical

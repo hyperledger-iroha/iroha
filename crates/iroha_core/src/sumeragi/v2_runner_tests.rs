@@ -40,6 +40,7 @@ include!("tests/v2_runner_unsealed_01.rs");
 include!("tests/v2_runner_unsealed_02.rs");
 include!("tests/v2_runner_upstream_recovery.rs");
 include!("tests/v2_runner_lifecycle_startup_order.rs");
+
 #[test]
 fn recovered_lifecycle_factory_dependency_permit_retains_exact_signer_and_cadence() {
     let local_signer = KeyPair::random();

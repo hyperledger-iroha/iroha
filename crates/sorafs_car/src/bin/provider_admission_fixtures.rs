@@ -306,7 +306,7 @@ fn build_proposal(
     }
     .to_bytes()?;
     let (vrf_public, vrf_private) =
-        BlsNormal::keypair(KeyGenOption::UseSeed(params.provider_id.to_vec()))?;
+        BlsNormal::try_keypair(KeyGenOption::UseSeed(params.provider_id.to_vec()))?;
     let vrf_pair: KeyPair = (vrf_public, vrf_private).into();
     Ok(ProviderAdmissionProposalV1 {
         version: 1,

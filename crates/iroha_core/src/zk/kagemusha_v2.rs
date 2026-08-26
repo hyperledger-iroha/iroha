@@ -1629,35 +1629,6 @@ impl KagemushaPastaCycleOpaqueProverV4 {
             candidate_evidence_lab: true,
         })
     }
-    /// The legacy candidate loader cannot retain release-sized proving keys in
-    /// memory. Use [`Self::from_candidate_artifact_spool_loader`] instead.
-    #[cfg(feature = "kagemusha-candidate-evidence-lab")]
-    pub fn from_candidate_artifact_loader<F>(
-        candidate: &iroha_data_model::offline::KagemushaRecursiveSpendCandidateV4,
-        expected_candidate_sha256: [u8; 32],
-        expected_manifest_sha256: [u8; 32],
-        load: F,
-    ) -> Result<Self, String>
-    where
-        F: FnMut(
-            KagemushaPastaCycleParityV1,
-            KagemushaPastaCycleArtifactKindV4,
-        ) -> Result<
-            super::kagemusha_artifact_v4::KagemushaValidatedArtifactPayloadV4,
-            String,
-        >,
-    {
-        KagemushaArtifactLoaderBindingV4::candidate_evidence_lab(
-            candidate,
-            expected_candidate_sha256,
-            expected_manifest_sha256,
-        )?;
-        let _ = load;
-        Err(
-            "Kagemusha V5 candidate/in-memory proving-key loaders require authenticated spools"
-                .to_owned(),
-        )
-    }
     /// Construct a production prover from a core-qualified pinned source.
     pub fn from_qualified_artifact_source(
         source: Arc<super::kagemusha_artifact_source_v4::KagemushaQualifiedArtifactSourceV4>,

@@ -8046,10 +8046,6 @@ export interface IsoMessageWaitOptions {
   signal?: AbortSignal;
   retryProfile?: string;
   resolveOnAcceptedWithoutTransaction?: boolean;
-  /**
-   * Alias for {@link resolveOnAcceptedWithoutTransaction}.
-   */
-  resolveOnAccepted?: boolean;
   onPoll?: (event: IsoMessagePollEvent) => void | Promise<void>;
 }
 

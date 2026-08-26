@@ -23,6 +23,11 @@ impl FileWrap {
             opts.write(true).read(true).create(true).truncate(false);
         })
     }
+    fn open_read_only(path: PathBuf) -> Result<Self> {
+        Self::open_with(path, |opts| {
+            opts.read(true);
+        })
+    }
     fn try_io<F, T>(&mut self, f: F) -> Result<T>
     where
         F: FnOnce(&mut std::fs::File) -> std::io::Result<T>,
@@ -389,6 +394,11 @@ pub enum Error {
     },
     /// Kura hash-only history is provisional until a signed snapshot authenticates its lineage
     SnapshotBootstrapAuthenticationPending,
+    /// Kura auxiliary history `{subsystem}` is unavailable after emergency Fast startup; restart in Strict mode
+    EmergencyFastAuxiliaryUnavailable {
+        /// Deferred inventory or derived index that cannot safely be represented as empty.
+        subsystem: &'static str,
+    },
     /// Authenticated snapshot bootstrap finalization failed: {reason}
     SnapshotBootstrapFinalization {
         /// Exact deferred recovery or immutable context-publication failure.

@@ -104,8 +104,6 @@ mod lane_drain;
 pub mod merge;
 /// Authenticated bounded transfer of certified merge-ledger sidecars.
 pub mod merge_sidecar;
-/// Minimal Merkle Mountain Range for bridge commitments.
-pub mod mmr;
 /// Rebuildable, non-consensus Musubi description and keyword search projection.
 pub mod musubi_search;
 /// Native AMX participant attestation control plane.
@@ -190,14 +188,6 @@ pub fn validate_genesis_block(
     genesis_account: &iroha_data_model::account::AccountId,
 ) -> Result<(), block::InvalidGenesisError> {
     block::check_genesis_block(block, genesis_account)
-}
-#[cfg(test)]
-/// Test-only helpers shared across core modules.
-pub mod test_alias {
-    /// Historical helper retained for callers; account alias resolvers are no longer installed.
-    pub fn ensure() {
-        // No-op by design.
-    }
 }
 use core::time::Duration;
 use gossiper::TransactionGossip;

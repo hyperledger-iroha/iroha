@@ -56,6 +56,23 @@ EXPECTED_ALGORITHMS = (
 )
 
 
+def test_first_release_crypto_module_excludes_camel_case_aliases() -> None:
+    retired_aliases = (
+        "computeConfidentialRootV2",
+        "deriveConfidentialNextZeroPathV2",
+        "deriveConfidentialDiversifierV2",
+        "deriveConfidentialOwnerTagV2",
+        "deriveConfidentialNoteV2",
+        "buildConfidentialTransferProofV2",
+        "buildConfidentialTransferProofV2WithPaths",
+        "buildConfidentialUnshieldProofV3",
+        "buildConfidentialUnshieldProofV3WithPaths",
+    )
+    for name in retired_aliases:
+        assert name not in crypto_module.__all__
+        assert not hasattr(crypto_module, name)
+
+
 def _signed_byte_array(data: bytes) -> array[int]:
     return array("b", (byte if byte < 128 else byte - 256 for byte in data))
 

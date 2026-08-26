@@ -109,9 +109,7 @@ struct ToriiCanonicalTransactionDraft {
 
     var signatureBytes = CompactNoritoWriter()
     signatureBytes.writeUInt64LE(UInt64(signature.count))
-    for byte in signature {
-      signatureBytes.writeField(Data([byte]))
-    }
+    signatureBytes.writeByteFields(signature)
     var signatureSet = CompactNoritoWriter()
     signatureSet.writeField(signatureBytes.data)
     var signed = CompactNoritoWriter()

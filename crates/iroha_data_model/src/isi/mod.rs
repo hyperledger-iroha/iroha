@@ -1699,8 +1699,13 @@ pub(crate) fn decode_packed_instruction_payload<T>(
 where
     T: norito::codec::Decode + norito::core::NoritoSerialize,
 {
-    // The headerless `Decode` entry point resets layout flags to the V1 defaults. Packed
-    // instruction payloads must instead retain the flags advertised by their enclosing frame.
+    // Pin the effective layout snapshot across both decoder state carriers. A restored outer
+    // payload context can otherwise override the caller's active packed-layout guard when the
+    // nested field decoder installs its own context.
+    let flags =
+        norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags);
+    let _flags = norito::core::DecodeFlagsGuard::enter(flags);
+    let _payload = norito::core::PayloadCtxGuard::enter_with_flags(bytes, flags);
     let (decoded, used) = norito::core::decode_field_canonical::<T>(bytes)?;
     if used != bytes.len() {
         return Err(norito::core::Error::LengthMismatch);

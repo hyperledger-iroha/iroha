@@ -13,13 +13,25 @@ public final class UaidJsonParserTests {
 
   public static void main(final String[] args) {
     parsesPortfolioPayload();
-    parsesLegacyPortfolioPayload();
+    rejectsLegacyPortfolioPayload();
     rejectsNoncanonicalPortfolioQuantities();
+    rejectsNegativePortfolioTotalsModel();
     rejectsInvalidUaidLsb();
     rejectsFractionalEpoch();
     rejectsNegativeRustUnsignedFields();
     rejectsMalformedPresentStringFields();
     System.out.println("[IrohaAndroid] UaidJsonParserTests passed.");
+  }
+
+  private static void rejectsNegativePortfolioTotalsModel() {
+    for (final long[] totals : new long[][] {{-1L, 0L}, {0L, -1L}}) {
+      try {
+        new UaidPortfolioResponse.UaidPortfolioTotals(totals[0], totals[1]);
+      } catch (final IllegalArgumentException expected) {
+        continue;
+      }
+      throw new AssertionError("negative UAID portfolio totals were normalized instead of rejected");
+    }
   }
 
   private static void rejectsNegativeRustUnsignedFields() {
@@ -107,12 +119,10 @@ public final class UaidJsonParserTests {
     final UaidPortfolioResponse.UaidPortfolioAsset asset = account.assets().get(0);
     assert (assetDefinitionId + "#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV").equals(asset.assetId()) : "asset id mismatch";
     assert assetDefinitionId.equals(asset.assetDefinitionId()) : "definition id mismatch";
-    assert assetDefinitionId.equals(asset.asset()) : "legacy definition alias mismatch";
-    assert asset.scope() == null : "modern payload should not synthesize a legacy scope";
     assert "15".equals(asset.quantity()) : "quantity mismatch";
   }
 
-  private static void parsesLegacyPortfolioPayload() {
+  private static void rejectsLegacyPortfolioPayload() {
     final String assetDefinitionId = TestAssetDefinitionIds.SECONDARY;
     final String json =
         """
@@ -138,15 +148,7 @@ public final class UaidJsonParserTests {
         }
         """
             .formatted(assetDefinitionId);
-    final UaidPortfolioResponse response =
-        UaidJsonParser.parsePortfolio(json.getBytes(StandardCharsets.UTF_8));
-    final UaidPortfolioResponse.UaidPortfolioAsset asset =
-        response.dataspaces().get(0).accounts().get(0).assets().get(0);
-    assert assetDefinitionId.equals(asset.assetId()) : "legacy asset id fallback mismatch";
-    assert assetDefinitionId.equals(asset.assetDefinitionId()) : "legacy definition id mismatch";
-    assert assetDefinitionId.equals(asset.asset()) : "legacy asset accessor mismatch";
-    assert "global".equals(asset.scope()) : "legacy scope mismatch";
-    assert "15".equals(asset.quantity()) : "legacy quantity mismatch";
+    expectInvalidResponse(json, UaidJsonParser::parsePortfolio);
   }
 
   private static void rejectsNoncanonicalPortfolioQuantities() {

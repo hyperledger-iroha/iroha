@@ -895,6 +895,9 @@ pub(crate) enum CertifiedServePayloadStoreError {
         /// Maximum entries inspected during one open.
         capacity: usize,
     },
+    /// Emergency Fast startup owns an inert payload store and cannot mutate it.
+    #[error("Certified-Serve payload store is read-only during emergency Fast startup")]
+    EmergencyFastReadOnly,
     /// The store directory contains a name outside the closed format.
     #[error("unexpected Certified-Serve payload entry: {}", .0.display())]
     UnexpectedEntry(PathBuf),
@@ -1064,6 +1067,8 @@ pub(crate) struct CertifiedServePayloadStoreV1 {
     max_entries: usize,
     max_entry_bytes: u64,
     indexed: BTreeSet<CertifiedServePayloadId>,
+    /// Emergency Fast owners neither inventory nor mutate retained payload files.
+    emergency_read_only: bool,
     #[cfg(test)]
     fail_next_publish_directory_sync: bool,
 }
@@ -1081,6 +1086,13 @@ impl CertifiedServePayloadStoreInstanceIdentity {
     }
 }
 impl CertifiedServePayloadStoreV1 {
+    fn ensure_mutable(&self) -> Result<(), CertifiedServePayloadStoreError> {
+        if self.emergency_read_only {
+            return Err(CertifiedServePayloadStoreError::EmergencyFastReadOnly);
+        }
+        Ok(())
+    }
+
     /// Project a comparison-only seal before moving this exact store.
     pub(crate) fn instance_identity(&self) -> CertifiedServePayloadStoreInstanceIdentity {
         CertifiedServePayloadStoreInstanceIdentity(Arc::clone(&self.identity))
@@ -1104,6 +1116,7 @@ impl CertifiedServePayloadStoreV1 {
         if verified.context() != &self.context {
             return Err(CertifiedServePayloadRecoveryError::ForeignContext.into());
         }
+        self.ensure_mutable()?;
         let payloads = self.reload_payload_census_strict()?;
         if payloads.keys().copied().collect::<BTreeSet<_>>() != self.indexed {
             return Err(CertifiedServePayloadStoreError::AuthenticatedRecoveryCutMismatch.into());
@@ -1145,6 +1158,35 @@ impl CertifiedServePayloadStoreV1 {
     ) -> Result<(Self, CertifiedServePayloadRecoveryCut), CertifiedServePayloadStoreError> {
         Self::open_with_max_entries(root, context, MAX_CERTIFIED_SERVE_PAYLOADS_PER_HEIGHT)
     }
+    /// Open an empty, read-only owner without touching the current-height directory.
+    pub(crate) fn open_emergency_fast_read_only(
+        root: &Path,
+        context: &wire::HeightContext,
+    ) -> Result<(Self, CertifiedServePayloadRecoveryCut), CertifiedServePayloadStoreError> {
+        context
+            .validate()
+            .map_err(|error| CertifiedServePayloadStoreError::InvalidFrame {
+                path: root.to_path_buf(),
+                reason: format!("invalid height context: {error}"),
+            })?;
+        let store = Self {
+            identity: Arc::new(CertifiedServePayloadStoreInstanceIdentityMarker),
+            directory: root.join(STORE_DIRECTORY),
+            context: context.clone(),
+            max_entries: MAX_CERTIFIED_SERVE_PAYLOADS_PER_HEIGHT,
+            max_entry_bytes: derive_max_entry_bytes(context)?,
+            indexed: BTreeSet::new(),
+            emergency_read_only: true,
+            #[cfg(test)]
+            fail_next_publish_directory_sync: false,
+        };
+        let recovery = CertifiedServePayloadRecoveryCut {
+            context_id: context.id(),
+            height: context.height,
+            payloads: BTreeMap::new(),
+        };
+        Ok((store, recovery))
+    }
     /// Open an empty payload owner for a structural lifecycle fixture.
     ///
     /// Production must use [`Self::open`]. This skips wire-context validation
@@ -1168,6 +1210,7 @@ impl CertifiedServePayloadStoreV1 {
                 max_entries: MAX_CERTIFIED_SERVE_PAYLOADS_PER_HEIGHT,
                 max_entry_bytes: derive_max_entry_bytes(context)?,
                 indexed: BTreeSet::new(),
+                emergency_read_only: false,
                 fail_next_publish_directory_sync: false,
             },
             AuthenticatedCertifiedServePayloadRecoveryCut {
@@ -1203,6 +1246,7 @@ impl CertifiedServePayloadStoreV1 {
             max_entries,
             max_entry_bytes,
             indexed: BTreeSet::new(),
+            emergency_read_only: false,
             #[cfg(test)]
             fail_next_publish_directory_sync: false,
         };
@@ -1385,6 +1429,8 @@ impl CertifiedServePayloadStoreV1 {
         local_retainer: wire::ValidatorIndex,
     ) -> Result<DurableCertifiedServeAdmissionPublication, CertifiedServePayloadRetentionError>
     {
+        self.ensure_mutable()
+            .map_err(CertifiedServePayloadRetentionError::Unchanged)?;
         let request = authenticated.request();
         let id = CertifiedServePayloadId::from_request(request);
         if id.request_hash() != authenticated.request_hash() {
@@ -1468,6 +1514,7 @@ impl CertifiedServePayloadStoreV1 {
         &mut self,
         receipts: &[DurableCertifiedServeAdmissionReceipt],
     ) -> Result<(), CertifiedServePayloadStoreError> {
+        self.ensure_mutable()?;
         let mut ids = BTreeSet::new();
         for receipt in receipts {
             let id = receipt.id();
@@ -1510,6 +1557,7 @@ impl CertifiedServePayloadStoreV1 {
         authenticated: &mut AuthenticatedCertifiedServePayloadRecoveryCut,
         retained: &BTreeSet<CertifiedServePayloadId>,
     ) -> Result<(), CertifiedServePayloadStoreError> {
+        self.ensure_mutable()?;
         self.validate_authenticated_cut(authenticated)?;
         let cut_ids = authenticated
             .iter()
@@ -1624,6 +1672,11 @@ impl CertifiedServePayloadStoreV1 {
         {
             return Err(CertifiedServePayloadStoreError::AuthenticatedRecoveryCutMismatch);
         }
+        if self.emergency_read_only {
+            return (self.indexed.is_empty() && authenticated.payloads.is_empty())
+                .then_some(())
+                .ok_or(CertifiedServePayloadStoreError::AuthenticatedRecoveryCutMismatch);
+        }
         let cut_ids = authenticated
             .iter()
             .map(AuthenticatedRecoveredCertifiedServePayload::id)
@@ -1659,6 +1712,8 @@ impl CertifiedServePayloadStoreV1 {
         retained: &BTreeSet<CertifiedServePayloadId>,
     ) -> Result<AuthenticatedCertifiedServePayloadRecoveryCut, CertifiedServeTerminalPersistenceError>
     {
+        self.ensure_mutable()
+            .map_err(CertifiedServeTerminalPersistenceError::StoreInvariant)?;
         self.validate_authenticated_cut(&authenticated)
             .map_err(CertifiedServeTerminalPersistenceError::StoreInvariant)?;
         self.prune_authenticated_orphans(&mut authenticated, retained)
@@ -2197,6 +2252,8 @@ impl CertifiedServePayloadStoreV1 {
         &mut self,
         payload: &PersistedCertifiedServePayloadV1,
     ) -> Result<(), PersistPayloadError> {
+        self.ensure_mutable()
+            .map_err(PersistPayloadError::Unpublished)?;
         let path = self.path_for(payload.id());
         self.validate_recovered_payload(payload, &path)
             .map_err(PersistPayloadError::Unpublished)?;

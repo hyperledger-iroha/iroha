@@ -430,7 +430,7 @@ asset_id = client.compose_asset_id(
     scope="dataspace:42",
 )
 
-client.mint_asset_and_wait(
+client.mint_asset_quantity_and_wait(
     authority="<asset-owner>",
     fee_payment=mint_fee_payment,
     private_key_hex="<64-hex-private-key>",
@@ -438,7 +438,7 @@ client.mint_asset_and_wait(
     quantity="100",
 )
 
-client.transfer_assets_and_wait(
+client.transfer_assets_quantity_and_wait(
     authority="<payer>",
     fee_payment=transfer_fee_payment,
     private_key_hex="<64-hex-private-key>",

@@ -2,7 +2,7 @@
 #[derive(Debug, ReadConfig)]
 pub struct Kura {
     /// Startup validation policy for the canonical block journal.
-    #[config(env = "KURA_INIT_MODE", default)]
+    #[config(default)]
     pub init_mode: KuraInitMode,
     /// Directory where Kura stores blocks and auxiliary indices.
     #[config(

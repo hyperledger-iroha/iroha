@@ -192,23 +192,14 @@ __all__ = [
     "derive_confidential_keyset",
     "derive_confidential_keyset_from_hex",
     "compute_confidential_root_v2",
-    "computeConfidentialRootV2",
     "derive_confidential_next_zero_path_v2",
-    "deriveConfidentialNextZeroPathV2",
     "derive_confidential_diversifier_v2",
-    "deriveConfidentialDiversifierV2",
     "derive_confidential_owner_tag_v2",
-    "deriveConfidentialOwnerTagV2",
     "derive_confidential_note_v2",
-    "deriveConfidentialNoteV2",
     "build_confidential_transfer_proof_v2",
-    "buildConfidentialTransferProofV2",
     "build_confidential_transfer_proof_v2_with_paths",
-    "buildConfidentialTransferProofV2WithPaths",
     "build_confidential_unshield_proof_v3",
-    "buildConfidentialUnshieldProofV3",
     "build_confidential_unshield_proof_v3_with_paths",
-    "buildConfidentialUnshieldProofV3WithPaths",
     "confidential_transfer_v2_verifying_key_registration_payload_v1",
     "confidential_unshield_v3_verifying_key_registration_payload_v1",
     "privacy_bridge_abi_version",
@@ -1904,17 +1895,6 @@ def build_confidential_unshield_proof_v3_with_paths(
         vk_bytes,
     )
     return _confidential_native_result(result, "confidential unshield v3 path prover")
-
-
-computeConfidentialRootV2 = compute_confidential_root_v2
-deriveConfidentialNextZeroPathV2 = derive_confidential_next_zero_path_v2
-deriveConfidentialDiversifierV2 = derive_confidential_diversifier_v2
-deriveConfidentialOwnerTagV2 = derive_confidential_owner_tag_v2
-deriveConfidentialNoteV2 = derive_confidential_note_v2
-buildConfidentialTransferProofV2 = build_confidential_transfer_proof_v2
-buildConfidentialTransferProofV2WithPaths = build_confidential_transfer_proof_v2_with_paths
-buildConfidentialUnshieldProofV3 = build_confidential_unshield_proof_v3
-buildConfidentialUnshieldProofV3WithPaths = build_confidential_unshield_proof_v3_with_paths
 
 
 def confidential_transfer_v2_verifying_key_registration_payload_v1() -> Dict[str, Any]:

@@ -55,7 +55,7 @@ struct StubWebSocketFactory {
 
 func XCTAssertThrowsErrorAsync<T>(_ expression: @autoclosure () async throws -> T,
                                   _ message: @autoclosure () -> String = "",
-                                  expectation: (Error) -> Void) async {
+                                  expectation: (Error) -> Void = { _ in }) async {
     do {
         _ = try await expression()
         XCTFail(message())

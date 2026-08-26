@@ -1,5 +1,4 @@
 use crate::{ParseError, hex_decode};
-#[cfg(not(feature = "ffi_import"))]
 use blake2::{
     Blake2b,
     digest::{Digest, consts::U32},
@@ -12,9 +11,7 @@ use mv::json::JsonKeyCodec;
 use norito::json::{self, FastJsonWrite, JsonDeserialize};
 #[cfg(feature = "json")]
 use norito::literal;
-#[cfg(not(feature = "ffi_import"))]
 use sha2::Sha256;
-#[cfg(not(feature = "ffi_import"))]
 use sha3::Keccak256;
 use std::{borrow::ToOwned as _, format, hash, marker::PhantomData, str::FromStr, string::String};
 /// Hash of Iroha entities. Currently supports only blake2b-32.
@@ -54,13 +51,11 @@ impl Hash {
     }
 }
 /// Compute raw SHA-256 bytes without Iroha hash marker semantics.
-#[cfg(not(feature = "ffi_import"))]
 #[must_use]
 pub fn sha256(bytes: impl AsRef<[u8]>) -> [u8; Hash::LENGTH] {
     Sha256::digest(bytes.as_ref()).into()
 }
 /// Compute raw BLAKE3-256 bytes without Iroha hash marker semantics.
-#[cfg(not(feature = "ffi_import"))]
 #[must_use]
 pub fn blake3_256(bytes: impl AsRef<[u8]>) -> [u8; Hash::LENGTH] {
     *blake3::hash(bytes.as_ref()).as_bytes()
@@ -75,7 +70,6 @@ pub fn blake3_256(bytes: impl AsRef<[u8]>) -> [u8; Hash::LENGTH] {
 ///
 /// Returns the reader's I/O error, or [`std::io::ErrorKind::InvalidData`] when
 /// the observed byte count overflows or exceeds `max_bytes`.
-#[cfg(not(feature = "ffi_import"))]
 pub fn sha256_reader_bounded(
     mut reader: impl std::io::Read,
     max_bytes: u64,
@@ -108,7 +102,6 @@ pub fn sha256_reader_bounded(
     Ok((hasher.finalize().into(), total))
 }
 /// Compute raw Keccak-256 bytes without Iroha hash marker semantics.
-#[cfg(not(feature = "ffi_import"))]
 #[must_use]
 pub fn keccak256(bytes: impl AsRef<[u8]>) -> [u8; Hash::LENGTH] {
     Keccak256::digest(bytes.as_ref()).into()
@@ -495,7 +488,7 @@ impl<'a, T> norito::core::DecodeFromSlice<'a> for HashOf<T> {
         Ok((HashOf(hash, PhantomData), used))
     }
 }
-#[cfg(any(feature = "ffi_export", feature = "ffi_import"))]
+#[cfg(feature = "ffi_export")]
 mod ffi {
     //! Manual implementations of FFI related functionality
     use super::*;

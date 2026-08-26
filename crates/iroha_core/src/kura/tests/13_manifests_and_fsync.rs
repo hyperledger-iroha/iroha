@@ -487,11 +487,36 @@ fn prune_sidecars_remove_temps_and_fail_closed_on_non_file_suffix() {
     );
 }
 #[test]
+fn fast_init_does_not_create_a_missing_store_root() {
+    let parent = TempDir::new().unwrap();
+    let missing = parent.path().join("not-initialized");
+    let mut config = kura_config_for_path(&missing, BLOCKS_IN_MEMORY);
+    config.init_mode = InitMode::Fast;
+
+    Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+        .expect_err("Fast requires storage previously initialized by Strict mode");
+
+    assert!(
+        !missing.exists(),
+        "Fast startup must not create a missing Kura store root"
+    );
+}
+
+#[test]
 fn fast_init_defers_body_validation_without_rewriting_hashes() {
     let temp_dir = TempDir::new().unwrap();
     populate_store(&temp_dir, 3);
+    let merge_path = RuntimeLaneConfig::default()
+        .primary()
+        .merge_log_path(temp_dir.path());
+    let invalid_merge_tail = [0xFF, 0xFF, 0xFF];
+    std::fs::write(&merge_path, invalid_merge_tail).expect("forge partial merge-log tail");
+    let geometry_path = temp_dir.path().join("lane_geometry_journal.norito");
+    let invalid_geometry = [0xA5; 1024];
+    std::fs::write(&geometry_path, invalid_geometry).expect("forge opaque geometry journal");
     let hash_path = primary_blocks_dir(&temp_dir).join(HASHES_FILE_NAME);
-    let forged = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAA; Hash::LENGTH]));
+    let forged =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAA; Hash::LENGTH]));
     {
         let mut file = std::fs::OpenOptions::new()
             .write(true)
@@ -504,26 +529,131 @@ fn fast_init_defers_body_validation_without_rewriting_hashes() {
     }
     let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     config.init_mode = InitMode::Fast;
-    let (kura, BlockCount(count)) = Kura::open_test_kura_with_configured_lane_config(
-        &config,
-        &RuntimeLaneConfig::default(),
-    )
-    .expect("fast init trusts the stable committed journal");
+    let (kura, BlockCount(count)) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("fast init trusts the stable committed journal");
     assert_eq!(count, 3);
     assert_eq!(kura.canonical_body_bytes_read_for_test(), 0);
+    assert!(matches!(
+        kura.disk_usage_bytes(),
+        Err(Error::EmergencyFastAuxiliaryUnavailable {
+            subsystem: "disk-usage inventory"
+        })
+    ));
+    assert!(matches!(
+        kura.merge_carrier_records(),
+        Err(Error::EmergencyFastAuxiliaryUnavailable {
+            subsystem: "merge-carrier index"
+        })
+    ));
+    assert!(matches!(
+        kura.merge_ledger_all_entries(),
+        Err(Error::EmergencyFastAuxiliaryUnavailable {
+            subsystem: "merge ledger"
+        })
+    ));
+    assert!(matches!(
+        kura.merge_ledger_latest_snapshot(1),
+        Err(Error::EmergencyFastAuxiliaryUnavailable {
+            subsystem: "merge ledger"
+        })
+    ));
+    assert_eq!(
+        std::fs::read(&merge_path).expect("reread deferred merge log"),
+        invalid_merge_tail,
+        "Fast startup must not decode or repair the merge log"
+    );
+    assert_eq!(
+        std::fs::read(&geometry_path).expect("reread deferred geometry journal"),
+        invalid_geometry,
+        "Fast startup must not decode or repair lane geometry"
+    );
+    assert!(matches!(
+        kura.latest_autonomous_lane_block_artifacts_snapshot(
+            test_network_id(b"fast-startup"),
+            1,
+            |_| 0,
+        ),
+        Err(Error::EmergencyFastAuxiliaryUnavailable {
+            subsystem: "autonomous-lane latest-route pointers"
+        })
+    ));
+    assert!(
+        kura.latest_certified_frontier_storage_unknown
+            .load(Ordering::Acquire)
+    );
     let replay_plan = crate::sumeragi::plan_v2_startup_replay(kura.as_ref())
         .expect("Fast replay planning trusts historical journal metadata");
     assert_eq!(replay_plan.durable_height(), 3);
-    assert_eq!(replay_plan.complete_prefix_height(), 2);
-    assert_eq!(replay_plan.pending_tip_height(), Some(3));
+    assert_eq!(replay_plan.complete_prefix_height(), 3);
+    assert_eq!(replay_plan.pending_tip_height(), None);
+    assert!(replay_plan.validate_restored_state_height(0).is_err());
+    assert!(replay_plan.validate_restored_state_height(1).is_err());
+    assert!(replay_plan.validate_restored_state_height(2).is_err());
+    replay_plan
+        .validate_restored_state_height(3)
+        .expect("Fast requires a snapshot at the exact durable tip");
     assert_eq!(kura.canonical_body_bytes_read_for_test(), 0);
     assert_eq!(kura.startup_replay_historical_payload_reads_for_test(), 0);
     assert_eq!(kura.v2_finality_crypto_verifications_for_test(), 0);
+    {
+        let data = kura.block_data.lock();
+        assert!(matches!(
+            &*data,
+            BlockData::Deferred { len: 3, entries } if entries.is_empty()
+        ));
+    }
     assert_eq!(kura.get_block_hash(nonzero!(2_usize)), Some(forged));
+    assert_eq!(kura.get_block_height_by_hash(forged), None);
     assert!(kura.get_block(nonzero!(2_usize)).is_none());
     assert!(kura.canonical_storage_poisoned.load(Ordering::Acquire));
     let mut store = new_block_store(&temp_dir);
     assert_eq!(store.read_block_hashes(1, 1).unwrap(), vec![forged]);
+}
+#[test]
+fn fast_init_keeps_history_sparse_and_rejects_canonical_mutation() {
+    let temp_dir = TempDir::new().unwrap();
+    populate_store(&temp_dir, 3);
+    let mut config = kura_config_for_dir(&temp_dir, nonzero!(1_usize));
+    config.init_mode = InitMode::Fast;
+    let (kura, BlockCount(count)) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("open count-only Fast Kura");
+    assert_eq!(count, 3);
+    assert_eq!(kura.blocks_count(), 3);
+
+    let oldest_hash = kura.get_block_hash(nonzero!(1_usize)).unwrap();
+    let oldest = kura
+        .get_block(nonzero!(1_usize))
+        .expect("load an old body on demand");
+    assert_eq!(oldest.hash(), oldest_hash);
+    assert_eq!(
+        kura.get_block_height_by_hash(oldest_hash),
+        None,
+        "an old read must not grow the bounded Fast reverse index"
+    );
+    assert!(matches!(
+        &*kura.block_data.lock(),
+        BlockData::Deferred { len: 3, entries } if entries.is_empty()
+    ));
+
+    let tip = kura
+        .get_block(nonzero!(3_usize))
+        .expect("load the retained-window tip on demand");
+    assert_eq!(
+        kura.get_block_height_by_hash(tip.hash()),
+        Some(nonzero!(3_usize))
+    );
+    assert!(matches!(
+        &*kura.block_data.lock(),
+        BlockData::Deferred { len: 3, entries } if entries.len() <= 2
+    ));
+    assert!(matches!(
+        kura.prune_to_height(2),
+        Err(Error::EmergencyFastAuxiliaryUnavailable {
+            subsystem: "canonical mutation"
+        })
+    ));
 }
 #[test]
 fn fast_init_rejects_truncated_committed_body_without_mutation() {
@@ -553,18 +683,157 @@ fn fast_init_rejects_truncated_committed_body_without_mutation() {
     let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     config.init_mode = InitMode::Fast;
     assert!(
-        Kura::open_test_kura_with_configured_lane_config(
-            &config,
-            &RuntimeLaneConfig::default(),
-        )
-        .is_err()
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default(),)
+            .is_err()
     );
     let after = paths
         .iter()
         .map(std::fs::read)
         .collect::<std::io::Result<Vec<_>>>()
         .unwrap();
-    assert_eq!(after, before, "Fast preflight must not lower the marker or prune committed bytes");
+    assert_eq!(
+        after, before,
+        "Fast preflight must not lower the marker or prune committed bytes"
+    );
+}
+#[test]
+fn fast_init_leaves_unpublished_journal_suffix_for_strict_recovery() {
+    let temp_dir = TempDir::new().unwrap();
+    populate_store(&temp_dir, 3);
+    let blocks_dir = primary_blocks_dir(&temp_dir);
+    let index_path = blocks_dir.join(INDEX_FILE_NAME);
+    let hashes_path = blocks_dir.join(HASHES_FILE_NAME);
+    {
+        let mut index = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&index_path)
+            .unwrap();
+        index
+            .write_all(
+                &BlockIndex {
+                    start: 0,
+                    length: 1,
+                }
+                .encode(),
+            )
+            .unwrap();
+        let mut hashes = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&hashes_path)
+            .unwrap();
+        hashes.write_all(&[0xCC; Hash::LENGTH]).unwrap();
+    }
+    let before_index = std::fs::read(&index_path).unwrap();
+    let before_hashes = std::fs::read(&hashes_path).unwrap();
+
+    let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    config.init_mode = InitMode::Fast;
+    let (kura, BlockCount(count)) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("Fast must trust only the published marker boundary");
+    assert_eq!(count, 3);
+    assert_eq!(std::fs::read(&index_path).unwrap(), before_index);
+    assert_eq!(std::fs::read(&hashes_path).unwrap(), before_hashes);
+    drop(kura);
+
+    config.init_mode = InitMode::Strict;
+    let (_, BlockCount(count)) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("Strict restart must reconcile the unpublished suffix");
+    assert_eq!(count, 3);
+    assert_eq!(
+        std::fs::metadata(&index_path).unwrap().len(),
+        3 * BlockIndex::SIZE
+    );
+    assert_eq!(
+        std::fs::metadata(&hashes_path).unwrap().len(),
+        3 * SIZE_OF_BLOCK_HASH
+    );
+}
+#[test]
+fn fast_init_rejects_canonical_association_recovery_without_mutation() {
+    let temp_dir = TempDir::new().unwrap();
+    populate_store(&temp_dir, 3);
+    let stage_path = primary_blocks_dir(&temp_dir).join(CANONICAL_ASSOCIATION_STAGE_FILE_NAME);
+    let staged_bytes = b"Strict recovery required";
+    std::fs::write(&stage_path, staged_bytes).expect("forge pending association stage");
+
+    let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    config.init_mode = InitMode::Fast;
+    Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+        .expect_err("Fast must not decode or recover a canonical association stage");
+
+    assert_eq!(
+        std::fs::read(&stage_path).expect("pending stage remains"),
+        staged_bytes,
+        "Fast rejection must leave the recovery artifact untouched"
+    );
+}
+#[test]
+fn fast_init_rejects_prune_recovery_without_root_inventory() {
+    let temp_dir = TempDir::new().unwrap();
+    populate_store(&temp_dir, 3);
+    let intent_path = temp_dir.path().join(PRUNE_INTENT_FILE_NAME);
+    let intent_bytes = b"Strict recovery required";
+    std::fs::write(&intent_path, intent_bytes).expect("forge pending prune intent");
+
+    let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    config.init_mode = InitMode::Fast;
+    Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+        .expect_err("Fast must not inventory or recover prune artifacts");
+
+    assert_eq!(
+        std::fs::read(&intent_path).expect("pending intent remains"),
+        intent_bytes,
+        "Fast rejection must leave the recovery artifact untouched"
+    );
+}
+#[test]
+fn fast_init_poisoned_oversized_interior_index_before_body_read() {
+    let temp_dir = TempDir::new().unwrap();
+    populate_store(&temp_dir, 3);
+    let index_path = primary_blocks_dir(&temp_dir).join(INDEX_FILE_NAME);
+    let oversized = BlockIndex {
+        start: 0,
+        length: STRICT_INIT_MAX_BLOCK_BYTES.saturating_add(1),
+    };
+    {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&index_path)
+            .unwrap();
+        file.seek(SeekFrom::Start(BlockIndex::SIZE)).unwrap();
+        file.write_all(&oversized.encode()).unwrap();
+        file.flush().unwrap();
+    }
+
+    let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    config.init_mode = InitMode::Fast;
+    let (kura, BlockCount(count)) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("Fast init defers interior index validation");
+    assert_eq!(count, 3);
+    assert_eq!(kura.canonical_body_bytes_read_for_test(), 0);
+
+    assert!(kura.get_block(nonzero!(2_usize)).is_none());
+    assert!(kura.canonical_storage_poisoned.load(Ordering::Acquire));
+    assert_eq!(kura.canonical_body_bytes_read_for_test(), 0);
+    assert!(kura.block_store.lock().data_mmap.is_none());
+}
+#[test]
+fn block_height_hash_index_keeps_the_earliest_height() {
+    let first =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x11; Hash::LENGTH]));
+    let second =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x22; Hash::LENGTH]));
+    let block_data: BlockData = vec![(first, None), (second, None), (first, None)]
+        .into_iter()
+        .collect();
+
+    let index = Kura::build_block_height_index(&block_data);
+
+    assert_eq!(index.get(&first), Some(&nonzero!(1_usize)));
+    assert_eq!(index.get(&second), Some(&nonzero!(2_usize)));
 }
 #[test]
 fn commit_marker_prunes_excess_entries_on_init() {

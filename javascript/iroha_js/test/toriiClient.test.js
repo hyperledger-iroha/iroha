@@ -7671,32 +7671,7 @@ test("waitForIsoMessageStatus rejects non-boolean resolveOnAcceptedWithoutTransa
   );
 });
 
-test("waitForIsoMessageStatus accepts resolveOnAccepted alias", async () => {
-  let calls = 0;
-  const fetchImpl = async () => {
-    calls += 1;
-    return createResponse({
-      status: 200,
-      jsonData: createIsoStatusPayload({
-        message_id: "msg-alias",
-        status: "Accepted",
-        transaction_hash: null,
-      }),
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.waitForIsoMessageStatus("msg-alias", {
-    resolveOnAccepted: true,
-    pollIntervalMs: 0,
-    maxAttempts: 2,
-  });
-  assert.equal(calls, 1);
-  assert.equal(result.status, "Accepted");
-  assert.equal(result.transaction_hash, null);
-});
-
-test("waitForIsoMessageStatus rejects mismatched resolveOnAccepted flags", async () => {
+test("waitForIsoMessageStatus rejects the removed resolveOnAccepted alias", async () => {
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => {
       throw new Error("should not fetch");
@@ -7705,14 +7680,14 @@ test("waitForIsoMessageStatus rejects mismatched resolveOnAccepted flags", async
   await assert.rejects(
     () =>
       client.waitForIsoMessageStatus("msg-alias-conflict", {
+        // @ts-expect-error the first release exposes only the explicit option name
         resolveOnAccepted: true,
-        resolveOnAcceptedWithoutTransaction: false,
       }),
     (error) => {
       assert(error instanceof TypeError);
       assert.match(
         error.message,
-        /wait\.resolveOnAccepted and wait\.resolveOnAcceptedWithoutTransaction must match when both are provided/,
+        /contains unsupported fields: resolveOnAccepted/,
       );
       return true;
     },

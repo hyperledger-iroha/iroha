@@ -2804,9 +2804,7 @@ fn validate_parliament_attempt_draft_response(
     response: &ParliamentAttemptDraftResponseV1,
     request: &ParliamentAttemptDraftRequestV1,
 ) -> Result<iroha_data_model::isi::governance::CreateParliamentGovernanceAttemptV1> {
-    use iroha_data_model::isi::{
-        Instruction as _, governance::CreateParliamentGovernanceAttemptV1,
-    };
+    use iroha_data_model::isi::governance::CreateParliamentGovernanceAttemptV1;
 
     if request.version != PARLIAMENT_API_VERSION_V1 || response.version != PARLIAMENT_API_VERSION_V1
     {
@@ -2860,9 +2858,7 @@ fn validate_parliament_transition_draft_response(
     response: &ParliamentTransitionDraftResponseV1,
     request: &ParliamentTransitionDraftRequestV1,
 ) -> Result<iroha_data_model::isi::governance::SubmitParliamentLifecycleTransitionV1> {
-    use iroha_data_model::isi::{
-        Instruction as _, governance::SubmitParliamentLifecycleTransitionV1,
-    };
+    use iroha_data_model::isi::governance::SubmitParliamentLifecycleTransitionV1;
 
     request
         .validate_static()
@@ -19191,7 +19187,7 @@ impl Client {
             .headers()
             .get("content-type")
             .and_then(|v| v.to_str().ok().map(str::to_owned));
-        Ok((resp.body().clone(), ct))
+        Ok((resp.into_body(), ct))
     }
     /// Delete attachment by id via `/v1/zk/attachments/{id}`.
     /// # Errors
@@ -19731,19 +19727,6 @@ where
             }
         }
     }
-}
-#[allow(dead_code)]
-fn contains_tx_hash(
-    batch: &crate::data_model::query::QueryOutputBatchBoxTuple,
-    target: HashOf<SignedTransaction>,
-) -> bool {
-    use crate::data_model::query::QueryOutputBatchBox as Batch;
-    batch.iter().any(|b| match b {
-        Batch::CommittedTransaction(v) => v
-            .iter()
-            .any(|tx| tx.entrypoint_hash().as_ref() == target.as_ref()),
-        _ => false,
-    })
 }
 fn hashes_match(target: &HashOf<SignedTransaction>, entry_hash: impl AsRef<[u8]>) -> bool {
     target.as_ref() == entry_hash.as_ref()

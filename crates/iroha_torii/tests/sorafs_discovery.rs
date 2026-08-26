@@ -1360,7 +1360,7 @@ fn make_signed_advert(
         alpn_ids: vec!["h2".to_owned()],
         report: Vec::new(),
     };
-    let (vrf_public, vrf_private) = BlsNormal::keypair(KeyGenOption::UseSeed(provider_id.to_vec()))
+    let (vrf_public, vrf_private) = BlsNormal::try_keypair(KeyGenOption::UseSeed(provider_id.to_vec()))
         .expect("derive provider VRF fixture key");
     let vrf_pair: KeyPair = (vrf_public, vrf_private).into();
     let proposal = ProviderAdmissionProposalV1 {

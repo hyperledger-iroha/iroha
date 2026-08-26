@@ -24,16 +24,12 @@ use super::{
         production_durable_predecessor_identity_kernel,
     },
     v2_first_release_recovery::{LifecycleContext, LifecycleDigest},
-    v2_lane_work::{
-        durable_lane_completion_matches_finality_emergency_fast,
-        durable_lane_completion_matches_finality_during_startup,
-    },
+    v2_lane_work::durable_lane_completion_matches_finality_during_startup,
 };
 use crate::{
     kura::{
         CommitManifestBindingState, ExactReplayBoundary, Kura, KuraInstanceIdentity,
-        KuraV2CommitReceipt, V2StartupFinalityProjection, V2StartupFinalityVerificationSession,
-        V2StartupReplayStorageBinding,
+        KuraV2CommitReceipt, V2StartupFinalityVerificationSession, V2StartupReplayStorageBinding,
     },
     state::{
         State, WorldReadOnly, live_consensus_key_pop_for_peer,
@@ -202,11 +198,16 @@ impl V2StartupReplayPlan {
     /// # Errors
     ///
     /// Returns an error when WSV is ahead of Kura or lies beyond the authenticated prefix at a
-    /// height other than the one recoverable durable tip.
+    /// height other than the one recoverable durable tip. Emergency Fast mode also rejects a WSV
+    /// behind the complete prefix instead of silently turning startup into historical replay.
     pub fn validate_restored_state_height(
         &self,
         state_height: usize,
     ) -> Result<(), V2StartupReplayError> {
+        let emergency_fast = self
+            .storage_binding
+            .as_ref()
+            .is_some_and(|binding| binding.emergency_fast_boundary().is_some());
         if state_height > self.durable_height {
             return Err(V2StartupReplayError::StateHeightOutsidePlan {
                 state_height,
@@ -225,16 +226,30 @@ impl V2StartupReplayPlan {
                 pending_tip_height: self.pending_tip_height,
             });
         }
+        if emergency_fast && state_height < self.complete_prefix_height {
+            // Reconstructing WSV from historical bodies defeats the emergency startup bound and
+            // would consume auxiliary evidence that Fast deliberately did not authenticate.
+            // Require an already-current snapshot, or the exact predecessor of one pending tip.
+            return Err(V2StartupReplayError::StateHeightOutsidePlan {
+                state_height,
+                durable_height: self.durable_height,
+                complete_prefix_height: self.complete_prefix_height,
+                pending_tip_height: self.pending_tip_height,
+            });
+        }
         Ok(())
     }
 }
-/// Inspect every durable Kura height and select the only safe generic-replay boundary.
+/// Select the startup replay boundary for Kura's configured initialization mode.
 ///
-/// Full bodies are trusted for generic replay only after all replay/finality sidecars form one
-/// exact authenticated tuple. A missing tuple is a recoverable crash image solely at the durable
-/// tip; an interior gap, multiple-height suffix, impossible publication order, or corrupt binding
-/// fails closed. Only heights inside Kura's typed audited-import boundary are exempt from the
-/// sidecar requirement, whether or not a legacy body happens to remain locally available.
+/// Strict mode inspects every durable height. Full bodies are trusted for generic replay only
+/// after all replay/finality sidecars form one exact authenticated tuple. A missing tuple is a
+/// recoverable crash image solely at the durable tip; an interior gap, multiple-height suffix,
+/// impossible publication order, or corrupt binding fails closed. Only heights inside Kura's
+/// typed audited-import boundary are exempt from the sidecar requirement.
+///
+/// Emergency Fast mode trusts the stable canonical journal, checks only the active tip needed by
+/// recovery, and requires an already-current State snapshot so historical replay never begins.
 ///
 /// # Errors
 ///
@@ -265,9 +280,9 @@ pub fn plan_v2_startup_replay(kura: &Kura) -> Result<V2StartupReplayPlan, V2Star
 }
 /// Build a bounded emergency replay plan without scanning historical finality or replay sidecars.
 ///
-/// Fast mode trusts the durable canonical journal. A published immutable finality path makes the
-/// tip complete; otherwise only that tip is resumed through normal crash recovery. Blocks needed
-/// to advance an older State are still decoded and hash/lineage checked lazily during replay.
+/// Fast mode trusts the durable canonical journal and never enters consensus recovery. It requires
+/// State to be restored at the exact durable height and leaves all active-height and finality
+/// inspection to the next Strict restart.
 fn plan_emergency_fast_v2_startup_replay(
     kura: &Kura,
 ) -> Result<V2StartupReplayPlan, V2StartupReplayError> {
@@ -280,63 +295,17 @@ fn plan_emergency_fast_v2_startup_replay(
     )?;
     let durable_height = usize::try_from(count)?;
     let durable_boundary_hash = v2_emergency_fast_replay_boundary_hash(count, tip_hash);
-    let tip_height = u64::try_from(durable_height)?;
-    let tip_is_complete = tip_height == 0 || emergency_fast_tip_is_complete(kura, tip_height)?;
-    let pending_tip_height = (!tip_is_complete).then_some(tip_height);
-    let complete_prefix_height = if tip_is_complete {
-        durable_height
-    } else {
-        durable_height.saturating_sub(1)
-    };
     iroha_logger::warn!(
         durable_height,
-        complete_prefix_height,
-        pending_tip_height = ?pending_tip_height,
-        "Sumeragi emergency Fast startup skipped historical finality, checkpoint, and manifest audits"
+        "Sumeragi emergency Fast startup skipped all finality, checkpoint, manifest, and active-height recovery inspection"
     );
     Ok(V2StartupReplayPlan {
         durable_height,
         durable_boundary_hash,
         storage_binding: Some(storage_binding),
         audited_bootstrap_prefix_height: 0,
-        complete_prefix_height,
-        pending_tip_height,
-    })
-}
-fn emergency_fast_tip_is_complete(
-    kura: &Kura,
-    tip_height: u64,
-) -> Result<bool, V2StartupReplayError> {
-    if !kura.emergency_fast_tip_finality_is_published(tip_height)? {
-        return Ok(false);
-    }
-    let Some((artifact, _receipt)) = kura.v2_finality_artifact_with_receipt(tip_height)? else {
-        return Ok(false);
-    };
-    let Some(manifest) = kura.commit_manifest(tip_height)? else {
-        return Ok(false);
-    };
-    match kura.commit_manifest_binding_state(&manifest)? {
-        CommitManifestBindingState::Bound => {}
-        CommitManifestBindingState::Unbound => return Ok(false),
-        CommitManifestBindingState::Mismatched => {
-            return Err(V2StartupReplayError::InvalidReplayMetadata {
-                height: tip_height,
-                reason: "emergency Fast tip checkpoint binds a different commit manifest",
-            });
-        }
-    }
-    if !V2StartupFinalityProjection::from_artifact(&artifact).binds_manifest(&manifest) {
-        return Err(V2StartupReplayError::InvalidReplayMetadata {
-            height: tip_height,
-            reason: "emergency Fast tip manifest differs from finality",
-        });
-    }
-    durable_lane_completion_matches_finality_emergency_fast(kura, &artifact).map_err(|_| {
-        V2StartupReplayError::InvalidReplayMetadata {
-            height: tip_height,
-            reason: "emergency Fast tip lane evidence conflicts with finality",
-        }
+        complete_prefix_height: durable_height,
+        pending_tip_height: None,
     })
 }
 fn plan_v2_startup_replay_inner(

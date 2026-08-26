@@ -234,18 +234,10 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4: u32 = 23;
 /// Exact schema identifier for the degree-parameterized artifact manifest.
 pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V4: &str =
     "kagemusha.offline.recursive_spend.artifact_manifest.v4";
-/// Exact schema identifier for a tracked-lock-bound artifact manifest.
-pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V5: &str =
-    "kagemusha.offline.recursive_spend.artifact_manifest.v5";
 /// Exact schema of the independently pinned reviewed clean source closure.
 pub const KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_SCHEMA_V1: &str = "iroha.reviewed-source-closure.v1";
-/// Exact schema of a reviewed clean source closure whose root `Cargo.lock` is tracked.
-pub const KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_SCHEMA_V2: &str =
-    "iroha.reviewed-source-closure.tracked-lock.v2";
 /// Maximum untracked regular-file entries in a first-release source closure.
 pub const KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_MAX_UNTRACKED_FILES_V1: usize = 0;
-/// Maximum untracked regular-file entries in a tracked-lock source closure.
-pub const KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_MAX_UNTRACKED_FILES_V2: usize = 0;
 /// Maximum tracked root `Cargo.lock` bytes admitted by the V1 source closure.
 pub const KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_MAX_CARGO_LOCK_BYTES_V1: u64 = 16 * 1024 * 1024;
 /// Maximum tracked root `Cargo.lock` bytes admitted by the reviewed closure.
@@ -292,8 +284,6 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5: usize = 138;
 pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V4: u16 = 5;
 /// Version of the degree-parameterized recursive-spend artifact manifest.
 pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V4: u16 = 4;
-/// Version of the tracked-lock-bound recursive-spend artifact manifest.
-pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V5: u16 = 5;
 /// Version carried by every ABI-21 chain-facing request and artifact binding.
 pub const KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4: u16 = 4;
 /// Schema identifier for the immutable pre-evidence ABI-21 candidate record.
@@ -301,39 +291,20 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_SCHEMA_V4: &str =
     "kagemusha.offline.recursive_spend.candidate.v4";
 /// Version of the immutable pre-evidence ABI-21 candidate record.
 pub const KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_VERSION_V4: u16 = 4;
-/// Schema identifier for an immutable tracked-lock-bound candidate record.
-pub const KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_SCHEMA_V5: &str =
-    "kagemusha.offline.recursive_spend.candidate.v5";
-/// Version of the immutable tracked-lock-bound candidate record.
-pub const KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_VERSION_V5: u16 = 5;
 /// Schema identifier for the canonical actual-recursion qualification receipt.
 pub const KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_SCHEMA_V4: &str =
     "kagemusha.offline.recursive_spend.qualification_receipt.v4";
-/// Schema identifier for the canonical V5 actual-recursion qualification receipt.
-pub const KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_SCHEMA_V5: &str =
-    "kagemusha.offline.recursive_spend.qualification_receipt.v5";
 /// First-release version of the canonical actual-recursion qualification receipt.
 pub const KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_VERSION_V4: u16 = 1;
-/// Version of the canonical V5 actual-recursion qualification receipt.
-pub const KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_VERSION_V5: u16 = 5;
 /// Canonical candidate/final inventory file carrying actual recursive proof pairs.
 pub const KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4: &str =
     "recursive-step-two-qualification-v4.norito";
-/// Canonical V5 candidate/final inventory file carrying actual recursive proof pairs.
-pub const KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V5: &str =
-    "recursive-step-two-qualification-v5.norito";
 /// Maximum canonical qualification receipt size, including two bounded proof pairs.
 pub const KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_MAX_BYTES_V4: usize =
-    2 * KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4 as usize + 16 * 1024;
-/// Maximum canonical V5 qualification receipt size for the unchanged proof-pair payloads.
-pub const KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_MAX_BYTES_V5: usize =
     2 * KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4 as usize + 16 * 1024;
 /// Domain separator for the candidate-plus-receipt release identity.
 pub const KAGEMUSHA_RECURSIVE_SPEND_QUALIFIED_CANDIDATE_DOMAIN_V4: &[u8] =
     b"iroha:kagemusha:recursive-spend-qualified-candidate:v4";
-/// Domain separator for a V5 candidate-plus-receipt release identity.
-pub const KAGEMUSHA_RECURSIVE_SPEND_QUALIFIED_CANDIDATE_DOMAIN_V5: &[u8] =
-    b"iroha:kagemusha:recursive-spend-qualified-candidate:v5";
 /// Absolute first-release memory ceiling for candidate generation and publication.
 pub const KAGEMUSHA_RECURSIVE_SPEND_GENERATION_MEMORY_ABSOLUTE_MAX_BYTES_V4: u64 =
     64 * 1024 * 1024 * 1024;
@@ -343,54 +314,32 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_GENERATION_MEMORY_ENFORCEMENT_PROFILE_V4: &s
 /// Schema identifier for the configured Kagemusha release-signing policy.
 pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_POLICY_SCHEMA_V1: &str =
     "kagemusha.offline.recursive_spend.release_policy.v1";
-/// Historical version-one attestation schema identifier retained by policy tooling.
-pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_SCHEMA_V1: &str =
-    "kagemusha.offline.recursive_spend.release_attestation.v1";
 /// Schema identifier for a signed V4 recursive-spend release envelope.
 pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_SCHEMA_V4: &str =
     "kagemusha.offline.recursive_spend.release_attestation.v4";
-/// Schema identifier for a signed tracked-lock-bound V5 release envelope.
-pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_SCHEMA_V5: &str =
-    "kagemusha.offline.recursive_spend.release_attestation.v5";
 /// Schema identifier for an authenticated ABI-21/V4 promotion record.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PROMOTED_RELEASE_SCHEMA_V4: &str =
     "kagemusha.offline.recursive_spend.promoted_release.v4";
-/// Schema identifier for an authenticated tracked-lock-bound V5 promotion record.
-pub const KAGEMUSHA_RECURSIVE_SPEND_PROMOTED_RELEASE_SCHEMA_V5: &str =
-    "kagemusha.offline.recursive_spend.promoted_release.v5";
 /// Version-one domain separator retained by the configured release policy.
 pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_APPROVAL_DOMAIN_V1: &str =
     "iroha:kagemusha:recursive-spend-release-approval:v1";
 /// Domain separator for role-specific V4 release approvals.
 pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_APPROVAL_DOMAIN_V4: &str =
     "iroha:kagemusha:recursive-spend-release-approval:v4";
-/// Domain separator for role-specific V5 release approvals.
-pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_APPROVAL_DOMAIN_V5: &str =
-    "iroha:kagemusha:recursive-spend-release-approval:v5";
 /// Schema identifier for a signed, candidate-bound V4 cryptographic review.
 pub const KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_SCHEMA_V4: &str =
     "kagemusha.offline.recursive_spend.cryptographic_review.v4";
-/// Schema identifier for a signed, candidate-bound V5 cryptographic review.
-pub const KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_SCHEMA_V5: &str =
-    "kagemusha.offline.recursive_spend.cryptographic_review.v5";
 /// Domain separator signed by every V4 cryptographic reviewer.
 pub const KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_DOMAIN_V4: &str =
     "iroha:kagemusha:recursive-spend-cryptographic-review:v4";
-/// Domain separator signed by every V5 cryptographic reviewer.
-pub const KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_DOMAIN_V5: &str =
-    "iroha:kagemusha:recursive-spend-cryptographic-review:v5";
 /// Version of the canonical signed V4 cryptographic-review envelope.
 pub const KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_VERSION_V4: u16 = 4;
-/// Version of the canonical signed V5 cryptographic-review envelope.
-pub const KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_VERSION_V5: u16 = 5;
 /// Exact number of independently evidenced checks in a production V4 review.
 pub const KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_CHECK_COUNT_V4: usize = 6;
 /// Current release policy, attestation, and promotion-record version.
 pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V1: u16 = 1;
 /// Signed-envelope version for explicitly degree-parameterized V4 releases.
 pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V4: u16 = 4;
-/// Signed-envelope version for tracked-lock-bound V5 releases.
-pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V5: u16 = 5;
 /// Defensive upper bound for authorized signers or supplied approvals.
 pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_APPROVALS_V1: usize = 64;
 /// Maximum signed review or physical-device evidence file accepted by promotion tooling.
@@ -399,27 +348,15 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_EVIDENCE_BYTES_V1: usize = 16 * 
 pub const KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_MAX_BYTES_V4: usize = 1024 * 1024;
 /// Maximum canonical ABI-21/V4 promotion record accepted by release consumers.
 pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROMOTION_BYTES_V4: usize = 1024 * 1024;
-/// Historical version-one attestation file name retained by policy tooling.
-pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_FILE_NAME_V1: &str =
-    "release-attestation.norito";
 /// Canonical Norito file containing the signed V4 release envelope.
 pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_FILE_NAME_V4: &str =
     "release-attestation-v4.norito";
-/// Canonical Norito file containing the signed V5 release envelope.
-pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_FILE_NAME_V5: &str =
-    "release-attestation-v5.norito";
-/// Canonical Norito file containing the V5 promotion record.
-pub const KAGEMUSHA_RECURSIVE_SPEND_PROMOTED_RELEASE_FILE_NAME_V5: &str =
-    "promotion-record-v5.norito";
 /// Canonical opaque file containing signed physical-device benchmark evidence.
 pub const KAGEMUSHA_RECURSIVE_SPEND_BENCHMARK_EVIDENCE_FILE_NAME_V1: &str =
     "physical-device-benchmark.evidence";
 /// Canonical Norito file containing the signed, candidate-bound cryptographic review.
 pub const KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_FILE_NAME_V1: &str =
     "cryptographic-review.evidence";
-/// Canonical Norito file containing the signed V5 candidate-bound cryptographic review.
-pub const KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_FILE_NAME_V5: &str =
-    "cryptographic-review-v5.norito";
 /// Version of the canonical authenticated V4 circuit configuration.
 pub const KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4: u16 = 5;
 /// Authenticated fixed degree of the complete compact V5 Step circuit.
@@ -763,16 +700,6 @@ pub struct KagemushaAuthenticatedReleaseV4 {
     release_policy_sha256: [u8; 32],
     approved_signers: Vec<KagemushaRecursiveSpendApprovedSignerV1>,
 }
-/// Runtime proof that a V5 manifest, evidence set, and role thresholds were authenticated.
-/// Private fields prevent V4 or unsigned material from becoming a tracked-lock-bound V5 release.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct KagemushaAuthenticatedReleaseV5 {
-    manifest: KagemushaRecursiveSpendArtifactManifestV5,
-    manifest_sha256: [u8; 32],
-    release_attestation_sha256: [u8; 32],
-    release_policy_sha256: [u8; 32],
-    approved_signers: Vec<KagemushaRecursiveSpendApprovedSignerV1>,
-}
 fn kagemusha_poseidon_preimage<T: Encode>(
     value: &T,
 ) -> Result<[u8; Hash::LENGTH], KagemushaValidationError> {
@@ -851,11 +778,9 @@ include!("kagemusha_model.rs");
 mod kagemusha_release_verifier;
 use kagemusha_release_verifier::verifying_key_commitment_v1;
 pub use kagemusha_release_verifier::{
-    kagemusha_recursive_spend_verifier_key_id_v4, kagemusha_recursive_spend_verifier_key_id_v5,
+    kagemusha_recursive_spend_verifier_key_id_v4,
     kagemusha_recursive_spend_verifier_owner_manifest_id_v4,
-    kagemusha_recursive_spend_verifier_owner_manifest_id_v5,
     kagemusha_recursive_spend_verifier_public_inputs_schema_hash_v4,
-    kagemusha_recursive_spend_verifier_public_inputs_schema_hash_v5,
 };
 /// On-chain platform-attested registration for a Kagemusha device key.
 ///
@@ -3089,7 +3014,7 @@ impl KagemushaReviewedSourceClosureV1 {
         Ok(Sha256::digest(self.canonical_descriptor_bytes()?).into())
     }
 }
-include!("kagemusha_release_v5.rs");
+include!("kagemusha_release_v4.rs");
 impl KagemushaRecursiveSpendArtifactBindingV4 {
     /// Validate a complete authenticated V4 manifest identity.
     ///
@@ -3851,423 +3776,6 @@ mod kagemusha_v4_artifact_contract_tests {
             Sha256::digest(format!("{entry_json}\n")).into();
         recompute_combined(&mut untracked);
         assert!(untracked.validate().is_err());
-    }
-    fn reviewed_source_closure_v2() -> KagemushaReviewedSourceClosureV2 {
-        let source_commit = "234567890abcdef1234567890abcdef123456789".to_owned();
-        let empty_sha256: [u8; 32] = Sha256::digest([]).into();
-        let tracked_cargo_lock = KagemushaReviewedTrackedCargoLockV2 {
-            path: "Cargo.lock".to_owned(),
-            git_blob_oid: "34567890abcdef1234567890abcdef1234567890".to_owned(),
-            git_mode: "100644".to_owned(),
-            sha256: digest(b"reviewed tracked Cargo.lock"),
-            size_bytes: 315_333,
-        };
-        let combined_source_fingerprint_sha256 = kagemusha_reviewed_source_fingerprint_v2(
-            empty_sha256,
-            empty_sha256,
-            &tracked_cargo_lock,
-        );
-        KagemushaReviewedSourceClosureV2 {
-            schema: KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_SCHEMA_V2.to_owned(),
-            base_commit: source_commit.clone(),
-            source_commit,
-            source_git_tree: "4567890abcdef1234567890abcdef12345678901".to_owned(),
-            source_repo_dirty: false,
-            source_tree_sha256: digest(b"v5 signed tracked source tree"),
-            tracked_binary_diff_sha256: empty_sha256,
-            untracked_file_count: 0,
-            untracked_path_mode_blob_oid_manifest: Vec::new(),
-            untracked_path_mode_blob_oid_manifest_sha256: empty_sha256,
-            tracked_cargo_lock,
-            combined_source_fingerprint_sha256,
-        }
-    }
-    #[test]
-    fn tracked_lock_source_closure_v2_is_canonical_and_has_no_ignored_shape() {
-        let closure = reviewed_source_closure_v2();
-        closure.validate().expect("valid tracked-lock V2 closure");
-        let bytes = closure
-            .canonical_descriptor_bytes()
-            .expect("canonical tracked-lock descriptor");
-        assert_eq!(bytes.last(), Some(&b'\n'));
-        assert!(!bytes[..bytes.len() - 1].contains(&b'\n'));
-        assert!(!bytes.contains(&b'\r'));
-        let text = core::str::from_utf8(&bytes).expect("ASCII descriptor");
-        assert!(text.contains("\"tracked_cargo_lock\":{\"git_blob_oid\":"));
-        assert!(text.contains("\"path\":\"Cargo.lock\""));
-        assert!(!text.contains("ignored"));
-        assert_eq!(
-            closure
-                .canonical_descriptor_sha256()
-                .expect("canonical descriptor digest"),
-            <[u8; 32]>::from(Sha256::digest(bytes))
-        );
-        let json = norito::json::to_json(&closure).expect("serialize V2 closure JSON");
-        let decoded: KagemushaReviewedSourceClosureV2 =
-            norito::json::from_str(&json).expect("decode V2 closure JSON");
-        assert_eq!(decoded, closure);
-    }
-    #[test]
-    fn tracked_lock_source_closure_v2_rejects_dirty_external_and_malformed_lock_shapes() {
-        let mut closure = reviewed_source_closure_v2();
-        closure.source_repo_dirty = true;
-        assert!(closure.validate().is_err());
-        let mut closure = reviewed_source_closure_v2();
-        closure.tracked_binary_diff_sha256 = digest(b"forbidden tracked diff");
-        closure.combined_source_fingerprint_sha256 = kagemusha_reviewed_source_fingerprint_v2(
-            closure.tracked_binary_diff_sha256,
-            closure.untracked_path_mode_blob_oid_manifest_sha256,
-            &closure.tracked_cargo_lock,
-        );
-        assert!(closure.validate().is_err());
-        let mut closure = reviewed_source_closure_v2();
-        closure.untracked_file_count = 1;
-        assert!(closure.validate().is_err());
-        for bad_path in [".cargo/Cargo.lock", "/Cargo.lock", "cargo.lock"] {
-            let mut closure = reviewed_source_closure_v2();
-            closure.tracked_cargo_lock.path = bad_path.to_owned();
-            closure.combined_source_fingerprint_sha256 = kagemusha_reviewed_source_fingerprint_v2(
-                closure.tracked_binary_diff_sha256,
-                closure.untracked_path_mode_blob_oid_manifest_sha256,
-                &closure.tracked_cargo_lock,
-            );
-            assert!(closure.validate().is_err());
-        }
-        let mut closure = reviewed_source_closure_v2();
-        closure.tracked_cargo_lock.git_mode = "100755".to_owned();
-        closure.combined_source_fingerprint_sha256 = kagemusha_reviewed_source_fingerprint_v2(
-            closure.tracked_binary_diff_sha256,
-            closure.untracked_path_mode_blob_oid_manifest_sha256,
-            &closure.tracked_cargo_lock,
-        );
-        assert!(closure.validate().is_err());
-        let mut closure = reviewed_source_closure_v2();
-        closure.tracked_cargo_lock.size_bytes = 0;
-        closure.combined_source_fingerprint_sha256 = kagemusha_reviewed_source_fingerprint_v2(
-            closure.tracked_binary_diff_sha256,
-            closure.untracked_path_mode_blob_oid_manifest_sha256,
-            &closure.tracked_cargo_lock,
-        );
-        assert!(closure.validate().is_err());
-    }
-    fn unsigned_candidate_v5() -> KagemushaRecursiveSpendCandidateV5 {
-        let v4 = unsigned_candidate(&manifest()).manifest;
-        let reviewed_source_closure = reviewed_source_closure_v2();
-        let reviewed_source_closure_descriptor_sha256 = reviewed_source_closure
-            .canonical_descriptor_sha256()
-            .expect("V2 closure descriptor digest");
-        let manifest = KagemushaRecursiveSpendArtifactManifestV5 {
-            schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V5.to_owned(),
-            version: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V5,
-            bridge_abi_version: v4.bridge_abi_version,
-            proof_backend: v4.proof_backend.clone(),
-            transcript_profile: v4.transcript_profile.clone(),
-            generation: v4.generation.clone(),
-            source_commit: reviewed_source_closure.source_commit.clone(),
-            source_git_tree: reviewed_source_closure.source_git_tree.clone(),
-            source_tree_sha256: reviewed_source_closure.source_tree_sha256,
-            source_repo_dirty: false,
-            reviewed_source_closure,
-            reviewed_source_closure_descriptor_sha256,
-            authenticated_source_seal_projection_sha256: digest(
-                b"canonical authenticated V5 source-seal projection",
-            ),
-            network_id: v4.network_id,
-            asset: v4.asset.clone(),
-            asset_scale: v4.asset_scale,
-            activation_height: v4.activation_height,
-            withdrawal_height: v4.withdrawal_height,
-            max_proof_bytes: v4.max_proof_bytes,
-            generation_memory_limit_bytes: v4.generation_memory_limit_bytes,
-            generation_memory_enforcement_profile: v4.generation_memory_enforcement_profile.clone(),
-            qualification_receipt_sha256: [0; 32],
-            qualified_candidate_sha256: [0; 32],
-            profiles: v4.profiles.clone(),
-            topup_finality_roster_artifact: v4.topup_finality_roster_artifact.clone(),
-            benchmark_evidence_sha256: [0; 32],
-            cryptographic_review_sha256: [0; 32],
-            release_attestation_sha256: [0; 32],
-        };
-        KagemushaRecursiveSpendCandidateV5 {
-            schema: KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_SCHEMA_V5.to_owned(),
-            version: KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_VERSION_V5,
-            manifest,
-        }
-    }
-    #[test]
-    fn v5_candidate_requires_v2_closure_tree_and_retained_projection_digest() {
-        let candidate = unsigned_candidate_v5();
-        candidate.validate().expect("valid V5 candidate nucleus");
-        assert_ne!(candidate.sha256().expect("V5 candidate digest"), [0; 32]);
-        let mut wrong_schema = candidate.clone();
-        wrong_schema.manifest.reviewed_source_closure.schema =
-            KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_SCHEMA_V1.to_owned();
-        assert!(wrong_schema.validate().is_err());
-        let mut wrong_tree = candidate.clone();
-        wrong_tree.manifest.source_git_tree = "567890abcdef1234567890abcdef123456789012".to_owned();
-        assert!(wrong_tree.validate().is_err());
-        let mut missing_projection = candidate;
-        missing_projection
-            .manifest
-            .authenticated_source_seal_projection_sha256 = [0; 32];
-        assert!(missing_projection.validate().is_err());
-    }
-    #[test]
-    fn v1_v4_bytes_do_not_decode_or_validate_at_v2_v5_boundaries() {
-        let v1_json = norito::json::to_json(&reviewed_source_closure())
-            .expect("serialize historical V1 closure");
-        assert!(norito::json::from_str::<KagemushaReviewedSourceClosureV2>(&v1_json).is_err());
-        let v4_json = norito::json::to_json(&unsigned_candidate(&manifest()))
-            .expect("serialize historical V4 candidate");
-        assert!(norito::json::from_str::<KagemushaRecursiveSpendCandidateV5>(&v4_json).is_err());
-        let v5_json =
-            norito::json::to_json(&unsigned_candidate_v5()).expect("serialize V5 candidate");
-        assert!(norito::json::from_str::<KagemushaRecursiveSpendCandidateV4>(&v5_json).is_err());
-    }
-    fn signed_review_v5(
-        candidate: &KagemushaRecursiveSpendCandidateV5,
-        qualification_receipt_sha256: [u8; 32],
-        qualified_candidate_sha256: [u8; 32],
-        reviewer: &KeyPair,
-    ) -> KagemushaRecursiveSpendCryptographicReviewEvidenceV5 {
-        let payload = KagemushaRecursiveSpendCryptographicReviewPayloadV5::approved(
-            candidate,
-            qualification_receipt_sha256,
-            qualified_candidate_sha256,
-            digest(b"complete independent V5 cryptographic review report"),
-            [
-                digest(b"V5 constraint coverage evidence"),
-                digest(b"V5 cycle and transcript evidence"),
-                digest(b"V5 public input and transition evidence"),
-                digest(b"V5 artifact parameter and verifying key evidence"),
-                digest(b"V5 nullifier replay and finality evidence"),
-                digest(b"V5 parser canonicalization and resource bound evidence"),
-            ],
-        )
-        .expect("canonical approved V5 review payload");
-        KagemushaRecursiveSpendCryptographicReviewEvidenceV5 {
-            schema: KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_SCHEMA_V5.to_owned(),
-            version: KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_VERSION_V5,
-            approvals: vec![KagemushaRecursiveSpendCryptographicReviewApprovalV5 {
-                public_key: reviewer.public_key().clone(),
-                signature: SignatureOf::try_new(reviewer.private_key(), &payload)
-                    .expect("V5 cryptographic review signature"),
-            }],
-            payload,
-        }
-    }
-    #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the cohesive V5 identity-family test shares one source-bound signed fixture"
-    )]
-    fn v5_qualification_review_attestation_and_promotion_are_disjoint_and_source_bound() {
-        assert_ne!(
-            KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V4,
-            KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V5
-        );
-        assert_ne!(
-            KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_SCHEMA_V4,
-            KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_SCHEMA_V5
-        );
-        assert_ne!(
-            KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_SCHEMA_V4,
-            KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_SCHEMA_V5
-        );
-        assert_ne!(
-            KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4,
-            KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V5
-        );
-        assert_ne!(
-            KAGEMUSHA_RECURSIVE_SPEND_QUALIFIED_CANDIDATE_DOMAIN_V4,
-            KAGEMUSHA_RECURSIVE_SPEND_QUALIFIED_CANDIDATE_DOMAIN_V5
-        );
-        assert_ne!(
-            KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_SCHEMA_V4,
-            KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_SCHEMA_V5
-        );
-        assert_ne!(
-            KAGEMUSHA_RECURSIVE_SPEND_PROMOTED_RELEASE_SCHEMA_V4,
-            KAGEMUSHA_RECURSIVE_SPEND_PROMOTED_RELEASE_SCHEMA_V5
-        );
-        assert_ne!(
-            KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_FILE_NAME_V4,
-            KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_FILE_NAME_V5
-        );
-        assert_ne!(
-            KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_SCHEMA_V4,
-            KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_SCHEMA_V5
-        );
-        assert_ne!(
-            KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_FILE_NAME_V1,
-            KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_FILE_NAME_V5
-        );
-        assert_ne!(
-            KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_DOMAIN_V4,
-            KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_DOMAIN_V5
-        );
-        assert_ne!(
-            KAGEMUSHA_RECURSIVE_SPEND_RELEASE_APPROVAL_DOMAIN_V4,
-            KAGEMUSHA_RECURSIVE_SPEND_RELEASE_APPROVAL_DOMAIN_V5
-        );
-
-        let candidate = unsigned_candidate_v5();
-        let receipt =
-            KagemushaRecursiveSpendQualificationReceiptV5::new(&candidate, vec![0x51], vec![0x52])
-                .expect("candidate-bound V5 qualification receipt");
-        let receipt_bytes = norito::encode_canonical(&receipt).expect("canonical V5 receipt");
-        assert_eq!(
-            KagemushaRecursiveSpendQualificationReceiptV5::decode_canonical_against_candidate(
-                &receipt_bytes,
-                &candidate,
-            )
-            .expect("decode candidate-bound V5 receipt"),
-            receipt
-        );
-        let v4_receipt = KagemushaRecursiveSpendQualificationReceiptV4::new(
-            &unsigned_candidate(&manifest()),
-            vec![0x51],
-            vec![0x52],
-        )
-        .expect("historical V4 qualification receipt");
-        let v4_receipt_bytes = norito::encode_canonical(&v4_receipt).expect("canonical V4 receipt");
-        assert!(
-            KagemushaRecursiveSpendQualificationReceiptV5::decode_canonical_against_candidate(
-                &v4_receipt_bytes,
-                &candidate,
-            )
-            .is_err()
-        );
-
-        let qualification_receipt_sha256 = receipt
-            .canonical_sha256_against_candidate(&candidate)
-            .expect("V5 qualification receipt identity");
-        let qualified_candidate_sha256 = receipt
-            .qualified_candidate_sha256(&candidate)
-            .expect("V5 qualified candidate identity");
-        let roles = [
-            KagemushaRecursiveSpendReleaseApprovalRoleV1::Release,
-            KagemushaRecursiveSpendReleaseApprovalRoleV1::CryptographicReview,
-            KagemushaRecursiveSpendReleaseApprovalRoleV1::PhysicalDeviceBenchmark,
-        ];
-        let key_pairs = [
-            KeyPair::from_seed(vec![81; 32], Algorithm::Ed25519),
-            KeyPair::from_seed(vec![82; 32], Algorithm::Ed25519),
-            KeyPair::from_seed(vec![83; 32], Algorithm::Ed25519),
-        ];
-        let review = signed_review_v5(
-            &candidate,
-            qualification_receipt_sha256,
-            qualified_candidate_sha256,
-            &key_pairs[1],
-        );
-        assert_eq!(
-            review.payload.subject.source_git_tree,
-            candidate.manifest.source_git_tree
-        );
-        assert_eq!(
-            review
-                .payload
-                .subject
-                .authenticated_source_seal_projection_sha256,
-            candidate
-                .manifest
-                .authenticated_source_seal_projection_sha256
-        );
-        let review_bytes = norito::encode_canonical(&review).expect("canonical V5 review");
-        let benchmark = b"signed V5 physical-device benchmark evidence".to_vec();
-        let policy = KagemushaRecursiveSpendReleasePolicyV1 {
-            schema: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_POLICY_SCHEMA_V1.to_owned(),
-            version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V1,
-            policy_id: "v5-artifact-test-policy".to_owned(),
-            internal_validation_runner_identity_sha256: [0x91; 32],
-            roles: roles
-                .iter()
-                .zip(&key_pairs)
-                .map(
-                    |(&role, key_pair)| KagemushaRecursiveSpendReleaseRolePolicyV1 {
-                        role,
-                        threshold: 1,
-                        authorized_signers: vec![key_pair.public_key().clone()],
-                    },
-                )
-                .collect(),
-        };
-
-        let mut finalized = candidate.manifest.clone();
-        finalized.qualification_receipt_sha256 = qualification_receipt_sha256;
-        finalized.qualified_candidate_sha256 = qualified_candidate_sha256;
-        finalized.benchmark_evidence_sha256 = digest(&benchmark);
-        finalized.cryptographic_review_sha256 = digest(&review_bytes);
-        finalized.release_attestation_sha256 = digest(b"nonzero V5 attestation staging digest");
-        let subject = finalized
-            .release_attestation_subject()
-            .expect("canonical source-bound V5 attestation subject");
-        assert_eq!(subject.source_git_tree, finalized.source_git_tree);
-        assert_eq!(
-            subject.authenticated_source_seal_projection_sha256,
-            finalized.authenticated_source_seal_projection_sha256
-        );
-        let attestation = KagemushaRecursiveSpendReleaseAttestationV5 {
-            schema: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_SCHEMA_V5.to_owned(),
-            version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V5,
-            subject: subject.clone(),
-            approvals: roles
-                .iter()
-                .zip(&key_pairs)
-                .map(
-                    |(&role, key_pair)| KagemushaRecursiveSpendReleaseApprovalV5 {
-                        role,
-                        public_key: key_pair.public_key().clone(),
-                        signature: SignatureOf::try_new(
-                            key_pair.private_key(),
-                            &subject.approval_payload(role),
-                        )
-                        .expect("test V5 release signature"),
-                    },
-                )
-                .collect(),
-        };
-        finalized.release_attestation_sha256 =
-            digest(&norito::encode_canonical(&attestation).expect("canonical V5 attestation"));
-        assert_eq!(
-            KagemushaAuthenticatedReleaseV5::verify(
-                &finalized,
-                &policy,
-                &attestation,
-                &benchmark,
-                &review_bytes,
-            ),
-            Err(KagemushaReleaseVerificationError::InvalidInternalValidationReceipt),
-            "V5 must remain fail-closed until it binds a signed internal-validation receipt",
-        );
-
-        let mut wrong_attestation_schema = attestation.clone();
-        wrong_attestation_schema.schema =
-            KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_SCHEMA_V4.to_owned();
-        assert_eq!(
-            KagemushaAuthenticatedReleaseV5::verify(
-                &finalized,
-                &policy,
-                &wrong_attestation_schema,
-                &benchmark,
-                &review_bytes,
-            ),
-            Err(KagemushaReleaseVerificationError::InvalidAttestation),
-        );
-        let mut wrong_review_domain = review.clone();
-        wrong_review_domain.payload.domain =
-            KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_DOMAIN_V4.to_owned();
-        assert!(
-            KagemushaRecursiveSpendCryptographicReviewEvidenceV5::validate_canonical_bytes_against_candidate(
-                &norito::encode_canonical(&wrong_review_domain)
-                    .expect("canonical wrong-domain review"),
-                &candidate,
-                qualification_receipt_sha256,
-                qualified_candidate_sha256,
-            )
-            .is_err()
-        );
     }
     fn circuit_params() -> KagemushaStepCircuitParamsV4 {
         KagemushaStepCircuitParamsV4::reviewed_first_release_generation_profile()

@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 from typing import Any, Callable, Dict, Mapping, Optional, Tuple, Union
+
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 
 def _require_exact_non_empty_string(value: Any, context: str) -> str:
@@ -64,20 +68,6 @@ def _identifier_sized_field(payload: Union[bytes, bytearray, memoryview]) -> byt
     return _identifier_compact_length(len(data)) + data
 
 
-def _identifier_u8(value: int, context: str) -> bytes:
-    integer = _identifier_unsigned_integer(value, context)
-    if integer > 0xFF:
-        raise ValueError(f"{context} must fit in u8")
-    return bytes((integer,))
-
-
-def _identifier_u16(value: int, context: str) -> bytes:
-    integer = _identifier_unsigned_integer(value, context)
-    if integer > 0xFFFF:
-        raise ValueError(f"{context} must fit in u16")
-    return integer.to_bytes(2, "little")
-
-
 def _identifier_u32(value: int, context: str) -> bytes:
     integer = _identifier_unsigned_integer(value, context)
     if integer > 0xFFFF_FFFF:
@@ -120,10 +110,11 @@ def _identifier_exact_string(value: Any, context: str) -> bytes:
 
 def _identifier_byte_vec(payload: Union[bytes, bytearray, memoryview]) -> bytes:
     data = bytes(payload)
-    parts = [len(data).to_bytes(8, "little")]
-    for byte in data:
-        parts.append(_identifier_sized_field(bytes((byte,))))
-    return b"".join(parts)
+    encoded = bytearray(8 + 2 * len(data))
+    encoded[:8] = len(data).to_bytes(8, "little")
+    encoded[8::2] = b"\x01" * len(data)
+    encoded[9::2] = data
+    return bytes(encoded)
 
 
 def _identifier_raw_byte_vec(payload: Union[bytes, bytearray, memoryview]) -> bytes:
@@ -496,25 +487,17 @@ def _identifier_decode_public_key(value: Any, context: str) -> Tuple[str, bytes]
 
 
 def _identifier_iroha_prehash(message: bytes) -> bytes:
-    try:
-        from iroha_python.crypto import hash_blake2b_32
-    except ImportError as exc:
-        raise RuntimeError(
-            "verify_identifier_resolution_receipt requires iroha_python crypto bindings"
-        ) from exc
-    digest = bytearray(hash_blake2b_32(message))
+    digest = bytearray(hashlib.blake2b(message, digest_size=32).digest())
     digest[-1] |= 1
     return bytes(digest)
 
 
 def _identifier_verify_ed25519(public_key: bytes, message: bytes, signature: bytes) -> bool:
     try:
-        from iroha_python.crypto import verify_ed25519
-    except ImportError as exc:
-        raise RuntimeError(
-            "verify_identifier_resolution_receipt requires iroha_python crypto bindings"
-        ) from exc
-    return bool(verify_ed25519(public_key, message, signature))
+        Ed25519PublicKey.from_public_bytes(public_key).verify(signature, message)
+    except (InvalidSignature, ValueError):
+        return False
+    return True
 
 
 def _require_mapping(value: Any, context: str) -> Mapping[str, Any]:

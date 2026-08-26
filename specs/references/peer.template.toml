@@ -193,7 +193,7 @@ expected_hash_file = "genesis.expected_hash"
 # enforcement_mode = "warn"            # Admission behavior: "warn" or "reject"
 
 [kura]
-# init_mode = "strict"               # "fast" skips historical audits for emergency recovery only
+# init_mode = "strict"               # "fast" opens Strict-initialized storage read-only, requires a current State snapshot, and quarantines production until a Strict restart
 # store_dir = "./storage"
 # blocks_in_memory = 1024
 # lane_history_retention = 512        # Lane, autonomous-lifecycle, and Native-AMX history retained before GC

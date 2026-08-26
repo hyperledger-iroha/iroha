@@ -34857,7 +34857,7 @@ mod tests {
         crypto: &ProviderCryptoFixture,
     ) -> Result<AdmissionRegistry> {
         let (vrf_public, vrf_private) =
-            BlsNormal::keypair(KeyGenOption::UseSeed(body.provider_id.to_vec()))
+            BlsNormal::try_keypair(KeyGenOption::UseSeed(body.provider_id.to_vec()))
                 .wrap_err("derive Soracloud provider VRF fixture key")?;
         let vrf_pair: KeyPair = (vrf_public, vrf_private).into();
         let endpoint = body

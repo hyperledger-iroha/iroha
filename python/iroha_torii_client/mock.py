@@ -1366,13 +1366,6 @@ class _MockState:
             "resolved_from": str(resolved_from),
         }
 
-    @classmethod
-    def _queued_pipeline_status(cls, hash_value: str) -> Dict[str, Any]:
-        return cls._make_status_payload(
-            hash_value,
-            {"kind": "Queued", "scope": "local", "resolved_from": "queue"},
-        )
-
     def _next_pipeline_hash_locked(self) -> str:
         self._pipeline_submit_seq += 1
         return f"mock-pipeline-hash-{self._pipeline_submit_seq:04d}"
@@ -1586,15 +1579,23 @@ class _MockState:
         if not isinstance(payload, dict):
             raise ValueError("sumeragi config must be an object")
 
+        allowed_fields = {"status", "diagnostics", "leader"}
+        unknown_fields = set(payload) - allowed_fields
+        if unknown_fields:
+            raise ValueError(
+                f"sumeragi config contains unknown field {sorted(unknown_fields)[0]}"
+            )
+
         updates: Dict[str, Dict[str, Any]] = {}
-        for field, attribute in (
+        for name, attribute in (
             ("status", "sumeragi_status"),
+            ("diagnostics", "sumeragi_diagnostics"),
             ("leader", "sumeragi_leader"),
         ):
-            value = payload.get(field)
+            value = payload.get(name)
             if value is not None:
                 if not isinstance(value, dict):
-                    raise ValueError(f"{field} must be an object")
+                    raise ValueError(f"{name} must be an object")
                 updates[attribute] = dict(value)
 
         with self._lock:

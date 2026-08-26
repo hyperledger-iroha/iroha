@@ -295,7 +295,7 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
             noritoArchive: archive,
             chainDiscriminant: SccpV1.tairaI105DiscriminantV1
         )
-        let finalityProof = try KagemushaTopUpFinalityProof(
+        let finalityProof = try KagemushaTopUpFinalityProofArchive(
             noritoArchive: canonicalTopUpFinalityProofArchive()
         )
         XCTAssertEqual(anchor.noritoArchive(), archive)
@@ -478,7 +478,7 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
             noritoArchive: canonicalTopUpAnchorArchive(),
             chainDiscriminant: SccpV1.tairaI105DiscriminantV1
         )
-        let finalityProof = try KagemushaTopUpFinalityProof(
+        let finalityProof = try KagemushaTopUpFinalityProofArchive(
             noritoArchive: canonicalTopUpFinalityProofArchive()
         )
         for (finalizedBlockHeight, serverTimeMs, field) in [

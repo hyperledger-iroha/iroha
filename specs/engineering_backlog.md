@@ -6218,8 +6218,8 @@ redistributable schemas, and official trust/revocation bundles.
   display and prefixed compatibility formatting now return a non-secret
   invalid-private-key marker instead of unwrapping checked private-key
   formatting; `Signature::try_new` now routes SM2 through checked private-key
-  rebuild/signing helpers, the high-level Rust SDK `Sm2KeyPair` exposes
-  `try_sign` while keeping `sign` as a compatibility wrapper, Connect/Norito C
+  rebuild/signing helpers, the high-level Rust SDK `Sm2KeyPair` exposes only
+  checked `try_sign`; the panicking `sign` compatibility wrapper is removed. Connect/Norito C
   SM2 detached signing returns `ERR_SM2_SIGN` from the checked signer on backend
   failures, and SM2 key-pair/public-key derivation now routes through
   `try_public_key`, SM2

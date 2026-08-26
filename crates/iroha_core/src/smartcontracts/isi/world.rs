@@ -1750,32 +1750,6 @@ pub mod isi {
         }
         Ok(())
     }
-    pub(in crate::smartcontracts::isi) fn push_confidential_commitment_for_asset(
-        st: &mut crate::state::ZkAssetState,
-        commitment: [u8; 32],
-        state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<[u8; 32], Error> {
-        push_confidential_commitments_for_asset(st, &[commitment], state_transaction)?
-            .into_iter()
-            .next()
-            .ok_or_else(|| {
-                Error::from(InstructionExecutionError::InvariantViolation(
-                    "single confidential commitment append produced no root".into(),
-                ))
-            })
-    }
-    fn push_confidential_commitments_for_asset(
-        st: &mut crate::state::ZkAssetState,
-        commitments: &[[u8; 32]],
-        state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<Vec<[u8; 32]>, Error> {
-        st.push_commitments(commitments, state_transaction.zk.tree_roots_history_len)
-            .map_err(|err| {
-                InstructionExecutionError::InvariantViolation(
-                    format!("failed to update canonical confidential tree: {err}").into(),
-                )
-            })
-    }
     fn extract_vote_public_inputs(
         backend: &str,
         proof_bytes: &[u8],
@@ -31211,30 +31185,10 @@ seiyaku GovernanceLifecycle {
             );
             assert!(stx.world.verifying_keys.get(&reserved_id).is_none());
 
-            let reserved_v5_id =
-                iroha_data_model::offline::kagemusha_recursive_spend_verifier_key_id_v5(
-                    iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq,
-                    [0x44; 32],
-                );
-            let err = verifying_keys::RegisterVerifyingKey {
-                id: reserved_v5_id.clone(),
-                record: record(TEST_HALO2_CIRCUIT_ID, 1),
-            }
-            .expect_execute_err(
-                &ALICE_ID,
-                &mut stx,
-                "generic registration must not occupy a V5 release-qualified Kagemusha id",
-            );
-            assert_contains!(
-                smart_contract_instruction_error_message(err),
-                "owned by atomic release activation"
-            );
-            assert!(stx.world.verifying_keys.get(&reserved_v5_id).is_none());
-
             let lookalike_id = VerifyingKeyId::new(
                 iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4,
                 format!(
-                    "v5-{}-not-a-release-digest",
+                    "unrelated-{}-not-a-release-digest",
                     iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4
                 ),
             );

@@ -24,11 +24,22 @@ from iroha_torii_client.client import (  # noqa: E402
     _decode_canonical_i105_string,
     _decode_i105_string,
 )
+from iroha_torii_client.identifier_receipts import _identifier_byte_vec  # noqa: E402
 
 CANONICAL_OWNER = "sorauﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP"
 CHECKSUM_VALID_ZERO_KEY_OWNER = (
     "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"
 )
+
+
+def test_identifier_byte_vector_encoding_is_exact_for_every_byte_value() -> None:
+    payload = bytes(range(256))
+
+    encoded = _identifier_byte_vec(payload)
+
+    assert encoded[:8] == len(payload).to_bytes(8, "little")
+    assert encoded[8::2] == b"\x01" * len(payload)
+    assert encoded[9::2] == payload
 
 
 def test_offline_proof_backend_type_is_the_exact_closed_registry_v1() -> None:

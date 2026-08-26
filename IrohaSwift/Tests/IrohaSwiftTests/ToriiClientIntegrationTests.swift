@@ -108,9 +108,6 @@ final class ToriiClientIntegrationTests: XCTestCase {
         let session = URLSession(configuration: .ephemeral)
         let client = ToriiClient(baseURL: mock.baseURL, session: session)
         let sdk = IrohaSDK(toriiClient: client)
-        sdk.pipelineSubmitOptions = PipelineSubmitOptions(maxRetries: 0,
-                                                          initialBackoffSeconds: 0,
-                                                          backoffMultiplier: 1)
         sdk.pipelinePollOptions = PipelineStatusPollOptions(pollInterval: 0.01, timeout: 1)
         let envelope = try tcMakePipelineEnvelope(hashHex: scenarioHash, marker: 0x11)
         let status = try await sdk.submitAndWait(envelope: envelope)
@@ -126,9 +123,6 @@ final class ToriiClientIntegrationTests: XCTestCase {
         let session = URLSession(configuration: .ephemeral)
         let client = ToriiClient(baseURL: mock.baseURL, session: session)
         let sdk = IrohaSDK(toriiClient: client)
-        sdk.pipelineSubmitOptions = PipelineSubmitOptions(maxRetries: 0,
-                                                          initialBackoffSeconds: 0,
-                                                          backoffMultiplier: 1)
         sdk.pipelinePollOptions = PipelineStatusPollOptions(pollInterval: 0.01, timeout: 1)
         let envelope = try tcMakePipelineEnvelope(hashHex: scenarioHash, marker: 0x22)
         do {
@@ -158,9 +152,6 @@ final class ToriiClientIntegrationTests: XCTestCase {
         let session = URLSession(configuration: .ephemeral)
         let client = ToriiClient(baseURL: mock.baseURL, session: session)
         let sdk = IrohaSDK(toriiClient: client)
-        sdk.pipelineSubmitOptions = PipelineSubmitOptions(maxRetries: 0,
-                                                          initialBackoffSeconds: 0,
-                                                          backoffMultiplier: 1)
         sdk.pipelinePollOptions = PipelineStatusPollOptions(pollInterval: 0.01,
                                                             timeout: 0.3,
                                                             maxAttempts: 3)

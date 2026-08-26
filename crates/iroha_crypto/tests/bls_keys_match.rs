@@ -1,5 +1,5 @@
 //! Validate that stored BLS keypair fixtures line up with the expected public keys.
-#![cfg(all(feature = "bls", not(feature = "ffi_import")))]
+#![cfg(feature = "bls")]
 use iroha_crypto::{KeyPair, PrivateKey, PublicKey};
 #[test]
 fn bls_keys_match_localnet_soranexus() {

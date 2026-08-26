@@ -59,6 +59,21 @@ public sealed class TransactionBuilderTests
     }
 
     [Fact]
+    public void TransactionEncodingContextEncodesEveryByteWithoutPerElementDrift()
+    {
+        var payload = Enumerable.Range(0, 256).Select(static value => (byte)value).ToArray();
+        var encoded = new TransactionEncodingContext(FixtureAccountId).EncodeConstVec(payload);
+
+        Assert.Equal(payload.Length * 2 + sizeof(ulong), encoded.Length);
+        Assert.Equal((ulong)payload.Length, BinaryPrimitives.ReadUInt64LittleEndian(encoded));
+        for (var index = 0; index < payload.Length; index++)
+        {
+            Assert.Equal(1, encoded[sizeof(ulong) + index * 2]);
+            Assert.Equal(payload[index], encoded[sizeof(ulong) + index * 2 + 1]);
+        }
+    }
+
+    [Fact]
     public void ExecutableBatchEncodingPreservesInstructionCallInstructionOrder()
     {
         var context = new TransactionEncodingContext(FixtureAccountId);

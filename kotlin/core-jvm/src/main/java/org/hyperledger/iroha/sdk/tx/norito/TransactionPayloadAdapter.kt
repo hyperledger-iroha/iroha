@@ -22,7 +22,6 @@ import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.FeeSponsorProgramId
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
 import org.hyperledger.iroha.sdk.core.model.JsonValue
-import org.hyperledger.iroha.sdk.core.model.MAX_CONTRACT_ARGUMENT_RECORD_BYTES
 import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.core.model.TransactionAdmissionIntent
@@ -567,16 +566,16 @@ internal class TransactionPayloadAdapter private constructor(
 
     private class ContractArgumentRecordAdapter : TypeAdapter<ByteArray> {
         override fun encode(encoder: NoritoEncoder, value: ByteArray) {
-            require(value.size <= MAX_CONTRACT_ARGUMENT_RECORD_BYTES) {
-                "Contract argument record exceeds $MAX_CONTRACT_ARGUMENT_RECORD_BYTES bytes"
+            require(value.size <= ContractInvocation.MAX_ARGUMENT_BYTES) {
+                "Contract argument record exceeds ${ContractInvocation.MAX_ARGUMENT_BYTES} bytes"
             }
             RAW_BYTE_VEC_ADAPTER.encode(encoder, value)
         }
 
         override fun decode(decoder: NoritoDecoder): ByteArray {
             val length = decoder.readLength(false)
-            require(length in 0L..MAX_CONTRACT_ARGUMENT_RECORD_BYTES.toLong()) {
-                "Contract argument record exceeds $MAX_CONTRACT_ARGUMENT_RECORD_BYTES bytes"
+            require(length in 0L..ContractInvocation.MAX_ARGUMENT_BYTES.toLong()) {
+                "Contract argument record exceeds ${ContractInvocation.MAX_ARGUMENT_BYTES} bytes"
             }
             return decoder.readBytes(length.toInt())
         }
@@ -602,7 +601,7 @@ internal class TransactionPayloadAdapter private constructor(
                 arguments = decodeBoundedSizedField<Optional<ByteArray>>(
                     decoder,
                     CONTRACT_ARGUMENTS_ADAPTER,
-                    MAX_CONTRACT_ARGUMENT_RECORD_BYTES.toLong() + 32L,
+                    ContractInvocation.MAX_ARGUMENT_BYTES.toLong() + 32L,
                     "ContractInvocation.arguments",
                 ).orElse(null),
             )

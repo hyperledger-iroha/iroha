@@ -12,7 +12,7 @@ name = "kaigi_zk"
 path = "src/lib.rs"
 
 [dependencies]
-iroha_crypto = { path = "../iroha_crypto", default-features = false, features = ["std"] }
+iroha_crypto = { path = "../iroha_crypto", default-features = false }
 halo2_proofs = { version = "0.5.1", package = "halo2-axiom", features = ["circuit-params"] }
 poseidon-primitives = "0.2.0"
 

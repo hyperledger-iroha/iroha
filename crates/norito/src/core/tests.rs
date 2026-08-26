@@ -433,6 +433,52 @@ fn decode_archived_field_uses_one_charged_overaligned_copy() {
     );
 }
 #[test]
+fn decode_archived_field_charges_padding_and_aligned_copy() {
+    #[derive(Debug, PartialEq, Eq)]
+    #[repr(C, align(64))]
+    struct ShortOveralignedField([u8; 64]);
+    impl<'de> NoritoDeserialize<'de> for ShortOveralignedField {
+        fn deserialize(_archived: &'de Archived<Self>) -> Self {
+            Self([0; 64])
+        }
+    }
+
+    let bytes = [0xA5];
+    let allocation_bytes = 2 * archived_payload_size::<ShortOveralignedField>();
+    let limits = DecodeLimits::new(
+        usize::MAX,
+        usize::MAX,
+        usize::MAX,
+        allocation_bytes,
+        usize::MAX,
+    );
+    let (decoded, usage) = with_decode_limits_measured(limits, || {
+        decode_archived_field::<ShortOveralignedField>(&bytes)
+    });
+    assert_eq!(
+        decoded.expect("an exact budget must cover padding and its aligned copy"),
+        ShortOveralignedField([0; 64])
+    );
+    assert_eq!(usage.total_allocated_bytes(), allocation_bytes);
+
+    let limits = DecodeLimits::new(
+        usize::MAX,
+        usize::MAX,
+        usize::MAX,
+        allocation_bytes - 1,
+        usize::MAX,
+    );
+    let error = with_decode_limits(limits, || {
+        decode_archived_field::<ShortOveralignedField>(&bytes)
+    })
+    .expect_err("one byte less must reject the second temporary allocation");
+    assert!(matches!(
+        error,
+        Error::TotalAllocationExceeded { attempted, limit }
+            if attempted == allocation_bytes as u64 && limit == (allocation_bytes - 1) as u64
+    ));
+}
+#[test]
 fn decode_archived_field_preserves_deserializer_errors() {
     #[derive(Debug)]
     struct Rejected;

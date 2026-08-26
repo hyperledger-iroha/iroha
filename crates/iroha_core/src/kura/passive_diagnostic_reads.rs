@@ -8,6 +8,7 @@ impl MergeLedgerLog {
         &mut self,
         hash: HashOf<MergeLedgerEntry>,
     ) -> Result<Option<MergeLedgerEntry>> {
+        self.ensure_history_available()?;
         if self.append_recovery_offset.is_some() {
             return Err(Error::MergeCarrierConflict(
                 "merge ledger has an unresolved append tail; passive diagnostics cannot repair it"

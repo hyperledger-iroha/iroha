@@ -15,10 +15,14 @@ pub enum InitMode {
     Strict,
     /// Trust the durable local journal and skip historical body and sidecar audits.
     ///
-    /// This emergency mode admits only a stable, structurally readable commit boundary and a
-    /// bounded active-tip recovery check. It does not support provisional snapshot import or
-    /// pending storage recovery. Operators should return to [`Self::Strict`] after service is
-    /// restored so the complete chain is audited on the next restart.
+    /// This emergency mode requires storage already initialized by Strict mode and an
+    /// already-current State snapshot. It admits only a stable, structurally readable commit
+    /// boundary and a bounded tip check, retains only a count plus bounded recent-block cache,
+    /// leaves local transaction/lane/merge production quarantined, rejects canonical mutation,
+    /// and neither repairs nor imports storage. Optional durable application services and
+    /// consensus active-height recovery remain offline. Operators should return to
+    /// [`Self::Strict`] after service is restored so the complete chain and deferred auxiliary
+    /// histories are audited before production resumes.
     Fast,
 }
 impl JsonSerialize for InitMode {

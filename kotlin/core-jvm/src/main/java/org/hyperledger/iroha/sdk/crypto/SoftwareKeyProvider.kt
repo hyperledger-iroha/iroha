@@ -4,6 +4,7 @@ import java.security.InvalidParameterException
 import java.security.KeyPair
 import java.security.KeyPairGenerator
 import java.security.NoSuchAlgorithmException
+import java.security.NoSuchProviderException
 import java.security.SecureRandom
 import java.security.Security
 import java.util.concurrent.ConcurrentHashMap
@@ -253,16 +254,18 @@ class SoftwareKeyProvider(
     }
 
     companion object {
+        private const val BOUNCY_CASTLE_PROVIDER_NAME = "BC"
+
         @JvmStatic
         fun tryBouncyCastleGenerator(): KeyPairGenerator? {
             return try {
-                val provider = BouncyCastleProvider()
-                val providerName = provider.name
-                if (Security.getProvider(providerName) == null) {
-                    Security.addProvider(provider)
+                if (Security.getProvider(BOUNCY_CASTLE_PROVIDER_NAME) == null) {
+                    Security.addProvider(BouncyCastleProvider())
                 }
-                KeyPairGenerator.getInstance("EdDSA", providerName)
+                KeyPairGenerator.getInstance("EdDSA", BOUNCY_CASTLE_PROVIDER_NAME)
             } catch (_: NoSuchAlgorithmException) {
+                null
+            } catch (_: NoSuchProviderException) {
                 null
             } catch (_: SecurityException) {
                 null

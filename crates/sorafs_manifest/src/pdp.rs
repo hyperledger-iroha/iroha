@@ -2127,7 +2127,7 @@ mod tests {
             },
         };
         let (vrf_public, vrf_private) =
-            iroha_crypto::BlsNormal::keypair(iroha_crypto::KeyGenOption::UseSeed(vec![0x34; 32]))
+            iroha_crypto::BlsNormal::try_keypair(iroha_crypto::KeyGenOption::UseSeed(vec![0x34; 32]))
                 .expect("fixture BLS keypair");
         let vrf_pair: iroha_crypto::KeyPair = (vrf_public, vrf_private).into();
         let vrf_bytes = vrf_pair.public_key().to_bytes().1;

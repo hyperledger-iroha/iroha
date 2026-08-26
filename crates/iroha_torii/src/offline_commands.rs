@@ -378,12 +378,7 @@ fn validate_kagemusha_v4_topup_snapshot(
             "Offline top-up proof does not use the asset-bound shield verifier.",
         ));
     }
-    let authoritative_initial_root = zk_state.current_root().map_err(|error| {
-        validation_owned(
-            "offline_confidential_state_invalid",
-            format!("Offline confidential tree is invalid: {error}"),
-        )
-    })?;
+    let authoritative_initial_root = zk_state.persisted_root;
     let authoritative_leaf_index = u32::try_from(zk_state.commitments.len()).map_err(|_| {
         validation(
             "offline_topup_tree_full",
@@ -396,6 +391,12 @@ fn validate_kagemusha_v4_topup_snapshot(
             .contains(&request.current_note.note_commitment)
         || zk_state
             .nullifiers
+            .contains(&request.current_note.note_commitment)
+        || zk_state
+            .nullifiers
+            .contains(&request.current_note.spend_nullifier)
+        || zk_state
+            .commitments
             .contains(&request.current_note.spend_nullifier)
     {
         return Err(validation(
@@ -403,11 +404,8 @@ fn validate_kagemusha_v4_topup_snapshot(
             "Offline top-up note conflicts with existing confidential state.",
         ));
     }
-    let mut commitments_after = zk_state.commitments.clone();
-    commitments_after.push(request.current_note.note_commitment);
     let authoritative_finalized_root = zk_state
-        .tree_profile
-        .compute_root(&commitments_after)
+        .preview_commitment_root(request.current_note.note_commitment)
         .map_err(|error| {
             validation_owned(
                 "offline_confidential_state_invalid",
@@ -2156,6 +2154,30 @@ mod tests {
             )
             .expect("offline hardware fixture signature must bind the exact typed fields");
         request
+    }
+    #[test]
+    fn topup_snapshot_uses_checked_incremental_tree_admission() {
+        let source = include_str!("offline_commands.rs");
+        let start = source
+            .find("fn validate_kagemusha_v4_topup_snapshot(")
+            .expect("top-up snapshot validator");
+        let end = source[start..]
+            .find("fn validate_kagemusha_v4_redeem_snapshot(")
+            .map(|offset| start + offset)
+            .expect("redemption snapshot validator");
+        let topup = &source[start..end];
+        assert!(topup.contains(".preview_commitment_root("));
+        assert!(!topup.contains("commitments.clone()"));
+        assert!(!topup.contains(".compute_root("));
+        for namespace_check in [
+            ".nullifiers\n            .contains(&request.current_note.note_commitment)",
+            ".commitments\n            .contains(&request.current_note.spend_nullifier)",
+        ] {
+            assert!(
+                topup.contains(namespace_check),
+                "top-up snapshot must reject commitment/nullifier cross-namespace collisions"
+            );
+        }
     }
     #[test]
     fn topup_admission_rejects_same_label_foreign_genesis_before_state_work() {

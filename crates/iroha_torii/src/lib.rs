@@ -44488,6 +44488,16 @@ impl ToriiRuntimeDeps {
             vpn_operator_signer: None,
         }
     }
+
+    /// Retain only bounded, in-memory dependencies for an emergency Fast boot.
+    ///
+    /// Fast mode is an explicitly degraded recovery posture. Deployment-owned
+    /// services can open durable journals, reconcile remote state, or start
+    /// signers while Torii is being constructed, so none of them may cross this
+    /// boundary. The normal Strict restart reconstructs and validates them.
+    fn into_emergency_fast(self) -> Self {
+        Self::new(self.telemetry)
+    }
     /// Attach the deployment-owned Parliament TLE partial-release coordinator.
     ///
     /// The coordinator retains the runtime signer behind its opaque Core
@@ -44994,6 +45004,49 @@ fn torii_runtime_deps_keep_vpn_and_proxy_signers_separate() {
     );
     assert_ne!(proxy_signer.public_key(), vpn_signer.public_key());
 }
+
+#[cfg(test)]
+#[test]
+fn emergency_fast_runtime_deps_drop_external_services_and_signers() {
+    let proxy_signer = KeyPair::try_from_seed(vec![0x93; 32], iroha_crypto::Algorithm::Ed25519)
+        .expect("proxy signer fixture");
+    let vpn_signer = KeyPair::try_from_seed(vec![0x94; 32], iroha_crypto::Algorithm::Ed25519)
+        .expect("VPN signer fixture");
+    let deps = ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled())
+        .with_torii_proxy_bridge_signer(proxy_signer)
+        .with_vpn_operator_signer(vpn_signer)
+        .into_emergency_fast();
+
+    assert!(deps.torii_proxy_bridge_signer.is_none());
+    assert!(deps.vpn_operator_signer.is_none());
+    assert!(deps.soracloud_runtime.is_none());
+    assert!(deps.sorafs_node.is_none());
+}
+
+#[cfg(test)]
+#[test]
+fn emergency_fast_does_not_configure_or_start_the_background_zk_prover() {
+    let source = include_str!("lib.rs");
+    let app_services = source
+        .split_once("// Configure app API subsystems (attachments) from Torii config")
+        .expect("app-service startup section")
+        .1
+        .split_once("let query_rate = config")
+        .expect("end of app-service startup section")
+        .0;
+    let fast_guard = app_services
+        .find("if !emergency_fast")
+        .expect("emergency Fast ZK-prover guard");
+    let configure = app_services
+        .find("crate::zk_prover::configure(")
+        .expect("ZK-prover configuration");
+    let start = app_services
+        .find("crate::zk_prover::start_worker()")
+        .expect("ZK-prover worker start");
+
+    assert!(fast_guard < configure && configure < start);
+}
+
 impl From<routing::MaybeTelemetry> for ToriiRuntimeDeps {
     fn from(telemetry: routing::MaybeTelemetry) -> Self {
         Self::new(telemetry)
@@ -47854,7 +47907,7 @@ impl Torii {
         chain_id: ChainId,
         network_id: NetworkId,
         kiso: KisoHandle,
-        config: Config,
+        mut config: Config,
         queue: Arc<Queue>,
         events: EventsSender,
         query_service: LiveQueryStoreHandle,
@@ -47869,7 +47922,49 @@ impl Torii {
             state.network_id, network_id,
             "Torii network id must match the genesis-derived Core state identity"
         );
+        let emergency_fast = kura.emergency_fast_startup_enabled();
+        if emergency_fast {
+            // Keep emergency startup independent of every optional durable
+            // Torii subsystem. These services are reconstructed and audited on
+            // the next Strict restart; Fast never opens their journals or
+            // starts their mutation workers.
+            config.privacy_bootle_lantern_issuer = None;
+            config.webhooks_enabled = false;
+            config.zk_attachments_enabled = false;
+            config.zk_prover_enabled = false;
+            config.push.enabled = false;
+            config.iso_bridge.enabled = false;
+            config.iso_bridge.store_dir = None;
+            config.iso_bridge.audit_export_dir = None;
+            config.operator_auth = iroha_config::parameters::actual::ToriiOperatorAuth::default();
+            config.da_ingest.taikai_anchor = None;
+            config.sorafs_discovery = iroha_config::parameters::actual::SorafsDiscovery::default();
+            config.sorafs_discovery.discovery_enabled = false;
+            config.sorafs_storage = iroha_config::parameters::actual::SorafsStorage::default();
+            config.sorafs_storage.enabled = false;
+            config.sorafs_repair = iroha_config::parameters::actual::SorafsRepair::default();
+            config.sorafs_repair.enabled = false;
+            config.sorafs_gc = iroha_config::parameters::actual::SorafsGc::default();
+            config.sorafs_gc.enabled = false;
+            config.sorafs_por = iroha_config::parameters::actual::SorafsPor::default();
+            config.sorafs_por.enabled = false;
+            config.sorafs_gateway = iroha_config::parameters::actual::SorafsGateway::default();
+            config.sorafs_gateway.acme.enabled = false;
+            config.sorafs_gateway.compliance = None;
+            config.sorafs_appeal_finance_settlement =
+                iroha_config::parameters::actual::SorafsAppealFinanceSettlement::default();
+            config.account_onboarding = None;
+            config.faucet = None;
+            config.kagemusha_commands = None;
+            config.ram_lfe = None;
+            config.tx_history = None;
+        }
         let runtime_deps = runtime_deps.into();
+        let runtime_deps = if emergency_fast {
+            runtime_deps.into_emergency_fast()
+        } else {
+            runtime_deps
+        };
         #[cfg(feature = "app_api")]
         let mut runtime_deps = runtime_deps;
         #[cfg(feature = "app_api")]
@@ -48118,23 +48213,25 @@ impl Torii {
                     telemetry.clone(),
                 );
             }
-            // Non-consensus background prover hook (disabled by default)
-            crate::zk_prover::configure(
-                config.zk_prover_enabled,
-                config.zk_prover_scan_period_secs,
-                config.zk_prover_reports_ttl_secs,
-                config.zk_prover_reports_max_count,
-                config.zk_prover_reports_max_bytes,
-                config.zk_prover_max_inflight,
-                config.zk_prover_max_scan_bytes,
-                config.zk_prover_max_scan_millis,
-                config.zk_prover_keys_dir.clone(),
-                config.zk_prover_allowed_backends.clone(),
-                config.zk_prover_allowed_circuits.clone(),
-                Some(state.clone()),
-                telemetry.clone(),
-            );
-            crate::zk_prover::start_worker();
+            if !emergency_fast {
+                // Non-consensus background prover hook (disabled by default)
+                crate::zk_prover::configure(
+                    config.zk_prover_enabled,
+                    config.zk_prover_scan_period_secs,
+                    config.zk_prover_reports_ttl_secs,
+                    config.zk_prover_reports_max_count,
+                    config.zk_prover_reports_max_bytes,
+                    config.zk_prover_max_inflight,
+                    config.zk_prover_max_scan_bytes,
+                    config.zk_prover_max_scan_millis,
+                    config.zk_prover_keys_dir.clone(),
+                    config.zk_prover_allowed_backends.clone(),
+                    config.zk_prover_allowed_circuits.clone(),
+                    Some(state.clone()),
+                    telemetry.clone(),
+                );
+                crate::zk_prover::start_worker();
+            }
         }
         let query_rate = config
             .query_rate_per_authority_per_sec
@@ -49142,9 +49239,11 @@ impl Torii {
             Some(config.recipient_lookup.requests_per_minute),
         );
         #[cfg(feature = "app_api")]
-        let musubi_search = Arc::new(RwLock::new(select_initial_musubi_search_index(
-            rebuild_musubi_search_index(state.as_ref(), None),
-        )));
+        let musubi_search = Arc::new(RwLock::new(if emergency_fast {
+            iroha_core::musubi_search::MusubiSearchIndexV1::default()
+        } else {
+            select_initial_musubi_search_index(rebuild_musubi_search_index(state.as_ref(), None))
+        }));
         Self {
             chain_id: Arc::new(chain_id),
             signed_query_admission,
@@ -49488,6 +49587,30 @@ impl Torii {
         Some(layer)
     }
     fn prepare_da_runtime_services(&self) -> DaRuntimeServices {
+        let replay_cache_config = iroha_core::da::ReplayCacheConfig::new()
+            .with_max_entries_per_lane(self.da_ingest.replay_cache_capacity)
+            .with_max_lane_epochs(self.da_ingest.replay_cache_max_lane_epochs)
+            .with_ttl(self.da_ingest.replay_cache_ttl)
+            .with_max_sequence_lag(self.da_ingest.replay_cache_max_sequence_lag);
+        if self.kura.emergency_fast_startup_enabled() {
+            // Handlers fail closed in Fast mode. Keep only bounded placeholders
+            // so router construction never opens, scans, verifies, or repairs
+            // the durable receipt/cursor trees.
+            let replay_cache = Arc::new(iroha_core::da::ReplayCache::new(replay_cache_config));
+            let replay_store = Arc::new(da::ReplayCursorStore::in_memory_with_max_lane_epochs(
+                self.da_ingest.replay_cache_max_lane_epochs,
+            ));
+            let receipt_log = Arc::new(da::DaReceiptLog::in_memory(
+                Arc::clone(&replay_store),
+                self.da_receipt_signer.public_key().clone(),
+            ));
+            return DaRuntimeServices {
+                replay_cache,
+                replay_store,
+                receipt_log,
+                spooler: None,
+            };
+        }
         let replay_store_dir = self.da_ingest.replay_cache_store_dir.clone();
         let replay_cursor_store = da::ReplayCursorStore::open_with_max_lane_epochs(
             replay_store_dir.clone(),
@@ -49499,11 +49622,6 @@ impl Torii {
                 replay_store_dir.display()
             )
         });
-        let replay_cache_config = iroha_core::da::ReplayCacheConfig::new()
-            .with_max_entries_per_lane(self.da_ingest.replay_cache_capacity)
-            .with_max_lane_epochs(self.da_ingest.replay_cache_max_lane_epochs)
-            .with_ttl(self.da_ingest.replay_cache_ttl)
-            .with_max_sequence_lag(self.da_ingest.replay_cache_max_sequence_lag);
         let replay_cache = Arc::new(iroha_core::da::ReplayCache::new(replay_cache_config));
         for (lane_epoch, highest) in replay_cursor_store.highest_sequences() {
             replay_cache
@@ -50204,6 +50322,7 @@ impl Torii {
         self,
         shutdown_signal: ShutdownSignal,
     ) -> core::result::Result<(), Report<Error>> {
+        let emergency_fast = self.kura.emergency_fast_startup_enabled();
         #[cfg(feature = "app_api")]
         if let Some(code) = self.sorafs_moderation_startup_error {
             return Err(Report::new(Error::SorafsModerationStartup { code }));
@@ -50251,7 +50370,9 @@ impl Torii {
             }
         }
         #[cfg(feature = "app_api")]
-        self.spawn_musubi_search_projection_worker(shutdown_signal.clone());
+        if !emergency_fast {
+            self.spawn_musubi_search_projection_worker(shutdown_signal.clone());
+        }
         if let Some(runtime) = self.iso_bridge.clone() {
             let mut rx = self.events.subscribe();
             tokio::spawn(async move {
@@ -50341,7 +50462,7 @@ impl Torii {
         }
         #[cfg(feature = "app_api")]
         {
-            if let Some(anchor_cfg) = self.da_ingest.taikai_anchor.clone() {
+            if !emergency_fast && let Some(anchor_cfg) = self.da_ingest.taikai_anchor.clone() {
                 crate::da::spawn_anchor_worker(
                     self.da_ingest.manifest_store_dir.clone(),
                     anchor_cfg,
@@ -50350,26 +50471,33 @@ impl Torii {
             }
         }
         #[cfg(feature = "app_api")]
-        self.spawn_pin_registry_metrics_worker(shutdown_signal.clone());
+        if !emergency_fast {
+            self.spawn_pin_registry_metrics_worker(shutdown_signal.clone());
+        }
         #[cfg(feature = "app_api")]
-        self.spawn_por_ingestion_metrics_worker(shutdown_signal.clone());
+        if !emergency_fast {
+            self.spawn_por_ingestion_metrics_worker(shutdown_signal.clone());
+        }
         #[cfg(feature = "app_api")]
-        let evidence_viewer_compaction_worker =
-            self.spawn_evidence_viewer_compaction_worker(shutdown_signal.clone());
+        let evidence_viewer_compaction_worker = if emergency_fast {
+            None
+        } else {
+            self.spawn_evidence_viewer_compaction_worker(shutdown_signal.clone())
+        };
         #[cfg(feature = "app_api")]
-        if let Some(runtime) = &self.por_runtime {
+        if !emergency_fast && let Some(runtime) = &self.por_runtime {
             runtime.clone().spawn(shutdown_signal.clone());
         }
         #[cfg(feature = "app_api")]
-        if let Some(runtime) = &self.sorafs_pop_credentials {
+        if !emergency_fast && let Some(runtime) = &self.sorafs_pop_credentials {
             runtime.clone().spawn(shutdown_signal.clone());
         }
         #[cfg(feature = "app_api")]
-        if let Some(runtime) = &self.gc_runtime {
+        if !emergency_fast && let Some(runtime) = &self.gc_runtime {
             runtime.clone().spawn(shutdown_signal.clone());
         }
         #[cfg(feature = "app_api")]
-        if let Some(components) = &self.sorafs_gateway_security {
+        if !emergency_fast && let Some(components) = &self.sorafs_gateway_security {
             if let Some(automation) = &components.tls_automation {
                 automation.spawn(self.telemetry.clone(), shutdown_signal.clone());
             }
@@ -50381,7 +50509,7 @@ impl Torii {
             .attach_with(|| self.address.clone().into_attachment())?;
         let (api_router, app_state) = self.create_api_router_with_state();
         #[cfg(feature = "app_api")]
-        {
+        if !emergency_fast {
             sorafs::api::spawn_sorafs_capacity_reconciler_worker(
                 app_state.clone(),
                 shutdown_signal.clone(),

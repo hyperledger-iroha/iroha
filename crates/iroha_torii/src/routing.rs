@@ -636,7 +636,7 @@ where
         ord => ord,
     });
     let skip = offset_usize.min(entries.len());
-    let items = entries
+    let items: Vec<T> = entries
         .into_iter()
         .skip(skip)
         .take(take)
@@ -1396,7 +1396,7 @@ pub struct RecordSoranetPrivacyShareDto {
 pub struct AliasResolveRequestDto {
     pub alias: String,
 }
-(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)
+(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, norito::derive::NoritoSerialize)
 pub struct AssetAliasResolveRequestDto {
     pub alias: String,
 }
@@ -2263,7 +2263,7 @@ pub struct RamLfeProgramPolicyListDto {
     pub total: u64,
     pub items: Vec<RamLfeProgramPolicySummaryDto>,
 }
-(Debug, norito::derive::NoritoDeserialize)
+(Debug, norito::derive::NoritoDeserialize, norito::derive::NoritoSerialize)
 /// Execute one RAM-LFE program from a BFV-encrypted input.
 pub struct RamLfeExecuteRequestDto {
     pub encrypted_input: String,
@@ -2421,7 +2421,7 @@ pub struct IdentifierPolicyListDto {
     pub total: u64,
     pub items: Vec<IdentifierPolicySummaryDto>,
 }
-(Debug, norito::derive::NoritoDeserialize)
+(Debug, norito::derive::NoritoDeserialize, norito::derive::NoritoSerialize)
 /// Resolve an encrypted identifier under one policy namespace.
 pub struct IdentifierResolveRequestDto {
     pub policy_id: String,
@@ -4343,7 +4343,11 @@ pub async fn handle_list_vk(
 include!("routing/signed_query_execution.rs");
 // ---------------------- Iroha Connect (feature-gated) ----------------------
 #[cfg(feature = "connect")]
-#[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::NoritoSerialize,
+)]
 #[norito(deny_unknown_fields)]
 /// Request body for creating a Connect session.
 pub struct ConnectSessionRequest {
@@ -4901,7 +4905,12 @@ pub async fn handle_get_proof(
         bytes,
     })
 }
-#[derive(Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::NoritoSerialize,
+)]
 #[norito(deny_unknown_fields)]
 /// Canonical signed-query envelope for `FindProofRecordById`.
 pub struct ProofFindByIdQueryDto {
@@ -10727,6 +10736,7 @@ pub fn accept_transaction_for_ingress(
     tx: impl Into<TransactionEntrypoint>,
     telemetry: &MaybeTelemetry,
 ) -> Result<iroha_core::tx::AcceptedTransaction<'static>> {
+    reject_emergency_fast_transaction_ingress(state.as_ref())?;
     #[cfg(not(feature = "telemetry"))]
     let _ = telemetry;
     #[cfg(feature = "telemetry")]
@@ -10866,6 +10876,7 @@ pub fn accept_decoded_signed_transaction_for_ingress_with_precheck(
     single_ed25519_prechecked: bool,
     precheck_rejection: Option<AcceptTransactionFail>,
 ) -> Result<iroha_core::tx::AcceptedTransaction<'static>> {
+    reject_emergency_fast_transaction_ingress(state.as_ref())?;
     #[cfg(not(feature = "telemetry"))]
     let _ = telemetry;
     #[cfg(feature = "telemetry")]
@@ -10989,6 +11000,7 @@ pub(crate) fn reject_ingress_if_queue_capacity_saturated(
     if incoming_tx_count == 0 {
         return Ok(());
     }
+    reject_emergency_fast_transaction_ingress(state)?;
     let pressure = {
         let block_time = state.sumeragi_block_cadence();
         queue.refresh_pressure_budget_from_block_time(block_time)
@@ -11026,6 +11038,16 @@ pub(crate) fn reject_ingress_if_queue_capacity_saturated(
             capacity: pressure.capacity,
         },
     })
+}
+fn reject_emergency_fast_transaction_ingress(state: &CoreState) -> Result<()> {
+    if state.emergency_fast_startup_enabled() {
+        return Err(Error::AppServiceUnavailable {
+            code: "emergency_fast_transaction_ingress_disabled",
+            message: "transaction admission and validation are disabled in emergency Fast mode; restart in Strict mode before submitting transactions"
+                .to_owned(),
+        });
+    }
+    Ok(())
 }
 pub(crate) fn push_accepted_transaction_for_ingress_with_routing_plan(
     queue: Arc<Queue>,
@@ -33519,7 +33541,26 @@ fn extend_account_history_index(
     }
     index
 }
-fn account_history_index_snapshot(state: &CoreState) -> Arc<AccountHistoryIndex> {
+fn reject_emergency_fast_history_index(state: &CoreState) -> Result<()> {
+    reject_emergency_fast_unbounded_history(state, false, "lazy application history index")
+}
+fn reject_emergency_fast_unbounded_history(
+    state: &CoreState,
+    bounded: bool,
+    surface: &'static str,
+) -> Result<()> {
+    if !bounded && state.emergency_fast_startup_enabled() {
+        return Err(Error::AppServiceUnavailable {
+            code: "emergency_fast_history_unavailable",
+            message: format!(
+                "{surface} requires a historical Kura scan that emergency Fast mode deliberately disables; provide an exact numeric block height where supported or restart in Strict mode"
+            ),
+        });
+    }
+    Ok(())
+}
+fn account_history_index_snapshot(state: &CoreState) -> Result<Arc<AccountHistoryIndex>> {
+    reject_emergency_fast_history_index(state)?;
     let cache_key = account_history_index_cache_key(state);
     if let Some(existing) = ACCOUNT_HISTORY_INDEX
         .read()
@@ -33527,13 +33568,13 @@ fn account_history_index_snapshot(state: &CoreState) -> Arc<AccountHistoryIndex>
         .as_ref()
         .filter(|index| index.cache_key == cache_key)
     {
-        return Arc::clone(existing);
+        return Ok(Arc::clone(existing));
     }
     let mut guard = ACCOUNT_HISTORY_INDEX
         .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(existing) = guard.as_ref().filter(|index| index.cache_key == cache_key) {
-        return Arc::clone(existing);
+        return Ok(Arc::clone(existing));
     }
     let rebuilt = if let Some(previous) = guard.as_ref() {
         if account_history_cache_extends_append_only(previous.as_ref(), state, &cache_key) {
@@ -33545,7 +33586,7 @@ fn account_history_index_snapshot(state: &CoreState) -> Arc<AccountHistoryIndex>
         Arc::new(build_account_history_index(state, cache_key))
     };
     *guard = Some(Arc::clone(&rebuilt));
-    rebuilt
+    Ok(rebuilt)
 }
 fn contract_activity_insert_index(
     index: &mut std::collections::HashMap<String, Vec<usize>>,
@@ -34489,7 +34530,8 @@ fn extend_contract_event_index(
     index.cache_key = next_key;
     index
 }
-fn contract_activity_index_snapshot(state: &CoreState) -> Arc<ContractActivityIndex> {
+fn contract_activity_index_snapshot(state: &CoreState) -> Result<Arc<ContractActivityIndex>> {
+    reject_emergency_fast_history_index(state)?;
     let cache_key = contract_activity_index_cache_key(state);
     if let Some(existing) = CONTRACT_ACTIVITY_INDEX
         .read()
@@ -34497,7 +34539,7 @@ fn contract_activity_index_snapshot(state: &CoreState) -> Arc<ContractActivityIn
         .and_then(|guard| guard.clone())
     {
         if existing.cache_key == cache_key {
-            return existing;
+            return Ok(existing);
         }
     }
     let rebuilt = if let Some(existing) = CONTRACT_ACTIVITY_INDEX
@@ -34520,14 +34562,15 @@ fn contract_activity_index_snapshot(state: &CoreState) -> Arc<ContractActivityIn
     if let Ok(mut guard) = CONTRACT_ACTIVITY_INDEX.write() {
         if let Some(existing) = guard.as_ref() {
             if existing.cache_key == cache_key {
-                return Arc::clone(existing);
+                return Ok(Arc::clone(existing));
             }
         }
         *guard = Some(Arc::clone(&rebuilt));
     }
-    rebuilt
+    Ok(rebuilt)
 }
-fn contract_event_index_snapshot(state: &CoreState) -> Arc<ContractEventIndex> {
+fn contract_event_index_snapshot(state: &CoreState) -> Result<Arc<ContractEventIndex>> {
+    reject_emergency_fast_history_index(state)?;
     let cache_key = contract_event_index_cache_key(state);
     if let Some(existing) = CONTRACT_EVENT_INDEX
         .read()
@@ -34535,7 +34578,7 @@ fn contract_event_index_snapshot(state: &CoreState) -> Arc<ContractEventIndex> {
         .and_then(|guard| guard.clone())
     {
         if existing.cache_key == cache_key {
-            return existing;
+            return Ok(existing);
         }
     }
     let rebuilt = if let Some(existing) = CONTRACT_EVENT_INDEX
@@ -34558,13 +34601,37 @@ fn contract_event_index_snapshot(state: &CoreState) -> Arc<ContractEventIndex> {
     if let Ok(mut guard) = CONTRACT_EVENT_INDEX.write() {
         if let Some(existing) = guard.as_ref() {
             if existing.cache_key == cache_key {
-                return Arc::clone(existing);
+                return Ok(Arc::clone(existing));
             }
         }
         *guard = Some(Arc::clone(&rebuilt));
     }
-    rebuilt
+    Ok(rebuilt)
 }
+#[cfg(all(test, feature = "app_api"))]
+routing_test! { sync emergency_fast_history_guard_precedes_every_lazy_full_index_build {
+    let source = include_str!("routing.rs");
+    for function in [
+        "fn account_history_index_snapshot",
+        "fn contract_activity_index_snapshot",
+        "fn contract_event_index_snapshot",
+    ] {
+        let body = source
+            .split_once(function)
+            .unwrap_or_else(|| panic!("missing {function}"))
+            .1;
+        let guard = body
+            .find("reject_emergency_fast_history_index(state)?")
+            .unwrap_or_else(|| panic!("missing Fast guard in {function}"));
+        let cache_key = body
+            .find("let cache_key")
+            .unwrap_or_else(|| panic!("missing cache key in {function}"));
+        assert!(
+            guard < cache_key,
+            "{function} must reject Fast mode before consulting or rebuilding its process-global history cache"
+        );
+    }
+} }
 fn intersect_contract_activity_positions(left: &[usize], right: &[usize]) -> Vec<usize> {
     let mut merged = Vec::with_capacity(left.len().min(right.len()));
     let mut left_index = 0usize;
@@ -37829,7 +37896,7 @@ pub async fn handle_v1_account_history_get_with_policy(
                 .clamp_fetch_size(None)?
                 .map(|value| value.min(pagination.cap))
         };
-        let snapshot = account_history_index_snapshot(state.as_ref());
+        let snapshot = account_history_index_snapshot(state.as_ref())?;
         let account_key = account_id.to_string();
         let positions = snapshot
             .by_account
@@ -38013,7 +38080,7 @@ pub async fn handle_v1_contracts_activity_get(
     let count_mode = app_count_mode(params.count_mode.as_deref(), ENDPOINT_CONTRACTS_ACTIVITY);
     let page = {
         let limits = app_query_limits();
-        let index = contract_activity_index_snapshot(state.as_ref());
+        let index = contract_activity_index_snapshot(state.as_ref())?;
         let pagination = enforce_app_pagination(
             params.limit,
             params.offset,
@@ -38078,7 +38145,7 @@ pub async fn handle_v1_contracts_events_get(
     let count_mode = app_count_mode(params.count_mode.as_deref(), ENDPOINT_CONTRACTS_EVENTS);
     let page = {
         let limits = app_query_limits();
-        let index = contract_event_index_snapshot(state.as_ref());
+        let index = contract_event_index_snapshot(state.as_ref())?;
         let pagination =
             enforce_app_pagination(params.limit, params.offset, cap, ENDPOINT_CONTRACTS_EVENTS)?;
         let fetch_cap = if count_mode == AppCountMode::Exact {
@@ -48136,7 +48203,7 @@ fn load_swap_fill_rollup(
         }
         cursor = cursor.saturating_sub(1);
     }
-    let index = contract_event_index_snapshot(state.as_ref());
+    let index = contract_event_index_snapshot(state.as_ref())?;
     let mut swap_events: Vec<ContractEventProjection> = index
         .items
         .iter()
@@ -49113,7 +49180,7 @@ pub async fn handle_v1_contracts_rollups_uranai_markets_history_get(
         params.count_mode.as_deref(),
         ENDPOINT_CONTRACTS_ROLLUPS_URANAI_MARKETS_HISTORY,
     );
-    let index = contract_event_index_snapshot(state.as_ref());
+    let index = contract_event_index_snapshot(state.as_ref())?;
     Ok(infallible_pretty_json_response(
         &uranai_market_history_rollup_to_json_value(
             index.as_ref(),
@@ -49140,7 +49207,7 @@ pub async fn handle_v1_contracts_rollups_trader_activity_get(
         params.count_mode.as_deref(),
         ENDPOINT_CONTRACTS_ROLLUPS_TRADER_ACTIVITY,
     );
-    let index = contract_event_index_snapshot(state.as_ref());
+    let index = contract_event_index_snapshot(state.as_ref())?;
     let (items, total) = collect_trader_activity_page(index.as_ref(), &params, pagination);
     let page = page_result_from_counted_items(items, total, params.offset, count_mode);
     let activity_items = page
@@ -49198,7 +49265,7 @@ pub async fn handle_v1_contracts_rollups_trader_account_get(
         cap,
         ENDPOINT_CONTRACTS_ROLLUPS_TRADER_ACCOUNT,
     )?;
-    let index = contract_event_index_snapshot(state.as_ref());
+    let index = contract_event_index_snapshot(state.as_ref())?;
     let (activity_projections, _) =
         collect_trader_activity_page(index.as_ref(), &activity_params, pagination);
     let activity_items = activity_projections
@@ -49241,7 +49308,7 @@ async fn handle_v1_contracts_rollups_module_get(
     let cap = app_query_page_cap(&state);
     let pagination = enforce_app_pagination(params.limit, params.offset, cap, endpoint)?;
     let count_mode = app_count_mode(params.count_mode.as_deref(), endpoint);
-    let index = contract_event_index_snapshot(state.as_ref());
+    let index = contract_event_index_snapshot(state.as_ref())?;
     let (items, total) = collect_trader_activity_page(index.as_ref(), &params, pagination);
     let page = page_result_from_counted_items(items, total, params.offset, count_mode);
     let activity_items = page
@@ -53011,6 +53078,11 @@ fn faucet_pow_recent_claims(
     faucet: &iroha_config::parameters::actual::ToriiFaucet,
     anchor_height: u64,
 ) -> Result<u64> {
+    reject_emergency_fast_unbounded_history(
+        app.state.as_ref(),
+        false,
+        "faucet proof-of-work claim history",
+    )?;
     if faucet.pow_adaptive_lookback_blocks == 0
         || faucet.pow_adaptive_claims_per_extra_bit == 0
         || faucet.pow_adaptive_max_extra_bits == 0
@@ -56970,6 +57042,11 @@ pub async fn handle_v1_explorer_transactions(
 ) -> Result<AxResponse, Error> {
     let started = std::time::Instant::now();
     let response = (|| -> Result<AxResponse, Error> {
+        reject_emergency_fast_unbounded_history(
+            state.as_ref(),
+            block.is_some(),
+            "explorer transaction history",
+        )?;
         let max_height = state.committed_height() as u64;
         record_account_literal_selection(&telemetry, ENDPOINT_EXPLORER_TRANSACTIONS);
         if let Some(block_height) = block {
@@ -57024,6 +57101,11 @@ pub async fn handle_v1_explorer_transactions_latest(
 ) -> Result<AxResponse, Error> {
     let started = std::time::Instant::now();
     let response = (|| -> Result<AxResponse, Error> {
+        reject_emergency_fast_unbounded_history(
+            state.as_ref(),
+            block.is_some(),
+            "explorer latest-transaction history",
+        )?;
         let max_height = state.committed_height() as u64;
         record_account_literal_selection(&telemetry, ENDPOINT_EXPLORER_TRANSACTIONS_LATEST);
         if let Some(block_height) = block {
@@ -57079,6 +57161,11 @@ pub async fn handle_v1_explorer_instructions(
 ) -> Result<AxResponse, Error> {
     let started = std::time::Instant::now();
     let response = (|| -> Result<AxResponse, Error> {
+        reject_emergency_fast_unbounded_history(
+            state.as_ref(),
+            query.block.is_some(),
+            "explorer instruction history",
+        )?;
         let max_height = state.committed_height() as u64;
         record_account_literal_selection(&telemetry, ENDPOINT_EXPLORER_INSTRUCTIONS);
         let ExplorerInstructionQuery {
@@ -57142,6 +57229,11 @@ pub async fn handle_v1_explorer_instructions_latest(
 ) -> Result<AxResponse, Error> {
     let started = std::time::Instant::now();
     let response = (|| -> Result<AxResponse, Error> {
+        reject_emergency_fast_unbounded_history(
+            state.as_ref(),
+            query.block.is_some(),
+            "explorer latest-instruction history",
+        )?;
         let max_height = state.committed_height() as u64;
         record_account_literal_selection(&telemetry, ENDPOINT_EXPLORER_INSTRUCTIONS_LATEST);
         let ExplorerInstructionQuery {
@@ -57198,6 +57290,11 @@ pub async fn handle_v1_explorer_transaction_detail(
 ) -> Result<AxResponse, Error> {
     let started = std::time::Instant::now();
     let response = (|| -> Result<AxResponse, Error> {
+        reject_emergency_fast_unbounded_history(
+            state.as_ref(),
+            false,
+            "explorer transaction detail",
+        )?;
         let max_height = state.committed_height() as u64;
         record_account_literal_selection(&telemetry, ENDPOINT_EXPLORER_TRANSACTION_DETAIL);
         let dto = find_transaction_detail(state.as_ref(), max_height, identifier)?;
@@ -57219,6 +57316,11 @@ pub async fn handle_v1_explorer_instruction_detail(
 ) -> Result<AxResponse, Error> {
     let started = std::time::Instant::now();
     let response = (|| -> Result<AxResponse, Error> {
+        reject_emergency_fast_unbounded_history(
+            state.as_ref(),
+            false,
+            "explorer instruction detail",
+        )?;
         let max_height = state.committed_height() as u64;
         record_account_literal_selection(&telemetry, ENDPOINT_EXPLORER_INSTRUCTION_DETAIL);
         let dto = find_instruction_detail(state.as_ref(), max_height, hash, index)?;
@@ -58100,6 +58202,11 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
     state: Arc<CoreState>,
     definition_id: AssetDefinitionId,
 ) -> Result<AxResponse, Error> {
+    reject_emergency_fast_unbounded_history(
+        state.as_ref(),
+        false,
+        "explorer asset econometrics",
+    )?;
     use iroha_data_model::{
         isi::{BurnBox, MintBox, TransferAssetBatch, TransferBox},
         transaction::executable::Executable,
@@ -59234,6 +59341,11 @@ pub async fn handle_v1_explorer_block_detail(
     let started = std::time::Instant::now();
     let response = (|| -> Result<AxResponse, Error> {
         let lookup = parse_block_identifier(&identifier)?;
+        reject_emergency_fast_unbounded_history(
+            state.as_ref(),
+            matches!(&lookup, ExplorerBlockIdentifier::Height(_)),
+            "explorer block hash lookup",
+        )?;
         let dto = match lookup {
             ExplorerBlockIdentifier::Height(height) => state
                 .block_by_height(height)

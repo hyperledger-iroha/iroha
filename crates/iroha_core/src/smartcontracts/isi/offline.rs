@@ -472,25 +472,22 @@ fn kagemusha_v4_parity_for_circuit(
     }
 }
 
-fn kagemusha_release_verifier_id_has_exact_digest(
+fn kagemusha_v4_release_verifier_id_has_exact_digest(
     id: &iroha_data_model::proof::VerifyingKeyId,
-    version_prefix: &str,
 ) -> bool {
     if id.backend.as_str()
         != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4
     {
         return false;
     }
-    let Some(name) = id.name.strip_prefix(version_prefix) else {
-        return false;
-    };
     [
         iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
         iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
     ]
     .iter()
     .any(|circuit| {
-        name.strip_prefix(circuit)
+        id.name
+            .strip_prefix(circuit)
             .and_then(|suffix| suffix.strip_prefix('-'))
             .is_some_and(|digest| {
                 digest.len() == 64
@@ -505,7 +502,7 @@ fn kagemusha_v4_release_verifier_candidate(
     id: &iroha_data_model::proof::VerifyingKeyId,
     circuit_id: &str,
 ) -> bool {
-    kagemusha_release_verifier_id_has_exact_digest(id, "")
+    kagemusha_v4_release_verifier_id_has_exact_digest(id)
         || kagemusha_v4_parity_for_circuit(circuit_id).is_some()
 }
 
@@ -513,13 +510,6 @@ fn exact_kagemusha_v4_release_verifier_identity(
     id: &iroha_data_model::proof::VerifyingKeyId,
     record: &VerifyingKeyRecord,
 ) -> Result<Option<KagemushaV4ReleaseVerifierIdentity>, String> {
-    // V5 reuses this backend and these circuits under a disjoint exact name.
-    // It remains protocol-owned, but no V5 native hydration path exists yet.
-    if kagemusha_release_verifier_id_has_exact_digest(id, "v5-") {
-        return Err(
-            "Kagemusha V5 release verifier cannot enter V4 or generic hydration".to_owned(),
-        );
-    }
     if !kagemusha_v4_release_verifier_candidate(id, &record.circuit_id) {
         return Ok(None);
     }
@@ -677,12 +667,6 @@ pub(crate) fn exact_kagemusha_v4_native_verifier_ids_for_hydration(
     }
 
     for ((circuit_id, version), id) in world.verifying_keys_by_circuit().iter() {
-        if kagemusha_release_verifier_id_has_exact_digest(id, "v5-") {
-            return Err(
-                "Kagemusha V5 release verifier index cannot enter V4 or generic hydration"
-                    .to_owned(),
-            );
-        }
         if !kagemusha_v4_release_verifier_candidate(id, circuit_id) {
             continue;
         }
@@ -5403,6 +5387,50 @@ pub mod isi {
         }
         Ok(())
     }
+    /// Reject overlap between a redemption delta and either confidential-state namespace.
+    fn ensure_kagemusha_v4_redemption_state_is_fresh(
+        zk_state: &crate::state::ZkAssetState,
+        current_nullifier: [u8; 32],
+        change_note: Option<([u8; 32], [u8; 32])>,
+    ) -> Result<(), InstructionExecutionError> {
+        if zk_state.nullifiers.contains(&current_nullifier) {
+            return Err(labeled_invariant(
+                "duplicate_nullifier",
+                "Kagemusha V4 spendable-note nullifier is already redeemed",
+            ));
+        }
+        if zk_state.commitments.contains(&current_nullifier) {
+            return Err(labeled_invariant(
+                "proof_binding",
+                "Kagemusha V4 spendable-note nullifier collides with a confidential commitment",
+            ));
+        }
+        let Some((note_commitment, spend_nullifier)) = change_note else {
+            return Ok(());
+        };
+        if zk_state.commitments.contains(&note_commitment) {
+            return Err(labeled_invariant(
+                "duplicate_output",
+                "Kagemusha V4 redemption change commitment already exists",
+            ));
+        }
+        if zk_state.nullifiers.contains(&spend_nullifier) || spend_nullifier == current_nullifier {
+            return Err(labeled_invariant(
+                "duplicate_nullifier",
+                "Kagemusha V4 redemption change nullifier collides with ledger state",
+            ));
+        }
+        if note_commitment == current_nullifier
+            || zk_state.nullifiers.contains(&note_commitment)
+            || zk_state.commitments.contains(&spend_nullifier)
+        {
+            return Err(labeled_invariant(
+                "proof_binding",
+                "Kagemusha V4 redemption change material overlaps an existing commitment or nullifier",
+            ));
+        }
+        Ok(())
+    }
     fn ensure_kagemusha_v4_anchor_matches_topup_request(
         anchor: &KagemushaRecursiveSpendTopUpAnchorV4,
         request: &iroha_data_model::offline::KagemushaRecursiveSpendTopUpRequestV4,
@@ -5517,8 +5545,7 @@ pub mod isi {
             .map_err(|error| labeled_invariant("invalid_recursive_bundle", error).into())
     }
     struct KagemushaV4RedemptionCommitPlan {
-        definition_id: AssetDefinitionId,
-        zk_asset_state: crate::state::ZkAssetState,
+        zk_asset: KagemushaV4ZkAssetCommitPlan,
         escrow_credit: KagemushaV2EscrowCreditPlan,
         anchor_drawdown: Vec<KagemushaV4AnchorDrawdownUpdate>,
         branch_commit: KagemushaV2BranchCommitPlan,
@@ -5528,18 +5555,11 @@ pub mod isi {
     }
     impl KagemushaV4RedemptionCommitPlan {
         fn commit(self, state_transaction: &mut StateTransaction<'_, '_>) -> Result<(), Error> {
-            // The balance move is the only fallible ledger mutation remaining.
-            // Every proof, conflict marker, tree update, and receipt collision was
-            // validated while constructing this plan.
+            // Every proof, conflict marker, tree update, and receipt collision
+            // was validated while constructing this plan. The two mutable
+            // ledger commits still recheck their exact preconditions.
             self.escrow_credit.commit(state_transaction)?;
-            state_transaction
-                .world
-                .zk_assets
-                .remove(self.definition_id.clone());
-            state_transaction
-                .world
-                .zk_assets
-                .insert(self.definition_id, self.zk_asset_state);
+            self.zk_asset.commit(state_transaction)?;
             commit_kagemusha_v4_anchor_drawdown(self.anchor_drawdown, state_transaction);
             self.branch_commit.commit(state_transaction);
             state_transaction
@@ -5547,6 +5567,91 @@ pub mod isi {
                 .smart_contract_state
                 .insert(self.receipt_key, self.receipt_digest.to_vec());
             commit_kagemusha_v4_replay_markers(self.replay_markers, state_transaction);
+            Ok(())
+        }
+    }
+    #[derive(Clone, Copy)]
+    struct KagemushaV4ChangeStateCommit {
+        note_commitment: [u8; 32],
+        spend_nullifier: [u8; 32],
+        expected_root: [u8; 32],
+    }
+    struct KagemushaV4ZkAssetCommitPlan {
+        definition_id: AssetDefinitionId,
+        expected_root: [u8; 32],
+        expected_commitment_count: usize,
+        current_nullifier: [u8; 32],
+        change: Option<KagemushaV4ChangeStateCommit>,
+    }
+    impl KagemushaV4ZkAssetCommitPlan {
+        fn commit(self, state_transaction: &mut StateTransaction<'_, '_>) -> Result<(), Error> {
+            let root_history_len = state_transaction.zk.tree_roots_history_len;
+            let checkpoint_height = state_transaction.block_height();
+            let checkpoint_interval = state_transaction.zk.tree_frontier_checkpoint_interval;
+            let reorg_depth_bound = state_transaction.zk.reorg_depth_bound;
+            let zk_asset_state = state_transaction
+                .world
+                .zk_assets
+                .get_mut(&self.definition_id)
+                .ok_or_else(|| {
+                    labeled_invariant(
+                        "verifier_key_invalid",
+                        "Kagemusha V4 redemption requires configured shielded asset state",
+                    )
+                })?;
+            if zk_asset_state.persisted_root != self.expected_root
+                || zk_asset_state.commitments.len() != self.expected_commitment_count
+            {
+                return Err(labeled_invariant(
+                    "proof_binding",
+                    "Kagemusha confidential state changed after redemption planning",
+                )
+                .into());
+            }
+            let change_note = self
+                .change
+                .map(|change| (change.note_commitment, change.spend_nullifier));
+            ensure_kagemusha_v4_redemption_state_is_fresh(
+                zk_asset_state,
+                self.current_nullifier,
+                change_note,
+            )?;
+            if !zk_asset_state.nullifiers.insert(self.current_nullifier) {
+                return Err(labeled_invariant(
+                    "duplicate_nullifier",
+                    "Kagemusha V4 spendable-note nullifier is already redeemed",
+                )
+                .into());
+            }
+            if let Some(change) = self.change {
+                let root = zk_asset_state
+                    .push_commitment(change.note_commitment, root_history_len)
+                    .map_err(|err| {
+                        labeled_invariant(
+                            "confidential_tree",
+                            format!("failed to update canonical confidential tree: {err}"),
+                        )
+                    })?;
+                if root != change.expected_root {
+                    return Err(labeled_invariant(
+                        "proof_binding",
+                        "Kagemusha redemption change root changed after planning",
+                    )
+                    .into());
+                }
+                let _frontier_update = zk_asset_state
+                    .record_frontier_checkpoint(
+                        checkpoint_height,
+                        checkpoint_interval,
+                        reorg_depth_bound,
+                    )
+                    .map_err(|err| {
+                        labeled_invariant(
+                            "confidential_tree",
+                            format!("failed to checkpoint canonical confidential tree: {err}"),
+                        )
+                    })?;
+            }
             Ok(())
         }
     }
@@ -5573,62 +5678,42 @@ pub mod isi {
         input: KagemushaV4RedemptionPlanInput<'_>,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<KagemushaV4RedemptionCommitPlan, Error> {
-        let mut zk_asset_state = state_transaction
+        let zk_asset_state = state_transaction
             .world
             .zk_assets
             .get(input.definition_id)
-            .cloned()
             .ok_or_else(|| {
                 labeled_invariant(
                     "verifier_key_invalid",
                     "Kagemusha V4 redemption requires configured shielded asset state",
                 )
             })?;
-        if zk_asset_state.nullifiers.contains(&input.current_nullifier) {
-            return Err(labeled_invariant(
-                "duplicate_nullifier",
-                "Kagemusha V4 spendable-note nullifier is already redeemed",
-            )
-            .into());
-        }
-        if zk_asset_state
-            .commitments
-            .contains(&input.current_nullifier)
-        {
-            return Err(labeled_invariant(
-                "proof_binding",
-                "Kagemusha V4 spendable-note nullifier collides with a confidential commitment",
-            )
-            .into());
-        }
-        if let Some(change) = input.change_output {
-            if zk_asset_state.commitments.contains(&change.note_commitment) {
-                return Err(labeled_invariant(
-                    "duplicate_output",
-                    "Kagemusha V4 redemption change commitment already exists",
-                )
-                .into());
-            }
-            if zk_asset_state.nullifiers.contains(&change.spend_nullifier)
-                || change.spend_nullifier == input.current_nullifier
-            {
-                return Err(labeled_invariant(
-                    "duplicate_nullifier",
-                    "Kagemusha V4 redemption change nullifier collides with ledger state",
-                )
-                .into());
-            }
-            if change.note_commitment == input.current_nullifier
-                || zk_asset_state.nullifiers.contains(&change.note_commitment)
-                || zk_asset_state.commitments.contains(&change.spend_nullifier)
-            {
-                return Err(labeled_invariant(
-                    "proof_binding",
-                    "Kagemusha V4 redemption change material overlaps an existing commitment or nullifier",
-                )
-                .into());
-            }
-        }
+        let change_note = input
+            .change_output
+            .map(|change| (change.note_commitment, change.spend_nullifier));
+        ensure_kagemusha_v4_redemption_state_is_fresh(
+            zk_asset_state,
+            input.current_nullifier,
+            change_note,
+        )?;
+        let change = input
+            .change_output
+            .map(|change| {
+                zk_asset_state
+                    .preview_commitment_root(change.note_commitment)
+                    .map(|expected_root| KagemushaV4ChangeStateCommit {
+                        note_commitment: change.note_commitment,
+                        spend_nullifier: change.spend_nullifier,
+                        expected_root,
+                    })
+                    .map_err(|err| {
+                        labeled_invariant(
+                            "confidential_tree",
+                            format!("failed to preview canonical confidential tree: {err}"),
+                        )
+                    })
+            })
+            .transpose()?;
         let branch_commit = plan_kagemusha_v2_consumed_branch_set(
             input.consumed_claims,
             input.redemption_binding,
@@ -5640,28 +5725,6 @@ pub mod isi {
             input.redemption_atomic_units,
             state_transaction,
         )?;
-        if !zk_asset_state.nullifiers.insert(input.current_nullifier) {
-            unreachable!("the V4 nullifier was checked before insertion into the cloned state");
-        }
-        if let Some(change) = input.change_output {
-            crate::smartcontracts::isi::world::isi::push_confidential_commitment_for_asset(
-                &mut zk_asset_state,
-                change.note_commitment,
-                state_transaction,
-            )?;
-            let _frontier_update = zk_asset_state
-                .record_frontier_checkpoint(
-                    state_transaction.block_height(),
-                    state_transaction.zk.tree_frontier_checkpoint_interval,
-                    state_transaction.zk.reorg_depth_bound,
-                )
-                .map_err(|err| {
-                    labeled_invariant(
-                        "confidential_tree",
-                        format!("failed to checkpoint canonical confidential tree: {err}"),
-                    )
-                })?;
-        }
         let escrow_credit = plan_kagemusha_v2_escrow_credit(
             input.operation_id,
             input.source_asset,
@@ -5672,8 +5735,13 @@ pub mod isi {
         let receipt_key =
             ensure_kagemusha_v4_redemption_receipt_absent(input.operation_id, state_transaction)?;
         Ok(KagemushaV4RedemptionCommitPlan {
-            definition_id: input.definition_id.clone(),
-            zk_asset_state,
+            zk_asset: KagemushaV4ZkAssetCommitPlan {
+                definition_id: input.definition_id.clone(),
+                expected_root: zk_asset_state.persisted_root,
+                expected_commitment_count: zk_asset_state.commitments.len(),
+                current_nullifier: input.current_nullifier,
+                change,
+            },
             escrow_credit,
             anchor_drawdown,
             branch_commit,
@@ -5978,25 +6046,19 @@ pub mod isi {
                 request.asset.definition(),
                 state_transaction,
             )?;
-            let mut zk_state = state_transaction
+            let zk_state = state_transaction
                 .world
                 .zk_assets
                 .get(request.asset.definition())
-                .cloned()
                 .ok_or_else(|| {
                     labeled_invariant(
                         "verifier_key_invalid",
                         "Kagemusha V4 top-up requires configured confidential asset state",
                     )
                 })?;
-            zk_state
-                .validate_tree_metadata()
-                .map_err(|err| labeled_invariant("topup_anchor_invalid", err))?;
-            let authoritative_initial_root = zk_state
-                .current_root()
-                .map_err(|err| labeled_invariant("topup_anchor_invalid", err))?;
+            let authoritative_commitment_count = zk_state.commitments.len();
             let authoritative_leaf_index =
-                u32::try_from(zk_state.commitments.len()).map_err(|_| {
+                u32::try_from(authoritative_commitment_count).map_err(|_| {
                     labeled_invariant(
                         "topup_tree_full",
                         "Kagemusha confidential tree position does not fit the protocol index",
@@ -6010,15 +6072,13 @@ pub mod isi {
                 .into());
             }
             ensure_kagemusha_v4_topup_note_is_fresh(
-                &zk_state,
+                zk_state,
                 request.current_note.note_commitment,
                 request.current_note.spend_nullifier,
             )?;
-            let mut commitments_after = zk_state.commitments.clone();
-            commitments_after.push(request.current_note.note_commitment);
+            let authoritative_initial_root = zk_state.persisted_root;
             let authoritative_finalized_root = zk_state
-                .tree_profile
-                .compute_root(&commitments_after)
+                .preview_commitment_root(request.current_note.note_commitment)
                 .map_err(|err| labeled_invariant("topup_anchor_invalid", err))?;
             let (shield_vk, _shield_record) = resolve_kagemusha_topup_shield_verifier(
                 request.asset.definition(),
@@ -6069,12 +6129,42 @@ pub mod isi {
                 &request.asset,
                 &amount,
             )?;
-            let finalized_root =
-                crate::smartcontracts::isi::world::isi::push_confidential_commitment_for_asset(
-                    &mut zk_state,
-                    request.current_note.note_commitment,
-                    state_transaction,
-                )?;
+            let root_history_len = state_transaction.zk.tree_roots_history_len;
+            let checkpoint_height = state_transaction.block_height();
+            let checkpoint_interval = state_transaction.zk.tree_frontier_checkpoint_interval;
+            let reorg_depth_bound = state_transaction.zk.reorg_depth_bound;
+            let zk_state = state_transaction
+                .world
+                .zk_assets
+                .get_mut(request.asset.definition())
+                .ok_or_else(|| {
+                    labeled_invariant(
+                        "verifier_key_invalid",
+                        "Kagemusha V4 top-up requires configured confidential asset state",
+                    )
+                })?;
+            if zk_state.persisted_root != authoritative_initial_root
+                || zk_state.commitments.len() != authoritative_commitment_count
+            {
+                return Err(labeled_invariant(
+                    "topup_anchor_mismatch",
+                    "Kagemusha confidential tree changed after read-only top-up admission",
+                )
+                .into());
+            }
+            ensure_kagemusha_v4_topup_note_is_fresh(
+                zk_state,
+                request.current_note.note_commitment,
+                request.current_note.spend_nullifier,
+            )?;
+            let finalized_root = zk_state
+                .push_commitment(request.current_note.note_commitment, root_history_len)
+                .map_err(|err| {
+                    labeled_invariant(
+                        "confidential_tree",
+                        format!("failed to update canonical confidential tree: {err}"),
+                    )
+                })?;
             if finalized_root != authoritative_finalized_root {
                 return Err(labeled_invariant(
                     "topup_anchor_mismatch",
@@ -6084,9 +6174,9 @@ pub mod isi {
             }
             let _frontier_update = zk_state
                 .record_frontier_checkpoint(
-                    state_transaction.block_height(),
-                    state_transaction.zk.tree_frontier_checkpoint_interval,
-                    state_transaction.zk.reorg_depth_bound,
+                    checkpoint_height,
+                    checkpoint_interval,
+                    reorg_depth_bound,
                 )
                 .map_err(|err| {
                     labeled_invariant(
@@ -6094,14 +6184,6 @@ pub mod isi {
                         format!("failed to checkpoint canonical confidential tree: {err}"),
                     )
                 })?;
-            state_transaction
-                .world
-                .zk_assets
-                .remove(request.asset.definition().clone());
-            state_transaction
-                .world
-                .zk_assets
-                .insert(request.asset.definition().clone(), zk_state);
             persist_kagemusha_v4_topup_anchor(&anchor, state_transaction)?;
             commit_kagemusha_online_hardware_assertion(
                 hardware_assertion_commit,
@@ -6244,7 +6326,6 @@ pub mod isi {
                 .world
                 .zk_assets
                 .get(&statement.asset)
-                .cloned()
                 .ok_or_else(|| {
                     labeled_invariant(
                         "verifier_key_invalid",
@@ -6255,7 +6336,7 @@ pub mod isi {
                 &statement.topup_anchor_refs,
                 statement.current_note.amount.atomic_units,
                 request.block_height,
-                &zk_state,
+                zk_state,
                 state_transaction,
             )?;
             let (redeem_vk, redeem_record) = resolve_kagemusha_unshield_verifier(
@@ -6269,13 +6350,6 @@ pub mod isi {
                 state_transaction.block_height(),
             )?;
             ensure_kagemusha_v4_redeem_public_inputs(&request, state_transaction, &redeem_record)?;
-            let commit_plan = plan_kagemusha_v4_redemption_commit(
-                &request,
-                &provenance.source_asset,
-                payload_digest,
-                replay_markers,
-                state_transaction,
-            )?;
             ensure_kagemusha_v4_policy_will_be_convertible(&statement.asset, state_transaction)?;
             state_transaction.register_confidential_proof(
                 request
@@ -6341,6 +6415,16 @@ pub mod isi {
                 )
                 .into());
             }
+            // Plan from the post-transition state, then commit only the checked
+            // nullifier/change delta through transactional mutable access. This
+            // preserves verifier-binding updates without another full-state clone.
+            let commit_plan = plan_kagemusha_v4_redemption_commit(
+                &request,
+                &provenance.source_asset,
+                payload_digest,
+                replay_markers,
+                state_transaction,
+            )?;
             commit_kagemusha_online_hardware_assertion(
                 hardware_assertion_commit,
                 state_transaction,

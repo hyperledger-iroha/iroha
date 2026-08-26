@@ -251,6 +251,167 @@ async fn snapshot_read_validates_hashes_without_historical_block_body() {
     );
 }
 #[tokio::test]
+async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journals() {
+    let tmp_root = tempdir().unwrap();
+    let snapshot_store_dir = tmp_root.path().join("snapshot");
+    let kura_store_dir = tmp_root.path().join("kura");
+    let lane_config = LaneConfig::default();
+    let mut kura_config = kura_config_for_snapshot_test(&kura_store_dir, nonzero!(1_usize));
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_config, &lane_config)
+        .expect("strict Kura init");
+    let mut state = state_factory_with_kura(Arc::clone(&kura));
+    let signing_key = checked_random_snapshot_keypair();
+    let block = signed_block_after_transaction(accepted_log_transaction("current"), None);
+    store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block));
+    store_complete_snapshot_commit_evidence_for_blocks(&state, &kura, &[Arc::clone(&block)]);
+    try_write_snapshot(&state, &snapshot_store_dir, &signing_key, TEST_CHUNK_SIZE)
+        .expect("write current snapshot");
+    let expected_network_id = state.network_id.clone();
+    drop(state);
+    drop(kura);
+
+    let merge_path = lane_config.primary().merge_log_path(&kura_store_dir);
+    let query_index_path = kura_store_dir.join("query-index-status.norito");
+    let query_projection_path = kura_store_dir.join("query-projection-checkpoint.norito");
+    let deferred_bytes = b"left for Strict recovery";
+    std::fs::write(&merge_path, deferred_bytes).expect("forge deferred merge journal");
+    std::fs::write(&query_index_path, deferred_bytes).expect("forge deferred query-index journal");
+    std::fs::write(&query_projection_path, deferred_bytes)
+        .expect("forge deferred query-projection journal");
+
+    kura_config.init_mode = iroha_config::kura::InitMode::Fast;
+    let (fast_kura, block_count) =
+        Kura::open_test_kura_with_configured_lane_config(&kura_config, &lane_config)
+            .expect("Fast Kura open must leave auxiliary journals deferred");
+    SNAPSHOT_PAYLOAD_DIGEST_PASSES.with(|passes| passes.set(0));
+    SNAPSHOT_DEEP_VALIDATION_PASSES.with(|passes| passes.set(0));
+    SNAPSHOT_BLOCK_HASH_VECTOR_CLONES.with(|clones| clones.set(0));
+    let restored = try_read_snapshot(
+        &snapshot_store_dir,
+        &fast_kura,
+        LiveQueryStore::start_test,
+        block_count,
+        TEST_CHUNK_SIZE,
+        signing_key.public_key(),
+        &expected_network_id,
+        &crate::state::default_zk_config(),
+        #[cfg(feature = "telemetry")]
+        StateTelemetry::new(<_>::default(), true),
+    )
+    .expect("Fast mode must restore its required current snapshot");
+    SNAPSHOT_PAYLOAD_DIGEST_PASSES.with(|passes| {
+        assert_eq!(
+            passes.get(),
+            1,
+            "Fast restore must hash the handle-bound payload exactly once"
+        );
+    });
+    SNAPSHOT_DEEP_VALIDATION_PASSES.with(|passes| {
+        assert_eq!(
+            passes.get(),
+            0,
+            "Fast restore must defer Merkle, resource, WSV, and raw SCCP validation"
+        );
+    });
+    SNAPSHOT_BLOCK_HASH_VECTOR_CLONES.with(|clones| {
+        assert_eq!(
+            clones.get(),
+            0,
+            "Fast restore must bind height and tip without cloning the block-hash journal"
+        );
+    });
+    assert_eq!(restored.committed_height(), 1);
+    let state_view = restored.view();
+    let unbounded_blocks = crate::smartcontracts::ValidQuery::execute(
+        iroha_data_model::query::block::prelude::FindBlocks,
+        iroha_data_model::query::dsl::CompoundPredicate::PASS,
+        &state_view,
+    )
+    .err()
+    .expect("Fast mode must reject a full block-history materialization");
+    assert!(matches!(
+        unbounded_blocks,
+        iroha_data_model::query::error::QueryExecutionFail::Conversion(_)
+    ));
+    let unbounded_transactions = crate::smartcontracts::ValidQuery::execute(
+        iroha_data_model::query::transaction::prelude::FindTransactions,
+        iroha_data_model::query::dsl::CompoundPredicate::PASS,
+        &state_view,
+    )
+    .err()
+    .expect("Fast mode must reject a full transaction-history materialization");
+    assert!(matches!(
+        unbounded_transactions,
+        iroha_data_model::query::error::QueryExecutionFail::Conversion(_)
+    ));
+    let bounded_blocks = crate::smartcontracts::ValidQuery::execute(
+        iroha_data_model::query::block::prelude::FindBlocks,
+        iroha_data_model::query::dsl::CompoundPredicate::<
+            iroha_data_model::block::SignedBlock,
+        >::build(|predicate| predicate.equals("height", 1_u64)),
+        &state_view,
+    )
+    .expect("an explicit bounded Fast block query remains available")
+    .collect::<Vec<_>>();
+    assert_eq!(bounded_blocks.len(), 1);
+    for path in [&merge_path, &query_index_path, &query_projection_path] {
+        assert_eq!(
+            std::fs::read(path).expect("deferred journal remains readable"),
+            deferred_bytes,
+            "Fast snapshot restore must not read-repair or rewrite {}",
+            path.display()
+        );
+    }
+
+    let wrong_network_id = NetworkId::from_genesis_hash(dummy_block_hash(0xE1));
+    let network_error = try_read_snapshot(
+        &snapshot_store_dir,
+        &fast_kura,
+        LiveQueryStore::start_test,
+        block_count,
+        TEST_CHUNK_SIZE,
+        signing_key.public_key(),
+        &wrong_network_id,
+        &crate::state::default_zk_config(),
+        #[cfg(feature = "telemetry")]
+        StateTelemetry::new(<_>::default(), true),
+    )
+    .expect_err("Fast restore must retain exact network identity binding");
+    assert!(matches!(
+        network_error,
+        TryReadError::NetworkIdMismatch { .. }
+    ));
+
+    let digest_hex = std::fs::read_to_string(current_generation_artifact(
+        &snapshot_store_dir,
+        SNAPSHOT_DIGEST_FILE_NAME,
+    ))
+    .expect("snapshot digest");
+    let digest = hex::decode(digest_hex.trim()).expect("snapshot digest hex");
+    let wrong_signing_key = checked_random_snapshot_keypair();
+    let wrong_signature =
+        Signature::try_new(wrong_signing_key.private_key(), &digest).expect("wrong-key signature");
+    std::fs::write(
+        current_generation_artifact(&snapshot_store_dir, SNAPSHOT_SIGNATURE_FILE_NAME),
+        hex::encode(wrong_signature.payload()),
+    )
+    .expect("replace snapshot signature");
+    let signature_error = try_read_snapshot(
+        &snapshot_store_dir,
+        &fast_kura,
+        LiveQueryStore::start_test,
+        block_count,
+        TEST_CHUNK_SIZE,
+        signing_key.public_key(),
+        &expected_network_id,
+        &crate::state::default_zk_config(),
+        #[cfg(feature = "telemetry")]
+        StateTelemetry::new(<_>::default(), true),
+    )
+    .expect_err("Fast restore must retain ordinary outer signature verification");
+    assert!(matches!(signature_error, TryReadError::SignatureInvalid(_)));
+}
+#[tokio::test]
 async fn snapshot_hash_reconcile_rejects_non_latest_mismatch() {
     let kura = Kura::blank_kura_for_testing();
     let mut state = state_factory_with_kura(Arc::clone(&kura));
@@ -271,6 +432,90 @@ async fn snapshot_hash_reconcile_rejects_non_latest_mismatch() {
         TryReadError::MismatchedHash { height: 2, .. }
     ));
     assert_eq!(state.committed_height(), 3);
+}
+#[tokio::test]
+async fn emergency_fast_snapshot_reconcile_checks_only_the_terminal_boundary() {
+    let tmp_root = tempdir().unwrap();
+    let kura_store_dir = tmp_root.path().join("kura");
+    let lane_config = LaneConfig::default();
+    let mut kura_config = kura_config_for_snapshot_test(&kura_store_dir, nonzero!(1_usize));
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_config, &lane_config)
+        .expect("strict Kura init");
+    let mut state = state_factory_with_kura(Arc::clone(&kura));
+    let block1 = signed_block_after_transaction(accepted_log_transaction("first"), None);
+    store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block1));
+    let block2 =
+        signed_block_after_transaction(accepted_log_transaction("second"), Some(block1.as_ref()));
+    store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block2));
+    let block3 =
+        signed_block_after_transaction(accepted_log_transaction("third"), Some(block2.as_ref()));
+    store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block3));
+    let mut snapshot_hashes = state.committed_block_hashes_snapshot();
+    let canonical_tip = snapshot_hashes[2];
+    drop(state);
+    drop(kura);
+
+    kura_config.init_mode = iroha_config::kura::InitMode::Fast;
+    let (fast_kura, BlockCount(block_count)) =
+        Kura::open_test_kura_with_configured_lane_config(&kura_config, &lane_config)
+            .expect("emergency Fast Kura reopen");
+    snapshot_hashes[0] = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x61; 32]));
+    snapshot_hashes[1] = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x62; 32]));
+    reconcile_snapshot_hash_height_with_kura(
+        &snapshot_hashes,
+        block_count,
+        &fast_kura,
+        false,
+        None,
+    )
+    .expect("Fast mode deliberately validates only the signed snapshot tip boundary");
+
+    let stale_error = reconcile_snapshot_hash_height_with_kura(
+        &snapshot_hashes[..2],
+        block_count,
+        &fast_kura,
+        false,
+        None,
+    )
+    .expect_err("Fast mode requires the snapshot at the exact current durable height");
+    assert!(matches!(
+        stale_error,
+        TryReadError::MismatchedHeight {
+            snapshot_height: 2,
+            kura_height: 3
+        }
+    ));
+
+    snapshot_hashes[2] = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x63; 32]));
+    let error = reconcile_snapshot_hash_height_with_kura(
+        &snapshot_hashes,
+        block_count,
+        &fast_kura,
+        false,
+        None,
+    )
+    .expect_err("Fast mode must still bind the signed snapshot to the durable tip");
+    assert!(matches!(
+        error,
+        TryReadError::MismatchedHash { height: 3, .. }
+    ));
+    assert_eq!(
+        fast_kura.block_hash_at_height(nonzero!(3_usize)),
+        Some(canonical_tip)
+    );
+    drop(fast_kura);
+
+    kura_config.init_mode = iroha_config::kura::InitMode::Strict;
+    let (strict_kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&kura_config, &lane_config)
+            .expect("Strict Kura reopen");
+    snapshot_hashes[2] = canonical_tip;
+    let error = reconcile_snapshot_hashes_with_kura(&snapshot_hashes, &strict_kura)
+        .expect_err("Strict restart must audit and reject the forged historical prefix");
+    assert!(matches!(
+        error,
+        TryReadError::MismatchedHash { height: 1, .. }
+    ));
 }
 #[tokio::test]
 async fn snapshot_hash_reconcile_rejects_latest_mismatch_without_mutation() {

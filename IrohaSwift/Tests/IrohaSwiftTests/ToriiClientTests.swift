@@ -272,7 +272,7 @@ private func mutateFirstNativeAmxQcBody(
     }
 }
 
-private final class StubGatewayFetcher: SorafsGatewayFetching, @unchecked Sendable {
+final class StubGatewayFetcher: SorafsGatewayFetching, @unchecked Sendable {
     var capturedPlan: ToriiJSONValue?
     var capturedProviders: [SorafsGatewayProvider]?
     var capturedOptions: SorafsGatewayFetchOptions?
@@ -2098,7 +2098,7 @@ final class ToriiClientTests: XCTestCase {
                                            statusCode: 200,
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
-            return (response, self.ramLfeExecuteResponseJSON())
+            return (response, ramLfeExecuteResponseJSON())
         }
 
         let response = try await makeClient().executeRamLfeProgram(
@@ -2172,7 +2172,7 @@ final class ToriiClientTests: XCTestCase {
                                            statusCode: 200,
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
-            return (response, self.ramLfeReceiptVerifyResponseJSON())
+            return (response, ramLfeReceiptVerifyResponseJSON())
         }
 
         let response = try await makeClient().verifyRamLfeReceipt(
@@ -19494,50 +19494,51 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
     func testGovernanceGetIdentifiersRejectAliasesBeforeTransportDispatch() async throws {
         let client = makeClient()
         let proposalId = String(repeating: "ab", count: 32)
+        let auth = canonicalReadAuth
         let invalidCalls: [(String, () async throws -> Void)] = [
             ("uppercase proposal", {
-                _ = try await client.getGovernanceProposal(idHex: proposalId.uppercased(), canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceProposal(idHex: proposalId.uppercased(), canonicalAuth: auth)
             }),
             ("prefixed proposal", {
-                _ = try await client.getGovernanceProposal(idHex: "0x\(proposalId)", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceProposal(idHex: "0x\(proposalId)", canonicalAuth: auth)
             }),
             ("padded proposal", {
-                _ = try await client.getGovernanceProposal(idHex: " \(proposalId)", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceProposal(idHex: " \(proposalId)", canonicalAuth: auth)
             }),
             ("slash proposal", {
-                _ = try await client.getGovernanceProposal(idHex: "proposal/segment", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceProposal(idHex: "proposal/segment", canonicalAuth: auth)
             }),
             ("padded referendum", {
-                _ = try await client.getGovernanceReferendum(id: " ref-1", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceReferendum(id: " ref-1", canonicalAuth: auth)
             }),
             ("internal referendum whitespace", {
-                _ = try await client.getGovernanceReferendum(id: "ref 1", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceReferendum(id: "ref 1", canonicalAuth: auth)
             }),
             ("slash referendum", {
-                _ = try await client.getGovernanceReferendum(id: "ref/1", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceReferendum(id: "ref/1", canonicalAuth: auth)
             }),
             ("leading-dot referendum", {
-                _ = try await client.getGovernanceReferendum(id: ".hidden", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceReferendum(id: ".hidden", canonicalAuth: auth)
             }),
             ("percent referendum", {
-                _ = try await client.getGovernanceReferendum(id: "ref%31", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceReferendum(id: "ref%31", canonicalAuth: auth)
             }),
             ("unicode referendum", {
-                _ = try await client.getGovernanceReferendum(id: "投票", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceReferendum(id: "投票", canonicalAuth: auth)
             }),
             ("tally tab", {
-                _ = try await client.getGovernanceTally(id: "ref\t1", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceTally(id: "ref\t1", canonicalAuth: auth)
             }),
             ("overlong tally", {
                 _ = try await client.getGovernanceTally(
-                    id: String(repeating: "a", count: 129), canonicalAuth: canonicalReadAuth
+                    id: String(repeating: "a", count: 129), canonicalAuth: auth
                 )
             }),
             ("locks control", {
-                _ = try await client.getGovernanceLocks(referendumId: "ref\u{0000}1", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceLocks(referendumId: "ref\u{0000}1", canonicalAuth: auth)
             }),
             ("locks unicode whitespace", {
-                _ = try await client.getGovernanceLocks(referendumId: "ref\u{2003}1", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceLocks(referendumId: "ref\u{2003}1", canonicalAuth: auth)
             }),
         ]
         var dispatched = false

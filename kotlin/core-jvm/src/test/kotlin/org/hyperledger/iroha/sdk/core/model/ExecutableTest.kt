@@ -104,7 +104,7 @@ class ExecutableTest {
                 CONTRACT_ADDRESS,
                 ByteArray(32) { 1 },
                 "call",
-                ByteArray(MAX_CONTRACT_ARGUMENT_RECORD_BYTES + 1),
+                ByteArray(ContractInvocation.MAX_ARGUMENT_BYTES + 1),
             )
         }
     }

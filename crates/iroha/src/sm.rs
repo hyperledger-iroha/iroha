@@ -113,12 +113,6 @@ impl Sm2KeyPair {
     pub fn try_sign(&self, message: &[u8]) -> Result<[u8; Sm2Signature::LENGTH], CryptoError> {
         Ok(self.private.try_sign(message)?.to_bytes())
     }
-    /// Sign `message` using deterministic SM2 DSA and return the canonical r∥s bytes.
-    #[must_use]
-    pub fn sign(&self, message: &[u8]) -> [u8; Sm2Signature::LENGTH] {
-        self.try_sign(message)
-            .expect("validated SM2 key pair should sign messages")
-    }
     /// Verify `signature` against `message` with this key pair.
     ///
     /// # Errors
@@ -222,7 +216,9 @@ mod tests {
                 .expect("fixture public key must format as prefixed multihash"),
             fixture.public_key_prefixed
         );
-        let signature = keypair.sign(&message);
+        let signature = keypair
+            .try_sign(&message)
+            .expect("fixture key must sign the fixture message");
         assert_eq!(signature, expected_signature);
         keypair
             .verify(&message, &expected_signature)
@@ -261,21 +257,12 @@ mod tests {
         let keypair =
             Sm2KeyPair::generate_with_distid("sdk-sm2-generate").expect("checked OS SM2 key pair");
         let message = b"sdk checked sm2";
-        let signature = keypair.sign(message);
+        let signature = keypair
+            .try_sign(message)
+            .expect("generated key must sign the test message");
         keypair
             .verify(message, &signature)
             .expect("signature verifies");
-    }
-    #[test]
-    fn try_sign_matches_compatibility_sign_and_verifies() {
-        let keypair =
-            Sm2KeyPair::from_seed(b"sdk-sm2-checked-signing").expect("seeded SM2 key pair");
-        let message = b"sdk checked sm2 signing";
-        let checked = keypair.try_sign(message).expect("checked SM2 signature");
-        assert_eq!(checked, keypair.sign(message));
-        keypair
-            .verify(message, &checked)
-            .expect("checked signature verifies");
     }
     #[test]
     fn sdk_sm2_keypair_constructors_reject_all_zero_secret_material() {

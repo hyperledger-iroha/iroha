@@ -4451,6 +4451,7 @@ where
     let min_size = archived_payload_size::<T>();
     let mut padded = Vec::new();
     let decode_bytes = if logical_len < min_size {
+        reserve_decode_allocation(min_size)?;
         padded
             .try_reserve_exact(min_size)
             .map_err(|_| Error::AllocationFailed {

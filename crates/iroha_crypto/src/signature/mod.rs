@@ -1,14 +1,12 @@
 // pub(crate) for inner modules it is not redundant, the contents of `signature` module get re-exported at root
 #![allow(clippy::redundant_pub_crate)]
-#[cfg(all(feature = "bls", not(feature = "ffi_import")))]
+#[cfg(feature = "bls")]
 pub(crate) mod bls;
-#[cfg(not(feature = "ffi_import"))]
 pub(crate) mod ed25519;
-#[cfg(all(feature = "gost", not(feature = "ffi_import")))]
+#[cfg(feature = "gost")]
 pub(crate) mod gost;
-#[cfg(not(feature = "ffi_import"))]
 pub(crate) mod secp256k1;
-#[cfg(all(feature = "sm", not(feature = "ffi_import")))]
+#[cfg(feature = "sm")]
 pub(crate) mod sm;
 #[cfg(feature = "sm")]
 use crate::sm::Sm2Signature;
@@ -26,15 +24,12 @@ use norito::json::{self, FastJsonWrite, JsonDeserialize};
 use std::{cell::RefCell, format, string::String, vec, vec::Vec};
 ffi::ffi_item! {
     /// Represents a signature of the data (`Block` or `Transaction` for example).
-    #[allow(unexpected_cfgs)]
-    #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, getset::Getters)]
-    #[cfg_attr(
-        not(feature="ffi_import"),
-        derive(derive_more::Debug, Hash, IntoSchema)
+    #[derive(
+        Clone, PartialEq, Eq, PartialOrd, Ord, getset::Getters, derive_more::Debug, Hash, IntoSchema,
     )]
-    #[cfg_attr(all(feature = "ffi_export", not(feature = "ffi_import")), ffi_type(opaque))]
+    #[cfg_attr(feature = "ffi_export", ffi_type(opaque))]
     #[repr(transparent)]
-    #[cfg_attr(not(feature="ffi_import"), debug("{{ {} }}", hex::encode_upper(payload)))]
+    #[debug("{{ {} }}", hex::encode_upper(payload))]
     pub struct Signature {
         payload: ConstVec<u8>
     }
@@ -372,33 +367,19 @@ impl Signature {
             PublicKeyFull::Gost { algorithm, key } => {
                 gost::verify(*algorithm, payload, &self.payload, key)
             }
-            #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
+            #[cfg(feature = "bls")]
             PublicKeyFull::BlsSmall { key, .. } => {
                 if self.payload.len() != bls::BlsSmall::signature_len() {
                     return Err(Error::BadSignature);
                 }
                 bls::BlsSmall::verify(payload, &self.payload, key)
             }
-            #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
+            #[cfg(feature = "bls")]
             PublicKeyFull::BlsNormal { key, .. } => {
                 if self.payload.len() != bls::BlsNormal::signature_len() {
                     return Err(Error::BadSignature);
                 }
                 bls::BlsNormal::verify(payload, &self.payload, key)
-            }
-            #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
-            PublicKeyFull::BlsSmall(pk) => {
-                if self.payload.len() != bls::BlsSmall::signature_len() {
-                    return Err(Error::BadSignature);
-                }
-                bls::BlsSmall::verify(payload, &self.payload, pk)
-            }
-            #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
-            PublicKeyFull::BlsNormal(pk) => {
-                if self.payload.len() != bls::BlsNormal::signature_len() {
-                    return Err(Error::BadSignature);
-                }
-                bls::BlsNormal::verify(payload, &self.payload, pk)
             }
             #[cfg(feature = "sm")]
             PublicKeyFull::Sm2(pk) => {
@@ -493,7 +474,7 @@ fn validate_signature_payload_for_decode(payload: &[u8]) -> Result<(), ncore::Er
     validate_signature_payload_for_admission(payload)
         .map_err(|err| ncore::Error::Message(err.to_string()))
 }
-#[cfg(all(feature = "json", not(feature = "ffi_import")))]
+#[cfg(feature = "json")]
 impl FastJsonWrite for Signature {
     fn write_json(&self, out: &mut String) {
         let encoded = hex::encode_upper(self.payload());
@@ -506,7 +487,7 @@ impl FastJsonWrite for Signature {
         json::write_upper_hex_json_string_to(self.payload(), out)
     }
 }
-#[cfg(all(feature = "json", not(feature = "ffi_import")))]
+#[cfg(feature = "json")]
 impl JsonDeserialize for Signature {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let encoded = parser.parse_string()?;
@@ -534,7 +515,6 @@ ffi::ffi_item! {
     // SAFETY: `SignatureOf` has no trap representation in `Signature`
     ffi_type(unsafe {robust})
 }
-#[cfg(not(feature = "ffi_import"))]
 impl<T> core::fmt::Debug for SignatureOf<T> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_tuple(core::any::type_name::<Self>())
@@ -564,13 +544,11 @@ impl<T> Ord for SignatureOf<T> {
         self.0.cmp(&other.0)
     }
 }
-#[cfg(not(feature = "ffi_import"))]
 impl<T> core::hash::Hash for SignatureOf<T> {
     fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
         self.0.hash(state);
     }
 }
-#[cfg(not(feature = "ffi_import"))]
 impl<T: IntoSchema> IntoSchema for SignatureOf<T> {
     fn type_name() -> String {
         format!("SignatureOf<{}>", T::type_name())
@@ -588,7 +566,6 @@ impl<T: IntoSchema> IntoSchema for SignatureOf<T> {
 }
 /// Archived representation of [`SignatureOf`].
 pub type ArchivedSignatureOf<T> = norito::core::Archived<SignatureOf<T>>;
-#[cfg(not(feature = "ffi_import"))]
 impl ncore::NoritoSerialize for Signature {
     fn serialize(&self, writer: &mut ncore::Encoder<'_>) -> Result<(), ncore::Error> {
         self.payload.serialize(writer)
@@ -600,7 +577,6 @@ impl ncore::NoritoSerialize for Signature {
         self.payload.encoded_len_exact()
     }
 }
-#[cfg(not(feature = "ffi_import"))]
 impl<'de> ncore::NoritoDeserialize<'de> for Signature {
     fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("Signature decode")
@@ -652,7 +628,7 @@ impl<'de, T> norito::core::NoritoDeserialize<'de> for SignatureOf<T> {
         Ok(SignatureOf(signature, PhantomData))
     }
 }
-#[cfg(all(feature = "json", not(feature = "ffi_import")))]
+#[cfg(feature = "json")]
 impl<T> FastJsonWrite for SignatureOf<T> {
     fn write_json(&self, out: &mut String) {
         self.0.write_json(out);
@@ -664,7 +640,7 @@ impl<T> FastJsonWrite for SignatureOf<T> {
         self.0.write_json_to(out)
     }
 }
-#[cfg(all(feature = "json", not(feature = "ffi_import")))]
+#[cfg(feature = "json")]
 impl<T> JsonDeserialize for SignatureOf<T> {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         Signature::json_deserialize(parser).map(|sig| SignatureOf(sig, PhantomData))
@@ -744,7 +720,6 @@ impl<T: norito::codec::Encode> SignatureOf<T> {
     }
 }
 // Provide slice-based decoding for Signature as well (used by hybrid decoders)
-#[cfg(not(feature = "ffi_import"))]
 #[cfg(test)]
 mod tests {
     use super::*;

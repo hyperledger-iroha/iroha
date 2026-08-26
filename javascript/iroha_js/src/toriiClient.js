@@ -9994,7 +9994,6 @@ export class ToriiClient {
       "pollIntervalMs",
       "maxAttempts",
       "resolveOnAcceptedWithoutTransaction",
-      "resolveOnAccepted",
       "onPoll",
       "signal",
       "retryProfile",
@@ -10024,35 +10023,15 @@ export class ToriiClient {
         : ToriiClient._normalizeUnsignedInteger(resolvedOptions.maxAttempts, "wait.maxAttempts", {
             allowZero: false,
           });
-    const resolveAlias = resolvedOptions.resolveOnAccepted;
-    const resolveCanonical = resolvedOptions.resolveOnAcceptedWithoutTransaction;
-    if (resolveCanonical !== undefined && typeof resolveCanonical !== "boolean") {
+    const resolveOnAcceptedWithoutTransaction =
+      resolvedOptions.resolveOnAcceptedWithoutTransaction ?? false;
+    if (typeof resolveOnAcceptedWithoutTransaction !== "boolean") {
       throw createValidationError(
         ValidationErrorCode.INVALID_OBJECT,
         "wait.resolveOnAcceptedWithoutTransaction must be a boolean",
         `${optionPath}.resolveOnAcceptedWithoutTransaction`,
       );
     }
-    if (resolveAlias !== undefined && typeof resolveAlias !== "boolean") {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_OBJECT,
-        "wait.resolveOnAccepted must be a boolean",
-        `${optionPath}.resolveOnAccepted`,
-      );
-    }
-    if (
-      resolveCanonical !== undefined &&
-      resolveAlias !== undefined &&
-      resolveCanonical !== resolveAlias
-    ) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_OBJECT,
-        "wait.resolveOnAccepted and wait.resolveOnAcceptedWithoutTransaction must match when both are provided",
-        `${optionPath}.resolveOnAccepted`,
-      );
-    }
-    const resolveOnAccepted =
-      resolveCanonical !== undefined ? resolveCanonical : resolveAlias ?? false;
     let retryProfile;
     if (resolvedOptions.retryProfile !== undefined && resolvedOptions.retryProfile !== null) {
       retryProfile = requireNonEmptyString(
@@ -10098,7 +10077,12 @@ export class ToriiClient {
         // eslint-disable-next-line no-await-in-loop
         await onPoll({ attempt, status: lastStatus });
       }
-      if (ToriiClient._isIsoStatusTerminal(lastStatus, resolveOnAccepted)) {
+      if (
+        ToriiClient._isIsoStatusTerminal(
+          lastStatus,
+          resolveOnAcceptedWithoutTransaction,
+        )
+      ) {
         return lastStatus;
       }
       if (attempt < maxAttempts) {
@@ -32868,13 +32852,19 @@ function identifierCanonicalExactString(value, context) {
   ]);
 }
 
-function identifierCanonicalByteVec(bytes) {
+function identifierCanonicalByteElements(bytes, lengthContext) {
   const payload = Buffer.from(bytes);
-  const parts = [identifierCanonicalU64(payload.length, "byteVec.length")];
-  for (const byte of payload) {
-    parts.push(identifierCanonicalCompactLength(1), Buffer.from([byte]));
+  const encoded = Buffer.allocUnsafe(8 + payload.length * 2);
+  identifierCanonicalU64(payload.length, lengthContext).copy(encoded, 0);
+  for (let index = 0; index < payload.length; index += 1) {
+    encoded[8 + index * 2] = 1;
+    encoded[9 + index * 2] = payload[index];
   }
-  return Buffer.concat(parts);
+  return encoded;
+}
+
+function identifierCanonicalByteVec(bytes) {
+  return identifierCanonicalByteElements(bytes, "byteVec.length");
 }
 
 function identifierCanonicalRawByteVec(bytes) {
@@ -33007,12 +32997,7 @@ function identifierAlgorithmTagForCurveId(curve, context) {
 }
 
 function identifierCanonicalConstVecU8(bytes) {
-  const payload = Buffer.from(bytes);
-  const parts = [identifierCanonicalU64(payload.length, "ConstVec<u8>.length")];
-  for (const byte of payload) {
-    parts.push(identifierCanonicalSizedField(Buffer.from([byte])));
-  }
-  return Buffer.concat(parts);
+  return identifierCanonicalByteElements(bytes, "ConstVec<u8>.length");
 }
 
 function identifierPublicKeyPayload(controller, context) {

@@ -631,7 +631,6 @@ mod tests {
     }
     #[test]
     fn submit_directory_draft_succeeds() {
-        crate::test_alias::ensure();
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
@@ -660,7 +659,6 @@ mod tests {
     }
     #[test]
     fn publish_directory_moves_draft() {
-        crate::test_alias::ensure();
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
@@ -703,7 +701,6 @@ mod tests {
     }
     #[test]
     fn revoke_resolver_uses_block_timestamp() {
-        crate::test_alias::ensure();
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();

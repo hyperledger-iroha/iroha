@@ -422,6 +422,115 @@ mod tests {
         }
     }
     #[test]
+    fn kagemusha_redemption_state_freshness_rejects_all_namespace_collisions() {
+        const EXISTING_COMMITMENT: [u8; 32] = [0x61; 32];
+        const SPENT_NULLIFIER: [u8; 32] = [0x62; 32];
+        const CURRENT_NULLIFIER: [u8; 32] = [0x63; 32];
+        const CHANGE_COMMITMENT: [u8; 32] = [0x64; 32];
+        const CHANGE_NULLIFIER: [u8; 32] = [0x65; 32];
+        let mut zk_state = crate::state::ZkAssetState::default();
+        zk_state.commitments.push(EXISTING_COMMITMENT);
+        assert!(zk_state.nullifiers.insert(SPENT_NULLIFIER));
+        ensure_kagemusha_v4_redemption_state_is_fresh(
+            &zk_state,
+            CURRENT_NULLIFIER,
+            Some((CHANGE_COMMITMENT, CHANGE_NULLIFIER)),
+        )
+        .expect("disjoint redemption material must remain admissible");
+        for (current_nullifier, change_note, expected_label) in [
+            (SPENT_NULLIFIER, None, "duplicate_nullifier"),
+            (EXISTING_COMMITMENT, None, "proof_binding"),
+            (
+                CURRENT_NULLIFIER,
+                Some((EXISTING_COMMITMENT, CHANGE_NULLIFIER)),
+                "duplicate_output",
+            ),
+            (
+                CURRENT_NULLIFIER,
+                Some((CHANGE_COMMITMENT, SPENT_NULLIFIER)),
+                "duplicate_nullifier",
+            ),
+            (
+                CURRENT_NULLIFIER,
+                Some((CHANGE_COMMITMENT, CURRENT_NULLIFIER)),
+                "duplicate_nullifier",
+            ),
+            (
+                CURRENT_NULLIFIER,
+                Some((CURRENT_NULLIFIER, CHANGE_NULLIFIER)),
+                "proof_binding",
+            ),
+            (
+                CURRENT_NULLIFIER,
+                Some((SPENT_NULLIFIER, CHANGE_NULLIFIER)),
+                "proof_binding",
+            ),
+            (
+                CURRENT_NULLIFIER,
+                Some((CHANGE_COMMITMENT, EXISTING_COMMITMENT)),
+                "proof_binding",
+            ),
+        ] {
+            let error = ensure_kagemusha_v4_redemption_state_is_fresh(
+                &zk_state,
+                current_nullifier,
+                change_note,
+            )
+            .expect_err("every redemption namespace collision must fail closed");
+            assert!(
+                error.to_string().contains(&format!(
+                    "{OFFLINE_REJECTION_REASON_PREFIX}{expected_label}:"
+                )),
+                "unexpected collision rejection for {expected_label}: {error}"
+            );
+        }
+    }
+    #[test]
+    fn kagemusha_redemption_state_delta_commits_in_place() {
+        const CURRENT_NULLIFIER: [u8; 32] = [0x71; 32];
+        const CHANGE_COMMITMENT: [u8; 32] = [0x72; 32];
+        const CHANGE_NULLIFIER: [u8; 32] = [0x73; 32];
+        let (state, definition_id, _, _) = offline_holding_limit_test_state(None);
+        let mut block = state.block(offline_test_header());
+        let mut state_transaction = block.transaction();
+        let verifier_binding = crate::state::ZkAssetVerifierBinding {
+            id: iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "post-policy-unshield"),
+            commitment: [0x74; 32],
+        };
+        let mut zk_asset_state = crate::state::ZkAssetState::default();
+        zk_asset_state.vk_unshield = Some(verifier_binding.clone());
+        let initial_root = zk_asset_state.persisted_root;
+        let expected_root = zk_asset_state
+            .preview_commitment_root(CHANGE_COMMITMENT)
+            .expect("preview change commitment");
+        state_transaction
+            .world
+            .zk_assets
+            .insert(definition_id.clone(), zk_asset_state);
+        KagemushaV4ZkAssetCommitPlan {
+            definition_id: definition_id.clone(),
+            expected_root: initial_root,
+            expected_commitment_count: 0,
+            current_nullifier: CURRENT_NULLIFIER,
+            change: Some(KagemushaV4ChangeStateCommit {
+                note_commitment: CHANGE_COMMITMENT,
+                spend_nullifier: CHANGE_NULLIFIER,
+                expected_root,
+            }),
+        }
+        .commit(&mut state_transaction)
+        .expect("commit checked redemption state delta");
+        let committed = state_transaction
+            .world
+            .zk_assets
+            .get(&definition_id)
+            .expect("committed shielded state");
+        assert!(committed.nullifiers.contains(&CURRENT_NULLIFIER));
+        assert_eq!(committed.commitments, vec![CHANGE_COMMITMENT]);
+        assert_eq!(committed.persisted_root, expected_root);
+        assert_eq!(committed.vk_unshield.as_ref(), Some(&verifier_binding));
+    }
+    #[test]
     fn kagemusha_v4_admission_authenticates_exact_release_without_global_backend_flag() {
         let source = include_str!("../offline.rs");
         let topup_start = source

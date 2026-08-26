@@ -5,8 +5,61 @@ Last updated: 2026-08-26
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
 
+## SDK first-release closure
+
+- Generate one canonical signing-algorithm token registry for the node and every SDK, then reject
+  convenience spellings that currently differ by language. Keep the canonical wire identifiers and
+  hardware-independent outputs unchanged.
+- Extend production-source reachability and exported-surface checks from the existing Sumeragi
+  closure to every maintained SDK. CI should reject unreferenced shipping files, generated package
+  metadata, deprecated annotations, compatibility-only aliases, and test helpers in production
+  artifacts.
+- Finish the Kotlin/Java reflection audit by replacing the remaining optional compression,
+  telemetry, and transport probes with direct typed dependencies or explicit unsupported results.
+  Remove raw-string status adapters and unused profile parameters in the same mirrored changes.
+- Reduce Python transaction signing to one typed credential input per operation and remove any
+  remaining alternate keyword shapes. Keep exact canonical request validation before transport.
+- Select one first-release transaction executable carrier in the data model and every SDK. Migrate
+  instruction-only transactions and shared fixtures to it, then remove dual `instructions`/`entries`
+  parameters and explicit batch-selection switches rather than preserving a legacy carrier.
+- Rebuild and publish the reviewed ABI-23 native bridge and a valid Darwin JavaScript native-binding
+  profile, then run the complete Swift, JavaScript, Python, Kotlin, Java/Android, and C# native
+  parity suites. Add allocation benchmarks for the new exact-size byte-field encoders and retain
+  byte-for-byte parity tests across implementations.
+
+## Iroha Core first-release closure
+
+- Replace the two remaining stored/ephemeral `QueryItemKind` match tables with one typed registry
+  declaration that generates both execution modes and an exhaustiveness test. Keep canonical exact
+  payload decoding and source-budget admission explicit; do not restore boxed or compatibility
+  dispatch.
+- Remove the crate-wide Clippy suppression in bounded module groups. Delete or test-gate each
+  resulting dead surface, and add a CI target that checks the production library without test-only
+  features so unused shipping code cannot accumulate again.
+- Move invariant-bypassing `*_for_testing` state mutators behind `cfg(test)` or the narrow
+  `iroha-core-tests` feature, then migrate dependent-crate fixtures through an explicit build
+  matrix. Preserve historical-format rejection and recovery detection that fail closed; those are
+  safety controls, not compatibility support.
+- Add deterministic benchmarks for query dispatch/metering, block admission, state transitions,
+  and startup indexes. Use the profiles to remove avoidable encoding, cloning, and full-collection
+  scans while asserting identical outputs across hardware paths.
+
+## Kura emergency-start closure
+
+- Keep merge and autonomous production unavailable in emergency Fast mode. If operators later need
+  those write paths before a Strict restart, first add an atomically published merge-log
+  count/length/tip marker and durable latest-route summary; Fast must never recover that authority
+  by decoding every historical frame.
+- Add large-history startup benchmarks that separately report marker preflight, hash-journal
+  binding, deferred merge metadata, Sumeragi replay planning, and recursive disk accounting, then
+  enforce no-historical-hash, no-historical-body, and no-historical-cryptography regressions for
+  Fast mode.
+
 ## Norito archive API closure
 
+- Centralize short archived-field padding used by `decode_archived_field` and derive-generated
+  `decode_from_slice` implementations in one fallible aligned-storage helper. Charge every
+  temporary allocation at its allocation site and remove the duplicated `Vec` padding path.
 - Replace the stateful `from_bytes`/`ArchivedBox` marker workflow with an
   owning or borrowed archive view that carries its payload context explicitly,
   then migrate remaining callers to exact value decode. Remove the global
@@ -356,14 +409,12 @@ Production readiness is not complete. The remaining work is internal release
 qualification plus external evidence and execution; external evidence cannot
 close the internal blockers below:
 
-- Replace the infeasible authenticated V5 k17 path with a feasible, reviewed
-  shipping recursion backend that meets the release device and memory limits.
-  V7 remains an unreviewed diagnostic experiment, not a fallback; keep
-  promotion hard-failing until a reviewed shipping backend is authenticated.
-  The public V5 authentication boundary also hard-fails because V5 does not yet
-  carry a signed candidate-bound internal-validation receipt; thread a genuine
-  V5 receipt through manifest, attestation subject, promotion marker, and
-  release record before any V5 authentication or admission path is enabled.
+- Qualify the sole ABI-21/V4 recursion backend against the release device and
+  memory limits, and keep promotion hard-failing until that exact backend is
+  reviewed and authenticated. The disconnected release-V5 model and rejected
+  serialized-audit V7 lab are removed, not fallback paths. `StateBoundaryV5`
+  and compact-v5 identifiers remain only as internal layout names inside the
+  V4 release protocol; they do not define another release or admission family.
 - Produce the independently authenticated candidate-bound internal-validation
   receipt. The locally trusted release policy now pins the exact
   key-and-executable validation-runner identity, so a receipt's self-declared
@@ -15777,8 +15828,8 @@ excluded from the first release.
   display and prefixed compatibility formatting now return a non-secret
   invalid-private-key marker instead of unwrapping checked private-key
   formatting; `Signature::try_new` now routes SM2 through checked private-key
-  rebuild/signing helpers, the high-level Rust SDK `Sm2KeyPair` exposes
-  `try_sign` while keeping `sign` as a compatibility wrapper, Connect/Norito C
+  rebuild/signing helpers, the high-level Rust SDK `Sm2KeyPair` exposes only
+  checked `try_sign`; the panicking `sign` compatibility wrapper is removed. Connect/Norito C
   SM2 detached signing returns `ERR_SM2_SIGN` from the checked signer on backend
   failures, and SM2 key-pair/public-key derivation now routes through
   `try_public_key`; SM2
