@@ -107,7 +107,8 @@ use super::{
         LocalProposalIntentReplayEvidenceV1, LocalProposalReadyReplayEvidenceV1,
     },
     v2_lifecycle_coordinator::{
-        AdmissionDecision, InstalledAuthenticatedGenesisReplayAuthorityV1, LifecycleContext,
+        AdmissionDecision, DurableStoreTerminalRetrySealV1,
+        InstalledAuthenticatedGenesisReplayAuthorityV1, LifecycleContext,
         LifecycleDecisionApplyDispatchKeyV1, LifecycleDecisionApplyLineageV1,
         LifecycleOutputAdmissionKeyV1, LifecycleOutputServiceDispositionV1,
         LifecycleValidateDispatchKeyV1, LiveLifecycleDecisionApplyReconciliationAuthorityV1,
@@ -130,7 +131,8 @@ use super::{
     v2_runtime::{
         BodyAvailableReservation, DecisionProposalRetirement, EnqueueError,
         LeaderWireRuntimeTerminal, LocalProposalEffectOwnership, LocalProposalReadyCommandIdentity,
-        NetworkIngressError, PendingRuntimeEffectBinding, RecoveredDurableValidateRetryFrontierV1,
+        NetworkIngressError, PendingRuntimeEffectBinding, PendingRuntimeEffectFingerprintV1,
+        PreTimeoutLockedPrepareQcCutV1, RecoveredDurableValidateRetryFrontierV1,
         RetiredBodyPipelineCompletions, RuntimeCandidateAdmissionDisposition,
         RuntimeCandidateSemanticStatement, RuntimeClockError, RuntimeEffectOwnership,
         RuntimeFetchAuthorityRelation, RuntimeLifecycleOwner, RuntimeQueueLaneSnapshot,
@@ -226,9 +228,11 @@ pub(crate) const fn v2_payload_is_terminal_reducer_control(
 /// Return whether one authenticated envelope can retire a hung signing fence.
 ///
 /// Only a TC or a CommitQC changes the reducer incarnation strongly enough to
-/// supersede an outstanding local signature. PrepareQCs and ordinary ingress
-/// remain behind retained reducer-effect debt. A discovery response carries
-/// the same authority only when its embedded certificate is a CommitQC.
+/// supersede an outstanding local signature. A PrepareQC can use the separate
+/// protected pacemaker Progress turn, but is not a certified signing-fence
+/// escape. Ordinary ingress remains behind retained reducer-effect debt. A
+/// discovery response carries the same fence authority only when its embedded
+/// certificate is a CommitQC.
 pub(crate) const fn network_ingress_is_certified_fence_escape(
     payload: &wire::ConsensusMessageV2Payload,
 ) -> bool {
@@ -1649,11 +1653,13 @@ pub(crate) trait V2EffectServices {
     /// repeated task identifier requests an idempotent retry of the same
     /// durable operation.
     fn enqueue_apply(&mut self, task: ApplyTask) -> Result<(), Self::Error>;
-    /// Observe a reducer-authorized view installation for timer/status wiring.
+    /// Observe a reducer-authorized view installation and its authenticated
+    /// durable-lock projection for timer/status and ingress recovery wiring.
     fn entered_view(
         &mut self,
         tag: EventTag,
         certificate: wire::TimeoutCertificate,
+        protected_lock: Option<(wire::ConsensusRound, wire::BlockSubject)>,
     ) -> Result<(), Self::Error>;
     /// Validate and persist complete authenticated equivocation evidence.
     fn report_equivocation(
@@ -1896,6 +1902,9 @@ include!("v2_effects_recovered_fetch_and_pipeline_types.rs");
 struct OwnedAdapterEffect {
     effect: AdapterEffect,
     ownership: RuntimeEffectOwnership,
+    /// Cleanup-only post-step high retained atomically with this EnterView.
+    /// Non-EnterView effects must always carry `None`.
+    highest_prepare_retention: Option<wire::QuorumCertificateRef>,
 }
 struct LocalProposalIntentProjection {
     command_identity: LocalProposalReadyCommandIdentity,
@@ -1957,10 +1966,53 @@ pub(crate) trait EffectRuntime {
     ) -> bool {
         false
     }
+    /// Return whether one pre-authentication wire has the closed shape of a
+    /// pacemaker Progress root.
+    ///
+    /// The default covers the wire kinds which are unconditionally assigned
+    /// to the protected Progress prefix. Production additionally recognizes
+    /// an exact historical CommitVote for its durable lock and an exact
+    /// current PrepareVote for a locally bound unchanged-lock reproposal. This
+    /// is a scheduling hint; normal runtime authentication remains mandatory.
+    fn wire_ingress_may_use_pacemaker_progress(
+        &self,
+        payload: &wire::ConsensusMessageV2Payload,
+    ) -> bool {
+        matches!(
+            payload,
+            wire::ConsensusMessageV2Payload::QuorumCertificate(_)
+                | wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
+                | wire::ConsensusMessageV2Payload::TimeoutVote(_)
+        )
+    }
     /// Publish the first receiver-local physical ordinal not yet admitted.
     /// Synthetic runtimes have no outer ingress and may retain the default.
     fn set_ingress_physical_cut(&mut self, _physical_cut: u128) -> Result<(), String> {
         Ok(())
+    }
+    /// Freeze one already-due timeout owner for an exact fixed-cut
+    /// unchanged-lock PrepareQC scan.
+    fn freeze_pre_timeout_locked_prepare_qc_cut(
+        &mut self,
+        _now: Instant,
+    ) -> Result<Option<PreTimeoutLockedPrepareQcCutV1>, String> {
+        Ok(None)
+    }
+    /// Deep-preview one fair-ingress payload against the frozen target.
+    fn wire_previews_pre_timeout_locked_prepare_qc(
+        &self,
+        _cut: &PreTimeoutLockedPrepareQcCutV1,
+        _payload: &wire::ConsensusMessageV2Payload,
+    ) -> bool {
+        false
+    }
+    /// Dispatch at most one exact already-admitted pre-cut PrepareQC.
+    fn step_pre_timeout_locked_prepare_qc_effects(
+        &mut self,
+        _now: Instant,
+        _cut: &PreTimeoutLockedPrepareQcCutV1,
+    ) -> Result<Option<RuntimeStep<AdapterEffect>>, String> {
+        Ok(None)
     }
     fn step_effects(&mut self, now: Instant) -> Result<RuntimeStep<AdapterEffect>, String>;
     /// Run at most one absolute-timeout or authenticated Progress-root turn.
@@ -2044,6 +2096,7 @@ pub(crate) trait EffectRuntime {
         Ok(RuntimeReconciliationFrontier {
             tag: self.authoritative_tag(),
             locked_body: None,
+            highest_prepare: None,
             lock_is_authoritative: false,
             decision: self.decided_body()?,
         })
@@ -2289,8 +2342,36 @@ impl EffectRuntime for SerializedV2Runtime {
         )
     }
 
+    fn wire_ingress_may_use_pacemaker_progress(
+        &self,
+        payload: &wire::ConsensusMessageV2Payload,
+    ) -> bool {
+        SerializedV2Runtime::wire_ingress_may_use_pacemaker_progress(self, payload)
+    }
+
     fn set_ingress_physical_cut(&mut self, physical_cut: u128) -> Result<(), String> {
         SerializedV2Runtime::set_ingress_physical_cut(self, physical_cut)
+    }
+    fn freeze_pre_timeout_locked_prepare_qc_cut(
+        &mut self,
+        now: Instant,
+    ) -> Result<Option<PreTimeoutLockedPrepareQcCutV1>, String> {
+        SerializedV2Runtime::freeze_pre_timeout_locked_prepare_qc_cut(self, now)
+    }
+    fn wire_previews_pre_timeout_locked_prepare_qc(
+        &self,
+        cut: &PreTimeoutLockedPrepareQcCutV1,
+        payload: &wire::ConsensusMessageV2Payload,
+    ) -> bool {
+        SerializedV2Runtime::wire_previews_pre_timeout_locked_prepare_qc(self, cut, payload)
+    }
+    fn step_pre_timeout_locked_prepare_qc_effects(
+        &mut self,
+        now: Instant,
+        cut: &PreTimeoutLockedPrepareQcCutV1,
+    ) -> Result<Option<RuntimeStep<AdapterEffect>>, String> {
+        self.try_step_pre_timeout_locked_prepare_qc(now, cut)
+            .map_err(|error| error.to_string())
     }
     fn lifecycle_live_clocks_are_armed(&self) -> bool {
         SerializedV2Runtime::lifecycle_live_clocks_are_armed(self)
@@ -2400,6 +2481,9 @@ impl EffectRuntime for SerializedV2Runtime {
         Ok(RuntimeReconciliationFrontier {
             tag: Some(directive.tag()),
             locked_body: directive.locked_body(),
+            highest_prepare: self
+                .replayed_highest_prepare_certificate_ref()
+                .map_err(|error| error.to_string())?,
             lock_is_authoritative: true,
             decision,
         })
@@ -2656,6 +2740,11 @@ pub(crate) struct V2EffectExecutor<R = SerializedV2Runtime> {
     /// Inert exact owners retained after lifecycle consumes a Validate pre-admission; only proven retries can stutter.
     durable_validate_retry_seals:
         BTreeMap<(wire::ConsensusRound, wire::BlockSubject), DurableValidateRetrySealV1>,
+    /// Inert exact markers for Store rows published directly by the lifecycle body pipeline.
+    published_lifecycle_store_retry_markers: BTreeMap<
+        (wire::ConsensusRound, wire::BlockSubject),
+        PublishedLifecycleStoreTerminalRetrySealV1,
+    >,
     /// Inert exact markers for Validate rows published directly by the lifecycle body pipeline.
     published_lifecycle_validate_retry_markers: BTreeMap<
         (wire::ConsensusRound, wire::BlockSubject),
@@ -3217,7 +3306,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         if local_handoff.is_some()
             && !matches!(
                 preflight_kind,
-                Kind::ValidatedInactive | Kind::ValidatedNoEffect
+                Kind::ValidatedBusy | Kind::ValidatedInactive | Kind::ValidatedNoEffect
             )
         {
             self.fatal_reason = Some(
@@ -3292,7 +3381,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
             || (has_local_publication
                 && !matches!(
                     preview.publication_kind(),
-                    Kind::ValidatedInactive | Kind::ValidatedNoEffect
+                    Kind::ValidatedBusy | Kind::ValidatedInactive | Kind::ValidatedNoEffect
                 ))
         {
             let published_kind = preview.publication_kind();
@@ -4555,11 +4644,20 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     }
     /// Return whether retained reducer dispatch debt permits this outer
     /// ingress envelope to reach its handler.
+    ///
+    /// The exact protected Progress roots may enter the runtime while an
+    /// ordinary effect suffix is retained: the typed pacemaker turn parks that
+    /// suffix before selecting them. This only opens authentication and
+    /// bounded runtime admission; it does not let the raw wire execute reducer
+    /// control directly.
     fn retained_dispatch_allows_network_ingress(
         &self,
         payload: &wire::ConsensusMessageV2Payload,
     ) -> bool {
         network_ingress_is_certified_fence_escape(payload)
+            || self
+                .runtime
+                .wire_ingress_may_use_pacemaker_progress(payload)
             || (self.retained_effect_batch.is_none() && self.parked_effect_batch.is_none()
                 || !Self::network_ingress_requires_reducer_order(payload))
     }
@@ -4658,6 +4756,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             authenticated_genesis_replay: BTreeMap::new(),
             pending_durable_validate_admissions: BTreeMap::new(),
             durable_validate_retry_seals: BTreeMap::new(),
+            published_lifecycle_store_retry_markers: BTreeMap::new(),
             published_lifecycle_validate_retry_markers: BTreeMap::new(),
             #[cfg(test)]
             last_recovered_validate_retry_trace_root: None,
@@ -4822,7 +4921,17 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         // keeps the executor projection untouched so the runner can latch its
         // shared restart guard with the original diagnostic.
         self.preflight_observed_protected_lock(tag, lock)?;
-        let changed = match self.reconcile_protected_lock(tag, Some(lock), services) {
+        let frontier = self
+            .runtime
+            .reconciliation_frontier()
+            .map_err(EffectExecutorError::Runtime)?;
+        self.preflight_highest_prepare_frontier(Some(tag), frontier.highest_prepare)?;
+        let changed = match self.reconcile_protected_lock(
+            tag,
+            Some(lock),
+            highest_prepare_body(frontier.highest_prepare),
+            services,
+        ) {
             Ok(changed) => changed,
             Err(error) => {
                 return Err(self.close_after_transferring_runtime_terminals(error, services));
@@ -4865,6 +4974,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         &mut self,
         tag: EventTag,
         replacement: Option<(wire::ConsensusRound, wire::BlockSubject)>,
+        highest_prepare_body: Option<(wire::ConsensusRound, wire::BlockSubject)>,
         services: &mut S,
     ) -> Result<bool, EffectExecutorError> {
         let Some(replacement) = replacement else {
@@ -4919,6 +5029,15 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 (round, subject),
             )
         };
+        // The durable high-water mark is cleanup authority only. It may keep
+        // one immutable Store task/replay alive while an older TC-carried
+        // PrepareQC becomes the voting lock, but it cannot preserve Fetch,
+        // ready-body, signing, or application work.
+        let retained_highest_store = highest_prepare_body.filter(|highest| {
+            self.pending_stores.values().any(|pending| {
+                (pending.task.manifest.round, pending.task.manifest.subject) == *highest
+            })
+        });
         let mut superseded_keys = BTreeSet::new();
         for key in self
             .body_pipeline_owners
@@ -4948,12 +5067,25 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             .chain(self.authenticated_genesis_replay.keys())
             .chain(self.pending_durable_validate_admissions.keys())
             .chain(self.durable_validate_retry_seals.keys())
+            .chain(self.published_lifecycle_store_retry_markers.keys())
             .chain(self.published_lifecycle_validate_retry_markers.keys())
             .copied()
         {
             if key_is_superseded(key.0, key.1) {
                 superseded_keys.insert(key);
             }
+        }
+        if let Some(cleanup_only_high) =
+            highest_prepare_body.filter(|highest| *highest != replacement)
+        {
+            // The durable high is retained only as bounded Store/Stored
+            // cleanup lineage.  It can be newer than the first TC-selected
+            // voting lock (and may have the same subject), so the ordinary
+            // lock-supersession predicate intentionally does not select it.
+            // Force that exact key through non-Store cleanup while the
+            // stage-specific retention clauses below preserve only an
+            // immutable in-flight Store or Store/Stored replay token.
+            superseded_keys.insert(cleanup_only_high);
         }
         if self
             .pending_durable_validate_admissions
@@ -5045,8 +5177,8 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             .pending_stores
             .iter()
             .filter(|(_, pending)| {
-                superseded_keys
-                    .contains(&(pending.task.manifest.round, pending.task.manifest.subject))
+                let key = (pending.task.manifest.round, pending.task.manifest.subject);
+                superseded_keys.contains(&key) && Some(key) != retained_highest_store
             })
             .map(|(id, pending)| (*id, pending.task.canonical_wire.len()))
             .collect::<Vec<_>>();
@@ -5111,6 +5243,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         };
         let mut pipeline_owners = Vec::new();
         for key in &superseded_keys {
+            if Some(*key) == retained_highest_store {
+                continue;
+            }
             if let Some(owner) = self.body_pipeline_owners.get(key).copied() {
                 let ready = self.ready_bodies.get(key);
                 if let Some(ready) = ready
@@ -5178,18 +5313,41 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         }
         self.ready_bodies
             .retain(|key, _| !superseded_keys.contains(key));
-        self.body_pipeline_owners
-            .retain(|key, _| !superseded_keys.contains(key));
-        self.remote_proposal_replay
-            .retain(|key, _| !superseded_keys.contains(key));
-        self.authenticated_genesis_replay
-            .retain(|key, _| !superseded_keys.contains(key));
+        self.body_pipeline_owners.retain(|key, _| {
+            !superseded_keys.contains(key) || Some(*key) == retained_highest_store
+        });
+        self.remote_proposal_replay.retain(|key, stage| {
+            !superseded_keys.contains(key)
+                || (Some(*key) == highest_prepare_body
+                    && matches!(
+                        stage,
+                        RemoteProposalReplayStageV1::Store { .. }
+                            | RemoteProposalReplayStageV1::Stored { .. }
+                    ))
+        });
+        self.authenticated_genesis_replay.retain(|key, stage| {
+            !superseded_keys.contains(key)
+                || (Some(*key) == highest_prepare_body
+                    && matches!(
+                        stage,
+                        AuthenticatedGenesisReplayStageV1::Store { .. }
+                            | AuthenticatedGenesisReplayStageV1::Stored { .. }
+                    ))
+        });
+        // An active published Store marker is the executor half of a still
+        // executable lifecycle-registry row. Lock reconciliation has no
+        // authority to cancel that row, so only the atomic Store-to-Validate
+        // handoff may remove its marker.
         self.durable_validate_retry_seals.retain(|key, seal| {
-            seal.lifecycle_ordinal().is_some() || !superseded_keys.contains(key)
+            seal.lifecycle_ordinal().is_some()
+                || !superseded_keys.contains(key)
+                || Some(*key) == highest_prepare_body
         });
         self.published_lifecycle_validate_retry_markers
             .retain(|key, marker| {
-                marker.owns_live_lifecycle_row() || !superseded_keys.contains(key)
+                marker.owns_live_lifecycle_row()
+                    || !superseded_keys.contains(key)
+                    || Some(*key) == highest_prepare_body
             });
         if retire_retained {
             self.retained_locked_body = None;
@@ -5292,6 +5450,15 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         pending_runner_decision_cleanup: Option<PendingRunnerDecisionCleanup>,
     ) -> Result<usize, EffectExecutorError> {
         self.ensure_open()?;
+        if effects.len() > MAX_EFFECTS_PER_STEP {
+            return Err(self.close(
+                EffectExecutorError::Contract(format!(
+                    "one adapter macro-step emitted {} effects above the adapter bound {MAX_EFFECTS_PER_STEP}",
+                    effects.len()
+                )),
+                services,
+            ));
+        }
         if self.pending_runner_decision_cleanup.is_some() {
             return Err(self.close(
                 EffectExecutorError::Contract(
@@ -5745,6 +5912,36 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             | AdapterEffect::ReportInvalidCertifiedBody { .. } => None,
         }
     }
+    /// Validate the cleanup-only high-water mark read from the same durable
+    /// reducer frontier as the effect batch. This reference cannot select a
+    /// lock or authorize body use; it only bounds which completed/in-flight
+    /// Store lineage survives stale-view retirement.
+    fn preflight_highest_prepare_frontier(
+        &self,
+        tag: Option<EventTag>,
+        highest_prepare: Option<wire::QuorumCertificateRef>,
+    ) -> Result<(), EffectExecutorError> {
+        let Some(highest) = highest_prepare else {
+            return Ok(());
+        };
+        let tag = tag.ok_or_else(|| {
+            EffectExecutorError::Contract(
+                "durable highest Prepare omitted its reducer incarnation".to_owned(),
+            )
+        })?;
+        if tag.height() != self.context.height
+            || highest.phase != wire::GlobalPhase::Prepare
+            || highest.round != highest.proposal_round
+            || highest.round.context_id != self.context.id()
+            || highest.round.height != self.context.height
+            || highest.round.view > tag.view()
+        {
+            return Err(EffectExecutorError::Contract(
+                "durable highest Prepare is outside its frozen reducer frontier".to_owned(),
+            ));
+        }
+        Ok(())
+    }
     /// Reject a malformed reducer frontier before consuming its move-only
     /// lifecycle sidecar. A rejected view transition must leave that exact
     /// owner available to the fail-stop/restart boundary.
@@ -5754,6 +5951,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         frontier: RuntimeReconciliationFrontier,
     ) -> Result<Option<EventTag>, EffectExecutorError> {
         let entering_view = Self::entering_view_tag(effects)?;
+        self.preflight_highest_prepare_frontier(frontier.tag, frontier.highest_prepare)?;
         if entering_view.is_some()
             && !matches!(effects.first(), Some(AdapterEffect::EnterView { .. }))
         {
@@ -5818,6 +6016,15 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             {
                 return Err(EffectExecutorError::Contract(
                     "EnterView disagreed with the reducer reconciliation frontier".to_owned(),
+                ));
+            }
+            if frontier
+                .highest_prepare
+                .is_some_and(|highest| highest.round.view >= tag.view())
+            {
+                return Err(EffectExecutorError::Contract(
+                    "EnterView cleanup frontier retained a non-historical highest Prepare"
+                        .to_owned(),
                 ));
             }
         }
@@ -5902,7 +6109,12 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             return Ok(());
         }
         self.preflight_observed_protected_lock(tag, replacement)?;
-        self.reconcile_protected_lock(tag, Some(replacement), services)?;
+        self.reconcile_protected_lock(
+            tag,
+            Some(replacement),
+            highest_prepare_body(frontier.highest_prepare),
+            services,
+        )?;
         Ok(())
     }
     #[cfg(test)]
@@ -6132,10 +6344,55 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         let mut retire_parked_body_stage_lineages = BTreeSet::new();
         let mut runtime_terminal_commits = Vec::new();
         let mut retained_validate_retry_seals = self.durable_validate_retry_seals.clone();
+        let mut retained_published_store_retry_markers =
+            self.published_lifecycle_store_retry_markers.clone();
         let mut retained_published_validate_retry_markers =
             self.published_lifecycle_validate_retry_markers.clone();
         let mut candidate_position = 0u8;
         for (index, (effect, evidence)) in effects.iter().zip(&mut ownership).enumerate() {
+            let mut stored_replay_adopted = false;
+            if let AdapterEffect::StoreBody { round, subject, .. } = effect
+                && let Some(adopted) = self.stored_replay_incumbent_store_ownership(
+                    (*round, *subject),
+                    effect,
+                    evidence,
+                )?
+            {
+                // Runtime terminal planning precedes StoreBody dispatch. A
+                // durable replay or its inert post-Validate Store seal is
+                // the executor-side proof which may bind a later carrier to
+                // that already-completed physical Store. Adopt it before the
+                // queued BodyStored owner is compared; the Store handler
+                // rechecks the same projection.
+                *evidence = adopted;
+                stored_replay_adopted = true;
+            }
+            let preterminal_body_stage_incumbent = match effect {
+                AdapterEffect::StoreBody { round, subject, .. } => {
+                    retained_store_lineages.get(&(*round, *subject))
+                }
+                AdapterEffect::ValidateBody { round, subject, .. } => {
+                    retained_validation_lineages.get(&(*round, *subject))
+                }
+                _ => None,
+            };
+            if let Some(incumbent) = preterminal_body_stage_incumbent {
+                if stored_replay_adopted && incumbent.owner() != evidence.owner() {
+                    return Err(EffectExecutorError::Contract(
+                        "stored replay and executor body-stage lineage retained different physical owners"
+                            .to_owned(),
+                    ));
+                }
+                if incumbent != &*evidence {
+                    // A pending/parked Store or Stored-replay/parked Validate
+                    // is already the sole executor-held physical stage. Adopt
+                    // it before the runtime compares a queued terminal, while
+                    // the typed lattice still rejects another body or stage.
+                    *evidence = incumbent
+                        .adopt_incumbent_body_stage_for_retry_or_authority(evidence, effect)
+                        .map_err(EffectExecutorError::Contract)?;
+                }
+            }
             let candidate = production_adapter_effect_candidate_semantic_identity(effect);
             if candidate.is_some() {
                 candidate_position = candidate_position.checked_add(1).ok_or_else(|| {
@@ -6149,18 +6406,163 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     "one adapter macro-step effect position was not representable".to_owned(),
                 )
             })?;
+            if let AdapterEffect::StoreBody { round, subject, .. } = effect
+                && let Some(marker) = retained_published_store_retry_markers
+                    .get(&(*round, *subject))
+                    .cloned()
+            {
+                // The direct lifecycle transaction already published the sole
+                // executable Store row. Its ordinal-free marker stutters a
+                // same-body retransmission before the runtime compares a
+                // queued BodyStored terminal under the retry's fresh owner,
+                // retaining the strongest authority in a comparison-only
+                // overlay while the published fingerprint remains immutable.
+                if stored_replay_adopted || preterminal_body_stage_incumbent.is_some() {
+                    return Err(EffectExecutorError::Contract(
+                        "published lifecycle Store retry overlapped another physical lineage"
+                            .to_owned(),
+                    ));
+                }
+                let key = (*round, *subject);
+                let receipt = self.durable_bodies.get(&key).ok_or_else(|| {
+                    EffectExecutorError::Contract(
+                        "published lifecycle Store retry lost its durable receipt".to_owned(),
+                    )
+                })?;
+                let projected = marker
+                    .project_active_store_retry(receipt, effect, evidence)
+                    .map_err(EffectExecutorError::Contract)?;
+                let identity = evidence.candidate_semantic_identity().ok_or_else(|| {
+                    EffectExecutorError::Contract(
+                        "published lifecycle Store retry omitted its candidate identity".to_owned(),
+                    )
+                })?;
+                if retained_candidate_owners
+                    .get(&identity)
+                    .is_some_and(|existing| existing != &*evidence)
+                {
+                    return Err(EffectExecutorError::Contract(
+                        "published lifecycle Store retry disagreed with an exact incumbent owner"
+                            .to_owned(),
+                    ));
+                }
+                let admission =
+                    production_adapter_effect_candidate_admission_disposition(effect, 1, 1)
+                        .map_err(EffectExecutorError::Contract)?;
+                if admission != RuntimeCandidateAdmissionDisposition::CoalescedRetry {
+                    return Err(EffectExecutorError::Contract(
+                        "published lifecycle Store retry did not classify as an owner stutter"
+                            .to_owned(),
+                    ));
+                }
+                let projection = production_adapter_effect_candidate_trace_projection(
+                    effect,
+                    evidence,
+                    effect_position,
+                    effect_count,
+                    candidate.as_ref().map_or(0, |_| candidate_position),
+                    candidate_count,
+                    1,
+                    1,
+                    true,
+                )
+                .map_err(EffectExecutorError::Contract)?;
+                let _authorized_store_retry = check_production_effect_to_candidate_transition(
+                    projection,
+                )
+                .ok_or_else(|| {
+                    EffectExecutorError::Contract(
+                        "published lifecycle Store retry failed candidate refinement".to_owned(),
+                    )
+                })?;
+                retained_published_store_retry_markers.insert((*round, *subject), projected);
+                retain_effect.push(false);
+                continue;
+            }
+            if let AdapterEffect::StoreBody { round, subject, .. } = effect
+                && let Some(marker) =
+                    retained_published_validate_retry_markers.get(&(*round, *subject))
+            {
+                // The direct lifecycle transaction already advanced this exact
+                // durable Store into its Validate row. Its opaque ordinal-free
+                // predecessor seal may stutter a compatible later Store before
+                // the runtime compares any queued BodyStored terminal under the
+                // retry's fresh owner. Live replay/seal or executor Store work
+                // beside this published marker would instead be two lineages.
+                if stored_replay_adopted || preterminal_body_stage_incumbent.is_some() {
+                    return Err(EffectExecutorError::Contract(
+                        "published lifecycle Store retry overlapped another physical lineage"
+                            .to_owned(),
+                    ));
+                }
+                let key = (*round, *subject);
+                let receipt = self.durable_bodies.get(&key).ok_or_else(|| {
+                    EffectExecutorError::Contract(
+                        "published lifecycle Store retry lost its durable receipt".to_owned(),
+                    )
+                })?;
+                marker
+                    .project_store_retry(receipt, effect, evidence)
+                    .map_err(EffectExecutorError::Contract)?;
+                let identity = evidence.candidate_semantic_identity().ok_or_else(|| {
+                    EffectExecutorError::Contract(
+                        "published lifecycle Store retry omitted its candidate identity".to_owned(),
+                    )
+                })?;
+                if retained_candidate_owners
+                    .get(&identity)
+                    .is_some_and(|existing| existing != &*evidence)
+                {
+                    return Err(EffectExecutorError::Contract(
+                        "published lifecycle Store retry disagreed with an exact incumbent owner"
+                            .to_owned(),
+                    ));
+                }
+                let admission =
+                    production_adapter_effect_candidate_admission_disposition(effect, 1, 1)
+                        .map_err(EffectExecutorError::Contract)?;
+                if admission != RuntimeCandidateAdmissionDisposition::CoalescedRetry {
+                    return Err(EffectExecutorError::Contract(
+                        "published lifecycle Store retry did not classify as an owner stutter"
+                            .to_owned(),
+                    ));
+                }
+                let projection = production_adapter_effect_candidate_trace_projection(
+                    effect,
+                    evidence,
+                    effect_position,
+                    effect_count,
+                    candidate.as_ref().map_or(0, |_| candidate_position),
+                    candidate_count,
+                    1,
+                    1,
+                    true,
+                )
+                .map_err(EffectExecutorError::Contract)?;
+                let _authorized_store_retry = check_production_effect_to_candidate_transition(
+                    projection,
+                )
+                .ok_or_else(|| {
+                    EffectExecutorError::Contract(
+                        "published lifecycle Store retry failed candidate refinement".to_owned(),
+                    )
+                })?;
+                retain_effect.push(false);
+                continue;
+            }
             if let AdapterEffect::ValidateBody { round, subject, .. } = effect
                 && let Some(marker) = retained_published_validate_retry_markers
                     .get(&(*round, *subject))
                     .cloned()
             {
-                // The direct lifecycle transaction already published the
-                // executable Validate row. Periodic reducer retransmission
-                // can refine its authority, but it must stutter before the
-                // generic executor path can demand a second replay owner.
+                // The direct lifecycle Validate remains the sole physical
+                // operation. Periodic reducer retransmission may refine the
+                // marker's authority but always stutters here; it cannot
+                // redispatch validation or mint a replacement lifecycle row.
                 let projected = marker
                     .project_retry(effect, evidence)
                     .map_err(EffectExecutorError::Contract)?;
+                let key = (*round, *subject);
                 let identity = evidence.candidate_semantic_identity().ok_or_else(|| {
                     EffectExecutorError::Contract(
                         "published lifecycle Validate retry omitted its candidate identity"
@@ -6205,7 +6607,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                         "published lifecycle Validate retry failed candidate refinement".to_owned(),
                     )
                 })?;
-                retained_published_validate_retry_markers.insert((*round, *subject), projected);
+                retained_published_validate_retry_markers.insert(key, projected);
                 retain_effect.push(false);
                 continue;
             }
@@ -6588,6 +6990,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 .map_err(EffectExecutorError::Runtime)?;
         }
         self.durable_validate_retry_seals = retained_validate_retry_seals;
+        self.published_lifecycle_store_retry_markers = retained_published_store_retry_markers;
         self.published_lifecycle_validate_retry_markers = retained_published_validate_retry_markers;
         #[cfg(test)]
         if let Some(trace_root) = recovered_validate_retry_trace_root {
@@ -6602,8 +7005,17 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             .into_iter()
             .zip(ownership)
             .zip(retain_effect)
-            .filter_map(|((effect, ownership), retain)| {
-                retain.then_some(OwnedAdapterEffect { effect, ownership })
+            .enumerate()
+            .filter_map(|(index, ((effect, ownership), retain))| {
+                let highest_prepare_retention = (index == 0
+                    && matches!(&effect, AdapterEffect::EnterView { .. }))
+                .then_some(frontier.highest_prepare)
+                .flatten();
+                retain.then_some(OwnedAdapterEffect {
+                    effect,
+                    ownership,
+                    highest_prepare_retention,
+                })
             })
             .collect::<VecDeque<_>>();
         if retained.is_empty() {
@@ -6835,7 +7247,12 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 break;
             }
             let pending_work_producer = Self::pending_work_producer(&owned.effect);
-            match self.consume_one(owned.effect, owned.ownership, services) {
+            match self.consume_one(
+                owned.effect,
+                owned.ownership,
+                owned.highest_prepare_retention,
+                services,
+            ) {
                 Ok(()) => {
                     let batch = self
                         .retained_effect_batch
@@ -7035,6 +7452,15 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         pending_runner_decision_cleanup: Option<PendingRunnerDecisionCleanup>,
     ) -> Result<usize, EffectExecutorError> {
         self.ensure_open()?;
+        if effects.len() > MAX_EFFECTS_PER_STEP {
+            return Err(self.close(
+                EffectExecutorError::Contract(format!(
+                    "one pacemaker adapter macro-step emitted {} effects above the adapter bound {MAX_EFFECTS_PER_STEP}",
+                    effects.len()
+                )),
+                services,
+            ));
+        }
         if self.pending_runner_decision_cleanup.is_some() {
             return Err(self.close(
                 EffectExecutorError::Contract(
@@ -7098,6 +7524,118 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             return Err(self.close(error, services));
         }
         Ok(count)
+    }
+    /// Freeze the already-due timeout owner and its fixed fair-ingress cut
+    /// only when the reducer exposes an immediately actionable unchanged-lock
+    /// PrepareQC target.
+    pub(crate) fn freeze_pre_timeout_locked_prepare_qc_cut(
+        &mut self,
+        now: Instant,
+        physical_cut: u128,
+    ) -> Result<Option<PreTimeoutLockedPrepareQcCutV1>, EffectExecutorError> {
+        self.ensure_open()?;
+        if self.retained_effect_batch.is_some()
+            || self.parked_effect_batch.is_some()
+            || self.pending_runner_decision_cleanup.is_some()
+        {
+            return Ok(None);
+        }
+        self.publish_external_lifecycle_owners()?;
+        self.runtime
+            .set_ingress_physical_cut(physical_cut)
+            .map_err(EffectExecutorError::Runtime)?;
+        self.runtime
+            .freeze_pre_timeout_locked_prepare_qc_cut(now)
+            .map_err(EffectExecutorError::Runtime)
+    }
+    /// Deep-preview one fair-ingress payload without consuming its queue row.
+    pub(crate) fn wire_previews_pre_timeout_locked_prepare_qc(
+        &self,
+        cut: &PreTimeoutLockedPrepareQcCutV1,
+        payload: &wire::ConsensusMessageV2Payload,
+    ) -> bool {
+        self.runtime
+            .wire_previews_pre_timeout_locked_prepare_qc(cut, payload)
+    }
+    /// Dispatch one exact already-admitted pre-cut PrepareQC and consume its
+    /// effects through the ordinary Progress-root executor path.
+    pub(crate) fn step_pre_timeout_locked_prepare_qc_once<S: V2EffectServices>(
+        &mut self,
+        now: Instant,
+        cut: &PreTimeoutLockedPrepareQcCutV1,
+        services: &mut S,
+    ) -> Result<EffectExecutorStep, EffectExecutorError> {
+        self.ensure_open()?;
+        if self.retained_effect_batch.is_some()
+            || self.parked_effect_batch.is_some()
+            || self.pending_runner_decision_cleanup.is_some()
+        {
+            return Ok(EffectExecutorStep::Idle);
+        }
+        if let Err(error) = self.publish_external_lifecycle_owners() {
+            return Err(self.close(error, services));
+        }
+        let decision_before_step = self
+            .runtime
+            .decided_body()
+            .map_err(EffectExecutorError::Runtime)
+            .map_err(|error| self.close(error, services))?;
+        let wal_step = self
+            .output_guard
+            .begin_fail_stop_operation()
+            .ok_or_else(|| {
+                EffectExecutorError::FailClosed(
+                    "process restart is required after a fatal consensus failure".to_owned(),
+                )
+            })?;
+        let step = match self
+            .runtime
+            .step_pre_timeout_locked_prepare_qc_effects(now, cut)
+        {
+            Ok(step) => step,
+            Err(reason) => {
+                drop(wal_step);
+                return Err(self.close(EffectExecutorError::Runtime(reason), services));
+            }
+        };
+        if step.is_some()
+            && let Err(reason) = self.runtime.take_scheduler_ownership()
+        {
+            drop(wal_step);
+            return Err(self.close(EffectExecutorError::Runtime(reason), services));
+        }
+        wal_step.complete();
+        if let Err(error) = self.finish_runtime_step_reconciliation(services) {
+            return Err(self.close(error, services));
+        }
+        let decision_after_step = self
+            .runtime
+            .decided_body()
+            .map_err(EffectExecutorError::Runtime)
+            .map_err(|error| self.close(error, services))?;
+        let pending_runner_decision_cleanup = self
+            .plan_runner_decision_cleanup(decision_before_step, decision_after_step)
+            .map_err(|error| self.close(error, services))?;
+        match step {
+            None | Some(RuntimeStep::Idle) => {
+                self.pending_runner_decision_cleanup = pending_runner_decision_cleanup;
+                if let Err(error) = self.publish_external_lifecycle_owners() {
+                    return Err(self.close(error, services));
+                }
+                if let Err(error) = self.publish_status(services) {
+                    return Err(self.close(error, services));
+                }
+                Ok(EffectExecutorStep::Idle)
+            }
+            Some(RuntimeStep::Advanced(effects)) => {
+                let count = self.consume_pacemaker_effects_with_runner_decision_cleanup(
+                    effects,
+                    services,
+                    pending_runner_decision_cleanup,
+                )?;
+                Ok(EffectExecutorStep::Advanced { effects: count })
+            }
+        }
     }
     /// Give one bounded scheduler turn only to absolute timeout or an
     /// authenticated Progress-root lifecycle.
@@ -7676,6 +8214,17 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             let validate_ownership = ownership
                 .rebind_as_inherited_adapter_effect(&validate_effect)
                 .map_err(|reason| self.close(EffectExecutorError::Contract(reason), services))?;
+            let store_terminal =
+                DurableStoreTerminalRetrySealV1::seal_exact(&store_effect, &ownership, &receipt)
+                    .ok_or_else(|| {
+                        self.close(
+                            EffectExecutorError::Contract(
+                                "durable local Store could not seal its terminal retry owner"
+                                    .to_owned(),
+                            ),
+                            services,
+                        )
+                    })?;
             let validate_replay = replay_ownership
                 .project_exact_validate(
                     &store_effect,
@@ -7716,6 +8265,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 &validate_effect,
                 &validate_ownership,
                 prepared.into_pending_durable_validate_admission(),
+                Some(store_terminal),
             )
             .map_err(|error| self.close(error, services))?;
         }
@@ -7944,6 +8494,116 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 services,
             ));
         }
+        // A certified lifecycle Fetch may publish the same immutable body
+        // through Store (or already through Validate) while an older ordinary
+        // reducer Store is still in flight.  Its eventual worker completion
+        // bypasses `retain_effect_batch`, so prove the same marker-authorized
+        // stutter here before it can enqueue a second `BodyStored` terminal
+        // under the legacy task's foreign lifecycle owner.  The task and any
+        // origin replay still settle below; only the duplicate runtime
+        // successor is suppressed.  An active Store marker retains a valid
+        // monotonic authority refinement, whereas the post-Validate marker is
+        // already at least as strong as every Store completion it may absorb.
+        let (marker_effect, marker_ownership, historical_completion) = match &pending.consumer {
+            Some(StoreConsumer::Reducer { tag, ownership }) => (
+                AdapterEffect::StoreBody {
+                    tag: *tag,
+                    round: manifest.round,
+                    subject: manifest.subject,
+                },
+                ownership,
+                false,
+            ),
+            Some(StoreConsumer::LocalProposal { .. }) | None => (
+                AdapterEffect::StoreBody {
+                    tag: pending.task.tag(),
+                    round: manifest.round,
+                    subject: manifest.subject,
+                },
+                pending.task.ownership(),
+                true,
+            ),
+        };
+        let published_store_completion_plan = match (
+            self.published_lifecycle_store_retry_markers.get(&key),
+            self.published_lifecycle_validate_retry_markers.get(&key),
+        ) {
+            (Some(_), Some(_)) => {
+                return Err(self.close(
+                    EffectExecutorError::Contract(
+                        "late Store completion found two published lifecycle terminals".to_owned(),
+                    ),
+                    services,
+                ));
+            }
+            (Some(marker), None) => {
+                let projection = if historical_completion {
+                    marker.project_historical_store_completion(
+                        &receipt,
+                        &marker_effect,
+                        marker_ownership,
+                    )
+                } else {
+                    marker.project_active_store_retry(&receipt, &marker_effect, marker_ownership)
+                };
+                let projected = match projection {
+                    Ok(projected) => projected,
+                    Err(reason) => {
+                        return Err(self.close(EffectExecutorError::Contract(reason), services));
+                    }
+                };
+                PublishedLifecycleStoreCompletionPlanV1::ActiveStore(projected)
+            }
+            (None, Some(marker)) => {
+                let projection = if historical_completion {
+                    marker.project_historical_store_completion(
+                        &receipt,
+                        &marker_effect,
+                        marker_ownership,
+                    )
+                } else {
+                    marker.project_store_retry(&receipt, &marker_effect, marker_ownership)
+                };
+                if let Err(reason) = projection {
+                    return Err(self.close(EffectExecutorError::Contract(reason), services));
+                }
+                PublishedLifecycleStoreCompletionPlanV1::PublishedValidate
+            }
+            (None, None) => PublishedLifecycleStoreCompletionPlanV1::NoPublishedMarker,
+        };
+        let coalesces_published_store_terminal =
+            published_store_completion_plan.coalesces_terminal();
+        let coalesced_pipeline_owner = if coalesces_published_store_terminal {
+            match (
+                &pending.consumer,
+                self.body_pipeline_owners.get(&key).copied(),
+            ) {
+                (Some(_), Some(owner)) => Some(owner),
+                (Some(_), None) => unreachable!(
+                    "an attached Store completion preflighted its exact pipeline owner"
+                ),
+                (None, Some(owner))
+                    if owner.manifest_hash == Some(HashOf::new(&manifest))
+                        && (owner.tag == pending.task.tag()
+                            || owner.tag.strictly_advances(pending.task.tag())) =>
+                {
+                    Some(owner)
+                }
+                (None, Some(_)) => {
+                    return Err(self.close(
+                        EffectExecutorError::Contract(
+                            "detached Store completion changed its retained pipeline owner"
+                                .to_owned(),
+                        ),
+                        services,
+                    ));
+                }
+                (None, None) => None,
+            }
+        } else {
+            None
+        };
+        let mut coalesces_local_store_replay = false;
         let local_replay_projection = match &pending.consumer {
             Some(StoreConsumer::LocalProposal { tag, ownership, .. }) => {
                 let store_effect = AdapterEffect::StoreBody {
@@ -7951,17 +8611,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     round: manifest.round,
                     subject: manifest.subject,
                 };
-                let validate_effect = AdapterEffect::ValidateBody {
-                    tag: *tag,
-                    round: manifest.round,
-                    subject: manifest.subject,
-                };
-                let validate_ownership = ownership
-                    .rebind_as_inherited_adapter_effect(&validate_effect)
-                    .map_err(|reason| {
-                        self.close(EffectExecutorError::Contract(reason), services)
-                    })?;
-                let Some(replay) = self.local_store_replay.get(&completion.work_id()) else {
+                if !self.local_store_replay.contains_key(&completion.work_id()) {
                     return Err(self.close(
                         EffectExecutorError::Contract(
                             "local body-store completion lost its pre-intent replay seal"
@@ -7969,20 +8619,20 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                         ),
                         services,
                     ));
-                };
-                if self.pending_durable_validate_admissions.contains_key(&key)
-                    || !replay.exactly_matches_store_task(
+                }
+                let local_store_replay_is_exact = {
+                    let replay = self
+                        .local_store_replay
+                        .get(&completion.work_id())
+                        .expect("preflighted local Store replay remains installed");
+                    replay.exactly_matches_store_task(
                         &store_effect,
                         &manifest,
                         pending.task.ownership(),
                     )
-                    || !replay.exactly_projects_validate_task(
-                        &store_effect,
-                        &manifest,
-                        &receipt,
-                        &validate_effect,
-                        &validate_ownership,
-                    )
+                };
+                if self.pending_durable_validate_admissions.contains_key(&key)
+                    || !local_store_replay_is_exact
                 {
                     return Err(self.close(
                         EffectExecutorError::Contract(
@@ -7992,7 +8642,67 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                         services,
                     ));
                 }
-                Some((store_effect, validate_effect, validate_ownership))
+                if coalesces_published_store_terminal {
+                    // The published row is already the sole successor. Retire
+                    // the exact pre-intent replay below without constructing
+                    // any executable Validate capability for a path that must
+                    // stutter.
+                    coalesces_local_store_replay = true;
+                    None
+                } else {
+                    let validate_effect = AdapterEffect::ValidateBody {
+                        tag: *tag,
+                        round: manifest.round,
+                        subject: manifest.subject,
+                    };
+                    let validate_ownership = ownership
+                        .rebind_as_inherited_adapter_effect(&validate_effect)
+                        .map_err(|reason| {
+                            self.close(EffectExecutorError::Contract(reason), services)
+                        })?;
+                    let store_terminal = DurableStoreTerminalRetrySealV1::seal_exact(
+                        &store_effect,
+                        pending.task.ownership(),
+                        &receipt,
+                    )
+                    .ok_or_else(|| {
+                        self.close(
+                            EffectExecutorError::Contract(
+                                "local Store completion could not seal its terminal retry owner"
+                                    .to_owned(),
+                            ),
+                            services,
+                        )
+                    })?;
+                    let local_validate_replay_is_exact = {
+                        let replay = self
+                            .local_store_replay
+                            .get(&completion.work_id())
+                            .expect("preflighted local Store replay remains serialized");
+                        replay.exactly_projects_validate_task(
+                            &store_effect,
+                            &manifest,
+                            &receipt,
+                            &validate_effect,
+                            &validate_ownership,
+                        )
+                    };
+                    if !local_validate_replay_is_exact {
+                        return Err(self.close(
+                            EffectExecutorError::Contract(
+                                "local body-store completion changed its exact Validate lineage"
+                                    .to_owned(),
+                            ),
+                            services,
+                        ));
+                    }
+                    Some((
+                        store_effect,
+                        validate_effect,
+                        validate_ownership,
+                        store_terminal,
+                    ))
+                }
             }
             Some(StoreConsumer::Reducer { .. }) | None => {
                 if self.local_store_replay.contains_key(&completion.work_id()) {
@@ -8040,14 +8750,16 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     services,
                 ));
             }
-            let previous = self.remote_proposal_replay.insert(
-                key,
-                RemoteProposalReplayStageV1::Stored {
-                    replay: stored,
-                    ownership: pending.task.ownership().clone(),
-                },
-            );
-            debug_assert!(previous.is_none());
+            if !coalesces_published_store_terminal {
+                let previous = self.remote_proposal_replay.insert(
+                    key,
+                    RemoteProposalReplayStageV1::Stored {
+                        replay: stored,
+                        ownership: pending.task.ownership().clone(),
+                    },
+                );
+                debug_assert!(previous.is_none());
+            }
         }
         if completes_authenticated_genesis_store {
             self.commit_authenticated_genesis_store_completion(
@@ -8057,27 +8769,39 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 pending.task.ownership().clone(),
             )
             .map_err(|error| self.close(error, services))?;
+            if coalesces_published_store_terminal {
+                let removed = self.authenticated_genesis_replay.remove(&key);
+                debug_assert!(matches!(
+                    removed,
+                    Some(AuthenticatedGenesisReplayStageV1::Stored { .. })
+                ));
+            }
         }
         match &pending.consumer {
-            Some(StoreConsumer::Reducer { tag, ownership }) => self
-                .runtime
-                .enqueue_body_stored_with_owner(
-                    *tag,
-                    manifest.round,
-                    manifest.subject,
-                    receipt.clone(),
-                    ownership,
-                )
-                .map_err(runtime_enqueue_error)
-                .map_err(|error| self.close(error, services))?,
+            Some(StoreConsumer::Reducer { tag, ownership }) => {
+                if !coalesces_published_store_terminal {
+                    self.runtime
+                        .enqueue_body_stored_with_owner(
+                            *tag,
+                            manifest.round,
+                            manifest.subject,
+                            receipt.clone(),
+                            ownership,
+                        )
+                        .map_err(runtime_enqueue_error)
+                        .map_err(|error| self.close(error, services))?;
+                }
+            }
             Some(StoreConsumer::LocalProposal { .. }) => {}
             None => {}
         }
-        let projected_local_admission = if let Some((
-            store_effect,
-            validate_effect,
-            validate_ownership,
-        )) = local_replay_projection
+        let projected_local_admission = if coalesces_local_store_replay {
+            debug_assert!(coalesces_published_store_terminal);
+            let removed = self.local_store_replay.remove(&completion.work_id());
+            debug_assert!(removed.is_some());
+            None
+        } else if let Some((store_effect, validate_effect, validate_ownership, store_terminal)) =
+            local_replay_projection
         {
             let replay = self
                 .local_store_replay
@@ -8127,18 +8851,40 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 validate_effect,
                 validate_ownership,
                 prepared.into_pending_durable_validate_admission(),
+                store_terminal,
             ))
         } else {
             None
         };
         self.pending_stores.remove(&completion.work_id());
         self.pending_store_bytes = pending_store_bytes;
+        if coalesces_published_store_terminal {
+            // The published lifecycle row is now the sole body-stage owner.
+            // The legacy pipeline token cannot authorize any later terminal
+            // and must not survive solely because its physical Store finished.
+            let removed = self.body_pipeline_owners.remove(&key);
+            debug_assert_eq!(removed, coalesced_pipeline_owner);
+        }
+        if let PublishedLifecycleStoreCompletionPlanV1::ActiveStore(projected) =
+            published_store_completion_plan
+        {
+            *self
+                .published_lifecycle_store_retry_markers
+                .get_mut(&key)
+                .expect("preflighted published Store marker remains serialized") = projected;
+        }
         self.recovered_bodies
             .insert(key, (manifest.clone(), receipt.clone()));
         self.durable_bodies.insert(key, receipt.clone());
-        if let Some((effect, ownership, pending)) = projected_local_admission {
-            self.install_pending_durable_validate_admission(key, &effect, &ownership, pending)
-                .map_err(|error| self.close(error, services))?;
+        if let Some((effect, ownership, pending, store_terminal)) = projected_local_admission {
+            self.install_pending_durable_validate_admission(
+                key,
+                &effect,
+                &ownership,
+                pending,
+                Some(store_terminal),
+            )
+            .map_err(|error| self.close(error, services))?;
         }
         self.publish_status(services)
             .map_err(|error| self.close(error, services))?;
@@ -9421,8 +10167,16 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         &mut self,
         effect: AdapterEffect,
         ownership: RuntimeEffectOwnership,
+        highest_prepare_retention: Option<wire::QuorumCertificateRef>,
         services: &mut S,
     ) -> Result<(), EffectExecutorError> {
+        if highest_prepare_retention.is_some()
+            && !matches!(&effect, AdapterEffect::EnterView { .. })
+        {
+            return Err(EffectExecutorError::Contract(
+                "cleanup-only highest Prepare sidecar escaped its EnterView".to_owned(),
+            ));
+        }
         let mut pending_kura_successor = None;
         let recovery_transition = self
             .pending_tip_recovery
@@ -9596,7 +10350,13 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 tag,
                 certificate,
                 protected_lock,
-            } => self.install_view(tag, certificate, protected_lock, services),
+            } => self.install_view(
+                tag,
+                certificate,
+                protected_lock,
+                highest_prepare_retention,
+                services,
+            ),
             effect @ (AdapterEffect::ReportEquivocation { .. }
             | AdapterEffect::ReportInvalidCertifiedBody { .. }) => {
                 self.park_lifecycle_output_admission(effect, ownership)
@@ -9617,7 +10377,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             let (effect, ownership) =
                 successor.consume_for_executor(PendingKuraApplySuccessorExecutorPermitV1::new());
             self.ensure_pending_tip_recovery_effect_is_local(&effect)?;
-            self.consume_one(effect, ownership, services)
+            self.consume_one(effect, ownership, None, services)
                 .map_err(|error| {
                     EffectExecutorError::Contract(format!(
                         "committed pending-Kura validation could not dispatch its exact Apply child: {error}"
@@ -10981,6 +11741,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         &self,
         tag: EventTag,
         protected_body: Option<(wire::ConsensusRound, wire::BlockSubject)>,
+        highest_prepare_body: Option<(wire::ConsensusRound, wire::BlockSubject)>,
     ) -> Result<CertifiedViewBodyCleanupPlan, EffectExecutorError> {
         let stale_stores = self
             .pending_stores
@@ -11006,7 +11767,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 )
             })?;
             let key = (pending.task.manifest.round, pending.task.manifest.subject);
-            if Some(key) == protected_body {
+            if Some(key) == protected_body || Some(key) == highest_prepare_body {
                 return Ok(total);
             }
             let bytes = u64::try_from(pending.task.canonical_wire.len()).map_err(|_| {
@@ -11132,7 +11893,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         tag: EventTag,
         round: wire::ConsensusRound,
         subject: wire::BlockSubject,
-        ownership: RuntimeEffectOwnership,
+        mut ownership: RuntimeEffectOwnership,
         services: &mut S,
     ) -> Result<(), EffectExecutorError> {
         let key = (round, subject);
@@ -11141,10 +11902,24 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             round,
             subject,
         };
+        if !self.remote_proposal_replay.contains_key(&key)
+            && !self.authenticated_genesis_replay.contains_key(&key)
+            && let Some(adopted) =
+                self.stored_replay_incumbent_store_ownership(key, &effect, &ownership)?
+        {
+            // Retention performs this projection before querying a queued
+            // terminal. Recheck the surviving post-Validate seal at dispatch
+            // so direct internal consumption cannot substitute a fresh owner.
+            ownership = adopted;
+        }
         let genesis_disposition =
             self.prepare_authenticated_genesis_store_replay(key, &effect, &ownership)?;
-        if genesis_disposition == AuthenticatedGenesisStoreReplayDispositionV1::Retry {
-            return self.store_body_inner(tag, round, subject, ownership, services);
+        let advances_genesis_replay = matches!(
+            &genesis_disposition,
+            AuthenticatedGenesisStoreReplayDispositionV1::Advance
+        );
+        if let AuthenticatedGenesisStoreReplayDispositionV1::Retry(adopted) = genesis_disposition {
+            return self.store_body_inner(tag, round, subject, adopted, services);
         }
         match self.remote_proposal_replay.get(&key) {
             Some(RemoteProposalReplayStageV1::Fetch { .. }) => {
@@ -11159,12 +11934,25 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     ));
                 }
             }
-            Some(RemoteProposalReplayStageV1::Store { replay, .. }) => {
-                if !replay.exactly_matches_retry(&effect, &ownership) {
-                    return Err(EffectExecutorError::Contract(
-                        "Proposal StoreBody retry changed its exact replay owner".to_owned(),
-                    ));
-                }
+            Some(RemoteProposalReplayStageV1::Store { work_id, replay }) => {
+                ownership = self
+                    .pending_stores
+                    .get(work_id)
+                    .filter(|pending| {
+                        (pending.task.manifest.round, pending.task.manifest.subject) == key
+                    })
+                    .and_then(|pending| {
+                        replay.project_retry_ownership(
+                            pending.task.ownership(),
+                            &effect,
+                            &ownership,
+                        )
+                    })
+                    .ok_or_else(|| {
+                        EffectExecutorError::Contract(
+                            "Proposal StoreBody retry changed its exact replay owner".to_owned(),
+                        )
+                    })?;
                 return self.store_body_inner(tag, round, subject, ownership, services);
             }
             Some(RemoteProposalReplayStageV1::Stored {
@@ -11176,15 +11964,14 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                         "durable Proposal replay lost its exact body receipt".to_owned(),
                     )
                 })?;
-                if ownership != *stored_ownership
-                    || !stored.exactly_retains_owned_store(receipt, stored_ownership)
-                    || !stored.exactly_matches_retry(&effect, receipt)
-                {
-                    return Err(EffectExecutorError::Contract(
-                        "durable Proposal StoreBody retry changed its exact replay owner"
-                            .to_owned(),
-                    ));
-                }
+                ownership = stored
+                    .project_retry_ownership(receipt, stored_ownership, &effect, &ownership)
+                    .ok_or_else(|| {
+                        EffectExecutorError::Contract(
+                            "durable Proposal StoreBody retry changed its exact replay owner"
+                                .to_owned(),
+                        )
+                    })?;
                 return self.store_body_inner(tag, round, subject, ownership, services);
             }
             Some(RemoteProposalReplayStageV1::BodyAvailable(_)) | None => {}
@@ -11222,8 +12009,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             self.remote_proposal_replay.get(&key),
             Some(RemoteProposalReplayStageV1::StoreAdmission(_))
         );
-        let advances_genesis_replay =
-            genesis_disposition == AuthenticatedGenesisStoreReplayDispositionV1::Advance;
         self.store_body_inner(tag, round, subject, ownership.clone(), services)?;
         if !advances_proposal_replay && !advances_genesis_replay {
             return Ok(());
@@ -12175,19 +12960,29 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 })?;
         self.pending_signatures.clear();
         // A durable Decision retires every competing signed-Proposal origin.
-        // Preserve only the selected body's already-fsynced Store lineage:
-        // the retained Validate still owns that exact causal root even though
-        // its candidate statement has monotonically acquired Commit authority.
-        // Earlier physical stages must instead restart from Decision recovery.
+        // Preserve the selected body's exact Store lineage before or after
+        // fsync whenever terminal cleanup is not draining that body. The
+        // selected immutable persistence task remains live above, so its
+        // replay owner must advance monotonically into Stored before the
+        // Commit-refined Validate consumes it. Earlier physical stages still
+        // restart from Decision recovery.
         self.remote_proposal_replay.retain(|key, stage| {
             !drain_decision_body
                 && *key == decision_body
-                && matches!(stage, RemoteProposalReplayStageV1::Stored { .. })
+                && matches!(
+                    stage,
+                    RemoteProposalReplayStageV1::Store { .. }
+                        | RemoteProposalReplayStageV1::Stored { .. }
+                )
         });
         self.authenticated_genesis_replay.retain(|key, stage| {
             !drain_decision_body
                 && *key == decision_body
-                && matches!(stage, AuthenticatedGenesisReplayStageV1::Stored { .. })
+                && matches!(
+                    stage,
+                    AuthenticatedGenesisReplayStageV1::Store { .. }
+                        | AuthenticatedGenesisReplayStageV1::Stored { .. }
+                )
         });
         // A resolved Validate owner may leave an inert idempotence tombstone,
         // while an ordinal-bound seal still denotes a live registry row.
@@ -12492,6 +13287,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         tag: EventTag,
         certificate: wire::TimeoutCertificate,
         protected_lock: Option<wire::QuorumCertificate>,
+        highest_prepare_retention: Option<wire::QuorumCertificateRef>,
         services: &mut S,
     ) -> Result<(), EffectExecutorError> {
         if tag.height() != self.context.height
@@ -12502,6 +13298,12 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             return Err(EffectExecutorError::Contract(
                 "EnterView tag does not immediately follow its persisted timeout certificate"
                     .to_owned(),
+            ));
+        }
+        self.preflight_highest_prepare_frontier(Some(tag), highest_prepare_retention)?;
+        if highest_prepare_retention.is_some_and(|highest| highest.round.view >= tag.view()) {
+            return Err(EffectExecutorError::Contract(
+                "EnterView cleanup frontier retained a non-historical highest Prepare".to_owned(),
             ));
         }
         if let Some(protected) = protected_lock.as_ref() {
@@ -12541,6 +13343,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             }
         }
         let protected_body = protected_lock_body(protected_lock.as_ref());
+        let highest_prepare_body = highest_prepare_body(highest_prepare_retention);
         // The typed pacemaker path may install this TC while an ordinary
         // reducer suffix is parked behind adapter backpressure. Effects from
         // the superseded incarnation have not acquired service ownership yet,
@@ -12596,8 +13399,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 pending.task.manifest.as_ref().map(HashOf::new),
             )?;
         }
-        self.reconcile_protected_lock(tag, protected_body, services)?;
-        let stale_body_cleanup = self.plan_certified_view_body_cleanup(tag, protected_body)?;
+        self.reconcile_protected_lock(tag, protected_body, highest_prepare_body, services)?;
+        let stale_body_cleanup =
+            self.plan_certified_view_body_cleanup(tag, protected_body, highest_prepare_body)?;
         let stale_fetches = self
             .pending_fetches
             .values()
@@ -12703,7 +13507,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                         "stale body-store work lost its executor owner".to_owned(),
                     )
                 })?;
-            if Some(key) != protected_body {
+            if Some(key) != protected_body && Some(key) != highest_prepare_body {
                 services.cancel_body_store(*id).map_err(service_error)?;
             }
         }
@@ -12744,6 +13548,31 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 }
             }
         }
+        let protected_ready_rebind_keys = stale_body_cleanup
+            .protected_ready_rebinds
+            .iter()
+            .map(|rebind| rebind.key)
+            .collect::<BTreeSet<_>>();
+        let stale_pipeline_owners = self
+            .body_pipeline_owners
+            .iter()
+            .filter_map(|(key, owner)| {
+                (tag.strictly_advances(owner.tag) && !protected_ready_rebind_keys.contains(key))
+                    .then_some((*key, *owner))
+            })
+            .collect::<Vec<_>>();
+        for (key, owner) in &stale_pipeline_owners {
+            // Once an EnterView supersedes a physical pipeline incarnation,
+            // every queued completion under that exact owner must retire before
+            // the owner can be released below. Ready-body cleanup already took
+            // BodyAvailable when present; this exact all-stage pass also drains
+            // BodyStored/LocalProposalReady after their ready bytes disappeared.
+            // Protected ready/fetch pipelines were rebound to `tag` above and
+            // are deliberately absent from this retirement census.
+            self.runtime
+                .retire_body_pipeline_completions(owner.tag, key.0, key.1)
+                .map_err(EffectExecutorError::Runtime)?;
+        }
         // Every fallible store/runtime callback has now acknowledged. Commit
         // the preflighted ownership removals and both exact residual counters
         // as one infallible serialized phase.
@@ -12753,7 +13582,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 .get(id)
                 .map(|pending| (pending.task.manifest.round, pending.task.manifest.subject))
                 .expect("preflighted stale body-store work remains serialized");
-            if Some(key) == protected_body {
+            if Some(key) == protected_body || Some(key) == highest_prepare_body {
                 // Persistence work and its canonical bytes are immutable. A
                 // timeout may replace the reducer consumer, but it must not
                 // restart the exact durable-lock store or race cancellation
@@ -12796,36 +13625,63 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 )
             })
             .collect::<BTreeSet<_>>();
+        let retained_store_owners = self
+            .pending_stores
+            .values()
+            .map(|pending| (pending.task.manifest.round, pending.task.manifest.subject))
+            .collect::<BTreeSet<_>>();
         self.body_pipeline_owners.retain(|key, owner| {
-            !tag.strictly_advances(owner.tag) || retained_apply_owners.contains(key)
+            !tag.strictly_advances(owner.tag)
+                || retained_apply_owners.contains(key)
+                || retained_store_owners.contains(key)
         });
         // Unprotected Proposal families retire with the superseded view.
-        // Preserve only the protected body's already-fsynced Store lineage:
-        // its later Prepare/Commit Validate carrier must first adopt this
-        // incumbent causal root before consuming the exact Proposal replay.
-        // Earlier physical stages restart from the certified pipeline.
+        // Preserve the protected body's exact Store lineage both before and
+        // after fsync. The in-flight persistence task above is deliberately
+        // detached instead of cancelled, so its move-only replay owner must
+        // advance monotonically from Store to Stored when that same task
+        // completes. A later Prepare/Commit Validate carrier then adopts the
+        // incumbent causal root before consuming it. Earlier physical stages
+        // still restart from the certified pipeline.
         self.remote_proposal_replay.retain(|key, stage| {
-            Some(*key) == protected_body
-                && matches!(stage, RemoteProposalReplayStageV1::Stored { .. })
+            (Some(*key) == protected_body || Some(*key) == highest_prepare_body)
+                && matches!(
+                    stage,
+                    RemoteProposalReplayStageV1::Store { .. }
+                        | RemoteProposalReplayStageV1::Stored { .. }
+                )
         });
         self.authenticated_genesis_replay.retain(|key, stage| {
-            Some(*key) == protected_body
-                && matches!(stage, AuthenticatedGenesisReplayStageV1::Stored { .. })
+            (Some(*key) == protected_body || Some(*key) == highest_prepare_body)
+                && matches!(
+                    stage,
+                    AuthenticatedGenesisReplayStageV1::Store { .. }
+                        | AuthenticatedGenesisReplayStageV1::Stored { .. }
+                )
         });
         // Retry authorities own no service work. Ordinal-bound entries still
         // represent live registry rows and survive view cleanup; among
-        // resolved tombstones, only the exact protected body can still emit a
-        // legitimate duplicate.
-        self.durable_validate_retry_seals
-            .retain(|key, seal| seal.lifecycle_ordinal().is_some() || Some(*key) == protected_body);
+        // resolved tombstones, only the exact protected body or cleanup-only
+        // durable high can still emit a legitimate duplicate. Active published
+        // Store markers remain executable lifecycle rows and are retired only
+        // by their atomic Store-to-Validate handoff.
+        self.durable_validate_retry_seals.retain(|key, seal| {
+            seal.lifecycle_ordinal().is_some()
+                || Some(*key) == protected_body
+                || Some(*key) == highest_prepare_body
+        });
         self.published_lifecycle_validate_retry_markers
-            .retain(|key, marker| marker.owns_live_lifecycle_row() || Some(*key) == protected_body);
+            .retain(|key, marker| {
+                marker.owns_live_lifecycle_row()
+                    || Some(*key) == protected_body
+                    || Some(*key) == highest_prepare_body
+            });
         let retain_local_producer = self.local_validator == Some(self.context.leader(tag.view()));
         self.runtime
             .reconcile_active_view_producer(tag, retain_local_producer)
             .map_err(EffectExecutorError::Runtime)?;
         services
-            .entered_view(tag, certificate)
+            .entered_view(tag, certificate, protected_body)
             .map_err(service_error)?;
         self.reconciled_tag = Some(tag);
         Ok(())

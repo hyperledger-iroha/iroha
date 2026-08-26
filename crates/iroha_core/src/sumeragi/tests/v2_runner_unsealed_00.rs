@@ -799,6 +799,42 @@ fn fail_closed_authenticated_coalesce_releases_gate_and_suppresses_retry() {
         None
     );
 }
+#[test]
+fn authentication_rejection_volatile_terminalizes_exact_leader_wire() {
+    let (_directory, ingress, gate, ownership, message, semantic_origin) =
+        leader_wire_runtime_ingress_fixture();
+    let token = ownership
+        .leader_wire_token()
+        .expect("the runner fixture owns one productive token")
+        .clone();
+    complete_control_ingress_admission(
+        &ingress,
+        &ownership,
+        Err(NetworkIngressError::Authentication(
+            super::super::v2::AdapterError::AuthenticatedTimeoutVoteOriginMismatch {
+                signer: 1,
+                semantic_origin: semantic_origin.clone(),
+            },
+        )),
+    )
+    .expect("remote authentication rejection is nonfatal");
+    assert_eq!(
+        ingress.state.lock().leader_wire_lifecycles[&token.slot].status,
+        super::super::FairV2IngressLeaderWireStatus::VolatileTerminal
+    );
+    assert_eq!(
+        gate.earliest_ingress_scheduler_ordinal()
+            .expect("read volatile-terminal runner leader-wire minimum"),
+        None
+    );
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            BlockMessage::V2(message),
+            semantic_origin,
+        )),
+        Ok(super::super::FairV2IngressPushDisposition::Coalesced)
+    ));
+}
 fn test_predecessor(context: &wire::HeightContext, label: &[u8]) -> DurableV2PredecessorIdentity {
     DurableV2PredecessorIdentity::for_test(context.height, label)
 }

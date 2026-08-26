@@ -1,5 +1,5 @@
 impl ConcreteLifecycleWorkRegistry {
-#[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines)]
     fn exactly_covers_all_live_work_with_optional_active_producer(
         &self,
         verified: &VerifiedHeightContext,
@@ -605,5 +605,4 @@ impl ConcreteLifecycleWorkRegistry {
             }
         })
     }
-
 }

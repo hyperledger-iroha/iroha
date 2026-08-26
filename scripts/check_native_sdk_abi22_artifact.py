@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -31,7 +32,20 @@ from typing import NoReturn
 if __package__:
     from .compute_workspace_source_manifest import workspace_source_manifest
 else:
-    from compute_workspace_source_manifest import workspace_source_manifest
+    _manifest_module_path = Path(__file__).resolve(strict=True).with_name(
+        "compute_workspace_source_manifest.py"
+    )
+    _manifest_module_spec = importlib.util.spec_from_file_location(
+        "_iroha_compute_workspace_source_manifest",
+        _manifest_module_path,
+    )
+    if _manifest_module_spec is None or _manifest_module_spec.loader is None:
+        raise ImportError(
+            f"unable to load workspace source manifest helper: {_manifest_module_path}"
+        )
+    _manifest_module = importlib.util.module_from_spec(_manifest_module_spec)
+    _manifest_module_spec.loader.exec_module(_manifest_module)
+    workspace_source_manifest = _manifest_module.workspace_source_manifest
 
 
 SCHEMA = "iroha.native-sdk-abi22-artifact.v1"
@@ -845,6 +859,244 @@ def _require_real_directory_ancestry(path: Path, *, label: str) -> None:
             fail(f"{label} ancestry must contain only directories: {current}")
 
 
+def _require_descriptor_staging_support() -> None:
+    """Fail unless Unix descriptor-relative no-follow staging is available."""
+
+    dir_fd_functions = getattr(os, "supports_dir_fd", ())
+    if (
+        os.name != "posix"
+        or not hasattr(os, "O_DIRECTORY")
+        or not getattr(os, "O_DIRECTORY")
+        or not hasattr(os, "O_NOFOLLOW")
+        or not getattr(os, "O_NOFOLLOW")
+        or os.open not in dir_fd_functions
+    ):
+        fail(
+            "native artifact staging requires Unix dir_fd, O_DIRECTORY, "
+            "and O_NOFOLLOW support"
+        )
+
+
+def _open_pinned_directory_ancestry(path: Path, *, label: str) -> int:
+    """Open every component beneath a trusted anchor without following links."""
+
+    if not path.is_absolute():
+        fail(f"{label} must be absolute")
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | os.O_DIRECTORY
+        | os.O_NOFOLLOW
+    )
+    anchor = Path(path.anchor)
+    descriptors: list[int] = []
+    try:
+        descriptors.append(os.open(anchor, flags))
+        for component in path.parts[len(anchor.parts) :]:
+            descriptors.append(
+                os.open(component, flags, dir_fd=descriptors[-1])
+            )
+        return descriptors.pop()
+    except OSError as error:
+        raise ArtifactContractError(
+            f"{label} ancestry could not be pinned without following symlinks"
+        ) from error
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
+def stage_unique_artifact(
+    source: Path,
+    canonical_destination: Path,
+) -> tuple[Path, str, int]:
+    """Copy a pinned build output into one fresh single-link artifact.
+
+    Cargo may hard-link its top-level dynamic-library output to the hashed
+    artifact under ``deps``.  Such build outputs are valid staging inputs but
+    are not valid authenticated SDK artifacts.  Pin the source descriptor and
+    its metadata revision, create the destination exclusively beneath a pinned
+    parent, and prove the staged bytes match the source digest and size.
+    """
+
+    _require_descriptor_staging_support()
+    source = Path(os.path.abspath(source))
+    canonical_destination = Path(os.path.abspath(canonical_destination))
+    if source == canonical_destination:
+        fail("native artifact staging source and destination must differ")
+
+    def source_revision(metadata: os.stat_result) -> tuple[int, ...]:
+        return (
+            metadata.st_dev,
+            metadata.st_ino,
+            metadata.st_mode,
+            metadata.st_size,
+            metadata.st_mtime_ns,
+            metadata.st_ctime_ns,
+            metadata.st_nlink,
+        )
+
+    try:
+        source_before = source.lstat()
+    except OSError as error:
+        raise ArtifactContractError(
+            f"native artifact staging source is unavailable: {source}"
+        ) from error
+    if (
+        stat.S_ISLNK(source_before.st_mode)
+        or not stat.S_ISREG(source_before.st_mode)
+        or source_before.st_size <= 0
+        or source_before.st_nlink < 1
+    ):
+        fail("native artifact staging source must be one non-empty regular file")
+
+    canonical_parent = canonical_destination.parent
+
+    read_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | os.O_NOFOLLOW
+    )
+    write_flags = (
+        os.O_CREAT
+        | os.O_EXCL
+        | os.O_WRONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | os.O_NOFOLLOW
+    )
+    source_descriptor: int | None = None
+    destination_descriptor: int | None = None
+    parent_descriptor: int | None = None
+    digest = hashlib.sha256()
+    copied_size = 0
+    result: tuple[Path, str, int] | None = None
+    failure: ArtifactContractError | None = None
+    try:
+        parent_descriptor = _open_pinned_directory_ancestry(
+            canonical_parent,
+            label="native artifact staging directory",
+        )
+        parent_opened = os.fstat(parent_descriptor)
+        parent_named = canonical_parent.lstat()
+        if (
+            not stat.S_ISDIR(parent_opened.st_mode)
+            or stat.S_ISLNK(parent_named.st_mode)
+            or (parent_opened.st_dev, parent_opened.st_ino)
+            != (parent_named.st_dev, parent_named.st_ino)
+        ):
+            fail("native artifact staging directory changed before creation")
+
+        source_descriptor = os.open(source, read_flags)
+        source_opened = os.fstat(source_descriptor)
+        if source_revision(source_opened) != source_revision(source_before):
+            fail("native artifact staging source changed while it was opened")
+
+        try:
+            destination_descriptor = os.open(
+                canonical_destination.name,
+                write_flags,
+                0o600,
+                dir_fd=parent_descriptor,
+            )
+        except FileExistsError as error:
+            raise ArtifactContractError(
+                "native artifact staging destination must be one fresh path: "
+                f"{canonical_destination}"
+            ) from error
+        destination_opened = os.fstat(destination_descriptor)
+        if (
+            not stat.S_ISREG(destination_opened.st_mode)
+            or destination_opened.st_nlink != 1
+            or destination_opened.st_size != 0
+            or stat.S_IMODE(destination_opened.st_mode) & 0o077 != 0
+        ):
+            fail("staged native artifact was not created as one private regular file")
+
+        pinned_size = source_opened.st_size
+        while copied_size < pinned_size:
+            chunk = os.read(
+                source_descriptor,
+                min(1024 * 1024, pinned_size - copied_size),
+            )
+            if not chunk:
+                fail("native artifact staging source was truncated while it was copied")
+            digest.update(chunk)
+            copied_size += len(chunk)
+            offset = 0
+            while offset < len(chunk):
+                written = os.write(destination_descriptor, chunk[offset:])
+                if written <= 0:
+                    fail("staged native artifact could not be written completely")
+                offset += written
+        if os.read(source_descriptor, 1):
+            fail("native artifact staging source grew while it was copied")
+        os.fsync(destination_descriptor)
+
+        source_after = os.fstat(source_descriptor)
+        source_named_after = source.lstat()
+        if (
+            source_revision(source_after) != source_revision(source_opened)
+            or source_revision(source_named_after) != source_revision(source_opened)
+        ):
+            fail("native artifact staging source changed while it was copied")
+
+        destination_after = os.fstat(destination_descriptor)
+        destination_named_after = canonical_destination.lstat()
+        if (
+            not stat.S_ISREG(destination_after.st_mode)
+            or destination_after.st_nlink != 1
+            or destination_after.st_size != copied_size
+            or copied_size != pinned_size
+            or stat.S_IMODE(destination_after.st_mode) & 0o077 != 0
+            or (destination_after.st_dev, destination_after.st_ino)
+            != (destination_opened.st_dev, destination_opened.st_ino)
+            or (destination_named_after.st_dev, destination_named_after.st_ino)
+            != (destination_opened.st_dev, destination_opened.st_ino)
+            or destination_named_after.st_size != copied_size
+            or destination_named_after.st_nlink != 1
+        ):
+            fail("staged native artifact changed while it was copied")
+
+        parent_after = os.fstat(parent_descriptor)
+        parent_named_after = canonical_parent.lstat()
+        if (
+            (parent_after.st_dev, parent_after.st_ino)
+            != (parent_opened.st_dev, parent_opened.st_ino)
+            or (parent_named_after.st_dev, parent_named_after.st_ino)
+            != (parent_opened.st_dev, parent_opened.st_ino)
+        ):
+            fail("native artifact staging directory changed while it was used")
+        source_digest = digest.hexdigest()
+        staged_digest, staged_size = stable_artifact_identity(canonical_destination)
+        if staged_digest != source_digest or staged_size != copied_size:
+            fail("staged native artifact does not match the pinned build output")
+        result = canonical_destination, source_digest, copied_size
+    except ArtifactContractError as error:
+        failure = error
+    except OSError as error:
+        failure = ArtifactContractError(
+            "native artifact could not be staged through pinned file descriptors"
+        )
+        failure.__cause__ = error
+    finally:
+        # POSIX has no portable atomic "unlink this name only if it still names
+        # this inode" operation.  Once the exclusive destination is visible,
+        # retain it on failure rather than risk deleting a replacement installed
+        # between a metadata check and pathname-based unlink.
+        if destination_descriptor is not None:
+            os.close(destination_descriptor)
+        if source_descriptor is not None:
+            os.close(source_descriptor)
+        if parent_descriptor is not None:
+            os.close(parent_descriptor)
+
+    if failure is not None:
+        raise failure
+    if result is None:
+        fail("native artifact staging completed without an authenticated result")
+    return result
+
+
 def _exclusive_write_at(directory: int, name: str, payload: bytes) -> None:
     """Create one private regular file relative to an authenticated directory."""
 
@@ -1024,6 +1276,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sdk", choices=tuple(sorted(SDK_VALUES)))
     parser.add_argument("--target")
     parser.add_argument("--evidence-dir", type=Path)
+    parser.add_argument("--stage-artifact", type=Path)
     return parser.parse_args()
 
 
@@ -1048,6 +1301,31 @@ def main() -> int:
             fail("record mode does not accept --evidence-dir")
         if args.sdk is None or args.target is None:
             fail("record mode requires --sdk and --target")
+        staged_source_identity: tuple[str, int] | None = None
+        if args.stage_artifact is not None:
+            stage_destination = Path(os.path.abspath(args.stage_artifact))
+            try:
+                canonical_stage_parent = stage_destination.parent.resolve(strict=True)
+            except OSError as error:
+                raise ArtifactContractError(
+                    "native artifact staging directory is unavailable: "
+                    f"{stage_destination.parent}"
+                ) from error
+            canonical_stage = canonical_stage_parent / stage_destination.name
+            if canonical_stage == source_root or source_root in canonical_stage.parents:
+                fail("staged native artifact must be outside the source tree")
+            staged_artifact, staged_digest, staged_size = stage_unique_artifact(
+                artifact,
+                canonical_stage,
+            )
+            if (
+                staged_artifact != canonical_stage
+                or staged_artifact == source_root
+                or source_root in staged_artifact.parents
+            ):
+                fail("returned staged native artifact must remain outside the source tree")
+            artifact = staged_artifact
+            staged_source_identity = staged_digest, staged_size
         manifest = build_manifest(
             sdk=args.sdk,
             target=args.target,
@@ -1055,8 +1333,15 @@ def main() -> int:
             source_root=source_root,
             probe=probe,
         )
+        if staged_source_identity is not None and (
+            manifest["artifact_sha256"],
+            manifest["artifact_size"],
+        ) != staged_source_identity:
+            fail("recorded native artifact does not match the pinned staging source")
         _exclusive_write(args.manifest, canonical_manifest_bytes(manifest))
     else:
+        if args.stage_artifact is not None:
+            fail("verify mode does not accept --stage-artifact")
         if args.sdk is not None or args.target is not None:
             fail("verify mode reads SDK and target from the manifest")
         manifest = load_manifest(Path(os.path.abspath(args.manifest)))

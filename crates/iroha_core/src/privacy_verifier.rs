@@ -6421,9 +6421,7 @@ mod tests {
         let context = vega_verification_context(&activation, &network_id, &issuer_record);
         assert!(matches!(
             verify_vega_release_candidate_envelope_v1(&envelope, context),
-            Err(PrivacyVerificationErrorV1::Context(detail))
-                if detail.code
-                    == PrivacyVerificationContextFailureCodeV1::NetworkGenesisMismatch
+            Err(PrivacyVerificationErrorV1::NativeVega(_))
         ));
         let mut oversized = envelope.clone();
         oversized.proof =
@@ -6562,7 +6560,9 @@ mod tests {
         changed_genesis.genesis_hash[0] ^= 1;
         assert!(matches!(
             verify_vega_release_candidate_envelope_v1(&envelope, changed_genesis),
-            Err(PrivacyVerificationErrorV1::NativeVega(_))
+            Err(PrivacyVerificationErrorV1::Context(detail))
+                if detail.code
+                    == PrivacyVerificationContextFailureCodeV1::NetworkGenesisMismatch
         ));
         let mut cross_suite = envelope.clone();
         cross_suite.proof =

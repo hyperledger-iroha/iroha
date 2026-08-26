@@ -18,7 +18,7 @@ KOTODAMA_MANIFEST = (
 )
 ISO_MANIFEST = ROOT / "crates/ivm/src/assets/iso20022_schema_v1/manifest.json"
 REGISTRY_PROVIDER_SHA256 = (
-    "ee791b196a957e9792fa7b60350ff9b99797b13397a5afc0785c7fa8f7315b6c"
+    "4dea799f1400a1e977e45ed58d775fb70664e8a59ea376dfba63f5c0e70687e0"
 )
 
 
@@ -347,6 +347,15 @@ def _iso_aliases(source: str, owner: str) -> list[tuple[str, ...]]:
 
 
 class CompileTimeTableProjectionTests(unittest.TestCase):
+    def test_byte_exact_tsv_assets_are_lf_normalized_on_checkout(self) -> None:
+        attributes = (ROOT / ".gitattributes").read_text(encoding="utf-8").splitlines()
+        self.assertTrue(
+            {
+                "*.tsv text eol=lf",
+                "*.ndjson text eol=lf",
+            }.issubset(attributes)
+        )
+
     def test_kotodama_tables_equal_sealed_rust_declarations(self) -> None:
         explanations = _sealed_declaration(
             KOTODAMA_MANIFEST,
@@ -425,14 +434,13 @@ class CompileTimeTableProjectionTests(unittest.TestCase):
             type_name = re.sub(r"\s+", "", match.group(2))
             mode = match.group(4) or "register_slice"
             rows.append((scope, type_name, mode, match.group(3)))
-        self.assertEqual(len(rows), 347)
+        self.assertEqual(len(rows), 350)
         self.assertEqual(
             collections.Counter(row[2] for row in rows),
             {
-                "register_slice": 326,
+                "register_slice": 330,
                 "register": 19,
                 "register_with_id": 1,
-                "register_with_id_slice": 1,
             },
         )
         canonical = "".join("\t".join(row) + "\n" for row in rows).encode()

@@ -349,6 +349,187 @@ fn recovered_lifecycle_signing_is_exact_and_class_sensitive_for_all_three_famili
         "changing the retained tag must still change the complete effect identity"
     );
 }
+
+#[test]
+fn ordinary_completion_behind_validate_fence_stages_and_drains_exactly_one() {
+    let (mut service, _) = fixture();
+    let admission = Arc::new(V2IoAdmission::new(2, 2).expect("bounded ordinary admission"));
+    let (command_tx, _command_rx) = v2_io_command_channel(2, 1, 1, 1, Arc::clone(&admission));
+    let (completion_tx, completion_rx) = mpsc::sync_channel(2);
+    send_tracked_completion_with_lifecycle_ordinal(
+        &completion_tx,
+        admission.as_ref(),
+        V2IoCompletion::AuxiliaryNoop,
+        Some(41),
+    )
+    .expect("publish the ordinary physical head");
+    send_tracked_completion_with_lifecycle_ordinal(
+        &completion_tx,
+        admission.as_ref(),
+        V2IoCompletion::AuxiliaryNoop,
+        Some(42),
+    )
+    .expect("publish one ordinary successor behind the physical head");
+    service.io = Some(V2IoHandle {
+        command_tx,
+        completion_rx,
+        join: None,
+        allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
+        admission: Arc::clone(&admission),
+    });
+
+    assert!(
+        service
+            .prepare_ordinary_completion_behind_validate_fence()
+            .expect("classify one ordinary fence-bypass head")
+    );
+    assert!(matches!(
+        service.held_io_completion.as_ref(),
+        Some(V2IoCompletion::AuxiliaryNoop)
+    ));
+    assert_eq!(
+        admission
+            .completion_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .owned
+            .len(),
+        2,
+        "classification cannot acknowledge either physical owner"
+    );
+
+    let mut executor = V2EffectExecutor::with_runtime(
+        SaturatedCompletionRuntime::new(0, 8),
+        BTreeMap::new(),
+        service.context.clone(),
+        service.local_peer.clone(),
+        service.local_validator,
+        EffectQueueConfig::default(),
+    )
+    .expect("construct ordinary fence-bypass executor");
+    assert_eq!(
+        service
+            .drain_one_ordinary_completion_after_lifecycle_pass_through(&mut executor)
+            .expect("drain only the staged ordinary head"),
+        1
+    );
+    assert!(service.held_io_completion.is_none());
+    assert_eq!(
+        admission
+            .completion_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .owned
+            .len(),
+        1,
+        "one-item drain must leave the physical successor intact"
+    );
+
+    assert!(
+        service
+            .prepare_ordinary_completion_behind_validate_fence()
+            .expect("classify the remaining ordinary head for cleanup")
+    );
+    assert_eq!(
+        service
+            .drain_one_ordinary_completion_after_lifecycle_pass_through(&mut executor)
+            .expect("drain the remaining ordinary head"),
+        1
+    );
+    assert!(
+        admission
+            .completion_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .owned
+            .is_empty()
+    );
+    drop(service.io.take());
+}
+
+#[test]
+fn dedicated_lifecycle_completion_behind_validate_fence_remains_intact() {
+    use super::super::v2_lifecycle_coordinator::RecoveredLifecycleSignClassV1;
+
+    let (mut service, _) = fixture();
+    let tag = EventTag::new(service.context.height, 0, Generation::new(1));
+    let mut vote = routing_vote(&service, 0, wire::GlobalPhase::Prepare);
+    vote.signature.clear();
+    let task = RecoveredLifecycleSignTaskV1::for_test(
+        43,
+        tag,
+        super::super::v2::SignRequest::Vote(vote),
+        RecoveredLifecycleSignClassV1::PhaseVote,
+    );
+    let key = task.dispatch_key();
+    let result = RecoveredLifecycleSignWorkerResultV1 {
+        task,
+        signature: vec![0xA5],
+        outbound_payload: None,
+    };
+    let output_guard = ConsensusOutputGuard::isolated();
+    let admission = Arc::new(V2IoAdmission::new(1, 1).expect("bounded dedicated admission"));
+    let (command_tx, _command_rx) = v2_io_command_channel(1, 1, 1, 1, Arc::clone(&admission));
+    let (completion_tx, completion_rx) = mpsc::sync_channel(1);
+    send_tracked_completion_with_lifecycle_ordinal(
+        &completion_tx,
+        admission.as_ref(),
+        V2IoCompletion::RecoveredLifecycleSign(Box::new(
+            GuardedRecoveredLifecycleSignWorkerResultV1::new(result, Arc::clone(&output_guard)),
+        )),
+        Some(key.lifecycle_ordinal()),
+    )
+    .expect("publish one dedicated lifecycle completion");
+    service.output_guard = Arc::clone(&output_guard);
+    service.io = Some(V2IoHandle {
+        command_tx,
+        completion_rx,
+        join: None,
+        allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
+        admission: Arc::clone(&admission),
+    });
+
+    assert!(
+        !service
+            .prepare_ordinary_completion_behind_validate_fence()
+            .expect("dedicated lifecycle head is a non-fatal fence bypass miss")
+    );
+    let Some(V2IoCompletion::RecoveredLifecycleSign(guarded)) = service.held_io_completion.as_ref()
+    else {
+        panic!("dedicated lifecycle head must remain in the sole held slot");
+    };
+    assert_eq!(guarded.result().dispatch_key(), key);
+    {
+        let owned = admission
+            .completion_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(owned.owned.len(), 1);
+        assert_eq!(owned.owned[0].recovered_lifecycle_sign, Some(key));
+    }
+    assert!(
+        !output_guard.restart_required(),
+        "classification cannot abandon the guarded lifecycle owner"
+    );
+
+    let Some(V2IoCompletion::RecoveredLifecycleSign(guarded)) = service.held_io_completion.take()
+    else {
+        unreachable!("the exact guarded lifecycle owner was inspected above")
+    };
+    admission.acknowledge_completion_at(0);
+    guarded.acknowledge_after_publication();
+    assert!(
+        admission
+            .completion_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .owned
+            .is_empty()
+    );
+    assert!(!output_guard.restart_required());
+    drop(service.io.take());
+}
+
 #[test]
 fn recovered_lifecycle_sign_queue_retains_exact_owner_through_opaque_extraction() {
     use super::super::v2_lifecycle_coordinator::RecoveredLifecycleSignClassV1;

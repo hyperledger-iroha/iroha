@@ -2391,6 +2391,14 @@ impl AuthenticatedRecoveredWalDecisionFetchProjection {
     }
 }
 impl RecoveredDecisionFetchStoreProjectionV1 {
+    /// Borrow the exact Store effect retained by this recovered projection.
+    pub(super) const fn store_effect(&self) -> &AdapterEffect {
+        &self.effect
+    }
+    /// Borrow the ordinal-free pending binding retained by this Store.
+    pub(super) const fn pending_effect_binding(&self) -> &PendingRuntimeEffectBinding {
+        &self.pending
+    }
     /// Rejoin exact already-sealed constituents for staged-address regressions.
     #[cfg(test)]
     pub(super) fn for_staged_address_test(

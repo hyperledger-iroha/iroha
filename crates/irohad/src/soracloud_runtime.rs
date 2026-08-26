@@ -9686,8 +9686,8 @@ impl SoracloudRuntimeManager {
                         );
                         return Ok(());
                     }
-                    PrivateExecutionJournalLedgerDisposition::Active => {}
-                }
+                        PrivateExecutionJournalLedgerDisposition::Active => {}
+                    };
                     let sorafs_node = self.sorafs_node.as_ref().ok_or_else(|| {
                         eyre::eyre!(
                             "private execution durable outbox requires embedded SoraFS storage"
@@ -9744,8 +9744,8 @@ impl SoracloudRuntimeManager {
                                 );
                                 return Ok(());
                             }
-                            PrivateExecutionJournalLedgerDisposition::Active => {}
-                        }
+                                PrivateExecutionJournalLedgerDisposition::Active => {}
+                            };
                         }
                         return Err(eyre::eyre!(
                             "recover private execution durable outbox submission: {}",

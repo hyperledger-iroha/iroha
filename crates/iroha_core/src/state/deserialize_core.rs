@@ -10,7 +10,9 @@ std::thread_local! {
 }
 
 enum SnapshotJsonField<'a> {
-    Borrowed { raw: &'a str },
+    Borrowed {
+        raw: &'a str,
+    },
     #[cfg(test)]
     Owned(json::Value),
 }
@@ -64,6 +66,7 @@ impl<'a> SnapshotJsonField<'a> {
         })
     }
 }
+
 struct SnapshotJsonMap<'a> {
     fields: BTreeMap<String, SnapshotJsonField<'a>>,
     source_order: Option<Vec<String>>,
@@ -596,7 +599,6 @@ impl KuraSeed {
         })?;
         Ok(state)
     }
-
 }
 fn emergency_fast_block_hashes(
     kura: &Kura,

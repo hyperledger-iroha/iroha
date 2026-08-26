@@ -690,7 +690,7 @@ v2_apply_test!(
 v2_apply_test!(
     same_body_reproposal_commit_qc_applies_exact_reproposal_body,
     {
-        let mut fixture = ApplyFixture::new();
+        let mut fixture = ApplyFixture::new_for_production_recovered_decision_apply();
         let mut keys = (1_u8..=4)
             .map(|seed| {
                 KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)

@@ -108,8 +108,8 @@ impl Kura {
                     "process-generation publication residue has an empty temporary identity",
                 ));
             }
-            let metadata =
-                std::fs::symlink_metadata(&path).map_err(|error| Error::IO(error, path.clone()))?;
+            let metadata = secure_file_metadata::from_path(&path)
+                .map_err(|error| Error::IO(error, path.clone()))?;
             if metadata.file_type().is_symlink()
                 || !metadata.file_type().is_file()
                 || !Self::sidecar_is_single_link(&metadata)

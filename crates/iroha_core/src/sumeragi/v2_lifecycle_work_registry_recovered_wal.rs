@@ -4246,6 +4246,14 @@ impl ConcreteLifecycleWorkRegistry {
     }
 }
 impl<'registry, 'adapter> PreparedRecoveredDecisionFetchStoreSuccessor<'registry, 'adapter> {
+    /// Borrow the exact Store effect emitted by the recovered adapter preview.
+    pub(super) const fn store_effect(&self) -> &AdapterEffect {
+        self.store.store_effect()
+    }
+    /// Borrow the ordinal-free pending binding projected from the recovered Fetch.
+    pub(super) const fn pending_effect_binding(&self) -> &PendingRuntimeEffectBinding {
+        self.store.pending_effect_binding()
+    }
     /// Project the exact child while retaining registry and adapter borrows.
     pub(super) fn project_for_body_transition(
         &self,

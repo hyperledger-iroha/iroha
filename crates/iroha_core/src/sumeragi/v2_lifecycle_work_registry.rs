@@ -760,6 +760,7 @@ use crate::sumeragi::{
     },
     v2_certified_serve_payload_store::CertifiedServePayloadStoreV1,
     v2_core::EventTag,
+    v2_effects::PublishedLifecycleStoreRetryCensusEntryV1,
     v2_runtime::{
         PendingRuntimeEffectBinding, RecoveredDurableValidateRetryBindingV1,
         RecoveredDurableValidateRetryFrontierV1, RuntimeCandidateSemanticStatement,
@@ -3212,6 +3213,85 @@ enum ConcreteLifecycleWorkKind {
 }
 
 impl ConcreteLifecycleWorkRegistry {
+    /// Project every exact executable Store publication retained by the
+    /// authenticated registry for finalized rollover cross-checking.
+    pub(super) fn published_lifecycle_store_retry_census(
+        &self,
+    ) -> Result<
+        BTreeMap<
+            (wire::ConsensusRound, wire::BlockSubject),
+            PublishedLifecycleStoreRetryCensusEntryV1,
+        >,
+        String,
+    > {
+        let mut census = BTreeMap::new();
+        for work in self.entries.values() {
+            let publication = match &work.kind {
+                ConcreteLifecycleWorkKind::DurableStoreBody(store) => {
+                    Some((&store.effect, &store.pending, &store.durable_receipt))
+                }
+                ConcreteLifecycleWorkKind::DurableRecoveredDecisionStore(store) => Some((
+                    store.store.store_effect(),
+                    store.store.pending_effect_binding(),
+                    store.store.durable_body_receipt(),
+                )),
+                _ => None,
+            };
+            let Some((effect, pending, durable_receipt)) = publication else {
+                continue;
+            };
+            if !work.validate_exact() {
+                return Err(
+                    "lifecycle registry Store row lost its complete authenticated work".to_owned(),
+                );
+            }
+            let entry = PublishedLifecycleStoreRetryCensusEntryV1::from_exact_published_store(
+                effect,
+                pending,
+                durable_receipt,
+            )
+            .ok_or_else(|| {
+                "lifecycle registry Store row lost its immutable publication identity".to_owned()
+            })?;
+            let key = entry.key();
+            if census.insert(key, entry).is_some() {
+                return Err(
+                    "lifecycle registry retained duplicate Store rows for one body".to_owned(),
+                );
+            }
+        }
+        Ok(census)
+    }
+
+    /// Borrow every exact durable Store row whose executable lifecycle owner
+    /// was already published before process restart.
+    pub(super) fn recovered_published_store_retry_markers(
+        &self,
+    ) -> impl Iterator<
+        Item = (
+            &AdapterEffect,
+            &PendingRuntimeEffectBinding,
+            &DurableBodyReceipt,
+        ),
+    > {
+        self.entries.values().filter_map(|work| {
+            if !work.validate_exact() {
+                return None;
+            }
+            match &work.kind {
+                ConcreteLifecycleWorkKind::DurableStoreBody(store) => {
+                    Some((&store.effect, &store.pending, &store.durable_receipt))
+                }
+                ConcreteLifecycleWorkKind::DurableRecoveredDecisionStore(store) => Some((
+                    store.store.store_effect(),
+                    store.store.pending_effect_binding(),
+                    store.store.durable_body_receipt(),
+                )),
+                _ => None,
+            }
+        })
+    }
+
     /// Borrow every exact durable Validate row whose executable lifecycle
     /// owner was already published before process restart.
     pub(super) fn recovered_published_validate_retry_markers(

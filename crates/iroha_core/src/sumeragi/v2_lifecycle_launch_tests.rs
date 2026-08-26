@@ -813,6 +813,8 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             "V2EffectExecutor::open_with_body_store(",
             "if let Some(authenticated_genesis) = inputs.authenticated_genesis.as_ref()",
             "executor\n                .install_authenticated_genesis_body(authenticated_genesis)",
+            ".recovered_published_store_retry_markers()",
+            ".install_recovered_published_lifecycle_store_retry_marker(",
             ".recovered_published_validate_retry_markers()",
             ".install_recovered_published_lifecycle_validate_retry_marker(",
             "ProductionV2Services::start_with_apply_service(",
@@ -1334,7 +1336,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
     );
     let finalization_readiness = source_region(
         &source,
-        "fn ready_for_finalized_rollover(&mut self) -> bool {",
+        "fn ready_for_finalized_rollover(\n        &mut self,\n    ) -> Result<bool, ProductionLifecycleFinalizationErrorV1> {",
         "impl ActivatedProductionLifecycleV1",
     );
     let owner_token = "let Self {\n            mut launched,\n            local_proposal,\n            runner_activation,";
@@ -1349,11 +1351,13 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             "self.pending_ingress_capacity.is_none()",
             "self.completion_observer_activation.is_none()",
             "exactly_covers_finalization_work(&self.owner.coordinator)",
+            "verify_published_store_marker_finalization_census()",
+            "ProductionLifecycleFinalizationErrorV1::StoreMarkerCensus",
         ],
     );
     assert_source_tokens_in_order(
         activated_finalization,
-        &["!self.launched.ready_for_finalized_rollover()", owner_token],
+        &["!self.launched.ready_for_finalized_rollover()?", owner_token],
     );
     assert_source_tokens_in_order(
         activated_finalization,
@@ -1374,7 +1378,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             "if !apply_terminal_settled && (!ready_to_finish || producer_turn.is_some())",
             "schedule_local_proposal(",
             "let finalization_ready =",
-            "activated.ready_for_finalized_rollover(&mut active_runner)",
+            "activated.ready_for_finalized_rollover(&mut active_runner)?",
             "let rollover_ready = if finalization_ready",
             "preflight_finalized_lane_rollover(",
             "if ready_to_finish && !rollover_ready",
@@ -1635,7 +1639,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         ],
     );
     assert!(lifecycle_run_inner_source.contains(
-        "let finalization_ready =\n            ready_to_finish && activated.ready_for_finalized_rollover(&mut active_runner);"
+        "let finalization_ready = if ready_to_finish {\n            activated.ready_for_finalized_rollover(&mut active_runner)?\n        } else {\n            false\n        };"
     ));
     assert!(lifecycle_scheduler_completion_source.contains(
         "finalization accepts the exact volatile refanout wait after its next Sign retires"

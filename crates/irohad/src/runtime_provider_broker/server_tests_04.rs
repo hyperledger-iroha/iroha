@@ -1,3 +1,7 @@
+use crate::external_software_signer::{
+    consensus_threshold_beacon_broker_test_fixture_v1,
+    consensus_threshold_tle_broker_test_fixture_v1,
+};
 use crate::runtime_provider_broker::api::{
     ConsensusSignerProviderQualificationV1, GlobalBeaconPartialSignerBrokerBackendErrorV1,
     GlobalBeaconPartialSignerBrokerBackendV1,
@@ -2305,4 +2309,99 @@ fn consensus_signer_broker_startup_is_exact_and_fail_closed() {
             Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
         ));
     }
+}
+
+#[test]
+fn global_beacon_partial_signer_round_trips_over_authenticated_broker() {
+    let fixture = consensus_threshold_beacon_broker_test_fixture_v1();
+    let (_directory, policy, shutdown, server) =
+        start_signer(fixture.catalog.clone(), fixture.backends);
+    let dependencies =
+        resolve(&fixture.catalog, &policy).expect("resolve global-beacon broker proxy");
+    let signer = dependencies
+        .sumeragi_global_beacon_partial_signer
+        .as_ref()
+        .expect("resolved global-beacon partial signer");
+    let anchor = iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1 {
+        height: 50,
+        block_hash:
+            iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                iroha_crypto::Hash::prehashed([0xB1; 32]),
+            ),
+    };
+    let mut verifier = iroha_core::beacon::GlobalThresholdBeaconPulseAggregatorV1::new(
+        fixture.session.clone(),
+        51,
+        anchor,
+    )
+    .expect("construct canonical brokered beacon pulse");
+    let partial = iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1::sign_partial(
+        signer.as_ref(),
+        &fixture.session,
+        verifier.payload(),
+    )
+    .expect("round-trip global-beacon partial through authenticated broker");
+    assert!(
+        verifier
+            .accept_partial(partial)
+            .expect("independently verify brokered beacon partial")
+    );
+    drop(dependencies);
+    shutdown.request_shutdown();
+    server
+        .join()
+        .expect("join global-beacon broker")
+        .expect("global-beacon broker exits cleanly");
+}
+
+#[test]
+fn parliament_tle_partial_release_round_trips_over_authenticated_broker() {
+    let fixture = consensus_threshold_tle_broker_test_fixture_v1();
+    let (_directory, policy, shutdown, server) =
+        start_signer(fixture.catalog.clone(), fixture.backends);
+    let requested_catalog = fixture
+        .catalog
+        .iter()
+        .map(ProviderBindingWireV1::try_from_binding)
+        .collect::<Result<Vec<_>, _>>()
+        .expect("project exact TLE broker catalog");
+    let (client, observations) = BrokerSession::connect(
+        &policy,
+        fixture.catalog.chain_id(),
+        *fixture.catalog.network_id(),
+        requested_catalog.clone(),
+    )
+    .expect("authenticate TLE broker client session");
+    let payload = encode_canonical(
+        &ParliamentTlePartialReleaseSignRequestWireV1 {
+            projection: fixture.projection,
+        },
+        MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+    )
+    .expect("encode exact TLE broker operation");
+    let result = client
+        .call(
+            &requested_catalog[0],
+            observations[0].metadata_digest,
+            OPERATION_PARLIAMENT_TLE_PARTIAL_RELEASE_SIGN_V1,
+            payload,
+            false,
+        )
+        .expect("round-trip Parliament TLE partial through authenticated broker");
+    let signed = client
+        .decode_operation_result::<ParliamentTlePartialReleaseSignResultWireV1>(
+            &result,
+            OPERATION_PARLIAMENT_TLE_PARTIAL_RELEASE_SIGN_V1,
+        )
+        .expect("decode brokered Parliament TLE partial");
+    fixture
+        .session
+        .verify_partial_release(&fixture.identity, 100, &signed.partial)
+        .expect("independently verify brokered Parliament TLE partial");
+    drop(client);
+    shutdown.request_shutdown();
+    server
+        .join()
+        .expect("join Parliament TLE broker")
+        .expect("Parliament TLE broker exits cleanly");
 }

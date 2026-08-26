@@ -5871,7 +5871,7 @@ mod tests {
             zk_ams_runtime_fixture_for_test,
         },
         query::store::LiveQueryStore,
-        state::{State, World},
+        state::{State, StateBlock, World},
     };
     use core::num::NonZeroU64;
     use iroha_crypto::{Hash, HashOf};
@@ -5896,8 +5896,8 @@ mod tests {
             PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyPqMaspPoolBootstrapV1,
             PrivacyProofBytesV1, PrivacyProofEnvelopeV1, PrivacyProofManagedPoolBootstrapV1,
             PrivacyProofV1, PrivacyProposedLifecycleV1, PrivacyProtocolActivationLimitsV1,
-            PrivacyProtocolIdV1, PrivacyRootPublicationV1, PrivacyRootV1,
-            PrivacyStatementContextV1, PrivacyStatementDigestV1, PrivacyStatementV1,
+            PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyRootPublicationV1,
+            PrivacyRootV1, PrivacyStatementContextV1, PrivacyStatementDigestV1, PrivacyStatementV1,
             PrivacyTransactionIntentDigestV1, PrivacyTrustAnchorNamespaceV1,
             PrivacyTrustAnchorPolicyNamespaceV1, PrivacyVegaIssuerRecordDigestV1,
             PrivacyVegaIssuerRecordLifecycleV1, PrivacyVegaMdlDigestAlgorithmV1,
@@ -6398,6 +6398,17 @@ mod tests {
     ) {
         bind_submit_privacy_instruction(transaction, instruction);
     }
+    fn install_synthetic_privacy_genesis_hash(state: &mut State, genesis_hash: [u8; 32]) {
+        // These protocol fixtures retain a synthetic committed genesis hash without a Kura block.
+        // Hydrate the genuinely empty DA projection first so block construction never asks the
+        // blank store for that synthetic body.
+        state
+            .ensure_da_indexes_hydrated()
+            .expect("blank privacy-test Kura has an empty DA projection");
+        state.push_block_hash_for_testing(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed(genesis_hash),
+        ));
+    }
     fn state_with_activation(lifecycle: PrivacyProtocolLifecycleV1) -> State {
         let activation = compiled_privacy_profile_v1(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1)
             .expect("compiled Anonymous PGC profile")
@@ -6414,9 +6425,7 @@ mod tests {
             LiveQueryStore::start_test(),
             TEST_CHAIN_ID.into(),
         );
-        state.push_block_hash_for_testing(HashOf::<BlockHeader>::from_untyped_unchecked(
-            Hash::prehashed(TEST_GENESIS_HASH),
-        ));
+        install_synthetic_privacy_genesis_hash(&mut state, TEST_GENESIS_HASH);
         state
     }
     fn bootle_lantern_public_matrix(seed: usize) -> BootleLanternIssuerPublicMatrixV1 {
@@ -6549,9 +6558,7 @@ mod tests {
             LiveQueryStore::start_test(),
             TEST_CHAIN_ID.into(),
         );
-        state.push_block_hash_for_testing(HashOf::<BlockHeader>::from_untyped_unchecked(
-            Hash::prehashed(TEST_GENESIS_HASH),
-        ));
+        install_synthetic_privacy_genesis_hash(&mut state, TEST_GENESIS_HASH);
         state
     }
     fn vega_issuer_record(
@@ -6577,7 +6584,7 @@ mod tests {
         )
         .expect("canonical governed Vega issuer fixture")
     }
-    fn state_with_exact_vega_activation() -> State {
+    fn exact_vega_candidate_activation_for_test() -> PrivacyProtocolActivationRecordV1 {
         let protocol_id = PrivacyProtocolIdV1::VegaExistingCredentialZkV0;
         let candidate =
             vega_release_candidate_profile_material_v1().expect("Vega candidate profile");
@@ -6592,23 +6599,39 @@ mod tests {
                 },
             )) if rejected == protocol_id
         ));
+        activation
+    }
+    fn state_for_vega_candidate_governance_test() -> State {
         let domain_id = DomainId::try_new("privacy", "universal").expect("domain");
         let domain = Domain::new(domain_id).build(&ALICE_ID);
         let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let mut world = World::with([domain], [alice], []);
-        world
-            .privacy_activations
-            .insert(PrivacyActivationKeyV1::new(protocol_id), activation);
+        let world = World::with([domain], [alice], []);
         let mut state = State::new_with_chain_for_testing(
             world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
             TEST_CHAIN_ID.into(),
         );
-        state.push_block_hash_for_testing(HashOf::<BlockHeader>::from_untyped_unchecked(
-            Hash::prehashed(TEST_GENESIS_HASH),
-        ));
+        install_synthetic_privacy_genesis_hash(&mut state, TEST_GENESIS_HASH);
         state
+    }
+    fn install_vega_candidate_activation_for_test(block: &mut StateBlock<'_>) {
+        let key = PrivacyActivationKeyV1::new(PrivacyProtocolIdV1::VegaExistingCredentialZkV0);
+        assert!(
+            block.world.privacy_activations.get(&key).is_none(),
+            "candidate activation must not be persisted across production block startup"
+        );
+        block
+            .world
+            .privacy_activations
+            .insert(key, exact_vega_candidate_activation_for_test());
+    }
+    fn remove_vega_candidate_activation_before_commit_for_test(block: &mut StateBlock<'_>) {
+        let key = PrivacyActivationKeyV1::new(PrivacyProtocolIdV1::VegaExistingCredentialZkV0);
+        assert!(
+            block.world.privacy_activations.remove(key).is_some(),
+            "candidate activation must exist only in the current test block overlay"
+        );
     }
     fn zk_ace_asset_definition_id() -> AssetDefinitionId {
         AssetDefinitionId::derive_from_components(
@@ -6750,9 +6773,7 @@ mod tests {
             LiveQueryStore::start_test(),
             TEST_CHAIN_ID.into(),
         );
-        state.push_block_hash_for_testing(HashOf::<BlockHeader>::from_untyped_unchecked(
-            Hash::prehashed(TEST_GENESIS_HASH),
-        ));
+        install_synthetic_privacy_genesis_hash(&mut state, TEST_GENESIS_HASH);
         state
     }
     fn test_header() -> BlockHeader {
@@ -6858,9 +6879,7 @@ mod tests {
             TEST_CHAIN_ID.into(),
             fixture.network_id,
         );
-        state.push_block_hash_for_testing(HashOf::<BlockHeader>::from_untyped_unchecked(
-            Hash::prehashed(fixture.genesis_hash),
-        ));
+        install_synthetic_privacy_genesis_hash(&mut state, fixture.genesis_hash);
         state
     }
     fn fcmp_test_header(fixture: &FcmpRuntimeFixtureForTest) -> BlockHeader {
@@ -7024,9 +7043,7 @@ mod tests {
             LiveQueryStore::start_test(),
             TEST_CHAIN_ID.into(),
         );
-        state.push_block_hash_for_testing(HashOf::<BlockHeader>::from_untyped_unchecked(
-            Hash::prehashed(TEST_GENESIS_HASH),
-        ));
+        install_synthetic_privacy_genesis_hash(&mut state, TEST_GENESIS_HASH);
         let mut block = state.block(test_header());
         let mut transaction = block.transaction();
         let config_key = PrivacyCommitmentKeyV1::proof_managed_pool_config(snapshot.namespace())
@@ -7941,8 +7958,11 @@ mod tests {
             unrelated_transaction.privacy_budget_for_testing(),
             unrelated_budget
         );
-        let state = state_with_exact_vega_activation();
-        let mut block = state.block(test_header());
+        let state = state_for_vega_candidate_governance_test();
+        let header = test_header();
+        let header_hash = header.hash();
+        let mut block = state.block(header);
+        install_vega_candidate_activation_for_test(&mut block);
         {
             let mut transaction = block.transaction();
             let budget_before = transaction.privacy_budget_for_testing();
@@ -8075,6 +8095,19 @@ mod tests {
             );
             transaction.apply();
         }
+        remove_vega_candidate_activation_before_commit_for_test(&mut block);
+        block
+            .commit()
+            .expect("commit the canonical Vega origin and rotation within the block action cap");
+        let mut block = state.block(BlockHeader::new(
+            NonZeroU64::new(TEST_BLOCK_HEIGHT + 1).expect("successor height"),
+            Some(header_hash),
+            None,
+            None,
+            1_800_000_000_001,
+            0,
+        ));
+        install_vega_candidate_activation_for_test(&mut block);
         let mutating_revocation = vega_issuer_record(
             issuer_id,
             3,
@@ -8148,10 +8181,11 @@ mod tests {
     }
     #[test]
     fn vega_governance_permanently_owns_keys_and_rejects_off_curve_rotations() {
-        let state = state_with_exact_vega_activation();
+        let state = state_for_vega_candidate_governance_test();
         let header = test_header();
         let header_hash = header.hash();
         let mut block = state.block(header);
+        install_vega_candidate_activation_for_test(&mut block);
         let first_issuer = PrivacyIssuerIdV1::new([0xD4; 32]);
         let second_issuer = PrivacyIssuerIdV1::new([0xD5; 32]);
         let first = vega_issuer_record(
@@ -8183,6 +8217,7 @@ mod tests {
                 .expect("register second unique Vega key owner");
             transaction.apply();
         }
+        remove_vega_candidate_activation_before_commit_for_test(&mut block);
         block
             .commit()
             .expect("commit both canonical Vega key owners");
@@ -8194,6 +8229,7 @@ mod tests {
             1_800_000_000_001,
             0,
         ));
+        install_vega_candidate_activation_for_test(&mut block);
         {
             let transaction = block.transaction();
             assert_eq!(
@@ -8309,10 +8345,11 @@ mod tests {
     }
     #[test]
     fn vega_governance_does_not_reassign_retired_or_revoked_keys() {
-        let state = state_with_exact_vega_activation();
+        let state = state_for_vega_candidate_governance_test();
         let header = test_header();
         let header_hash = header.hash();
         let mut block = state.block(header);
+        install_vega_candidate_activation_for_test(&mut block);
         let issuer_id = PrivacyIssuerIdV1::new([0xD7; 32]);
         let origin = vega_issuer_record(
             issuer_id,
@@ -8343,6 +8380,7 @@ mod tests {
                 .expect("retire the origin key with a canonical rotation");
             transaction.apply();
         }
+        remove_vega_candidate_activation_before_commit_for_test(&mut block);
         block
             .commit()
             .expect("commit the origin and canonical Vega key rotation");
@@ -8354,6 +8392,7 @@ mod tests {
             1_800_000_000_001,
             0,
         ));
+        install_vega_candidate_activation_for_test(&mut block);
         {
             let transaction = block.transaction();
             assert_eq!(
@@ -8452,8 +8491,9 @@ mod tests {
     }
     #[test]
     fn vega_governance_rejects_the_exact_lineage_cap_without_mutation() {
-        let state = state_with_exact_vega_activation();
+        let state = state_for_vega_candidate_governance_test();
         let mut block = state.block(test_header());
+        install_vega_candidate_activation_for_test(&mut block);
         let mut transaction = block.transaction();
         grant_governance(&mut transaction);
         let issuer_id = PrivacyIssuerIdV1::new([0xD2; 32]);
@@ -8634,9 +8674,7 @@ mod tests {
             TEST_CHAIN_ID.into(),
             fixture.network_id,
         );
-        state.push_block_hash_for_testing(HashOf::<BlockHeader>::from_untyped_unchecked(
-            Hash::prehashed(fixture.genesis_hash),
-        ));
+        install_synthetic_privacy_genesis_hash(&mut state, fixture.genesis_hash);
         let header = BlockHeader::new(
             NonZeroU64::new(fixture.current_height).expect("non-zero ZK-AMS height"),
             None,

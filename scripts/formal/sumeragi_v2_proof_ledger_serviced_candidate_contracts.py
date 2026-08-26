@@ -2702,9 +2702,14 @@ if matches!(&owned.effect, AdapterEffect::Apply { .. })
         drain,
         """
 let pending_work_producer = Self::pending_work_producer(&owned.effect);
-match self.consume_one(owned.effect, owned.ownership, services) {
+match self.consume_one(
+    owned.effect,
+    owned.ownership,
+    owned.highest_prepare_retention,
+    services,
+) {
 """,
-        "certified-request retry must classify and dispatch the exact retained owned effect",
+        "certified-request retry must classify and dispatch the exact retained owned effect with its highest-Prepare cleanup sidecar",
         errors,
     )
     _require_rust_token_sequence(

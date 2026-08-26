@@ -702,6 +702,155 @@ fn two_fresh_timeout_vote_slots_replenish_once_and_close_a_four_validator_view()
     assert!(!runtime.fail_closed);
 }
 #[test]
+fn mismatched_timeout_vote_origin_is_nonfatal_and_does_not_hide_distinct_share() {
+    let directory = TempDir::new().expect("temporary mismatched-TV runtime directory");
+    let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
+        &directory,
+        RuntimeQueueConfig::new(4, 1, 1),
+        Some(0),
+    );
+    let lifecycle_ordinals = runtime.ingress.lifecycle_ordinals.clone();
+    let (_leader_wire_directory, leader_wire_ingress, ownerships) =
+        preowned_leader_wire_ownerships(&context, &[], lifecycle_ordinals);
+    assert!(ownerships.is_empty());
+    let started_at = Instant::now();
+    runtime
+        .arm_live_clocks(started_at)
+        .expect("arm the mismatch runtime");
+    runtime
+        .set_ingress_physical_cut(leader_wire_ingress.next_physical_admission_ordinal())
+        .expect("publish the empty fair-ingress cut before timeout");
+    let timeout_step = runtime
+        .step(started_at + runtime.round_timeout())
+        .expect("the local timeout opens its finite TV episode");
+    let RuntimeStep::Advanced(timeout_effects) = timeout_step else {
+        panic!("absolute timeout unexpectedly idled")
+    };
+    assert_eq!(
+        runtime
+            .take_last_scheduler_ownership()
+            .expect("timeout publishes scheduler ownership")
+            .selected,
+        RuntimeSelectedOwnerKind::Timeout
+    );
+    let timeout_effect_ownership = runtime
+        .take_effect_ownership(timeout_effects.len())
+        .expect("timeout Sign retains its exact lifecycle owner");
+    let [timeout_effect_owner] = timeout_effect_ownership.as_slice() else {
+        panic!("timeout emits one exact signing effect")
+    };
+    runtime
+        .set_external_lifecycle_owners(vec![timeout_effect_owner.owner().clone()])
+        .expect("publish the pending local timeout signer");
+
+    let mismatched_message = signed_runtime_timeout_vote(&context, &keys, 0, 1);
+    let mismatched_origin = context.roster[2].validator.clone();
+    let first_valid_message = signed_runtime_timeout_vote(&context, &keys, 0, 3);
+    let first_valid_origin = context.roster[3].validator.clone();
+    let second_valid_message = signed_runtime_timeout_vote(&context, &keys, 0, 1);
+    let second_valid_origin = context.roster[1].validator.clone();
+    assert_eq!(
+        second_valid_message, mismatched_message,
+        "identical inner vote bytes remain independent across authenticated semantic origins"
+    );
+    for (message, origin) in [
+        (&mismatched_message, &mismatched_origin),
+        (&first_valid_message, &first_valid_origin),
+        (&second_valid_message, &second_valid_origin),
+    ] {
+        assert!(matches!(
+            leader_wire_ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+                BlockMessage::V2(message.clone()),
+                origin.clone(),
+            )),
+            Ok(super::super::FairV2IngressPushDisposition::Enqueued)
+        ));
+    }
+
+    for (valid_message, valid_origin) in [
+        (&first_valid_message, &first_valid_origin),
+        (&second_valid_message, &second_valid_origin),
+    ] {
+        let mut valid_inbound = leader_wire_ingress
+            .try_recv_if(|inbound| {
+                let BlockMessage::V2(candidate) = inbound.message() else {
+                    return false;
+                };
+                inbound.sender() == valid_origin
+                    && inbound.ingress_ownership().is_some_and(|ownership| {
+                        runtime.can_admit_timeout_vote_recovery_episode(candidate, ownership)
+                    })
+            })
+            .expect("a valid distinct share crosses the mismatched retained owner");
+        let valid_ownership = valid_inbound
+            .take_ingress_ownership()
+            .expect("the valid share retains exact checked-dequeue ownership");
+        runtime
+            .enqueue_network_with_ingress_ownership(valid_message.clone(), valid_ownership)
+            .expect("the valid share enters the protected Progress prefix");
+    }
+    assert_eq!(leader_wire_ingress.len(), 1);
+    assert_eq!(runtime.queued_commands(), 2);
+    assert!(
+        runtime
+            .ingress
+            .check_capacity(CommandClass::Progress)
+            .is_err(),
+        "two valid shares fill the configured Progress prefix"
+    );
+    assert_eq!(
+        runtime
+            .timeout_recovery_episode
+            .as_ref()
+            .expect("the timeout episode retains the valid share")
+            .admitted_timeout_vote_owners
+            .len(),
+        2
+    );
+
+    let mut mismatched_inbound = leader_wire_ingress
+        .try_recv_if(|inbound| {
+            let BlockMessage::V2(candidate) = inbound.message() else {
+                return false;
+            };
+            inbound.ingress_ownership().is_some_and(|ownership| {
+                runtime.can_admit_network_message_with_ingress_ownership(candidate, ownership)
+            })
+        })
+        .expect("the mismatched wire drains to authenticated rejection");
+    let mismatched_ownership = mismatched_inbound
+        .take_ingress_ownership()
+        .expect("the mismatched wire retains exact terminal ownership");
+    assert!(
+        mismatched_ownership.leader_wire_runtime_receipt().is_some(),
+        "runner terminalization receives the exact runtime receipt"
+    );
+    match runtime.enqueue_network_with_ingress_ownership(mismatched_message, mismatched_ownership) {
+        Err(NetworkIngressError::Authentication(
+            AdapterError::AuthenticatedTimeoutVoteOriginMismatch {
+                signer,
+                semantic_origin,
+            },
+        )) => {
+            assert_eq!(signer, 1);
+            assert_eq!(semantic_origin, mismatched_origin);
+        }
+        other => panic!("unexpected mismatched TimeoutVote admission: {other:?}"),
+    }
+    assert_eq!(runtime.queued_commands(), 2);
+    assert_eq!(
+        runtime
+            .timeout_recovery_episode
+            .as_ref()
+            .expect("the timeout episode retains the valid share")
+            .admitted_timeout_vote_owners
+            .len(),
+        2,
+        "remote authentication rejection cannot consume another finite source slot"
+    );
+    assert!(!runtime.fail_closed);
+}
+#[test]
 fn restored_timeout_vote_reactivation_binds_fresh_carrier_before_runtime_admission() {
     let runtime_directory = TempDir::new().expect("temporary restored-TV runtime directory");
     let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
@@ -2260,5 +2409,1022 @@ fn periodic_decision_store_retry_carries_durable_commit_authority() {
         decision.subject,
         decision.execution_commitment,
     ));
+    assert!(!runtime.fail_closed);
+}
+
+#[test]
+fn periodic_prepare_lock_retries_bind_store_and_validate_authority() {
+    let directory = TempDir::new().expect("temporary periodic Prepare-lock directory");
+    let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
+        &directory,
+        RuntimeQueueConfig::new(8, 1, 1),
+        Some(0),
+    );
+    let now = Instant::now();
+    runtime
+        .arm_live_clocks(now)
+        .expect("arm runtime for Prepare-lock recovery");
+    runtime
+        .enqueue_network(signed_runtime_proposal(&context, &keys, 0x8E))
+        .expect("enqueue authenticated proposal");
+    let RuntimeStep::Advanced(proposal_effects) = runtime
+        .step_and_take_scheduler_ownership_for_test(now)
+        .expect("dispatch proposal")
+    else {
+        panic!("proposal dispatch unexpectedly idled")
+    };
+    let (proposal_tag, manifest) = match proposal_effects.as_slice() {
+        [
+            AdapterEffect::FetchBody {
+                tag,
+                manifest: Some(manifest),
+                ..
+            },
+        ] => (*tag, manifest.clone()),
+        effects => panic!("unexpected proposal effects: {effects:?}"),
+    };
+    runtime
+        .enqueue_body_available(proposal_tag, manifest.clone())
+        .expect("enqueue reconstructed proposal body");
+    assert!(matches!(
+        runtime
+            .step_and_take_scheduler_ownership_for_test(now)
+            .expect("dispatch reconstructed body"),
+        RuntimeStep::Advanced(ref effects)
+            if matches!(effects.as_slice(), [AdapterEffect::StoreBody { .. }])
+    ));
+    let durable = DurableBodyReceipt::for_test(
+        context.id(),
+        manifest.round,
+        manifest.subject,
+        HashOf::new(&manifest),
+    );
+    let validated = ValidatedBodyReceipt::for_test(durable.clone());
+    runtime
+        .enqueue_body_stored(
+            proposal_tag,
+            manifest.round,
+            manifest.subject,
+            durable.clone(),
+        )
+        .expect("enqueue durable proposal body");
+    assert!(matches!(
+        runtime
+            .step_and_take_scheduler_ownership_for_test(now)
+            .expect("dispatch durable proposal body"),
+        RuntimeStep::Advanced(ref effects)
+            if matches!(effects.as_slice(), [AdapterEffect::ValidateBody { .. }])
+    ));
+    let prepare_sign_effects = runtime
+        .driver_mut_for_test()
+        .settle_ready_validate_succeeded_for_runtime_test(
+            proposal_tag,
+            manifest.round,
+            manifest.subject,
+            &validated,
+        );
+    runtime
+        .retain_external_lifecycle_effect_ownership_for_test(&prepare_sign_effects)
+        .expect("bind the lifecycle-owned Prepare signer");
+    let prepare_sign_ownership = runtime
+        .take_effect_ownership(prepare_sign_effects.len())
+        .expect("Prepare signer retains exact ownership");
+    let (prepare_sign_tag, prepare_signature_preimage) = match prepare_sign_effects.as_slice() {
+        [
+            AdapterEffect::Sign {
+                tag,
+                request: SignRequest::Vote(vote),
+            },
+        ] if vote.phase == wire::GlobalPhase::Prepare
+            && vote.round == manifest.round
+            && vote.subject == manifest.subject =>
+        {
+            (*tag, vote.signature_preimage())
+        }
+        effects => panic!("unexpected Prepare-sign effects: {effects:?}"),
+    };
+    let prepare_signature = Signature::new(keys[0].private_key(), &prepare_signature_preimage)
+        .payload()
+        .to_vec();
+    runtime
+        .enqueue_signature_with_owner(
+            prepare_sign_tag,
+            prepare_signature,
+            &prepare_sign_ownership[0],
+        )
+        .expect("enqueue exact Prepare signature completion");
+    let RuntimeStep::Advanced(prepare_broadcasts) = runtime
+        .step(now)
+        .expect("dispatch Prepare signature completion")
+    else {
+        panic!("Prepare signature completion unexpectedly idled")
+    };
+    runtime
+        .take_last_scheduler_ownership()
+        .expect("Prepare completion publishes scheduler ownership");
+    assert!(matches!(
+        prepare_broadcasts.as_slice(),
+        [AdapterEffect::Broadcast(message)]
+            if matches!(
+                &message.payload,
+                wire::ConsensusMessageV2Payload::Vote(vote)
+                    if vote.phase == wire::GlobalPhase::Prepare
+                        && vote.round == manifest.round
+                        && vote.subject == manifest.subject
+            )
+    ));
+    runtime
+        .take_effect_ownership(prepare_broadcasts.len())
+        .expect("consume Prepare broadcast ownership");
+
+    let prepare = wire::QuorumCertificate {
+        round: manifest.round,
+        proposal_round: manifest.round,
+        phase: wire::GlobalPhase::Prepare,
+        subject: manifest.subject,
+        execution_commitment: validated.execution_commitment(),
+        signers: vec![0, 1, 2],
+        aggregate_signature: vec![0x8F; 96],
+    };
+    runtime
+        .ingress
+        .enqueue_authenticated(
+            proposal_tag,
+            CommandClass::Progress,
+            AuthenticatedConsensusMessage::for_test(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::QuorumCertificate(prepare.clone()),
+            )),
+        )
+        .expect("enqueue the authenticated PrepareQC");
+    let RuntimeStep::Advanced(lock_effects) =
+        runtime.step(now).expect("install the durable Prepare lock")
+    else {
+        panic!("PrepareQC dispatch unexpectedly idled")
+    };
+    runtime
+        .take_last_scheduler_ownership()
+        .expect("PrepareQC publishes scheduler ownership");
+    assert!(matches!(
+        lock_effects.as_slice(),
+        [
+            AdapterEffect::Sign {
+                request: SignRequest::Vote(vote),
+                ..
+            },
+        ] if vote.phase == wire::GlobalPhase::Commit
+            && vote.proposal_round == manifest.round
+            && vote.subject == manifest.subject
+            && vote.execution_commitment == prepare.execution_commitment
+    ));
+    let lock_effect_ownership = runtime
+        .take_effect_ownership(lock_effects.len())
+        .expect("durable lock transfers into its Commit signer");
+    let _lock_terminals = runtime.take_leader_wire_runtime_terminals();
+    assert_eq!(
+        runtime
+            .replayed_body_authority_certificate()
+            .expect("query durable body authority"),
+        Some(prepare.clone()),
+    );
+    runtime
+        .set_external_lifecycle_owners(vec![lock_effect_ownership[0].owner().clone()])
+        .expect("publish the pending Commit signer owner");
+
+    runtime
+        .enqueue_network(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::TimeoutCertificate(
+                signed_runtime_timeout_certificate(&context, &keys),
+            ),
+        ))
+        .expect("enqueue the authenticated timeout certificate");
+    let RuntimeStep::Advanced(enter_view_effects) = runtime
+        .try_step_pacemaker_escape(now)
+        .expect("the timeout certificate remains schedulable")
+        .expect("the timeout certificate owns one pacemaker turn")
+    else {
+        panic!("timeout-certificate dispatch unexpectedly idled")
+    };
+    let [
+        AdapterEffect::EnterView {
+            tag: enter_view_tag,
+            protected_lock: Some(protected_lock),
+            ..
+        },
+        AdapterEffect::FetchBody {
+            tag: fetch_tag,
+            round: fetch_round,
+            subject: fetch_subject,
+            certificate: Some(fetch_certificate),
+            ..
+        },
+        AdapterEffect::Sign {
+            tag: commit_sign_tag,
+            request: SignRequest::Vote(commit_vote),
+        },
+    ] = enter_view_effects.as_slice()
+    else {
+        panic!("unexpected protected EnterView effects: {enter_view_effects:?}")
+    };
+    assert_eq!(enter_view_tag.view(), proposal_tag.view() + 1);
+    assert_eq!(protected_lock, &prepare);
+    assert_eq!(*fetch_tag, *enter_view_tag);
+    assert_eq!(*fetch_round, manifest.round);
+    assert_eq!(*fetch_subject, manifest.subject);
+    assert_eq!(fetch_certificate, &prepare);
+    assert_eq!(commit_vote.phase, wire::GlobalPhase::Commit);
+    assert_eq!(commit_vote.proposal_round, manifest.round);
+    assert_eq!(commit_vote.subject, manifest.subject);
+    assert_eq!(
+        commit_vote.execution_commitment,
+        prepare.execution_commitment
+    );
+    let commit_signature_preimage = commit_vote.signature_preimage();
+    runtime
+        .take_last_scheduler_ownership()
+        .expect("timeout certificate publishes scheduler ownership");
+    let mut enter_view_ownership = runtime
+        .take_effect_ownership(enter_view_effects.len())
+        .expect("consume EnterView ownership");
+    let commit_sign_ownership = enter_view_ownership
+        .pop()
+        .expect("protected EnterView retains its reissued Commit signer");
+    let fetch_ownership = enter_view_ownership.swap_remove(1);
+    assert_eq!(
+        fetch_ownership.owner(),
+        commit_sign_ownership.owner(),
+        "the atomic EnterView batch retains one inherited TC lifecycle",
+    );
+    assert_eq!(
+        fetch_ownership
+            .candidate_semantic_statement()
+            .expect("protected Fetch carries one statement")
+            .phase,
+        Some(wire::GlobalPhase::Prepare),
+    );
+    let _timeout_terminals = runtime.take_leader_wire_runtime_terminals();
+    runtime
+        .set_external_lifecycle_owners(vec![commit_sign_ownership.owner().clone()])
+        .expect("replace the superseded Commit signer with its new-view retry");
+    let recovery_tag = runtime.round_tag();
+    assert_eq!(recovery_tag.view(), proposal_tag.view() + 1);
+    runtime
+        .reconcile_active_view_producer(recovery_tag, false)
+        .expect("retire the non-leader view producer reservation");
+    assert_eq!(
+        runtime
+            .replayed_body_authority_certificate()
+            .expect("query post-TC durable body authority"),
+        Some(prepare.clone()),
+    );
+    let commit_signature = Signature::new(keys[0].private_key(), &commit_signature_preimage)
+        .payload()
+        .to_vec();
+    runtime
+        .enqueue_signature_with_owner(*commit_sign_tag, commit_signature, &commit_sign_ownership)
+        .expect("enqueue the reissued Commit signature completion");
+    runtime
+        .set_external_lifecycle_owners(vec![fetch_ownership.owner().clone()])
+        .expect("the reconstructed body remains under the shared TC owner");
+    let RuntimeStep::Advanced(commit_broadcasts) = runtime
+        .step_and_take_scheduler_ownership_for_test(now)
+        .expect("dispatch the reissued Commit signature completion")
+    else {
+        panic!("reissued Commit signature completion unexpectedly idled")
+    };
+    assert!(matches!(
+        commit_broadcasts.as_slice(),
+        [AdapterEffect::Broadcast(message)]
+            if matches!(
+                &message.payload,
+                wire::ConsensusMessageV2Payload::Vote(vote)
+                    if vote.phase == wire::GlobalPhase::Commit
+                        && vote.proposal_round == manifest.round
+                        && vote.subject == manifest.subject
+                        && vote.execution_commitment == prepare.execution_commitment
+            )
+    ));
+    let reservation = runtime
+        .reserve_body_available_with_owner(*fetch_tag, manifest.clone(), &fetch_ownership)
+        .expect("reserve locked body reconstruction under its certified Fetch owner");
+    runtime
+        .commit_body_available(reservation)
+        .expect("publish locked body reconstruction");
+    runtime
+        .set_external_lifecycle_owners(Vec::new())
+        .expect("retire the completed locked FetchBody owner");
+    let RuntimeStep::Advanced(store_effects) = runtime
+        .step(now)
+        .expect("dispatch locked body reconstruction")
+    else {
+        panic!("locked body reconstruction unexpectedly idled")
+    };
+    runtime
+        .take_last_scheduler_ownership()
+        .expect("locked body reconstruction publishes scheduler ownership");
+    let [incumbent_store_effect] = store_effects.as_slice() else {
+        panic!("locked body reconstruction must emit one StoreBody: {store_effects:?}")
+    };
+    assert!(matches!(
+        incumbent_store_effect,
+        AdapterEffect::StoreBody { round, subject, .. }
+            if *round == manifest.round && *subject == manifest.subject
+    ));
+    let incumbent_store_ownership = runtime
+        .take_effect_ownership(store_effects.len())
+        .expect("StoreBody retains the certified Fetch owner")
+        .pop()
+        .expect("one StoreBody has one owner");
+    let store_statement = incumbent_store_ownership
+        .candidate_semantic_statement()
+        .expect("StoreBody carries its inherited Prepare statement");
+    assert_eq!(store_statement.phase, Some(wire::GlobalPhase::Prepare));
+    assert_eq!(
+        store_statement.execution_commitment,
+        Some(prepare.execution_commitment),
+    );
+    runtime
+        .set_external_lifecycle_owners(vec![incumbent_store_ownership.owner().clone()])
+        .expect("publish the in-flight locked StoreBody owner");
+
+    let store_retry_at = now + runtime.retransmit_interval();
+    let RuntimeStep::Advanced(store_retry_effects) = runtime
+        .step(store_retry_at)
+        .expect("periodic locked StoreBody retry advances")
+    else {
+        panic!("periodic locked StoreBody retry unexpectedly idled")
+    };
+    assert_eq!(
+        runtime
+            .take_last_scheduler_ownership()
+            .expect("periodic StoreBody publishes scheduler ownership")
+            .selected,
+        RuntimeSelectedOwnerKind::PeriodicTimer,
+    );
+    let store_retry_position = store_retry_effects
+        .iter()
+        .position(|effect| {
+            matches!(
+                effect,
+                AdapterEffect::StoreBody { round, subject, .. }
+                    if *round == manifest.round && *subject == manifest.subject
+            )
+        })
+        .expect("periodic recovery emits the exact StoreBody retry");
+    let mut store_retry_ownership = runtime
+        .take_effect_ownership(store_retry_effects.len())
+        .expect("periodic StoreBody retains exact Prepare authority");
+    let store_retry_ownership = store_retry_ownership.swap_remove(store_retry_position);
+    assert_ne!(
+        store_retry_ownership.owner(),
+        incumbent_store_ownership.owner(),
+        "the periodic StoreBody remains a distinct physical retry root",
+    );
+    assert_eq!(
+        store_retry_ownership.candidate_semantic_statement(),
+        Some(store_statement),
+    );
+
+    let AdapterEffect::StoreBody { tag: store_tag, .. } = incumbent_store_effect else {
+        unreachable!("StoreBody shape checked above")
+    };
+    runtime
+        .enqueue_body_stored_with_owner(
+            *store_tag,
+            manifest.round,
+            manifest.subject,
+            durable,
+            &incumbent_store_ownership,
+        )
+        .expect("enqueue completion under the physical StoreBody incumbent");
+    runtime
+        .set_external_lifecycle_owners(Vec::new())
+        .expect("retire the completed StoreBody owner");
+    let RuntimeStep::Advanced(validate_effects) = runtime
+        .step(store_retry_at)
+        .expect("dispatch durable locked body")
+    else {
+        panic!("durable locked body unexpectedly idled")
+    };
+    runtime
+        .take_last_scheduler_ownership()
+        .expect("durable locked body publishes scheduler ownership");
+    let [incumbent_validate_effect] = validate_effects.as_slice() else {
+        panic!("durable locked body must emit one ValidateBody: {validate_effects:?}")
+    };
+    assert!(matches!(
+        incumbent_validate_effect,
+        AdapterEffect::ValidateBody { round, subject, .. }
+            if *round == manifest.round && *subject == manifest.subject
+    ));
+    let incumbent_validate_ownership = runtime
+        .take_effect_ownership(validate_effects.len())
+        .expect("ValidateBody retains the physical StoreBody owner")
+        .pop()
+        .expect("one ValidateBody has one owner");
+    assert_eq!(
+        incumbent_validate_ownership.candidate_semantic_statement(),
+        Some(store_statement),
+    );
+    runtime
+        .set_external_lifecycle_owners(vec![incumbent_validate_ownership.owner().clone()])
+        .expect("publish the in-flight locked ValidateBody owner");
+
+    let validate_retry_at = store_retry_at + runtime.retransmit_interval();
+    let RuntimeStep::Advanced(validate_retry_effects) = runtime
+        .step(validate_retry_at)
+        .expect("periodic locked ValidateBody retry advances")
+    else {
+        panic!("periodic locked ValidateBody retry unexpectedly idled")
+    };
+    assert_eq!(
+        runtime
+            .take_last_scheduler_ownership()
+            .expect("periodic ValidateBody publishes scheduler ownership")
+            .selected,
+        RuntimeSelectedOwnerKind::PeriodicTimer,
+    );
+    let validate_retry_position = validate_retry_effects
+        .iter()
+        .position(|effect| {
+            matches!(
+                effect,
+                AdapterEffect::ValidateBody { round, subject, .. }
+                    if *round == manifest.round && *subject == manifest.subject
+            )
+        })
+        .expect("periodic recovery emits the exact ValidateBody retry");
+    let mut validate_retry_ownership = runtime
+        .take_effect_ownership(validate_retry_effects.len())
+        .expect("periodic ValidateBody retains exact Prepare authority");
+    let validate_retry_ownership = validate_retry_ownership.swap_remove(validate_retry_position);
+    assert_ne!(
+        validate_retry_ownership.owner(),
+        incumbent_validate_ownership.owner(),
+        "the periodic ValidateBody remains a distinct physical retry root",
+    );
+    assert_eq!(
+        validate_retry_ownership.candidate_semantic_statement(),
+        Some(store_statement),
+    );
+    runtime
+        .set_external_lifecycle_owners(Vec::new())
+        .expect("retire the in-flight ValidateBody owner");
+    assert!(!runtime.fail_closed);
+}
+
+struct PreTimeoutLockedPrepareQcRuntimeFixture {
+    runtime: SerializedV2Runtime<SumeragiV2Adapter>,
+    context: wire::HeightContext,
+    keys: Vec<KeyPair>,
+    now: Instant,
+    target: PreTimeoutLockedPrepareQcTargetV1,
+}
+
+fn signed_prepare_qc_for_runtime_statement(
+    keys: &[KeyPair],
+    round: wire::ConsensusRound,
+    subject: wire::BlockSubject,
+    execution_commitment: wire::ExecutionCommitment,
+) -> wire::QuorumCertificate {
+    let signers = vec![0, 1, 2];
+    let preimage = wire::Vote {
+        round,
+        proposal_round: round,
+        phase: wire::GlobalPhase::Prepare,
+        subject,
+        execution_commitment,
+        signer: signers[0],
+        signature: Vec::new(),
+    }
+    .signature_preimage();
+    let shares = signers
+        .iter()
+        .map(|signer| {
+            Signature::new(
+                keys[usize::try_from(*signer).expect("small PrepareQC signer index")].private_key(),
+                &preimage,
+            )
+            .payload()
+            .to_vec()
+        })
+        .collect::<Vec<_>>();
+    let share_refs = shares.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    wire::QuorumCertificate {
+        round,
+        proposal_round: round,
+        phase: wire::GlobalPhase::Prepare,
+        subject,
+        execution_commitment,
+        signers,
+        aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(&share_refs)
+            .expect("aggregate exact pre-timeout PrepareQC"),
+    }
+}
+
+fn signed_timeout_certificate_with_highest_prepare_qc(
+    keys: &[KeyPair],
+    highest_prepare_qc: wire::QuorumCertificate,
+) -> wire::TimeoutCertificate {
+    let round = highest_prepare_qc.round;
+    let signers = vec![0, 1, 2];
+    let preimage = wire::TimeoutVote {
+        round,
+        highest_prepare_qc: Some(highest_prepare_qc.clone()),
+        signer: signers[0],
+        signature: Vec::new(),
+    }
+    .signature_preimage();
+    let shares = signers
+        .iter()
+        .map(|signer| {
+            Signature::new(
+                keys[usize::try_from(*signer).expect("small timeout-certificate signer index")]
+                    .private_key(),
+                &preimage,
+            )
+            .payload()
+            .to_vec()
+        })
+        .collect::<Vec<_>>();
+    let share_refs = shares.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    wire::TimeoutCertificate {
+        round,
+        groups: vec![wire::TimeoutVoteGroup {
+            highest_prepare_qc: Some(highest_prepare_qc),
+            signers,
+            aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(&share_refs)
+                .expect("aggregate timeout certificate carrying the locked PrepareQC"),
+        }],
+    }
+}
+
+fn pre_timeout_locked_prepare_qc_runtime_fixture(
+    directory: &TempDir,
+) -> PreTimeoutLockedPrepareQcRuntimeFixture {
+    const BODY_MARKER: u8 = 0xA4;
+
+    let (expected_context, _) = authenticated_runtime_context();
+    let local_validator = expected_context.leader(1);
+    let local_index = usize::try_from(local_validator).expect("small local validator index");
+    let (runtime_shell, context, keys) = authenticated_network_runtime_with_local_validator(
+        directory,
+        RuntimeQueueConfig::new(12, 2, 2),
+        Some(local_validator),
+    );
+    assert_eq!(context.id(), expected_context.id());
+    let mut adapter = runtime_shell.into_driver();
+
+    let locked_manifest = runtime_manifest(&context, BODY_MARKER);
+    let locked_durable = DurableBodyReceipt::for_test(
+        context.id(),
+        locked_manifest.round,
+        locked_manifest.subject,
+        HashOf::new(&locked_manifest),
+    );
+    let locked_validated = ValidatedBodyReceipt::for_test(locked_durable.clone());
+    let locked_prepare = signed_prepare_qc_for_runtime_statement(
+        &keys,
+        locked_manifest.round,
+        locked_manifest.subject,
+        locked_validated.execution_commitment(),
+    );
+    let timeout = signed_timeout_certificate_with_highest_prepare_qc(&keys, locked_prepare.clone());
+    let timeout = adapter
+        .authenticate(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::TimeoutCertificate(timeout),
+        ))
+        .expect("authenticate the TC carrying the older Prepare lock");
+    let enter_view_effects = adapter
+        .receive_authenticated(timeout)
+        .expect("install the older durable Prepare lock")
+        .into_effects();
+    let fetch_tag = match enter_view_effects.as_slice() {
+        [
+            AdapterEffect::EnterView {
+                tag: enter_view_tag,
+                protected_lock: Some(protected_lock),
+                ..
+            },
+            AdapterEffect::FetchBody {
+                tag,
+                round,
+                subject,
+                certificate: Some(certificate),
+                ..
+            },
+        ] if enter_view_tag == tag
+            && protected_lock == &locked_prepare
+            && *round == locked_manifest.round
+            && *subject == locked_manifest.subject
+            && certificate == &locked_prepare =>
+        {
+            *tag
+        }
+        effects => panic!("unexpected locked EnterView effects: {effects:?}"),
+    };
+    assert_eq!(fetch_tag.view(), 1);
+    assert_eq!(context.leader(fetch_tag.view()), local_validator);
+
+    assert!(matches!(
+        adapter
+            .body_available(fetch_tag, locked_manifest.clone())
+            .expect("recover the TC-protected body")
+            .effects(),
+        [AdapterEffect::StoreBody { tag, round, subject }]
+            if *tag == fetch_tag
+                && *round == locked_manifest.round
+                && *subject == locked_manifest.subject
+    ));
+    assert!(matches!(
+        adapter
+            .body_stored(
+                fetch_tag,
+                locked_manifest.round,
+                locked_manifest.subject,
+                &locked_durable,
+            )
+            .expect("store the TC-protected body")
+            .effects(),
+        [AdapterEffect::ValidateBody { tag, round, subject }]
+            if *tag == fetch_tag
+                && *round == locked_manifest.round
+                && *subject == locked_manifest.subject
+    ));
+    assert!(
+        adapter
+            .settle_ready_validate_succeeded_for_runtime_test(
+                fetch_tag,
+                locked_manifest.round,
+                locked_manifest.subject,
+                &locked_validated,
+            )
+            .is_empty(),
+        "old-round validation must complete the Fetch without minting split-round work",
+    );
+
+    let current_round = wire::ConsensusRound {
+        context_id: context.id(),
+        height: fetch_tag.height(),
+        view: fetch_tag.view(),
+    };
+    let current_manifest = encode_payload(
+        &context,
+        current_round,
+        locked_manifest.subject,
+        &[BODY_MARKER; 4],
+    )
+    .expect("encode the unchanged body at the current round")
+    .manifest()
+    .clone();
+    let current_durable = DurableBodyReceipt::for_test(
+        context.id(),
+        current_round,
+        current_manifest.subject,
+        HashOf::new(&current_manifest),
+    );
+    let current_validated = ValidatedBodyReceipt::for_test_with_commitment(
+        current_durable.clone(),
+        locked_validated.execution_commitment(),
+    );
+    let proposal_sign = adapter
+        .local_proposal_ready(
+            fetch_tag,
+            current_manifest,
+            &current_durable,
+            &current_validated,
+        )
+        .expect("publish the current unchanged-body reproposal")
+        .into_effects();
+    let proposal_sign_handoff = adapter
+        .take_live_proposal_intent_wal_sign(&proposal_sign)
+        .expect("the live ProposalIntent sidecar exactly matches its Sign batch")
+        .expect("the fsynced local ProposalIntent retains one WAL Sign sidecar");
+    let (proposal_sign_tag, proposal_sign_preimage) = match proposal_sign.as_slice() {
+        [
+            AdapterEffect::Sign {
+                tag,
+                request: SignRequest::Proposal(proposal),
+            },
+        ] if proposal.round == current_round && proposal.subject == locked_manifest.subject => {
+            (*tag, proposal.signature_preimage())
+        }
+        effects => panic!("unexpected current Proposal-sign effects: {effects:?}"),
+    };
+    let proposal_signed_effects = adapter
+        .signature_completed(
+            proposal_sign_tag,
+            Signature::new(keys[local_index].private_key(), &proposal_sign_preimage)
+                .payload()
+                .to_vec(),
+        )
+        .expect("complete the current Proposal signature")
+        .into_effects();
+    drop(proposal_sign_handoff);
+    assert!(
+        adapter
+            .take_live_proposal_intent_wal_sign(&proposal_signed_effects)
+            .expect("the Proposal completion cannot leave a second live ProposalIntent sidecar")
+            .is_none()
+    );
+    assert!(proposal_signed_effects.iter().any(|effect| matches!(
+        effect,
+        AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
+            payload: wire::ConsensusMessageV2Payload::Proposal(proposal),
+            ..
+        }) if proposal.round == current_round && proposal.subject == locked_manifest.subject
+    )));
+    let (prepare_sign_tag, prepare_sign_preimage) = proposal_signed_effects
+        .iter()
+        .find_map(|effect| match effect {
+            AdapterEffect::Sign {
+                tag,
+                request: SignRequest::Vote(vote),
+            } if vote.phase == wire::GlobalPhase::Prepare
+                && vote.round == current_round
+                && vote.subject == locked_manifest.subject
+                && vote.execution_commitment == locked_validated.execution_commitment() =>
+            {
+                Some((*tag, vote.signature_preimage()))
+            }
+            _ => None,
+        })
+        .expect("signed current Proposal emits its exact Prepare signer");
+    assert_eq!(
+        proposal_signed_effects.len(),
+        2,
+        "the signed Proposal has only its broadcast and exact Prepare signer",
+    );
+    assert!(matches!(
+        adapter
+            .signature_completed(
+                prepare_sign_tag,
+                Signature::new(keys[local_index].private_key(), &prepare_sign_preimage)
+                    .payload()
+                    .to_vec(),
+            )
+            .expect("complete the current Prepare signature")
+            .effects(),
+        [AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
+            payload: wire::ConsensusMessageV2Payload::Vote(vote),
+            ..
+        })] if vote.phase == wire::GlobalPhase::Prepare
+            && vote.round == current_round
+            && vote.subject == locked_manifest.subject
+    ));
+
+    let target = adapter
+        .pre_timeout_locked_prepare_qc_target()
+        .expect("the current validated unchanged body exposes one exact target");
+    assert_eq!(target.round, current_round);
+    assert_eq!(target.subject, locked_manifest.subject);
+    assert_eq!(
+        target.execution_commitment,
+        locked_validated.execution_commitment()
+    );
+    assert!(adapter.ingress_ready());
+    assert!(!adapter.pacemaker_escape_is_parked());
+    assert!(!adapter.signature_fence_is_active());
+    assert!(adapter.all_deferred_admission_ordinals().is_empty());
+
+    let now = Instant::now();
+    let (mut runtime, startup) = SerializedV2Runtime::new(
+        adapter,
+        Vec::new(),
+        now,
+        Duration::from_secs(10),
+        RuntimeQueueConfig::new(12, 2, 2),
+    )
+    .expect("wrap the settled adapter in the production serialized runtime");
+    assert!(startup.is_empty());
+    runtime
+        .arm_live_clocks(now)
+        .expect("arm the pre-timeout PrepareQC fixture");
+    assert_eq!(runtime.round_tag(), fetch_tag);
+    assert_eq!(
+        runtime.driver().pre_timeout_locked_prepare_qc_target(),
+        Some(target)
+    );
+    assert_eq!(runtime.queued_commands(), 0);
+    assert!(runtime.last_scheduler_ownership().is_none());
+    assert!(!runtime.fail_closed);
+
+    PreTimeoutLockedPrepareQcRuntimeFixture {
+        runtime,
+        context,
+        keys,
+        now,
+        target,
+    }
+}
+
+#[test]
+fn due_timeout_dispatches_an_exact_admitted_pre_cut_locked_prepare_qc_first() {
+    let directory = TempDir::new().expect("temporary pre-cut PrepareQC runtime directory");
+    let PreTimeoutLockedPrepareQcRuntimeFixture {
+        mut runtime,
+        context,
+        keys,
+        now,
+        target,
+    } = pre_timeout_locked_prepare_qc_runtime_fixture(&directory);
+    let exact_qc = signed_prepare_qc_for_runtime_statement(
+        &keys,
+        target.round,
+        target.subject,
+        target.execution_commitment,
+    );
+    let exact_message =
+        wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(exact_qc));
+    let lifecycle_ordinals = runtime.ingress.lifecycle_ordinals.clone();
+    let (_leader_wire_directory, leader_wire_ingress, ownerships) = preowned_leader_wire_ownerships(
+        &context,
+        &[(exact_message.clone(), context.roster[0].validator.clone())],
+        lifecycle_ordinals,
+    );
+    let [ownership]: [FairV2IngressOwnershipEvidence; 1] = ownerships
+        .try_into()
+        .expect("one exact PrepareQC has one fair-ingress owner");
+    let source_ordinal = ownership
+        .physical_admission_ordinal()
+        .expect("the exact PrepareQC owns one physical occurrence");
+    let physical_cut = leader_wire_ingress.next_physical_admission_ordinal();
+    assert!(u128::from(source_ordinal) < physical_cut);
+    runtime
+        .set_ingress_physical_cut(physical_cut)
+        .expect("publish the receiver cut after the admitted PrepareQC");
+    runtime
+        .enqueue_network_with_ingress_ownership(exact_message.clone(), ownership)
+        .expect("authenticate and admit the exact pre-cut PrepareQC");
+
+    let deadline = now + runtime.round_timeout();
+    let cut = runtime
+        .freeze_pre_timeout_locked_prepare_qc_cut(deadline)
+        .expect("freeze the already-due timeout owner")
+        .expect("the unchanged locked body mints one pre-timeout cut");
+    assert_eq!(cut.physical_cut(), physical_cut);
+    assert!(runtime.wire_previews_pre_timeout_locked_prepare_qc(&cut, &exact_message.payload));
+    let Some(RuntimeStep::Advanced(effects)) = runtime
+        .try_step_pre_timeout_locked_prepare_qc(deadline, &cut)
+        .expect("dispatch the exact pre-cut PrepareQC")
+    else {
+        panic!("exact pre-cut PrepareQC did not advance")
+    };
+    assert!(matches!(
+        effects.as_slice(),
+        [AdapterEffect::Sign {
+            request: SignRequest::Vote(vote),
+            ..
+        }] if vote.phase == wire::GlobalPhase::Commit
+            && vote.round == target.round
+            && vote.proposal_round == target.round
+            && vote.subject == target.subject
+            && vote.execution_commitment == target.execution_commitment
+    ));
+    assert!(!effects.iter().any(|effect| matches!(
+        effect,
+        AdapterEffect::Sign {
+            request: SignRequest::TimeoutVote(_),
+            ..
+        }
+    )));
+    let scheduler = runtime
+        .take_last_scheduler_ownership()
+        .expect("the pre-timeout PrepareQC publishes scheduler evidence");
+    assert_eq!(
+        scheduler.selected,
+        RuntimeSelectedOwnerKind::PreTimeoutLockedPrepareQc
+    );
+    assert!(scheduler.timeout_due);
+    assert_eq!(
+        scheduler.pre_timeout_locked_prepare_qc_physical_cut,
+        Some(physical_cut)
+    );
+    assert_eq!(scheduler.validate_exact(), Ok(()));
+    let RuntimeSelectedCandidateOwnership::Exact(candidate) = &scheduler.candidate else {
+        panic!("the pre-timeout PrepareQC owns one exact FIFO candidate")
+    };
+    assert_eq!(candidate.kind, RuntimeCommandKind::Authenticated);
+    assert_eq!(candidate.class, SERVICE_CLASS_PROGRESS);
+    assert_eq!(
+        candidate.selection_seal.kind,
+        RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc
+    );
+    assert!(
+        candidate
+            .causal_origin
+            .root_ingress_physical_ownership
+            .is_some_and(|physical| u128::from(physical.source_ordinal) < physical_cut)
+    );
+    assert!(!runtime.timeout_emitted);
+    runtime
+        .take_effect_ownership(effects.len())
+        .expect("take the pre-timeout Commit signer ownership");
+    drop(runtime.take_leader_wire_runtime_terminals());
+    assert!(!runtime.fail_closed);
+}
+
+#[test]
+fn wrong_or_post_cut_prepare_qc_gets_no_grace_before_the_due_timeout() {
+    let directory = TempDir::new().expect("temporary post-cut PrepareQC runtime directory");
+    let PreTimeoutLockedPrepareQcRuntimeFixture {
+        mut runtime,
+        context,
+        keys,
+        now,
+        target,
+    } = pre_timeout_locked_prepare_qc_runtime_fixture(&directory);
+    let exact_qc = signed_prepare_qc_for_runtime_statement(
+        &keys,
+        target.round,
+        target.subject,
+        target.execution_commitment,
+    );
+    let exact_message =
+        wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(exact_qc));
+    let filler = signed_runtime_timeout_vote(&context, &keys, target.round.view, 1);
+    let lifecycle_ordinals = runtime.ingress.lifecycle_ordinals.clone();
+    let (_leader_wire_directory, leader_wire_ingress, filler_ownerships) =
+        preowned_leader_wire_ownerships(
+            &context,
+            &[(filler, context.roster[1].validator.clone())],
+            lifecycle_ordinals,
+        );
+    assert_eq!(filler_ownerships.len(), 1);
+    let physical_cut = leader_wire_ingress.next_physical_admission_ordinal();
+    runtime
+        .set_ingress_physical_cut(physical_cut)
+        .expect("publish the empty receiver cut before the exact PrepareQC");
+    let deadline = now + runtime.round_timeout();
+    let cut = runtime
+        .freeze_pre_timeout_locked_prepare_qc_cut(deadline)
+        .expect("freeze the already-due timeout owner")
+        .expect("the unchanged locked body mints one pre-timeout cut");
+    assert_eq!(cut.physical_cut(), physical_cut);
+
+    let wrong_qc = signed_prepare_qc_for_runtime_statement(
+        &keys,
+        target.round,
+        runtime_manifest(&context, 0xB6).subject,
+        target.execution_commitment,
+    );
+    let wrong_payload = wire::ConsensusMessageV2Payload::QuorumCertificate(wrong_qc);
+    assert!(!runtime.wire_previews_pre_timeout_locked_prepare_qc(&cut, &wrong_payload));
+
+    assert!(matches!(
+        leader_wire_ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            BlockMessage::V2(exact_message.clone()),
+            context.roster[0].validator.clone(),
+        )),
+        Ok(super::super::FairV2IngressPushDisposition::Enqueued)
+    ));
+    let mut inbound = leader_wire_ingress
+        .try_recv()
+        .expect("dequeue the exact post-cut PrepareQC");
+    let ownership = inbound
+        .take_ingress_ownership()
+        .expect("the post-cut PrepareQC retains exact fair ownership");
+    let source_ordinal = ownership
+        .physical_admission_ordinal()
+        .expect("the post-cut PrepareQC owns one physical occurrence");
+    assert!(u128::from(source_ordinal) >= cut.physical_cut());
+    runtime
+        .set_ingress_physical_cut(leader_wire_ingress.next_physical_admission_ordinal())
+        .expect("refresh the live receiver cut after post-cut publication");
+    runtime
+        .enqueue_network_with_ingress_ownership(exact_message.clone(), ownership)
+        .expect("authenticate and admit the exact post-cut PrepareQC");
+    assert!(runtime.wire_previews_pre_timeout_locked_prepare_qc(&cut, &exact_message.payload));
+    assert!(
+        runtime
+            .try_step_pre_timeout_locked_prepare_qc(deadline, &cut)
+            .expect("post-cut absence is a successful stutter")
+            .is_none()
+    );
+    assert!(runtime.take_last_scheduler_ownership().is_none());
+
+    let RuntimeStep::Advanced(timeout_effects) = runtime
+        .step(deadline)
+        .expect("dispatch the ordinary due timeout")
+    else {
+        panic!("ordinary due timeout unexpectedly idled")
+    };
+    assert!(matches!(
+        timeout_effects.as_slice(),
+        [AdapterEffect::Sign {
+            request: SignRequest::TimeoutVote(vote),
+            ..
+        }] if vote.round == target.round
+    ));
+    let scheduler = runtime
+        .take_last_scheduler_ownership()
+        .expect("ordinary timeout publishes scheduler evidence");
+    assert_eq!(scheduler.selected, RuntimeSelectedOwnerKind::Timeout);
+    assert!(scheduler.timeout_due);
+    assert_eq!(scheduler.validate_exact(), Ok(()));
+    assert!(runtime.timeout_emitted);
+    assert_eq!(runtime.queued_commands(), 1);
+    runtime
+        .take_effect_ownership(timeout_effects.len())
+        .expect("take the ordinary TimeoutIntent signer ownership");
     assert!(!runtime.fail_closed);
 }

@@ -1171,6 +1171,21 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let account_id = self.object().clone();
+            if let Some((proposal_id, reference_kind)) =
+                crate::validation_fee::retained_enacted_validation_fee_account_reference(
+                    state_transaction,
+                    &account_id,
+                )
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister account {account_id}: it is retained as the enacted validation-fee {reference_kind} by proposal {}",
+                        hex::encode(proposal_id)
+                    )
+                    .into(),
+                )
+                .into());
+            }
             if let Some((program_id, _)) =
                 state_transaction
                     .world
@@ -2240,6 +2255,21 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let asset_definition_id = self.object().clone();
+            if let Some((proposal_id, reference_kind)) =
+                crate::validation_fee::retained_enacted_validation_fee_asset_reference(
+                    state_transaction,
+                    &asset_definition_id,
+                )
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister asset definition {asset_definition_id}: it is retained as the enacted validation-fee {reference_kind} by proposal {}",
+                        hex::encode(proposal_id)
+                    )
+                    .into(),
+                )
+                .into());
+            }
             if crate::smartcontracts::isi::asset::isi::is_sccp_settlement_asset_definition(
                 state_transaction,
                 &asset_definition_id,

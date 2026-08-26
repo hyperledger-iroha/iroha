@@ -624,6 +624,7 @@ pub(in crate::sumeragi) struct LifecycleV2IngressDrainDispositionV1 {
     producer_claim: LifecycleProducerClaimDispositionV1,
     retry_before_producer: bool,
     terminal_settlement_stops_runtime: bool,
+    advance_executor_yield: Option<AdvanceExecutorYieldV1>,
 }
 
 impl LifecycleV2IngressDrainDispositionV1 {
@@ -632,6 +633,7 @@ impl LifecycleV2IngressDrainDispositionV1 {
             producer_claim,
             retry_before_producer: false,
             terminal_settlement_stops_runtime: false,
+            advance_executor_yield: None,
         }
     }
 
@@ -642,6 +644,7 @@ impl LifecycleV2IngressDrainDispositionV1 {
             producer_claim,
             retry_before_producer: false,
             terminal_settlement_stops_runtime: true,
+            advance_executor_yield: None,
         }
     }
 
@@ -650,6 +653,19 @@ impl LifecycleV2IngressDrainDispositionV1 {
             producer_claim,
             retry_before_producer: true,
             terminal_settlement_stops_runtime: false,
+            advance_executor_yield: None,
+        }
+    }
+
+    const fn after_advance_executor_yield(
+        producer_claim: LifecycleProducerClaimDispositionV1,
+        advance_executor_yield: AdvanceExecutorYieldV1,
+    ) -> Self {
+        Self {
+            producer_claim,
+            retry_before_producer: false,
+            terminal_settlement_stops_runtime: false,
+            advance_executor_yield: Some(advance_executor_yield),
         }
     }
 
@@ -666,6 +682,13 @@ impl LifecycleV2IngressDrainDispositionV1 {
     /// Return whether terminal settlement must precede all ordinary runtime service.
     pub(in crate::sumeragi) const fn terminal_settlement_stops_runtime(self) -> bool {
         self.terminal_settlement_stops_runtime
+    }
+
+    /// Whether the pre-Ingress runtime turn yielded on serialized executor debt.
+    pub(in crate::sumeragi) const fn advance_executor_yield(
+        self,
+    ) -> Option<AdvanceExecutorYieldV1> {
+        self.advance_executor_yield
     }
 }
 
@@ -934,24 +957,148 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                     // remains inert until that barrier settles.
                     return Ok(blocked_runtime_drain_disposition(producer_claim));
                 }
-                let (installed_terminal, lifecycle_yield) = activated.with_runner_runtime(
+                let (pre_timeout_cut, pre_timeout_advanced) = activated.with_runner_runtime(
+                    runner,
+                    |_owner, executor, services, _local_proposal| {
+                        let now = Instant::now();
+                        let Some(cut) = executor.freeze_pre_timeout_locked_prepare_qc_cut(
+                            now,
+                            receiver.next_physical_admission_ordinal(),
+                        )?
+                        else {
+                            return Ok::<_, V2RunnerError>((None, false));
+                        };
+                        match executor
+                            .step_pre_timeout_locked_prepare_qc_once(now, &cut, services)?
+                        {
+                            EffectExecutorStep::Idle => Ok((Some(cut), false)),
+                            EffectExecutorStep::Advanced { .. } => {
+                                let _ = reconcile_executor_locked_body(executor, services)?;
+                                Ok((None, true))
+                            }
+                        }
+                    },
+                )?;
+                if pre_timeout_advanced {
+                    // The exact already-admitted QC staged LockAndCommit ahead
+                    // of the frozen timeout owner. Re-enter Completion/Runtime
+                    // so the existing WAL fence settles before any Producer or
+                    // ordinary timeout turn.
+                    return Ok(LifecycleV2IngressDrainDispositionV1::retry_before_producer(
+                        producer_claim,
+                    ));
+                }
+                if let Some(pre_timeout_cut) = pre_timeout_cut {
+                    use super::super::v2_lifecycle_coordinator::ProductionPreTimeoutLockedPrepareQcIngressTurnV1 as PreTimeoutIngress;
+                    match activated
+                        .prepare_pre_timeout_locked_prepare_qc_ingress_turn(&pre_timeout_cut)
+                    {
+                        PreTimeoutIngress::Empty => {}
+                        PreTimeoutIngress::RestartRequired => {
+                            return Err(ingress_restart_error(&output_guard));
+                        }
+                        PreTimeoutIngress::ObsoletePredecessor(prepared) => {
+                            let consumption = activated.consume_prepared_ordinary_ingress_turn(
+                                runner,
+                                prepared,
+                                lane_work,
+                                kura,
+                                local_key,
+                                block_sync_server,
+                                block_sync,
+                                block_sync_request,
+                                npos_vrf,
+                                npos_beacon,
+                            )?;
+                            match consumption {
+                                super::ordinary_ingress_consumer::ProductionPreparedOrdinaryIngressConsumptionV1::Continue => {}
+                            }
+                            // Dequeue retirement strictly lowers the fixed
+                            // pre-cut predecessor rank. A fresh outer turn
+                            // remints the same timeout owner/cut and cannot see
+                            // any later producer append.
+                            return Ok(
+                                LifecycleV2IngressDrainDispositionV1::retry_before_producer(
+                                    producer_claim,
+                                ),
+                            );
+                        }
+                        PreTimeoutIngress::ExactPrepareQc(prepared) => {
+                            let consumption = activated.consume_prepared_ordinary_ingress_turn(
+                                runner,
+                                prepared,
+                                lane_work,
+                                kura,
+                                local_key,
+                                block_sync_server,
+                                block_sync,
+                                block_sync_request,
+                                npos_vrf,
+                                npos_beacon,
+                            )?;
+                            match consumption {
+                                super::ordinary_ingress_consumer::ProductionPreparedOrdinaryIngressConsumptionV1::Continue => {}
+                            }
+                            let advanced = activated.with_runner_runtime(
+                                runner,
+                                |_owner, executor, services, _local_proposal| match executor
+                                    .step_pre_timeout_locked_prepare_qc_once(
+                                        Instant::now(),
+                                        &pre_timeout_cut,
+                                        services,
+                                    )? {
+                                    EffectExecutorStep::Idle => Ok::<_, V2RunnerError>(false),
+                                    EffectExecutorStep::Advanced { .. } => {
+                                        let _ = reconcile_executor_locked_body(executor, services)?;
+                                        Ok(true)
+                                    }
+                                },
+                            )?;
+                            if advanced {
+                                return Ok(
+                                    LifecycleV2IngressDrainDispositionV1::retry_before_producer(
+                                        producer_claim,
+                                    ),
+                                );
+                            }
+                            // Authentication or ordinary ingress admission may
+                            // have retired the previewed carrier without
+                            // queueing the exact runtime command. Grant no
+                            // further grace; the ordinary step below emits the
+                            // already-owned timeout in this same Runtime turn.
+                        }
+                    }
+                }
+                let (installed_terminal, executor_slice) = activated.with_runner_runtime(
                     runner,
                     |owner, executor, services, _local_proposal| {
                         let was_terminal = executor
                             .local_proposal_directive()?
                             .decided_subject()
                             .is_some();
-                        let lifecycle_yield =
+                        let executor_slice =
                             advance_executor(receiver, owner, executor, services, 1)?;
                         let is_terminal = executor
                             .local_proposal_directive()?
                             .decided_subject()
                             .is_some();
-                        Ok::<_, V2RunnerError>((!was_terminal && is_terminal, lifecycle_yield))
+                        Ok::<_, V2RunnerError>((!was_terminal && is_terminal, executor_slice))
                     },
                 )?;
-                if installed_terminal || lifecycle_yield {
+                if installed_terminal {
                     return Ok(LifecycleV2IngressDrainDispositionV1::ready(producer_claim));
+                }
+                match executor_slice {
+                    AdvanceExecutorSliceOutcomeV1::Idle
+                    | AdvanceExecutorSliceOutcomeV1::AdvancedAtSliceBoundary => {}
+                    AdvanceExecutorSliceOutcomeV1::Yielded(advance_executor_yield) => {
+                        return Ok(
+                            LifecycleV2IngressDrainDispositionV1::after_advance_executor_yield(
+                                producer_claim,
+                                advance_executor_yield,
+                            ),
+                        );
+                    }
                 }
                 if producer_claim.blocks_ingress() {
                     return Ok(LifecycleV2IngressDrainDispositionV1::ready(producer_claim));
@@ -1097,6 +1244,21 @@ mod tests {
         assert!(!completion_selection_stops_batch(
             &ProductionLifecycleCompletionSelectionV1::RestartRequired
         ));
+    }
+
+    #[test]
+    fn drain_disposition_preserves_exact_executor_yield_owner() {
+        let claim = LifecycleProducerClaimDispositionV1::initial();
+        let reason = AdvanceExecutorYieldV1::new(
+            AdvanceExecutorYieldCheckpointV1::AfterStep,
+            AdvanceExecutorYieldCauseV1::SettledLifecycleOutput,
+        );
+        let disposition =
+            LifecycleV2IngressDrainDispositionV1::after_advance_executor_yield(claim, reason);
+
+        assert_eq!(disposition.advance_executor_yield(), Some(reason));
+        assert_eq!(disposition.producer_claim(), claim);
+        assert!(!disposition.requires_yield());
     }
 
     #[test]

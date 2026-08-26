@@ -582,55 +582,51 @@ mod recovered_sign_capacity_tests {
         }
     );
 
-    sumeragi_stack_test!(
-        apply_terminal_settles_only_the_attested_direct_broadcast,
-        {
-            let (mut services, keys) = crate::sumeragi::v2_worker::tests::fixture();
-            let context = worker_context(&keys);
-            let proofs = keys
-                .iter()
-                .map(|key| {
-                    iroha_crypto::bls_normal_pop_prove(key.private_key())
-                        .expect("post-Apply direct-output proof of possession")
-                })
-                .collect::<Vec<_>>();
-            let verified = crate::sumeragi::v2::VerifiedHeightContext::genesis(context, proofs)
-                .expect("verified post-Apply direct-output context");
-            let directory =
-                tempfile::TempDir::new().expect("temporary post-Apply direct-output store");
-            let runtime = recovered_completion_runtime(verified.clone(), directory.path());
-            let (mut owner, recovered, paired, unrelated) =
-                ProductionLifecycleOwnerV1::recovered_broadcast_pair_scheduler_fixture_for_test(
-                    verified,
-                    &keys[0],
-                    directory.path(),
-                );
-            let (direct, pending) = owner
-                .defer_direct_timeout_broadcast_for_test(0x74)
-                .expect("defer one exact direct Broadcast behind recovered work");
-            for ordinal in [recovered, paired, unrelated] {
-                assert!(owner.retire_ready_work_for_completion_test(ordinal));
-            }
-            assert_eq!(
-                owner.exact_ready_completion_classification_for_test(),
-                ProductionCompletionReadyWorkV1::RetainedDirectOutput
+    sumeragi_stack_test!(apply_terminal_settles_only_the_attested_direct_broadcast, {
+        let (mut services, keys) = crate::sumeragi::v2_worker::tests::fixture();
+        let context = worker_context(&keys);
+        let proofs = keys
+            .iter()
+            .map(|key| {
+                iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("post-Apply direct-output proof of possession")
+            })
+            .collect::<Vec<_>>();
+        let verified = crate::sumeragi::v2::VerifiedHeightContext::genesis(context, proofs)
+            .expect("verified post-Apply direct-output context");
+        let directory = tempfile::TempDir::new().expect("temporary post-Apply direct-output store");
+        let runtime = recovered_completion_runtime(verified.clone(), directory.path());
+        let (mut owner, recovered, paired, unrelated) =
+            ProductionLifecycleOwnerV1::recovered_broadcast_pair_scheduler_fixture_for_test(
+                verified,
+                &keys[0],
+                directory.path(),
             );
-            let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
-            let (mut executor, planner_io) = owner
-                .bind_body_store_to_lifecycle_completion_io_for_test(
-                    &mut services,
-                    runtime,
-                    Arc::clone(&output_guard),
-                    0,
-                    2,
-            );
-            services.set_exact_output_admission_hook(|_post, _ticket| Ok(()));
-            assert!(executor.install_pending_lifecycle_output_for_test(*pending));
-            let prepared = owner
-                .prepare_apply_terminal_direct_broadcast()
-                .expect("bind the exact Ready minimum to its pending output key");
-            assert_eq!(prepared.ordinal(), direct);
-            assert_eq!(
+        let (direct, pending) = owner
+            .defer_direct_timeout_broadcast_for_test(0x74)
+            .expect("defer one exact direct Broadcast behind recovered work");
+        for ordinal in [recovered, paired, unrelated] {
+            assert!(owner.retire_ready_work_for_completion_test(ordinal));
+        }
+        assert_eq!(
+            owner.exact_ready_completion_classification_for_test(),
+            ProductionCompletionReadyWorkV1::RetainedDirectOutput
+        );
+        let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
+        let (mut executor, planner_io) = owner.bind_body_store_to_lifecycle_completion_io_for_test(
+            &mut services,
+            runtime,
+            Arc::clone(&output_guard),
+            0,
+            2,
+        );
+        services.set_exact_output_admission_hook(|_post, _ticket| Ok(()));
+        assert!(executor.install_pending_lifecycle_output_for_test(*pending));
+        let prepared = owner
+            .prepare_apply_terminal_direct_broadcast()
+            .expect("bind the exact Ready minimum to its pending output key");
+        assert_eq!(prepared.ordinal(), direct);
+        assert_eq!(
                 executor
                     .settle_apply_terminal_direct_broadcast(
                         &mut owner,
@@ -640,16 +636,15 @@ mod recovered_sign_capacity_tests {
                     .expect("settle only the sealed post-Apply direct Broadcast"),
                 crate::sumeragi::v2_effects::ProductionApplyTerminalDirectBroadcastSettlementV1::Completed
             );
-            assert!(!executor.has_pending_lifecycle_output_admissions());
-            let state = owner.recovered_broadcast_scheduler_state_for_test(recovered);
-            assert!(matches!(
-                state.records[&direct].state,
-                LifecycleState::Terminal(TerminalOutcome::Advanced)
-            ));
-            assert!(!output_guard.restart_required());
-            planner_io.detach(&mut services);
-        }
-    );
+        assert!(!executor.has_pending_lifecycle_output_admissions());
+        let state = owner.recovered_broadcast_scheduler_state_for_test(recovered);
+        assert!(matches!(
+            state.records[&direct].state,
+            LifecycleState::Terminal(TerminalOutcome::Advanced)
+        ));
+        assert!(!output_guard.restart_required());
+        planner_io.detach(&mut services);
+    });
 
     sumeragi_stack_test!(
         apply_terminal_direct_broadcast_source_retention_reinstalls_exact_pending_owner,
@@ -663,11 +658,9 @@ mod recovered_sign_capacity_tests {
                         .expect("post-Apply retained-output proof of possession")
                 })
                 .collect::<Vec<_>>();
-            let verified = crate::sumeragi::v2::VerifiedHeightContext::genesis(
-                context.clone(),
-                proofs,
-            )
-                .expect("verified post-Apply retained-output context");
+            let verified =
+                crate::sumeragi::v2::VerifiedHeightContext::genesis(context.clone(), proofs)
+                    .expect("verified post-Apply retained-output context");
             let directory =
                 tempfile::TempDir::new().expect("temporary retained post-Apply output store");
             let runtime = recovered_completion_runtime(verified.clone(), directory.path());
@@ -792,71 +785,67 @@ mod recovered_sign_capacity_tests {
         }
     );
 
-    sumeragi_stack_test!(
-        apply_terminal_wakes_fenced_direct_before_settlement,
-        {
-            let (mut services, keys) = crate::sumeragi::v2_worker::tests::fixture();
-            let context = worker_context(&keys);
-            let proofs = keys
-                .iter()
-                .map(|key| {
-                    iroha_crypto::bls_normal_pop_prove(key.private_key())
-                        .expect("post-Apply fence-wake proof of possession")
-                })
-                .collect::<Vec<_>>();
-            let verified = crate::sumeragi::v2::VerifiedHeightContext::genesis(context, proofs)
-                .expect("verified post-Apply fence-wake context");
-            let directory =
-                tempfile::TempDir::new().expect("temporary post-Apply fence-wake store");
-            let runtime = recovered_completion_runtime(verified.clone(), directory.path());
-            let (mut owner, recovered, paired, unrelated) =
-                ProductionLifecycleOwnerV1::recovered_broadcast_pair_scheduler_fixture_for_test(
-                    verified,
-                    &keys[0],
-                    directory.path(),
-                );
-            let (direct, pending) = owner
-                .defer_direct_timeout_broadcast_for_test(0x75)
-                .expect("defer one direct Broadcast for a reducer-fence wake");
-            for ordinal in [recovered, paired, unrelated] {
-                assert!(owner.retire_ready_work_for_completion_test(ordinal));
-            }
-            let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
-            let (mut executor, planner_io) = owner
-                .bind_body_store_to_lifecycle_completion_io_for_test(
-                    &mut services,
-                    runtime,
-                    Arc::clone(&output_guard),
-                    0,
-                    2,
-                );
-            services.set_exact_output_admission_hook(|_post, _ticket| Ok(()));
-            let fence = executor.lifecycle_reducer_fence_observation();
-            assert!(owner.park_direct_broadcast_before_fence_for_test(direct, fence));
-            assert_eq!(
-                owner.classify_completion_ready_work(fence),
-                ProductionCompletionReadyWorkV1::RetainedDirectOutput
+    sumeragi_stack_test!(apply_terminal_wakes_fenced_direct_before_settlement, {
+        let (mut services, keys) = crate::sumeragi::v2_worker::tests::fixture();
+        let context = worker_context(&keys);
+        let proofs = keys
+            .iter()
+            .map(|key| {
+                iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("post-Apply fence-wake proof of possession")
+            })
+            .collect::<Vec<_>>();
+        let verified = crate::sumeragi::v2::VerifiedHeightContext::genesis(context, proofs)
+            .expect("verified post-Apply fence-wake context");
+        let directory = tempfile::TempDir::new().expect("temporary post-Apply fence-wake store");
+        let runtime = recovered_completion_runtime(verified.clone(), directory.path());
+        let (mut owner, recovered, paired, unrelated) =
+            ProductionLifecycleOwnerV1::recovered_broadcast_pair_scheduler_fixture_for_test(
+                verified,
+                &keys[0],
+                directory.path(),
             );
-            assert_eq!(
-                owner.wake_apply_terminal_direct_broadcast_if_fenced(fence),
-                Ok(true),
-                "the terminal barrier must publish the fence wake before cold-output ordering"
-            );
-            assert_eq!(
-                owner.wake_apply_terminal_direct_broadcast_if_fenced(fence),
-                Ok(false),
-                "the same reducer generation cannot wake the direct row twice"
-            );
-            let state = owner.recovered_broadcast_scheduler_state_for_test(recovered);
-            assert_eq!(state.ready_index.first().copied(), Some(direct));
-            assert_eq!(state.records[&direct].state, LifecycleState::Ready);
+        let (direct, pending) = owner
+            .defer_direct_timeout_broadcast_for_test(0x75)
+            .expect("defer one direct Broadcast for a reducer-fence wake");
+        for ordinal in [recovered, paired, unrelated] {
+            assert!(owner.retire_ready_work_for_completion_test(ordinal));
+        }
+        let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
+        let (mut executor, planner_io) = owner.bind_body_store_to_lifecycle_completion_io_for_test(
+            &mut services,
+            runtime,
+            Arc::clone(&output_guard),
+            0,
+            2,
+        );
+        services.set_exact_output_admission_hook(|_post, _ticket| Ok(()));
+        let fence = executor.lifecycle_reducer_fence_observation();
+        assert!(owner.park_direct_broadcast_before_fence_for_test(direct, fence));
+        assert_eq!(
+            owner.classify_completion_ready_work(fence),
+            ProductionCompletionReadyWorkV1::RetainedDirectOutput
+        );
+        assert_eq!(
+            owner.wake_apply_terminal_direct_broadcast_if_fenced(fence),
+            Ok(true),
+            "the terminal barrier must publish the fence wake before cold-output ordering"
+        );
+        assert_eq!(
+            owner.wake_apply_terminal_direct_broadcast_if_fenced(fence),
+            Ok(false),
+            "the same reducer generation cannot wake the direct row twice"
+        );
+        let state = owner.recovered_broadcast_scheduler_state_for_test(recovered);
+        assert_eq!(state.ready_index.first().copied(), Some(direct));
+        assert_eq!(state.records[&direct].state, LifecycleState::Ready);
 
-            assert!(executor.install_pending_lifecycle_output_for_test(*pending));
-            let prepared = owner
-                .prepare_apply_terminal_direct_broadcast()
-                .expect("seal the newly Ready direct Broadcast");
-            assert_eq!(prepared.ordinal(), direct);
-            assert_eq!(
+        assert!(executor.install_pending_lifecycle_output_for_test(*pending));
+        let prepared = owner
+            .prepare_apply_terminal_direct_broadcast()
+            .expect("seal the newly Ready direct Broadcast");
+        assert_eq!(prepared.ordinal(), direct);
+        assert_eq!(
                 executor
                     .settle_apply_terminal_direct_broadcast(
                         &mut owner,
@@ -866,10 +855,9 @@ mod recovered_sign_capacity_tests {
                     .expect("settle the fence-woken direct Broadcast"),
                 crate::sumeragi::v2_effects::ProductionApplyTerminalDirectBroadcastSettlementV1::Completed
             );
-            assert!(!output_guard.restart_required());
-            planner_io.detach(&mut services);
-        }
-    );
+        assert!(!output_guard.restart_required());
+        planner_io.detach(&mut services);
+    });
 
     sumeragi_stack_test!(
         apply_terminal_fence_wake_rejects_collateral_non_broadcast,
@@ -946,63 +934,59 @@ mod recovered_sign_capacity_tests {
         }
     );
 
-    sumeragi_stack_test!(
-        apply_terminal_reenters_for_each_ordered_direct_broadcast,
-        {
-            let (mut services, keys) = crate::sumeragi::v2_worker::tests::fixture();
-            let context = worker_context(&keys);
-            let proofs = keys
-                .iter()
-                .map(|key| {
-                    iroha_crypto::bls_normal_pop_prove(key.private_key())
-                        .expect("post-Apply multi-output proof of possession")
-                })
-                .collect::<Vec<_>>();
-            let verified = crate::sumeragi::v2::VerifiedHeightContext::genesis(context, proofs)
-                .expect("verified post-Apply multi-output context");
-            let directory =
-                tempfile::TempDir::new().expect("temporary post-Apply multi-output store");
-            let runtime = recovered_completion_runtime(verified.clone(), directory.path());
-            let (mut owner, recovered, paired, unrelated) =
-                ProductionLifecycleOwnerV1::recovered_broadcast_pair_scheduler_fixture_for_test(
-                    verified,
-                    &keys[0],
-                    directory.path(),
-                );
-            let (first, first_pending) = owner
-                .defer_direct_timeout_broadcast_for_test(0x76)
-                .expect("defer the first direct Broadcast");
-            let (second, second_pending) = owner
-                .defer_direct_timeout_broadcast_for_test(0x77)
-                .expect("defer the second direct Broadcast");
-            assert!(first < second);
-            for ordinal in [recovered, paired, unrelated] {
-                assert!(owner.retire_ready_work_for_completion_test(ordinal));
-            }
-            let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
-            let (mut executor, planner_io) = owner
-                .bind_body_store_to_lifecycle_completion_io_for_test(
-                    &mut services,
-                    runtime,
-                    Arc::clone(&output_guard),
-                    0,
-                    2,
-                );
-            services.set_exact_output_admission_hook(|_post, _ticket| Ok(()));
-            assert!(executor.install_pending_lifecycle_output_for_test(*first_pending));
-            assert!(executor.install_pending_lifecycle_output_for_test(*second_pending));
-            let fence = executor.lifecycle_reducer_fence_observation();
+    sumeragi_stack_test!(apply_terminal_reenters_for_each_ordered_direct_broadcast, {
+        let (mut services, keys) = crate::sumeragi::v2_worker::tests::fixture();
+        let context = worker_context(&keys);
+        let proofs = keys
+            .iter()
+            .map(|key| {
+                iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("post-Apply multi-output proof of possession")
+            })
+            .collect::<Vec<_>>();
+        let verified = crate::sumeragi::v2::VerifiedHeightContext::genesis(context, proofs)
+            .expect("verified post-Apply multi-output context");
+        let directory = tempfile::TempDir::new().expect("temporary post-Apply multi-output store");
+        let runtime = recovered_completion_runtime(verified.clone(), directory.path());
+        let (mut owner, recovered, paired, unrelated) =
+            ProductionLifecycleOwnerV1::recovered_broadcast_pair_scheduler_fixture_for_test(
+                verified,
+                &keys[0],
+                directory.path(),
+            );
+        let (first, first_pending) = owner
+            .defer_direct_timeout_broadcast_for_test(0x76)
+            .expect("defer the first direct Broadcast");
+        let (second, second_pending) = owner
+            .defer_direct_timeout_broadcast_for_test(0x77)
+            .expect("defer the second direct Broadcast");
+        assert!(first < second);
+        for ordinal in [recovered, paired, unrelated] {
+            assert!(owner.retire_ready_work_for_completion_test(ordinal));
+        }
+        let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
+        let (mut executor, planner_io) = owner.bind_body_store_to_lifecycle_completion_io_for_test(
+            &mut services,
+            runtime,
+            Arc::clone(&output_guard),
+            0,
+            2,
+        );
+        services.set_exact_output_admission_hook(|_post, _ticket| Ok(()));
+        assert!(executor.install_pending_lifecycle_output_for_test(*first_pending));
+        assert!(executor.install_pending_lifecycle_output_for_test(*second_pending));
+        let fence = executor.lifecycle_reducer_fence_observation();
 
-            for (index, expected) in [first, second].into_iter().enumerate() {
-                assert_eq!(
-                    owner.classify_completion_ready_work(fence),
-                    ProductionCompletionReadyWorkV1::RetainedDirectOutput
-                );
-                let prepared = owner
-                    .prepare_apply_terminal_direct_broadcast()
-                    .expect("seal the next exact direct Broadcast");
-                assert_eq!(prepared.ordinal(), expected);
-                assert_eq!(
+        for (index, expected) in [first, second].into_iter().enumerate() {
+            assert_eq!(
+                owner.classify_completion_ready_work(fence),
+                ProductionCompletionReadyWorkV1::RetainedDirectOutput
+            );
+            let prepared = owner
+                .prepare_apply_terminal_direct_broadcast()
+                .expect("seal the next exact direct Broadcast");
+            assert_eq!(prepared.ordinal(), expected);
+            assert_eq!(
                     executor
                         .settle_apply_terminal_direct_broadcast(
                             &mut owner,
@@ -1012,21 +996,20 @@ mod recovered_sign_capacity_tests {
                         .expect("settle one ordered direct Broadcast"),
                     crate::sumeragi::v2_effects::ProductionApplyTerminalDirectBroadcastSettlementV1::Completed
                 );
-                assert_eq!(
-                    executor.has_pending_lifecycle_output_admissions(),
-                    index == 0,
-                    "only the later exact output may remain after one settlement"
-                );
-                let state = owner.recovered_broadcast_scheduler_state_for_test(recovered);
-                assert!(matches!(
-                    state.records[&expected].state,
-                    LifecycleState::Terminal(TerminalOutcome::Advanced)
-                ));
-            }
-            assert!(!output_guard.restart_required());
-            planner_io.detach(&mut services);
+            assert_eq!(
+                executor.has_pending_lifecycle_output_admissions(),
+                index == 0,
+                "only the later exact output may remain after one settlement"
+            );
+            let state = owner.recovered_broadcast_scheduler_state_for_test(recovered);
+            assert!(matches!(
+                state.records[&expected].state,
+                LifecycleState::Terminal(TerminalOutcome::Advanced)
+            ));
         }
-    );
+        assert!(!output_guard.restart_required());
+        planner_io.detach(&mut services);
+    });
 
     #[test]
     fn composite_recovered_completion_capacity_unavailable_claims_no_ready_sign() {
@@ -1796,10 +1779,8 @@ impl ProductionLifecycleOwnerV1 {
         }
         next.observed_generation
             .insert(fence.source(), observed_generation);
-        record.state = LifecycleState::Waiting(super::WaitToken::new(
-            fence.source(),
-            observed_generation,
-        ));
+        record.state =
+            LifecycleState::Waiting(super::WaitToken::new(fence.source(), observed_generation));
         self.coordinator = next;
         true
     }
@@ -1975,14 +1956,15 @@ impl ProductionLifecycleOwnerV1 {
                 crate::sumeragi::v2_effects::EffectQueueConfig::default(),
             )
             .expect("open the clean lifecycle Completion executor");
-        let fixture = crate::sumeragi::v2_worker::tests::install_lifecycle_planner_io_for_test(
-            services,
-            context,
-            output_guard,
-            body_store,
-            identity.clone(),
-            class_capacity,
-        );
+        let fixture = crate::sumeragi::v2_worker::tests::install_lifecycle_planner_io_for_local_validator_for_test(
+                services,
+                context,
+                local_validator,
+                output_guard,
+                body_store,
+                identity.clone(),
+                class_capacity,
+            );
         self.body_store_identity = Some(identity);
         (executor, fixture)
     }

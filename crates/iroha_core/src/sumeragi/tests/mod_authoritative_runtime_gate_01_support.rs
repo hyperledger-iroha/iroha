@@ -344,6 +344,25 @@ fn v2_vote(phase: wire::GlobalPhase) -> BlockMessage {
         }),
     ))
 }
+fn v2_quorum_certificate(phase: wire::GlobalPhase) -> BlockMessage {
+    let BlockMessage::V2(message) = v2_vote(phase) else {
+        unreachable!("v2 vote fixture always returns a v2 envelope");
+    };
+    let wire::ConsensusMessageV2Payload::Vote(vote) = message.payload else {
+        unreachable!("v2 vote fixture always carries a vote");
+    };
+    BlockMessage::V2(wire::ConsensusMessageV2::new(
+        wire::ConsensusMessageV2Payload::QuorumCertificate(wire::QuorumCertificate {
+            round: vote.round,
+            proposal_round: vote.proposal_round,
+            phase,
+            subject: vote.subject,
+            execution_commitment: vote.execution_commitment,
+            signers: vec![vote.signer],
+            aggregate_signature: vote.signature,
+        }),
+    ))
+}
 fn v2_auxiliary_prepare(index: u64) -> BlockMessage {
     let BlockMessage::V2(mut message) = v2_vote(wire::GlobalPhase::Prepare) else {
         unreachable!("v2 vote fixture always returns a v2 envelope");

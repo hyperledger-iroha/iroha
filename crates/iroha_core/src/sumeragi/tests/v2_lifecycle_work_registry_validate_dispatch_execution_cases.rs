@@ -1619,8 +1619,8 @@ fn cold_ready_validate_open_stutters_real_periodic_retry_fixture() {
     assert_eq!(queued_after_debt.7, 1);
     let first_output_settlement =
         executor.settle_pending_lifecycle_output_admissions(&mut owner, &mut services);
-    let first_output_count = match first_output_settlement {
-        Ok(count) => count,
+    let first_output_summary = match first_output_settlement {
+        Ok(summary) => summary,
         Err(error) => {
             planner_io.activate_one_lifecycle_validate();
             let cleanup_callbacks = planner_io.execute_held_lifecycle_validate_fixture(
@@ -1632,7 +1632,12 @@ fn cold_ready_validate_open_stutters_real_periodic_retry_fixture() {
             );
         }
     };
-    assert_eq!(first_output_count, 1);
+    assert_eq!(first_output_summary.newly_completed(), 1);
+    assert_eq!(first_output_summary.already_completed(), 0);
+    assert!(
+        first_output_summary.requires_outer_executor_yield(),
+        "fresh service I/O plus terminal publication must yield the outer executor slice"
+    );
     assert_eq!(
         services.consensus_broadcast_count_for_test(&prepare_qc_envelope),
         1,
@@ -1844,8 +1849,8 @@ fn cold_ready_validate_open_stutters_real_periodic_retry_fixture() {
     assert_eq!(active_after_debt.7, 1);
     let duplicate_output_settlement =
         executor.settle_pending_lifecycle_output_admissions(&mut owner, &mut services);
-    let duplicate_output_count = match duplicate_output_settlement {
-        Ok(count) => count,
+    let duplicate_output_summary = match duplicate_output_settlement {
+        Ok(summary) => summary,
         Err(error) => {
             let cleanup_callbacks = planner_io.execute_held_lifecycle_validate_fixture(
                 commitment,
@@ -1856,7 +1861,12 @@ fn cold_ready_validate_open_stutters_real_periodic_retry_fixture() {
             );
         }
     };
-    assert_eq!(duplicate_output_count, 1);
+    assert_eq!(duplicate_output_summary.newly_completed(), 0);
+    assert_eq!(duplicate_output_summary.already_completed(), 1);
+    assert!(
+        !duplicate_output_summary.requires_outer_executor_yield(),
+        "an exact terminal duplicate stutters before service I/O and cannot starve ingress"
+    );
     assert_eq!(
         services.consensus_broadcast_count_for_test(&prepare_qc_envelope),
         2,

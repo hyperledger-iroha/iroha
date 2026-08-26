@@ -51,8 +51,8 @@ macro_rules! kura_autonomous_reservation_inventory_methods {
             if !name.starts_with("autonomous_") {
                 continue;
             }
-            let metadata =
-                std::fs::symlink_metadata(&path).map_err(|error| Error::IO(error, path.clone()))?;
+            let metadata = secure_file_metadata::from_path(&path)
+                .map_err(|error| Error::IO(error, path.clone()))?;
             if metadata.file_type().is_symlink()
                 || !metadata.file_type().is_file()
                 || !Self::sidecar_is_single_link(&metadata)

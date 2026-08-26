@@ -34,7 +34,8 @@ fn bootstrap_move_geometry_path(
     }
     bootstrap_sync_geometry_path(store_root, source, directory)?;
     let identity = checked_geometry_file_identity(
-        &fs::symlink_metadata(source).map_err(|error| Error::IO(error, source.to_path_buf()))?,
+        &secure_file_metadata::from_path(source)
+            .map_err(|error| Error::IO(error, source.to_path_buf()))?,
         source,
     )?;
     let source_parent = source.parent().ok_or_else(|| {
@@ -80,7 +81,7 @@ fn bootstrap_move_geometry_path(
     inject_geometry_move_target_collision_for_test(target, directory)?;
     if !bootstrap_validate_path_kind(store_root, source, directory)?
         || checked_geometry_file_identity(
-            &fs::symlink_metadata(source)
+            &secure_file_metadata::from_path(source)
                 .map_err(|error| Error::IO(error, source.to_path_buf()))?,
             source,
         )? != identity
@@ -102,7 +103,7 @@ fn bootstrap_move_geometry_path(
     .map_err(|error| Error::IO(error, source.to_path_buf()))?;
     if !bootstrap_validate_path_kind(store_root, target, directory)?
         || checked_geometry_file_identity(
-            &fs::symlink_metadata(target)
+            &secure_file_metadata::from_path(target)
                 .map_err(|error| Error::IO(error, target.to_path_buf()))?,
             target,
         )? != identity

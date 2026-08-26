@@ -8,8 +8,10 @@ The outer FairV2Ingress classification reserves every Commit vote, QC, TC,
 TimeoutVote, payload chunk, certified-body request/response, and
 Commit-certificate request/response as Progress.  At the serialized runtime
 boundary only QCs, TCs, TimeoutVote, and an authenticated exact historical
-locked Commit use Progress.  Ordinary proposal/vote traffic is Normal, while
-manifest, chunk, and recovery transport payloads bypass that runtime queue.
+locked Commit use Progress, together with an authenticated exact current
+Prepare for a locally bound unchanged-lock reproposal.  Ordinary proposal/vote
+traffic is Normal, while manifest, chunk, and recovery transport payloads bypass
+that runtime queue.
 The repaired mode checks both exact partitions.  Each mutant removes or
 promotes one source-exact case while preserving the outer/runtime distinction.
 ***************************************************************************)
@@ -48,13 +50,14 @@ OuterAuxiliaryKinds == OuterKinds \ OuterProgressKinds
 
 RuntimeKinds ==
   {"Proposal", "PrepareVote", "CommitVote", "HistoricalLockedCommitVote",
-   "PrepareQC", "CommitQC", "TimeoutVote", "TimeoutCertificate",
+   "CurrentLockedReproposalPrepareVote", "PrepareQC", "CommitQC",
+   "TimeoutVote", "TimeoutCertificate",
    "PayloadManifest", "Chunk", "CertifiedRequest", "CertifiedResponse",
    "CommitCertificateRequest", "CommitCertificateResponse"}
 
 RequiredRuntimeProgressKinds ==
-  {"HistoricalLockedCommitVote", "PrepareQC", "CommitQC", "TimeoutVote",
-   "TimeoutCertificate"}
+  {"HistoricalLockedCommitVote", "CurrentLockedReproposalPrepareVote",
+   "PrepareQC", "CommitQC", "TimeoutVote", "TimeoutCertificate"}
 
 RequiredRuntimeNormalKinds ==
   {"Proposal", "PrepareVote", "CommitVote"}
@@ -65,6 +68,8 @@ RequiredRuntimeBypassKinds ==
 
 DroppedRuntimeProgressKind ==
   CASE Mode = "DropRuntimeLockedCommit" -> "HistoricalLockedCommitVote"
+    [] Mode = "DropRuntimeLockedReproposalPrepare" ->
+         "CurrentLockedReproposalPrepareVote"
     [] Mode = "DropRuntimePrepareQC" -> "PrepareQC"
     [] Mode = "DropRuntimeCommitQC" -> "CommitQC"
     [] Mode = "DropRuntimeTimeout" -> "TimeoutVote"

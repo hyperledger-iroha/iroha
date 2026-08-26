@@ -1271,10 +1271,44 @@ mod tests {
             12,
             74,
         );
+        let protected_round = wire::ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: 2,
+        };
+        let protected_subject = wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"protected historical Commit block",
+            )),
+            payload_hash: Hash::new(b"protected historical Commit payload"),
+        };
+        let mut protected_commit = leader_wire_slot_token(
+            &context,
+            &origin,
+            FairV2IngressLeaderWirePhase::CommitVote,
+            None,
+            13,
+            75,
+        );
+        protected_commit.identity.view = protected_round.view;
+        protected_commit.identity.subject_hash = Hash::new(protected_subject.encode());
+        let historical_commit_qc = leader_wire_slot_token(
+            &context,
+            &origin,
+            FairV2IngressLeaderWirePhase::CommitQc,
+            None,
+            14,
+            76,
+        );
         gate.reserve(response.clone())
             .expect("reserve historical response");
         gate.reserve(proposal.clone())
             .expect("reserve view-scoped proposal");
+        gate.reserve(protected_commit.clone())
+            .expect("reserve historical Commit vote");
+        gate.reserve(historical_commit_qc.clone())
+            .expect("reserve historical CommitQC");
         drop(gate);
         let (gate, restore) = LeaderWireLifecycleStoreGate::open(
             &wal,
@@ -1289,8 +1323,10 @@ mod tests {
             &[],
         )
         .expect("reopen leader-wire owners as dormant");
-        assert_eq!(restore.records().len(), 2);
-        let advanced = leader_wire_recovery_authority_at(&context, OWNER_A, 3, false);
+        assert_eq!(restore.records().len(), 4);
+        let advanced = leader_wire_recovery_authority_at(&context, OWNER_A, 3, false)
+            .with_protected_lock(Some((protected_round, protected_subject)))
+            .expect("project the replayed durable lock");
         gate.advance_recovery_cut(advanced, &BTreeSet::from([proposal.slot.clone()]))
             .expect("retire only the view-scoped dormant owner");
         assert!(
@@ -1304,11 +1340,21 @@ mod tests {
             "an outstanding certified-body recovery must survive local view advance"
         );
         let restore = gate.restore().expect("inspect retained recovery owner");
-        assert_eq!(restore.records().len(), 1);
-        assert_eq!(restore.records()[0].token(), &response);
-        assert_eq!(
-            restore.records()[0].status(),
-            LeaderWireLifecycleStatus::Dormant
+        assert_eq!(restore.records().len(), 3);
+        assert!(restore.records().iter().all(|record| {
+            record.status() == LeaderWireLifecycleStatus::Dormant && record.token() != &proposal
+        }));
+        assert!(
+            !gate
+                .identity_is_obsolete(&protected_commit.identity)
+                .expect("inspect protected Commit vote cut"),
+            "the exact durable-lock Commit vote remains reducer input"
+        );
+        assert!(
+            !gate
+                .identity_is_obsolete(&historical_commit_qc.identity)
+                .expect("inspect historical CommitQC cut"),
+            "CommitQC remains terminal progress until Decision"
         );
         let replay = gate
             .admit_ingress(response.clone())
@@ -1324,6 +1370,11 @@ mod tests {
             gate.admit_ingress(conflicting).is_err(),
             "the view-cut exception must not weaken one-owner same-slot conflict fencing"
         );
+        let commit_replay = gate
+            .admit_ingress(protected_commit)
+            .expect("reactivate the exact durable-lock Commit vote");
+        assert!(!commit_replay.inserted());
+        assert_eq!(commit_replay.status(), LeaderWireLifecycleStatus::Ingress);
         let decision = leader_wire_recovery_authority_at(&context, OWNER_A, 3, true);
         drop(gate);
         let (gate, restore) = LeaderWireLifecycleStoreGate::open(
@@ -1353,6 +1404,113 @@ mod tests {
         );
         gate.admit_ingress(response)
             .expect("the exact decided-body response can reactivate after restart");
+    }
+    #[test]
+    fn leader_wire_protected_lock_cut_is_exact_monotone_and_decision_closed() {
+        let context = context();
+        let origin = context.roster[0].validator.clone();
+        let protected_round = wire::ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: 2,
+        };
+        let protected_subject = wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"protected Commit block")),
+            payload_hash: Hash::new(b"protected Commit payload"),
+        };
+        let replayed = leader_wire_recovery_authority_at(&context, OWNER_A, 2, false)
+            .with_protected_lock(Some((protected_round, protected_subject)))
+            .expect("a replayed current-round lock is authoritative");
+        let advanced = replayed
+            .advance_view(5, Some((protected_round, protected_subject)))
+            .expect("the exact lock survives certified view churn");
+        let mut protected_commit = leader_wire_slot_token(
+            &context,
+            &origin,
+            FairV2IngressLeaderWirePhase::CommitVote,
+            None,
+            21,
+            81,
+        );
+        protected_commit.identity.view = protected_round.view;
+        protected_commit.identity.subject_hash = Hash::new(protected_subject.encode());
+        assert!(!advanced.retires(&protected_commit));
+        assert!(advanced.admits_ingress_identity(&protected_commit.identity));
+
+        let mut wrong_subject = protected_commit.clone();
+        wrong_subject.identity.subject_hash = Hash::new(b"wrong protected Commit subject");
+        wrong_subject.identity.canonical_wire_hash = Hash::new(b"wrong protected Commit bytes");
+        assert!(advanced.retires(&wrong_subject));
+        assert!(!advanced.admits_ingress_identity(&wrong_subject.identity));
+
+        let mut wrong_round = protected_commit.clone();
+        wrong_round.identity.view = protected_round.view.saturating_sub(1);
+        wrong_round.identity.canonical_wire_hash = Hash::new(b"wrong protected Commit round");
+        assert!(advanced.retires(&wrong_round));
+        assert!(!advanced.admits_ingress_identity(&wrong_round.identity));
+
+        let mut wrong_phase = leader_wire_slot_token(
+            &context,
+            &origin,
+            FairV2IngressLeaderWirePhase::PrepareVote,
+            None,
+            22,
+            82,
+        );
+        wrong_phase.identity.view = protected_round.view;
+        wrong_phase.identity.subject_hash = Hash::new(protected_subject.encode());
+        assert!(advanced.retires(&wrong_phase));
+        assert!(!advanced.admits_ingress_identity(&wrong_phase.identity));
+
+        let historical_commit_qc = leader_wire_slot_token(
+            &context,
+            &origin,
+            FairV2IngressLeaderWirePhase::CommitQc,
+            None,
+            23,
+            83,
+        );
+        assert!(!advanced.retires(&historical_commit_qc));
+        assert!(advanced.admits_ingress_identity(&historical_commit_qc.identity));
+
+        assert!(
+            advanced.advance_view(6, None).is_err(),
+            "live authority cannot lose its durable lock"
+        );
+        let conflicting_subject = wire::BlockSubject {
+            payload_hash: Hash::new(b"conflicting protected Commit payload"),
+            ..protected_subject
+        };
+        assert!(
+            advanced
+                .advance_view(6, Some((protected_round, conflicting_subject)))
+                .is_err(),
+            "same-round lock authority cannot change subject"
+        );
+        let lower_round = wire::ConsensusRound {
+            view: protected_round.view.saturating_sub(1),
+            ..protected_round
+        };
+        assert!(
+            advanced
+                .advance_view(6, Some((lower_round, protected_subject)))
+                .is_err(),
+            "lock authority cannot regress"
+        );
+        let higher_round = wire::ConsensusRound {
+            view: protected_round.view + 1,
+            ..protected_round
+        };
+        advanced
+            .advance_view(6, Some((higher_round, conflicting_subject)))
+            .expect("a strictly higher durable lock may replace the protected subject");
+
+        let decision = advanced.with_durable_decision();
+        assert!(decision.retires(&protected_commit));
+        assert!(!decision.admits_ingress_identity(&protected_commit.identity));
+        assert!(decision.retires(&historical_commit_qc));
+        assert!(!decision.admits_ingress_identity(&historical_commit_qc.identity));
     }
     #[test]
     fn leader_wire_live_recovery_cut_retires_only_dormant_records_and_is_monotone() {

@@ -302,6 +302,19 @@ impl V2GlobalBeaconLifecycle {
             if partial.signer_index != expected_index {
                 return Err(V2GlobalBeaconError::LocalSignerMismatch);
             }
+            #[cfg(feature = "test-network-parliament-signers")]
+            let deliberately_invalid_outbound =
+                signer.test_network_emit_invalid_outbound_partial_v1();
+            #[cfg(feature = "test-network-parliament-signers")]
+            let partial = if deliberately_invalid_outbound {
+                let mut partial = partial;
+                partial.signature_share[0] ^= 1;
+                partial
+            } else {
+                let _ = active.aggregator.accept_partial(partial)?;
+                partial
+            };
+            #[cfg(not(feature = "test-network-parliament-signers"))]
             let _ = active.aggregator.accept_partial(partial)?;
             let message = wire::ConsensusMessageV2::new(
                 wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(
@@ -317,7 +330,16 @@ impl V2GlobalBeaconLifecycle {
             );
             active.retransmit = Some(message.clone());
             self.outbound.push(message);
+            #[cfg(not(feature = "test-network-parliament-signers"))]
             if active.finalized.is_none()
+                && active.aggregator.verified_partial_count()
+                    >= usize::from(active.session.record().threshold)
+            {
+                active.finalized = Some(active.aggregator.finalize()?);
+            }
+            #[cfg(feature = "test-network-parliament-signers")]
+            if !deliberately_invalid_outbound
+                && active.finalized.is_none()
                 && active.aggregator.verified_partial_count()
                     >= usize::from(active.session.record().threshold)
             {
