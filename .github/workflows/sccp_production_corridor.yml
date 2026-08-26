@@ -65,6 +65,7 @@ on:
       - "scripts/exec_with_file_lock.py"
       - "scripts/norito_bridge_source_seal.py"
       - "scripts/run_mobile_hermetic_command.py"
+      - "scripts/requirements.txt"
       - "scripts/update_norito_bridge_swift_pins.py"
       - "scripts/validate_norito_bridge_xcframework.py"
       - "scripts/ci/run_xcframework_smoke.sh"
@@ -377,6 +378,8 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: "3.11"
+      - name: Install pinned contract test dependencies
+        run: python3 -m pip install -r scripts/requirements.txt
       - name: Build authenticated EVM and TVM artifact manifest
         run: |
           python3 scripts/contract_artifact_corridor.py build \

@@ -370,6 +370,16 @@ def test_python_workflow_installs_hash_locked_sdk_dependencies() -> None:
     assert "pip install --upgrade pip pytest" not in job
 
 
+def test_contract_workflow_installs_pinned_test_dependencies_first() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    job = workflow_job(workflow, "contract-smoke")
+    install = "python3 -m pip install -r scripts/requirements.txt"
+    corridor = "bash scripts/check_sccp_production_corridor.sh --phase contract-smoke"
+    assert install in job
+    assert job.index(install) < job.index(corridor)
+    assert '"scripts/requirements.txt"' in workflow
+
+
 def test_swift_workflow_binds_the_exact_first_release_bridge_envelope() -> None:
     job = workflow_job(WORKFLOW.read_text(encoding="utf-8"), "swift-sdk")
     for required in (

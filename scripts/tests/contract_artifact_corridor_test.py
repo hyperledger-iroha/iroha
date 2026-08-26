@@ -706,7 +706,7 @@ def test_evm_tooling_is_locked_audited_hardhat_without_ganache() -> None:
         "hardhat": "3.9.1",
         "solc": "file:../authenticated-solc",
     }
-    assert package["overrides"] == {"ws": "8.21.0"}
+    assert package["overrides"] == {"adm-zip": "0.6.0", "ws": "8.21.0"}
     assert all("ganache" not in name.casefold() for name in package_lock["packages"])
     for name, value in package_lock["packages"].items():
         if not name or "resolved" not in value:
