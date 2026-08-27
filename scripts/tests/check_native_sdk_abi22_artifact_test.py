@@ -1110,6 +1110,24 @@ def test_record_rejects_source_manifest_toctou(
         )
 
 
+def test_source_manifest_failure_preserves_actionable_detail(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Native build logs retain the safe manifest invariant that failed."""
+
+    def fail_manifest(_root: Path) -> str:
+        raise RuntimeError("portable clean source has tracked changes: tracked.txt")
+
+    monkeypatch.setattr(checker, "workspace_source_manifest", fail_manifest)
+
+    with pytest.raises(
+        checker.ArtifactContractError,
+        match="portable clean source has tracked changes: tracked.txt",
+    ):
+        checker.workspace_source_manifest_sha256(tmp_path)
+
+
 def test_symbol_tool_parsers_preserve_duplicates_and_normalize_only_macho() -> None:
     symbol = checker.APPROVED_PRIVACY_C_EXPORTS[0]
     assert checker._parse_symbol_tool_output(
@@ -2270,6 +2288,13 @@ def test_repository_wires_exact_abi23_release_contract() -> None:
         assert "check_native_sdk_abi22_artifact.py" in lane
         assert "record" in lane
         assert "verify" in lane
+    preflight = csharp_workflow.index("Preflight Windows native source manifest")
+    assert "if: runner.os == 'Windows'" in csharp_workflow
+    assert "python -I scripts/compute_workspace_source_manifest.py" in csharp_workflow
+    assert "--native-artifact-manifest" in csharp_workflow
+    assert preflight < csharp_workflow.index(
+        "Build native C# bridge on its matching release host"
+    )
     assert 'PYTHON_VERSION}" != "3.12"' in python_lane
     assert "sys.version_info.major}{sys.version_info.minor}" in python_lane
     kagemusha_workflow = read(".github/workflows/pr_kagemusha_payload_bench.yml")

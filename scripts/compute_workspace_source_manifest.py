@@ -417,10 +417,22 @@ def _validate_sha256(value: str, label: str) -> str:
     return value
 
 
-def _stable_metadata_changed(before: os.stat_result, after: os.stat_result) -> bool:
+def _windows_host_semantics() -> bool:
+    """Return whether filesystem metadata follows Windows host semantics."""
+
+    return os.name == "nt"
+
+
+def _stable_metadata_changed(
+    before: os.stat_result,
+    after: os.stat_result,
+    *,
+    compare_ctime: bool = True,
+) -> bool:
     return any(
         getattr(before, field) != getattr(after, field)
         for field in _STABLE_FILE_FIELDS
+        if compare_ctime or field != "st_ctime_ns"
     )
 
 
@@ -460,12 +472,16 @@ def _stable_regular_reader(
         opened = os.fstat(stream.fileno())
         if (
             (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
-            or _stable_metadata_changed(before, opened)
+            or _stable_metadata_changed(
+                before,
+                opened,
+                compare_ctime=not _windows_host_semantics(),
+            )
         ):
             raise SourceSealError(f"{label} changed before it was opened")
         yield stream, before
         after = os.fstat(stream.fileno())
-        if _stable_metadata_changed(before, after):
+        if _stable_metadata_changed(opened, after):
             raise SourceSealError(f"{label} changed while it was read")
         try:
             path_after = path.lstat()
@@ -805,11 +821,15 @@ def _stable_regular_reader_at(
     stream = os.fdopen(descriptor, "rb")
     try:
         opened = os.fstat(stream.fileno())
-        if _stable_metadata_changed(expected, opened):
+        if _stable_metadata_changed(
+            expected,
+            opened,
+            compare_ctime=not _windows_host_semantics(),
+        ):
             raise SourceSealError(f"{label} changed before it was opened")
         yield stream, expected
         after = os.fstat(stream.fileno())
-        if _stable_metadata_changed(expected, after):
+        if _stable_metadata_changed(opened, after):
             raise SourceSealError(f"{label} changed while it was read")
         try:
             path_after = os.stat(
@@ -1821,8 +1841,14 @@ def _portable_clean_index_manifest_snapshot(
     )
     if not expected_oid_length:
         raise RuntimeError(f"unsupported Git object format: {algorithm}")
-    materialized_symlinks = _git_config_bool(root, "core.symlinks") is False
-    honor_filemode = _git_config_bool(root, "core.filemode") is not False
+    windows_checkout = _windows_host_semantics()
+    materialized_symlinks = (
+        windows_checkout or _git_config_bool(root, "core.symlinks") is False
+    )
+    honor_filemode = (
+        not windows_checkout
+        and _git_config_bool(root, "core.filemode") is not False
+    )
     hasher = hashlib.sha256(_DOMAIN)
     root_before = root.lstat()
     if not stat.S_ISDIR(root_before.st_mode) or stat.S_ISLNK(root_before.st_mode):
@@ -2102,6 +2128,11 @@ def main() -> int:
         help="require one clean committed source and print its canonical identity",
     )
     parser.add_argument(
+        "--native-artifact-manifest",
+        action="store_true",
+        help="print the strongest host-supported native-artifact source manifest",
+    )
+    parser.add_argument(
         "--write-path-list",
         type=Path,
         help="create a detached-build path list with O_EXCL and print its manifest",
@@ -2153,6 +2184,23 @@ def main() -> int:
     )
     if seal_modes > 1:
         parser.error("source-seal create and extract modes are mutually exclusive")
+    if args.native_artifact_manifest and (
+        args.release_identity_json
+        or args.write_path_list is not None
+        or args.path_list is not None
+        or args.require_exact_closure
+        or seal_modes
+        or any(
+            value is not None
+            for value in (
+                args.destination,
+                args.expected_manifest,
+                args.expected_archive_sha256,
+                args.expected_path_list_sha256,
+            )
+        )
+    ):
+        parser.error("--native-artifact-manifest must be used by itself")
     if args.release_identity_json and (
         args.write_path_list is not None
         or args.path_list is not None
@@ -2204,7 +2252,9 @@ def main() -> int:
     ):
         parser.error("source-seal control arguments require a source-seal mode")
     try:
-        if args.release_identity_json:
+        if args.native_artifact_manifest:
+            print(native_artifact_workspace_source_manifest(args.root))
+        elif args.release_identity_json:
             print(
                 json.dumps(
                     release_source_identity(args.root),

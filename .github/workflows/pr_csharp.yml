@@ -87,6 +87,13 @@ jobs:
           cache: "false"
           target: ${{ matrix.target }}
 
+      - name: Preflight Windows native source manifest
+        if: runner.os == 'Windows'
+        shell: bash
+        run: >-
+          python -I scripts/compute_workspace_source_manifest.py
+          --native-artifact-manifest
+
       - name: Build native C# bridge on its matching release host
         shell: bash
         run: |

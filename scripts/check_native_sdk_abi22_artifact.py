@@ -181,8 +181,10 @@ def workspace_source_manifest_sha256(root: Path) -> str:
     try:
         digest = workspace_source_manifest(root)
     except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+        detail = str(error).strip()
         raise ArtifactContractError(
             "native artifact workspace source manifest could not be authenticated"
+            + (f": {detail}" if detail else "")
         ) from error
     if SHA256_RE.fullmatch(digest) is None or digest == "0" * 64:
         fail("native artifact workspace source manifest SHA-256 is not canonical")
