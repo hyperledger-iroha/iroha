@@ -25,10 +25,6 @@ public final class IrohaPeerWireLimitsV1 {
     return maximumKagemushaEncodedBytes;
   }
 
-  public int maximumEncodedBytes(final IrohaPeerPayloadProfile profile) {
-    return maximumKagemushaEncodedBytes;
-  }
-
   private static void require(final boolean condition) {
     if (!condition) throw new IllegalArgumentException("Peer wire limit is outside V1 bounds");
   }

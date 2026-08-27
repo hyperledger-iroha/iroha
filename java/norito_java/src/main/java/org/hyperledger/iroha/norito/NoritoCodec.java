@@ -52,9 +52,6 @@ public final class NoritoCodec {
     byte[] payloadBytes = payload;
     int compressionTag = NoritoHeader.COMPRESSION_NONE;
     if (compression.mode == NoritoHeader.COMPRESSION_ZSTD) {
-      if (!NoritoCompression.hasZstd()) {
-        throw new UnsupportedOperationException("Zstd compression requested but backend unavailable");
-      }
       payloadBytes = NoritoCompression.compressZstd(payload, compression.level);
       compressionTag = NoritoHeader.COMPRESSION_ZSTD;
     } else if (compression.mode != NoritoHeader.COMPRESSION_NONE) {

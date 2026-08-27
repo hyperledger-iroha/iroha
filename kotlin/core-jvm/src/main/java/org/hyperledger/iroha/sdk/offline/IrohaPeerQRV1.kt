@@ -28,7 +28,7 @@ class IrohaPeerQRFrameV1(
 
     init {
         require(stream.size == 16) { "Malformed IRQR stream identifier" }
-        require(total in 1..maximumDataShards(profile) && index in 0..0xffff) {
+        require(total in 1..MAXIMUM_DATA_SHARDS && index in 0..0xffff) {
             "Malformed IRQR frame index"
         }
         require(framePayload.size <= 0xffff) { "Malformed IRQR frame payload" }
@@ -37,7 +37,7 @@ class IrohaPeerQRFrameV1(
                 index == 0 && total == 1 &&
                     framePayload.size > IrohaPeerWireMessageV1.HEADER_LENGTH &&
                     framePayload.size <= IrohaPeerWireMessageV1.HEADER_LENGTH +
-                    maximumEncodedBytes(profile),
+                    IrohaPeerWireMessageV1.MAXIMUM_KAGEMUSHA_ENCODED_BYTES,
             ) { "Malformed complete IRQR frame" }
             IrohaPeerQRFrameKindV1.HEADER -> require(
                 index == 0 && framePayload.size == IrohaPeerWireMessageV1.HEADER_LENGTH,
@@ -84,6 +84,8 @@ class IrohaPeerQRFrameV1(
         const val VERSION = 1
         const val PAYLOAD_OFFSET = 32
         const val FIXED_OVERHEAD = 36
+        private const val MAXIMUM_DATA_SHARDS =
+            (IrohaPeerWireMessageV1.MAXIMUM_KAGEMUSHA_ENCODED_BYTES + 255) / 256
         private val MAGIC = "IRQR".toByteArray(Charsets.US_ASCII)
 
         @JvmStatic
@@ -116,13 +118,6 @@ class IrohaPeerQRFrameV1(
             )
         }
 
-        private fun maximumEncodedBytes(
-            @Suppress("UNUSED_PARAMETER") profile: IrohaPeerPayloadProfile,
-        ): Int =
-            IrohaPeerWireMessageV1.MAXIMUM_KAGEMUSHA_ENCODED_BYTES
-
-        private fun maximumDataShards(profile: IrohaPeerPayloadProfile): Int =
-            (maximumEncodedBytes(profile) + 255) / 256
     }
 }
 
