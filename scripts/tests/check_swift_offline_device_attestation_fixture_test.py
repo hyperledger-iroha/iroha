@@ -232,6 +232,9 @@ def test_workflow_splits_native_build_from_authenticated_swift_tests() -> None:
     workflow = (
         REPO_ROOT / ".github/workflows/pr_kagemusha_payload_bench.yml"
     ).read_text(encoding="utf-8")
+    builder = (REPO_ROOT / "scripts/build_norito_xcframework.sh").read_text(
+        encoding="utf-8"
+    )
     native_match = re.search(
         r"(?ms)^  swift:\n(?P<body>.*?)(?=^  swift_lifecycle:\n)",
         workflow,
@@ -251,7 +254,22 @@ def test_workflow_splits_native_build_from_authenticated_swift_tests() -> None:
 
     assert "name: Swift native artifact build" in native
     assert "timeout-minutes: 360" in native
-    assert "scripts/build_norito_xcframework.sh" in native
+    assert "scripts/build_norito_xcframework.sh --ci-handoff-only" in native
+    assert (
+        'artifact_root="$MOBILE_SDK_APPLE_ARTIFACT_DIR/'
+        'NoritoBridge.ci-handoff"'
+        in native
+    )
+    assert (
+        '[[ ! -e "$MOBILE_SDK_APPLE_ARTIFACT_DIR/'
+        'NoritoBridge.xcframework" ]]'
+        in native
+    )
+    assert (
+        '[[ ! -L "$MOBILE_SDK_APPLE_ARTIFACT_DIR/'
+        'NoritoBridge.artifacts.json" ]]'
+        in native
+    )
     assert "handoff_sha256: ${{ steps.apple-handoff.outputs.sha256 }}" in native
     assert "id: apple-handoff" in native
     assert "COPYFILE_DISABLE=1 /usr/bin/tar -cf" in native
@@ -263,6 +281,19 @@ def test_workflow_splits_native_build_from_authenticated_swift_tests() -> None:
     assert "github.run_attempt" not in native
     assert "check_mobile_sdk_artifacts.sh --apple-only" not in native
     assert "check_kagemusha_recursive_spend_swift_sdk.sh" not in native
+    assert "--ci-handoff-only cannot publish an archive or use dirty source" in builder
+    assert 'CI_HANDOFF_DIR="$OUT_DIR/NoritoBridge.ci-handoff"' in builder
+    assert "RENAME_EXCL = 0x00000004" in builder
+    assert builder.index(
+        'assert_bridge_source_seal "pre-handoff artifact verification"'
+    ) < builder.index(
+        'echo "[+] Atomically staged uncertified CI handoff candidate:'
+    )
+    assert builder.index(
+        'echo "[+] Atomically staged uncertified CI handoff candidate:'
+    ) < builder.index(
+        'echo "[+] Atomically published XCFramework and canonical manifest:'
+    )
 
     assert "name: Swift lifecycle surface" in swift
     assert "needs: swift" in swift

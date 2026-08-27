@@ -1003,17 +1003,22 @@ jobs:
           echo "RUSTC_BOOTSTRAP=1" >> "$GITHUB_ENV"
           echo "RUSTDOC=$rustdoc_path" >> "$GITHUB_ENV"
       - name: Build exact ABI-23 NoritoBridge XCFramework
-        run: scripts/build_norito_xcframework.sh
+        run: scripts/build_norito_xcframework.sh --ci-handoff-only
       - name: Pack authenticated Apple artifact handoff
         id: apple-handoff
         shell: bash
         run: |
-          artifact_root="$MOBILE_SDK_APPLE_ARTIFACT_DIR"
+          artifact_root="$MOBILE_SDK_APPLE_ARTIFACT_DIR/NoritoBridge.ci-handoff"
           manifest="$artifact_root/NoritoBridge.artifacts.json"
           handoff_dir="$RUNNER_TEMP/iroha-kagemusha-apple-handoff"
           handoff_archive="$handoff_dir/NoritoBridge.xcframework.tar"
           mkdir -p "$handoff_dir"
           test ! -e "$handoff_archive"
+          [[ ! -e "$MOBILE_SDK_APPLE_ARTIFACT_DIR/NoritoBridge.xcframework" ]]
+          [[ ! -L "$MOBILE_SDK_APPLE_ARTIFACT_DIR/NoritoBridge.xcframework" ]]
+          [[ ! -e "$MOBILE_SDK_APPLE_ARTIFACT_DIR/NoritoBridge.artifacts.json" ]]
+          [[ ! -L "$MOBILE_SDK_APPLE_ARTIFACT_DIR/NoritoBridge.artifacts.json" ]]
+          [[ -d "$artifact_root" && ! -L "$artifact_root" ]]
           [[ -d "$artifact_root/NoritoBridge.xcframework" ]]
           [[ -L "$manifest" ]]
           [[ "$(readlink "$manifest")" == "NoritoBridge.xcframework/NoritoBridge.artifacts.json" ]]
