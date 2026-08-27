@@ -13,6 +13,8 @@ test_build_source_seal() {
     "$root/scripts/build_norito_xcframework.sh"
   cp "$SCRIPT_DIR/exec_with_file_lock.py" \
     "$root/scripts/exec_with_file_lock.py"
+  cp "$SCRIPT_DIR/norito_bridge_apple_slice_handoff.py" \
+    "$root/scripts/norito_bridge_apple_slice_handoff.py"
   cp "$SCRIPT_DIR/norito_bridge_source_seal.py" \
     "$root/scripts/norito_bridge_source_seal.py"
   cp "$SCRIPT_DIR/run_mobile_hermetic_command.py" \

@@ -20,6 +20,7 @@ on:
       - "scripts/check_mobile_sdk_artifact_pin_commit.py"
       - "scripts/check_mobile_sdk_artifacts.sh"
       - "scripts/norito_bridge_source_seal.py"
+      - "scripts/norito_bridge_apple_slice_handoff.py"
       - "scripts/package_mobile_sdk_artifacts.sh"
       - "scripts/run_mobile_hermetic_command.py"
       - "crates/connect_norito_bridge/**"

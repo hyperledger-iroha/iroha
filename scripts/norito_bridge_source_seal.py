@@ -61,6 +61,7 @@ APPLE_ROOT_INPUTS = (
     "scripts/archive_norito_xcframework.py",
     "scripts/build_norito_xcframework.sh",
     "scripts/exec_with_file_lock.py",
+    "scripts/norito_bridge_apple_slice_handoff.py",
     "scripts/package_mobile_sdk_artifacts.sh",
     "scripts/render_norito_bridge_podspec.py",
     "scripts/update_norito_bridge_swift_pins.py",

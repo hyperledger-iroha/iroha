@@ -64,6 +64,7 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
             "scripts/check_mobile_sdk_artifacts.sh": "#!/bin/sh\n",
             "scripts/exec_with_file_lock.py": "#!/usr/bin/env python3\n",
             "scripts/norito_bridge_source_seal.py": "# fixture\n",
+            "scripts/norito_bridge_apple_slice_handoff.py": "#!/usr/bin/env python3\n",
             "scripts/package_mobile_sdk_artifacts.sh": "#!/bin/sh\n",
             "scripts/render_norito_bridge_podspec.py": "#!/usr/bin/env python3\n",
             "scripts/update_norito_bridge_swift_pins.py": "#!/usr/bin/env python3\n",
@@ -111,6 +112,7 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
         self.assertIn("IrohaSwift/VERSION", apple)
         self.assertIn("scripts/exec_with_file_lock.py", apple)
         self.assertIn("scripts/archive_norito_xcframework.py", apple)
+        self.assertIn("scripts/norito_bridge_apple_slice_handoff.py", apple)
         self.assertIn("scripts/package_mobile_sdk_artifacts.sh", apple)
         self.assertIn("scripts/render_norito_bridge_podspec.py", apple)
         self.assertIn("scripts/update_norito_bridge_swift_pins.py", apple)
@@ -121,6 +123,7 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
         self.assertNotIn("IrohaSwift/Package.resolved", android)
         self.assertNotIn("IrohaSwift/Sources/IrohaSwiftMobileTransports", android)
         self.assertNotIn("scripts/exec_with_file_lock.py", android)
+        self.assertNotIn("scripts/norito_bridge_apple_slice_handoff.py", android)
         self.assertIn("scripts/check_mobile_sdk_artifact_pin_commit.py", android)
 
     def test_apple_seal_requires_regular_package_resolution_lock(self) -> None:
