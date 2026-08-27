@@ -204,6 +204,7 @@ def validate(
             "version": "1.0.0",
             "native_bridge_abi_version": 23,
             "privacy_production_enabled": False,
+            "kagemusha_production_authorization_sha256": None,
             "cargo_features": [],
             "build_environment": {
                 "schema": "iroha.mobile-native-build-environment.v1",

@@ -99,6 +99,7 @@ manifest = {
     "cargo_locked": True,
     "privacy_production_enabled": production,
     "cargo_features": ["privacy-production-enabled"] if production else [],
+    "kagemusha_production_authorization_sha256": None,
     "build_environment": {
         "schema": "iroha.mobile-native-build-environment.v1",
         "hermetic_runner_schema": "iroha.mobile-hermetic-command.v1",
@@ -528,6 +529,7 @@ SWIFT
   "native_bridge_abi_version": 23,
   "privacy_production_enabled": false,
   "cargo_features": [],
+  "kagemusha_production_authorization_sha256": null,
   "build_environment": {
     "schema": "iroha.mobile-native-build-environment.v1",
     "hermetic_runner_schema": "iroha.mobile-hermetic-command.v1",

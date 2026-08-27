@@ -1823,6 +1823,20 @@ fn taira_config_enables_untrusted_cid_hosting() {
         Some(true),
         "Taira profile should run the Soracloud runtime in production posture"
     );
+    assert_eq!(
+        runtime
+            .get("hydration_concurrency")
+            .and_then(TomlValue::as_integer),
+        Some(4),
+        "Taira must pin the first-release artifact hydration worker bound"
+    );
+    assert_eq!(
+        runtime
+            .get("prepared_runtime_cache_capacity")
+            .and_then(TomlValue::as_integer),
+        Some(4),
+        "Taira must pin the independent first-release prepared-runtime cache bound"
+    );
     let inrou = runtime
         .get("inrou")
         .and_then(TomlValue::as_table)

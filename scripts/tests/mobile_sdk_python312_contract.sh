@@ -169,8 +169,8 @@ grep -Fq 'sys.version_info[:2] != (3, 12)' "$JVM_NATIVE_GATE" \
   || fail "JVM native gate does not require exact Python 3.12"
 grep -Fq '"$PYTHON_BINARY" -I -S' "$JVM_NATIVE_GATE" \
   || fail "JVM native gate does not isolate Python helpers from site packages"
-[[ "$(grep -Fc 'python-version: "3.12"' "$MOBILE_WORKFLOW")" -eq 3 ]] \
-  || fail "mobile workflow must pin Python 3.12 in exactly three jobs"
+[[ "$(grep -Fc 'python-version: "3.12"' "$MOBILE_WORKFLOW")" -eq 5 ]] \
+  || fail "mobile workflow must pin Python 3.12 in exactly five jobs"
 [[ "$(grep -Fc 'echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python"' "$MOBILE_WORKFLOW")" -eq 3 ]] \
   || fail "mobile workflow must bind the canonical Python in exactly three jobs"
 [[ "$(grep -Fc 'echo "MOBILE_SDK_RUSTUP_BINARY=$rustup_path"' "$MOBILE_WORKFLOW")" -eq 1 ]] \

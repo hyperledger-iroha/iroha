@@ -344,6 +344,8 @@ const DEFAULT_CHAIN_ID: &str = "00000000-0000-0000-0000-000000000000";
 const TAIRA_TESTNET_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
 const RETIRED_TAIRA_CHAIN_ID_ALIAS: &str = "iroha3-taira";
 const TAIRA_TESTNET_PEERS: u16 = 4;
+const TAIRA_SORACLOUD_HYDRATION_CONCURRENCY: i64 = 4;
+const TAIRA_SORACLOUD_PREPARED_RUNTIME_CACHE_CAPACITY: i64 = 4;
 const TAIRA_RUNTIME_SIGNER_SEED_DOMAIN: &[u8] = b"iroha:kagami:taira:runtime-signer:v1|";
 const TAIRA_RUNTIME_SIGNER_REVISION: u64 = 1;
 const TAIRA_RUNTIME_SIGNER_POLICY_DIGEST_DOMAIN: &[u8] =
@@ -2319,6 +2321,14 @@ fn render_peer_config(
     );
     if taira {
         soracloud_runtime.insert("production_mode".into(), Value::Boolean(true));
+        soracloud_runtime.insert(
+            "hydration_concurrency".into(),
+            Value::Integer(TAIRA_SORACLOUD_HYDRATION_CONCURRENCY),
+        );
+        soracloud_runtime.insert(
+            "prepared_runtime_cache_capacity".into(),
+            Value::Integer(TAIRA_SORACLOUD_PREPARED_RUNTIME_CACHE_CAPACITY),
+        );
         let (_, runtime_public_key) = peer
             .runtime_signer_public_key
             .try_to_bytes()
@@ -5418,6 +5428,24 @@ mod tests {
             .expect("read generated Taira peer config");
         let peer_config: toml::Value =
             toml::from_str(&peer_config_text).expect("parse generated Taira peer config");
+        let soracloud_runtime = peer_config
+            .get("soracloud_runtime")
+            .and_then(toml::Value::as_table)
+            .expect("canonical Taira Soracloud runtime profile");
+        assert_eq!(
+            soracloud_runtime
+                .get("hydration_concurrency")
+                .and_then(toml::Value::as_integer),
+            Some(TAIRA_SORACLOUD_HYDRATION_CONCURRENCY),
+            "canonical Taira configs must explicitly pin the first-release hydration worker count"
+        );
+        assert_eq!(
+            soracloud_runtime
+                .get("prepared_runtime_cache_capacity")
+                .and_then(toml::Value::as_integer),
+            Some(TAIRA_SORACLOUD_PREPARED_RUNTIME_CACHE_CAPACITY),
+            "canonical Taira configs must explicitly pin the independent first-release prepared-runtime cache capacity"
+        );
         let credential_scope = peer_config
             .get("torii")
             .and_then(toml::Value::as_table)
@@ -5502,6 +5530,19 @@ mod tests {
             assert_eq!(
                 validator_records[peer_index].peer_id,
                 PeerId::from(peer.public_key.clone())
+            );
+            assert_eq!(
+                parsed.soracloud_runtime.hydration_concurrency.get(),
+                usize::try_from(TAIRA_SORACLOUD_HYDRATION_CONCURRENCY)
+                    .expect("Taira hydration worker count fits usize")
+            );
+            assert_eq!(
+                parsed
+                    .soracloud_runtime
+                    .prepared_runtime_cache_capacity
+                    .get(),
+                usize::try_from(TAIRA_SORACLOUD_PREPARED_RUNTIME_CACHE_CAPACITY)
+                    .expect("Taira prepared-runtime cache capacity fits usize")
             );
             let inrou = &parsed.soracloud_runtime.inrou;
             assert!(!inrou.enabled);

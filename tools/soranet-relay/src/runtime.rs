@@ -302,6 +302,19 @@ fn record_stream_context(stream_id: StreamId) -> RecordStreamContext {
     };
     RecordStreamContext::new(initiator, kind, stream_id.index())
 }
+#[derive(Debug, Error)]
+enum QuicSendFinishError {
+    #[error("peer stopped the finished stream with code {0}")]
+    PeerStopped(VarInt),
+    #[error("failed while waiting for the peer to acknowledge the finished stream: {0}")]
+    Transport(#[from] quinn::StoppedError),
+}
+async fn wait_for_finished_quic_send_stream(send: &SendStream) -> Result<(), QuicSendFinishError> {
+    match send.stopped().await? {
+        None => Ok(()),
+        Some(code) => Err(QuicSendFinishError::PeerStopped(code)),
+    }
+}
 /// Shared context required by `monitor_circuit`.
 #[derive(Clone)]
 struct MonitorCircuitResources {
@@ -4910,10 +4923,35 @@ impl RelayRuntime {
                 b"vpn bridge policy failure".as_slice()
             }
         };
-        match timeout(Duration::from_secs(1), protected_send.shutdown()).await {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => debug!(%error, "failed to finish protected vpn tunnel stream"),
-            Err(error) => debug!(%error, "timed out finishing protected vpn tunnel stream"),
+        let finish_queued = match timeout(HANDSHAKE_STREAM_TIMEOUT, protected_send.shutdown()).await
+        {
+            Ok(Ok(())) => true,
+            Ok(Err(error)) => {
+                debug!(%error, "failed to finish protected vpn tunnel stream");
+                false
+            }
+            Err(error) => {
+                debug!(%error, "timed out finishing protected vpn tunnel stream");
+                false
+            }
+        };
+        drop(protected_send);
+        drop(protected_recv);
+        if finish_queued {
+            match timeout(
+                HANDSHAKE_STREAM_TIMEOUT,
+                wait_for_finished_quic_send_stream(&send),
+            )
+            .await
+            {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    debug!(%error, "peer did not acknowledge the finished vpn tunnel stream")
+                }
+                Err(error) => {
+                    debug!(%error, "timed out awaiting vpn tunnel stream acknowledgement")
+                }
+            }
         }
         connection.close(0u32.into(), close_reason);
     }

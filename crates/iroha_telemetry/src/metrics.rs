@@ -6982,6 +6982,8 @@ fields {
     pub p2p_incoming_cap_reject_total: gauge();
     /// Number of incoming connections rejected due to total cap
     pub p2p_total_cap_reject_total: gauge();
+    /// Number of accepted unauthenticated transports rejected by the concurrent source cap.
+    pub p2p_preauth_source_cap_reject_total: gauge();
     /// Trust score per peer (label `peer_id`).
     pub p2p_trust_score: int_gauge_vec(&["peer_id"]);
     /// Trust penalties applied (label `reason`).
@@ -8520,7 +8522,8 @@ construct {
         p2p_deferred_send_dropped_total p2p_session_reconnect_total p2p_connect_retry_seconds
         p2p_accept_throttled_total p2p_accept_bucket_evictions_total p2p_accept_buckets_current
         p2p_accept_prefix_cache_total p2p_accept_throttle_decisions_total
-        p2p_incoming_cap_reject_total p2p_total_cap_reject_total p2p_trust_score
+        p2p_incoming_cap_reject_total p2p_total_cap_reject_total
+        p2p_preauth_source_cap_reject_total p2p_trust_score
         p2p_trust_penalties_total p2p_trust_decay_ticks_total p2p_trust_gossip_skipped_total]
     {
         for direction in ["send", "recv"] {
@@ -9068,7 +9071,8 @@ initialize (metrics) {
         p2p_session_reconnect_total p2p_connect_retry_seconds p2p_accept_throttled_total
         p2p_accept_bucket_evictions_total p2p_accept_buckets_current p2p_accept_prefix_cache_total
         p2p_accept_throttle_decisions_total p2p_incoming_cap_reject_total
-        p2p_total_cap_reject_total p2p_trust_score p2p_trust_penalties_total
+        p2p_total_cap_reject_total p2p_preauth_source_cap_reject_total p2p_trust_score
+        p2p_trust_penalties_total
         p2p_trust_decay_ticks_total p2p_trust_gossip_skipped_total tx_gossip_sent_total
         tx_gossip_dropped_total tx_gossip_targets tx_gossip_fallback_total
         tx_gossip_frame_cap_bytes tx_gossip_public_target_cap tx_gossip_restricted_target_cap
@@ -9341,12 +9345,12 @@ epilogue {
 }
 const METRIC_CATALOG_V2: &str = include_str!("metrics/catalog_v2.tsv");
 const METRIC_CATALOG_V2_HEADER: &str = "# iroha-telemetry-metric-catalog-v2";
-const METRIC_CATALOG_V2_ROWS: usize = 812;
-const METRIC_CATALOG_V2_REGISTERED: usize = 767;
-const METRIC_CATALOG_V2_BYTES: usize = 110_834;
+const METRIC_CATALOG_V2_ROWS: usize = 813;
+const METRIC_CATALOG_V2_REGISTERED: usize = 768;
+const METRIC_CATALOG_V2_BYTES: usize = 111_005;
 #[cfg(test)]
 const METRIC_CATALOG_V2_BLAKE3: &str =
-    "1be62b26a5e9f1ddee730267ec5a5534cffe9a3826df65f14b7e15b3e2ee9a1e";
+    "4fcfbcff77a0db0a63403cd82f7bd5b221f7a7989cdd58fa4e2c0f6666569699";
 
 #[derive(Clone, Copy)]
 struct MetricSpec {

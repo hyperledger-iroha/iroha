@@ -1297,6 +1297,9 @@ abstract class StripNativeBridgeTask @Inject constructor(
     @get:Input
     abstract val privacyProductionEnabled: Property<Boolean>
 
+    @get:Input
+    abstract val kagemushaProductionAuthorizationSha256: Property<String>
+
     @get:InputDirectory
     @get:PathSensitive(PathSensitivity.RELATIVE)
     abstract val inputDirectory: DirectoryProperty
@@ -1541,13 +1544,16 @@ abstract class StripNativeBridgeTask @Inject constructor(
         } else {
             emptyList<String>()
         }
-        val manifest = linkedMapOf<String, Any>(
+        val authorizationSha256 = kagemushaProductionAuthorizationSha256.get()
+            .ifEmpty { null }
+        val manifest = linkedMapOf<String, Any?>(
             "schema" to "iroha.android-native-build-provenance.v1",
             "native_bridge_abi_version" to 23,
             "build_profile" to "release",
             "cargo_locked" to true,
             "privacy_production_enabled" to privacyProductionEnabled.get(),
             "cargo_features" to cargoFeatures,
+            "kagemusha_production_authorization_sha256" to authorizationSha256,
             "build_environment" to NativeBridgeBuildContract.buildEnvironmentDocument(tools),
             "source_commit" to sourceCommit,
             "source_tree_dirty" to sourceTreeDirty,
@@ -1691,6 +1697,43 @@ if (privacyProductionEnabledInput != "true" && privacyProductionEnabledInput != 
     )
 }
 val privacyProductionEnabledValue = privacyProductionEnabledInput == "true"
+val requireKagemushaProductionAuthorizationInput =
+    providers.gradleProperty("requireKagemushaProductionAuthorization").orNull ?: "false"
+if (
+    requireKagemushaProductionAuthorizationInput != "true" &&
+        requireKagemushaProductionAuthorizationInput != "false"
+) {
+    throw GradleException(
+        "requireKagemushaProductionAuthorization must be exactly 'true' or 'false'",
+    )
+}
+val requireKagemushaProductionAuthorization =
+    requireKagemushaProductionAuthorizationInput == "true"
+val kagemushaProductionAuthorizationSha256Input =
+    providers.gradleProperty("kagemushaProductionAuthorizationSha256").orNull ?: ""
+if (
+    kagemushaProductionAuthorizationSha256Input.isNotEmpty() &&
+        (!Regex("[0-9a-f]{64}").matches(kagemushaProductionAuthorizationSha256Input) ||
+            kagemushaProductionAuthorizationSha256Input.all { character -> character == '0' })
+) {
+    throw GradleException(
+        "kagemushaProductionAuthorizationSha256 must be non-zero lowercase SHA-256",
+    )
+}
+if (kagemushaProductionAuthorizationSha256Input.isNotEmpty() && !privacyProductionEnabledValue) {
+    throw GradleException(
+        "a Kagemusha production authorization may bind only a production-enabled build",
+    )
+}
+if (
+    requireKagemushaProductionAuthorization &&
+        privacyProductionEnabledValue &&
+        kagemushaProductionAuthorizationSha256Input.isEmpty()
+) {
+    throw GradleException(
+        "official production build requires a verified Kagemusha authorization digest",
+    )
+}
 val nativeBuildMode = if (privacyProductionEnabledValue) "production" else "default"
 val mobileSdkAndroidArtifactDirectoryInput =
     providers.environmentVariable("MOBILE_SDK_ANDROID_ARTIFACT_DIR")
@@ -2027,6 +2070,9 @@ val stripNativeLibs = tasks.register<StripNativeBridgeTask>("stripNativeLibs") {
     group = "native"
     description = "Canonically strip the compiled Android native bridge libraries"
     privacyProductionEnabled.set(privacyProductionEnabledValue)
+    kagemushaProductionAuthorizationSha256.set(
+        kagemushaProductionAuthorizationSha256Input,
+    )
     inputDirectory.set(compileNativeLibs.flatMap { it.outputDirectory })
     sourceSealFile.set(compileNativeLibs.flatMap { it.sourceSealFile })
     buildEnvironmentFile.set(compileNativeLibs.flatMap { it.buildEnvironmentFile })

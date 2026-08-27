@@ -18571,10 +18571,7 @@ pub mod isi {
                     account.set_label(None);
                 }
                 for label in labels {
-                    state_transaction
-                        .world
-                        .account_rekey_records
-                        .remove(label.clone());
+                    state_transaction.world.remove_account_rekey_record(&label);
                     state_transaction.world.remove_account_alias_binding(&label);
                 }
             }
@@ -27018,9 +27015,7 @@ seiyaku GovernanceLifecycle {
                 .expect("independent alias reassignment");
             stx.world
                 .insert_account_alias_binding(alias.clone(), alias_owner.clone());
-            stx.world
-                .account_rekey_records
-                .insert(alias.clone(), history.clone());
+            stx.world.replace_account_rekey_record(history.clone());
             let call_name: Name = "active-call".parse().expect("call name");
             let call = KaigiId::new(call_domain.clone(), call_name.clone());
             let record = KaigiRecord::from_new(
@@ -27028,14 +27023,11 @@ seiyaku GovernanceLifecycle {
                 0,
             );
             let key = kaigi_metadata_key(&call_name).expect("Kaigi metadata key");
-            stx.world
-                .domain_mut(&call_domain)
-                .expect("call domain")
-                .metadata_mut()
-                .insert(
-                    key.clone(),
-                    Json::try_new(record).expect("Kaigi record JSON"),
-                );
+            crate::smartcontracts::isi::kaigi::store_kaigi_record_for_testing(
+                &mut stx,
+                &record,
+            )
+            .expect("store indexed Kaigi fixture");
 
             let error = Unregister::domain(alias_domain.clone()).expect_execute_err(
                 &ALICE_ID,
@@ -27230,8 +27222,7 @@ seiyaku GovernanceLifecycle {
                 .set_label(Some(primary_label.clone()));
             stx.world
                 .insert_account_alias_binding(primary_label.clone(), account_id.clone());
-            stx.world.account_rekey_records.insert(
-                primary_label.clone(),
+            stx.world.replace_account_rekey_record(
                 iroha_data_model::account::rekey::AccountRekeyRecord::new(
                     primary_label.clone(),
                     account_id.clone(),
@@ -27239,8 +27230,7 @@ seiyaku GovernanceLifecycle {
             );
             stx.world
                 .insert_account_alias_binding(retail_label.clone(), account_id.clone());
-            stx.world.account_rekey_records.insert(
-                retail_label.clone(),
+            stx.world.replace_account_rekey_record(
                 iroha_data_model::account::rekey::AccountRekeyRecord::new(
                     retail_label.clone(),
                     account_id.clone(),
@@ -28331,27 +28321,24 @@ seiyaku GovernanceLifecycle {
                 ),
             );
             let ticket_id = iroha_data_model::da::types::StorageTicketId::new([0xD2; 32]);
+            let pin_authorization = crate::da::signed_test_ingest_authorization(
+                network_id,
+                &account_keypair,
+                LaneId::new(1),
+                1,
+                1,
+                1,
+            );
             stx.world.da_pin_intents_by_ticket.insert(
                 ticket_id,
                 iroha_data_model::da::pin_intent::DaPinIntentWithLocation {
-                    intent: iroha_data_model::da::pin_intent::DaPinIntent {
-                        lane_id: LaneId::new(1),
-                        epoch: 1,
-                        sequence: 1,
-                        storage_ticket: ticket_id,
-                        manifest_hash: iroha_data_model::sorafs::pin_registry::ManifestDigest::new(
-                            [0xE3; 32],
-                        ),
-                        alias: None,
-                        authorization: crate::da::signed_test_ingest_authorization(
-                            network_id,
-                            &account_keypair,
-                            LaneId::new(1),
-                            1,
-                            1,
-                            1,
-                        ),
-                    },
+                    intent: crate::da::signed_test_pin_intent(
+                        pin_authorization,
+                        &account_keypair,
+                        ticket_id,
+                        iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xE3; 32]),
+                        None,
+                    ),
                     location: iroha_data_model::da::commitment::DaCommitmentLocation {
                         block_height: 1,
                         index_in_bundle: 0,

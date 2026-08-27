@@ -10,6 +10,7 @@ use crate::da::taikai::{
     TAIKAI_ANCHOR_REQUEST_PREFIX, TAIKAI_ANCHOR_REQUEST_SUFFIX, TAIKAI_ANCHOR_SENTINEL_PREFIX,
     TAIKAI_ANCHOR_SENTINEL_SUFFIX, TAIKAI_SPOOL_SUBDIR, TAIKAI_TRM_LINEAGE_PREFIX,
     TAIKAI_TRM_LINEAGE_SUFFIX, TAIKAI_TRM_LOCK_PREFIX, TAIKAI_TRM_LOCK_SUFFIX,
+    TAIKAI_TRM_PENDING_PREFIX, TAIKAI_TRM_PENDING_SUFFIX,
 };
 use crate::da::{
     DaReceiptLog, DaSpoolAction, DaSpoolActionOutput, DaSpoolBatch, DaSpooler, ReplayCursorStore,
@@ -274,7 +275,7 @@ fn spool_artifact_path_for_key(
             fs::create_dir_all(&artifact_dir).expect("create ticket artifact fixture directory");
             artifact_dir.join(file_name)
         }
-        "da-commitment-" | "da-commitment-schedule-" | "da-pin-intent-" => {
+        "da-commitment-" | "da-commitment-schedule-" | "da-pin-intent-" | "da-pin-scope-" => {
             let lane = lane_id.as_u32();
             let ticket_hex = hex::encode(ticket.as_bytes());
             let fingerprint_hex = hex::encode(fingerprint);
@@ -1430,7 +1431,7 @@ fn sample_trm_manifest() -> TaikaiRoutingManifestV1 {
         version: TaikaiRoutingManifestV1::VERSION,
         event_id,
         stream_id,
-        segment_window: TaikaiSegmentWindow::new(40, 64),
+        segment_window: TaikaiSegmentWindow::new(0, 64),
         renditions: vec![route],
         alias_binding: TaikaiAliasBinding {
             name: "docs".to_owned(),
@@ -1504,6 +1505,44 @@ fn sample_request() -> DaIngestRequest {
     }
     .try_sign(&keypair)
     .expect("sign canonical DA request fixture")
+}
+
+fn resign_sample_request(request: &mut DaIngestRequest) {
+    let keypair = checked_fixture_keypair(vec![0x42; 32], Algorithm::Ed25519);
+    request.signatures.clear();
+    request.pin_scope_signatures.clear();
+    let signature = Signature::try_new(keypair.private_key(), &request.signing_digest())
+        .expect("re-sign canonical DA request fixture");
+    request.signatures.push(DaIngestSignatureV1 {
+        signer: keypair.public_key().clone(),
+        signature,
+    });
+}
+
+fn signed_pin_intent(
+    request: &DaIngestRequest,
+    storage_ticket: StorageTicketId,
+    manifest_hash: ManifestDigest,
+    alias: Option<String>,
+) -> DaPinIntent {
+    let keypair = checked_fixture_keypair(vec![0x42; 32], Algorithm::Ed25519);
+    let authorization = request.authorization();
+    let scope = DaPinScopeV1::new(&authorization, storage_ticket, manifest_hash, alias);
+    let scope_authorization = DaPinScopeAuthorizationV1::try_sign(scope, &keypair)
+        .expect("sign canonical DA pin-scope fixture");
+    DaPinIntent::new(authorization, scope_authorization)
+}
+
+fn signed_pin_intent_for_manifest(
+    request: &DaIngestRequest,
+    manifest: &ManifestArtifacts,
+) -> DaPinIntent {
+    let keypair = checked_fixture_keypair(vec![0x42; 32], Algorithm::Ed25519);
+    let scope = build_da_pin_scope(request, manifest.storage_ticket, manifest.manifest_hash)
+        .expect("build canonical DA pin scope");
+    let scope_authorization =
+        DaPinScopeAuthorizationV1::try_sign(scope, &keypair).expect("sign canonical DA pin scope");
+    build_da_pin_intent(request, scope_authorization)
 }
 
 fn active_da_admission_incarnation(app: &crate::SharedAppState, lane_id: LaneId) -> Hash {
@@ -3918,6 +3957,49 @@ async fn taikai_anchor_collection_rejects_mismatched_request_capture() {
     );
 }
 #[test]
+fn taikai_trm_lineage_guard_requires_zero_origin() {
+    let dir = tempdir().expect("tempdir");
+    let spool_dir = dir.path();
+    let mut manifest = sample_trm_manifest();
+    let alias = manifest.alias_binding.clone();
+    let digest = trm_digest_hex(0xA9);
+    let mut guard = taikai_ingest::TrmLineageGuard::new(spool_dir, &alias)
+        .expect("guard")
+        .expect("enabled");
+    for start_sequence in [1, u64::MAX - 1] {
+        manifest.segment_window = TaikaiSegmentWindow::new(start_sequence, start_sequence);
+        manifest.renditions[0].ssm_range = manifest.segment_window;
+        manifest
+            .validate()
+            .expect("nonzero window remains structurally valid before lineage admission");
+        let err = guard
+            .validate(&manifest, &digest)
+            .expect_err("fresh alias lineage must reject a nonzero window origin");
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+        assert!(
+            err.1.contains("must start at sequence 0"),
+            "unexpected origin error: {err:?}"
+        );
+        let err = guard
+            .commit(manifest.segment_window, &digest)
+            .expect_err("the authoritative commit must independently reject a nonzero origin");
+        assert_eq!(err.0, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(
+            err.1.contains("must start at sequence 0"),
+            "unexpected commit-origin error: {err:?}"
+        );
+    }
+
+    manifest.segment_window = TaikaiSegmentWindow::new(0, 15);
+    manifest.renditions[0].ssm_range = manifest.segment_window;
+    guard
+        .validate(&manifest, &digest)
+        .expect("zero-origin alias lineage must remain valid");
+    guard
+        .commit(manifest.segment_window, &digest)
+        .expect("zero-origin authoritative lineage must remain valid");
+}
+#[test]
 fn taikai_trm_lineage_guard_rejects_overlapping_windows() {
     let dir = tempdir().expect("tempdir");
     let spool_dir = dir.path();
@@ -3945,9 +4027,103 @@ fn taikai_trm_lineage_guard_rejects_overlapping_windows() {
         .expect_err("must reject overlapping manifest windows");
 }
 #[test]
-fn taikai_trm_lineage_guard_allows_exact_staged_ingest_retry() {
+fn taikai_trm_lineage_guard_requires_exact_contiguous_successor() {
     let dir = tempdir().expect("tempdir");
     let spool_dir = dir.path();
+    let mut manifest = sample_trm_manifest();
+    manifest.segment_window = TaikaiSegmentWindow::new(0, 8);
+    manifest.renditions[0].ssm_range = manifest.segment_window;
+    manifest.validate().expect("valid root manifest");
+    let alias = manifest.alias_binding.clone();
+    let first_digest = trm_digest_hex(0xAC);
+    {
+        let mut guard = taikai_ingest::TrmLineageGuard::new(spool_dir, &alias)
+            .expect("guard")
+            .expect("enabled");
+        guard
+            .validate(&manifest, &first_digest)
+            .expect("valid root");
+        guard
+            .commit(manifest.segment_window, &first_digest)
+            .expect("commit root");
+    }
+
+    let mut successor = manifest.clone();
+    successor.segment_window = TaikaiSegmentWindow::new(10, 16);
+    successor.renditions[0].ssm_range = successor.segment_window;
+    successor
+        .validate()
+        .expect("structurally valid gap manifest");
+    let successor_digest = trm_digest_hex(0xAD);
+    let mut guard = taikai_ingest::TrmLineageGuard::new(spool_dir, &alias)
+        .expect("successor guard")
+        .expect("enabled");
+    let err = guard
+        .validate(&successor, &successor_digest)
+        .expect_err("a skipped routing window must be rejected");
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(
+        err.1.contains("expected start 9"),
+        "unexpected gap error: {err:?}"
+    );
+    let err = guard
+        .commit(successor.segment_window, &successor_digest)
+        .expect_err("the authoritative commit must independently reject a skipped window");
+    assert_eq!(err.0, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(
+        err.1.contains("expected contiguous successor 9"),
+        "unexpected commit-gap error: {err:?}"
+    );
+
+    successor.segment_window = TaikaiSegmentWindow::new(9, 16);
+    successor.renditions[0].ssm_range = successor.segment_window;
+    successor
+        .validate()
+        .expect("structurally valid contiguous manifest");
+    guard
+        .validate(&successor, &successor_digest)
+        .expect("the exact contiguous routing window must remain valid");
+    guard
+        .commit(successor.segment_window, &successor_digest)
+        .expect("the exact contiguous authoritative window must remain valid");
+}
+struct StagedTaikaiLineageFixture {
+    _dir: tempfile::TempDir,
+    spool_dir: PathBuf,
+    receipt_log: DaReceiptLog,
+    manifest: TaikaiRoutingManifestV1,
+    trm_bytes: Vec<u8>,
+    trm_path: PathBuf,
+    digest: String,
+    lane_id: LaneId,
+    epoch: u64,
+    sequence: u64,
+    receipt: DaIngestReceipt,
+    fingerprint: ReplayFingerprint,
+}
+impl StagedTaikaiLineageFixture {
+    fn append_receipt(&self) {
+        assert!(matches!(
+            self.receipt_log
+                .append(
+                    LaneEpoch::new(self.lane_id, self.epoch),
+                    self.sequence,
+                    self.receipt.clone(),
+                    self.fingerprint,
+                )
+                .expect("append exact durable receipt"),
+            ReceiptInsertOutcome::Stored { .. }
+        ));
+    }
+}
+fn staged_taikai_lineage_fixture(seed: u8) -> StagedTaikaiLineageFixture {
+    let dir = tempdir().expect("tempdir");
+    let spool_dir = dir.path().join("spool");
+    let cursor_store =
+        Arc::new(ReplayCursorStore::empty(dir.path().join("cursors")).expect("cursor store"));
+    let signer = checked_fixture_ed25519_keypair(seed);
+    let receipt_log = open_receipt_log(&dir.path().join("receipts"), &cursor_store, &signer)
+        .expect("receipt log");
     let mut manifest = sample_trm_manifest();
     manifest.segment_window = TaikaiSegmentWindow::new(0, 15);
     let alias = manifest.alias_binding.clone();
@@ -3955,61 +4131,146 @@ fn taikai_trm_lineage_guard_allows_exact_staged_ingest_retry() {
     let digest = hex::encode(blake3_hash(&trm_bytes).as_bytes());
     let lane_id = LaneId::new(7);
     let epoch = 42;
-    let sequence = 9;
-    let storage_ticket = StorageTicketId::new([0xA5; 32]);
-    let fingerprint = ReplayFingerprint::from_hash(blake3_hash(b"exact-lineage-retry"));
-    {
-        let mut guard = taikai_ingest::TrmLineageGuard::new(spool_dir, &alias)
+    let sequence = 0;
+    let receipt = test_receipt(&signer, lane_id, epoch, sequence, seed);
+    let fingerprint = receipt_fingerprint(&receipt);
+    let trm_path = {
+        let mut guard = taikai_ingest::TrmLineageGuard::new(&spool_dir, &alias)
             .expect("guard")
             .expect("enabled");
         guard.validate(&manifest, &digest).expect("fresh lineage");
-        taikai_ingest::persist_envelope(
-            spool_dir,
-            lane_id,
-            epoch,
-            sequence,
-            &storage_ticket,
-            &fingerprint,
-            b"envelope",
-        )
-        .expect("persist envelope")
-        .expect("enabled envelope path");
-        taikai_ingest::persist_trm(
-            spool_dir,
-            lane_id,
-            epoch,
-            sequence,
-            &storage_ticket,
-            &fingerprint,
-            &trm_bytes,
-        )
-        .expect("persist routing manifest")
-        .expect("enabled routing manifest path");
         guard
-            .commit_ingest(
+            .stage_ingest(
                 manifest.segment_window.clone(),
                 &digest,
                 lane_id,
                 epoch,
                 sequence,
-                &storage_ticket,
+                &receipt.storage_ticket,
                 &fingerprint,
             )
-            .expect("commit lineage before simulated receipt failure");
-    }
-    let guard = taikai_ingest::TrmLineageGuard::new(spool_dir, &alias)
-        .expect("retry guard")
-        .expect("enabled");
-    let validation = guard
-        .validate_ingest_retry(
-            &manifest,
-            &digest,
+            .expect("stage pending lineage");
+        taikai_ingest::persist_trm(
+            &spool_dir,
             lane_id,
             epoch,
             sequence,
-            &storage_ticket,
+            &receipt.storage_ticket,
             &fingerprint,
             &trm_bytes,
+        )
+        .expect("persist routing manifest")
+        .expect("enabled routing manifest path")
+    };
+    StagedTaikaiLineageFixture {
+        _dir: dir,
+        spool_dir,
+        receipt_log,
+        manifest,
+        trm_bytes,
+        trm_path,
+        digest,
+        lane_id,
+        epoch,
+        sequence,
+        receipt,
+        fingerprint,
+    }
+}
+#[test]
+fn taikai_pending_lineage_without_durable_receipt_is_discarded() {
+    let fixture = staged_taikai_lineage_fixture(0x66);
+    assert!(
+        taikai_lineage_artifact_path(
+            &fixture.spool_dir,
+            TAIKAI_TRM_PENDING_PREFIX,
+            TAIKAI_TRM_PENDING_SUFFIX,
+        )
+        .is_some(),
+        "staging should create a pending lineage record"
+    );
+
+    taikai_ingest::recover_pending_lineages(&fixture.spool_dir, &fixture.receipt_log)
+        .expect("receipt-less pending lineage should be discarded");
+
+    assert!(
+        taikai_lineage_artifact_path(
+            &fixture.spool_dir,
+            TAIKAI_TRM_PENDING_PREFIX,
+            TAIKAI_TRM_PENDING_SUFFIX,
+        )
+        .is_none(),
+        "receipt-less recovery must remove the pending lineage record"
+    );
+    assert!(
+        taikai_lineage_artifact_path(
+            &fixture.spool_dir,
+            TAIKAI_TRM_LINEAGE_PREFIX,
+            TAIKAI_TRM_LINEAGE_SUFFIX,
+        )
+        .is_none(),
+        "receipt-less recovery must not advance authoritative lineage"
+    );
+    let guard =
+        taikai_ingest::TrmLineageGuard::new(&fixture.spool_dir, &fixture.manifest.alias_binding)
+            .expect("recovered guard")
+            .expect("enabled");
+    assert_eq!(
+        guard
+            .validate_ingest_retry(
+                &fixture.manifest,
+                &fixture.digest,
+                fixture.lane_id,
+                fixture.epoch,
+                fixture.sequence,
+                &fixture.receipt.storage_ticket,
+                &fixture.fingerprint,
+                &fixture.trm_bytes,
+            )
+            .expect("discarded pending lineage must remain fresh"),
+        taikai_ingest::TrmLineageValidation::Fresh
+    );
+}
+#[test]
+fn taikai_trm_lineage_guard_allows_exact_staged_ingest_retry() {
+    let fixture = staged_taikai_lineage_fixture(0x67);
+    fixture.append_receipt();
+
+    taikai_ingest::recover_pending_lineages(&fixture.spool_dir, &fixture.receipt_log)
+        .expect("promote receipt-backed pending lineage");
+
+    assert!(
+        taikai_lineage_artifact_path(
+            &fixture.spool_dir,
+            TAIKAI_TRM_PENDING_PREFIX,
+            TAIKAI_TRM_PENDING_SUFFIX,
+        )
+        .is_none(),
+        "successful recovery must remove the pending lineage record"
+    );
+    assert!(
+        taikai_lineage_artifact_path(
+            &fixture.spool_dir,
+            TAIKAI_TRM_LINEAGE_PREFIX,
+            TAIKAI_TRM_LINEAGE_SUFFIX,
+        )
+        .is_some(),
+        "exact receipt and TRM must promote authoritative lineage"
+    );
+    let guard =
+        taikai_ingest::TrmLineageGuard::new(&fixture.spool_dir, &fixture.manifest.alias_binding)
+            .expect("retry guard")
+            .expect("enabled");
+    let validation = guard
+        .validate_ingest_retry(
+            &fixture.manifest,
+            &fixture.digest,
+            fixture.lane_id,
+            fixture.epoch,
+            fixture.sequence,
+            &fixture.receipt.storage_ticket,
+            &fixture.fingerprint,
+            &fixture.trm_bytes,
         )
         .expect("exact staged retry must be admitted");
     assert_eq!(
@@ -4024,6 +4285,220 @@ fn taikai_trm_lineage_guard_allows_exact_staged_ingest_retry() {
         !validation.records_alias_rotation(),
         "an exact retry must not emit a duplicate alias-rotation event"
     );
+    let err = guard
+        .validate_ingest_retry(
+            &fixture.manifest,
+            &fixture.digest,
+            fixture.lane_id,
+            fixture.epoch,
+            fixture.sequence + 1,
+            &fixture.receipt.storage_ticket,
+            &fixture.fingerprint,
+            &fixture.trm_bytes,
+        )
+        .expect_err("a receipt-backed lineage must admit only the exact retry coordinates");
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(
+        err.1.contains("already accepted"),
+        "unexpected inexact retry error: {:?}",
+        err
+    );
+}
+#[test]
+fn taikai_pending_lineage_with_tampered_trm_is_not_promoted() {
+    let fixture = staged_taikai_lineage_fixture(0x69);
+    fixture.append_receipt();
+    fs::write(&fixture.trm_path, b"tampered routing manifest")
+        .expect("tamper staged routing manifest");
+
+    let err = taikai_ingest::recover_pending_lineages(&fixture.spool_dir, &fixture.receipt_log)
+        .expect_err("tampered staged TRM must not promote receipt-backed lineage");
+    assert_eq!(err.0, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(
+        err.1.contains("digest mismatch"),
+        "unexpected tampered-TRM recovery error: {:?}",
+        err
+    );
+    assert!(
+        taikai_lineage_artifact_path(
+            &fixture.spool_dir,
+            TAIKAI_TRM_LINEAGE_PREFIX,
+            TAIKAI_TRM_LINEAGE_SUFFIX,
+        )
+        .is_none(),
+        "tampered staged TRM must not create authoritative lineage"
+    );
+    assert!(
+        taikai_lineage_artifact_path(
+            &fixture.spool_dir,
+            TAIKAI_TRM_PENDING_PREFIX,
+            TAIKAI_TRM_PENDING_SUFFIX,
+        )
+        .is_some(),
+        "failed recovery should retain pending state for operator inspection"
+    );
+}
+#[test]
+fn taikai_pending_lineage_recovery_rejects_nonzero_origin() {
+    let fixture = staged_taikai_lineage_fixture(0x6A);
+    let pending_path = taikai_lineage_artifact_path(
+        &fixture.spool_dir,
+        TAIKAI_TRM_PENDING_PREFIX,
+        TAIKAI_TRM_PENDING_SUFFIX,
+    )
+    .expect("pending lineage path");
+    let mut pending: Value =
+        json::from_slice(&fs::read(&pending_path).expect("read pending lineage record"))
+            .expect("decode pending lineage record");
+    pending
+        .as_object_mut()
+        .expect("pending lineage object")
+        .insert("window_start_sequence".into(), Value::from(1_u64));
+    fs::write(
+        &pending_path,
+        json::to_string(&pending)
+            .expect("encode malformed pending lineage")
+            .as_bytes(),
+    )
+    .expect("write malformed pending lineage");
+
+    let err = taikai_ingest::recover_pending_lineages(&fixture.spool_dir, &fixture.receipt_log)
+        .expect_err("a nonzero pending root must not become authoritative");
+    assert_eq!(err.0, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(
+        err.1.contains("must start at sequence 0"),
+        "unexpected pending-root error: {err:?}"
+    );
+    assert!(
+        taikai_lineage_artifact_path(
+            &fixture.spool_dir,
+            TAIKAI_TRM_LINEAGE_PREFIX,
+            TAIKAI_TRM_LINEAGE_SUFFIX,
+        )
+        .is_none(),
+        "invalid pending root must not create authoritative lineage"
+    );
+}
+#[test]
+fn taikai_pending_lineage_recovery_rejects_window_gap() {
+    let fixture = staged_taikai_lineage_fixture(0x6B);
+    fixture.append_receipt();
+    taikai_ingest::recover_pending_lineages(&fixture.spool_dir, &fixture.receipt_log)
+        .expect("promote the root lineage");
+
+    let next_digest = trm_digest_hex(0xBC);
+    {
+        let mut guard = taikai_ingest::TrmLineageGuard::new(
+            &fixture.spool_dir,
+            &fixture.manifest.alias_binding,
+        )
+        .expect("successor guard")
+        .expect("enabled");
+        guard
+            .stage_ingest(
+                TaikaiSegmentWindow::new(16, 23),
+                &next_digest,
+                fixture.lane_id,
+                fixture.epoch,
+                1,
+                &fixture.receipt.storage_ticket,
+                &fixture.fingerprint,
+            )
+            .expect("stage exact successor before tampering it into a gap");
+    }
+    let pending_path = taikai_lineage_artifact_path(
+        &fixture.spool_dir,
+        TAIKAI_TRM_PENDING_PREFIX,
+        TAIKAI_TRM_PENDING_SUFFIX,
+    )
+    .expect("pending lineage path");
+    let mut pending: Value =
+        json::from_slice(&fs::read(&pending_path).expect("read pending lineage record"))
+            .expect("decode pending lineage record");
+    pending
+        .as_object_mut()
+        .expect("pending lineage object")
+        .insert("window_start_sequence".into(), Value::from(17_u64));
+    fs::write(
+        &pending_path,
+        json::to_string(&pending)
+            .expect("encode gapped pending lineage")
+            .as_bytes(),
+    )
+    .expect("write gapped pending lineage");
+
+    let err = taikai_ingest::recover_pending_lineages(&fixture.spool_dir, &fixture.receipt_log)
+        .expect_err("a gapped pending successor must not become authoritative");
+    assert_eq!(err.0, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(
+        err.1.contains("expected contiguous successor 16"),
+        "unexpected pending-gap error: {err:?}"
+    );
+    let lineage_path = taikai_lineage_artifact_path(
+        &fixture.spool_dir,
+        TAIKAI_TRM_LINEAGE_PREFIX,
+        TAIKAI_TRM_LINEAGE_SUFFIX,
+    )
+    .expect("root lineage must remain authoritative");
+    let lineage: Value =
+        json::from_slice(&fs::read(lineage_path).expect("read authoritative lineage"))
+            .expect("decode authoritative lineage");
+    assert_eq!(
+        lineage.get("window_end_sequence").and_then(Value::as_u64),
+        Some(15),
+        "failed gap recovery must not advance the authoritative head"
+    );
+}
+#[test]
+fn taikai_pending_lineage_recovery_rejects_terminal_and_oversized_windows() {
+    for (label, end_sequence) in [
+        ("terminal", u64::MAX),
+        (
+            "oversized",
+            iroha_data_model::taikai::TAIKAI_SEGMENT_WINDOW_MAX_SEQUENCES_V1,
+        ),
+    ] {
+        let fixture = staged_taikai_lineage_fixture(0x68);
+        fixture.append_receipt();
+        let pending_path = taikai_lineage_artifact_path(
+            &fixture.spool_dir,
+            TAIKAI_TRM_PENDING_PREFIX,
+            TAIKAI_TRM_PENDING_SUFFIX,
+        )
+        .expect("pending lineage path");
+        let mut pending: Value =
+            json::from_slice(&fs::read(&pending_path).expect("read pending lineage record"))
+                .expect("decode pending lineage record");
+        pending
+            .as_object_mut()
+            .expect("pending lineage object")
+            .insert("window_end_sequence".into(), Value::from(end_sequence));
+        fs::write(
+            &pending_path,
+            json::to_string(&pending)
+                .expect("encode malformed pending lineage")
+                .as_bytes(),
+        )
+        .expect("write malformed pending lineage");
+
+        let err = taikai_ingest::recover_pending_lineages(&fixture.spool_dir, &fixture.receipt_log)
+            .expect_err("invalid pending window must not be promoted");
+        assert_eq!(err.0, StatusCode::INTERNAL_SERVER_ERROR, "case: {label}");
+        assert!(
+            err.1.contains("invalid segment window"),
+            "unexpected {label} pending-lineage error: {:?}",
+            err
+        );
+        assert!(
+            taikai_lineage_artifact_path(
+                &fixture.spool_dir,
+                TAIKAI_TRM_LINEAGE_PREFIX,
+                TAIKAI_TRM_LINEAGE_SUFFIX,
+            )
+            .is_none(),
+            "{label} pending state must not advance authoritative lineage"
+        );
+    }
 }
 #[test]
 fn taikai_trm_lineage_guard_rejects_retry_from_legacy_lineage_without_provenance() {
@@ -4244,7 +4719,7 @@ fn taikai_trm_lineage_guard_rejects_staged_retry_at_different_coordinates() {
 fn trm_digest_hex(byte: u8) -> String {
     hex::encode([byte; 32])
 }
-fn taikai_lineage_state_path(spool_dir: &Path) -> PathBuf {
+fn taikai_lineage_artifact_path(spool_dir: &Path, prefix: &str, suffix: &str) -> Option<PathBuf> {
     fs::read_dir(spool_dir.join(TAIKAI_SPOOL_SUBDIR))
         .expect("read taikai spool")
         .filter_map(Result::ok)
@@ -4252,12 +4727,16 @@ fn taikai_lineage_state_path(spool_dir: &Path) -> PathBuf {
         .find(|path| {
             path.file_name()
                 .and_then(|name| name.to_str())
-                .is_some_and(|name| {
-                    name.starts_with(TAIKAI_TRM_LINEAGE_PREFIX)
-                        && name.ends_with(TAIKAI_TRM_LINEAGE_SUFFIX)
-                })
+                .is_some_and(|name| name.starts_with(prefix) && name.ends_with(suffix))
         })
-        .expect("lineage state path")
+}
+fn taikai_lineage_state_path(spool_dir: &Path) -> PathBuf {
+    taikai_lineage_artifact_path(
+        spool_dir,
+        TAIKAI_TRM_LINEAGE_PREFIX,
+        TAIKAI_TRM_LINEAGE_SUFFIX,
+    )
+    .expect("lineage state path")
 }
 fn taikai_lock_path(spool_dir: &Path) -> PathBuf {
     fs::read_dir(spool_dir.join(TAIKAI_SPOOL_SUBDIR))
@@ -5304,7 +5783,7 @@ fn validate_taikai_trm_accepts_matching_manifest() {
         "alias binding should match the stream metadata"
     );
     assert_eq!(
-        routing_manifest.segment_window.start_sequence, 40,
+        routing_manifest.segment_window.start_sequence, 0,
         "validated manifest should expose the expected window"
     );
 }
@@ -6170,19 +6649,17 @@ fn persist_da_pin_intent_writes_file() {
         b"sora/docs".to_vec(),
         MetadataVisibility::Public,
     ));
+    resign_sample_request(&mut request);
     let (fixture, manifest) = resolved_manifest_fixture(request, 1_701_700_123, "manifest");
     let request = &fixture.request;
     let alias =
         registry_alias_from_metadata(&request.metadata).expect("alias metadata should parse");
-    let mut intent = DaPinIntent::new(
-        request.lane_id,
-        request.epoch,
-        request.sequence,
+    let intent = signed_pin_intent(
+        request,
         manifest.storage_ticket,
         ManifestDigest::new(*manifest.manifest_hash.as_bytes()),
-        request.authorization(),
+        alias,
     );
-    intent.alias = alias;
     let path = persistence::persist_da_pin_intent(
         manifest_dir,
         &intent,
@@ -6214,12 +6691,59 @@ fn persist_da_pin_intent_writes_file() {
 }
 
 #[test]
+fn persist_da_pin_scope_roundtrips_and_rejects_replacement() {
+    let temp_dir = tempdir().expect("temp dir");
+    let manifest_dir = temp_dir.path();
+    let (fixture, manifest) =
+        resolved_manifest_fixture(sample_request(), 1_701_700_124, "manifest");
+    let request = &fixture.request;
+    let scope = build_da_pin_scope(request, manifest.storage_ticket, manifest.manifest_hash)
+        .expect("build exact pin scope");
+    let path = persistence::persist_da_pin_scope(
+        manifest_dir,
+        &scope,
+        request.lane_id,
+        request.epoch,
+        request.sequence,
+        &manifest.storage_ticket,
+        &manifest.fingerprint,
+    )
+    .expect("persist pin scope")
+    .expect("pin-scope path");
+    assert!(path.exists());
+    let loaded = persistence::load_da_pin_scope(
+        manifest_dir,
+        request.lane_id,
+        request.epoch,
+        request.sequence,
+        &manifest.storage_ticket,
+        &manifest.fingerprint,
+    )
+    .expect("load exact pin scope");
+    assert_eq!(loaded, scope);
+
+    let mut replacement = scope;
+    replacement.alias = Some("forged-replacement".to_owned());
+    let error = persistence::persist_da_pin_scope(
+        manifest_dir,
+        &replacement,
+        request.lane_id,
+        request.epoch,
+        request.sequence,
+        &manifest.storage_ticket,
+        &manifest.fingerprint,
+    )
+    .expect_err("an existing durable scope cannot be replaced");
+    assert_eq!(error.kind(), ErrorKind::InvalidData);
+}
+
+#[test]
 fn load_da_pin_intent_rejects_filename_body_tuple_mismatch() {
     let temp_dir = tempdir().expect("temp dir");
     let context = sample_manifest_context_for(BlobClass::TaikaiSegment);
     let request = context.request;
     let manifest = context.artifacts;
-    let intent = build_da_pin_intent(&request, &manifest).expect("build pin intent");
+    let intent = signed_pin_intent_for_manifest(&request, &manifest);
     let wrong_sequence = request.sequence.saturating_add(1);
     let path = spool_artifact_path_for_key(
         temp_dir.path(),
@@ -6369,13 +6893,11 @@ fn persist_spool_artifacts_reject_body_tuple_mismatches() {
         ),
         "schedule PDP manifest digest mismatch",
     );
-    let intent = DaPinIntent::new(
-        request.lane_id,
-        request.epoch,
-        request.sequence,
+    let intent = signed_pin_intent(
+        request,
         manifest.storage_ticket,
         ManifestDigest::new(*manifest.manifest_hash.as_bytes()),
-        request.authorization(),
+        None,
     );
     assert_invalid_input(
         persistence::persist_da_pin_intent(
@@ -6430,13 +6952,11 @@ fn persist_spool_artifacts_reject_existing_mismatched_targets() {
         &pdp_bytes,
         DaProofScheme::MerkleSha256,
     );
-    let intent = DaPinIntent::new(
-        request.lane_id,
-        request.epoch,
-        request.sequence,
+    let intent = signed_pin_intent(
+        &request,
         manifest.storage_ticket,
         ManifestDigest::new(*manifest.manifest_hash.as_bytes()),
-        request.authorization(),
+        None,
     );
     let fingerprint = *manifest.fingerprint.as_bytes();
     let assert_invalid_data =
@@ -7014,15 +7534,50 @@ fn da_receipt_log_open_rejects_spool_dir_symlink() {
     );
 }
 #[test]
+fn da_receipt_log_requires_zero_for_a_fresh_lane_epoch() {
+    let temp_dir = tempdir().expect("temp dir");
+    let lane_epoch = LaneEpoch::new(LaneId::new(4), 8);
+    let cursor_store = Arc::new(ReplayCursorStore::in_memory());
+    let signer = checked_random_keypair();
+    let log = open_receipt_log(temp_dir.path(), &cursor_store, &signer).unwrap();
+
+    for sequence in [1, u64::MAX - 1] {
+        let receipt = test_receipt(
+            &signer,
+            lane_epoch.lane_id,
+            lane_epoch.epoch,
+            sequence,
+            0xC0,
+        );
+        assert_eq!(
+            log.append(lane_epoch, sequence, receipt, test_fingerprint(0xC0))
+                .unwrap(),
+            ReceiptInsertOutcome::SequenceGap {
+                expected_next: 0,
+                observed: sequence,
+            }
+        );
+    }
+    assert_eq!(receipt_file_count(temp_dir.path()), 0);
+    assert!(cursor_store.highest_sequences().is_empty());
+
+    let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 0, 0xC1);
+    assert!(matches!(
+        log.append(lane_epoch, 0, receipt, test_fingerprint(0xC1))
+            .unwrap(),
+        ReceiptInsertOutcome::Stored { .. }
+    ));
+}
+#[test]
 fn da_receipt_log_enforces_ordering_and_dedupe() {
     let temp_dir = tempdir().expect("temp dir");
     let lane_epoch = LaneEpoch::new(LaneId::new(4), 9);
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
     let signer = checked_random_keypair();
     let log = open_receipt_log(temp_dir.path(), &cursor_store, &signer).unwrap();
-    let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 1);
+    let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 0, 1);
     assert!(matches!(
-        log.append(lane_epoch, 1, receipt.clone(), test_fingerprint(1))
+        log.append(lane_epoch, 0, receipt.clone(), test_fingerprint(1))
             .unwrap(),
         ReceiptInsertOutcome::Stored { .. }
     ));
@@ -7032,7 +7587,7 @@ fn da_receipt_log_enforces_ordering_and_dedupe() {
         "stored receipt should create one durable receipt file"
     );
     assert!(matches!(
-        log.append(lane_epoch, 1, receipt.clone(), test_fingerprint(1))
+        log.append(lane_epoch, 0, receipt.clone(), test_fingerprint(1))
             .unwrap(),
         ReceiptInsertOutcome::Duplicate { .. }
     ));
@@ -7043,7 +7598,7 @@ fn da_receipt_log_enforces_ordering_and_dedupe() {
     );
     let wrong_fingerprint = test_fingerprint(0xD0);
     let err = log
-        .append(lane_epoch, 1, receipt.clone(), wrong_fingerprint)
+        .append(lane_epoch, 0, receipt.clone(), wrong_fingerprint)
         .expect_err("wrong-fingerprint duplicate must be rejected before durable lookup");
     assert!(
         format!("{err:?}").contains("does not match storage ticket"),
@@ -7054,13 +7609,13 @@ fn da_receipt_log_enforces_ordering_and_dedupe() {
         1,
         "wrong-fingerprint duplicate must not create another durable receipt file"
     );
-    let mut receipt_conflict = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0xD1);
+    let mut receipt_conflict = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 0, 0xD1);
     receipt_conflict.manifest_hash = receipt.manifest_hash;
     let unsigned =
-        persistence::unsigned_receipt_bytes(&receipt_conflict, 1).expect("unsigned bytes");
+        persistence::unsigned_receipt_bytes(&receipt_conflict, 0).expect("unsigned bytes");
     receipt_conflict.operator_signature = checked_signature(signer.private_key(), &unsigned);
     assert!(matches!(
-        log.append(lane_epoch, 1, receipt_conflict, test_fingerprint(0xD1))
+        log.append(lane_epoch, 0, receipt_conflict, test_fingerprint(0xD1))
             .unwrap(),
         ReceiptInsertOutcome::ReceiptConflict { .. }
     ));
@@ -7069,9 +7624,9 @@ fn da_receipt_log_enforces_ordering_and_dedupe() {
         1,
         "receipt-evidence conflict must not create another durable receipt file"
     );
-    let conflict = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 2);
+    let conflict = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 0, 2);
     assert!(matches!(
-        log.append(lane_epoch, 1, conflict, test_fingerprint(2))
+        log.append(lane_epoch, 0, conflict, test_fingerprint(2))
             .unwrap(),
         ReceiptInsertOutcome::ManifestConflict { .. }
     ));
@@ -7079,6 +7634,30 @@ fn da_receipt_log_enforces_ordering_and_dedupe() {
         receipt_file_count(temp_dir.path()),
         1,
         "conflicting receipt must not be written before validation"
+    );
+    let gap = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 2, 4);
+    assert!(matches!(
+        log.append(lane_epoch, 2, gap, test_fingerprint(4)).unwrap(),
+        ReceiptInsertOutcome::SequenceGap {
+            expected_next: 1,
+            observed: 2
+        }
+    ));
+    assert_eq!(
+        receipt_file_count(temp_dir.path()),
+        1,
+        "gap receipt must not be written before validation"
+    );
+    let second = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 5);
+    assert!(matches!(
+        log.append(lane_epoch, 1, second, test_fingerprint(5))
+            .unwrap(),
+        ReceiptInsertOutcome::Stored { .. }
+    ));
+    assert_eq!(
+        receipt_file_count(temp_dir.path()),
+        2,
+        "contiguous receipt should still be accepted after a rejected gap"
     );
     let stale = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 0, 3);
     assert!(matches!(
@@ -7088,32 +7667,8 @@ fn da_receipt_log_enforces_ordering_and_dedupe() {
     ));
     assert_eq!(
         receipt_file_count(temp_dir.path()),
-        1,
-        "stale receipt must not be written before validation"
-    );
-    let gap = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 3, 4);
-    assert!(matches!(
-        log.append(lane_epoch, 3, gap, test_fingerprint(4)).unwrap(),
-        ReceiptInsertOutcome::SequenceGap {
-            expected_next: 2,
-            observed: 3
-        }
-    ));
-    assert_eq!(
-        receipt_file_count(temp_dir.path()),
-        1,
-        "gap receipt must not be written before validation"
-    );
-    let second = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 2, 5);
-    assert!(matches!(
-        log.append(lane_epoch, 2, second, test_fingerprint(5))
-            .unwrap(),
-        ReceiptInsertOutcome::Stored { .. }
-    ));
-    assert_eq!(
-        receipt_file_count(temp_dir.path()),
         2,
-        "contiguous receipt should still be accepted after a rejected gap"
+        "stale receipt must not be written before validation"
     );
 }
 #[test]
@@ -7156,30 +7711,30 @@ fn da_receipt_log_rejected_append_does_not_advance_replay_cursor() {
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
     let signer = checked_fixture_ed25519_keypair(0x64);
     let log = open_receipt_log(temp_dir.path(), &cursor_store, &signer).unwrap();
-    let first = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0xE1);
+    let first = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 0, 0xE1);
     assert!(matches!(
-        log.append(lane_epoch, 1, first, test_fingerprint(0xE1))
+        log.append(lane_epoch, 0, first, test_fingerprint(0xE1))
             .unwrap(),
         ReceiptInsertOutcome::Stored { .. }
     ));
-    assert_replay_cursor_sequences(&cursor_store, &[(lane_epoch, 1)]);
-    let gap = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 3, 0xE3);
+    assert_replay_cursor_sequences(&cursor_store, &[(lane_epoch, 0)]);
+    let gap = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 2, 0xE3);
     assert!(matches!(
-        log.append(lane_epoch, 3, gap, test_fingerprint(0xE3))
+        log.append(lane_epoch, 2, gap, test_fingerprint(0xE3))
             .unwrap(),
         ReceiptInsertOutcome::SequenceGap {
-            expected_next: 2,
-            observed: 3
+            expected_next: 1,
+            observed: 2
         }
     ));
-    assert_replay_cursor_sequences(&cursor_store, &[(lane_epoch, 1)]);
-    let second = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 2, 0xE2);
+    assert_replay_cursor_sequences(&cursor_store, &[(lane_epoch, 0)]);
+    let second = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0xE2);
     assert!(matches!(
-        log.append(lane_epoch, 2, second, test_fingerprint(0xE2))
+        log.append(lane_epoch, 1, second, test_fingerprint(0xE2))
             .unwrap(),
         ReceiptInsertOutcome::Stored { .. }
     ));
-    assert_replay_cursor_sequences(&cursor_store, &[(lane_epoch, 2)]);
+    assert_replay_cursor_sequences(&cursor_store, &[(lane_epoch, 1)]);
 }
 #[test]
 fn da_receipt_log_recovers_after_cursor_failure_post_file_write() {
@@ -7193,10 +7748,10 @@ fn da_receipt_log_recovers_after_cursor_failure_post_file_write() {
     let main_path = replay_cursor_main_path(cursor_dir.path());
     let tmp_path = persistence::replay_cursor_temp_path(&main_path);
     fs::create_dir(&tmp_path).expect("block cursor temp path");
-    let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0xF1);
+    let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 0, 0xF1);
     let fingerprint = test_fingerprint(0xF1);
     let err = log
-        .append(lane_epoch, 1, receipt.clone(), fingerprint)
+        .append(lane_epoch, 0, receipt.clone(), fingerprint)
         .expect_err("blocked cursor persistence should fail append after file write");
     assert!(
         format!("{err:?}").contains("failed to persist receipt cursor"),
@@ -7214,7 +7769,7 @@ fn da_receipt_log_recovers_after_cursor_failure_post_file_write() {
     assert_replay_cursor_sequences(&cursor_store, &[]);
     fs::remove_dir(&tmp_path).expect("unblock cursor temp path");
     assert!(matches!(
-        log.append(lane_epoch, 1, receipt, fingerprint).unwrap(),
+        log.append(lane_epoch, 0, receipt, fingerprint).unwrap(),
         ReceiptInsertOutcome::Stored {
             cursor_advanced: true
         }
@@ -7225,7 +7780,7 @@ fn da_receipt_log_recovers_after_cursor_failure_post_file_write() {
         "retry should adopt the existing receipt file without duplicating it"
     );
     assert_eq!(log.receipts_for(lane_epoch).len(), 1);
-    assert_replay_cursor_sequences(&cursor_store, &[(lane_epoch, 1)]);
+    assert_replay_cursor_sequences(&cursor_store, &[(lane_epoch, 0)]);
 }
 #[test]
 fn da_receipt_log_rejects_conflicting_preexisting_receipt_without_cursor_advance() {
@@ -7234,12 +7789,12 @@ fn da_receipt_log_rejects_conflicting_preexisting_receipt_without_cursor_advance
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
     let signer = checked_fixture_ed25519_keypair(0x66);
     let log = open_receipt_log(receipt_dir.path(), &cursor_store, &signer).unwrap();
-    let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0xF2);
+    let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 0, 0xF2);
     let fingerprint = test_fingerprint(0xF2);
-    let poisoned_path = canonical_receipt_spool_path(receipt_dir.path(), &receipt, 1);
+    let poisoned_path = canonical_receipt_spool_path(receipt_dir.path(), &receipt, 0);
     fs::write(&poisoned_path, b"poison-receipt").expect("seed poisoned receipt");
     let err = log
-        .append(lane_epoch, 1, receipt.clone(), fingerprint)
+        .append(lane_epoch, 0, receipt.clone(), fingerprint)
         .expect_err("conflicting preexisting receipt file must reject append");
     assert!(
         format!("{err:?}").contains("DA receipt artifact already exists"),
@@ -7258,14 +7813,14 @@ fn da_receipt_log_rejects_conflicting_preexisting_receipt_without_cursor_advance
     assert_replay_cursor_sequences(&cursor_store, &[]);
     fs::remove_file(&poisoned_path).expect("remove poisoned receipt");
     assert!(matches!(
-        log.append(lane_epoch, 1, receipt, fingerprint).unwrap(),
+        log.append(lane_epoch, 0, receipt, fingerprint).unwrap(),
         ReceiptInsertOutcome::Stored {
             cursor_advanced: true
         }
     ));
     assert_eq!(receipt_file_count(receipt_dir.path()), 1);
     assert_eq!(log.receipts_for(lane_epoch).len(), 1);
-    assert_replay_cursor_sequences(&cursor_store, &[(lane_epoch, 1)]);
+    assert_replay_cursor_sequences(&cursor_store, &[(lane_epoch, 0)]);
 }
 #[test]
 fn da_receipt_log_in_memory_append_fails_closed() {
@@ -7307,14 +7862,14 @@ fn da_receipt_log_duplicate_reload_rejects_receipt_symlink_replacement() {
     let signer = checked_fixture_ed25519_keypair(0x67);
     let log =
         open_receipt_log(receipt_dir.path(), &cursor_store, &signer).expect("open receipt log");
-    let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0xA2);
+    let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 0, 0xA2);
     let fingerprint = test_fingerprint(0xA2);
     assert!(matches!(
-        log.append(lane_epoch, 1, receipt.clone(), fingerprint)
+        log.append(lane_epoch, 0, receipt.clone(), fingerprint)
             .expect("append receipt"),
         ReceiptInsertOutcome::Stored { .. }
     ));
-    let receipt_path = canonical_receipt_spool_path(receipt_dir.path(), &receipt, 1);
+    let receipt_path = canonical_receipt_spool_path(receipt_dir.path(), &receipt, 0);
     let target_path = receipt_dir.path().join("receipt-symlink-target.norito");
     fs::write(
         &target_path,
@@ -7324,7 +7879,7 @@ fn da_receipt_log_duplicate_reload_rejects_receipt_symlink_replacement() {
     fs::remove_file(&receipt_path).expect("remove stored receipt");
     symlink(&target_path, &receipt_path).expect("replace receipt with symlink");
     let err = log
-        .receipt_for_duplicate(lane_epoch, 1, fingerprint)
+        .receipt_for_duplicate(lane_epoch, 0, fingerprint)
         .expect_err("symlinked durable receipt must fail duplicate reload");
     assert!(
         format!("{err:?}").contains("not a regular file"),
@@ -7346,7 +7901,7 @@ fn da_receipt_log_duplicate_reload_rejects_receipt_symlink_replacement() {
 fn duplicate_da_ingest_reuses_durable_artifacts_after_timestamp_retry() {
     let temp_dir = tempdir().expect("temp dir");
     let spool_dir = temp_dir.path();
-    let context = sample_manifest_context_for(BlobClass::NexusLaneSidecar);
+    let context = zero_sequence_manifest_context_for(BlobClass::NexusLaneSidecar);
     let request = context.request;
     let manifest = context.artifacts;
     let canonical = normalize_payload(&request).expect("normalize payload");
@@ -7381,7 +7936,21 @@ fn duplicate_da_ingest_reuses_durable_artifacts_after_timestamp_retry() {
     )
     .expect("persist manifest")
     .expect("manifest path");
-    let durable_pin_intent = build_da_pin_intent(&request, &manifest).expect("build pin intent");
+    let durable_scope =
+        build_da_pin_scope(&request, manifest.storage_ticket, manifest.manifest_hash)
+            .expect("build durable pin scope");
+    persistence::persist_da_pin_scope(
+        spool_dir,
+        &durable_scope,
+        request.lane_id,
+        request.epoch,
+        request.sequence,
+        &manifest.storage_ticket,
+        &manifest.fingerprint,
+    )
+    .expect("persist pin scope")
+    .expect("pin-scope path");
+    let durable_pin_intent = signed_pin_intent_for_manifest(&request, &manifest);
     persistence::persist_da_pin_intent(
         spool_dir,
         &durable_pin_intent,
@@ -7440,8 +8009,6 @@ fn duplicate_da_ingest_reuses_durable_artifacts_after_timestamp_retry() {
         .expect("append receipt"),
         ReceiptInsertOutcome::Stored { .. }
     ));
-    let retry_pin_intent =
-        build_da_pin_intent(&request, &retry_manifest).expect("retry pin intent");
     let duplicate = load_duplicate_da_artifacts(
         &log,
         spool_dir,
@@ -7449,7 +8016,7 @@ fn duplicate_da_ingest_reuses_durable_artifacts_after_timestamp_retry() {
         request.sequence,
         &retry_manifest.storage_ticket,
         retry_manifest.fingerprint,
-        &retry_pin_intent,
+        &request,
     )
     .expect("load duplicate artifacts");
     assert_eq!(duplicate.receipt, receipt);
@@ -7473,12 +8040,116 @@ fn duplicate_da_ingest_reuses_durable_artifacts_after_timestamp_retry() {
         request.sequence,
         &retry_manifest.storage_ticket,
         retry_manifest.fingerprint,
-        &retry_pin_intent,
+        &request,
     )
     .expect("check durable duplicate after restart")
     .expect("durable duplicate should be present after restart");
     assert_eq!(recovered_after_restart.receipt, receipt);
     assert_eq!(recovered_after_restart.pdp_commitment_bytes, pdp_bytes);
+}
+
+#[test]
+fn duplicate_retry_finalizes_only_after_exact_pin_scope_signature() {
+    let temp_dir = tempdir().expect("temp dir");
+    let context = zero_sequence_manifest_context_for(BlobClass::TaikaiSegment);
+    let mut request = context.request;
+    let manifest = context.artifacts;
+    let scope = build_da_pin_scope(&request, manifest.storage_ticket, manifest.manifest_hash)
+        .expect("build exact pin scope");
+    let operator = checked_fixture_ed25519_keypair(0x69);
+    let receipt = build_receipt(
+        &operator,
+        &request,
+        manifest.manifest.issued_at_unix.max(1),
+        manifest.blob_hash,
+        manifest.chunk_root,
+        manifest.manifest_hash,
+        manifest.storage_ticket,
+        Vec::new(),
+        manifest.manifest.rent_quote.clone(),
+        stripe_layout_from_manifest(&manifest.manifest),
+    )
+    .expect("build pending receipt fixture");
+    let lane_epoch = LaneEpoch::new(request.lane_id, request.epoch);
+    let artifacts = DuplicateDaArtifacts {
+        receipt_path: temp_dir.path().join("receipt.norito"),
+        receipt,
+        pdp_commitment_bytes: Vec::new(),
+        pin_scope: scope.clone(),
+        pin_intent: None,
+    };
+
+    let (pending, finalized) = finalize_duplicate_da_pin_intent(
+        temp_dir.path(),
+        &request,
+        lane_epoch,
+        manifest.fingerprint,
+        artifacts,
+    )
+    .expect("unsigned scope remains pending");
+    assert!(!finalized);
+    assert!(pending.pin_intent.is_none());
+    assert!(!taikai_ready_path(temp_dir.path(), &request, &manifest).exists());
+
+    request
+        .try_add_pin_scope_signature(
+            &scope,
+            &checked_fixture_keypair(vec![0x42; 32], Algorithm::Ed25519),
+        )
+        .expect("authorize exact durable pin scope");
+    let (finalized_artifacts, finalized) = finalize_duplicate_da_pin_intent(
+        temp_dir.path(),
+        &request,
+        lane_epoch,
+        manifest.fingerprint,
+        pending,
+    )
+    .expect("exact producer scope finalizes");
+    assert!(finalized);
+    assert!(finalized_artifacts.pin_intent.is_some());
+    assert!(taikai_ready_path(temp_dir.path(), &request, &manifest).exists());
+    persistence::load_da_pin_intent(
+        temp_dir.path(),
+        request.lane_id,
+        request.epoch,
+        request.sequence,
+        &manifest.storage_ticket,
+        &manifest.fingerprint,
+    )
+    .expect("producer-authorized pin intent must be durable");
+}
+
+#[test]
+fn submitted_pin_scope_witness_cannot_authorize_a_different_durable_scope() {
+    let context = zero_sequence_manifest_context_for(BlobClass::NexusLaneSidecar);
+    let request = context.request;
+    let manifest = context.artifacts;
+    let exact_scope = build_da_pin_scope(&request, manifest.storage_ticket, manifest.manifest_hash)
+        .expect("build exact durable pin scope");
+    let signer = checked_fixture_keypair(vec![0x42; 32], Algorithm::Ed25519);
+
+    for forged_scope in [
+        DaPinScopeV1 {
+            storage_ticket: StorageTicketId::new([0xA1; 32]),
+            ..exact_scope.clone()
+        },
+        DaPinScopeV1 {
+            manifest_hash: ManifestDigest::new([0xA2; 32]),
+            ..exact_scope.clone()
+        },
+        DaPinScopeV1 {
+            alias: Some("forged-alias".to_owned()),
+            ..exact_scope.clone()
+        },
+    ] {
+        let mut forged_request = request.clone();
+        forged_request
+            .try_add_pin_scope_signature(&forged_scope, &signer)
+            .expect("sign forged pin scope fixture");
+        let error = submitted_pin_scope_authorization(&forged_request, exact_scope.clone())
+            .expect_err("a witness over another scope must reject");
+        assert_eq!(error.0, StatusCode::UNAUTHORIZED);
+    }
 }
 
 fn persist_completed_duplicate_fixture(
@@ -7499,7 +8170,20 @@ fn persist_completed_duplicate_fixture(
     )
     .expect("persist duplicate fixture manifest")
     .expect("duplicate fixture manifest path");
-    let pin_intent = build_da_pin_intent(request, manifest).expect("build duplicate pin intent");
+    let pin_scope = build_da_pin_scope(request, manifest.storage_ticket, manifest.manifest_hash)
+        .expect("build duplicate fixture pin scope");
+    persistence::persist_da_pin_scope(
+        spool_dir,
+        &pin_scope,
+        request.lane_id,
+        request.epoch,
+        request.sequence,
+        &manifest.storage_ticket,
+        &manifest.fingerprint,
+    )
+    .expect("persist duplicate fixture pin scope")
+    .expect("duplicate fixture pin-scope path");
+    let pin_intent = signed_pin_intent_for_manifest(request, manifest);
     persistence::persist_da_pin_intent(
         spool_dir,
         &pin_intent,
@@ -7559,6 +8243,32 @@ fn persist_completed_duplicate_fixture(
     log
 }
 
+fn load_duplicate_da_artifacts_and_publish_taikai_ready(
+    receipt_log: &DaReceiptLog,
+    spool_dir: &Path,
+    request: &DaIngestRequest,
+    manifest: &ManifestArtifacts,
+    lane_epoch: LaneEpoch,
+) -> Result<DuplicateDaArtifacts, DuplicateDaArtifactsError> {
+    let artifacts = load_duplicate_da_artifacts(
+        receipt_log,
+        spool_dir,
+        lane_epoch,
+        request.sequence,
+        &manifest.storage_ticket,
+        manifest.fingerprint,
+        request,
+    )?;
+    finalize_duplicate_da_pin_intent(
+        spool_dir,
+        request,
+        lane_epoch,
+        manifest.fingerprint,
+        artifacts,
+    )
+    .map(|(artifacts, _)| artifacts)
+}
+
 fn resign_duplicate_fixture_request(request: &mut DaIngestRequest) {
     let keypair = checked_fixture_keypair(vec![0x42; 32], Algorithm::Ed25519);
     let digest = request.signing_digest();
@@ -7583,7 +8293,7 @@ fn taikai_ready_path(
 #[test]
 fn completed_taikai_duplicate_rejects_changed_stripped_ssm_identity() {
     let temp_dir = tempdir().expect("temp dir");
-    let context = sample_manifest_context_for(BlobClass::TaikaiSegment);
+    let context = zero_sequence_manifest_context_for(BlobClass::TaikaiSegment);
     let mut request = context.request;
     let manifest = context.artifacts;
     request.norito_manifest = Some(manifest.encoded.clone());
@@ -7594,8 +8304,6 @@ fn completed_taikai_duplicate_rejects_changed_stripped_ssm_identity() {
     ));
     resign_duplicate_fixture_request(&mut request);
     let receipt_log = persist_completed_duplicate_fixture(temp_dir.path(), &request, &manifest);
-    let matching_pin_intent =
-        build_da_pin_intent(&request, &manifest).expect("matching pin intent");
     load_duplicate_da_artifacts(
         &receipt_log,
         temp_dir.path(),
@@ -7603,7 +8311,7 @@ fn completed_taikai_duplicate_rejects_changed_stripped_ssm_identity() {
         request.sequence,
         &manifest.storage_ticket,
         manifest.fingerprint,
-        &matching_pin_intent,
+        &request,
     )
     .expect("matching completed Taikai duplicate must recover");
 
@@ -7617,14 +8325,12 @@ fn completed_taikai_duplicate_rejects_changed_stripped_ssm_identity() {
         .value = b"different signed Taikai manifest".to_vec();
     resign_duplicate_fixture_request(&mut retry);
     assert_ne!(request.signing_digest(), retry.signing_digest());
-    let retry_pin_intent = build_da_pin_intent(&retry, &manifest).expect("build retry pin intent");
     let err = load_duplicate_da_artifacts_and_publish_taikai_ready(
         &receipt_log,
         temp_dir.path(),
         &retry,
         &manifest,
         LaneEpoch::new(retry.lane_id, retry.epoch),
-        &retry_pin_intent,
     )
     .expect_err("changed stripped SSM must conflict with the completed request identity");
     assert!(matches!(err, DuplicateDaArtifactsError::Conflict(_)));
@@ -7637,7 +8343,7 @@ fn completed_taikai_duplicate_rejects_changed_stripped_ssm_identity() {
 #[test]
 fn completed_taikai_duplicate_rejects_changed_caller_manifest_timestamp() {
     let temp_dir = tempdir().expect("temp dir");
-    let context = sample_manifest_context_for(BlobClass::TaikaiSegment);
+    let context = zero_sequence_manifest_context_for(BlobClass::TaikaiSegment);
     let mut request = context.request;
     let manifest = context.artifacts;
     request.norito_manifest = Some(manifest.encoded.clone());
@@ -7650,14 +8356,12 @@ fn completed_taikai_duplicate_rejects_changed_caller_manifest_timestamp() {
     retry.norito_manifest = Some(to_bytes(&changed_manifest).expect("encode changed manifest"));
     resign_duplicate_fixture_request(&mut retry);
     assert_ne!(request.signing_digest(), retry.signing_digest());
-    let retry_pin_intent = build_da_pin_intent(&retry, &manifest).expect("build retry pin intent");
     let err = load_duplicate_da_artifacts_and_publish_taikai_ready(
         &receipt_log,
         temp_dir.path(),
         &retry,
         &manifest,
         LaneEpoch::new(retry.lane_id, retry.epoch),
-        &retry_pin_intent,
     )
     .expect_err("changed caller manifest timestamp must conflict with completed identity");
     assert!(matches!(err, DuplicateDaArtifactsError::Conflict(_)));
@@ -7670,7 +8374,7 @@ fn completed_taikai_duplicate_rejects_changed_caller_manifest_timestamp() {
 #[test]
 fn completed_taikai_duplicate_fails_closed_on_corrupt_pin_intent() {
     let temp_dir = tempdir().expect("temp dir");
-    let context = sample_manifest_context_for(BlobClass::TaikaiSegment);
+    let context = zero_sequence_manifest_context_for(BlobClass::TaikaiSegment);
     let request = context.request;
     let manifest = context.artifacts;
     let receipt_log = persist_completed_duplicate_fixture(temp_dir.path(), &request, &manifest);
@@ -7684,14 +8388,12 @@ fn completed_taikai_duplicate_fails_closed_on_corrupt_pin_intent() {
         *manifest.fingerprint.as_bytes(),
     );
     fs::write(&pin_path, b"corrupt durable pin intent").expect("corrupt pin intent");
-    let expected_pin_intent = build_da_pin_intent(&request, &manifest).expect("build pin intent");
     let err = load_duplicate_da_artifacts_and_publish_taikai_ready(
         &receipt_log,
         temp_dir.path(),
         &request,
         &manifest,
         LaneEpoch::new(request.lane_id, request.epoch),
-        &expected_pin_intent,
     )
     .expect_err("corrupt durable pin intent must fail closed");
     assert!(matches!(err, DuplicateDaArtifactsError::Internal(_)));
@@ -7743,14 +8445,12 @@ fn duplicate_taikai_ingest_does_not_publish_readiness_before_receipt_validation(
     let signer = checked_random_keypair();
     let receipt_log =
         open_receipt_log(spool_dir, &cursor_store, &signer).expect("open receipt log");
-    let expected_pin_intent = build_da_pin_intent(&request, &manifest).expect("build pin intent");
     load_duplicate_da_artifacts_and_publish_taikai_ready(
         &receipt_log,
         spool_dir,
         &request,
         &manifest,
         lane_epoch,
-        &expected_pin_intent,
     )
     .expect_err("missing durable receipt artifacts must reject duplicate recovery");
     let ready_path = taikai_ready_path(spool_dir, &request, &manifest);
@@ -7878,19 +8578,19 @@ fn da_receipt_log_reloads_from_disk() {
     let signer = checked_random_keypair();
     {
         let log = open_receipt_log(temp_dir.path(), &cursor_store, &signer).unwrap();
-        let first = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 9);
-        let second = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 2, 10);
-        log.append(lane_epoch, 1, first.clone(), test_fingerprint(9))
+        let first = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 0, 9);
+        let second = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 10);
+        log.append(lane_epoch, 0, first.clone(), test_fingerprint(9))
             .unwrap();
-        log.append(lane_epoch, 2, second.clone(), test_fingerprint(10))
+        log.append(lane_epoch, 1, second.clone(), test_fingerprint(10))
             .unwrap();
     }
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
     let reopened = open_receipt_log(temp_dir.path(), &cursor_store, &signer).unwrap();
     let entries = reopened.receipts_for(lane_epoch);
     assert_eq!(entries.len(), 2);
-    assert_eq!(entries[0].sequence, 1);
-    assert_eq!(entries[1].sequence, 2);
+    assert_eq!(entries[0].sequence, 0);
+    assert_eq!(entries[1].sequence, 1);
     assert_eq!(
         entries[1].manifest_hash,
         BlobDigest::new([10u8.wrapping_add(3); 32])
@@ -7899,16 +8599,48 @@ fn da_receipt_log_reloads_from_disk() {
         cursor_store
             .highest_sequences()
             .iter()
-            .any(|(key, seq)| *key == lane_epoch && *seq == 2),
+            .any(|(key, seq)| *key == lane_epoch && *seq == 1),
         "cursor store should be seeded from disk"
     );
+}
+#[test]
+fn da_receipt_log_recovery_rejects_nonzero_origin() {
+    let temp_dir = tempdir().expect("temp dir");
+    let lane_epoch = LaneEpoch::new(LaneId::new(6), 19);
+    let signer = checked_fixture_ed25519_keypair(0x6A);
+    let receipt = test_receipt(
+        &signer,
+        lane_epoch.lane_id,
+        lane_epoch.epoch,
+        u64::MAX - 1,
+        0x96,
+    );
+    persistence::persist_da_receipt(
+        temp_dir.path(),
+        &receipt,
+        u64::MAX - 1,
+        &test_fingerprint(0x96),
+    )
+    .expect("persist nonzero-origin receipt")
+    .expect("receipt path");
+    let cursor_store = Arc::new(ReplayCursorStore::in_memory());
+    let err = match open_receipt_log(temp_dir.path(), &cursor_store, &signer) {
+        Ok(_) => panic!("receipt-log recovery must reject a nonzero origin"),
+        Err(err) => err,
+    };
+    let message = format!("{err:?}");
+    assert!(
+        message.contains(&format!("starts at {}; expected 0", u64::MAX - 1)),
+        "unexpected nonzero-origin recovery error: {err:?}"
+    );
+    assert!(cursor_store.highest_sequences().is_empty());
 }
 #[test]
 fn da_receipt_log_rejects_sequence_gap_on_open() {
     let temp_dir = tempdir().expect("temp dir");
     let lane_epoch = LaneEpoch::new(LaneId::new(6), 18);
     let signer = checked_fixture_ed25519_keypair(0x69);
-    for (sequence, seed) in [(1, 0x94), (3, 0x95)] {
+    for (sequence, seed) in [(0, 0x94), (2, 0x95)] {
         let receipt = test_receipt(
             &signer,
             lane_epoch.lane_id,
@@ -8098,8 +8830,8 @@ fn da_receipt_log_rejects_replay_cursor_seed_failures_on_open() {
     let receipt_dir = tempdir().expect("receipt dir");
     let lane_epoch = LaneEpoch::new(LaneId::new(6), 15);
     let signer = checked_random_keypair();
-    let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0x8B);
-    persistence::persist_da_receipt(receipt_dir.path(), &receipt, 1, &test_fingerprint(0x8B))
+    let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 0, 0x8B);
+    persistence::persist_da_receipt(receipt_dir.path(), &receipt, 0, &test_fingerprint(0x8B))
         .expect("persist receipt")
         .expect("receipt path");
     let cursor_store = Arc::new(ReplayCursorStore::in_memory_with_max_lane_epochs(
@@ -9359,8 +10091,15 @@ struct ManifestFixtureContext {
     artifacts: ManifestArtifacts,
 }
 fn sample_manifest_context_for(blob_class: BlobClass) -> ManifestFixtureContext {
+    manifest_context_for_sequence(blob_class, 7)
+}
+fn zero_sequence_manifest_context_for(blob_class: BlobClass) -> ManifestFixtureContext {
+    manifest_context_for_sequence(blob_class, 0)
+}
+fn manifest_context_for_sequence(blob_class: BlobClass, sequence: u64) -> ManifestFixtureContext {
     let (mut request, canonical_payload) = sample_request_with_payload();
     request.blob_class = blob_class;
+    request.sequence = sequence;
     let keypair = checked_fixture_keypair(vec![0x42; 32], Algorithm::Ed25519);
     let digest = request.signing_digest();
     request.signatures[0].signature = checked_signature(keypair.private_key(), &digest);
@@ -9474,7 +10213,7 @@ fn record_taikai_alias_rotation_event_updates_metrics() {
     assert_eq!(snapshot.stream, "stage-a");
     assert_eq!(snapshot.alias_namespace, "sora");
     assert_eq!(snapshot.alias_name, "docs");
-    assert_eq!(snapshot.window_start_sequence, 40);
+    assert_eq!(snapshot.window_start_sequence, 0);
     assert_eq!(snapshot.window_end_sequence, 64);
     assert_eq!(snapshot.manifest_digest_hex, "deadbeef");
     assert_eq!(snapshot.rotations_total, 1);

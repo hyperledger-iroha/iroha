@@ -120,8 +120,21 @@ pub mod soracloud_runtime {
     pub const STATE_DIR: &str = "./storage/soracloud_runtime";
     /// Default reconciliation cadence in milliseconds.
     pub const RECONCILE_INTERVAL_MS: u64 = 5_000;
-    /// Default number of concurrent hydration workers reserved for artifact fetchers.
+    /// Default number of concurrent artifact hydration workers.
+    ///
+    /// This pool is independent of prepared IVM caching and Inrou guest concurrency.
     pub const HYDRATION_CONCURRENCY: NonZeroUsize = nonzero!(4_usize);
+    /// Hard V1 ceiling for concurrent artifact hydration workers.
+    ///
+    /// A remote worker may buffer up to 256 MiB, so V1 limits the pool to 2 GiB of
+    /// concurrent remote payload buffers before protocol and allocator overhead.
+    pub const HYDRATION_CONCURRENCY_MAX: usize = 8;
+    /// Default number of idle prepared IVM runtimes retained across requests.
+    ///
+    /// This cache is independent of artifact hydration and Inrou guest concurrency.
+    pub const PREPARED_RUNTIME_CACHE_CAPACITY: NonZeroUsize = nonzero!(4_usize);
+    /// Hard V1 ceiling for idle prepared IVM runtimes.
+    pub const PREPARED_RUNTIME_CACHE_CAPACITY_MAX: usize = 64;
     /// Default bundle cache budget in bytes.
     pub const BUNDLE_CACHE_BUDGET_BYTES: NonZeroU64 = nonzero!(512_u64 * 1024 * 1024);
     /// Default static-asset cache budget in bytes.
@@ -780,6 +793,10 @@ pub mod network {
     /// Keep this comfortably above the typical integration-test runtime so peers do not churn
     /// before they exchange their first gossip/status messages.
     pub const IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+    /// Maximum total tenure for an accepted transport to authenticate.
+    pub const PREAUTH_TIMEOUT: Duration = Duration::from_secs(30);
+    /// Maximum concurrent pre-authentication transports admitted from one source IP.
+    pub const PREAUTH_MAX_CONNECTIONS_PER_IP: NonZeroUsize = nonzero!(8_usize);
     /// Base deadline for an exact reply to remain owned by one peer writer without a flush.
     pub const REPLY_WRITER_FLUSH_TIMEOUT: Duration = Duration::from_secs(30);
     /// Delay outbound peer dials after startup.

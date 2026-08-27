@@ -685,6 +685,9 @@ class FakeRuntime:
                     "[soracloud_runtime]\n"
                     f'state_dir = "{runtime_dir}"\n'
                     "production_mode = true\n"
+                    f"hydration_concurrency = {module.TAIRA_SORACLOUD_HYDRATION_CONCURRENCY}\n"
+                    "prepared_runtime_cache_capacity = "
+                    f"{module.TAIRA_SORACLOUD_PREPARED_RUNTIME_CACHE_CAPACITY}\n"
                     "[torii.faucet]\n"
                     "enabled = true\n"
                     f'authority = "{FAKE_FAUCET_AUTHORITY}"\n'
@@ -1677,6 +1680,20 @@ class TairaDevnetTests(unittest.TestCase):
             identity_name, uid, gid = module.taira_inrou_identity(index)
             self.assertEqual(identity_name, f"iroha-inrou-{index}")
             self.assertEqual(
+                module.section_assignment(
+                    config, "soracloud_runtime", "hydration_concurrency"
+                ),
+                str(module.TAIRA_SORACLOUD_HYDRATION_CONCURRENCY),
+            )
+            self.assertEqual(
+                module.section_assignment(
+                    config,
+                    "soracloud_runtime",
+                    "prepared_runtime_cache_capacity",
+                ),
+                str(module.TAIRA_SORACLOUD_PREPARED_RUNTIME_CACHE_CAPACITY),
+            )
+            self.assertEqual(
                 module.section_assignment(config, "soracloud_runtime.inrou", "enabled"),
                 "true",
             )
@@ -2380,11 +2397,69 @@ class TairaDevnetTests(unittest.TestCase):
 
         self.assertEqual(peer0.read_text(encoding="utf-8"), peer0_before)
 
+    def test_profile_overlay_rejects_missing_or_drifted_runtime_resource_bounds(
+        self,
+    ) -> None:
+        hydration = (
+            "hydration_concurrency = "
+            f"{module.TAIRA_SORACLOUD_HYDRATION_CONCURRENCY}\n"
+        )
+        prepared = (
+            "prepared_runtime_cache_capacity = "
+            f"{module.TAIRA_SORACLOUD_PREPARED_RUNTIME_CACHE_CAPACITY}\n"
+        )
+        cases = (
+            ("missing-hydration", lambda text: text.replace(hydration, "", 1)),
+            (
+                "drifted-prepared-cache",
+                lambda text: text.replace(
+                    prepared,
+                    "prepared_runtime_cache_capacity = "
+                    f"{module.TAIRA_SORACLOUD_PREPARED_RUNTIME_CACHE_CAPACITY + 1}\n",
+                    1,
+                ),
+            ),
+        )
+        for name, mutate in cases:
+            with self.subTest(name=name):
+                _, target = self.generated_network(f"generated-{name}")
+                peer0 = target / "peer0.toml"
+                peer3 = target / "peer3.toml"
+                peer0_before = peer0.read_text(encoding="utf-8")
+                peer3.write_text(
+                    mutate(peer3.read_text(encoding="utf-8")),
+                    encoding="utf-8",
+                )
+
+                with self.assertRaisesRegex(
+                    module.DevnetError,
+                    "wrong assignment set|exact first-release Taira resource profile",
+                ):
+                    module.apply_canonical_taira_profiles(target)
+
+                self.assertEqual(peer0.read_text(encoding="utf-8"), peer0_before)
+
     def test_canonical_profile_rejects_identity_and_selector_drift(self) -> None:
         runtime = FakeRuntime()
         module.up(self.up_args(), run=runtime.run, request=runtime.request)
         config = self.root / "state" / "network" / "peer2.toml"
         original = config.read_text(encoding="utf-8")
+        config.write_text(
+            original.replace(
+                "hydration_concurrency = "
+                f"{module.TAIRA_SORACLOUD_HYDRATION_CONCURRENCY}",
+                "hydration_concurrency = "
+                f"{module.TAIRA_SORACLOUD_HYDRATION_CONCURRENCY + 1}",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(
+            module.DevnetError, "exact first-release Taira resource profile"
+        ):
+            module.require_canonical_taira_profiles(
+                config.parent, self.trusted_guest_artifact()
+            )
         config.write_text(
             original.replace("portable_vm_uid = 70002", "portable_vm_uid = 70001", 1),
             encoding="utf-8",

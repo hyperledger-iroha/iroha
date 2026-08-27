@@ -9314,8 +9314,7 @@ mod tests {
             world
                 .account_aliases_by_account
                 .insert(account_id.clone(), BTreeSet::from([alias.clone()]));
-            world.account_rekey_records.insert(
-                alias.clone(),
+            world.replace_account_rekey_record_for_testing(
                 iroha_data_model::account::rekey::AccountRekeyRecord::new(
                     alias.clone(),
                     account_id.clone(),

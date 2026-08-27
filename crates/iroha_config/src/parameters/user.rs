@@ -7712,6 +7712,13 @@ pub struct Network {
     /// (clamped to >= 100ms).
     #[config(default = "defaults::network::IDLE_TIMEOUT.into()")]
     pub idle_timeout_ms: DurationMs,
+    /// Maximum total tenure for an accepted transport to authenticate
+    /// (clamped to >= 100ms).
+    #[config(default = "defaults::network::PREAUTH_TIMEOUT.into()")]
+    pub preauth_timeout_ms: DurationMs,
+    /// Maximum concurrent pre-authentication transports admitted from one source IP.
+    #[config(default = "defaults::network::PREAUTH_MAX_CONNECTIONS_PER_IP")]
+    pub preauth_max_connections_per_ip: NonZeroUsize,
     /// Base deadline for an exact reply to await one peer writer's full flush
     /// (clamped to >= 100ms).
     #[config(default = "defaults::network::REPLY_WRITER_FLUSH_TIMEOUT.into()")]
@@ -7994,6 +8001,8 @@ impl Network {
             transaction_gossip_restricted_fallback,
             transaction_gossip_restricted_public_payload,
             idle_timeout_ms: idle_timeout,
+            preauth_timeout_ms: preauth_timeout,
+            preauth_max_connections_per_ip,
             reply_writer_flush_timeout_ms: reply_writer_flush_timeout,
             connect_startup_delay_ms: connect_startup_delay,
             dial_timeout_ms: dial_timeout,
@@ -8168,6 +8177,7 @@ impl Network {
         };
         let min_interval = MIN_TIMER_INTERVAL;
         let idle_timeout = idle_timeout.get().max(min_interval);
+        let preauth_timeout = preauth_timeout.get().max(min_interval);
         let reply_writer_flush_timeout = reply_writer_flush_timeout.get().max(min_interval);
         let dial_timeout = dial_timeout.get().max(min_interval);
         let peer_gossip_period = peer_gossip_period.get().max(min_interval);
@@ -8202,6 +8212,8 @@ impl Network {
                 relay_hub_addresses,
                 relay_ttl,
                 idle_timeout,
+                preauth_timeout,
+                preauth_max_connections_per_ip,
                 reply_writer_flush_timeout,
                 connect_startup_delay: connect_startup_delay.get(),
                 dial_timeout,
@@ -13023,9 +13035,12 @@ pub struct SoracloudRuntime {
         default = "DurationMs(std::time::Duration::from_millis(defaults::soracloud_runtime::RECONCILE_INTERVAL_MS))"
     )]
     pub reconcile_interval_ms: DurationMs,
-    /// Maximum concurrent artifact hydration workers.
+    /// Maximum concurrent artifact hydration workers, independent of Inrou guest concurrency.
     #[config(default = "defaults::soracloud_runtime::HYDRATION_CONCURRENCY")]
     pub hydration_concurrency: NonZeroUsize,
+    /// Maximum idle prepared IVM runtimes retained independently of hydration workers.
+    #[config(default = "defaults::soracloud_runtime::PREPARED_RUNTIME_CACHE_CAPACITY")]
+    pub prepared_runtime_cache_capacity: NonZeroUsize,
     /// Cache budgets for hydrated Soracloud artifacts.
     #[config(default)]
     pub cache_budgets: SoracloudRuntimeCacheBudgets,
@@ -13052,11 +13067,31 @@ impl SoracloudRuntime {
                 ),
             );
         }
+        if self.hydration_concurrency.get() > defaults::soracloud_runtime::HYDRATION_CONCURRENCY_MAX
+        {
+            emitter.emit(
+                Report::new(ParseError::InvalidSoracloudConfig).attach(format!(
+                    "soracloud_runtime.hydration_concurrency must not exceed {}",
+                    defaults::soracloud_runtime::HYDRATION_CONCURRENCY_MAX
+                )),
+            );
+        }
+        if self.prepared_runtime_cache_capacity.get()
+            > defaults::soracloud_runtime::PREPARED_RUNTIME_CACHE_CAPACITY_MAX
+        {
+            emitter.emit(
+                Report::new(ParseError::InvalidSoracloudConfig).attach(format!(
+                    "soracloud_runtime.prepared_runtime_cache_capacity must not exceed {}",
+                    defaults::soracloud_runtime::PREPARED_RUNTIME_CACHE_CAPACITY_MAX
+                )),
+            );
+        }
         actual::SoracloudRuntime {
             production_mode,
             state_dir: self.state_dir.resolve_relative_path(),
             reconcile_interval,
             hydration_concurrency: self.hydration_concurrency,
+            prepared_runtime_cache_capacity: self.prepared_runtime_cache_capacity,
             cache_budgets: self.cache_budgets.parse(),
             inrou: self.inrou.parse(emitter),
             submission,
@@ -13070,6 +13105,7 @@ struct SoracloudRuntimeFields {
     state_dir: Option<WithOrigin<PathBuf>>,
     reconcile_interval_ms: Option<DurationMs>,
     hydration_concurrency: Option<NonZeroUsize>,
+    prepared_runtime_cache_capacity: Option<NonZeroUsize>,
     cache_budgets: Option<SoracloudRuntimeCacheBudgets>,
     inrou: Option<SoracloudRuntimeInrou>,
     submission: Option<SoracloudRuntimeSubmission>,
@@ -13121,6 +13157,12 @@ impl SoracloudRuntimeFields {
                 parser,
                 <NonZeroUsize as json::JsonDeserialize>::json_deserialize,
             ),
+            "prepared_runtime_cache_capacity" => Self::set_unique(
+                &mut self.prepared_runtime_cache_capacity,
+                "prepared_runtime_cache_capacity",
+                parser,
+                <NonZeroUsize as json::JsonDeserialize>::json_deserialize,
+            ),
             "cache_budgets" => Self::set_unique(
                 &mut self.cache_budgets,
                 "cache_budgets",
@@ -13164,6 +13206,9 @@ impl SoracloudRuntimeFields {
             hydration_concurrency: self
                 .hydration_concurrency
                 .unwrap_or(defaults::soracloud_runtime::HYDRATION_CONCURRENCY),
+            prepared_runtime_cache_capacity: self
+                .prepared_runtime_cache_capacity
+                .unwrap_or(defaults::soracloud_runtime::PREPARED_RUNTIME_CACHE_CAPACITY),
             cache_budgets: self.cache_budgets.unwrap_or_default(),
             inrou: self.inrou.unwrap_or_default(),
             submission: self.submission.unwrap_or_default(),
@@ -31783,11 +31828,12 @@ mod offline_cfg_tests {
 #[cfg(test)]
 mod duration_clamp_tests {
     use super::{
-        AssetDefinitionId, BTreeSet, ConfidentialComputeMechanism, DaManifestPolicy, DomainId,
-        Emitter, LaneId, NexusFees, NonZeroU64, RETIRED_LANE_FUNCTIONAL_METADATA_KEYS,
-        SORA_INROU_EPHEMERAL_STORAGE_ALIGNMENT_BYTES_V1, SORA_INROU_MIN_CPU_MILLIS_V1,
-        SORA_INROU_MIN_MEMORY_BYTES_V1, SORA_INROU_VMM_CPU_OVERHEAD_MILLIS_V1,
-        SORA_INROU_VMM_MEMORY_OVERHEAD_BYTES_V1,
+        AssetDefinitionId, BTreeSet, ConfidentialComputeMechanism, ContentAuthMode,
+        DaManifestPolicy, DomainId, Emitter, LaneId, NexusFees, NonZeroU64,
+        RETIRED_LANE_FUNCTIONAL_METADATA_KEYS, SORA_INROU_EPHEMERAL_STORAGE_ALIGNMENT_BYTES_V1,
+        SORA_INROU_MIN_CPU_MILLIS_V1, SORA_INROU_MIN_MEMORY_BYTES_V1,
+        SORA_INROU_VMM_CPU_OVERHEAD_MILLIS_V1, SORA_INROU_VMM_MEMORY_OVERHEAD_BYTES_V1,
+        UniversalAccountId, parse_content_auth_mode,
     };
     use crate::parameters::{
         actual, defaults,
@@ -35237,6 +35283,7 @@ publish_delay_seconds = 17
             runtime.state_dir => defaults::soracloud_runtime::state_dir(),
             runtime.reconcile_interval => StdDuration::from_millis(defaults::soracloud_runtime::RECONCILE_INTERVAL_MS),
             runtime.hydration_concurrency => defaults::soracloud_runtime::HYDRATION_CONCURRENCY,
+            runtime.prepared_runtime_cache_capacity => defaults::soracloud_runtime::PREPARED_RUNTIME_CACHE_CAPACITY,
             runtime.cache_budgets.bundle_bytes => defaults::soracloud_runtime::BUNDLE_CACHE_BUDGET_BYTES,
             inrou.enabled => defaults::soracloud_runtime::INROU_ENABLED,
             inrou.guest_image_max_bytes => defaults::soracloud_runtime::INROU_GUEST_IMAGE_MAX_BYTES,
@@ -35456,7 +35503,7 @@ publish_delay_seconds = 17
         if let Some(enabled) = inrou_enabled {
             write!(
                 source,
-                r"
+                r#"
 [inrou]
 enabled = {enabled}
 portable_vm_uid = 70000
@@ -35468,7 +35515,7 @@ max_memory_bytes = 8589934592
 max_storage_bytes = 68719476736
 start_grace_ms = 30000
 stop_grace_ms = 10000
-",
+"#,
             )
             .expect("writing to an owned string cannot fail");
         }
@@ -35689,7 +35736,7 @@ max_storage_bytes = 10737418240
             let identity_fields = format!("portable_vm_uid = {id}\nportable_vm_gid = {id}");
             let result = actual::Root::from_toml_source(TomlSource::inline(
                 table_with_soracloud_runtime(&format!(
-                    r"
+                    r#"
 [inrou]
 enabled = true
 {identity_fields}
@@ -35698,7 +35745,7 @@ trusted_guest_content_cid = "bafyr6ibrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrge
 max_cpu_millis = 1000
 max_memory_bytes = 1073741824
 max_storage_bytes = 10737418240
-",
+"#,
                 )),
             ));
             assert!(
@@ -35761,7 +35808,7 @@ max_storage_bytes = 10737418240
             let field = retired.split_once(' ').expect("retired selector name").0;
             let error = actual::Root::from_toml_source(TomlSource::inline(
                 table_with_soracloud_runtime(&format!(
-                    r"
+                    r#"
 [inrou]
 enabled = true
 portable_vm_uid = 70000
@@ -35772,7 +35819,7 @@ trusted_guest_content_cid = "bafyr6ibrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrge
 max_cpu_millis = 1000
 max_memory_bytes = 1073741824
 max_storage_bytes = 10737418240
-",
+"#,
                 )),
             ))
             .expect_err("retired first-release selector must be unknown");
@@ -35821,6 +35868,7 @@ max_storage_bytes = 10737418240
 state_dir = "./runtime/custom"
 reconcile_interval_ms = 2500
 hydration_concurrency = 7
+prepared_runtime_cache_capacity = 11
 
 [cache_budgets]
 bundle_bytes = 1024
@@ -35867,6 +35915,7 @@ max_bytes_per_minute = 262144
         assert_all_eq!(
             runtime.reconcile_interval => StdDuration::from_millis(2_500),
             runtime.hydration_concurrency.get() => 7,
+            runtime.prepared_runtime_cache_capacity.get() => 11,
             runtime.cache_budgets.bundle_bytes.get() => 1_024,
             runtime.cache_budgets.model_weight_bytes.get() => 6_144,
             inrou.guest_image_max_bytes.get() => 12_345_678,
@@ -35911,6 +35960,35 @@ max_bytes_per_minute = 262144
                 )))
                 .is_err(),
                 "noncanonical Soracloud runtime configuration must fail closed: {snippet}"
+            );
+        }
+    }
+    #[test]
+    fn soracloud_runtime_worker_and_cache_limits_are_bounded() {
+        for (field, maximum) in [
+            (
+                "hydration_concurrency",
+                defaults::soracloud_runtime::HYDRATION_CONCURRENCY_MAX,
+            ),
+            (
+                "prepared_runtime_cache_capacity",
+                defaults::soracloud_runtime::PREPARED_RUNTIME_CACHE_CAPACITY_MAX,
+            ),
+        ] {
+            actual::Root::from_toml_source(TomlSource::inline(table_with_soracloud_runtime(
+                &format!("{field} = {maximum}\n"),
+            )))
+            .unwrap_or_else(|error| panic!("{field} must accept its V1 ceiling: {error:?}"));
+
+            let rejected = maximum.checked_add(1).expect("V1 limit plus one");
+            let error = actual::Root::from_toml_source(TomlSource::inline(
+                table_with_soracloud_runtime(&format!("{field} = {rejected}\n")),
+            ))
+            .expect_err("values above the V1 ceiling must fail closed");
+            let report = format!("{error:?}");
+            assert!(
+                report.contains(field),
+                "out-of-range {field} diagnostic must identify the field: {report}"
             );
         }
     }

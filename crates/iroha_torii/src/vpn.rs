@@ -46,10 +46,10 @@ use std::{
 };
 const SUPPORTED_EXIT_CLASSES: [&str; 3] = ["standard", "low-latency", "high-security"];
 const DEFAULT_TUNNEL_ADDRESSES: [&str; 2] = ["10.208.0.2/32", "fd53:7261:6574::2/128"];
-// Runtime VPN state is deliberately bounded independently of the number of
-// registered accounts. At most one quote and one session are retained per
-// account. Ordered expiry indexes reclaim terminal entries without scanning;
-// a cache containing only live entries fails closed instead of evicting users.
+// Runtime VPN session state is deliberately bounded independently of the
+// number of registered accounts. Quotes are self-contained signed capabilities
+// and are never retained here; the WSV lease is authoritative after payment.
+// Ordered expiry indexes reclaim cached sessions without scanning.
 const VPN_RUNTIME_ACCOUNT_CAPACITY: usize = 4_096;
 /// Maximum request body accepted by any first-release VPN mutation route.
 pub(crate) const VPN_MUTATION_REQUEST_MAX_BYTES_V1: usize = 16 * 1_024;
@@ -482,23 +482,18 @@ pub(crate) struct VpnQuoteRecord {
     pub directory_snapshot_digest: [u8; 32],
     pub relay_trust_valid_until_ms: u64,
 }
-/// Reverse/expiry indexes, in-flight reservations, and VPN runtime-cache bounds.
+/// Reverse/expiry indexes, in-flight reservations, and the VPN session-cache bound.
 ///
 /// The enclosing `vpn_state_lock` protects these indexes together with every
-/// mutation of `vpn_quotes`, `vpn_sessions`, and `vpn_used_payments`. Keeping
-/// the indexes behind the same lock makes replacement, expiry, and exact
-/// removal atomic without requiring request-time scans of the record maps.
+/// mutation of `vpn_sessions` and `vpn_used_payments`. Keeping the indexes
+/// behind the same lock makes replacement, expiry, and exact removal atomic
+/// without requiring request-time scans of the record maps.
 #[derive(Debug)]
 pub(crate) struct VpnRuntimeState {
-    quote_ids_by_account: HashMap<AccountId, String>,
     session_ids_by_account: HashMap<AccountId, String>,
-    quote_expirations: BTreeSet<(u64, String)>,
     session_expirations: BTreeSet<(u64, String)>,
     settling_session_ids: HashSet<String>,
-    quote_capacity: usize,
     session_capacity: usize,
-    #[cfg(test)]
-    quote_account_lookups: usize,
     #[cfg(test)]
     session_account_lookups: usize,
     #[cfg(test)]
@@ -507,15 +502,10 @@ pub(crate) struct VpnRuntimeState {
 impl Default for VpnRuntimeState {
     fn default() -> Self {
         Self {
-            quote_ids_by_account: HashMap::new(),
             session_ids_by_account: HashMap::new(),
-            quote_expirations: BTreeSet::new(),
             session_expirations: BTreeSet::new(),
             settling_session_ids: HashSet::new(),
-            quote_capacity: VPN_RUNTIME_ACCOUNT_CAPACITY,
             session_capacity: VPN_RUNTIME_ACCOUNT_CAPACITY,
-            #[cfg(test)]
-            quote_account_lookups: 0,
             #[cfg(test)]
             session_account_lookups: 0,
             #[cfg(test)]
@@ -525,9 +515,8 @@ impl Default for VpnRuntimeState {
 }
 #[cfg(test)]
 impl VpnRuntimeState {
-    fn with_capacities(quote_capacity: usize, session_capacity: usize) -> Self {
+    fn with_session_capacity(session_capacity: usize) -> Self {
         Self {
-            quote_capacity,
             session_capacity,
             ..Self::default()
         }
@@ -813,9 +802,6 @@ fn build_quote_id(
     hasher.update(&current_ms.to_be_bytes());
     *hasher.finalize().as_bytes()
 }
-fn build_session_id_from_quote(quote: &VpnQuoteRecord) -> String {
-    hex::encode(quote.session_id)
-}
 fn default_lease_id_hex(record: &VpnSessionRecord) -> String {
     hex::encode(record.lease_id)
 }
@@ -984,6 +970,76 @@ fn validate_quote_record_projection(
         &policy.relay_trust_valid_until_ms
     );
     Ok(())
+}
+fn quote_record_from_lease(
+    lease: &VpnLeaseRecordV1,
+    expected_network_id: &iroha_data_model::NetworkId,
+) -> Result<VpnQuoteRecord, Error> {
+    let signed_quote = &lease.signed_quote;
+    let body = &signed_quote.body;
+    let policy = &body.policy;
+    let expected_address_slot = derive_vpn_address_slot_v1(body.quote_id);
+    if lease.lease_id != body.lease_id
+        || lease.session_id != body.session_id
+        || lease.quote_id != body.quote_id
+        || lease.client_account_id != body.client_account_id
+        || lease.operator_account_id != body.operator_account_id
+        || lease.metering_public_key != body.metering_public_key
+        || lease.asset_definition != body.asset_definition
+        || lease.lease_fee != body.tariff.lease_fee
+        || lease.custody_account_id != policy.escrow_account_id
+        || lease.relay_id != policy.relay_id
+        || lease.tariff != body.tariff
+        || lease.quote_policy != *policy
+        || lease.address_slot != body.address_slot
+        || body.address_slot != expected_address_slot
+        || lease.expires_at_ms != body.expires_at_ms
+        || lease.settlement_grace_ms != body.settlement_grace_ms
+        || lease.opened_at_ms < body.valid_after_ms
+        || lease.opened_at_ms >= body.expires_at_ms
+    {
+        return Err(inconsistent_vpn_state(
+            "consensus VPN lease differs from its retained signed quote",
+        ));
+    }
+    let quote_id = hex::encode(body.quote_id);
+    let record = VpnQuoteRecord {
+        quote_id: quote_id.clone(),
+        lease_id: body.lease_id,
+        session_id: body.session_id,
+        signed_quote: signed_quote.clone(),
+        account_id: body.client_account_id.clone(),
+        exit_class: policy.exit_class.as_label().to_owned(),
+        relay_endpoint: policy.relay_endpoint.clone(),
+        lease_secs: policy.lease_secs,
+        quote_expires_at_ms: body.expires_at_ms,
+        payment_reference: quote_id,
+        fee_asset_id: body.asset_definition.to_string(),
+        escrow_account_id: policy.escrow_account_id.clone(),
+        operator_account_id: body.operator_account_id.clone(),
+        lease_fee: body.tariff.lease_fee.clone(),
+        tariff: body.tariff.clone(),
+        settlement_grace_ms: body.settlement_grace_ms,
+        metering_public_key: body.metering_public_key.clone(),
+        route_pushes: policy.route_pushes.clone(),
+        excluded_routes: policy.excluded_routes.clone(),
+        dns_servers: policy.dns_servers.clone(),
+        tunnel_addresses: policy.tunnel_addresses.clone(),
+        mtu_bytes: policy.mtu_bytes,
+        meter_family: policy.meter_family.clone(),
+        flow_label_bits: policy.flow_label_bits,
+        padding_budget_ms: policy.padding_budget_ms,
+        relay_id: policy.relay_id,
+        relay_mldsa65_public_key: policy.relay_mldsa65_public_key,
+        descriptor_commit: policy.descriptor_commit,
+        tls_server_name: policy.tls_server_name.clone(),
+        relay_tls_spki_sha256: policy.relay_tls_spki_sha256,
+        relay_certificate_sha256: policy.relay_certificate_sha256,
+        directory_snapshot_digest: policy.directory_snapshot_digest,
+        relay_trust_valid_until_ms: policy.relay_trust_valid_until_ms,
+    };
+    validate_quote_record_projection(&record, expected_network_id)?;
+    Ok(record)
 }
 fn open_lease_instruction(
     record: &VpnQuoteRecord,
@@ -1204,127 +1260,6 @@ fn lock_vpn_runtime(app: &SharedAppState) -> std::sync::MutexGuard<'_, VpnRuntim
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
-fn remove_quote_by_id_locked(
-    app: &SharedAppState,
-    state: &mut VpnRuntimeState,
-    quote_id: &str,
-) -> Option<VpnQuoteRecord> {
-    let (_, record) = app.vpn_quotes.remove(quote_id)?;
-    let account_key = &record.account_id;
-    if state
-        .quote_ids_by_account
-        .get(account_key)
-        .is_some_and(|indexed_id| indexed_id == quote_id)
-    {
-        state.quote_ids_by_account.remove(account_key);
-    }
-    state
-        .quote_expirations
-        .remove(&(record.quote_expires_at_ms, record.quote_id.clone()));
-    Some(record)
-}
-
-fn reclaim_expired_quotes_locked(
-    app: &SharedAppState,
-    state: &mut VpnRuntimeState,
-    current_ms: u64,
-) {
-    while let Some((expires_at_ms, quote_id)) = state
-        .quote_expirations
-        .first()
-        .filter(|(expires_at_ms, _)| *expires_at_ms <= current_ms)
-        .cloned()
-    {
-        state
-            .quote_expirations
-            .remove(&(expires_at_ms, quote_id.clone()));
-        let Some(record) = app.vpn_quotes.get(&quote_id).map(|entry| entry.clone()) else {
-            continue;
-        };
-        if record.quote_expires_at_ms == expires_at_ms {
-            let _ = remove_quote_by_id_locked(app, state, &quote_id);
-        }
-    }
-}
-fn quote_for_account_locked(
-    app: &SharedAppState,
-    state: &mut VpnRuntimeState,
-    account_id: &AccountId,
-) -> Option<VpnQuoteRecord> {
-    #[cfg(test)]
-    {
-        state.quote_account_lookups += 1;
-    }
-    let quote_id = state.quote_ids_by_account.get(account_id)?.clone();
-    let record = app.vpn_quotes.get(&quote_id).map(|entry| entry.clone());
-    match record {
-        Some(record) if &record.account_id == account_id => Some(record),
-        _ => {
-            // Self-heal only the authenticated account's stale reverse entry.
-            state.quote_ids_by_account.remove(account_id);
-            None
-        }
-    }
-}
-fn expire_quote_for_account_locked(
-    app: &SharedAppState,
-    state: &mut VpnRuntimeState,
-    account_id: &AccountId,
-    current_ms: u64,
-) {
-    let Some(record) = quote_for_account_locked(app, state, account_id) else {
-        return;
-    };
-    if record.quote_expires_at_ms <= current_ms {
-        let _ = remove_quote_by_id_locked(app, state, &record.quote_id);
-    }
-}
-fn quote_by_id_locked(
-    app: &SharedAppState,
-    state: &mut VpnRuntimeState,
-    quote_id: &str,
-    current_ms: u64,
-) -> Option<VpnQuoteRecord> {
-    let record = app.vpn_quotes.get(quote_id).map(|entry| entry.clone())?;
-    if record.quote_expires_at_ms <= current_ms {
-        let _ = remove_quote_by_id_locked(app, state, quote_id);
-        return None;
-    }
-    Some(record)
-}
-fn insert_quote_locked(
-    app: &SharedAppState,
-    state: &mut VpnRuntimeState,
-    record: VpnQuoteRecord,
-    current_ms: u64,
-) -> Result<(), Error> {
-    validate_quote_record_projection(&record, app.state.network_id_ref())?;
-    reclaim_expired_quotes_locked(app, state, current_ms);
-    let existing = quote_for_account_locked(app, state, &record.account_id);
-    if existing.is_none() && state.quote_ids_by_account.len() >= state.quote_capacity {
-        return Err(not_permitted_error(
-            "vpn runtime quote capacity is exhausted",
-        ));
-    }
-    if let Some(collision) = app.vpn_quotes.get(&record.quote_id) {
-        if collision.account_id != record.account_id {
-            return Err(not_permitted_error(
-                "vpn quote identifier collides with another account",
-            ));
-        }
-    }
-    if let Some(existing) = existing {
-        let _ = remove_quote_by_id_locked(app, state, &existing.quote_id);
-    }
-    state
-        .quote_ids_by_account
-        .insert(record.account_id.clone(), record.quote_id.clone());
-    state
-        .quote_expirations
-        .insert((record.quote_expires_at_ms, record.quote_id.clone()));
-    app.vpn_quotes.insert(record.quote_id.clone(), record);
-    Ok(())
-}
 fn remove_session_by_id_locked(
     app: &SharedAppState,
     state: &mut VpnRuntimeState,
@@ -1361,6 +1296,24 @@ fn remove_session_record_locked(
         app.vpn_used_payments.remove(&record.payment_tx_hash);
     }
     removed
+}
+
+fn remove_session_candidate_locked(
+    app: &SharedAppState,
+    state: &mut VpnRuntimeState,
+    expected: &VpnSessionRecord,
+) -> bool {
+    let Some(current) = app
+        .vpn_sessions
+        .get(&expected.session_id)
+        .map(|entry| entry.clone())
+    else {
+        return false;
+    };
+    if current.lease_id != expected.lease_id {
+        return false;
+    }
+    remove_session_record_locked(app, state, &current).is_some()
 }
 
 fn reclaim_expired_sessions_locked(
@@ -1518,21 +1471,24 @@ fn insert_session_locked(
     state: &mut VpnRuntimeState,
     record: VpnSessionRecord,
     current_ms: u64,
-) -> Result<(), Error> {
+) -> Result<bool, Error> {
     reclaim_expired_sessions_locked(app, state, current_ms);
     let existing = session_for_account_locked(app, state, &record.account_id);
-    if existing.is_none() && state.session_ids_by_account.len() >= state.session_capacity {
-        return Err(not_permitted_error(
-            "vpn runtime session capacity is exhausted",
-        ));
+    if let Some(existing) = existing.as_ref()
+        && existing.lease_id == record.lease_id
+        && existing.session_id == record.session_id
+        && existing.payment_tx_hash == record.payment_tx_hash
+    {
+        return Ok(true);
     }
-    if app.vpn_used_payments.contains_key(&record.payment_tx_hash) {
-        return Err(not_permitted_error(
-            "vpn payment transaction was already used for a session",
-        ));
+    if existing.is_none() && state.session_ids_by_account.len() >= state.session_capacity {
+        // The process-local session map is only an optimization. A paid,
+        // consensus-indexed lease must remain usable when this cache is full;
+        // GET reconstructs the same session directly from WSV.
+        return Ok(false);
     }
     if let Some(collision) = app.vpn_sessions.get(&record.session_id) {
-        if collision.account_id != record.account_id {
+        if collision.account_id != record.account_id || collision.lease_id != record.lease_id {
             return Err(not_permitted_error(
                 "vpn session identifier collides with another account",
             ));
@@ -1555,7 +1511,7 @@ fn insert_session_locked(
         .session_expirations
         .insert((record.expires_at_ms, record.session_id.clone()));
     app.vpn_sessions.insert(record.session_id.clone(), record);
-    Ok(())
+    Ok(true)
 }
 fn list_receipts_for_account(
     app: &SharedAppState,
@@ -1688,6 +1644,7 @@ fn canonical_signed_transaction_hash(tx: &SignedTransaction) -> [u8; 32] {
 
 fn verify_vpn_payment(
     app: &SharedAppState,
+    lease: &VpnLeaseRecordV1,
     quote: &VpnQuoteRecord,
     payment_tx_hash: &str,
 ) -> Result<[u8; 32], Error> {
@@ -1696,20 +1653,19 @@ fn verify_vpn_payment(
     if payment_hash.is_empty() {
         return Err(conversion_error("payment_tx_hash must not be empty"));
     }
-    let _ = decode_hex_32(payment_hash, "payment_tx_hash")?;
+    let requested_payment_hash = decode_hex_32(payment_hash, "payment_tx_hash")?;
     #[cfg(test)]
-    if app.state.committed_height() == 0 && payment_hash == quote.quote_id {
-        return decode_hex_32(payment_hash, "payment_tx_hash");
+    if app.state.committed_height() == 0
+        && requested_payment_hash == lease.open_tx_hash
+        && requested_payment_hash == lease.quote_id
+    {
+        return Ok(requested_payment_hash);
     }
     let (tx, _) = committed_transaction_by_hash(app, payment_hash)?;
     let canonical_payment_hash = canonical_signed_transaction_hash(&tx);
-    let canonical_payment_hash_hex = hex::encode(canonical_payment_hash);
-    if app
-        .vpn_used_payments
-        .contains_key(&canonical_payment_hash_hex)
-    {
+    if canonical_payment_hash != lease.open_tx_hash {
         return Err(not_permitted_error(
-            "vpn payment transaction was already used for a session",
+            "vpn payment transaction does not match the consensus VPN lease opening",
         ));
     }
     if tx.authority() != &quote.account_id {
@@ -1732,9 +1688,6 @@ fn verify_vpn_payment(
             "vpn payment transaction must explicitly open the quoted native XOR VPN lease escrow",
         ));
     }
-    let lease = lease_record_by_id(app, &quote.lease_id).ok_or_else(|| {
-        not_permitted_error("vpn payment transaction did not retain the quoted native VPN lease")
-    })?;
     if lease.status != VpnLeaseStatusV1::Active
         || lease.signed_quote != quote.signed_quote
         || lease.client_account_id != quote.account_id
@@ -1783,10 +1736,6 @@ fn decode_norito_hex<T: norito::codec::Decode>(
     }
     Ok(decoded)
 }
-fn lease_record_by_id(app: &SharedAppState, lease_id: &[u8; 32]) -> Option<VpnLeaseRecordV1> {
-    let world = app.state.world_view();
-    world.vpn_leases().get(lease_id).cloned()
-}
 fn parse_vpn_session_id_hex(session_id: &str) -> Result<[u8; 16], Error> {
     if session_id.len() != 32
         || !session_id
@@ -1803,12 +1752,110 @@ fn parse_vpn_session_id_hex(session_id: &str) -> Result<[u8; 16], Error> {
         .map_err(|error| conversion_error(format!("session_id is invalid: {error}")))?;
     Ok(decoded)
 }
-fn lease_id_from_session_lookup(app: &SharedAppState, session_id: [u8; 16]) -> Option<[u8; 32]> {
+fn active_paid_lease_for_session(
+    app: &SharedAppState,
+    account_id: &AccountId,
+    quote_id: [u8; 32],
+    current_ms: u64,
+) -> Result<(VpnLeaseRecordV1, VpnQuoteRecord), Error> {
+    let network_id = *app.state.network_id_ref();
+    let address_slot = derive_vpn_address_slot_v1(quote_id);
+    let expected_lease_id = derive_vpn_lease_id_v1(&network_id, quote_id, account_id);
+    let expected_session_id =
+        derive_vpn_session_id_v1(&network_id, quote_id, account_id, address_slot);
+    let lease = {
+        let world = app.state.world_view();
+        let account_lease_id = world.vpn_active_lease_by_account().get(account_id).copied();
+        let address_lease_id = world
+            .vpn_active_lease_by_address_slot()
+            .get(&address_slot)
+            .copied();
+        if account_lease_id != Some(expected_lease_id)
+            || address_lease_id != Some(expected_lease_id)
+        {
+            return Err(not_permitted_error(
+                "vpn quote has no exact active consensus-indexed paid lease",
+            ));
+        }
+        let lease = world.vpn_leases().get(&expected_lease_id).ok_or_else(|| {
+            inconsistent_vpn_state(
+                "active VPN account/address indexes reference a missing native VPN lease",
+            )
+        })?;
+        if lease.lease_id != expected_lease_id
+            || lease.session_id != expected_session_id
+            || lease.quote_id != quote_id
+            || &lease.client_account_id != account_id
+            || lease.address_slot != address_slot
+        {
+            return Err(inconsistent_vpn_state(
+                "active VPN account/address indexes differ from the retained native VPN lease",
+            ));
+        }
+        lease.clone()
+    };
+    if lease.status != VpnLeaseStatusV1::Active || lease.expires_at_ms <= current_ms {
+        return Err(not_permitted_error(
+            "vpn quote's consensus-indexed paid lease is not active",
+        ));
+    }
+    let quote = quote_record_from_lease(&lease, &network_id)?;
+    let trust = app.vpn_relay_trust.as_deref().ok_or_else(|| {
+        not_permitted_error("vpn relay trust is not configured on this Torii node")
+    })?;
+    ensure_lease_matches_authenticated_trust(&lease, trust)?;
+    Ok((lease, quote))
+}
+fn revalidate_unchanged_paid_lease(
+    app: &SharedAppState,
+    account_id: &AccountId,
+    quote_id: [u8; 32],
+    expected_lease: &VpnLeaseRecordV1,
+    expected_quote: &VpnQuoteRecord,
+    current_ms: u64,
+) -> Result<VpnLeaseRecordV1, Error> {
+    let (lease, quote) = active_paid_lease_for_session(app, account_id, quote_id, current_ms)?;
+    if &lease != expected_lease || &quote.signed_quote != &expected_quote.signed_quote {
+        return Err(not_permitted_error(
+            "vpn consensus lease changed during session admission",
+        ));
+    }
+    Ok(lease)
+}
+fn active_lease_record_from_wsv(
+    app: &SharedAppState,
+    session_id: [u8; 16],
+    current_ms: u64,
+) -> Result<Option<VpnLeaseRecordV1>, Error> {
     let slot = VpnAddressSlotV1::from_session_id(session_id);
-    let world = app.state.world_view();
-    let lease_id = *world.vpn_active_lease_by_address_slot().get(&slot)?;
-    let lease = world.vpn_leases().get(&lease_id)?;
-    (lease.session_id == session_id).then_some(lease_id)
+    let lease_record = {
+        let world = app.state.world_view();
+        let Some(lease_id) = world.vpn_active_lease_by_address_slot().get(&slot).copied() else {
+            return Ok(None);
+        };
+        let lease = world.vpn_leases().get(&lease_id).ok_or_else(|| {
+            inconsistent_vpn_state("active VPN address slot references a missing native VPN lease")
+        })?;
+        if lease.lease_id != lease_id {
+            return Err(inconsistent_vpn_state(
+                "active VPN address-slot index key differs from the retained VPN lease id",
+            ));
+        }
+        if lease.session_id != session_id {
+            return Err(inconsistent_vpn_state(
+                "active VPN address slot references a different session id",
+            ));
+        }
+        lease.clone()
+    };
+    if lease_record.status != VpnLeaseStatusV1::Active || lease_record.expires_at_ms <= current_ms {
+        return Ok(None);
+    }
+    let trust = app.vpn_relay_trust.as_deref().ok_or_else(|| {
+        not_permitted_error("vpn relay trust is not configured on this Torii node")
+    })?;
+    ensure_lease_matches_authenticated_trust(&lease_record, trust)?;
+    Ok(Some(lease_record))
 }
 struct AuthorizedVpnSettlementContext {
     lease_id: [u8; 32],
@@ -1964,29 +2011,15 @@ fn session_record_from_lease(record: &VpnLeaseRecordV1) -> Result<VpnSessionReco
         bytes_out: 0,
     })
 }
-fn active_session_record_from_wsv(
+fn active_session_record_from_lease(
     app: &SharedAppState,
-    session_id: [u8; 16],
-    current_ms: u64,
-) -> Result<Option<VpnSessionRecord>, Error> {
-    let Some(lease_id) = lease_id_from_session_lookup(app, session_id) else {
-        return Ok(None);
-    };
-    let Some(lease_record) = lease_record_by_id(app, &lease_id) else {
-        return Ok(None);
-    };
-    if lease_record.status != VpnLeaseStatusV1::Active || lease_record.expires_at_ms <= current_ms {
-        return Ok(None);
-    }
-    let trust = app.vpn_relay_trust.as_deref().ok_or_else(|| {
-        not_permitted_error("vpn relay trust is not configured on this Torii node")
-    })?;
-    ensure_lease_matches_authenticated_trust(&lease_record, trust)?;
-    let mut record = session_record_from_lease(&lease_record)?;
+    lease_record: &VpnLeaseRecordV1,
+) -> Result<VpnSessionRecord, Error> {
+    let mut record = session_record_from_lease(lease_record)?;
     let operator_signer = vpn_operator_ticket_signer(app, &record.operator_account_id)?;
     record.helper_ticket_hex =
         build_helper_ticket_hex(&record, record.expires_at_ms, operator_signer.private_key())?;
-    Ok(Some(record))
+    Ok(record)
 }
 fn receipt_record_from_settled_lease(
     record: &VpnLeaseRecordV1,
@@ -2387,10 +2420,6 @@ pub(crate) async fn handle_create_vpn_quote(
         relay_trust_valid_until_ms: trust.valid_until_ms,
     };
     let response = quote_response_from_record(&record, &network_id)?;
-    let mut vpn_state = lock_vpn_runtime(&app);
-    expire_quote_for_account_locked(&app, &mut vpn_state, &record.account_id, current_ms);
-    expire_session_for_account_locked(&app, &mut vpn_state, &record.account_id, current_ms);
-    insert_quote_locked(&app, &mut vpn_state, record, current_ms)?;
     Ok((StatusCode::CREATED, crate::utils::JsonBody(response)).into_response())
 }
 pub(crate) async fn handle_create_vpn_session(
@@ -2409,93 +2438,46 @@ pub(crate) async fn handle_create_vpn_session(
         return Err(not_permitted_error("vpn is disabled on this Torii node"));
     }
     let current_ms = now_ms();
-    let quote_id = request.quote_id.trim();
-    if quote_id.is_empty() {
+    if request.quote_id.trim().is_empty() {
         return Err(conversion_error("quote_id must not be empty"));
     }
+    let quote_id = decode_hex_32(&request.quote_id, "quote_id")?;
     let exit_class = normalize_exit_class(&request.exit_class, &vpn.exit_class)?;
     let metering_public_key = parse_metering_public_key(&request.metering_public_key_hex)?;
     if request.payment_tx_hash.trim().is_empty() {
         return Err(conversion_error("payment_tx_hash must not be empty"));
     }
     let payment_tx_hash = hex::encode(decode_hex_32(&request.payment_tx_hash, "payment_tx_hash")?);
-    let quote = {
-        let mut vpn_state = lock_vpn_runtime(&app);
-        expire_quote_for_account_locked(&app, &mut vpn_state, &account_id, current_ms);
-        expire_session_for_account_locked(&app, &mut vpn_state, &account_id, current_ms);
-        let Some(quote) = quote_by_id_locked(&app, &mut vpn_state, quote_id, current_ms) else {
-            return Err(not_permitted_error(
-                "vpn quote is missing, expired, or already consumed",
-            ));
-        };
-        if quote.account_id != account_id {
-            return Err(not_permitted_error(
-                "vpn quote belongs to a different account",
-            ));
-        }
-        if quote.exit_class != exit_class {
-            return Err(not_permitted_error(
-                "vpn quote exit class does not match session request",
-            ));
-        }
-        if metering_public_key != quote.metering_public_key {
-            return Err(not_permitted_error(
-                "vpn session metering key does not match the quoted native lease",
-            ));
-        }
-        vpn_operator_ticket_signer(&app, &quote.operator_account_id)?;
-        remove_quote_by_id_locked(&app, &mut vpn_state, quote_id)
-            .ok_or_else(|| conversion_error("vpn quote disappeared while creating the session"))?
-    };
-    // Payment verification reads committed WSV/block state and must not hold
-    // the compound runtime-cache lock while doing so.
-    let canonical_payment_tx_hash = verify_vpn_payment(&app, &quote, &payment_tx_hash)?;
-    let session_id = build_session_id_from_quote(&quote);
-    let expires_at_ms = quote.quote_expires_at_ms;
-    let mut record = VpnSessionRecord {
-        session_id: session_id.clone(),
-        lease_id: quote.lease_id,
-        account_id: quote.account_id,
-        exit_class: quote.exit_class,
-        relay_endpoint: quote.relay_endpoint,
-        lease_secs: quote.lease_secs,
-        expires_at_ms,
-        connected_at_ms: current_ms,
-        meter_family: quote.meter_family,
-        quote_id: quote.quote_id,
-        payment_reference: quote.payment_reference,
-        payment_tx_hash: hex::encode(canonical_payment_tx_hash),
-        fee_asset_id: quote.fee_asset_id,
-        escrow_account_id: quote.escrow_account_id,
-        operator_account_id: quote.operator_account_id,
-        lease_fee: quote.lease_fee,
-        tariff: quote.tariff,
-        flow_label_bits: quote.flow_label_bits,
-        padding_budget_ms: quote.padding_budget_ms,
-        relay_id: quote.relay_id,
-        relay_mldsa65_public_key: quote.relay_mldsa65_public_key,
-        descriptor_commit: quote.descriptor_commit,
-        tls_server_name: quote.tls_server_name,
-        relay_tls_spki_sha256: quote.relay_tls_spki_sha256,
-        relay_certificate_sha256: quote.relay_certificate_sha256,
-        directory_snapshot_digest: quote.directory_snapshot_digest,
-        relay_trust_valid_until_ms: quote.relay_trust_valid_until_ms,
-        metering_public_key,
-        route_pushes: quote.route_pushes,
-        excluded_routes: quote.excluded_routes,
-        dns_servers: quote.dns_servers,
-        tunnel_addresses: quote.tunnel_addresses,
-        mtu_bytes: quote.mtu_bytes,
-        helper_ticket_hex: String::new(),
-        bytes_in: 0,
-        bytes_out: 0,
-    };
-    let operator_signer = vpn_operator_ticket_signer(&app, &record.operator_account_id)?;
-    record.helper_ticket_hex =
-        build_helper_ticket_hex(&record, expires_at_ms, operator_signer.private_key())?;
+    // Resolve both consensus indexes and the retained lease from one WSV view.
+    // The signed quote is reconstructed from that durable lease, so unpaid
+    // quote issuance consumes no process-local capacity and works across nodes.
+    let (lease, quote) = active_paid_lease_for_session(&app, &account_id, quote_id, current_ms)?;
+    if quote.exit_class != exit_class {
+        return Err(not_permitted_error(
+            "vpn quote exit class does not match session request",
+        ));
+    }
+    if metering_public_key != quote.metering_public_key {
+        return Err(not_permitted_error(
+            "vpn session metering key does not match the quoted native lease",
+        ));
+    }
+    let canonical_payment_tx_hash = verify_vpn_payment(&app, &lease, &quote, &payment_tx_hash)?;
+    // Transaction resolution can overlap a consensus transition. Re-read both
+    // active indexes after it and issue a helper ticket only for the unchanged,
+    // still-active durable lease.
+    let admission_ms = now_ms();
+    let final_lease =
+        revalidate_unchanged_paid_lease(&app, &account_id, quote_id, &lease, &quote, admission_ms)?;
+    let record = active_session_record_from_lease(&app, &final_lease)?;
+    if record.payment_tx_hash != hex::encode(canonical_payment_tx_hash) {
+        return Err(inconsistent_vpn_state(
+            "consensus VPN lease payment projection differs from its committed transaction",
+        ));
+    }
     let response = response_from_record(&record);
     let mut vpn_state = lock_vpn_runtime(&app);
-    insert_session_locked(&app, &mut vpn_state, record, current_ms)?;
+    let _cached = insert_session_locked(&app, &mut vpn_state, record, admission_ms)?;
     Ok((StatusCode::CREATED, crate::utils::JsonBody(response)).into_response())
 }
 pub(crate) async fn handle_get_vpn_session(
@@ -2512,13 +2494,26 @@ pub(crate) async fn handle_get_vpn_session(
         let mut vpn_state = lock_vpn_runtime(&app);
         session_by_id_locked(&app, &mut vpn_state, session_id, current_ms)
     };
-    let record = if let Some(record) = cached_record {
-        record
-    } else if let Some(record) = active_session_record_from_wsv(&app, session_id_bytes, current_ms)?
-    {
-        record
-    } else {
-        return Ok(StatusCode::NOT_FOUND.into_response());
+    // WSV is authoritative for lease lifecycle. Keep its snapshot outside the
+    // runtime-cache lock, then conditionally evict only the candidate observed
+    // before that snapshot so a concurrent replacement cannot be removed.
+    let active_lease = active_lease_record_from_wsv(&app, session_id_bytes, current_ms)?;
+    let record = match (cached_record.as_ref(), active_lease.as_ref()) {
+        (Some(cached), Some(lease)) if cached.lease_id == lease.lease_id => cached.clone(),
+        (cached, None) => {
+            if let Some(cached) = cached {
+                let mut vpn_state = lock_vpn_runtime(&app);
+                let _ = remove_session_candidate_locked(&app, &mut vpn_state, cached);
+            }
+            return Ok(StatusCode::NOT_FOUND.into_response());
+        }
+        (cached, Some(lease)) => {
+            if let Some(cached) = cached {
+                let mut vpn_state = lock_vpn_runtime(&app);
+                let _ = remove_session_candidate_locked(&app, &mut vpn_state, cached);
+            }
+            active_session_record_from_lease(&app, lease)?
+        }
     };
     if record.account_id != account_id {
         return Err(not_permitted_error(

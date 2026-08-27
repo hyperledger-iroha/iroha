@@ -159,14 +159,6 @@ Completed history lives in [`status.md`](./status.md).
 
 ## Torii first-release closure
 
-- Define governed DA lane/epoch producer authority, an admissible epoch
-  horizon, and an atomic durable retirement operation for replay cursors and
-  receipts. Enforce that policy before replay-window reservation so arbitrary
-  authenticated accounts cannot consume the finite lane/epoch inventory.
-- Specify a canonical, size-bounded Taikai anchor acknowledgement whose proof
-  is authenticated and bound to the exact request digest and manifest ID.
-  Require HTTPS outside loopback testing, same-origin/no redirects, request
-  deadlines, and verified receipt persistence before source artefacts retire.
 - Make DA spool recovery transactional: journal server-owned timestamps and
   intended artefact bytes before the first immutable write, then resume or
   quarantine receipt-less partial transactions deterministically after
@@ -451,6 +443,14 @@ Completed history lives in [`status.md`](./status.md).
 
 ## SoraNet first-release security qualification
 
+- Qualify the shared P2P pre-authentication gate through live TCP and QUIC
+  listeners under global-capacity saturation, authentication success, timeout,
+  shutdown, IPv4-mapped/native-IPv6 sources, and legitimate shared-NAT load.
+  Archive rejection-counter and bounded-resource evidence from the release
+  build.
+- Exercise stateless VPN quotes across Torii restart and load-balanced nodes,
+  then saturate the optional process session cache and prove an exact paid,
+  active WSV lease still creates the same canonical session and helper ticket.
 - Exercise the hardened relay, puzzle, DNS, VPN backend, and privileged helper
   boundaries on Linux with real TUN devices, pidfds, owner-private runtime
   secrets, DNS rollback, process replacement, partial writes, and hostile local
@@ -611,10 +611,15 @@ close the internal blockers below:
   probe. Host JDK 21 and the exact NDK are present, but no ADB device,
   governance-aligned Android trust roots, signed reference slot, or complete
   offline AndroidX test cache is available.
-- Keep tagged and manually dispatched mobile production capability forced
-  false independently for Apple and Android until the workflow authenticates
-  a protected, source-bound receipt for that exact platform. Never let one
-  platform's receipt enable the other platform's artifacts.
+- Execute the implemented platform-separated mobile authorization workflow
+  only after the Apple and Android protected environments contain current,
+  source-bound physical-device evidence. Each build now derives production
+  mode from the exact protected promotion run and requires its own OIDC-attested
+  authorization digest; the combined publisher independently reverifies both
+  receipts, both complete build-job package digests, every internal checksum,
+  and the exact fourteen-file final release inventory before any release
+  mutation. Run that implemented path on the real protected hosts; repository
+  fixtures do not replace the deployment-owned promotion receipt.
 - Freeze a clean immutable source commit with exactly one accepted SSH
   signature and no tracked or untracked changes. The current unsigned
   development HEAD and dirty checkout are not candidate source. Qualify the
@@ -28464,23 +28469,18 @@ hardening for SORA Parliament policy juries.
 
 ## Kagemusha protected mobile production publication
 
-**Status:** outstanding deployment/release qualification work; the ABI-21/V4
-runtime and legitimate full/partial redemption paths are implemented.
+**Status:** source implementation complete; protected-host execution and release
+qualification remain outstanding. The ABI-21/V4 runtime and legitimate
+full/partial redemption paths are implemented.
 
-- Produce separate, attested Apple and Android build-authorization receipts
-  from their own protected physical-device qualification lanes. Each receipt
-  must bind the platform, source commit and closure, release/tag identity,
-  manifest/policy/promotion digests, ABI-21/native ABI-23, and the exact
-  `privacy-production-enabled` feature set.
-- Let each mobile build job enable only its own platform after independently
-  verifying its receipt and GitHub attestation. Receipt coordinates may select
-  evidence but must never act as a trusted boolean, and Apple evidence must not
-  authorize Android or vice versa.
-- Require both platform receipt digests before publishing the combined mobile
-  release, and embed the appropriate authorization digest in each artifact's
-  provenance. Tag builds without both receipts must not publish default-off
-  artifacts under the final production release identity.
-- The current protected promotion workflow validates physical iOS evidence but
-  emits no durable authorization receipt; there is no equivalent protected
-  Android evidence lane yet. Resolve both deployment-owned prerequisites before
-  advertising official production mobile packages.
+- Provision and approve the `kagemusha-v4-production` and
+  `kagemusha-v4-android-production` environments with the exact protected
+  runners, current physical-device evidence, trust roots, and root-custodied
+  release inputs required by the checked-in workflow.
+- Run the platform-separated authorization workflow from one clean immutable
+  `main` commit. Retain both canonical authorization documents, both pinned
+  Kagami verification reports, and both GitHub OIDC bundles, then publish the
+  matching canonical mobile tag through the guarded combined publisher.
+- Do not advertise the official production mobile packages until that real
+  protected run and its release readback complete. Source and fixture checks do
+  not substitute for device evidence or protected-environment approval.

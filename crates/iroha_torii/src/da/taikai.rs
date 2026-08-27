@@ -284,6 +284,37 @@ pub(crate) mod taikai_ingest {
                         ),
                     ));
                 }
+                let expected_start = previous
+                    .window_end_sequence
+                    .checked_add(1)
+                    .ok_or_else(|| {
+                        internal_error(
+                            "committed Taikai routing manifest lineage has no representable successor"
+                                .into(),
+                        )
+                    })?;
+                if manifest.segment_window.start_sequence != expected_start {
+                    return Err(bad_request(
+                        META_TAIKAI_TRM,
+                        format!(
+                            "routing manifest window {}–{} does not immediately follow previously accepted window {}–{} for alias {}.{}; expected start {expected_start}",
+                            manifest.segment_window.start_sequence,
+                            manifest.segment_window.end_sequence,
+                            previous.window_start_sequence,
+                            previous.window_end_sequence,
+                            self.alias_name,
+                            self.alias_namespace
+                        ),
+                    ));
+                }
+            } else if manifest.segment_window.start_sequence != 0 {
+                return Err(bad_request(
+                    META_TAIKAI_TRM,
+                    format!(
+                        "initial routing manifest window for alias {}.{} must start at sequence 0",
+                        self.alias_name, self.alias_namespace
+                    ),
+                ));
             }
             Ok(())
         }
@@ -357,7 +388,7 @@ pub(crate) mod taikai_ingest {
             })?;
             let artifact_base_id = pending.artifact_base_id.as_deref().ok_or_else(|| {
                 internal_error(
-                    "pending Taikai routing manifest lineage is missing artifact provenance",
+                    "pending Taikai routing manifest lineage is missing artifact provenance".into(),
                 )
             })?;
             let coordinates = parse_taikai_artifact_base_id(artifact_base_id).map_err(|err| {
@@ -367,7 +398,8 @@ pub(crate) mod taikai_ingest {
             })?;
             if coordinates.storage_ticket.as_bytes() != coordinates.fingerprint.as_bytes() {
                 return Err(internal_error(
-                    "pending Taikai routing manifest artifact identity does not bind the storage ticket to its replay fingerprint",
+                    "pending Taikai routing manifest artifact identity does not bind the storage ticket to its replay fingerprint"
+                        .into(),
                 ));
             }
             let receipt = receipt_log
@@ -387,7 +419,8 @@ pub(crate) mod taikai_ingest {
             };
             if receipt.storage_ticket != coordinates.storage_ticket {
                 return Err(internal_error(
-                    "pending Taikai routing manifest lineage does not match the durable receipt storage ticket",
+                    "pending Taikai routing manifest lineage does not match the durable receipt storage ticket"
+                        .into(),
                 ));
             }
             validate_pending_trm_artifact(&self.manifest_store_dir, &pending).map_err(|err| {
@@ -519,6 +552,11 @@ pub(crate) mod taikai_ingest {
             artifact_base_id: Option<String>,
         ) -> Result<(), (StatusCode, String)> {
             let record = self.build_record(window, manifest_digest_hex, artifact_base_id)?;
+            validate_lineage_successor(self.previous.as_ref(), &record).map_err(|err| {
+                internal_error(format!(
+                    "failed to validate Taikai routing manifest lineage before commit: {err}"
+                ))
+            })?;
             write_lineage_record(&self.record_path, &record).map_err(|err| {
                 internal_error(format!(
                     "failed to persist Taikai routing manifest lineage `{}`: {err}",
@@ -628,7 +666,7 @@ pub(crate) mod taikai_ingest {
                 )));
             }
             let mut guard = TrmLineageGuard::new(spool_dir, &alias)?.ok_or_else(|| {
-                internal_error("Taikai lineage recovery requires durable storage")
+                internal_error("Taikai lineage recovery requires durable storage".into())
             })?;
             guard.recover_pending(receipt_log)?;
         }
@@ -1245,6 +1283,21 @@ pub(crate) mod taikai_ingest {
                     "pending Taikai routing manifest overlaps the committed segment window",
                 ));
             }
+            let expected_start = previous.window_end_sequence.checked_add(1).ok_or_else(|| {
+                invalid_lineage_record(
+                    "committed Taikai routing manifest lineage has no representable successor",
+                )
+            })?;
+            if candidate.window_start_sequence != expected_start {
+                return Err(invalid_lineage_record(format!(
+                    "pending Taikai routing manifest starts at sequence {}; expected contiguous successor {expected_start}",
+                    candidate.window_start_sequence
+                )));
+            }
+        } else if candidate.window_start_sequence != 0 {
+            return Err(invalid_lineage_record(
+                "initial Taikai routing manifest lineage must start at sequence 0",
+            ));
         }
         Ok(())
     }

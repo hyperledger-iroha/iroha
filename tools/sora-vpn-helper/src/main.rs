@@ -94,6 +94,8 @@ const CONNECT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const CONNECT_READY_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
+#[cfg(target_os = "linux")]
+const VPN_STREAM_FINISH_TIMEOUT: Duration = Duration::from_secs(5);
 const SYSTEM_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 #[cfg(target_os = "linux")]
 const SYSTEM_COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(25);
@@ -4662,9 +4664,12 @@ async fn run_network_worker_session(
         Ok(exit) => (0, exit.message.as_str()),
         Err(_) => (u64::MAX, "unprivileged network worker failed"),
     };
-    let _ = protected_send.shutdown().await;
+    let finish_queued = protected_send.shutdown().await.is_ok();
     drop(protected_send);
     drop(protected_recv);
+    if finish_queued {
+        let _ = timeout(VPN_STREAM_FINISH_TIMEOUT, send.stopped()).await;
+    }
     connection.close(0u32.into(), close_message.as_bytes());
     endpoint.close(0u32.into(), close_message.as_bytes());
     endpoint.wait_idle().await;
@@ -13184,6 +13189,7 @@ mod tests {
         let raw_payload =
             test_connect_payload_json(session_id, &ticket, Some(metering_seed.as_str()));
         let payload = parse_connect_payload(Some(&raw_payload)).expect("payload");
+        let circuit_id = ticket.session_id;
         let mut signer = UsageVoucherSigner::from_payload(&payload, ticket).expect("signer");
         let counters = UsageVoucherCounters::default();
         let context =
@@ -13211,8 +13217,8 @@ mod tests {
 
         send_usage_voucher_control_cell(
             &mut writer,
-            session_id,
-            vpn_flow_label_from_session_id(session_id).expect("flow label"),
+            circuit_id,
+            vpn_flow_label_from_session_id(circuit_id).expect("flow label"),
             payload.padding_budget_ms,
             &counters,
             &mut signer,

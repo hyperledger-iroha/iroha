@@ -114,6 +114,8 @@ TAIRA_NEXUS_STORAGE_WEIGHTS = (
 )
 STORAGE_WEIGHT_BASIS_POINTS = 10_000
 TAIRA_SORAFS_MAX_CAPACITY_BYTES = 13_743_895_347
+TAIRA_SORACLOUD_HYDRATION_CONCURRENCY = 4
+TAIRA_SORACLOUD_PREPARED_RUNTIME_CACHE_CAPACITY = 4
 TAIRA_INROU_IDENTITY_BASE = 70_000
 TAIRA_INROU_IDENTITY_SLOTS = PEER_COUNT
 TAIRA_INROU_IDENTITY_NAME_PREFIX = "iroha-inrou-"
@@ -2884,7 +2886,8 @@ def _canonical_inrou_text(config: Path, text: str, peer_index: int) -> str:
     """Render the one-backend, one-VM Taira V1 runtime overlay."""
 
     lines, sections = _generated_config_sections(config, text)
-    _one_storage_section(config, sections, _SORACLOUD_RUNTIME_SECTION)
+    runtime = _one_storage_section(config, sections, _SORACLOUD_RUNTIME_SECTION)
+    _require_canonical_taira_runtime_profile(config, lines, runtime)
     egress = _one_storage_section(config, sections, _SORACLOUD_RUNTIME_EGRESS_SECTION)
     retained_inrou = [
         section[0]
@@ -2934,6 +2937,39 @@ def _canonical_inrou_text(config: Path, text: str, peer_index: int) -> str:
         f"stop_grace_ms = {TAIRA_INROU_STOP_GRACE_MS}\n\n"
     )
     return "".join((*lines[: egress[2]], replacement, *lines[egress[3] :]))
+
+
+def _require_canonical_taira_runtime_profile(
+    config: Path,
+    lines: Sequence[str],
+    runtime: tuple[str, bool, int, int],
+) -> None:
+    """Require the exact first-release Taira Soracloud resource profile."""
+
+    assignments = _storage_section_assignments(config, lines, runtime)
+    _require_exact_keys(
+        config,
+        _SORACLOUD_RUNTIME_SECTION,
+        assignments,
+        {
+            "state_dir",
+            "production_mode",
+            "hydration_concurrency",
+            "prepared_runtime_cache_capacity",
+        },
+    )
+    expected = {
+        "production_mode": "true",
+        "hydration_concurrency": str(TAIRA_SORACLOUD_HYDRATION_CONCURRENCY),
+        "prepared_runtime_cache_capacity": str(
+            TAIRA_SORACLOUD_PREPARED_RUNTIME_CACHE_CAPACITY
+        ),
+    }
+    if any(assignments[field] != value for field, value in expected.items()):
+        fail(
+            "generated [soracloud_runtime] is not the exact first-release "
+            f"Taira resource profile: {config}"
+        )
 
 
 def _atomic_replace_generated_config(path: Path, text: str) -> None:
@@ -3068,7 +3104,8 @@ def _require_canonical_taira_profiles(
             label=f"peer{peer_index} config",
         )
         lines, sections = _generated_config_sections(config, text)
-        _one_storage_section(config, sections, _SORACLOUD_RUNTIME_SECTION)
+        runtime = _one_storage_section(config, sections, _SORACLOUD_RUNTIME_SECTION)
+        _require_canonical_taira_runtime_profile(config, lines, runtime)
         egress = _one_storage_section(config, sections, _SORACLOUD_RUNTIME_EGRESS_SECTION)
         inrou = _one_storage_section(config, sections, _SORACLOUD_RUNTIME_INROU_SECTION)
         related = [

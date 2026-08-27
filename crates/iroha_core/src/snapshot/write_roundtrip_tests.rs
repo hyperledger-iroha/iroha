@@ -213,6 +213,18 @@ async fn signed_snapshot_roundtrip_preserves_authoritative_alias_revert_maps() {
         );
         records.commit();
     }
+    {
+        let mut records_by_account = state.world.account_rekey_records_by_account.block();
+        assert!(
+            records_by_account
+                .insert(
+                    owner.clone(),
+                    std::collections::BTreeSet::from([account_alias.clone()]),
+                )
+                .is_none()
+        );
+        records_by_account.commit();
+    }
     let definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").expect("asset domain"),
         "restart_asset".parse().expect("asset name"),
@@ -240,6 +252,24 @@ async fn signed_snapshot_roundtrip_preserves_authoritative_alias_revert_maps() {
                 .is_none()
         );
         definitions.commit();
+    }
+    let registration_header =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new([b'h', 0xA5]));
+    let incarnation = iroha_data_model::nexus::AxtAssetIncarnationV1::derive(
+        &state.network_id,
+        &definition_id,
+        &registration_header,
+        &Hash::new([b'e', 0xA5]),
+        0,
+    );
+    {
+        let mut incarnations = state.world.axt_asset_incarnations.block();
+        assert!(
+            incarnations
+                .insert(definition_id.clone(), incarnation)
+                .is_none()
+        );
+        incarnations.commit();
     }
     {
         let mut bindings = state.world.asset_definition_alias_bindings.block();
@@ -305,12 +335,29 @@ async fn signed_snapshot_roundtrip_preserves_authoritative_alias_revert_maps() {
     let aliases = restored.world.account_aliases.block_and_revert();
     assert!(aliases.get(&account_alias).is_none());
     aliases.commit();
+    let aliases_by_account = restored.world.account_aliases_by_account.block_and_revert();
+    assert!(
+        !aliases_by_account
+            .get(&owner)
+            .is_some_and(|aliases| aliases.contains(&account_alias)),
+        "restored reverse alias index must revert with its authoritative binding"
+    );
+    aliases_by_account.commit();
     let records = restored.world.account_rekey_records.block_and_revert();
     assert!(records.get(&account_alias).is_none());
     records.commit();
+    let records_by_account = restored
+        .world
+        .account_rekey_records_by_account
+        .block_and_revert();
+    assert!(records_by_account.is_empty());
+    records_by_account.commit();
     let definitions = restored.world.asset_definitions.block_and_revert();
     assert!(definitions.get(&definition_id).is_none());
     definitions.commit();
+    let incarnations = restored.world.axt_asset_incarnations.block_and_revert();
+    assert!(incarnations.get(&definition_id).is_none());
+    incarnations.commit();
     let definition_bindings = restored
         .world
         .asset_definition_alias_bindings

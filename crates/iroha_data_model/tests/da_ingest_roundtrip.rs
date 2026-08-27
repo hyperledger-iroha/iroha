@@ -1,8 +1,12 @@
 //! Round-trip tests for DA ingest/manifest Norito types.
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature};
 use iroha_data_model::{
-    NetworkId, account::AccountId, block::BlockHeader, da::prelude::*, nexus::LaneId,
-    sorafs::pin_registry::StorageClass,
+    NetworkId,
+    account::AccountId,
+    block::BlockHeader,
+    da::prelude::*,
+    nexus::LaneId,
+    sorafs::pin_registry::{ManifestDigest, StorageClass},
 };
 use norito::{
     codec::{DecodeAll as _, Encode as _},
@@ -95,7 +99,36 @@ fn sample_ingest_request() -> DaIngestRequest {
             signer: sample_public_key(),
             signature: sample_signature(0x42),
         }],
+        pin_scope_signatures: Vec::new(),
     }
+}
+
+#[test]
+fn pin_scope_witnesses_roundtrip_without_changing_primary_digest() {
+    let mut request = sample_ingest_request();
+    let primary_digest = request.signing_digest();
+    let scope = DaPinScopeV1::new(
+        &request.authorization(),
+        sample_ticket(0x41),
+        ManifestDigest::new(*sample_digest(0x42).as_bytes()),
+        Some("roundtrip.example".to_owned()),
+    );
+    let key_pair = KeyPair::try_from_seed(vec![0x43; 32], Algorithm::Ed25519)
+        .expect("valid deterministic scope witness key");
+    request
+        .try_add_pin_scope_signature(&scope, &key_pair)
+        .expect("add pin-scope witness");
+    assert_eq!(request.signing_digest(), primary_digest);
+    assert!(
+        request
+            .pin_scope_authorization(scope)
+            .has_valid_canonical_signatures()
+    );
+
+    let bytes = norito::to_bytes(&request).expect("encode request with pin-scope witness");
+    let decoded: DaIngestRequest =
+        norito::decode_from_bytes(&bytes).expect("decode request with pin-scope witness");
+    assert_eq!(decoded, request);
 }
 fn sample_ingest_receipt() -> DaIngestReceipt {
     DaIngestReceipt {

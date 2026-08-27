@@ -402,7 +402,7 @@ fn build_taikai_request(
         client_blob_id: digest,
         lane_id: LaneId::SINGLE,
         epoch: 7,
-        sequence: 3,
+        sequence: 0,
         blob_class: BlobClass::TaikaiSegment,
         codec: BlobCodec("video/cmaf".into()),
         erasure_profile: ErasureProfile::default(),

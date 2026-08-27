@@ -45,6 +45,8 @@ const DA_RECEIPT_SIGNATURE_MAX_BYTES_V1: usize = 4 * 1024;
 const DA_MANIFEST_ARTIFACT_MAX_BYTES_V1: usize = 2 * 1024 * 1024;
 /// First-release ceiling for one authorised DA pin-intent spool body.
 const DA_PIN_INTENT_ARTIFACT_MAX_BYTES_V1: usize = 2 * 1024 * 1024;
+/// First-release ceiling for one unsigned producer pin-scope challenge.
+const DA_PIN_SCOPE_ARTIFACT_MAX_BYTES_V1: usize = 64 * 1024;
 const TICKET_ARTIFACTS_DIR: &str = "artifacts";
 const MANIFEST_ARTIFACT_FILE_NAME: &str = "manifest.norito";
 const PDP_COMMITMENT_ARTIFACT_FILE_NAME: &str = "pdp-commitment.norito";
@@ -1132,7 +1134,8 @@ pub enum ReceiptInsertOutcome {
         /// Highest sequence currently recorded for the lane/epoch.
         highest: u64,
     },
-    /// Sequence skipped over the next required slot.
+    /// Sequence skipped over the next required slot, including sequence zero for a fresh
+    /// lane/epoch.
     SequenceGap {
         /// Next sequence expected by the durable receipt log.
         expected_next: u64,
@@ -1211,6 +1214,13 @@ impl ReceiptScanSummary {
         Ok(())
     }
     fn validate_contiguous(&self, lane_epoch: LaneEpoch) -> eyre::Result<()> {
+        if self.minimum_sequence != 0 {
+            return Err(eyre!(
+                "durable DA receipt sequence for lane {:?} starts at {}; expected 0",
+                lane_epoch,
+                self.minimum_sequence
+            ));
+        }
         let expected_count = self
             .maximum_sequence
             .checked_sub(self.minimum_sequence)
@@ -1430,7 +1440,8 @@ impl DaReceiptLog {
             index: Arc::new(NonPoisoningMutex::new(BTreeMap::new())),
         }
     }
-    /// Append a receipt to the log, enforcing monotonic sequence ordering per lane/epoch.
+    /// Append a receipt to the log, enforcing a zero origin and contiguous ordering per
+    /// lane/epoch.
     pub fn append(
         &self,
         lane_epoch: LaneEpoch,
@@ -1458,6 +1469,7 @@ impl DaReceiptLog {
         let receipt_digest = *blake3::hash(&encoded).as_bytes();
         let manifest_hash = receipt.manifest_hash;
         let mut guard = self.lock_index();
+        let has_receipt_head = guard.contains_key(&lane_epoch);
         if let Some(existing) = guard.get(&lane_epoch) {
             if sequence == existing.sequence && existing.receipt_digest == receipt_digest {
                 if existing.fingerprint != fingerprint {
@@ -1501,7 +1513,8 @@ impl DaReceiptLog {
                 self.cursor_store.max_lane_epochs()
             ));
         }
-        if let Some(highest) = self.cursor_store.highest_sequence(lane_epoch) {
+        let cursor_highest = self.cursor_store.highest_sequence(lane_epoch);
+        if let Some(highest) = cursor_highest {
             if sequence <= highest {
                 return Ok(ReceiptInsertOutcome::StaleSequence { highest });
             }
@@ -1513,6 +1526,12 @@ impl DaReceiptLog {
                     observed: sequence,
                 });
             }
+        }
+        if !has_receipt_head && cursor_highest.is_none() && sequence != 0 {
+            return Ok(ReceiptInsertOutcome::SequenceGap {
+                expected_next: 0,
+                observed: sequence,
+            });
         }
         let path = self.write_receipt_file(&receipt, sequence, &fingerprint, &encoded)?;
         self.cursor_store
@@ -2442,13 +2461,13 @@ mod temp_artifact_tests {
             signer.public_key().clone(),
         )
         .expect("initial receipt log");
-        let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0xCC);
+        let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 0, 0xCC);
         assert!(matches!(
-            log.append(lane_epoch, 1, receipt, test_fingerprint(0xCC))
+            log.append(lane_epoch, 0, receipt, test_fingerprint(0xCC))
                 .expect("append retired receipt"),
             ReceiptInsertOutcome::Stored { .. }
         ));
-        let active_receipt = receipt_file_path(&receipt_dir, lane_epoch, 1, test_fingerprint(0xCC));
+        let active_receipt = receipt_file_path(&receipt_dir, lane_epoch, 0, test_fingerprint(0xCC));
         assert!(active_receipt.exists());
         drop(log);
         drop(cursor_store);
@@ -2489,20 +2508,20 @@ mod temp_artifact_tests {
         let retained = LaneEpoch::new(LaneId::new(3), 8);
         let retired = LaneEpoch::new(LaneId::new(3), 7);
         for (lane_epoch, marker) in [(retired, 0xC1), (retained, 0xC2)] {
-            let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, marker);
+            let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 0, marker);
             assert!(matches!(
-                log.append(lane_epoch, 1, receipt, test_fingerprint(marker))
+                log.append(lane_epoch, 0, receipt, test_fingerprint(marker))
                     .expect("append receipt"),
                 ReceiptInsertOutcome::Stored { .. }
             ));
         }
-        let retired_path = receipt_file_path(&receipt_dir, retired, 1, test_fingerprint(0xC1));
+        let retired_path = receipt_file_path(&receipt_dir, retired, 0, test_fingerprint(0xC1));
         assert_eq!(
             log.retain_lane_epochs(|lane_epoch| lane_epoch == retained)
                 .expect("runtime retirement"),
             vec![retired]
         );
-        assert_eq!(cursor_store.highest_sequences(), vec![(retained, 1)]);
+        assert_eq!(cursor_store.highest_sequences(), vec![(retained, 0)]);
         assert_eq!(
             log.index.lock().keys().copied().collect::<Vec<_>>(),
             vec![retained]
@@ -2534,22 +2553,22 @@ mod temp_artifact_tests {
             "caught panic must not fabricate receipt-log entries"
         );
         assert!(
-            log.receipt_for_duplicate(lane_epoch, 1, test_fingerprint(0xA1))
+            log.receipt_for_duplicate(lane_epoch, 0, test_fingerprint(0xA1))
                 .expect("receipt-log lookup after caught panic")
                 .is_none(),
             "empty receipt log must not report a duplicate"
         );
-        let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0xA1);
+        let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 0, 0xA1);
         assert!(
             matches!(
-                log.append(lane_epoch, 1, receipt.clone(), test_fingerprint(0xA1))
+                log.append(lane_epoch, 0, receipt.clone(), test_fingerprint(0xA1))
                     .expect("receipt append after caught panic"),
                 ReceiptInsertOutcome::Stored { .. }
             ),
             "caught action panic must not permanently disable receipt persistence"
         );
         let (_, recovered) = log
-            .receipt_for_duplicate(lane_epoch, 1, test_fingerprint(0xA1))
+            .receipt_for_duplicate(lane_epoch, 0, test_fingerprint(0xA1))
             .expect("duplicate lookup after recovered append")
             .expect("durable receipt should be recoverable");
         assert_eq!(recovered, receipt);
@@ -2566,20 +2585,20 @@ mod temp_artifact_tests {
     #[test]
     fn receipt_scan_summary_is_constant_size_and_rejects_gaps_and_duplicates() {
         let lane_epoch = LaneEpoch::new(LaneId::new(8), 21);
-        let mut valid = ReceiptScanSummary::new(1, receipt_head(1, 1));
-        valid.observe(2, receipt_head(2, 2)).expect("observe two");
-        valid.observe(3, receipt_head(3, 3)).expect("observe three");
+        let mut valid = ReceiptScanSummary::new(0, receipt_head(0, 1));
+        valid.observe(1, receipt_head(1, 2)).expect("observe one");
+        valid.observe(2, receipt_head(2, 3)).expect("observe two");
         valid
             .validate_contiguous(lane_epoch)
             .expect("contiguous receipt summary");
-        assert_eq!(valid.head.sequence, 3);
-        let mut corrupt = ReceiptScanSummary::new(1, receipt_head(1, 1));
+        assert_eq!(valid.head.sequence, 2);
+        let mut corrupt = ReceiptScanSummary::new(0, receipt_head(0, 1));
         assert!(
-            corrupt.observe(1, receipt_head(1, 4)).is_err(),
+            corrupt.observe(0, receipt_head(0, 4)).is_err(),
             "duplicate sequence must reject without growing retained state"
         );
-        let mut corrupt = ReceiptScanSummary::new(1, receipt_head(1, 1));
-        corrupt.observe(3, receipt_head(3, 3)).expect("observe gap");
+        let mut corrupt = ReceiptScanSummary::new(0, receipt_head(0, 1));
+        corrupt.observe(2, receipt_head(2, 3)).expect("observe gap");
         assert!(
             corrupt.validate_contiguous(lane_epoch).is_err(),
             "a duplicate must not conceal a missing sequence"
@@ -2618,7 +2637,7 @@ mod temp_artifact_tests {
         )
         .expect("receipt log");
         let lane_epoch = LaneEpoch::new(LaneId::new(5), 12);
-        for (sequence, seed) in [(1, 0x31), (2, 0x32)] {
+        for (sequence, seed) in [(0, 0x31), (1, 0x32)] {
             let receipt = test_receipt(
                 &signer,
                 lane_epoch.lane_id,
@@ -2634,7 +2653,7 @@ mod temp_artifact_tests {
         }
         let index = log.lock_index();
         assert_eq!(index.len(), 1);
-        assert_eq!(index.get(&lane_epoch).map(|head| head.sequence), Some(2));
+        assert_eq!(index.get(&lane_epoch).map(|head| head.sequence), Some(1));
     }
 }
 pub(super) fn persist_da_receipt(
@@ -3030,6 +3049,67 @@ pub(super) fn load_da_pin_intent(
         })?;
     Ok(intent)
 }
+pub(super) fn load_da_pin_scope(
+    spool_dir: &Path,
+    lane_id: LaneId,
+    epoch: u64,
+    sequence: u64,
+    storage_ticket: &StorageTicketId,
+    fingerprint: &ReplayFingerprint,
+) -> std::io::Result<DaPinScopeV1> {
+    if spool_dir.as_os_str().is_empty() {
+        return Err(std::io::Error::new(
+            ErrorKind::NotFound,
+            "DA pin-scope spool directory is not configured",
+        ));
+    }
+    validate_ticket_fingerprint(storage_ticket, fingerprint).map_err(|err| {
+        std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!("invalid DA pin-scope lookup tuple: {err}"),
+        )
+    })?;
+    if open_spool_dir_no_follow(spool_dir)?.is_none() {
+        return Err(std::io::Error::new(
+            ErrorKind::NotFound,
+            "DA pin-scope spool directory does not exist",
+        ));
+    }
+    let path = da_pin_scope_file_path(
+        spool_dir,
+        lane_id,
+        epoch,
+        sequence,
+        storage_ticket,
+        fingerprint,
+    );
+    let bytes = read_regular_spool_artifact(
+        &path,
+        "DA pin-scope artifact",
+        DA_PIN_SCOPE_ARTIFACT_MAX_BYTES_V1,
+    )?;
+    let scope = decode_from_bytes::<DaPinScopeV1>(&bytes).map_err(|err| {
+        std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "failed to decode DA pin-scope artifact {}: {err}",
+                path.display()
+            ),
+        )
+    })?;
+    validate_pin_scope_artifact_inputs(&scope, lane_id, epoch, sequence, storage_ticket).map_err(
+        |err| {
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "DA pin-scope artifact {} does not match its filename: {err}",
+                    path.display()
+                ),
+            )
+        },
+    )?;
+    Ok(scope)
+}
 fn load_ticket_artifact_path(
     spool_dir: &Path,
     ticket: &StorageTicketId,
@@ -3290,6 +3370,39 @@ fn validate_pin_intent_artifact_inputs(
     if !intent.authorization.has_valid_canonical_signatures() {
         return Err(invalid_artifact_input(
             "DA pin-intent authorization signatures are invalid",
+        ));
+    }
+    if !intent
+        .pin_scope_authorization
+        .scope
+        .matches_authorization(&intent.authorization)
+        || intent.pin_scope_authorization.scope.storage_ticket != intent.storage_ticket
+        || intent.pin_scope_authorization.scope.manifest_hash != intent.manifest_hash
+        || intent.pin_scope_authorization.scope.alias != intent.alias
+        || !intent
+            .pin_scope_authorization
+            .has_valid_canonical_signatures()
+    {
+        return Err(invalid_artifact_input(
+            "DA pin-intent scope authorization does not match intent body",
+        ));
+    }
+    Ok(())
+}
+fn validate_pin_scope_artifact_inputs(
+    scope: &DaPinScopeV1,
+    lane_id: LaneId,
+    epoch: u64,
+    sequence: u64,
+    storage_ticket: &StorageTicketId,
+) -> std::io::Result<()> {
+    if scope.lane_id != lane_id
+        || scope.epoch != epoch
+        || scope.sequence != sequence
+        || &scope.storage_ticket != storage_ticket
+    {
+        return Err(invalid_artifact_input(
+            "DA pin-scope artifact filename tuple does not match scope body",
         ));
     }
     Ok(())
@@ -3627,6 +3740,70 @@ pub(super) fn persist_da_pin_intent(
     Ok(Some(target_path))
 }
 
+pub(super) fn persist_da_pin_scope(
+    spool_dir: &Path,
+    scope: &DaPinScopeV1,
+    lane_id: LaneId,
+    epoch: u64,
+    sequence: u64,
+    storage_ticket: &StorageTicketId,
+    fingerprint: &ReplayFingerprint,
+) -> std::io::Result<Option<PathBuf>> {
+    if spool_dir.as_os_str().is_empty() {
+        return Ok(None);
+    }
+    validate_pin_scope_artifact_inputs(scope, lane_id, epoch, sequence, storage_ticket)?;
+    validate_ticket_fingerprint(storage_ticket, fingerprint)?;
+    create_spool_dir_no_follow(spool_dir)?;
+    let lane = lane_id.as_u32();
+    let ticket_hex = hex::encode(storage_ticket.as_ref());
+    let fingerprint_hex = hex::encode(fingerprint.as_bytes());
+    let target_path = da_pin_scope_file_path(
+        spool_dir,
+        lane_id,
+        epoch,
+        sequence,
+        storage_ticket,
+        fingerprint,
+    );
+    let encoded =
+        to_bytes(scope).map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))?;
+    if encoded.len() > DA_PIN_SCOPE_ARTIFACT_MAX_BYTES_V1 {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            format!(
+                "DA pin scope is {} bytes, exceeding the first-release {}-byte limit",
+                encoded.len(),
+                DA_PIN_SCOPE_ARTIFACT_MAX_BYTES_V1
+            ),
+        ));
+    }
+    if let Some(path) =
+        existing_artifact_path_if_matching(&target_path, &encoded, "DA pin-scope artifact")?
+    {
+        return Ok(Some(path));
+    }
+    let tmp_name = format!(
+        ".da-pin-scope-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-{fingerprint_hex}.tmp-{}",
+        artifact_temp_suffix()?
+    );
+    let tmp_path = spool_dir.join(tmp_name);
+    match write_temp_artifact(&tmp_path, &encoded) {
+        Ok(()) => {}
+        Err(err) => return Err(temp_artifact_write_error(&tmp_path, err)),
+    }
+    install_artifact_without_overwrite(&tmp_path, &target_path, &encoded, "DA pin-scope artifact")?;
+    debug!(
+        path = ?target_path,
+        lane,
+        epoch,
+        sequence,
+        ticket = %ticket_hex,
+        "persisted DA producer pin-scope challenge"
+    );
+    Ok(Some(target_path))
+}
+
 fn da_pin_intent_file_path(
     spool_dir: &Path,
     lane_id: LaneId,
@@ -3640,5 +3817,21 @@ fn da_pin_intent_file_path(
     let fingerprint_hex = hex::encode(fingerprint.as_bytes());
     spool_dir.join(format!(
         "da-pin-intent-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-{fingerprint_hex}.norito"
+    ))
+}
+
+fn da_pin_scope_file_path(
+    spool_dir: &Path,
+    lane_id: LaneId,
+    epoch: u64,
+    sequence: u64,
+    storage_ticket: &StorageTicketId,
+    fingerprint: &ReplayFingerprint,
+) -> PathBuf {
+    let lane = lane_id.as_u32();
+    let ticket_hex = hex::encode(storage_ticket.as_ref());
+    let fingerprint_hex = hex::encode(fingerprint.as_bytes());
+    spool_dir.join(format!(
+        "da-pin-scope-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-{fingerprint_hex}.norito"
     ))
 }

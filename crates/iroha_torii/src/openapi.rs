@@ -198,20 +198,6 @@ mod tests {
     };
     use sorafs_node::evidence_viewer::EVIDENCE_VIEWER_MAX_OPAQUE_TOKEN_BYTES_V1;
     use std::collections::{BTreeSet, VecDeque};
-
-    fn catalog_method_name(method: CatalogHttpMethod) -> &'static str {
-        match method {
-            CatalogHttpMethod::Get => "get",
-            CatalogHttpMethod::Post => "post",
-            CatalogHttpMethod::Put => "put",
-            CatalogHttpMethod::Patch => "patch",
-            CatalogHttpMethod::Delete => "delete",
-            CatalogHttpMethod::Any => {
-                panic!("ANY gateways cannot enter the OpenAPI surface")
-            }
-        }
-    }
-
     const GOVERNANCE_HASH_LITERAL_PATTERN: &str =
         "^(?:[bB][lL][aA][kK][eE]2[bB]32:)?(?:0[xX])?[0-9a-fA-F]{64}$";
     const GOVERNANCE_LOWER_HEX32_PATTERN: &str = "^[0-9a-f]{64}$";

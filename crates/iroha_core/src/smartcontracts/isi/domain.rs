@@ -79,10 +79,7 @@ pub mod isi {
             }
             None => AccountRekeyRecord::new(label.clone(), account.clone()),
         };
-        state_transaction
-            .world
-            .account_rekey_records
-            .insert(label.clone(), record);
+        state_transaction.world.replace_account_rekey_record(record);
         Ok(())
     }
     /// Restore only the missing binding/index state of an exact account-alias setup intent.
@@ -198,10 +195,7 @@ pub mod isi {
                 "purging stale account rekey record label={:?} missing_owner={}",
                 label, record.active_account_id
             );
-            state_transaction
-                .world
-                .account_rekey_records
-                .remove(label.clone());
+            state_transaction.world.remove_account_rekey_record(label);
         }
         Ok(())
     }
@@ -1222,8 +1216,7 @@ pub mod isi {
             if let Some(record) = AccountRekeyRecord::from_account(&account)
                 && state_transaction
                     .world
-                    .account_rekey_records
-                    .insert(record.label.clone(), record)
+                    .insert_account_rekey_record(record)
                     .is_some()
             {
                 state_transaction.world.accounts.remove(account_id.clone());
@@ -2212,10 +2205,7 @@ pub mod isi {
                 .world
                 .remove_account_alias_bindings_for_account(&account_id)
             {
-                state_transaction
-                    .world
-                    .account_rekey_records
-                    .remove(label.clone());
+                state_transaction.world.remove_account_rekey_record(&label);
             }
             if let Some(uaid) = account_value.uaid().copied() {
                 state_transaction.world.uaid_accounts.remove(uaid);
@@ -3699,7 +3689,7 @@ mod tests {
         let call = KaigiId::new(domain_id.clone(), call_name.clone());
         let record = KaigiRecord::from_new(&NewKaigi::with_defaults(call.clone(), host.clone()), 1);
         let key = kaigi_metadata_key(&call_name).expect("Kaigi metadata key");
-        let value = Json::try_new(record).expect("Kaigi record JSON");
+        let value = Json::try_new(record.clone()).expect("Kaigi record JSON");
 
         let mut state = test_state();
         seed_domain(&mut state, &domain_id, &authority);
@@ -3708,12 +3698,11 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut transaction = block.transaction();
-        transaction
-            .world
-            .domain_mut(&domain_id)
-            .expect("Kaigi domain")
-            .metadata_mut()
-            .insert(key.clone(), value.clone());
+        crate::smartcontracts::isi::kaigi::store_kaigi_record_for_testing(
+            &mut transaction,
+            &record,
+        )
+        .expect("store indexed Kaigi fixture");
 
         assert!(transaction.world.take_external_events().is_empty());
 
@@ -3748,7 +3737,7 @@ mod tests {
     fn stale_alias_purge_preserves_kaigi_rekey_continuity_atomically() {
         use iroha_data_model::{
             account::rekey::AccountAliasDomain,
-            kaigi::{KaigiId, KaigiRecord, NewKaigi, kaigi_metadata_key},
+            kaigi::{KaigiId, KaigiRecord, NewKaigi},
         };
 
         let authority = (*ALICE_ID).clone();
@@ -3785,17 +3774,12 @@ mod tests {
             .insert_account_alias_binding(alias.clone(), missing_alias_owner.clone());
         transaction
             .world
-            .account_rekey_records
-            .insert(alias.clone(), history.clone());
-        transaction
-            .world
-            .domain_mut(&call_domain)
-            .expect("call domain")
-            .metadata_mut()
-            .insert(
-                kaigi_metadata_key(&call_name).expect("Kaigi metadata key"),
-                Json::try_new(record).expect("Kaigi record JSON"),
-            );
+            .replace_account_rekey_record(history.clone());
+        crate::smartcontracts::isi::kaigi::store_kaigi_record_for_testing(
+            &mut transaction,
+            &record,
+        )
+        .expect("store indexed Kaigi fixture");
 
         let error = super::isi::purge_stale_account_label_state(&mut transaction, &alias)
             .expect_err("stale cleanup must not erase required Kaigi continuity");
@@ -5298,10 +5282,11 @@ mod tests {
         }
         tx.world
             .insert_account_alias_binding(alias.clone(), current_account_id.clone());
-        tx.world.account_rekey_records.insert(
-            alias.clone(),
-            AccountRekeyRecord::new(alias.clone(), current_account_id.clone()),
-        );
+        tx.world
+            .replace_account_rekey_record(AccountRekeyRecord::new(
+                alias.clone(),
+                current_account_id.clone(),
+            ));
         seed_account_alias_lease_record(&mut tx, &replacement_account_id, &alias);
         tx.world.add_account_permission(
             &current_account_id,
@@ -5428,10 +5413,11 @@ mod tests {
         }
         tx.world
             .insert_account_alias_binding(ubl_alias.clone(), target.clone());
-        tx.world.account_rekey_records.insert(
-            ubl_alias.clone(),
-            AccountRekeyRecord::new(ubl_alias.clone(), target.clone()),
-        );
+        tx.world
+            .replace_account_rekey_record(AccountRekeyRecord::new(
+                ubl_alias.clone(),
+                target.clone(),
+            ));
         let err = RebindAccountAlias::new(
             resolved_account_alias(&tx, &ubl_alias),
             target.clone(),
@@ -5450,7 +5436,7 @@ mod tests {
         );
         assert_eq!(tx.world.account_aliases.get(&ubl_alias), Some(&target));
         tx.world.remove_account_alias_binding(&ubl_alias);
-        tx.world.account_rekey_records.remove(ubl_alias.clone());
+        tx.world.remove_account_rekey_record(&ubl_alias);
         assert!(
             tx.world
                 .remove_account_permission(&authority, &hbl_permission),
@@ -5559,10 +5545,11 @@ mod tests {
         .expect("same-FI secondary aliases remain supported");
         tx.world
             .insert_account_alias_binding(ubl_home_alias.clone(), ubl_account.clone());
-        tx.world.account_rekey_records.insert(
-            ubl_home_alias.clone(),
-            AccountRekeyRecord::new(ubl_home_alias.clone(), ubl_account.clone()),
-        );
+        tx.world
+            .replace_account_rekey_record(AccountRekeyRecord::new(
+                ubl_home_alias.clone(),
+                ubl_account.clone(),
+            ));
         seed_account_alias_lease_record(&mut tx, &ubl_account, &ubl_home_alias);
         let err = EnsureTestAccountAliasBinding {
             account: ubl_account.clone(),
@@ -5604,9 +5591,7 @@ mod tests {
             "rejected cross-FI repoint must preserve the UBL home"
         );
         tx.world.remove_account_alias_binding(&hbl_secondary_alias);
-        tx.world
-            .account_rekey_records
-            .remove(hbl_secondary_alias.clone());
+        tx.world.remove_account_rekey_record(&hbl_secondary_alias);
         let err = EnsureTestAccountAliasBinding {
             account: unhomed_account,
             alias: Some(hbl_home_alias.clone()),
@@ -5658,10 +5643,11 @@ mod tests {
             .set_label(Some(ubl_alias.clone()));
         tx.world
             .insert_account_alias_binding(ubl_alias.clone(), customer.clone());
-        tx.world.account_rekey_records.insert(
-            ubl_alias.clone(),
-            AccountRekeyRecord::new(ubl_alias.clone(), customer.clone()),
-        );
+        tx.world
+            .replace_account_rekey_record(AccountRekeyRecord::new(
+                ubl_alias.clone(),
+                customer.clone(),
+            ));
         tx.world.add_account_permission(
             &ubl_manager,
             Permission::from(CanManageAccountAlias {
@@ -5726,10 +5712,11 @@ mod tests {
             .set_label(Some(old_alias.clone()));
         tx.world
             .insert_account_alias_binding(old_alias.clone(), customer.clone());
-        tx.world.account_rekey_records.insert(
-            old_alias.clone(),
-            AccountRekeyRecord::new(old_alias.clone(), customer.clone()),
-        );
+        tx.world
+            .replace_account_rekey_record(AccountRekeyRecord::new(
+                old_alias.clone(),
+                customer.clone(),
+            ));
         seed_account_alias_lease_record(&mut tx, &customer, &new_alias);
         tx.world.add_account_permission(
             &authority,
@@ -5789,10 +5776,11 @@ mod tests {
             .set_label(Some(ubl_alias.clone()));
         tx.world
             .insert_account_alias_binding(ubl_alias.clone(), target.clone());
-        tx.world.account_rekey_records.insert(
-            ubl_alias.clone(),
-            AccountRekeyRecord::new(ubl_alias.clone(), target.clone()),
-        );
+        tx.world
+            .replace_account_rekey_record(AccountRekeyRecord::new(
+                ubl_alias.clone(),
+                target.clone(),
+            ));
         seed_account_alias_lease_record(&mut tx, &target, &hbl_alias);
         tx.world.add_account_permission(
             &authority,
@@ -8639,27 +8627,24 @@ mod tests {
             .execute(&authority, &mut tx)
             .expect("register account");
         let ticket_id = iroha_data_model::da::types::StorageTicketId::new([0xD1; 32]);
+        let pin_authorization = crate::da::signed_test_ingest_authorization(
+            network_id,
+            &keypair,
+            LaneId::new(1),
+            1,
+            1,
+            1,
+        );
         tx.world.da_pin_intents_by_ticket.insert(
             ticket_id,
             iroha_data_model::da::pin_intent::DaPinIntentWithLocation {
-                intent: iroha_data_model::da::pin_intent::DaPinIntent {
-                    lane_id: LaneId::new(1),
-                    epoch: 1,
-                    sequence: 1,
-                    storage_ticket: ticket_id,
-                    manifest_hash: iroha_data_model::sorafs::pin_registry::ManifestDigest::new(
-                        [0xE2; 32],
-                    ),
-                    alias: None,
-                    authorization: crate::da::signed_test_ingest_authorization(
-                        network_id,
-                        &keypair,
-                        LaneId::new(1),
-                        1,
-                        1,
-                        1,
-                    ),
-                },
+                intent: crate::da::signed_test_pin_intent(
+                    pin_authorization,
+                    &keypair,
+                    ticket_id,
+                    iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xE2; 32]),
+                    None,
+                ),
                 location: iroha_data_model::da::commitment::DaCommitmentLocation {
                     block_height: 1,
                     index_in_bundle: 0,

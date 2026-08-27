@@ -2718,8 +2718,7 @@ mod tests {
         world
             .account_aliases_by_account_mut_for_testing()
             .insert(account_id.clone(), labels);
-        world.account_rekey_records_mut_for_testing().insert(
-            label.clone(),
+        world.replace_account_rekey_record_for_testing(
             iroha_data_model::account::rekey::AccountRekeyRecord::new(label, account_id.clone()),
         );
         world.smart_contract_state_mut_for_testing().insert(

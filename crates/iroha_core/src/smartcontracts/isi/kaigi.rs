@@ -30,7 +30,7 @@ use iroha_data_model::{
         KaigiStatus, kaigi_metadata_key, kaigi_relay_allowlist_key, kaigi_relay_feedback_key,
         kaigi_relay_metadata_key,
     },
-    prelude::{AccountId, DomainId, Json, Name},
+    prelude::{AccountId, Domain, DomainId, Json, Name},
     query::error::FindError,
 };
 use mv::storage::StorageReadOnly;
@@ -40,6 +40,13 @@ use std::{
     convert::TryFrom,
 };
 mod privacy;
+
+type KaigiAccountDependencyLocator = (u8, DomainId, Name);
+
+const KAIGI_DEPENDENCY_RELAY_REGISTRATION: u8 = 0;
+const KAIGI_DEPENDENCY_RELAY_FEEDBACK: u8 = 1;
+const KAIGI_DEPENDENCY_ACTIVE_CALL: u8 = 2;
+
 /// Signature-authenticated account authorizing a Kaigi state transition.
 #[derive(Clone, Copy, Debug)]
 enum KaigiAuthorization<'a> {
@@ -549,7 +556,8 @@ impl Execute for RegisterKaigiRelay {
                 "relay registration requires a non-zero bandwidth class",
             ));
         }
-        let rekey_graph = persisted_kaigi_rekey_graph(&state_transaction.world)?;
+        let rekey_graph =
+            persisted_kaigi_rekey_graph(&state_transaction.world, [registration.relay_id.clone()])?;
         let key = kaigi_relay_metadata_key(&registration.relay_id).map_err(|err| {
             Error::InvalidParameter(InvalidParameterError::SmartContract(err.to_string()))
         })?;
@@ -576,7 +584,24 @@ impl Execute for RegisterKaigiRelay {
                 ));
             }
         }
+        let dependency = (
+            KAIGI_DEPENDENCY_RELAY_REGISTRATION,
+            domain_id.clone(),
+            key.clone(),
+        );
+        let previous_dependencies = if existing.is_some() {
+            BTreeSet::from([registration.relay_id.clone()])
+        } else {
+            BTreeSet::new()
+        };
+        let next_dependencies = BTreeSet::from([registration.relay_id.clone()]);
         if existing.as_ref() == Some(&registration) {
+            ensure_kaigi_account_dependency_replacement(
+                state_transaction,
+                &dependency,
+                &previous_dependencies,
+                &next_dependencies,
+            )?;
             return Ok(());
         }
         ensure_relay_allowed_by_governance_with_graph(
@@ -585,7 +610,7 @@ impl Execute for RegisterKaigiRelay {
             &rekey_graph,
         )?;
         if existing.is_none()
-            && validated_kaigi_relay_registry_count_with_graph(state_transaction, &rekey_graph)?
+            && state_transaction.world.kaigi_relay_registry.len()
                 >= KAIGI_RELAY_REGISTRY_MAX_ENTRIES_V1
         {
             return Err(relay_error(format!(
@@ -600,6 +625,12 @@ impl Execute for RegisterKaigiRelay {
             "max_metadata_value_bytes",
             limits::DEFAULT_JSON_LIMIT,
         )?;
+        ensure_kaigi_account_dependency_replacement(
+            state_transaction,
+            &dependency,
+            &previous_dependencies,
+            &next_dependencies,
+        )?;
         {
             let domain = state_transaction.world.domain_mut(&domain_id)?;
             domain.metadata_mut().insert(key.clone(), value.clone());
@@ -611,6 +642,12 @@ impl Execute for RegisterKaigiRelay {
                 .insert(registration.relay_id.clone(), domain_id.clone());
             debug_assert!(replaced.is_none());
         }
+        apply_kaigi_account_dependency_replacement(
+            state_transaction,
+            &dependency,
+            &previous_dependencies,
+            &next_dependencies,
+        );
         state_transaction
             .world
             .emit_internal_events(Some(DomainEvent::MetadataInserted(MetadataChanged {
@@ -633,7 +670,10 @@ impl Execute for UnregisterKaigiRelay {
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         state_transaction.world.account(authority)?;
-        let rekey_graph = persisted_kaigi_rekey_graph(&state_transaction.world)?;
+        let rekey_graph = persisted_kaigi_rekey_graph(
+            &state_transaction.world,
+            [authority.clone(), self.relay_id.clone()],
+        )?;
         if !accounts_share_active_lineage_with_graph(
             state_transaction,
             authority,
@@ -644,7 +684,8 @@ impl Execute for UnregisterKaigiRelay {
                 "only the relay account or its active account-id rekey successor may unregister it",
             ));
         }
-        let domain_id = relay_domain_with_graph(state_transaction, &self.relay_id, &rekey_graph)?;
+        let domain_id =
+            relay_domain_from_persisted_graph(state_transaction, &self.relay_id, &rekey_graph)?;
         let registration_key = kaigi_relay_metadata_key(&self.relay_id).map_err(|err| {
             Error::InvalidParameter(InvalidParameterError::SmartContract(err.to_string()))
         })?;
@@ -698,6 +739,33 @@ impl Execute for UnregisterKaigiRelay {
             }
         }
 
+        let registration_dependency = (
+            KAIGI_DEPENDENCY_RELAY_REGISTRATION,
+            domain_id.clone(),
+            registration_key.clone(),
+        );
+        let relay_account = BTreeSet::from([self.relay_id.clone()]);
+        let no_accounts = BTreeSet::new();
+        ensure_kaigi_account_dependency_replacement(
+            state_transaction,
+            &registration_dependency,
+            &relay_account,
+            &no_accounts,
+        )?;
+        let feedback_dependency = (
+            KAIGI_DEPENDENCY_RELAY_FEEDBACK,
+            domain_id.clone(),
+            feedback_key.clone(),
+        );
+        if feedback_value.is_some() {
+            ensure_kaigi_account_dependency_replacement(
+                state_transaction,
+                &feedback_dependency,
+                &relay_account,
+                &no_accounts,
+            )?;
+        }
+
         {
             let domain = state_transaction.world.domain_mut(&domain_id)?;
             domain.metadata_mut().remove(&registration_key);
@@ -710,6 +778,20 @@ impl Execute for UnregisterKaigiRelay {
             .kaigi_relay_registry
             .remove(self.relay_id.clone());
         debug_assert_eq!(removed.as_ref(), Some(&domain_id));
+        apply_kaigi_account_dependency_replacement(
+            state_transaction,
+            &registration_dependency,
+            &relay_account,
+            &no_accounts,
+        );
+        if feedback_value.is_some() {
+            apply_kaigi_account_dependency_replacement(
+                state_transaction,
+                &feedback_dependency,
+                &relay_account,
+                &no_accounts,
+            );
+        }
         let mut internal_events = vec![DomainEvent::MetadataRemoved(MetadataChanged {
             target: domain_id.clone(),
             key: registration_key,
@@ -867,8 +949,18 @@ where
     #[cfg(feature = "telemetry")]
     let previous_manifest = record.relay_manifest.clone();
     let authority = authorization.signed_account();
-    let mut associated = accounts_share_active_lineage(state_transaction, authority, &record.host)?
-        || record_has_participant_in_active_lineage(state_transaction, &record, authority)?;
+    let rekey_graph = persisted_kaigi_rekey_graph(&state_transaction.world, [authority.clone()])?;
+    let mut associated = accounts_share_active_lineage_with_graph(
+        state_transaction,
+        authority,
+        &record.host,
+        &rekey_graph,
+    )? || record_has_participant_in_active_lineage(
+        state_transaction,
+        &record,
+        authority,
+        &rekey_graph,
+    )?;
     let grant: AccessGrant = f(state_transaction, &mut record)?;
     if matches!(grant, AccessGrant::PrivacyAuthorized) {
         associated = true;
@@ -935,8 +1027,39 @@ fn store_record(
         "max_metadata_value_bytes",
         limits::DEFAULT_JSON_LIMIT,
     )?;
+    let previous_record = state_transaction
+        .world
+        .domain(domain_id)?
+        .metadata()
+        .get(&key)
+        .cloned()
+        .map(|value| {
+            let record: KaigiRecord = value
+                .try_into_any_norito()
+                .map_err(|err| Error::Conversion(err.to_string()))?;
+            Ok::<_, Error>(record)
+        })
+        .transpose()?;
+    let previous_dependencies = previous_record
+        .as_ref()
+        .map(active_call_dependency_accounts)
+        .unwrap_or_default();
+    let next_dependencies = active_call_dependency_accounts(record);
+    let dependency = (KAIGI_DEPENDENCY_ACTIVE_CALL, domain_id.clone(), key.clone());
+    ensure_kaigi_account_dependency_replacement(
+        state_transaction,
+        &dependency,
+        &previous_dependencies,
+        &next_dependencies,
+    )?;
     let domain = state_transaction.world.domain_mut(domain_id)?;
     domain.metadata_mut().insert(key.clone(), value.clone());
+    apply_kaigi_account_dependency_replacement(
+        state_transaction,
+        &dependency,
+        &previous_dependencies,
+        &next_dependencies,
+    );
     state_transaction
         .world
         .emit_internal_events(Some(DomainEvent::MetadataInserted(MetadataChanged {
@@ -946,6 +1069,18 @@ fn store_record(
         })));
     Ok(())
 }
+
+/// Store a Kaigi fixture through the same metadata and reverse-index path as production.
+#[cfg(any(test, feature = "iroha-core-tests"))]
+pub(crate) fn store_kaigi_record_for_testing(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    record: &KaigiRecord,
+) -> Result<(), Error> {
+    let domain_id = record.id.domain_id.clone();
+    let key = metadata_key(&record.id)?;
+    store_record(state_transaction, &domain_id, key, record)
+}
+
 fn clear_ledger_visible_privacy_hints(record: &mut KaigiRecord) {
     if let Some(host_commitment) = record.host_commitment.as_mut() {
         host_commitment.alias_tag = None;
@@ -973,10 +1108,38 @@ fn store_relay_feedback(
         limits::DEFAULT_JSON_LIMIT,
     )?;
     let domain_id = relay_domain(state_transaction, &feedback.relay_id)?;
+    let previous_dependencies = if state_transaction
+        .world
+        .domain(&domain_id)?
+        .metadata()
+        .contains(&key)
+    {
+        BTreeSet::from([feedback.relay_id.clone()])
+    } else {
+        BTreeSet::new()
+    };
+    let next_dependencies = BTreeSet::from([feedback.relay_id.clone()]);
+    let dependency = (
+        KAIGI_DEPENDENCY_RELAY_FEEDBACK,
+        domain_id.clone(),
+        key.clone(),
+    );
+    ensure_kaigi_account_dependency_replacement(
+        state_transaction,
+        &dependency,
+        &previous_dependencies,
+        &next_dependencies,
+    )?;
     {
         let domain = state_transaction.world.domain_mut(&domain_id)?;
         domain.metadata_mut().insert(key.clone(), value.clone());
     }
+    apply_kaigi_account_dependency_replacement(
+        state_transaction,
+        &dependency,
+        &previous_dependencies,
+        &next_dependencies,
+    );
     state_transaction
         .world
         .emit_internal_events(Some(DomainEvent::MetadataInserted(MetadataChanged {
@@ -985,6 +1148,82 @@ fn store_relay_feedback(
             value,
         })));
     Ok(domain_id)
+}
+
+fn active_call_dependency_accounts(record: &KaigiRecord) -> BTreeSet<AccountId> {
+    if record.status != KaigiStatus::Active {
+        return BTreeSet::new();
+    }
+    let mut accounts = BTreeSet::from([record.host.clone()]);
+    accounts.extend(record.participants.iter().cloned());
+    if let Some(manifest) = record.relay_manifest.as_ref() {
+        accounts.extend(manifest.hops.iter().map(|hop| hop.relay_id.clone()));
+    }
+    accounts
+}
+
+fn ensure_kaigi_account_dependency_replacement(
+    state_transaction: &StateTransaction<'_, '_>,
+    dependency: &KaigiAccountDependencyLocator,
+    previous_accounts: &BTreeSet<AccountId>,
+    next_accounts: &BTreeSet<AccountId>,
+) -> Result<(), Error> {
+    for account in previous_accounts.union(next_accounts) {
+        let indexed = state_transaction
+            .world
+            .kaigi_account_dependencies
+            .get(account)
+            .is_some_and(|dependencies| dependencies.contains(dependency));
+        if indexed != previous_accounts.contains(account) {
+            return Err(Error::InvariantViolation(
+                "Kaigi account-dependency index disagrees with authoritative metadata".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn apply_kaigi_account_dependency_replacement(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    dependency: &KaigiAccountDependencyLocator,
+    previous_accounts: &BTreeSet<AccountId>,
+    next_accounts: &BTreeSet<AccountId>,
+) {
+    for account in previous_accounts.difference(next_accounts) {
+        let remove_account = state_transaction
+            .world
+            .kaigi_account_dependencies
+            .get_mut(account)
+            .is_some_and(|dependencies| {
+                dependencies.remove(dependency);
+                dependencies.is_empty()
+            });
+        if remove_account {
+            state_transaction
+                .world
+                .kaigi_account_dependencies
+                .remove(account.clone());
+        }
+    }
+    for account in next_accounts.difference(previous_accounts) {
+        if state_transaction
+            .world
+            .kaigi_account_dependencies
+            .get(account)
+            .is_none()
+        {
+            state_transaction
+                .world
+                .kaigi_account_dependencies
+                .insert(account.clone(), BTreeSet::new());
+        }
+        state_transaction
+            .world
+            .kaigi_account_dependencies
+            .get_mut(account)
+            .expect("Kaigi dependency account was just inserted")
+            .insert(dependency.clone());
+    }
 }
 fn metadata_key(call_id: &KaigiId) -> Result<Name, Error> {
     kaigi_metadata_key(&call_id.call_name).map_err(|err| {
@@ -1001,6 +1240,82 @@ pub(crate) fn is_reserved_kaigi_metadata_key(key: &Name) -> bool {
         || literal.starts_with("kaigi_relay__")
         || literal.starts_with("kaigi_relay_feedback__")
 }
+
+enum IndexedKaigiDependency {
+    ActiveCall(KaigiId),
+    RelayRegistration,
+    RelayFeedback,
+}
+
+fn validate_indexed_kaigi_dependency(
+    world: &impl WorldReadOnly,
+    indexed_account: &AccountId,
+    dependency: &KaigiAccountDependencyLocator,
+) -> Result<IndexedKaigiDependency, Error> {
+    let (kind, domain_id, key) = dependency;
+    let value = world
+        .domain(domain_id)?
+        .metadata()
+        .get(key)
+        .cloned()
+        .ok_or_else(|| {
+            Error::InvariantViolation(
+                "Kaigi account-dependency index references missing metadata".into(),
+            )
+        })?;
+    match *kind {
+        KAIGI_DEPENDENCY_RELAY_REGISTRATION => {
+            let registration = decode_stored_relay_registration(domain_id, key, value)?;
+            if &registration.relay_id != indexed_account {
+                return Err(Error::InvariantViolation(
+                    "Kaigi relay dependency is indexed under the wrong account".into(),
+                ));
+            }
+            Ok(IndexedKaigiDependency::RelayRegistration)
+        }
+        KAIGI_DEPENDENCY_RELAY_FEEDBACK => {
+            let feedback: KaigiRelayFeedback = value.try_into_any_norito().map_err(|err| {
+                Error::InvariantViolation(
+                    format!("malformed indexed Kaigi relay feedback: {err}").into(),
+                )
+            })?;
+            let expected_key = kaigi_relay_feedback_key(&feedback.relay_id).map_err(|err| {
+                Error::InvariantViolation(
+                    format!("invalid indexed Kaigi relay feedback identity: {err}").into(),
+                )
+            })?;
+            if &expected_key != key || &feedback.relay_id != indexed_account {
+                return Err(Error::InvariantViolation(
+                    "Kaigi relay feedback dependency is indexed under the wrong account or key"
+                        .into(),
+                ));
+            }
+            Ok(IndexedKaigiDependency::RelayFeedback)
+        }
+        KAIGI_DEPENDENCY_ACTIVE_CALL => {
+            let record: KaigiRecord = value.try_into_any_norito().map_err(|err| {
+                Error::InvariantViolation(format!("malformed indexed Kaigi record: {err}").into())
+            })?;
+            let expected_key = metadata_key(&record.id).map_err(|error| {
+                Error::InvariantViolation(format!("invalid indexed Kaigi identity: {error}").into())
+            })?;
+            if &record.id.domain_id != domain_id
+                || &expected_key != key
+                || !active_call_dependency_accounts(&record).contains(indexed_account)
+            {
+                return Err(Error::InvariantViolation(
+                    "Kaigi call dependency is indexed under the wrong account or metadata location"
+                        .into(),
+                ));
+            }
+            Ok(IndexedKaigiDependency::ActiveCall(record.id))
+        }
+        _ => Err(Error::InvariantViolation(
+            "Kaigi account-dependency index contains an unknown dependency kind".into(),
+        )),
+    }
+}
+
 /// Reject moving a registered relay's primary alias outside its storage domain.
 ///
 /// Relay descriptors and feedback are domain metadata keyed by the relay ID.
@@ -1015,54 +1330,32 @@ pub(crate) fn ensure_kaigi_relay_home_change_allowed(
     if new_domain == Some(current_domain) {
         return Ok(());
     }
-    let domain = state_transaction.world.domain(current_domain)?;
-    let relay_ids = domain
-        .metadata()
-        .iter()
-        .filter(|(key, _)| {
-            key.as_ref().starts_with("kaigi_relay__")
-                || key.as_ref().starts_with("kaigi_relay_feedback__")
-        })
-        .map(|(key, value)| {
-            if key.as_ref().starts_with("kaigi_relay_feedback__") {
-                let feedback: KaigiRelayFeedback = value
-                    .clone()
-                    .try_into_any_norito()
-                    .map_err(|err| Error::Conversion(err.to_string()))?;
-                let expected_key = kaigi_relay_feedback_key(&feedback.relay_id).map_err(|err| {
-                    Error::InvariantViolation(
-                        format!("invalid retained Kaigi relay feedback identity: {err}").into(),
-                    )
-                })?;
-                if key != &expected_key {
-                    return Err(Error::InvariantViolation(
-                        "retained Kaigi relay feedback key does not match its relay ID".into(),
-                    ));
-                }
-                Ok(feedback.relay_id)
-            } else {
-                let registration: KaigiRelayRegistration = value
-                    .clone()
-                    .try_into_any_norito()
-                    .map_err(|err| Error::Conversion(err.to_string()))?;
-                let expected_key =
-                    kaigi_relay_metadata_key(&registration.relay_id).map_err(|err| {
-                        Error::InvariantViolation(
-                            format!("invalid retained Kaigi relay registration identity: {err}")
-                                .into(),
-                        )
-                    })?;
-                if key != &expected_key {
-                    return Err(Error::InvariantViolation(
-                        "retained Kaigi relay registration key does not match its relay ID".into(),
-                    ));
-                }
-                Ok(registration.relay_id)
+    let rekey_graph = persisted_kaigi_rekey_graph(&state_transaction.world, [account.clone()])?;
+    let component = persisted_kaigi_rekey_component(&rekey_graph.neighbours, account);
+    for identity in component {
+        let Some(dependencies) = state_transaction
+            .world
+            .kaigi_account_dependencies
+            .get(&identity)
+        else {
+            continue;
+        };
+        for dependency in dependencies
+            .iter()
+            .take_while(|(kind, _, _)| *kind < KAIGI_DEPENDENCY_ACTIVE_CALL)
+        {
+            validate_indexed_kaigi_dependency(&state_transaction.world, &identity, dependency)?;
+            if &dependency.1 != current_domain {
+                continue;
             }
-        })
-        .collect::<Result<Vec<_>, Error>>()?;
-    for relay_id in relay_ids {
-        if accounts_share_active_lineage(state_transaction, account, &relay_id)? {
+            if !accounts_share_active_lineage_with_graph(
+                state_transaction,
+                account,
+                &identity,
+                &rekey_graph,
+            )? {
+                continue;
+            }
             return Err(relay_error(
                 "registered Kaigi relay primary alias domain is pinned while relay state exists",
             ));
@@ -1104,96 +1397,39 @@ fn ensure_kaigi_account_has_no_stranded_dependencies(
     account: &AccountId,
     operation: &str,
 ) -> Result<(), Error> {
-    let entries = state_transaction
-        .world
-        .domains_iter()
-        .flat_map(|domain| {
-            domain
-                .metadata()
-                .iter()
-                .filter(|(key, _)| is_reserved_kaigi_metadata_key(key))
-                .map(|(key, value)| (key.clone(), value.clone()))
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
-    for (key, value) in entries {
-        let literal = key.as_ref();
-        if literal.starts_with("kaigi__") {
-            let record: KaigiRecord = value
-                .try_into_any_norito()
-                .map_err(|err| Error::Conversion(err.to_string()))?;
-            if record.status != KaigiStatus::Active {
-                continue;
-            }
-            let is_host = accounts_share_active_lineage(state_transaction, account, &record.host)?;
-            let is_participant =
-                record_has_participant_in_active_lineage(state_transaction, &record, account)?;
-            let is_manifest_relay = if let Some(manifest) = record.relay_manifest.as_ref() {
-                let mut found = false;
-                for hop in &manifest.hops {
-                    if accounts_share_active_lineage(state_transaction, account, &hop.relay_id)? {
-                        found = true;
-                        break;
-                    }
-                }
-                found
-            } else {
-                false
-            };
-            if is_host || is_participant || is_manifest_relay {
-                return Err(Error::InvariantViolation(
-                    format!(
-                        "cannot {operation} account {account}: it is referenced by active Kaigi {}",
-                        record.id
-                    )
-                    .into(),
-                ));
-            }
-        } else if literal.starts_with("kaigi_relay_feedback__") {
-            let feedback: KaigiRelayFeedback = value
-                .try_into_any_norito()
-                .map_err(|err| Error::Conversion(err.to_string()))?;
-            let expected_key = kaigi_relay_feedback_key(&feedback.relay_id).map_err(|err| {
-                Error::InvariantViolation(
-                    format!("invalid retained Kaigi relay feedback identity: {err}").into(),
-                )
-            })?;
-            if key != expected_key {
-                return Err(Error::InvariantViolation(
-                    "retained Kaigi relay feedback key does not match its relay ID".into(),
-                ));
-            }
-            if accounts_share_active_lineage(state_transaction, account, &feedback.relay_id)? {
-                return Err(Error::InvariantViolation(
-                    format!(
-                        "cannot {operation} account {account}: it owns retained Kaigi relay feedback"
-                    )
-                    .into(),
-                ));
-            }
-        } else if literal.starts_with("kaigi_relay__") {
-            let registration: KaigiRelayRegistration = value
-                .try_into_any_norito()
-                .map_err(|err| Error::Conversion(err.to_string()))?;
-            let expected_key = kaigi_relay_metadata_key(&registration.relay_id).map_err(|err| {
-                Error::InvariantViolation(
-                    format!("invalid retained Kaigi relay registration identity: {err}").into(),
-                )
-            })?;
-            if key != expected_key {
-                return Err(Error::InvariantViolation(
-                    "retained Kaigi relay registration key does not match its relay ID".into(),
-                ));
-            }
-            if accounts_share_active_lineage(state_transaction, account, &registration.relay_id)? {
-                return Err(Error::InvariantViolation(
-                    format!(
-                        "cannot {operation} account {account}: it owns retained Kaigi relay registration"
-                    )
-                    .into(),
-                ));
-            }
+    let rekey_graph = persisted_kaigi_rekey_graph(&state_transaction.world, [account.clone()])?;
+    let component = persisted_kaigi_rekey_component(&rekey_graph.neighbours, account);
+    for identity in component {
+        let Some(dependency) = state_transaction
+            .world
+            .kaigi_account_dependencies
+            .get(&identity)
+            .and_then(|dependencies| dependencies.iter().next())
+        else {
+            continue;
+        };
+        let indexed =
+            validate_indexed_kaigi_dependency(&state_transaction.world, &identity, dependency)?;
+        if !accounts_share_active_lineage_with_graph(
+            state_transaction,
+            account,
+            &identity,
+            &rekey_graph,
+        )? {
+            continue;
         }
+        let message = match indexed {
+            IndexedKaigiDependency::ActiveCall(call) => format!(
+                "cannot {operation} account {account}: it is referenced by active Kaigi {call}"
+            ),
+            IndexedKaigiDependency::RelayRegistration => format!(
+                "cannot {operation} account {account}: it owns retained Kaigi relay registration"
+            ),
+            IndexedKaigiDependency::RelayFeedback => format!(
+                "cannot {operation} account {account}: it owns retained Kaigi relay feedback"
+            ),
+        };
+        return Err(Error::InvariantViolation(message.into()));
     }
     Ok(())
 }
@@ -1243,31 +1479,14 @@ pub(crate) fn ensure_account_id_is_not_retired_rekey_predecessor(
     state_transaction: &StateTransaction<'_, '_>,
     account: &AccountId,
 ) -> Result<(), Error> {
-    for (label, record) in state_transaction.world.account_rekey_records.iter() {
-        for (index, predecessor) in record.previous_account_ids.iter().enumerate() {
-            if predecessor != account {
-                continue;
-            }
-            let Some(provenance) = record.transition_provenance.get(index) else {
-                return Err(Error::InvariantViolation(
-                    "cannot inspect malformed retained account-id rekey history".into(),
-                ));
-            };
-            if *provenance == AccountRekeyTransitionProvenance::AccountIdRekey {
-                if label != &record.label {
-                    return Err(Error::InvariantViolation(
-                        "retained account-id rekey history key does not match its embedded alias"
-                            .into(),
-                    ));
-                }
-                return Err(Error::InvariantViolation(
-                    format!(
-                        "cannot activate account {account}: it is retained as a retired canonical account-id rekey predecessor"
-                    )
-                    .into(),
-                ));
-            }
-        }
+    let graph = persisted_kaigi_rekey_graph(&state_transaction.world, [account.clone()])?;
+    if graph.forward.contains_key(account) {
+        return Err(Error::InvariantViolation(
+            format!(
+                "cannot activate account {account}: it is retained as a retired canonical account-id rekey predecessor"
+            )
+            .into(),
+        ));
     }
     Ok(())
 }
@@ -1348,7 +1567,7 @@ fn resolve_active_kaigi_account(
     state_transaction: &StateTransaction<'_, '_>,
     account: &AccountId,
 ) -> Result<Option<AccountId>, Error> {
-    let graph = persisted_kaigi_rekey_graph(&state_transaction.world)?;
+    let graph = persisted_kaigi_rekey_graph(&state_transaction.world, [account.clone()])?;
     resolve_active_kaigi_account_with_graph(state_transaction, account, &graph)
 }
 fn resolve_active_kaigi_account_with_graph(
@@ -1383,7 +1602,8 @@ fn accounts_share_active_lineage(
     left: &AccountId,
     right: &AccountId,
 ) -> Result<bool, Error> {
-    let graph = persisted_kaigi_rekey_graph(&state_transaction.world)?;
+    let graph =
+        persisted_kaigi_rekey_graph(&state_transaction.world, [left.clone(), right.clone()])?;
     accounts_share_active_lineage_with_graph(state_transaction, left, right, &graph)
 }
 fn accounts_share_active_lineage_with_graph(
@@ -1428,52 +1648,147 @@ struct PersistedKaigiRekeyGraph {
 }
 fn persisted_kaigi_rekey_graph(
     world: &impl WorldReadOnly,
+    accounts: impl IntoIterator<Item = AccountId>,
 ) -> Result<PersistedKaigiRekeyGraph, Error> {
     let mut graph = PersistedKaigiRekeyGraph::default();
     let mut reverse = BTreeMap::<AccountId, AccountId>::new();
-    for (label, record) in world.account_rekey_records().iter() {
-        if label != &record.label {
-            return Err(Error::InvariantViolation(
-                "account-id rekey history key does not match its embedded alias".into(),
-            ));
+    let mut covered_accounts = BTreeSet::new();
+    for seed in accounts {
+        if covered_accounts.contains(&seed) {
+            continue;
         }
-        if record.previous_account_ids.len() != record.transition_provenance.len() {
-            return Err(Error::InvariantViolation(
-                "malformed account-id rekey history while resolving Kaigi continuity".into(),
-            ));
-        }
-        let mut sequence = record.previous_account_ids.clone();
-        sequence.push(record.active_account_id.clone());
-        for (index, provenance) in record.transition_provenance.iter().enumerate() {
-            if *provenance != AccountRekeyTransitionProvenance::AccountIdRekey {
+        let mut frontier = vec![seed];
+        let mut component_accounts = BTreeSet::new();
+        let mut expanded_aliases = BTreeSet::<AccountAlias>::new();
+        let mut work = 0usize;
+        while let Some(account) = frontier.pop() {
+            if !component_accounts.insert(account.clone()) {
                 continue;
             }
-            let predecessor = sequence[index].clone();
-            let successor = sequence[index + 1].clone();
-            if predecessor == successor
-                || graph
-                    .forward
-                    .insert(predecessor.clone(), successor.clone())
-                    .is_some_and(|existing| existing != successor)
-                || reverse
-                    .insert(successor.clone(), predecessor.clone())
-                    .is_some_and(|existing| existing != predecessor)
-            {
-                return Err(Error::InvariantViolation(
-                    "ambiguous account-id rekey history while resolving Kaigi continuity".into(),
-                ));
+            if let Some(aliases) = world.account_rekey_records_by_account().get(&account) {
+                for label in aliases {
+                    if expanded_aliases.contains(label) {
+                        continue;
+                    }
+                    let record = world.account_rekey_records().get(label).ok_or_else(|| {
+                        Error::InvariantViolation(
+                            "account-id rekey reverse index references a missing history record"
+                                .into(),
+                        )
+                    })?;
+                    work = work
+                        .checked_add(record.previous_account_ids.len().saturating_add(1))
+                        .filter(|work| *work <= crate::sns::ACCOUNT_REKEY_LINEAGE_WORK_LIMIT)
+                        .ok_or_else(|| {
+                            Error::InvariantViolation(
+                                format!(
+                                    "account-id rekey lineage exceeds the deterministic {}-occurrence work limit",
+                                    crate::sns::ACCOUNT_REKEY_LINEAGE_WORK_LIMIT
+                                )
+                                .into(),
+                            )
+                        })?;
+                    expanded_aliases.insert(label.clone());
+                    if label != &record.label {
+                        return Err(Error::InvariantViolation(
+                            "account-id rekey history key does not match its embedded alias".into(),
+                        ));
+                    }
+                    if record.previous_account_ids.len() != record.transition_provenance.len() {
+                        return Err(Error::InvariantViolation(
+                            "malformed account-id rekey history while resolving Kaigi continuity"
+                                .into(),
+                        ));
+                    }
+                    let contains_account = record
+                        .previous_account_ids
+                        .iter()
+                        .chain(core::iter::once(&record.active_account_id))
+                        .any(|candidate| candidate == &account);
+                    if !contains_account {
+                        return Err(Error::InvariantViolation(
+                            "account-id rekey reverse index contains a stale alias occurrence"
+                                .into(),
+                        ));
+                    }
+                    for candidate in record
+                        .previous_account_ids
+                        .iter()
+                        .chain(core::iter::once(&record.active_account_id))
+                    {
+                        if !world
+                            .account_rekey_records_by_account()
+                            .get(candidate)
+                            .is_some_and(|aliases| aliases.contains(label))
+                        {
+                            return Err(Error::InvariantViolation(
+                                "account-id rekey history is missing a reverse alias occurrence"
+                                    .into(),
+                            ));
+                        }
+                    }
+                    let mut record_edges = Vec::new();
+                    let mut record_neighbours = BTreeMap::<AccountId, BTreeSet<AccountId>>::new();
+                    for (index, provenance) in record.transition_provenance.iter().enumerate() {
+                        if *provenance != AccountRekeyTransitionProvenance::AccountIdRekey {
+                            continue;
+                        }
+                        let predecessor = record.previous_account_ids[index].clone();
+                        let successor = record
+                            .previous_account_ids
+                            .get(index + 1)
+                            .unwrap_or(&record.active_account_id)
+                            .clone();
+                        record_neighbours
+                            .entry(predecessor.clone())
+                            .or_default()
+                            .insert(successor.clone());
+                        record_neighbours
+                            .entry(successor.clone())
+                            .or_default()
+                            .insert(predecessor.clone());
+                        record_edges.push((predecessor, successor));
+                    }
+                    let record_component =
+                        persisted_kaigi_rekey_component(&record_neighbours, &account);
+                    for (predecessor, successor) in record_edges {
+                        if !record_component.contains(&predecessor) {
+                            continue;
+                        }
+                        if predecessor == successor
+                            || graph
+                                .forward
+                                .get(&predecessor)
+                                .is_some_and(|existing| existing != &successor)
+                            || reverse
+                                .get(&successor)
+                                .is_some_and(|existing| existing != &predecessor)
+                        {
+                            return Err(Error::InvariantViolation(
+                                "ambiguous account-id rekey history while resolving Kaigi continuity"
+                                    .into(),
+                            ));
+                        }
+                        graph.forward.insert(predecessor.clone(), successor.clone());
+                        reverse.insert(successor.clone(), predecessor.clone());
+                        graph
+                            .neighbours
+                            .entry(predecessor.clone())
+                            .or_default()
+                            .insert(successor.clone());
+                        graph
+                            .neighbours
+                            .entry(successor)
+                            .or_default()
+                            .insert(predecessor);
+                    }
+                }
             }
-            graph
-                .neighbours
-                .entry(predecessor.clone())
-                .or_default()
-                .insert(successor.clone());
-            graph
-                .neighbours
-                .entry(successor)
-                .or_default()
-                .insert(predecessor);
+            if let Some(neighbours) = graph.neighbours.get(&account) {
+                frontier.extend(neighbours.iter().cloned());
+            }
         }
+        covered_accounts.extend(component_accounts);
     }
     let mut completed = BTreeSet::new();
     for start in graph.forward.keys() {
@@ -1517,9 +1832,11 @@ fn record_has_participant_in_active_lineage(
     state_transaction: &StateTransaction<'_, '_>,
     record: &KaigiRecord,
     account: &AccountId,
+    graph: &PersistedKaigiRekeyGraph,
 ) -> Result<bool, Error> {
     for participant in &record.participants {
-        if accounts_share_active_lineage(state_transaction, participant, account)? {
+        if accounts_share_active_lineage_with_graph(state_transaction, participant, account, graph)?
+        {
             return Ok(true);
         }
     }
@@ -1604,8 +1921,13 @@ fn decode_stored_relay_registration(
 fn collect_kaigi_relay_registry(
     world: &impl WorldReadOnly,
 ) -> Result<BTreeMap<AccountId, DomainId>, Error> {
+    collect_kaigi_relay_registry_from_domains(world.domains_iter())
+}
+fn collect_kaigi_relay_registry_from_domains(
+    domains: impl IntoIterator<Item = &'_ Domain>,
+) -> Result<BTreeMap<AccountId, DomainId>, Error> {
     let mut rebuilt = BTreeMap::new();
-    for domain in world.domains_iter() {
+    for domain in domains {
         for (key, value) in domain.metadata().iter() {
             if !key.as_ref().starts_with("kaigi_relay__") {
                 continue;
@@ -1623,6 +1945,123 @@ fn collect_kaigi_relay_registry(
     }
     Ok(rebuilt)
 }
+
+fn collect_kaigi_account_dependencies(
+    world: &impl WorldReadOnly,
+) -> Result<BTreeMap<AccountId, BTreeSet<KaigiAccountDependencyLocator>>, Error> {
+    collect_kaigi_account_dependencies_from_domains(world.domains_iter())
+}
+
+fn collect_kaigi_account_dependencies_from_domains(
+    domains: impl IntoIterator<Item = &'_ Domain>,
+) -> Result<BTreeMap<AccountId, BTreeSet<KaigiAccountDependencyLocator>>, Error> {
+    let mut rebuilt = BTreeMap::<AccountId, BTreeSet<KaigiAccountDependencyLocator>>::new();
+    for domain in domains {
+        for (key, value) in domain.metadata().iter() {
+            let literal = key.as_ref();
+            let (kind, accounts) = if literal.starts_with("kaigi__") {
+                let record: KaigiRecord = value.clone().try_into_any_norito().map_err(|err| {
+                    Error::InvariantViolation(
+                        format!("malformed Kaigi record in domain {}: {err}", domain.id()).into(),
+                    )
+                })?;
+                let expected_key = metadata_key(&record.id).map_err(|error| {
+                    Error::InvariantViolation(
+                        format!("invalid stored Kaigi identity: {error}").into(),
+                    )
+                })?;
+                if &record.id.domain_id != domain.id() || &expected_key != key {
+                    return Err(Error::InvariantViolation(
+                        "stored Kaigi record identity does not match its metadata location".into(),
+                    ));
+                }
+                (
+                    KAIGI_DEPENDENCY_ACTIVE_CALL,
+                    active_call_dependency_accounts(&record),
+                )
+            } else if literal.starts_with("kaigi_relay_feedback__") {
+                let feedback: KaigiRelayFeedback =
+                    value.clone().try_into_any_norito().map_err(|err| {
+                        Error::InvariantViolation(
+                            format!(
+                                "malformed Kaigi relay feedback in domain {}: {err}",
+                                domain.id()
+                            )
+                            .into(),
+                        )
+                    })?;
+                let expected_key = kaigi_relay_feedback_key(&feedback.relay_id).map_err(|err| {
+                    Error::InvariantViolation(
+                        format!("invalid retained Kaigi relay feedback identity: {err}").into(),
+                    )
+                })?;
+                if &expected_key != key {
+                    return Err(Error::InvariantViolation(
+                        "retained Kaigi relay feedback key does not match its relay ID".into(),
+                    ));
+                }
+                (
+                    KAIGI_DEPENDENCY_RELAY_FEEDBACK,
+                    BTreeSet::from([feedback.relay_id]),
+                )
+            } else if literal.starts_with("kaigi_relay__") {
+                let registration =
+                    decode_stored_relay_registration(domain.id(), key, value.clone())?;
+                (
+                    KAIGI_DEPENDENCY_RELAY_REGISTRATION,
+                    BTreeSet::from([registration.relay_id]),
+                )
+            } else {
+                continue;
+            };
+            let dependency = (kind, domain.id().clone(), key.clone());
+            for account in accounts {
+                rebuilt
+                    .entry(account)
+                    .or_default()
+                    .insert(dependency.clone());
+            }
+        }
+    }
+    Ok(rebuilt)
+}
+
+/// Rebuild the skipped Kaigi account-dependency reverse index from domain metadata.
+pub(crate) fn rebuild_kaigi_account_dependencies(world: &mut World) -> Result<(), String> {
+    let current =
+        collect_kaigi_account_dependencies(&world.view()).map_err(|error| error.to_string())?;
+    let previous = {
+        let reverted_domains = world.domains.block_and_revert();
+        let rebuilt = collect_kaigi_account_dependencies_from_domains(
+            reverted_domains.iter().map(|(_, domain)| domain),
+        )
+        .map_err(|error| error.to_string())?;
+        // Abort the temporary revert view so authoritative metadata and its undo journal remain
+        // unchanged while the skipped index reconstructs the same two MV layers.
+        drop(reverted_domains);
+        rebuilt
+    };
+    world.kaigi_account_dependencies =
+        crate::state::rebuild_derived_storage_with_previous(current, previous);
+    Ok(())
+}
+
+/// Validate the rebuilt Kaigi account-dependency index against authoritative metadata.
+pub(crate) fn validate_rebuilt_kaigi_account_dependencies(
+    world: &impl WorldReadOnly,
+) -> Result<(), String> {
+    let expected = collect_kaigi_account_dependencies(world).map_err(|error| error.to_string())?;
+    let actual = world
+        .kaigi_account_dependencies()
+        .iter()
+        .map(|(account, dependencies)| (account.clone(), dependencies.clone()))
+        .collect::<BTreeMap<_, _>>();
+    if actual != expected {
+        return Err("Kaigi account-dependency index disagrees with authoritative metadata".into());
+    }
+    Ok(())
+}
+
 /// Rebuild the derived relay-to-domain index from authoritative domain metadata.
 ///
 /// The first-release limit is an admission constraint, not a restore constraint:
@@ -1632,8 +2071,20 @@ fn collect_kaigi_relay_registry(
 ///
 /// Returns an error when an authoritative relay row is malformed or duplicated.
 pub(crate) fn rebuild_kaigi_relay_registry(world: &mut World) -> Result<(), String> {
-    let rebuilt = collect_kaigi_relay_registry(&world.view()).map_err(|error| error.to_string())?;
-    world.kaigi_relay_registry = rebuilt.into_iter().collect();
+    let current = collect_kaigi_relay_registry(&world.view()).map_err(|error| error.to_string())?;
+    let previous = {
+        let reverted_domains = world.domains.block_and_revert();
+        let rebuilt = collect_kaigi_relay_registry_from_domains(
+            reverted_domains.iter().map(|(_, domain)| domain),
+        )
+        .map_err(|error| error.to_string())?;
+        // Abort the temporary revert view so authoritative domain metadata and its undo journal
+        // remain unchanged while the skipped relay index reconstructs the same two MV layers.
+        drop(reverted_domains);
+        rebuilt
+    };
+    world.kaigi_relay_registry =
+        crate::state::rebuild_derived_storage_with_previous(current, previous);
     Ok(())
 }
 /// Validate rebuilt relay membership against persisted account lineage and home domains.
@@ -1644,7 +2095,14 @@ pub(crate) fn rebuild_kaigi_relay_registry(world: &mut World) -> Result<(), Stri
 pub(crate) fn validate_rebuilt_kaigi_relay_registry(
     world: &impl WorldReadOnly,
 ) -> Result<(), String> {
-    let graph = persisted_kaigi_rekey_graph(world).map_err(|error| error.to_string())?;
+    let graph = persisted_kaigi_rekey_graph(
+        world,
+        world
+            .kaigi_relay_registry()
+            .iter()
+            .map(|(relay_id, _)| relay_id.clone()),
+    )
+    .map_err(|error| error.to_string())?;
     for (relay_id, domain_id) in world.kaigi_relay_registry().iter() {
         let key = kaigi_relay_metadata_key(relay_id).map_err(|error| error.to_string())?;
         let value = world
@@ -1675,12 +2133,21 @@ pub(crate) fn validate_rebuilt_kaigi_relay_registry(
     }
     Ok(())
 }
+#[cfg(test)]
 fn validated_kaigi_relay_registry_count(
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<usize, Error> {
-    let graph = persisted_kaigi_rekey_graph(&state_transaction.world)?;
+    let graph = persisted_kaigi_rekey_graph(
+        &state_transaction.world,
+        state_transaction
+            .world
+            .kaigi_relay_registry
+            .iter()
+            .map(|(relay_id, _)| relay_id.clone()),
+    )?;
     validated_kaigi_relay_registry_count_with_graph(state_transaction, &graph)
 }
+#[cfg(test)]
 fn validated_kaigi_relay_registry_count_with_graph(
     state_transaction: &StateTransaction<'_, '_>,
     graph: &PersistedKaigiRekeyGraph,
@@ -1709,10 +2176,12 @@ fn validated_kaigi_relay_registry_count_with_graph(
                 "Kaigi relay registry key does not match its metadata registration".into(),
             ));
         }
-        let resolved_domain = relay_domain_from_persisted_graph(state_transaction, relay_id, graph)?;
+        let resolved_domain =
+            relay_domain_from_persisted_graph(state_transaction, relay_id, graph)?;
         if &resolved_domain != domain_id {
             return Err(Error::InvariantViolation(
-                "stored Kaigi relay registration is outside its relay's active home domain".into(),
+                "stored Kaigi relay registration is outside its relay's persisted home domain"
+                    .into(),
             ));
         }
         count = count.saturating_add(1);
@@ -1731,7 +2200,10 @@ fn ensure_manifest_relays_registered(
             "relay manifest expiry must be greater than the current block time",
         ));
     }
-    let rekey_graph = persisted_kaigi_rekey_graph(&state_transaction.world)?;
+    let rekey_graph = persisted_kaigi_rekey_graph(
+        &state_transaction.world,
+        manifest.hops.iter().map(|hop| hop.relay_id.clone()),
+    )?;
     let mut active_relays = BTreeSet::new();
     for hop in &manifest.hops {
         let active_relay = resolve_active_kaigi_account_with_graph(
@@ -1739,9 +2211,7 @@ fn ensure_manifest_relays_registered(
             &hop.relay_id,
             &rekey_graph,
         )?
-        .ok_or_else(|| {
-                relay_error("relay manifest references an unregistered relay account")
-            })?;
+        .ok_or_else(|| relay_error("relay manifest references an unregistered relay account"))?;
         if !active_relays.insert(active_relay) {
             return Err(relay_error(
                 "relay manifest must not contain multiple identities from the same active account-id rekey lineage",
@@ -1897,7 +2367,7 @@ fn relay_domain(
     state_transaction: &StateTransaction<'_, '_>,
     relay_id: &AccountId,
 ) -> Result<DomainId, Error> {
-    let graph = persisted_kaigi_rekey_graph(&state_transaction.world)?;
+    let graph = persisted_kaigi_rekey_graph(&state_transaction.world, [relay_id.clone()])?;
     relay_domain_with_graph(state_transaction, relay_id, &graph)
 }
 fn relay_domain_with_graph(
@@ -1921,7 +2391,7 @@ fn relay_domain_from_persisted_graph(
             .ok_or_else(|| {
                 relay_error("relay account is not registered or in a persisted lineage")
             })?;
-    active_relay_subject_domain(state_transaction, &relay_subject)
+    relay_subject_domain(&state_transaction.world, &relay_subject)
 }
 fn active_relay_subject_domain(
     state_transaction: &StateTransaction<'_, '_>,
@@ -2046,14 +2516,23 @@ fn process_join(
     proof: Option<&[u8]>,
 ) -> Result<AccessGrant, Error> {
     ensure_kaigi_active(record)?;
-    if accounts_share_active_lineage(state_transaction, &record.host, participant)? {
+    let authority = authorization.signed_account();
+    let rekey_graph = persisted_kaigi_rekey_graph(
+        &state_transaction.world,
+        [record.host.clone(), participant.clone(), authority.clone()],
+    )?;
+    if accounts_share_active_lineage_with_graph(
+        state_transaction,
+        &record.host,
+        participant,
+        &rekey_graph,
+    )? {
         return Err(Error::InvalidParameter(
             InvalidParameterError::SmartContract("host is already part of the call".into()),
         ));
     }
     match record.privacy_mode {
         KaigiPrivacyMode::Transparent => {
-            let authority = authorization.signed_account();
             privacy::ensure_transparent_payload(&PrivacyArtifacts {
                 #[cfg(feature = "kaigi_privacy_mocks")]
                 subject: authority,
@@ -2065,11 +2544,21 @@ fn process_join(
                 proof,
             })?;
             if authority != participant
-                && !accounts_share_active_lineage(state_transaction, authority, &record.host)?
+                && !accounts_share_active_lineage_with_graph(
+                    state_transaction,
+                    authority,
+                    &record.host,
+                    &rekey_graph,
+                )?
             {
                 return Err(unauthorized("only the host may invite other accounts"));
             }
-            if record_has_participant_in_active_lineage(state_transaction, record, participant)? {
+            if record_has_participant_in_active_lineage(
+                state_transaction,
+                record,
+                participant,
+                &rekey_graph,
+            )? {
                 return Err(Error::InvariantViolation(
                     "participant already joined".into(),
                 ));
@@ -2148,6 +2637,10 @@ fn process_leave(
     proof: Option<&[u8]>,
 ) -> Result<AccessGrant, Error> {
     ensure_kaigi_active(record)?;
+    let rekey_graph = persisted_kaigi_rekey_graph(
+        &state_transaction.world,
+        [record.host.clone(), participant.clone(), authority.clone()],
+    )?;
     match record.privacy_mode {
         KaigiPrivacyMode::Transparent => {
             privacy::ensure_transparent_payload(&PrivacyArtifacts {
@@ -2160,14 +2653,27 @@ fn process_leave(
                 roster_root: roster_root.as_ref(),
                 proof,
             })?;
-            if !accounts_share_active_lineage(state_transaction, authority, participant)?
-                && !accounts_share_active_lineage(state_transaction, authority, &record.host)?
-            {
+            if !accounts_share_active_lineage_with_graph(
+                state_transaction,
+                authority,
+                participant,
+                &rekey_graph,
+            )? && !accounts_share_active_lineage_with_graph(
+                state_transaction,
+                authority,
+                &record.host,
+                &rekey_graph,
+            )? {
                 return Err(unauthorized(
                     "only the host or participant may remove a participant",
                 ));
             }
-            if accounts_share_active_lineage(state_transaction, &record.host, participant)? {
+            if accounts_share_active_lineage_with_graph(
+                state_transaction,
+                &record.host,
+                participant,
+                &rekey_graph,
+            )? {
                 return Err(Error::InvalidParameter(
                     InvalidParameterError::SmartContract(
                         "host cannot leave the call without ending it".into(),
@@ -2176,10 +2682,11 @@ fn process_leave(
             }
             let mut matching_index = None;
             for (index, stored_participant) in record.participants.iter().enumerate() {
-                if !accounts_share_active_lineage(
+                if !accounts_share_active_lineage_with_graph(
                     state_transaction,
                     stored_participant,
                     participant,
+                    &rekey_graph,
                 )? {
                     continue;
                 }
@@ -2456,9 +2963,7 @@ mod tests {
                     .expect("canonical account-id rekey")
                     .reassign_alias_to_account(new_alias_owner.clone())
                     .expect("later independent alias reassignment");
-                stx.world
-                    .account_rekey_records
-                    .insert(alias.clone(), history);
+                stx.world.replace_account_rekey_record(history);
                 stx.world
                     .insert_account_alias_binding(alias.clone(), new_alias_owner.clone());
 
@@ -2509,6 +3014,117 @@ mod tests {
         );
     }
     #[test]
+    fn account_dependency_guard_and_rekey_graph_ignore_unrelated_oversized_history() {
+        use iroha_data_model::{
+            account::rekey::{AccountAlias, AccountRekeyRecord, AccountRekeyTransitionProvenance},
+            nexus::DataSpaceId,
+        };
+        let (domain, predecessor, _) = sample_ids();
+        let (terminal, _) = gen_account_in("nexus");
+        let (unrelated_predecessor, _) = gen_account_in("nexus");
+        let (unrelated_terminal, _) = gen_account_in("nexus");
+        with_seeded_kaigi_state_transaction(
+            &domain,
+            &[terminal.clone(), unrelated_terminal.clone()],
+            |stx| {
+                let alias = AccountAlias::domainless(
+                    "targeted-kaigi-lineage".parse().expect("alias label"),
+                    DataSpaceId::UNIVERSAL,
+                );
+                stx.world.replace_account_rekey_record(
+                    AccountRekeyRecord::new(alias, predecessor.clone())
+                        .repoint_for_account_id_rekey(terminal.clone())
+                        .expect("target rekey history"),
+                );
+                let unrelated_alias = AccountAlias::domainless(
+                    "oversized-unrelated-kaigi-lineage"
+                        .parse()
+                        .expect("alias label"),
+                    DataSpaceId::UNIVERSAL,
+                );
+                let mut oversized =
+                    AccountRekeyRecord::new(unrelated_alias, unrelated_terminal.clone());
+                oversized.previous_account_ids = vec![
+                    unrelated_predecessor.clone();
+                    crate::sns::ACCOUNT_REKEY_LINEAGE_WORK_LIMIT
+                ];
+                oversized.transition_provenance = vec![
+                    AccountRekeyTransitionProvenance::AccountIdRekey;
+                    crate::sns::ACCOUNT_REKEY_LINEAGE_WORK_LIMIT
+                ];
+                stx.world.replace_account_rekey_record(oversized);
+
+                assert_eq!(
+                    resolve_active_kaigi_account(stx, &predecessor)
+                        .expect("unrelated history must not affect targeted resolution"),
+                    Some(terminal.clone())
+                );
+                ensure_kaigi_account_can_unregister(stx, &terminal)
+                    .expect("unrelated oversized history must not affect the dependency guard");
+                let error = resolve_active_kaigi_account(stx, &unrelated_predecessor)
+                    .expect_err("the oversized requested lineage must hit the work bound");
+                assert_invariant_error(error, "occurrence work limit");
+            },
+        );
+    }
+    #[test]
+    fn duplicate_rekey_edges_remain_supported_until_the_last_alias_is_removed() {
+        use iroha_data_model::{
+            account::rekey::{AccountAlias, AccountRekeyRecord},
+            nexus::DataSpaceId,
+        };
+        let (domain, predecessor, _) = sample_ids();
+        let (terminal, _) = gen_account_in("nexus");
+        with_seeded_kaigi_state_transaction(&domain, std::slice::from_ref(&terminal), |stx| {
+            let first_alias = AccountAlias::domainless(
+                "duplicate-edge-a".parse().expect("alias label"),
+                DataSpaceId::UNIVERSAL,
+            );
+            let second_alias = AccountAlias::domainless(
+                "duplicate-edge-b".parse().expect("alias label"),
+                DataSpaceId::UNIVERSAL,
+            );
+            for alias in [&first_alias, &second_alias] {
+                stx.world.replace_account_rekey_record(
+                    AccountRekeyRecord::new(alias.clone(), predecessor.clone())
+                        .repoint_for_account_id_rekey(terminal.clone())
+                        .expect("duplicate canonical edge"),
+                );
+            }
+            assert_eq!(
+                stx.world.account_rekey_records_by_account.get(&predecessor),
+                Some(&BTreeSet::from([first_alias.clone(), second_alias.clone()]))
+            );
+            assert_eq!(
+                resolve_active_kaigi_account(stx, &predecessor).expect("duplicate edge support"),
+                Some(terminal.clone())
+            );
+
+            stx.world.remove_account_rekey_record(&first_alias);
+            assert_eq!(
+                stx.world.account_rekey_records_by_account.get(&predecessor),
+                Some(&BTreeSet::from([second_alias.clone()]))
+            );
+            assert_eq!(
+                resolve_active_kaigi_account(stx, &predecessor)
+                    .expect("remaining duplicate edge support"),
+                Some(terminal.clone())
+            );
+
+            stx.world.remove_account_rekey_record(&second_alias);
+            assert!(
+                stx.world
+                    .account_rekey_records_by_account
+                    .get(&predecessor)
+                    .is_none()
+            );
+            assert_eq!(
+                resolve_active_kaigi_account(stx, &predecessor).expect("removed edge resolution"),
+                None
+            );
+        });
+    }
+    #[test]
     fn persisted_rekey_history_rejects_a_registered_predecessor() {
         use iroha_data_model::{
             account::rekey::{AccountAlias, AccountRekeyRecord},
@@ -2529,7 +3145,7 @@ mod tests {
                 let history = AccountRekeyRecord::new(alias.clone(), predecessor.clone())
                     .repoint_for_account_id_rekey(terminal.clone())
                     .expect("canonical account-id rekey");
-                stx.world.account_rekey_records.insert(alias, history);
+                stx.world.replace_account_rekey_record(history);
 
                 let error = resolve_active_kaigi_account(stx, &predecessor)
                     .expect_err("a registered predecessor must not regain Kaigi authority");
@@ -2579,7 +3195,7 @@ mod tests {
             let history = AccountRekeyRecord::new(alias.clone(), predecessor.clone())
                 .repoint_for_account_id_rekey(terminal.clone())
                 .expect("canonical account-id rekey");
-            stx.world.account_rekey_records.insert(alias, history);
+            stx.world.replace_account_rekey_record(history);
 
             let error = Register::account(Account::new(predecessor.clone()))
                 .execute(&ALICE_ID, stx)
@@ -2615,7 +3231,12 @@ mod tests {
                 .expect("canonical account-id rekey");
             stx.world
                 .account_rekey_records
-                .insert(stored_alias, history);
+                .insert(stored_alias.clone(), history);
+            for account_id in [&predecessor, &terminal] {
+                stx.world
+                    .account_rekey_records_by_account
+                    .insert(account_id.clone(), BTreeSet::from([stored_alias.clone()]));
+            }
 
             let error = resolve_active_kaigi_account(stx, &predecessor)
                 .expect_err("the persisted alias key must authenticate its payload");
@@ -2746,8 +3367,7 @@ mod tests {
             crate::sns::record_storage_key(&selector),
             norito::codec::Encode::encode(&lease),
         );
-        stx.world.account_rekey_records.insert(
-            alias.clone(),
+        stx.world.replace_account_rekey_record(
             AccountRekeyRecord::new(alias.clone(), retired.clone())
                 .repoint_for_account_id_rekey(active.clone())
                 .expect("canonical account-id rekey fixture"),
@@ -2758,46 +3378,208 @@ mod tests {
     #[test]
     fn transparent_join_and_leave_updates_participants_only() {
         let (mut record, host, participant) = new_record(KaigiPrivacyMode::Transparent);
-        with_state_transaction(|stx| {
-            let grant = process_join(
-                stx,
-                &mut record,
-                KaigiAuthorization::SignedAccount(&participant),
-                &participant,
-                None,
-                None,
-                None,
-                None,
-            )
-            .expect("transparent join");
-            assert_eq!(grant, AccessGrant::Default);
-            assert!(record.has_participant(&participant));
-            assert!(record.roster_commitments.is_empty());
-            let leave_grant = process_leave(
-                stx,
-                &mut record,
-                &participant,
-                &participant,
-                None,
-                None,
-                None,
-                None,
-            )
-            .expect("transparent leave");
-            assert_eq!(leave_grant, AccessGrant::Default);
-            assert!(!record.has_participant(&participant));
-            let _ = process_join(
-                stx,
-                &mut record,
-                KaigiAuthorization::SignedAccount(&host),
-                &participant,
-                None,
-                None,
-                None,
-                None,
-            )
-            .expect("host can re-invite");
+        let domain_id = record.id.domain_id.clone();
+        with_seeded_kaigi_state_transaction(
+            &domain_id,
+            &[host.clone(), participant.clone()],
+            |stx| {
+                let grant = process_join(
+                    stx,
+                    &mut record,
+                    KaigiAuthorization::SignedAccount(&participant),
+                    &participant,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .expect("transparent join");
+                assert_eq!(grant, AccessGrant::Default);
+                assert!(record.has_participant(&participant));
+                assert!(record.roster_commitments.is_empty());
+                let leave_grant = process_leave(
+                    stx,
+                    &mut record,
+                    &participant,
+                    &participant,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .expect("transparent leave");
+                assert_eq!(leave_grant, AccessGrant::Default);
+                assert!(!record.has_participant(&participant));
+                let _ = process_join(
+                    stx,
+                    &mut record,
+                    KaigiAuthorization::SignedAccount(&host),
+                    &participant,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .expect("host can re-invite");
+            },
+        );
+    }
+    #[test]
+    fn account_dependency_index_tracks_call_lifecycle_and_filters_relay_home_checks() {
+        let (record, host, participant) = new_record(KaigiPrivacyMode::Transparent);
+        let call = record.id.clone();
+        let domain = call.domain_id.clone();
+        let dependency = (
+            KAIGI_DEPENDENCY_ACTIVE_CALL,
+            domain.clone(),
+            kaigi_metadata_key(&call.call_name).expect("call metadata key"),
+        );
+        with_seeded_kaigi_state_transaction(&domain, &[host.clone(), participant.clone()], |stx| {
+            create_call(stx, &record, &host);
+            assert!(
+                stx.world
+                    .kaigi_account_dependencies
+                    .get(&host)
+                    .is_some_and(|dependencies| dependencies.contains(&dependency))
+            );
+            ensure_kaigi_relay_home_change_allowed(stx, &host, &domain, None)
+                .expect("an active-call host reference is not retained relay state");
+            assert_invariant_error(
+                ensure_kaigi_account_can_unregister(stx, &host)
+                    .expect_err("an active-call host must remain registered"),
+                "referenced by active Kaigi",
+            );
+
+            JoinKaigi {
+                call_id: call.clone(),
+                participant: participant.clone(),
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
+            }
+            .execute(&host, stx)
+            .expect("join participant");
+            assert!(
+                stx.world
+                    .kaigi_account_dependencies
+                    .get(&participant)
+                    .is_some_and(|dependencies| dependencies.contains(&dependency))
+            );
+
+            LeaveKaigi {
+                call_id: call.clone(),
+                participant: participant.clone(),
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
+            }
+            .execute(&host, stx)
+            .expect("leave participant");
+            assert!(
+                stx.world
+                    .kaigi_account_dependencies
+                    .get(&participant)
+                    .is_none()
+            );
+            ensure_kaigi_account_can_unregister(stx, &participant)
+                .expect("a departed participant has no retained Kaigi dependency");
+
+            EndKaigi {
+                call_id: call.clone(),
+                ended_at_ms: Some(0),
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
+            }
+            .execute(&host, stx)
+            .expect("end Kaigi");
+            assert!(stx.world.kaigi_account_dependencies.get(&host).is_none());
+            ensure_kaigi_account_can_unregister(stx, &host)
+                .expect("an ended Kaigi has no retained account dependency");
         });
+    }
+    #[test]
+    fn account_dependency_index_rolls_back_with_transaction_metadata() {
+        let (record, host, participant) = new_record(KaigiPrivacyMode::Transparent);
+        let call = record.id.clone();
+        let domain = call.domain_id.clone();
+        let dependency = (
+            KAIGI_DEPENDENCY_ACTIVE_CALL,
+            domain.clone(),
+            kaigi_metadata_key(&call.call_name).expect("call metadata key"),
+        );
+        let state = State::new(
+            World::with(
+                [Domain::new(domain.clone()).build(&ALICE_ID)],
+                [host.clone(), participant.clone()]
+                    .map(|account| Account::new(account).build(&ALICE_ID)),
+                std::iter::empty::<AssetDefinition>(),
+            ),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let header = iroha_data_model::block::BlockHeader::new(
+            NonZeroU64::new(1).expect("non-zero height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = state.block(header);
+        {
+            let mut transaction = block.transaction();
+            create_call(&mut transaction, &record, &host);
+            transaction.apply();
+        }
+        {
+            let mut transaction = block.transaction();
+            JoinKaigi {
+                call_id: call.clone(),
+                participant: participant.clone(),
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
+            }
+            .execute(&host, &mut transaction)
+            .expect("join participant in discarded transaction");
+            assert!(
+                transaction
+                    .world
+                    .kaigi_account_dependencies
+                    .get(&participant)
+                    .is_some_and(|dependencies| dependencies.contains(&dependency))
+            );
+        }
+        assert!(
+            block
+                .world
+                .kaigi_account_dependencies
+                .get(&participant)
+                .is_none()
+        );
+        let stored: KaigiRecord = block
+            .world
+            .domain(&domain)
+            .expect("Kaigi domain")
+            .metadata()
+            .get(&dependency.2)
+            .expect("Kaigi metadata")
+            .clone()
+            .try_into_any_norito()
+            .expect("decode Kaigi metadata");
+        assert!(stored.participants.is_empty());
+        assert!(
+            block
+                .world
+                .kaigi_account_dependencies
+                .get(&host)
+                .is_some_and(|dependencies| dependencies.contains(&dependency))
+        );
     }
     #[test]
     fn record_storage_scrubs_legacy_clear_privacy_hints() {
@@ -3670,7 +4452,15 @@ mod tests {
                 .domain_mut(&home)
                 .expect("home domain")
                 .metadata_mut()
-                .insert(key, Json::try_new(feedback).expect("serialize feedback"));
+                .insert(
+                    key.clone(),
+                    Json::try_new(feedback).expect("serialize feedback"),
+                );
+            seed_kaigi_account_dependency_for_testing(
+                stx,
+                &relay_id,
+                (KAIGI_DEPENDENCY_RELAY_FEEDBACK, home.clone(), key),
+            );
 
             let error = ensure_kaigi_relay_home_change_allowed(stx, &relay_id, &home, Some(&other))
                 .expect_err("retained feedback must pin relay storage even without a descriptor");
@@ -3701,6 +4491,16 @@ mod tests {
                         descriptor_key.clone(),
                         Json::try_new(descriptor).expect("serialize descriptor"),
                     );
+                let descriptor_dependency = (
+                    KAIGI_DEPENDENCY_RELAY_REGISTRATION,
+                    home.clone(),
+                    descriptor_key.clone(),
+                );
+                seed_kaigi_account_dependency_for_testing(
+                    stx,
+                    &key_relay,
+                    descriptor_dependency.clone(),
+                );
                 for error in [
                     ensure_kaigi_relay_home_change_allowed(stx, &key_relay, &home, Some(&other))
                         .expect_err("corrupt descriptor key must reject alias movement"),
@@ -3714,6 +4514,11 @@ mod tests {
                     .expect("home domain")
                     .metadata_mut()
                     .remove(&descriptor_key);
+                remove_kaigi_account_dependency_for_testing(
+                    stx,
+                    &key_relay,
+                    &descriptor_dependency,
+                );
 
                 let feedback_key = kaigi_relay_feedback_key(&key_relay).expect("feedback key");
                 let feedback = KaigiRelayFeedback {
@@ -3732,9 +4537,14 @@ mod tests {
                     .expect("home domain")
                     .metadata_mut()
                     .insert(
-                        feedback_key,
+                        feedback_key.clone(),
                         Json::try_new(feedback).expect("serialize feedback"),
                     );
+                seed_kaigi_account_dependency_for_testing(
+                    stx,
+                    &key_relay,
+                    (KAIGI_DEPENDENCY_RELAY_FEEDBACK, home.clone(), feedback_key),
+                );
                 for error in [
                     ensure_kaigi_relay_home_change_allowed(stx, &key_relay, &home, Some(&other))
                         .expect_err("corrupt feedback key must reject alias movement"),
@@ -3745,6 +4555,37 @@ mod tests {
                 }
             },
         );
+    }
+    #[test]
+    fn relay_home_change_validates_corrupt_relay_locator_before_domain_filtering() {
+        let home = DomainId::try_new("relay-home", "universal").expect("home domain");
+        let unrelated =
+            DomainId::try_new("unrelated-relay-home", "universal").expect("unrelated domain");
+        let (relay_id, _) = gen_account_in("relay-home");
+        with_state_transaction(|stx| {
+            for domain in [&home, &unrelated] {
+                Register::domain(Domain::new(domain.clone()))
+                    .execute(&ALICE_ID, stx)
+                    .expect("register domain");
+            }
+            Register::account(Account::new(relay_id.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register relay account");
+            let missing_key = kaigi_relay_feedback_key(&relay_id).expect("feedback key");
+            seed_kaigi_account_dependency_for_testing(
+                stx,
+                &relay_id,
+                (
+                    KAIGI_DEPENDENCY_RELAY_FEEDBACK,
+                    unrelated.clone(),
+                    missing_key,
+                ),
+            );
+
+            let error = ensure_kaigi_relay_home_change_allowed(stx, &relay_id, &home, None)
+                .expect_err("a corrupt out-of-domain relay locator must fail closed");
+            assert_invariant_error(error, "references missing metadata");
+        });
     }
     #[test]
     fn retired_relay_allowlist_entry_authorizes_only_the_active_successor_id() {
@@ -4153,17 +4994,28 @@ mod tests {
                         hpke_public_key: vec![u8::try_from(index % 251).expect("bounded byte") + 1],
                         bandwidth_class: 1,
                     };
+                    let registration_key =
+                        kaigi_relay_metadata_key(&relay_id).expect("registration key");
                     stx.world
                         .domain_mut(&domain_id)
                         .expect("relay domain")
                         .metadata_mut()
                         .insert(
-                            kaigi_relay_metadata_key(&relay_id).expect("registration key"),
+                            registration_key.clone(),
                             Json::try_new(registration).expect("serialize registration"),
                         );
                     stx.world
                         .kaigi_relay_registry
                         .insert(relay_id.clone(), domain_id.clone());
+                    seed_kaigi_account_dependency_for_testing(
+                        stx,
+                        &relay_id,
+                        (
+                            KAIGI_DEPENDENCY_RELAY_REGISTRATION,
+                            domain_id.clone(),
+                            registration_key,
+                        ),
+                    );
                 }
                 relay_ids.push(relay_id);
             }
@@ -4203,17 +5055,27 @@ mod tests {
             assert_eq!(load_relay_registration(stx, &domain_id, &new_relay), None);
             assert!(stx.world.take_external_events().is_empty());
 
+            let rejected_key = kaigi_relay_metadata_key(&new_relay).expect("registration key");
             stx.world
                 .domain_mut(&domain_id)
                 .expect("relay domain")
                 .metadata_mut()
                 .insert(
-                    kaigi_relay_metadata_key(&new_relay).expect("registration key"),
+                    rejected_key.clone(),
                     Json::try_new(rejected).expect("serialize legacy over-cap registration"),
                 );
             stx.world
                 .kaigi_relay_registry
                 .insert(new_relay.clone(), domain_id.clone());
+            seed_kaigi_account_dependency_for_testing(
+                stx,
+                &new_relay,
+                (
+                    KAIGI_DEPENDENCY_RELAY_REGISTRATION,
+                    domain_id.clone(),
+                    rejected_key,
+                ),
+            );
             assert_eq!(
                 collect_kaigi_relay_registry(&stx.world)
                     .expect("valid legacy over-cap registry remains rebuildable")
@@ -4291,6 +5153,106 @@ mod tests {
                 .expect_err("duplicate relay rows must fail state rebuild");
             assert_invariant_error(error, "duplicate Kaigi relay registration");
         });
+    }
+    #[test]
+    fn relay_registry_rebuild_preserves_latest_block_revert() {
+        let domain_id = DomainId::try_new("relay-revert", "universal").expect("domain id");
+        let (relay_id, _) = gen_account_in("relay-revert");
+        let registration_key = kaigi_relay_metadata_key(&relay_id).expect("relay registration key");
+        let mut domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+        domain.metadata_mut().insert(
+            registration_key.clone(),
+            Json::try_new(KaigiRelayRegistration {
+                relay_id: relay_id.clone(),
+                hpke_public_key: vec![0xAA],
+                bandwidth_class: 1,
+            })
+            .expect("serialize relay registration"),
+        );
+        let mut world = World::with(
+            [domain],
+            std::iter::empty::<Account>(),
+            std::iter::empty::<AssetDefinition>(),
+        );
+        {
+            let mut domains = world.domains.block();
+            domains
+                .get_mut(&domain_id)
+                .expect("relay domain")
+                .metadata_mut()
+                .remove(&registration_key);
+            domains.commit();
+        }
+        let authoritative_before =
+            norito::json::to_json(&world.domains).expect("serialize domain MV state");
+        rebuild_kaigi_relay_registry(&mut world).expect("rebuild relay index");
+        assert!(world.kaigi_relay_registry.view().is_empty());
+        assert_eq!(
+            norito::json::to_json(&world.domains).expect("serialize rebuilt domain MV state"),
+            authoritative_before,
+            "relay index rebuild must preserve authoritative domain MV history"
+        );
+        let reverted = world.kaigi_relay_registry.block_and_revert();
+        assert_eq!(reverted.get(&relay_id), Some(&domain_id));
+        reverted.commit();
+    }
+    #[test]
+    fn account_dependency_rebuild_preserves_latest_block_revert() {
+        let domain_id = DomainId::try_new("kaigi-revert", "universal").expect("domain id");
+        let (host, _) = gen_account_in("kaigi-revert");
+        let call = KaigiId::new(
+            domain_id.clone(),
+            Name::from_str("active-before-revert").expect("call name"),
+        );
+        let record = KaigiRecord::from_new(&NewKaigi::with_defaults(call.clone(), host.clone()), 0);
+        let record_key = kaigi_metadata_key(&call.call_name).expect("Kaigi metadata key");
+        let dependency = (
+            KAIGI_DEPENDENCY_ACTIVE_CALL,
+            domain_id.clone(),
+            record_key.clone(),
+        );
+        let mut domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+        domain.metadata_mut().insert(
+            record_key.clone(),
+            Json::try_new(record).expect("serialize Kaigi record"),
+        );
+        let mut world = World::with(
+            [domain],
+            [Account::new(host.clone()).build(&ALICE_ID)],
+            std::iter::empty::<AssetDefinition>(),
+        );
+        assert!(
+            world
+                .kaigi_account_dependencies
+                .view()
+                .get(&host)
+                .is_some_and(|dependencies| dependencies.contains(&dependency))
+        );
+        {
+            let mut domains = world.domains.block();
+            domains
+                .get_mut(&domain_id)
+                .expect("Kaigi domain")
+                .metadata_mut()
+                .remove(&record_key);
+            domains.commit();
+        }
+        let authoritative_before =
+            norito::json::to_json(&world.domains).expect("serialize domain MV state");
+        rebuild_kaigi_account_dependencies(&mut world).expect("rebuild dependency index");
+        assert!(world.kaigi_account_dependencies.view().is_empty());
+        assert_eq!(
+            norito::json::to_json(&world.domains).expect("serialize rebuilt domain MV state"),
+            authoritative_before,
+            "dependency-index rebuild must preserve authoritative domain MV history"
+        );
+        let reverted = world.kaigi_account_dependencies.block_and_revert();
+        assert!(
+            reverted
+                .get(&host)
+                .is_some_and(|dependencies| dependencies.contains(&dependency))
+        );
+        reverted.commit();
     }
     #[test]
     fn rebuilt_relay_registry_rejects_mis_homed_metadata() {
@@ -4380,6 +5342,17 @@ mod tests {
         let retired_relay = manifest.hops[0].relay_id.clone();
         with_seeded_kaigi_state_transaction(&domain, std::slice::from_ref(&host), |stx| {
             register_manifest_relays(stx, &domain, &manifest);
+            let registration_dependency = (
+                KAIGI_DEPENDENCY_RELAY_REGISTRATION,
+                domain.clone(),
+                kaigi_relay_metadata_key(&retired_relay).expect("registration key"),
+            );
+            assert!(
+                stx.world
+                    .kaigi_account_dependencies
+                    .get(&retired_relay)
+                    .is_some_and(|dependencies| dependencies.contains(&registration_dependency))
+            );
             let mut template = NewKaigi::with_defaults(call_id.clone(), host.clone());
             template.relay_manifest = Some(manifest.clone());
             CreateKaigi {
@@ -4400,6 +5373,17 @@ mod tests {
                 notes: Some("retiring".to_owned()),
             };
             store_relay_feedback(stx, &feedback).expect("seed relay feedback");
+            let feedback_dependency = (
+                KAIGI_DEPENDENCY_RELAY_FEEDBACK,
+                domain.clone(),
+                kaigi_relay_feedback_key(&retired_relay).expect("feedback key"),
+            );
+            assert!(
+                stx.world
+                    .kaigi_account_dependencies
+                    .get(&retired_relay)
+                    .is_some_and(|dependencies| dependencies.contains(&feedback_dependency))
+            );
             stx.world.take_external_events();
             let internal_len = stx.world.internal_event_buf.len();
 
@@ -4417,6 +5401,20 @@ mod tests {
             assert_eq!(stx.world.internal_event_buf.len(), internal_len + 3);
             assert_eq!(load_relay_registration(stx, &domain, &retired_relay), None);
             assert!(stx.world.kaigi_relay_registry.get(&retired_relay).is_none());
+            let remaining_dependencies = stx
+                .world
+                .kaigi_account_dependencies
+                .get(&retired_relay)
+                .expect("active manifest dependency remains");
+            assert!(!remaining_dependencies.contains(&registration_dependency));
+            assert!(!remaining_dependencies.contains(&feedback_dependency));
+            assert!(
+                remaining_dependencies
+                    .iter()
+                    .any(|(kind, _, _)| { *kind == KAIGI_DEPENDENCY_ACTIVE_CALL })
+            );
+            ensure_kaigi_relay_home_change_allowed(stx, &retired_relay, &domain, None)
+                .expect("active-call relay references alone must not pin relay metadata home");
             assert_eq!(
                 load_relay_feedback(stx, &retired_relay).expect("load removed feedback"),
                 None
@@ -4521,10 +5519,10 @@ mod tests {
     fn active_rekey_successor_may_retire_predecessor_relay_descriptor() {
         let domain_id = DomainId::try_new("relay-lineage", "universal").expect("domain id");
         let (retired_relay, _) = gen_account_in("relay-lineage");
-        let (active_relay, _) = gen_account_in("relay-lineage");
+        let (active_relay, active_relay_key) = gen_account_in("relay-lineage");
         with_seeded_kaigi_state_transaction(
             &domain_id,
-            &[retired_relay.clone(), active_relay.clone()],
+            std::slice::from_ref(&retired_relay),
             |stx| {
                 add_relay_to_allowlist(stx, &domain_id, &retired_relay);
                 RegisterKaigiRelay {
@@ -4536,13 +5534,16 @@ mod tests {
                 }
                 .execute(&retired_relay, stx)
                 .expect("register predecessor descriptor");
-                seed_active_account_id_rekey_lineage(
-                    stx,
-                    "relay-retirement-lineage",
-                    &retired_relay,
-                    &active_relay,
-                );
-                seed_relay_primary_alias_for_testing(stx, &domain_id, &active_relay);
+                ReplaceAccountController {
+                    account: retired_relay.clone(),
+                    new_controller: AccountController::single(
+                        active_relay_key.public_key().clone(),
+                    ),
+                }
+                .execute(&retired_relay, stx)
+                .expect("replace relay controller");
+                assert!(stx.world.account(&retired_relay).is_err());
+                assert!(stx.world.account(&active_relay).is_ok());
                 stx.world.take_external_events();
 
                 UnregisterKaigiRelay {
@@ -4556,6 +5557,54 @@ mod tests {
                 );
                 assert!(
                     extract_unregistration_summary(&stx.world.take_external_events()).is_some()
+                );
+            },
+        );
+    }
+    #[test]
+    fn expired_relay_alias_does_not_block_registry_admission_or_retirement() {
+        let domain_id = DomainId::try_new("relay-expired", "universal").expect("domain id");
+        let (expired_relay, _) = gen_account_in("relay-expired");
+        let (new_relay, _) = gen_account_in("relay-expired");
+        with_seeded_kaigi_state_transaction(
+            &domain_id,
+            &[expired_relay.clone(), new_relay.clone()],
+            |stx| {
+                add_relay_to_allowlist(stx, &domain_id, &expired_relay);
+                RegisterKaigiRelay {
+                    relay: KaigiRelayRegistration {
+                        relay_id: expired_relay.clone(),
+                        hpke_public_key: vec![0xAA],
+                        bandwidth_class: 1,
+                    },
+                }
+                .execute(&expired_relay, stx)
+                .expect("register relay before its alias expires");
+                expire_relay_primary_alias_for_testing(stx, &expired_relay);
+
+                add_relay_to_allowlist(stx, &domain_id, &new_relay);
+                RegisterKaigiRelay {
+                    relay: KaigiRelayRegistration {
+                        relay_id: new_relay.clone(),
+                        hpke_public_key: vec![0xBB],
+                        bandwidth_class: 1,
+                    },
+                }
+                .execute(&new_relay, stx)
+                .expect("an expired indexed relay must not poison later registry admission");
+
+                UnregisterKaigiRelay {
+                    relay_id: expired_relay.clone(),
+                }
+                .execute(&expired_relay, stx)
+                .expect("an expired relay must retain the ability to retire its descriptor");
+                assert_eq!(
+                    load_relay_registration(stx, &domain_id, &expired_relay),
+                    None
+                );
+                assert_eq!(
+                    stx.world.kaigi_relay_registry.get(&new_relay),
+                    Some(&domain_id)
                 );
             },
         );
@@ -5869,16 +6918,73 @@ mod tests {
             crate::sns::record_storage_key(&selector),
             norito::codec::Encode::encode(&lease),
         );
-        stx.world.account_rekey_records.insert(
-            alias.clone(),
-            AccountRekeyRecord::new(alias.clone(), relay_id.clone()),
-        );
+        stx.world
+            .replace_account_rekey_record(AccountRekeyRecord::new(alias.clone(), relay_id.clone()));
         stx.world
             .account_mut(relay_id)
             .expect("relay account exists")
             .set_label(Some(alias.clone()));
         stx.world
             .insert_account_alias_binding(alias, relay_id.clone());
+    }
+    fn expire_relay_primary_alias_for_testing(
+        stx: &mut StateTransaction<'_, '_>,
+        relay_id: &AccountId,
+    ) {
+        use iroha_data_model::{
+            account::AccountAddress,
+            sns::{NameControllerV1, NameRecordV1},
+        };
+        let alias = stx
+            .world
+            .account(relay_id)
+            .expect("relay account exists")
+            .label()
+            .cloned()
+            .expect("relay primary alias exists");
+        let selector =
+            crate::sns::selector_for_account_alias(&alias, stx.world.dataspace_catalog())
+                .expect("relay alias selector");
+        let address = AccountAddress::from_account_id(relay_id).expect("relay account address");
+        let expired = NameRecordV1::new(
+            selector.clone(),
+            relay_id.clone(),
+            vec![NameControllerV1::account(&address)],
+            0,
+            0,
+            0,
+            0,
+            0,
+            Metadata::default(),
+        );
+        stx.world.smart_contract_state.insert(
+            crate::sns::record_storage_key(&selector),
+            norito::codec::Encode::encode(&expired),
+        );
+    }
+    fn seed_kaigi_account_dependency_for_testing(
+        stx: &mut StateTransaction<'_, '_>,
+        account: &AccountId,
+        dependency: KaigiAccountDependencyLocator,
+    ) {
+        apply_kaigi_account_dependency_replacement(
+            stx,
+            &dependency,
+            &BTreeSet::new(),
+            &BTreeSet::from([account.clone()]),
+        );
+    }
+    fn remove_kaigi_account_dependency_for_testing(
+        stx: &mut StateTransaction<'_, '_>,
+        account: &AccountId,
+        dependency: &KaigiAccountDependencyLocator,
+    ) {
+        apply_kaigi_account_dependency_replacement(
+            stx,
+            dependency,
+            &BTreeSet::from([account.clone()]),
+            &BTreeSet::new(),
+        );
     }
     fn load_call_record(stx: &StateTransaction<'_, '_>, call_id: &KaigiId) -> KaigiRecord {
         let key = kaigi_metadata_key(&call_id.call_name).expect("metadata key");

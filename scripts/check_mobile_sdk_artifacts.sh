@@ -3159,6 +3159,7 @@ with archive:
         "cargo_locked",
         "privacy_production_enabled",
         "cargo_features",
+        "kagemusha_production_authorization_sha256",
         "build_environment",
         "source_commit",
         "source_tree_dirty",
@@ -3189,6 +3190,14 @@ with archive:
             "client-android native provenance cargo_features must be exactly "
             f"{expected_features}"
         )
+    authorization = manifest["kagemusha_production_authorization_sha256"]
+    if authorization is not None and (
+        not production
+        or not isinstance(authorization, str)
+        or not sha256_pattern.fullmatch(authorization)
+        or authorization == "0" * 64
+    ):
+        fail("client-android native provenance Kagemusha production authorization is invalid")
     build_environment = manifest["build_environment"]
     expected_build_environment_fields = {
         "schema",

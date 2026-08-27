@@ -134,7 +134,11 @@ state_test! { sync failed_da_rewind_on_missing_body_preserves_all_published_inde
         .advance_da_shard_cursors_from_bundle(77, std::slice::from_ref(&sentinel))
         .expect("seed published shard cursor sentinel");
     let_row! { mut pin = test_da_pin_intent( *state.network_id_ref(), LaneId::new(0), 2, 1, StorageTicketId::new([0x51; 32]), ManifestDigest::new([0x52; 32]), ) };
-    pin.alias = Some("atomic-rebuild-sentinel".to_owned());
+    set_test_da_pin_intent_alias(
+        &mut pin,
+        &ALICE_KEYPAIR,
+        Some("atomic-rebuild-sentinel".to_owned()),
+    );
     state.da_pin_intents.write().insert(pin, sentinel_location);
     let before = da_index_debug_snapshot(&state);
     let missing_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x61; 32]));

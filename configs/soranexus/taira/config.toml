@@ -237,6 +237,10 @@ retention_grace_secs = 86400
 
 [soracloud_runtime]
 production_mode = true
+# Artifact hydration workers and retained idle IVMs are independent resource pools.
+# Neither value controls the number of concurrently hosted Inrou guests.
+hydration_concurrency = 4
+prepared_runtime_cache_capacity = 4
 
 [soracloud_runtime.submission]
 fee_payer = "sponsor"

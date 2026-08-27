@@ -96,7 +96,7 @@ fn build_da_request(network: &Network, retention_policy: RetentionPolicy) -> DaI
         client_blob_id,
         lane_id: LaneId::SINGLE,
         epoch: 7,
-        sequence: 1,
+        sequence: 0,
         blob_class: BlobClass::NexusLaneSidecar,
         codec: BlobCodec("video/cmaf".into()),
         erasure_profile: ErasureProfile::default(),

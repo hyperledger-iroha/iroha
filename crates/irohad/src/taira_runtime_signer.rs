@@ -58,6 +58,10 @@ pub const TAIRA_CHAIN_ID_V1: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
 pub const TAIRA_CHAIN_DISCRIMINANT_V1: u16 = 369;
 /// Exact first-release Taira validator count.
 pub const TAIRA_VALIDATOR_COUNT_V1: usize = 4;
+/// Exact first-release Taira artifact-hydration worker count.
+pub const TAIRA_HYDRATION_CONCURRENCY_V1: usize = 4;
+/// Exact first-release Taira idle prepared-runtime cache capacity.
+pub const TAIRA_PREPARED_RUNTIME_CACHE_CAPACITY_V1: usize = 4;
 /// Exact aggregate Nexus disk budget for one first-release Taira validator.
 pub const TAIRA_NEXUS_STORAGE_BUDGET_BYTES_V1: u64 = 68_719_476_736;
 /// Exact Kura share of the first-release Taira Nexus disk budget.
@@ -133,6 +137,14 @@ fn validate_taira_launcher_profile_v1(
     }
     if !runtime.production_mode {
         return Err("Taira launcher requires Soracloud production mode".to_owned());
+    }
+    if runtime.hydration_concurrency.get() != TAIRA_HYDRATION_CONCURRENCY_V1
+        || runtime.prepared_runtime_cache_capacity.get() != TAIRA_PREPARED_RUNTIME_CACHE_CAPACITY_V1
+    {
+        return Err(
+            "Taira launcher requires the exact V1 hydration-worker and prepared-runtime capacities"
+                .to_owned(),
+        );
     }
     let inrou = &runtime.inrou;
     if !inrou.enabled {
@@ -582,13 +594,18 @@ mod tests {
     };
     use std::{
         fs,
-        num::NonZeroU32,
+        num::{NonZeroU32, NonZeroUsize},
         os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _},
     };
 
     fn canonical_runtime_profile() -> SoracloudRuntime {
         let mut runtime = SoracloudRuntime::default();
         runtime.production_mode = true;
+        runtime.hydration_concurrency = NonZeroUsize::new(TAIRA_HYDRATION_CONCURRENCY_V1)
+            .expect("nonzero Taira hydration-worker count");
+        runtime.prepared_runtime_cache_capacity =
+            NonZeroUsize::new(TAIRA_PREPARED_RUNTIME_CACHE_CAPACITY_V1)
+                .expect("nonzero Taira prepared-runtime capacity");
         runtime.inrou.enabled = true;
         runtime.inrou.portable_vm_uid = NonZeroU32::new(70_000);
         runtime.inrou.portable_vm_gid = NonZeroU32::new(70_000);
@@ -721,6 +738,17 @@ mod tests {
                 .is_err()
             );
         };
+
+        let mut changed = runtime.clone();
+        changed.hydration_concurrency = NonZeroUsize::new(TAIRA_HYDRATION_CONCURRENCY_V1 + 1)
+            .expect("changed hydration-worker count is nonzero");
+        assert_rejected(&changed);
+
+        let mut changed = runtime.clone();
+        changed.prepared_runtime_cache_capacity =
+            NonZeroUsize::new(TAIRA_PREPARED_RUNTIME_CACHE_CAPACITY_V1 + 1)
+                .expect("changed prepared-runtime capacity is nonzero");
+        assert_rejected(&changed);
 
         let mut changed = runtime.clone();
         changed.inrou.guest_image_max_bytes =

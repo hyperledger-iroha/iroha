@@ -5,6 +5,8 @@
     clippy::needless_pass_by_value
 )]
 use crate::boilerplate;
+#[cfg(feature = "quic")]
+use crate::preauth::DeadlineElapsed;
 use crate::{
     Broadcast, Error, NetworkMessage, OnlinePeers, P2pIdentityKeys, Post, Priority, RelayRole,
     UpdatePeers, UpdateTopology, UpdateTrustedPeers,
@@ -15,6 +17,7 @@ use crate::{
         handles::{PeerHandle, RecoverPostError, connected_from, connecting},
         message::*,
     },
+    preauth::{PreauthDeadline, PreauthSourceGate, canonical_remote_ip},
     sampler::LogSampler,
     soranet_handshake_runtime::{SoranetHandshakeRuntime, runtime_from_handshake},
 };
@@ -488,6 +491,8 @@ static ACCEPT_IP_THROTTLED: AtomicU64 = AtomicU64::new(0);
 static INCOMING_CAP_REJECTS: AtomicU64 = AtomicU64::new(0);
 /// Count of accepted connections dropped due to `max_total_connections` cap.
 static TOTAL_CAP_REJECTS: AtomicU64 = AtomicU64::new(0);
+/// Count of accepted connections dropped due to the concurrent pre-auth source cap.
+static PREAUTH_SOURCE_CAP_REJECTS: AtomicU64 = AtomicU64::new(0);
 /// Count of low-priority post messages throttled by per-peer token buckets.
 static LOW_THROTTLED_POSTS: AtomicU64 = AtomicU64::new(0);
 /// Count of low-priority broadcast deliveries throttled per peer.
@@ -5827,6 +5832,10 @@ pub fn incoming_cap_reject_count() -> u64 {
 pub fn total_cap_reject_count() -> u64 {
     TOTAL_CAP_REJECTS.load(Ordering::Relaxed)
 }
+/// Returns the number of connections rejected by the concurrent pre-auth source cap.
+pub fn preauth_source_cap_reject_count() -> u64 {
+    PREAUTH_SOURCE_CAP_REJECTS.load(Ordering::Relaxed)
+}
 /// Returns the number of low-priority post messages dropped by per-peer throttle.
 pub fn low_post_throttled_count() -> u64 {
     LOW_THROTTLED_POSTS.load(Ordering::Relaxed)
@@ -7481,6 +7490,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             relay_ttl,
             soranet_handshake,
             idle_timeout,
+            preauth_timeout,
             reply_writer_flush_timeout,
             connect_startup_delay,
             dial_timeout,
@@ -7514,6 +7524,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             addr_ipv6_first,
             max_incoming,
             max_total_connections,
+            preauth_max_connections_per_ip,
             accept_rate_per_ip_per_sec,
             accept_burst_per_ip,
             max_accept_buckets,
@@ -7590,6 +7601,12 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             iroha_config::parameters::defaults::network::lane_profile::CORE_MAX_TOTAL_CONNECTIONS,
             core::num::NonZeroUsize::get,
         );
+        crate::preauth::PreauthDeadline::from_now(preauth_timeout).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "network.preauth_timeout_ms cannot be represented by the monotonic clock",
+            )
+        })?;
         let authenticated_source_credit_capacity = inbound_source_credit_capacity(
             p2p_subscriber_queue_cap.get(),
             max_total_connections,
@@ -7903,6 +7920,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
                     )
                 })?;
         let preauth_capacity = Arc::new(Semaphore::new(max_total_connections));
+        let preauth_source_gate = Arc::new(PreauthSourceGate::new(preauth_max_connections_per_ip));
         let mut listener_tasks = Vec::new();
         #[cfg(feature = "quic")]
         if quic_enabled {
@@ -7916,6 +7934,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
                 public_address.value().clone(),
                 service_message_sender.clone(),
                 idle_timeout,
+                preauth_timeout,
                 quic_max_idle_timeout,
                 quic_datagrams_enabled,
                 quic_datagram_max_payload_bytes,
@@ -7936,6 +7955,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
                 relay_role,
                 quic_flow_control,
                 quic_max_incoming,
+                Arc::clone(&preauth_source_gate),
                 Arc::clone(&preauth_capacity),
                 shutdown_signal.clone(),
             )
@@ -7950,6 +7970,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             public_address.value().clone(),
             service_message_sender.clone(),
             idle_timeout,
+            preauth_timeout,
             network_id.clone(),
             consensus_caps.clone(),
             confidential_caps.clone(),
@@ -7971,6 +7992,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             max_frame_bytes,
             soranet_runtime.clone(),
             relay_role,
+            Arc::clone(&preauth_source_gate),
             Arc::clone(&preauth_capacity),
             shutdown_signal.clone(),
         )
@@ -9575,6 +9597,7 @@ mod accept_stream_tests {
             require_sm_handshake_match: true,
             require_sm_openssl_preview_match: true,
             idle_timeout: std::time::Duration::from_millis(200),
+            preauth_timeout: iroha_config::parameters::defaults::network::PREAUTH_TIMEOUT,
             reply_writer_flush_timeout:
                 iroha_config::parameters::defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
             connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
@@ -9651,6 +9674,8 @@ mod accept_stream_tests {
             addr_ipv6_first: false,
             max_incoming: None,
             max_total_connections: None,
+            preauth_max_connections_per_ip:
+                iroha_config::parameters::defaults::network::PREAUTH_MAX_CONNECTIONS_PER_IP,
             accept_rate_per_ip_per_sec: None,
             accept_burst_per_ip: None,
             max_accept_buckets: iroha_config::parameters::defaults::network::MAX_ACCEPT_BUCKETS,
@@ -10005,6 +10030,582 @@ mod accept_stream_tests {
         );
     }
     #[tokio::test(flavor = "current_thread")]
+    async fn tls_listener_closes_silent_transport_at_absolute_preauth_deadline() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        use tokio::{io::AsyncReadExt as _, sync::mpsc};
+
+        let key_pair = test_node_key_pair();
+        let network_id = test_network_id("preauth-deadline-test-chain");
+        let soranet_transport_key_pair = Arc::new(test_transport_key_pair());
+        let soranet_transport_certificate = crate::peer::create_soranet_transport_certificate_v5(
+            &key_pair,
+            Arc::clone(&soranet_transport_key_pair),
+            Arc::new(test_relay_authentication_key_pair()),
+            &network_id,
+        )
+        .expect("test transport certificate");
+        let cancellations = Arc::new(AtomicUsize::new(0));
+        let observed_cancellations = Arc::clone(&cancellations);
+        let (service_tx, mut service_rx) =
+            mpsc::channel::<super::ServiceMessage<super::WireMessage<Dummy>>>(8);
+        tokio::spawn(async move {
+            while let Some(message) = service_rx.recv().await {
+                match message {
+                    super::ServiceMessage::InboundAsk { reply, .. } => {
+                        let _ = reply.send(true);
+                    }
+                    super::ServiceMessage::InboundCancelled(_) => {
+                        observed_cancellations.fetch_add(1, Ordering::Relaxed);
+                    }
+                    _ => {}
+                }
+            }
+        });
+        let std_listener = match std::net::TcpListener::bind("127.0.0.1:0") {
+            Ok(listener) => listener,
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(e) => panic!("tcp bind failed: {e:?}"),
+        };
+        let addr = std_listener.local_addr().unwrap();
+        drop(std_listener);
+        let shutdown = ShutdownSignal::new();
+        let listener_task = start_tls_listener::<super::WireMessage<Dummy>, ChaCha20Poly1305>(
+            addr,
+            Arc::new(key_pair),
+            soranet_transport_key_pair,
+            soranet_transport_certificate,
+            socket_addr!(127.0.0.1:1_337),
+            service_tx,
+            Duration::from_secs(5),
+            Duration::from_millis(150),
+            network_id,
+            None,
+            None,
+            None,
+            8,
+            OutboundFrameQueueLimits::default(),
+            OutboundPostByteBudgets::default(),
+            crate::peer::InboundFrameByteBudgets::default(),
+            TlsListenerOptions {
+                peer_capabilities: TlsPeerCapabilities {
+                    trust_gossip: true,
+                    quic_datagrams_enabled: false,
+                    quic_datagram_max_payload_bytes: 0,
+                    local_scion_supported: true,
+                },
+                tcp_nodelay: true,
+                tcp_keepalive: None,
+            },
+            59_999,
+            test_soranet_handshake_runtime(),
+            RelayRole::Disabled,
+            Arc::new(PreauthSourceGate::new(
+                iroha_config::parameters::defaults::network::PREAUTH_MAX_CONNECTIONS_PER_IP,
+            )),
+            Arc::new(Semaphore::new(1)),
+            shutdown.clone(),
+        )
+        .await
+        .expect("start TLS listener");
+
+        let mut raw = tokio::net::TcpStream::connect(addr)
+            .await
+            .expect("connect silent client");
+        let mut byte = [0_u8; 1];
+        match tokio::time::timeout(Duration::from_secs(2), raw.read(&mut byte)).await {
+            Ok(Ok(0) | Err(_)) => {}
+            other => panic!("silent transport outlived its absolute pre-auth deadline: {other:?}"),
+        }
+        for _ in 0..20 {
+            if cancellations.load(Ordering::Relaxed) == 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            cancellations.load(Ordering::Relaxed),
+            1,
+            "the expired transport must release exactly one inbound reservation"
+        );
+        shutdown.send();
+        tokio::time::timeout(Duration::from_secs(2), listener_task.join())
+            .await
+            .expect("TLS listener must stop after shutdown");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn tls_source_gate_precedes_global_capacity_and_deadline_releases_it() {
+        use std::{net::Ipv4Addr, num::NonZeroUsize, sync::Arc};
+        use tokio::{io::AsyncReadExt as _, sync::mpsc};
+
+        let key_pair = test_node_key_pair();
+        let network_id = test_network_id("preauth-source-gate-test-chain");
+        let soranet_transport_key_pair = Arc::new(test_transport_key_pair());
+        let soranet_transport_certificate = crate::peer::create_soranet_transport_certificate_v5(
+            &key_pair,
+            Arc::clone(&soranet_transport_key_pair),
+            Arc::new(test_relay_authentication_key_pair()),
+            &network_id,
+        )
+        .expect("test transport certificate");
+        let (service_tx, mut service_rx) =
+            mpsc::channel::<super::ServiceMessage<super::WireMessage<Dummy>>>(1);
+        let std_listener = match std::net::TcpListener::bind("127.0.0.1:0") {
+            Ok(listener) => listener,
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(e) => panic!("tcp bind failed: {e:?}"),
+        };
+        let addr = std_listener.local_addr().expect("listener address");
+        drop(std_listener);
+        let source_gate = Arc::new(PreauthSourceGate::new(NonZeroUsize::new(1).unwrap()));
+        let held_source = source_gate
+            .try_acquire(IpAddr::V4(Ipv4Addr::LOCALHOST))
+            .expect("pre-existing source reservation");
+        let global_capacity = Arc::new(Semaphore::new(1));
+        let shutdown = ShutdownSignal::new();
+        let listener_task = start_tls_listener::<super::WireMessage<Dummy>, ChaCha20Poly1305>(
+            addr,
+            Arc::new(key_pair),
+            soranet_transport_key_pair,
+            soranet_transport_certificate,
+            socket_addr!(127.0.0.1:1_337),
+            service_tx,
+            Duration::from_secs(5),
+            Duration::from_millis(150),
+            network_id,
+            None,
+            None,
+            None,
+            8,
+            OutboundFrameQueueLimits::default(),
+            OutboundPostByteBudgets::default(),
+            crate::peer::InboundFrameByteBudgets::default(),
+            TlsListenerOptions {
+                peer_capabilities: TlsPeerCapabilities {
+                    trust_gossip: true,
+                    quic_datagrams_enabled: false,
+                    quic_datagram_max_payload_bytes: 0,
+                    local_scion_supported: true,
+                },
+                tcp_nodelay: true,
+                tcp_keepalive: None,
+            },
+            59_999,
+            test_soranet_handshake_runtime(),
+            RelayRole::Disabled,
+            Arc::clone(&source_gate),
+            Arc::clone(&global_capacity),
+            shutdown.clone(),
+        )
+        .await
+        .expect("start TLS listener");
+
+        let mut rejected = tokio::net::TcpStream::connect(addr)
+            .await
+            .expect("connect source-capped client");
+        let mut byte = [0_u8; 1];
+        match tokio::time::timeout(Duration::from_secs(2), rejected.read(&mut byte)).await {
+            Ok(Ok(0) | Err(_)) => {}
+            other => panic!("source-capped transport was not closed: {other:?}"),
+        }
+        assert_eq!(
+            global_capacity.available_permits(),
+            1,
+            "source rejection must happen before global capacity acquisition"
+        );
+        assert!(service_rx.try_recv().is_err());
+
+        drop(held_source);
+        let global_owner = Arc::clone(&global_capacity)
+            .acquire_owned()
+            .await
+            .expect("global capacity");
+        let mut capacity_waiter = tokio::net::TcpStream::connect(addr)
+            .await
+            .expect("connect capacity waiter");
+        for _ in 0..20 {
+            if source_gate.active_for(IpAddr::V4(Ipv4Addr::LOCALHOST)) == 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            source_gate.active_for(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+            1,
+            "accepted transport must own the source gate while waiting for global capacity"
+        );
+        match tokio::time::timeout(Duration::from_secs(2), capacity_waiter.read(&mut byte)).await {
+            Ok(Ok(0) | Err(_)) => {}
+            other => panic!("capacity waiter outlived its absolute deadline: {other:?}"),
+        }
+        assert_eq!(
+            source_gate.active_for(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+            0,
+            "deadline teardown must release the source reservation"
+        );
+        assert!(service_rx.try_recv().is_err());
+
+        drop(global_owner);
+        shutdown.send();
+        tokio::time::timeout(Duration::from_secs(2), listener_task.join())
+            .await
+            .expect("TLS listener must stop after shutdown");
+    }
+
+    #[cfg(feature = "quic")]
+    #[tokio::test(flavor = "current_thread")]
+    async fn tls_and_quic_share_source_gate_and_release_deadline_ownership() {
+        use std::{
+            net::{IpAddr, Ipv4Addr},
+            num::NonZeroUsize,
+            sync::{
+                Arc, Mutex,
+                atomic::{AtomicUsize, Ordering},
+            },
+        };
+        use tokio::{
+            io::AsyncReadExt as _,
+            sync::{Notify, mpsc},
+        };
+
+        let key_pair = test_node_key_pair();
+        let network_id = test_network_id("shared-preauth-source-gate-test-chain");
+        let soranet_transport_key_pair = Arc::new(test_transport_key_pair());
+        let soranet_transport_certificate = crate::peer::create_soranet_transport_certificate_v5(
+            &key_pair,
+            Arc::clone(&soranet_transport_key_pair),
+            Arc::new(test_relay_authentication_key_pair()),
+            &network_id,
+        )
+        .expect("test transport certificate");
+        let inbound_asks = Arc::new(AtomicUsize::new(0));
+        let observed_inbound_asks = Arc::clone(&inbound_asks);
+        let admitted_conn_ids = Arc::new(Mutex::new(Vec::new()));
+        let observed_admitted_conn_ids = Arc::clone(&admitted_conn_ids);
+        let cancelled_conn_ids = Arc::new(Mutex::new(Vec::new()));
+        let observed_cancelled_conn_ids = Arc::clone(&cancelled_conn_ids);
+        let release_first_admission = Arc::new(Notify::new());
+        let observed_release_first_admission = Arc::clone(&release_first_admission);
+        let (service_tx, mut service_rx) =
+            mpsc::channel::<super::ServiceMessage<super::WireMessage<Dummy>>>(8);
+        tokio::spawn(async move {
+            let mut first_admission = true;
+            while let Some(message) = service_rx.recv().await {
+                match message {
+                    super::ServiceMessage::InboundAsk { conn_id, reply, .. } => {
+                        observed_inbound_asks.fetch_add(1, Ordering::Relaxed);
+                        observed_admitted_conn_ids
+                            .lock()
+                            .expect("admitted connection record")
+                            .push(conn_id);
+                        if first_admission {
+                            first_admission = false;
+                            observed_release_first_admission.notified().await;
+                        }
+                        let _ = reply.send(true);
+                    }
+                    super::ServiceMessage::InboundCancelled(conn_id) => {
+                        observed_cancelled_conn_ids
+                            .lock()
+                            .expect("cancelled connection record")
+                            .push(conn_id);
+                    }
+                    _ => {}
+                }
+            }
+        });
+
+        let tcp = match std::net::TcpListener::bind("127.0.0.1:0") {
+            Ok(listener) => listener,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(error) => panic!("tcp bind failed: {error:?}"),
+        };
+        let tls_addr = tcp.local_addr().expect("TLS listener address");
+        drop(tcp);
+        let udp = match std::net::UdpSocket::bind("127.0.0.1:0") {
+            Ok(socket) => socket,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(error) => panic!("udp bind failed: {error:?}"),
+        };
+        let quic_addr = udp.local_addr().expect("QUIC listener address");
+        drop(udp);
+
+        let preauth_timeout = Duration::from_secs(3);
+        let source_gate = Arc::new(PreauthSourceGate::new(NonZeroUsize::new(1).unwrap()));
+        let global_capacity = Arc::new(Semaphore::new(1));
+        let shutdown = ShutdownSignal::new();
+        let tls_listener = start_tls_listener::<super::WireMessage<Dummy>, ChaCha20Poly1305>(
+            tls_addr,
+            Arc::new(key_pair.clone()),
+            Arc::clone(&soranet_transport_key_pair),
+            Arc::clone(&soranet_transport_certificate),
+            socket_addr!(127.0.0.1:1_337),
+            service_tx.clone(),
+            Duration::from_secs(5),
+            preauth_timeout,
+            network_id.clone(),
+            None,
+            None,
+            None,
+            8,
+            OutboundFrameQueueLimits::default(),
+            OutboundPostByteBudgets::default(),
+            crate::peer::InboundFrameByteBudgets::default(),
+            TlsListenerOptions {
+                peer_capabilities: TlsPeerCapabilities {
+                    trust_gossip: true,
+                    quic_datagrams_enabled: false,
+                    quic_datagram_max_payload_bytes: 0,
+                    local_scion_supported: true,
+                },
+                tcp_nodelay: true,
+                tcp_keepalive: None,
+            },
+            59_999,
+            test_soranet_handshake_runtime(),
+            RelayRole::Disabled,
+            Arc::clone(&source_gate),
+            Arc::clone(&global_capacity),
+            shutdown.clone(),
+        )
+        .await
+        .expect("start TLS listener");
+        let quic_listener = start_quic_listener::<super::WireMessage<Dummy>, ChaCha20Poly1305>(
+            &quic_addr,
+            Arc::new(key_pair),
+            soranet_transport_key_pair,
+            soranet_transport_certificate,
+            socket_addr!(127.0.0.1:4_321),
+            service_tx,
+            Duration::from_secs(5),
+            preauth_timeout,
+            None,
+            false,
+            0,
+            0,
+            0,
+            network_id,
+            None,
+            None,
+            None,
+            8,
+            OutboundFrameQueueLimits::default(),
+            OutboundPostByteBudgets::default(),
+            crate::peer::InboundFrameByteBudgets::default(),
+            true,
+            59_999,
+            test_soranet_handshake_runtime(),
+            true,
+            RelayRole::Disabled,
+            crate::transport::quic::FlowControlConfig {
+                max_encrypted_frame_bytes: 59_999,
+                max_total_connections: 1,
+                process_budget_bytes: 4 * crate::transport::quic::FLOW_CONTROL_GRANULE_BYTES,
+            },
+            1,
+            Arc::clone(&source_gate),
+            Arc::clone(&global_capacity),
+            shutdown.clone(),
+        )
+        .await
+        .expect("start QUIC listener");
+
+        let mut silent_tls = tokio::net::TcpStream::connect(tls_addr)
+            .await
+            .expect("connect silent TLS client");
+        let localhost = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        for _ in 0..40 {
+            if source_gate.active_for(localhost) == 1 && inbound_asks.load(Ordering::Relaxed) == 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            source_gate.active_for(localhost),
+            1,
+            "silent TLS transport must retain the shared source reservation"
+        );
+        assert_eq!(
+            inbound_asks.load(Ordering::Relaxed),
+            1,
+            "the TLS transport must reach actor admission before stalling"
+        );
+
+        let mut endpoint = quinn::Endpoint::client("127.0.0.1:0".parse().unwrap())
+            .expect("create QUIC client endpoint");
+        let mut crypto = rustls::ClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(AcceptAllVerifier))
+            .with_no_client_auth();
+        crypto.alpn_protocols = vec![crate::transport::quic::P2P_ALPN.to_vec()];
+        let mut client_config = quinn::ClientConfig::new(Arc::new(
+            quinn::crypto::rustls::QuicClientConfig::try_from(crypto)
+                .expect("configure rustls for quinn"),
+        ));
+        client_config.transport_config(Arc::new(quinn::TransportConfig::default()));
+        endpoint.set_default_client_config(client_config);
+
+        assert_eq!(
+            global_capacity.available_permits(),
+            0,
+            "the admitted TLS transport must already own global pre-auth capacity",
+        );
+        let rejected = endpoint
+            .connect(quic_addr, "iroha-quic")
+            .expect("start source-capped QUIC connection");
+        assert!(
+            matches!(
+                tokio::time::timeout(Duration::from_secs(1), rejected).await,
+                Ok(Err(_))
+            ),
+            "QUIC source rejection must precede the unavailable global capacity"
+        );
+        assert_eq!(
+            inbound_asks.load(Ordering::Relaxed),
+            1,
+            "a source-capped QUIC attempt must not consume actor admission"
+        );
+        assert_eq!(
+            source_gate.active_for(localhost),
+            1,
+            "rejecting QUIC must not release the TLS owner's reservation"
+        );
+        assert!(
+            cancelled_conn_ids
+                .lock()
+                .expect("cancelled connection record")
+                .is_empty(),
+            "source rejection must not cancel the admitted TLS reservation"
+        );
+        release_first_admission.notify_one();
+        let mut byte = [0_u8; 1];
+        match tokio::time::timeout(Duration::from_secs(4), silent_tls.read(&mut byte)).await {
+            Ok(Ok(0) | Err(_)) => {}
+            other => panic!("silent TLS transport outlived its pre-auth deadline: {other:?}"),
+        }
+        for _ in 0..40 {
+            if source_gate.active_for(localhost) == 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            source_gate.active_for(localhost),
+            0,
+            "TLS deadline teardown must release shared source ownership"
+        );
+        for _ in 0..40 {
+            if cancelled_conn_ids
+                .lock()
+                .expect("cancelled connection record")
+                .len()
+                == 1
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let tls_conn_id = admitted_conn_ids
+            .lock()
+            .expect("admitted connection record")[0];
+        assert_eq!(
+            cancelled_conn_ids
+                .lock()
+                .expect("cancelled connection record")
+                .as_slice(),
+            &[tls_conn_id],
+            "TLS deadline must cancel exactly its admitted reservation"
+        );
+
+        let admitted = endpoint
+            .connect(quic_addr, "iroha-quic")
+            .expect("start QUIC connection after TLS timeout");
+        let connection = tokio::time::timeout(Duration::from_secs(2), admitted)
+            .await
+            .expect("QUIC admission must complete before the pre-auth deadline")
+            .expect("QUIC source must be admitted after TLS releases it");
+        let (mut send, _recv) = connection
+            .open_bi()
+            .await
+            .expect("open required QUIC stream");
+        send.write_all(b"I")
+            .await
+            .expect("send incomplete application preface");
+        for _ in 0..40 {
+            if inbound_asks.load(Ordering::Relaxed) == 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            inbound_asks.load(Ordering::Relaxed),
+            2,
+            "released ownership must admit the next QUIC transport"
+        );
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(
+            source_gate.active_for(localhost),
+            1,
+            "silent QUIC application authentication must retain source ownership"
+        );
+        assert_eq!(
+            cancelled_conn_ids
+                .lock()
+                .expect("cancelled connection record")
+                .len(),
+            1,
+            "admitted QUIC ownership must not cancel before its deadline"
+        );
+        for _ in 0..100 {
+            if source_gate.active_for(localhost) == 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert_eq!(
+            source_gate.active_for(localhost),
+            0,
+            "QUIC pre-auth deadline must release source ownership"
+        );
+        for _ in 0..40 {
+            if cancelled_conn_ids
+                .lock()
+                .expect("cancelled connection record")
+                .len()
+                == 2
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let cancelled = cancelled_conn_ids
+            .lock()
+            .expect("cancelled connection record")
+            .clone();
+        let admitted = admitted_conn_ids
+            .lock()
+            .expect("admitted connection record")
+            .clone();
+        assert_eq!(
+            cancelled, admitted,
+            "each admitted deadline path must cancel its exact reservation once"
+        );
+
+        connection.close(0u32.into(), b"done");
+        endpoint.close(0u32.into(), b"done");
+        shutdown.send();
+        tokio::time::timeout(Duration::from_secs(2), tls_listener.join())
+            .await
+            .expect("TLS listener must stop after shutdown");
+        tokio::time::timeout(Duration::from_secs(2), quic_listener.join())
+            .await
+            .expect("QUIC listener must stop after shutdown");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn tls_listener_requires_exact_p2p_alpn_and_propagates_frame_cap() {
         use std::sync::Arc;
         use tokio::sync::mpsc;
@@ -10050,6 +10651,7 @@ mod accept_stream_tests {
             socket_addr!(127.0.0.1:1_337),
             service_tx,
             Duration::from_secs(1),
+            Duration::from_secs(1),
             network_id,
             None,
             None,
@@ -10071,6 +10673,9 @@ mod accept_stream_tests {
             max_frame_bytes,
             soranet.clone(),
             RelayRole::Disabled,
+            Arc::new(PreauthSourceGate::new(
+                iroha_config::parameters::defaults::network::PREAUTH_MAX_CONNECTIONS_PER_IP,
+            )),
             Arc::new(Semaphore::new(1)),
             shutdown,
         )
@@ -10293,6 +10898,7 @@ mod accept_stream_tests {
             socket_addr!(127.0.0.1:4_321),
             service_tx,
             Duration::from_secs(1),
+            Duration::from_secs(1),
             None,
             false,
             0,
@@ -10317,6 +10923,9 @@ mod accept_stream_tests {
                 process_budget_bytes: 4 * crate::transport::quic::FLOW_CONTROL_GRANULE_BYTES,
             },
             1,
+            Arc::new(PreauthSourceGate::new(
+                iroha_config::parameters::defaults::network::PREAUTH_MAX_CONNECTIONS_PER_IP,
+            )),
             Arc::new(Semaphore::new(1)),
             ShutdownSignal::new(),
         )
@@ -10580,6 +11189,7 @@ async fn start_quic_listener<T, E>(
     public_address: iroha_primitives::addr::SocketAddr,
     service_message_sender: tokio::sync::mpsc::Sender<crate::peer::message::ServiceMessage<T>>,
     idle_timeout: std::time::Duration,
+    preauth_timeout: std::time::Duration,
     quic_max_idle_timeout: Option<std::time::Duration>,
     quic_datagrams_enabled: bool,
     quic_datagram_max_payload_bytes: usize,
@@ -10600,6 +11210,7 @@ async fn start_quic_listener<T, E>(
     relay_role: RelayRole,
     flow_control: crate::transport::quic::FlowControlConfig,
     endpoint_max_incoming: usize,
+    preauth_source_gate: Arc<PreauthSourceGate>,
     preauth_capacity: Arc<Semaphore>,
     shutdown_signal: ShutdownSignal,
 ) -> Result<AbortOnDropTask, Error>
@@ -10696,14 +11307,45 @@ where
                 }
                 continue;
             }
+            let remote = incoming.remote_address();
+            let Some(preauth_deadline) = PreauthDeadline::from_now(preauth_timeout) else {
+                iroha_logger::error!(
+                    %remote,
+                    "Configured pre-authentication timeout is not representable"
+                );
+                continue;
+            };
+            let Some(source_permit) = preauth_source_gate.try_acquire(remote.ip()) else {
+                PREAUTH_SOURCE_CAP_REJECTS.fetch_add(1, Ordering::Relaxed);
+                iroha_logger::debug!(
+                    %remote,
+                    source_ip = %canonical_remote_ip(remote.ip()),
+                    cap = preauth_source_gate.max_per_ip(),
+                    "Dropping unauthenticated QUIC connection due to concurrent source cap"
+                );
+                continue;
+            };
             // Address validation must precede both actor admission and any
             // reservation/cryptographic capacity ownership.
             let permit = tokio::select! {
                 () = shutdown_signal.receive() => break,
                 () = service_message_sender.closed() => break,
-                permit = Arc::clone(&preauth_capacity).acquire_owned() => {
-                    let Ok(permit) = permit else { break };
-                    permit
+                permit = preauth_deadline.run(
+                    None,
+                    Arc::clone(&preauth_capacity).acquire_owned(),
+                ) => {
+                    match permit {
+                        Ok(Ok(permit)) => permit,
+                        Ok(Err(_)) => break,
+                        Err(_) => {
+                            iroha_logger::warn!(
+                                %remote,
+                                timeout = ?preauth_timeout,
+                                "QUIC connection exhausted its pre-authentication deadline while waiting for capacity"
+                            );
+                            continue;
+                        }
+                    }
                 }
             };
             let service_message_sender = service_message_sender.clone();
@@ -10725,7 +11367,6 @@ where
             let trust_gossip_config = trust_gossip_config;
             let transport_binding = transport_binding;
             children.spawn(async move {
-                let remote = incoming.remote_address();
                 let conn_id = id_alloc.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let mut reservation =
                     InboundReservationGuard::new(conn_id, service_message_sender.clone());
@@ -10736,13 +11377,15 @@ where
                     reply: tx,
                 };
                 if !matches!(
-                    tokio::time::timeout(idle_timeout, service_message_sender.send(ask)).await,
+                    preauth_deadline
+                        .run(Some(idle_timeout), service_message_sender.send(ask))
+                        .await,
                     Ok(Ok(()))
                 ) {
                     iroha_logger::debug!(%remote, "Network did not accept QUIC InboundAsk in time");
                     return;
                 }
-                let allow = match tokio::time::timeout(idle_timeout, rx).await {
+                let allow = match preauth_deadline.run(Some(idle_timeout), rx).await {
                     Ok(Ok(allow)) => allow,
                     _ => return,
                 };
@@ -10761,7 +11404,10 @@ where
                         return;
                     }
                 };
-                let new_conn = match tokio::time::timeout(idle_timeout, connecting).await {
+                let new_conn = match preauth_deadline
+                    .run(Some(idle_timeout), connecting)
+                    .await
+                {
                     Ok(Ok(conn)) => conn,
                     Ok(Err(e)) => {
                         iroha_logger::warn!(%e, %remote, "QUIC handshake failed");
@@ -10772,11 +11418,9 @@ where
                         return;
                     }
                 };
-                let (send_hi, recv_hi) = match tokio::time::timeout(
-                    idle_timeout,
-                    new_conn.accept_bi(),
-                )
-                .await
+                let (send_hi, recv_hi) = match preauth_deadline
+                    .run(Some(idle_timeout), new_conn.accept_bi())
+                    .await
                 {
                     Ok(Ok((send, recv))) => (send, recv),
                     Ok(Err(e)) => {
@@ -10792,18 +11436,27 @@ where
                         return;
                     }
                 };
-                let low = tokio::time::timeout(
-                    std::time::Duration::from_millis(200),
-                    new_conn.accept_bi(),
-                )
-                .await;
+                let low = preauth_deadline
+                    .run(
+                        Some(std::time::Duration::from_millis(200)),
+                        new_conn.accept_bi(),
+                    )
+                    .await;
                 let (send_low, recv_low) = match low {
                     Ok(Ok((s, r))) => (Some(s), Some(r)),
                     Ok(Err(e)) => {
                         iroha_logger::debug!(%e, %remote, "Failed to accept low-priority QUIC stream; continuing with single stream");
                         (None, None)
                     }
-                    Err(_) => (None, None),
+                    Err(DeadlineElapsed::Stage) => (None, None),
+                    Err(DeadlineElapsed::Absolute) => {
+                        iroha_logger::warn!(
+                            %remote,
+                            timeout = ?preauth_timeout,
+                            "QUIC connection exhausted its pre-authentication deadline while waiting for the optional stream"
+                        );
+                        return;
+                    }
                 };
                 let soranet_policy = match soranet_handshake.snapshot() {
                     Ok(policy) => policy,
@@ -10817,6 +11470,7 @@ where
                     }
                 };
                 let trust_gossip = trust_gossip_config && soranet_policy.trust_gossip();
+                let (auth_completion, auth_receiver) = preauth_deadline.completion_channel();
                 let peer_task = connected_from::<T, E>(
                     public_address,
                     key_pair,
@@ -10834,6 +11488,7 @@ where
                     ),
                     service_message_sender,
                     idle_timeout,
+                    auth_completion,
                     network_id,
                     consensus_caps,
                     confidential_caps,
@@ -10850,8 +11505,21 @@ where
                     quic_datagrams_enabled,
                     quic_datagram_max_payload_bytes,
                 );
+                let peer_task = AbortOnDropTask::new(peer_task);
+                if !preauth_deadline
+                    .wait_for_authentication(auth_receiver)
+                    .await
+                {
+                    iroha_logger::warn!(
+                        %remote,
+                        timeout = ?preauth_timeout,
+                        "QUIC peer did not authenticate before its pre-authentication deadline"
+                    );
+                    return;
+                }
+                drop(source_permit);
                 reservation.disarm();
-                AbortOnDropTask::new(peer_task).join().await;
+                peer_task.join().await;
             });
         }
         endpoint.close(0u32.into(), b"listener shutdown");
@@ -10911,6 +11579,7 @@ mod quic_tests {
             socket_addr!(127.0.0.1:1337),
             tx,
             std::time::Duration::from_secs(1),
+            std::time::Duration::from_secs(1),
             None,
             false,
             0,
@@ -10935,6 +11604,9 @@ mod quic_tests {
                 process_budget_bytes: 4 * crate::transport::quic::FLOW_CONTROL_GRANULE_BYTES,
             },
             1,
+            Arc::new(PreauthSourceGate::new(
+                iroha_config::parameters::defaults::network::PREAUTH_MAX_CONNECTIONS_PER_IP,
+            )),
             Arc::new(Semaphore::new(1)),
             shutdown.clone(),
         )
@@ -10982,6 +11654,7 @@ async fn start_tls_listener<T, E>(
     public_address: iroha_primitives::addr::SocketAddr,
     service_message_sender: tokio::sync::mpsc::Sender<crate::peer::message::ServiceMessage<T>>,
     idle_timeout: std::time::Duration,
+    preauth_timeout: std::time::Duration,
     network_id: iroha_data_model::NetworkId,
     consensus_caps: Option<crate::ConsensusHandshakeCaps>,
     confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
@@ -10994,6 +11667,7 @@ async fn start_tls_listener<T, E>(
     max_frame_bytes: usize,
     soranet_handshake: Arc<SoranetHandshakeRuntime>,
     relay_role: RelayRole,
+    preauth_source_gate: Arc<PreauthSourceGate>,
     preauth_capacity: Arc<Semaphore>,
     shutdown_signal: ShutdownSignal,
 ) -> Result<AbortOnDropTask, Error>
@@ -11039,20 +11713,50 @@ where
         iroha_logger::info!(addr=%addr, "TLS listener started");
         loop {
             while children.try_join_next().is_some() {}
-            let permit = tokio::select! {
-                () = shutdown_signal.receive() => break,
-                () = service_message_sender.closed() => break,
-                permit = Arc::clone(&preauth_capacity).acquire_owned() => {
-                    let Ok(permit) = permit else { break };
-                    permit
-                }
-            };
             let (tcp, remote) = tokio::select! {
                 () = shutdown_signal.receive() => break,
                 () = service_message_sender.closed() => break,
                 accepted = listener.accept() => {
                     let Ok(accepted) = accepted else { break };
                     accepted
+                }
+            };
+            let Some(preauth_deadline) = PreauthDeadline::from_now(preauth_timeout) else {
+                iroha_logger::error!(
+                    %remote,
+                    "Configured pre-authentication timeout is not representable"
+                );
+                continue;
+            };
+            let Some(source_permit) = preauth_source_gate.try_acquire(remote.ip()) else {
+                PREAUTH_SOURCE_CAP_REJECTS.fetch_add(1, Ordering::Relaxed);
+                iroha_logger::debug!(
+                    %remote,
+                    source_ip = %canonical_remote_ip(remote.ip()),
+                    cap = preauth_source_gate.max_per_ip(),
+                    "Dropping unauthenticated TLS connection due to concurrent source cap"
+                );
+                continue;
+            };
+            let permit = tokio::select! {
+                () = shutdown_signal.receive() => break,
+                () = service_message_sender.closed() => break,
+                permit = preauth_deadline.run(
+                    None,
+                    Arc::clone(&preauth_capacity).acquire_owned(),
+                ) => {
+                    match permit {
+                        Ok(Ok(permit)) => permit,
+                        Ok(Err(_)) => break,
+                        Err(_) => {
+                            iroha_logger::warn!(
+                                %remote,
+                                timeout = ?preauth_timeout,
+                                "TLS connection exhausted its pre-authentication deadline while waiting for capacity"
+                            );
+                            continue;
+                        }
+                    }
                 }
             };
             let service_message_sender = service_message_sender.clone();
@@ -11088,13 +11792,15 @@ where
                     reply: tx,
                 };
                 if !matches!(
-                    tokio::time::timeout(idle_timeout, service_message_sender.send(ask)).await,
+                    preauth_deadline
+                        .run(Some(idle_timeout), service_message_sender.send(ask))
+                        .await,
                     Ok(Ok(()))
                 ) {
                     iroha_logger::debug!(%remote, "Network did not accept TLS InboundAsk in time");
                     return;
                 }
-                let allow = match tokio::time::timeout(idle_timeout, rx).await {
+                let allow = match preauth_deadline.run(Some(idle_timeout), rx).await {
                     Ok(Ok(allow)) => allow,
                     _ => return,
                 };
@@ -11106,7 +11812,10 @@ where
                 // `incoming_pending` is now the exact max-total owner.
                 drop(permit);
                 crate::transport::apply_tcp_socket_options(&tcp, tcp_nodelay, tcp_keepalive);
-                match tokio::time::timeout(idle_timeout, acceptor.accept(tcp)).await {
+                match preauth_deadline
+                    .run(Some(idle_timeout), acceptor.accept(tcp))
+                    .await
+                {
                     Ok(Ok(tls_stream)) => {
                         if tls_stream.get_ref().1.alpn_protocol()
                             != Some(crate::transport::P2P_ALPN)
@@ -11130,6 +11839,8 @@ where
                         };
                         let trust_gossip = trust_gossip_config && soranet_policy.trust_gossip();
                         let (read_half, write_half) = tokio::io::split(tls_stream);
+                        let (auth_completion, auth_receiver) =
+                            preauth_deadline.completion_channel();
                         let peer_task = connected_from::<T, E>(
                             public_address,
                             key_pair,
@@ -11143,6 +11854,7 @@ where
                             ),
                             service_message_sender,
                             idle_timeout,
+                            auth_completion,
                             network_id,
                             consensus_caps,
                             confidential_caps.clone(),
@@ -11159,8 +11871,21 @@ where
                             quic_datagrams_enabled,
                             quic_datagram_max_payload_bytes,
                         );
+                        let peer_task = AbortOnDropTask::new(peer_task);
+                        if !preauth_deadline
+                            .wait_for_authentication(auth_receiver)
+                            .await
+                        {
+                            iroha_logger::warn!(
+                                %remote,
+                                timeout = ?preauth_timeout,
+                                "TLS peer did not authenticate before its pre-authentication deadline"
+                            );
+                            return;
+                        }
+                        drop(source_permit);
                         reservation.disarm();
-                        AbortOnDropTask::new(peer_task).join().await;
+                        peer_task.join().await;
                     }
                     Ok(Err(e)) => {
                         iroha_logger::warn!(%e, %remote, "TLS accept failed");
@@ -11452,6 +12177,14 @@ struct NetworkBase<T: Pload, E: Enc> {
     _encryptor: core::marker::PhantomData<E>,
 }
 impl<T: Pload, E: Enc> NetworkBase<T, E> {
+    fn reserve_incoming_pending(&mut self, conn_id: ConnectionId) -> bool {
+        self.incoming_pending.insert(conn_id)
+    }
+
+    fn release_incoming_pending(&mut self, conn_id: ConnectionId) -> bool {
+        self.incoming_pending.remove(&conn_id)
+    }
+
     /// Revoke every actor-owned reply tenure and every caller-held waiter
     /// authorized by those tenures.
     ///
@@ -11508,6 +12241,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                 remote_addr,
                 reply,
             } => {
+                let remote_ip = canonical_remote_ip(remote_addr.ip());
                 // Apply the same caps and per-IP throttle to TLS and QUIC accepts.
                 let allow = if self.exceeds_caps() {
                     TOTAL_CAP_REJECTS.fetch_add(1, Ordering::Relaxed);
@@ -11517,26 +12251,24 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                     INCOMING_CAP_REJECTS.fetch_add(1, Ordering::Relaxed);
                     iroha_logger::warn!(addr=%remote_addr, "Dropping unauthenticated connection due to max_incoming cap");
                     false
-                } else if !self.allow_ip(remote_addr.ip()) {
-                    ACCEPT_THROTTLED.fetch_add(1, Ordering::Relaxed);
-                    iroha_logger::debug!(addr=%remote_addr, "Dropping authenticated transport connection due to per-IP throttle");
+                } else if !self.allow_ip(remote_ip) {
+                    // Token-bucket rejection is counted inside `allow_ip_with_policy` exactly
+                    // once; ACL rejection is policy enforcement, not throttling telemetry.
+                    iroha_logger::debug!(addr=%remote_addr, "Dropping unauthenticated connection due to IP policy or accept throttle");
                     false
                 } else {
-                    true
+                    self.reserve_incoming_pending(conn_id)
                 };
-                if allow {
-                    self.incoming_pending.insert(conn_id);
-                }
                 if reply.send(allow).is_err() && allow {
                     // The request future was cancelled after admission but
                     // before it could construct its cancellation guard.
-                    self.incoming_pending.remove(&conn_id);
+                    self.release_incoming_pending(conn_id);
                 }
             }
             ServiceMessage::InboundCancelled(conn_id) => {
                 // Idempotent and deliberately limited to pre-authentication
                 // state: a delayed duplicate must not de-account a live peer.
-                self.incoming_pending.remove(&conn_id);
+                self.release_incoming_pending(conn_id);
             }
         }
     }
@@ -13778,7 +14510,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
         true
     }
     fn mark_connection_terminating(&mut self, conn_id: ConnectionId) {
-        self.incoming_pending.remove(&conn_id);
+        self.release_incoming_pending(conn_id);
         self.incoming_active.remove(&conn_id);
         if let Some(tenure) = self.reply_route_tenures.get(&conn_id) {
             tenure.mark_draining();
@@ -14126,7 +14858,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
         self.reset_backoff_addr(peer.id(), peer.address());
         self.last_active
             .insert(peer.id().clone(), tokio::time::Instant::now());
-        if self.incoming_pending.remove(&connection_id) {
+        if self.release_incoming_pending(connection_id) {
             self.incoming_active.insert(connection_id);
         }
         if configured_hub_candidate {
@@ -14282,7 +15014,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
         // `peer_connected` accepts it into the active set.  Rejections after
         // authentication report `Some(peer)`, so clean both inbound sets
         // independently of how far the connection progressed.
-        self.incoming_pending.remove(&conn_id);
+        self.release_incoming_pending(conn_id);
         self.incoming_active.remove(&conn_id);
         // Writer tickets were cancelled above. Delivery capability retirement
         // is deferred to the receiver-completion fence, so a stale predecessor
@@ -17983,6 +18715,12 @@ mod tests {
             );
         }
     }
+    fn reserve_test_incoming<T: Pload>(
+        network: &mut NetworkBase<T, ChaCha20Poly1305>,
+        conn_id: ConnectionId,
+    ) {
+        assert!(network.reserve_incoming_pending(conn_id));
+    }
     #[allow(clippy::too_many_lines)]
     fn bare_network() -> Option<NetworkBase<DummyMsg, ChaCha20Poly1305>> {
         bare_network_with::<DummyMsg>()
@@ -18415,7 +19153,7 @@ mod tests {
         let conn_id = 73;
         let peer = test_peer(socket_addr!(127.0.0.1:12073));
         network.max_total_connections = Some(1);
-        network.incoming_pending.insert(conn_id);
+        reserve_test_incoming(&mut network, conn_id);
         assert!(
             network.exceeds_caps(),
             "pending handshake must consume the cap"
@@ -18664,7 +19402,7 @@ mod tests {
         network.peer_reputations.record_connected(peer.id());
         network.incoming_active.insert(old_conn_id);
         network.outbound_connections.insert(old_conn_id);
-        network.incoming_pending.insert(new_conn_id);
+        reserve_test_incoming(&mut network, new_conn_id);
         let semantic_origin = random_peer_id();
         let old_reply_tenure = test_reply_tenure(
             &network.reply_route_owner,
@@ -18851,7 +19589,7 @@ mod tests {
         let old_conn_id = 87;
         let new_conn_id = 88;
         let old_delivery_drain = Arc::new(InboundDeliveryDrain::new());
-        network.incoming_pending.insert(old_conn_id);
+        reserve_test_incoming(&mut network, old_conn_id);
         let (old_handle, old_receivers) = test_wire_peer_handle::<DummyMsg>(1);
         let (old_sender_tx, mut old_sender_rx) = tokio::sync::oneshot::channel();
         network.peer_connected(Connected {
@@ -18890,7 +19628,7 @@ mod tests {
         let (_origin, _authenticated_via, _payload, _bytes, retained_route, receiver_guard) =
             delivered.into_parts_with_reply_route();
         let retained_route = retained_route.expect("final consumer preserves its exact route");
-        network.incoming_pending.insert(new_conn_id);
+        reserve_test_incoming(&mut network, new_conn_id);
         connect_test_peer!(network, peer, new_conn_id, 1, Disabled => _new_receivers, _new_sender_rx);
         assert!(old_receivers.termination_requested());
         assert!(retained_route.is_active());
@@ -19041,7 +19779,7 @@ mod tests {
         );
         network.current_topology.insert(peer.id().clone());
         let old_conn_id = 177;
-        network.incoming_pending.insert(old_conn_id);
+        reserve_test_incoming(&mut network, old_conn_id);
         let (old_handle, old_receivers) = test_wire_peer_handle::<DummyMsg>(1);
         let (old_sender_tx, mut old_sender_rx) = tokio::sync::oneshot::channel();
         let old_delivery_drain = Arc::new(InboundDeliveryDrain::new());
@@ -19081,7 +19819,7 @@ mod tests {
         drop(old_senders);
         old_delivery_drain.close_producer();
         let new_conn_id = 178;
-        network.incoming_pending.insert(new_conn_id);
+        reserve_test_incoming(&mut network, new_conn_id);
         let (new_handle, _new_receivers) = test_wire_peer_handle::<DummyMsg>(1);
         let (new_sender_tx, mut new_sender_rx) = tokio::sync::oneshot::channel();
         let new_delivery_drain = Arc::new(InboundDeliveryDrain::new());
@@ -19140,7 +19878,7 @@ mod tests {
             peer_key_pair.public_key().clone(),
         );
         network.max_total_connections = Some(1);
-        network.incoming_pending.insert(conn_id);
+        reserve_test_incoming(&mut network, conn_id);
         // An empty permissioned topology rejects an untrusted authenticated observer.
         connect_test_peer!(
             network,
@@ -19190,7 +19928,7 @@ mod tests {
         });
         let peer = test_peer(socket_addr!(127.0.0.1:12081));
         let first_conn_id = 81;
-        network.incoming_pending.insert(first_conn_id);
+        reserve_test_incoming(&mut network, first_conn_id);
         connect_test_peer!(network, peer, first_conn_id, 0, Disabled => first_receivers, mut first_receiver);
         assert!(first_receivers.termination_requested());
         assert!(matches!(
@@ -19208,7 +19946,7 @@ mod tests {
                 .install_protected_sources(HashSet::new())
         );
         let second_conn_id = 82;
-        network.incoming_pending.insert(second_conn_id);
+        reserve_test_incoming(&mut network, second_conn_id);
         connect_test_peer!(network, peer, second_conn_id, 1, Disabled => second_receivers, mut second_receiver);
         assert!(second_receiver.try_recv().is_ok());
         assert!(!second_receivers.termination_requested());
@@ -19225,7 +19963,7 @@ mod tests {
             Some(HashSet::from([peer.id().clone()])),
         );
         network.current_topology.insert(peer.id().clone());
-        network.incoming_pending.insert(conn_id);
+        reserve_test_incoming(&mut network, conn_id);
         let (handle, receivers) = test_wire_peer_handle::<DummyMsg>(1);
         let (peer_message_sender, peer_message_receiver) = tokio::sync::oneshot::channel();
         drop(peer_message_receiver);
@@ -19269,7 +20007,7 @@ mod tests {
             .peer_reputations
             .set_trusted(&HashSet::from([hub.id().clone()]));
         let conn_id = 2_093;
-        network.incoming_pending.insert(conn_id);
+        reserve_test_incoming(&mut network, conn_id);
         connect_test_peer!(network, hub, conn_id, 0, Hub => receivers, mut peer_message_receiver);
         assert!(matches!(
             peer_message_receiver.try_recv(),
@@ -19296,7 +20034,7 @@ mod tests {
                     .expect("churn address"),
                 random_node_key_pair().public_key().clone(),
             );
-            network.incoming_pending.insert(conn_id);
+            reserve_test_incoming(&mut network, conn_id);
             connect_test_peer!(network, peer, conn_id, 0, Disabled => receivers, _peer_message_receiver);
             assert!(receivers.termination_requested());
             network.peer_terminated(Terminated {
@@ -19340,7 +20078,7 @@ mod tests {
                     .expect("churn address"),
                 random_node_key_pair().public_key().clone(),
             );
-            network.incoming_pending.insert(conn_id);
+            reserve_test_incoming(&mut network, conn_id);
             connect_test_peer!(network, peer, conn_id, 0, Disabled => receivers, peer_message_receiver);
             assert!(network.peers.contains_key(peer.id()));
             assert!(!receivers.termination_requested());
@@ -19839,7 +20577,7 @@ mod tests {
         assert!(!network.peers.contains_key(hub_a.id()));
         assert!(network.is_configured_hub_peer(&hub_b, RelayRole::Hub));
         let first_b_conn_id = 3_112;
-        network.incoming_pending.insert(first_b_conn_id);
+        reserve_test_incoming(&mut network, first_b_conn_id);
         connect_test_peer!(network, hub_b, first_b_conn_id, 0, Hub => first_b_receivers, mut first_b_receiver);
         assert!(first_b_receivers.termination_requested());
         assert!(matches!(
@@ -19869,7 +20607,7 @@ mod tests {
         });
         assert!(network.retry_backoff.contains_key(hub_b.id()));
         let replayed_a_conn_id = 3_114;
-        network.incoming_pending.insert(replayed_a_conn_id);
+        reserve_test_incoming(&mut network, replayed_a_conn_id);
         connect_test_peer!(network, hub_a, replayed_a_conn_id, 1, Hub => replayed_a_receivers, mut replayed_a_receiver);
         assert!(replayed_a_receivers.termination_requested());
         assert!(matches!(
@@ -19900,7 +20638,7 @@ mod tests {
                 .protected_source_geometry_fits()
         );
         let second_b_conn_id = 3_113;
-        network.incoming_pending.insert(second_b_conn_id);
+        reserve_test_incoming(&mut network, second_b_conn_id);
         connect_test_peer!(network, hub_b, second_b_conn_id, 1, Hub => second_b_receivers, mut second_b_receiver);
         assert!(second_b_receiver.try_recv().is_ok());
         assert!(!second_b_receivers.termination_requested());
@@ -23742,7 +24480,7 @@ mod tests {
             Some(HashSet::new())
         );
         let arbitrary_conn_id = 45_708;
-        network.incoming_pending.insert(arbitrary_conn_id);
+        reserve_test_incoming(&mut network, arbitrary_conn_id);
         connect_test_peer!(network, arbitrary, arbitrary_conn_id, 0, Hub => arbitrary_receivers, mut arbitrary_receiver);
         assert!(arbitrary_receivers.termination_requested());
         assert!(matches!(
@@ -23755,7 +24493,7 @@ mod tests {
             Some(HashSet::new())
         );
         let wrong_role_conn_id = 45_709;
-        network.incoming_pending.insert(wrong_role_conn_id);
+        reserve_test_incoming(&mut network, wrong_role_conn_id);
         connect_test_peer!(network, hub, wrong_role_conn_id, 0, Spoke => wrong_role_receivers, mut wrong_role_receiver);
         assert!(wrong_role_receivers.termination_requested());
         assert!(matches!(
@@ -23764,7 +24502,7 @@ mod tests {
         ));
         assert!(network.relay_hub_peer.is_none());
         let hub_conn_id = 45_710;
-        network.incoming_pending.insert(hub_conn_id);
+        reserve_test_incoming(&mut network, hub_conn_id);
         connect_test_peer!(network, hub, hub_conn_id, 1, Hub => hub_receivers, mut hub_receiver);
         assert!(hub_receiver.try_recv().is_ok());
         assert!(!hub_receivers.termination_requested());

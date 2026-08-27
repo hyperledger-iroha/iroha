@@ -3,7 +3,7 @@ use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     da::{
         commitment::{DaCommitmentLocation, MerklePathItem},
-        ingest::DaIngestAuthorizationV1,
+        ingest::{DaIngestAuthorizationV1, DaPinScopeAuthorizationV1},
         types::StorageTicketId,
     },
     nexus::LaneId,
@@ -39,26 +39,26 @@ pub struct DaPinIntent {
     /// This is a required V1 wire field. Pre-release owner-only pin intents do not
     /// decode and there is no unsigned sidecar representation.
     pub authorization: DaIngestAuthorizationV1,
+    /// Producer signatures over the exact durable ticket, manifest, and alias scope.
+    pub pin_scope_authorization: DaPinScopeAuthorizationV1,
 }
 impl DaPinIntent {
     /// Construct a fully authorised pin intent.
     #[must_use]
     pub fn new(
-        lane_id: LaneId,
-        epoch: u64,
-        sequence: u64,
-        storage_ticket: StorageTicketId,
-        manifest_hash: ManifestDigest,
         authorization: DaIngestAuthorizationV1,
+        pin_scope_authorization: DaPinScopeAuthorizationV1,
     ) -> Self {
+        let scope = &pin_scope_authorization.scope;
         Self {
-            lane_id,
-            epoch,
-            sequence,
-            storage_ticket,
-            manifest_hash,
-            alias: None,
+            lane_id: scope.lane_id,
+            epoch: scope.epoch,
+            sequence: scope.sequence,
+            storage_ticket: scope.storage_ticket,
+            manifest_hash: scope.manifest_hash,
+            alias: scope.alias.clone(),
             authorization,
+            pin_scope_authorization,
         }
     }
 }
@@ -89,6 +89,8 @@ impl DaPinIntentBundle {
                 intent.alias.clone(),
                 to_bytes(&intent.authorization)
                     .expect("DA ingest authorization must have a canonical Norito encoding"),
+                to_bytes(&intent.pin_scope_authorization)
+                    .expect("DA pin-scope authorization must have a canonical Norito encoding"),
             )
         });
         Self {
@@ -232,16 +234,22 @@ mod tests {
         account::AccountId,
         block::BlockHeader,
         da::{
-            ingest::{DaIngestAuthorizationV1, DaIngestSignatureV1},
+            ingest::{
+                DaIngestAuthorizationV1, DaIngestSignatureV1, DaPinScopeAuthorizationV1,
+                DaPinScopeV1,
+            },
             types::{BlobDigest, StorageTicketId},
         },
         nexus::LaneId,
         sorafs::pin_registry::ManifestDigest,
     };
     use iroha_crypto::{Algorithm, HashOf, KeyPair, Signature};
+    fn test_key_pair() -> KeyPair {
+        KeyPair::try_from_seed(vec![0xD9; 32], Algorithm::Ed25519)
+            .expect("valid deterministic pin-intent key")
+    }
     fn test_authorization(lane: LaneId, epoch: u64, sequence: u64) -> DaIngestAuthorizationV1 {
-        let key_pair = KeyPair::try_from_seed(vec![0xD9; 32], Algorithm::Ed25519)
-            .expect("valid deterministic pin-intent key");
+        let key_pair = test_key_pair();
         let mut authorization = DaIngestAuthorizationV1 {
             network_id: NetworkId::from_genesis_hash(
                 HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xDA; 32])),
@@ -262,17 +270,31 @@ mod tests {
         });
         authorization
     }
+    fn test_intent(
+        lane: LaneId,
+        epoch: u64,
+        sequence: u64,
+        storage_ticket: StorageTicketId,
+        manifest_hash: ManifestDigest,
+        alias: Option<String>,
+    ) -> DaPinIntent {
+        let authorization = test_authorization(lane, epoch, sequence);
+        let scope = DaPinScopeV1::new(&authorization, storage_ticket, manifest_hash, alias);
+        let scope_authorization = DaPinScopeAuthorizationV1::try_sign(scope, &test_key_pair())
+            .expect("sign deterministic pin scope");
+        DaPinIntent::new(authorization, scope_authorization)
+    }
 
     #[test]
     #[cfg(feature = "json")]
     fn pin_intent_json_requires_explicit_alias_and_rejects_unknown_fields() {
-        let intent = DaPinIntent::new(
+        let intent = test_intent(
             LaneId::new(1),
             1,
             1,
             StorageTicketId::new([1; 32]),
             ManifestDigest::new([2; 32]),
-            test_authorization(LaneId::new(1), 1, 1),
+            None,
         );
         let mut missing = norito::json::to_value(&intent).expect("serialize DA pin intent");
         missing
@@ -309,31 +331,29 @@ mod tests {
 
     #[test]
     fn bundle_sorts_intents_deterministically() {
-        let mut first = DaPinIntent::new(
+        let first = test_intent(
             LaneId::new(2),
             2,
             1,
             StorageTicketId::new([2; 32]),
             ManifestDigest::new([2; 32]),
-            test_authorization(LaneId::new(2), 2, 1),
+            Some("z-alias".to_owned()),
         );
-        first.alias = Some("z-alias".to_string());
-        let mut second = DaPinIntent::new(
+        let second = test_intent(
             LaneId::new(1),
             2,
             3,
             StorageTicketId::new([1; 32]),
             ManifestDigest::new([1; 32]),
-            test_authorization(LaneId::new(1), 2, 3),
+            Some("a-alias".to_owned()),
         );
-        second.alias = Some("a-alias".to_string());
-        let third = DaPinIntent::new(
+        let third = test_intent(
             LaneId::new(1),
             1,
             9,
             StorageTicketId::new([3; 32]),
             ManifestDigest::new([3; 32]),
-            test_authorization(LaneId::new(1), 1, 9),
+            None,
         );
         let bundle = DaPinIntentBundle::new(vec![first.clone(), second.clone(), third.clone()]);
         let ordered: Vec<(u32, u64, u64, StorageTicketId)> = bundle
@@ -374,13 +394,13 @@ mod tests {
     }
     #[test]
     fn pin_intent_merkle_domains_are_disjoint() {
-        let intent = DaPinIntent::new(
+        let intent = test_intent(
             LaneId::new(1),
             1,
             1,
             StorageTicketId::new([1; 32]),
             ManifestDigest::new([2; 32]),
-            test_authorization(LaneId::new(1), 1, 1),
+            None,
         );
         let encoded = to_bytes(&intent).expect("encode pin intent");
         assert_ne!(pin_intent_leaf_hash(&intent), Hash::new(encoded));

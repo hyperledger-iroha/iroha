@@ -5,7 +5,9 @@ use iroha_data_model::{
     block::BlockHeader,
     da::{
         commitment::DaCommitmentLocation,
-        ingest::{DaIngestAuthorizationV1, DaIngestSignatureV1},
+        ingest::{
+            DaIngestAuthorizationV1, DaIngestSignatureV1, DaPinScopeAuthorizationV1, DaPinScopeV1,
+        },
         pin_intent::{DaPinIntent, DaPinIntentWithLocation},
         types::BlobDigest,
     },
@@ -47,6 +49,22 @@ fn checked_da_authorization(lane_id: LaneId, epoch: u64, sequence: u64) -> DaIng
         .expect("sign deterministic query-response DA authorization"),
     });
     authorization
+}
+fn checked_da_pin_intent(
+    lane_id: LaneId,
+    epoch: u64,
+    sequence: u64,
+    storage_ticket: iroha_data_model::da::types::StorageTicketId,
+    manifest_hash: iroha_data_model::sorafs::pin_registry::ManifestDigest,
+) -> DaPinIntent {
+    let key_pair =
+        iroha_crypto::KeyPair::try_from_seed(vec![0xE1; 32], iroha_crypto::Algorithm::Ed25519)
+            .expect("valid deterministic query-response DA key");
+    let authorization = checked_da_authorization(lane_id, epoch, sequence);
+    let scope = DaPinScopeV1::new(&authorization, storage_ticket, manifest_hash, None);
+    let scope_authorization = DaPinScopeAuthorizationV1::try_sign(scope, &key_pair)
+        .expect("sign deterministic query-response DA pin scope");
+    DaPinIntent::new(authorization, scope_authorization)
 }
 fn checked_random_account_id() -> iroha_data_model::AccountId {
     iroha_data_model::AccountId::new(
@@ -99,13 +117,12 @@ fn parameters_roundtrip_bare_payload() {
 }
 #[test]
 fn da_pin_intent_singular_roundtrip() {
-    let intent = DaPinIntent::new(
+    let intent = checked_da_pin_intent(
         LaneId::new(3),
         5,
         7,
         iroha_data_model::da::types::StorageTicketId::new([0xAA; 32]),
         iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]),
-        checked_da_authorization(LaneId::new(3), 5, 7),
     );
     let with_location = DaPinIntentWithLocation {
         intent: intent.clone(),

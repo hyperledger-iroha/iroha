@@ -174,7 +174,7 @@ mod fresh_replay_reservation_tests {
         let cache = Arc::new(ReplayCache::new(ReplayCacheConfig::new()));
         let key = ReplayKey::new(
             LaneEpoch::new(LaneId::SINGLE, 19),
-            7,
+            0,
             ReplayFingerprint::from_hash(blake3_hash(b"taikai-replay-reservation")),
         );
         let now = Instant::now();
@@ -203,7 +203,7 @@ mod fresh_replay_reservation_tests {
         let cache = Arc::new(ReplayCache::new(ReplayCacheConfig::new()));
         let key = ReplayKey::new(
             LaneEpoch::new(LaneId::SINGLE, 20),
-            8,
+            0,
             ReplayFingerprint::from_hash(blake3_hash(b"taikai-cancelled-submitter")),
         );
         let now = Instant::now();
@@ -540,9 +540,6 @@ pub async fn handler_post_da_ingest(
             "overriding DA retention policy to match configured network baseline"
         );
     }
-    let pin_intent = build_da_pin_intent(&request, &manifest).map_err(|(status, message)| {
-        ResponseError::from(build_error_response(status, &message, format))
-    })?;
     debug_assert_eq!(request.owner, authenticated_owner);
     let fingerprint = manifest.fingerprint;
     let lane_epoch = LaneEpoch::new(request.lane_id, request.epoch);
@@ -576,7 +573,7 @@ pub async fn handler_post_da_ingest(
         request.sequence,
         &manifest.storage_ticket,
         fingerprint,
-        &pin_intent,
+        &request,
     )
     .map_err(|err| {
         duplicate_da_artifacts_response_error(
@@ -585,19 +582,22 @@ pub async fn handler_post_da_ingest(
             format,
         )
     })? {
-        ensure_taikai_anchor_ready(&app.da_ingest.manifest_store_dir, &request, &manifest)
-            .map_err(|err| {
-                ResponseError::from(build_error_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    &format!("failed to publish durable Taikai anchor readiness: {err}"),
-                    format,
-                ))
-            })?;
+        let (artifacts, finalized) = finalize_duplicate_da_pin_intent(
+            &app.da_ingest.manifest_store_dir,
+            &request,
+            lane_epoch,
+            fingerprint,
+            artifacts,
+        )
+        .map_err(|err| {
+            duplicate_da_artifacts_response_error(err, "failed to finalize DA pin intent", format)
+        })?;
         return duplicate_da_ingest_response_from_artifacts(
             &telemetry,
             lane_epoch,
             request.sequence,
             artifacts,
+            finalized,
             format,
         );
     }
@@ -621,10 +621,22 @@ pub async fn handler_post_da_ingest(
                     &request,
                     &manifest,
                     lane_epoch,
-                    &pin_intent,
                     format,
                 );
             }
+            let pin_scope =
+                build_da_pin_scope(&request, manifest.storage_ticket, manifest.manifest_hash)
+                    .map_err(|(status, message)| {
+                        ResponseError::from(build_error_response(status, &message, format))
+                    })?;
+            let pin_scope_authorization =
+                submitted_pin_scope_authorization(&request, pin_scope.clone()).map_err(
+                    |(status, message)| {
+                        ResponseError::from(build_error_response(status, &message, format))
+                    },
+                )?;
+            let pin_intent = pin_scope_authorization
+                .map(|authorization| build_da_pin_intent(&request, authorization));
             let replay_reservation = FreshReplayReservation::new(
                 Arc::clone(&app.da_replay_cache),
                 fresh_reservation.expect("fresh replay outcome carries a reservation"),
@@ -806,8 +818,29 @@ pub async fn handler_post_da_ingest(
             }
             {
                 let spool_dir = app.da_ingest.manifest_store_dir.clone();
-                let pin_intent = pin_intent.clone();
+                let pin_scope = pin_scope.clone();
                 let storage_ticket = manifest.storage_ticket.clone();
+                let lane_id = request.lane_id;
+                let epoch = request.epoch;
+                let sequence = request.sequence;
+                spool_batch.push(DaSpoolAction::new("pin_scope", move || {
+                    persistence::persist_da_pin_scope(
+                        &spool_dir,
+                        &pin_scope,
+                        lane_id,
+                        epoch,
+                        sequence,
+                        &storage_ticket,
+                        &fingerprint,
+                    )
+                    .map(|_| DaSpoolActionOutput::None)
+                    .map_err(|err| err.to_string())
+                }));
+            }
+            if let Some(pin_intent) = pin_intent.as_ref() {
+                let spool_dir = app.da_ingest.manifest_store_dir.clone();
+                let pin_intent = pin_intent.clone();
+                let storage_ticket = manifest.storage_ticket;
                 let lane_id = request.lane_id;
                 let epoch = request.epoch;
                 let sequence = request.sequence;
@@ -1030,16 +1063,18 @@ pub async fn handler_post_da_ingest(
                 let epoch = request.epoch;
                 let mut replay_reservation = replay_reservation;
                 let mut taikai_lineage_commit = taikai_lineage_commit;
-                let taikai_ready =
-                    matches!(request.blob_class, BlobClass::TaikaiSegment).then(|| {
-                        (
-                            app.da_ingest.manifest_store_dir.clone(),
-                            request.lane_id,
-                            request.epoch,
-                            request.sequence,
-                            manifest.storage_ticket,
-                        )
-                    });
+                let pin_finalized = pin_intent.is_some();
+                let taikai_ready = (pin_finalized
+                    && matches!(request.blob_class, BlobClass::TaikaiSegment))
+                .then(|| {
+                    (
+                        app.da_ingest.manifest_store_dir.clone(),
+                        request.lane_id,
+                        request.epoch,
+                        request.sequence,
+                        manifest.storage_ticket,
+                    )
+                });
                 // The durable receipt and replay cursor commit only after every
                 // artifact required by this ingest has been written successfully. Moving the
                 // reservation into the queued action keeps it live if the HTTP future is
@@ -1190,9 +1225,14 @@ pub async fn handler_post_da_ingest(
                 );
             }
             let response = DaIngestResponse {
-                status: "accepted",
+                status: if pin_intent.is_some() {
+                    "accepted"
+                } else {
+                    "pending_pin_authorization"
+                },
                 duplicate,
                 receipt: Some(receipt),
+                pin_scope: Some(pin_scope),
             };
             let mut http_response = utils::respond_with_format(response, format);
             http_response.headers_mut().insert(
@@ -1250,15 +1290,19 @@ struct DuplicateDaArtifacts {
     receipt_path: PathBuf,
     receipt: DaIngestReceipt,
     pdp_commitment_bytes: Vec<u8>,
+    pin_scope: DaPinScopeV1,
+    pin_intent: Option<DaPinIntent>,
 }
 #[derive(Debug)]
 enum DuplicateDaArtifactsError {
+    Client(StatusCode, String),
     Conflict(String),
     Internal(eyre::Report),
 }
 impl std::fmt::Display for DuplicateDaArtifactsError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Client(_, message) => formatter.write_str(message),
             Self::Conflict(message) => formatter.write_str(message),
             Self::Internal(error) => std::fmt::Display::fmt(error, formatter),
         }
@@ -1272,6 +1316,7 @@ fn duplicate_da_artifacts_response_error(
     format: ResponseFormat,
 ) -> ResponseError {
     let (status, message) = match error {
+        DuplicateDaArtifactsError::Client(status, message) => (status, message),
         DuplicateDaArtifactsError::Conflict(message) => (StatusCode::CONFLICT, message),
         DuplicateDaArtifactsError::Internal(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1288,9 +1333,9 @@ fn load_duplicate_da_artifacts(
     sequence: u64,
     storage_ticket: &StorageTicketId,
     fingerprint: ReplayFingerprint,
-    expected_pin_intent: &DaPinIntent,
+    request: &DaIngestRequest,
 ) -> Result<DuplicateDaArtifacts, DuplicateDaArtifactsError> {
-    let durable_pin_intent = persistence::load_da_pin_intent(
+    let pin_scope = persistence::load_da_pin_scope(
         spool_dir,
         lane_epoch.lane_id,
         lane_epoch.epoch,
@@ -1298,16 +1343,21 @@ fn load_duplicate_da_artifacts(
         storage_ticket,
         &fingerprint,
     )
-    .wrap_err("failed to load duplicate DA pin-intent artifact")
+    .wrap_err("failed to load duplicate DA pin-scope artifact")
     .map_err(DuplicateDaArtifactsError::Internal)?;
+    if !pin_scope.matches_authorization(&request.authorization()) {
+        return Err(DuplicateDaArtifactsError::Conflict(
+            "completed DA ingest identity conflicts with the submitted request".to_owned(),
+        ));
+    }
     let manifest_artifact =
         persistence::load_manifest_artifact_from_spool(spool_dir, storage_ticket)
             .wrap_err("failed to load duplicate DA manifest artifact")
             .map_err(DuplicateDaArtifactsError::Internal)?;
     let manifest_hash = BlobDigest::from_hash(blake3_hash(&manifest_artifact.bytes));
-    if durable_pin_intent.manifest_hash.as_bytes() != manifest_hash.as_bytes() {
+    if pin_scope.manifest_hash.as_bytes() != manifest_hash.as_bytes() {
         return Err(DuplicateDaArtifactsError::Internal(eyre!(
-            "duplicate DA pin-intent manifest digest does not match durable manifest"
+            "duplicate DA pin scope manifest digest does not match durable manifest"
         )));
     }
     let pdp_commitment_bytes = persistence::load_pdp_commitment_for_manifest_artifact(
@@ -1339,18 +1389,36 @@ fn load_duplicate_da_artifacts(
             "duplicate DA receipt PDP commitment does not match durable PDP artifact"
         )));
     }
-    if durable_pin_intent.alias != expected_pin_intent.alias
-        || durable_pin_intent.authorization.signing_digest()
-            != expected_pin_intent.authorization.signing_digest()
+    let pin_intent = match persistence::load_da_pin_intent(
+        spool_dir,
+        lane_epoch.lane_id,
+        lane_epoch.epoch,
+        sequence,
+        storage_ticket,
+        &fingerprint,
+    ) {
+        Ok(intent) => Some(intent),
+        Err(error) if error.kind() == ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(DuplicateDaArtifactsError::Internal(eyre!(
+                "failed to load duplicate DA pin-intent artifact: {error}"
+            )));
+        }
+    };
+    if pin_intent
+        .as_ref()
+        .is_some_and(|intent| intent.pin_scope_authorization.scope != pin_scope)
     {
-        return Err(DuplicateDaArtifactsError::Conflict(
-            "completed DA ingest identity conflicts with the submitted request".to_owned(),
-        ));
+        return Err(DuplicateDaArtifactsError::Internal(eyre!(
+            "duplicate DA pin intent does not match the durable producer scope"
+        )));
     }
     Ok(DuplicateDaArtifacts {
         receipt_path,
         receipt,
         pdp_commitment_bytes,
+        pin_scope,
+        pin_intent,
     })
 }
 fn load_duplicate_da_artifacts_if_receipt_present(
@@ -1360,7 +1428,7 @@ fn load_duplicate_da_artifacts_if_receipt_present(
     sequence: u64,
     storage_ticket: &StorageTicketId,
     fingerprint: ReplayFingerprint,
-    expected_pin_intent: &DaPinIntent,
+    request: &DaIngestRequest,
 ) -> Result<Option<DuplicateDaArtifacts>, DuplicateDaArtifactsError> {
     if receipt_log
         .receipt_for_duplicate(lane_epoch, sequence, fingerprint)
@@ -1377,7 +1445,7 @@ fn load_duplicate_da_artifacts_if_receipt_present(
         sequence,
         storage_ticket,
         fingerprint,
-        expected_pin_intent,
+        request,
     )
     .map(Some)
 }
@@ -1387,16 +1455,17 @@ fn handle_duplicate_da_ingest(
     request: &DaIngestRequest,
     manifest: &ManifestArtifacts,
     lane_epoch: LaneEpoch,
-    expected_pin_intent: &DaPinIntent,
     format: ResponseFormat,
 ) -> Result<Response, ResponseError> {
-    let artifacts = load_duplicate_da_artifacts_and_publish_taikai_ready(
+    let _lifecycle_guard = app.da_replay_lifecycle_lock.lock();
+    let artifacts = load_duplicate_da_artifacts(
         app.da_receipt_log.as_ref(),
         &app.da_ingest.manifest_store_dir,
-        request,
-        manifest,
         lane_epoch,
-        expected_pin_intent,
+        request.sequence,
+        &manifest.storage_ticket,
+        manifest.fingerprint,
+        request,
     )
     .map_err(|err| {
         duplicate_da_artifacts_response_error(
@@ -1405,41 +1474,61 @@ fn handle_duplicate_da_ingest(
             format,
         )
     })?;
+    let (artifacts, finalized) = finalize_duplicate_da_pin_intent(
+        &app.da_ingest.manifest_store_dir,
+        request,
+        lane_epoch,
+        manifest.fingerprint,
+        artifacts,
+    )
+    .map_err(|err| {
+        duplicate_da_artifacts_response_error(err, "failed to finalize DA pin intent", format)
+    })?;
     duplicate_da_ingest_response_from_artifacts(
         telemetry,
         lane_epoch,
         request.sequence,
         artifacts,
+        finalized,
         format,
     )
 }
-fn load_duplicate_da_artifacts_and_publish_taikai_ready(
-    receipt_log: &persistence::DaReceiptLog,
+fn finalize_duplicate_da_pin_intent(
     spool_dir: &Path,
     request: &DaIngestRequest,
-    manifest: &ManifestArtifacts,
     lane_epoch: LaneEpoch,
-    expected_pin_intent: &DaPinIntent,
-) -> Result<DuplicateDaArtifacts, DuplicateDaArtifactsError> {
-    let artifacts = load_duplicate_da_artifacts(
-        receipt_log,
-        spool_dir,
-        lane_epoch,
-        request.sequence,
-        &manifest.storage_ticket,
-        manifest.fingerprint,
-        expected_pin_intent,
-    )?;
-    // Publish readiness only after every durable duplicate artifact, including
-    // its receipt, has been reloaded and cross-checked successfully.
-    ensure_taikai_anchor_ready(spool_dir, request, manifest)
+    fingerprint: ReplayFingerprint,
+    mut artifacts: DuplicateDaArtifacts,
+) -> Result<(DuplicateDaArtifacts, bool), DuplicateDaArtifactsError> {
+    if artifacts.pin_intent.is_none() {
+        let Some(scope_authorization) =
+            submitted_pin_scope_authorization(request, artifacts.pin_scope.clone())
+                .map_err(|(status, message)| DuplicateDaArtifactsError::Client(status, message))?
+        else {
+            return Ok((artifacts, false));
+        };
+        let intent = build_da_pin_intent(request, scope_authorization);
+        persistence::persist_da_pin_intent(
+            spool_dir,
+            &intent,
+            lane_epoch.lane_id,
+            lane_epoch.epoch,
+            request.sequence,
+            &artifacts.pin_scope.storage_ticket,
+            &fingerprint,
+        )
+        .wrap_err("failed to persist producer-authorized DA pin intent")
         .map_err(DuplicateDaArtifactsError::Internal)?;
-    Ok(artifacts)
+        artifacts.pin_intent = Some(intent);
+    }
+    ensure_taikai_anchor_ready_for_scope(spool_dir, request, &artifacts.pin_scope)
+        .map_err(DuplicateDaArtifactsError::Internal)?;
+    Ok((artifacts, true))
 }
-fn ensure_taikai_anchor_ready(
+fn ensure_taikai_anchor_ready_for_scope(
     spool_dir: &Path,
     request: &DaIngestRequest,
-    manifest: &ManifestArtifacts,
+    scope: &DaPinScopeV1,
 ) -> eyre::Result<()> {
     if !matches!(request.blob_class, BlobClass::TaikaiSegment) {
         return Ok(());
@@ -1449,8 +1538,8 @@ fn ensure_taikai_anchor_ready(
         request.lane_id,
         request.epoch,
         request.sequence,
-        &manifest.storage_ticket,
-        &manifest.fingerprint,
+        &scope.storage_ticket,
+        &ReplayFingerprint::from(*scope.storage_ticket.as_bytes()),
     )
     .wrap_err("failed to persist Taikai anchor readiness marker")?;
     Ok(())
@@ -1460,6 +1549,7 @@ fn duplicate_da_ingest_response_from_artifacts(
     lane_epoch: LaneEpoch,
     sequence: u64,
     artifacts: DuplicateDaArtifacts,
+    finalized: bool,
     format: ResponseFormat,
 ) -> Result<Response, ResponseError> {
     record_da_receipt_metrics(
@@ -1474,9 +1564,14 @@ fn duplicate_da_ingest_response_from_artifacts(
         |(status, message)| ResponseError::from(build_error_response(status, &message, format)),
     )?;
     let response = DaIngestResponse {
-        status: "accepted",
+        status: if finalized {
+            "accepted"
+        } else {
+            "pending_pin_authorization"
+        },
         duplicate: true,
         receipt: Some(artifacts.receipt),
+        pin_scope: Some(artifacts.pin_scope),
     };
     let mut http_response = utils::respond_with_format(response, format);
     http_response.headers_mut().insert(
@@ -1848,6 +1943,21 @@ fn authenticate_da_ingest_request(
             StatusCode::FORBIDDEN,
             "DA ingest authorization includes a signer outside the authenticated account witness",
         ));
+    }
+    if !request.pin_scope_signatures.is_empty() {
+        let scope_signers = request
+            .pin_scope_signatures
+            .iter()
+            .map(|witness| &witness.signer)
+            .collect::<Vec<_>>();
+        let mut principal_signers = principal.verified_signers.iter().collect::<Vec<_>>();
+        principal_signers.sort();
+        if scope_signers != principal_signers {
+            return Err((
+                StatusCode::FORBIDDEN,
+                "DA pin-scope signers must exactly match the authenticated account witness",
+            ));
+        }
     }
     request.verify_signatures().map_err(|_| {
         (
@@ -2715,18 +2825,38 @@ fn registry_alias_from_metadata(
 }
 fn build_da_pin_intent(
     request: &DaIngestRequest,
-    manifest: &ManifestArtifacts,
-) -> Result<DaPinIntent, (StatusCode, String)> {
-    let mut intent = DaPinIntent::new(
-        request.lane_id,
-        request.epoch,
-        request.sequence,
-        manifest.storage_ticket,
-        ManifestDigest::new(*manifest.manifest_hash.as_bytes()),
-        request.authorization(),
-    );
-    intent.alias = registry_alias_from_metadata(&request.metadata)?;
-    Ok(intent)
+    scope_authorization: DaPinScopeAuthorizationV1,
+) -> DaPinIntent {
+    DaPinIntent::new(request.authorization(), scope_authorization)
+}
+fn build_da_pin_scope(
+    request: &DaIngestRequest,
+    storage_ticket: StorageTicketId,
+    manifest_hash: BlobDigest,
+) -> Result<DaPinScopeV1, (StatusCode, String)> {
+    let alias = registry_alias_from_metadata(&request.metadata)?;
+    Ok(DaPinScopeV1::new(
+        &request.authorization(),
+        storage_ticket,
+        ManifestDigest::new(*manifest_hash.as_bytes()),
+        alias,
+    ))
+}
+fn submitted_pin_scope_authorization(
+    request: &DaIngestRequest,
+    scope: DaPinScopeV1,
+) -> Result<Option<DaPinScopeAuthorizationV1>, (StatusCode, String)> {
+    if request.pin_scope_signatures.is_empty() {
+        return Ok(None);
+    }
+    let authorization = request.pin_scope_authorization(scope);
+    if !authorization.has_valid_canonical_signatures() {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "DA pin-scope signatures are invalid or non-canonical".to_owned(),
+        ));
+    }
+    Ok(Some(authorization))
 }
 #[allow(clippy::too_many_arguments)]
 fn verify_manifest_against_request(
@@ -2912,6 +3042,7 @@ struct DaIngestResponse {
     status: &'static str,
     duplicate: bool,
     receipt: Option<DaIngestReceipt>,
+    pin_scope: Option<DaPinScopeV1>,
 }
 #[cfg(test)]
 #[path = "tests.rs"]

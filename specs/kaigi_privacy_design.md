@@ -142,6 +142,12 @@ Only unique, live, explicitly proven account-ID rekey successors of the stored
 host or current transparent participants qualify; the historical stored ID is
 not a bypass when its lineage is no longer live. Ordinary alias reassignment and
 revoked or expired lineage do not qualify.
+Core lineage authorization starts from the identities named by the operation
+and follows a derived reverse occurrence index instead of collecting every
+persisted rekey record. A connected component may consume at most 4,096 record
+occurrences; an oversized, cyclic, branched, or otherwise ambiguous relevant
+component fails closed, while unrelated rekey history cannot consume that
+operation's budget.
 Private calls remain host-only while private roster joins are disabled. The
 route remains classified as expensive compute and requires a canonical
 account-signed request; it is available to ordinary on-ledger accounts rather
@@ -297,9 +303,14 @@ Hosts can still submit transparent totals; privacy mode only makes the commitmen
 ## Relay Registration
 
 - Relays self-register as domain metadata entries `kaigi_relay__<account-digest>` including HPKE key material and bandwidth class. V1 rejects empty keys and encoded keys larger than 4 KiB before metadata persistence or event emission; the opaque ceiling accommodates the current ML-KEM suites while bounding ledger and subscriber work until the descriptor carries an explicit suite tag. Native domain registration and generic metadata ISIs reject attempts to seed, overwrite, or remove these reserved entries; relay descriptors must use `RegisterKaigiRelay` or `UnregisterKaigiRelay`. The signed relay account must be registered and have a live domain-qualified primary alias; that authenticated primary alias, not a global allowlist scan, selects the descriptor's governance domain. Aliasless or domainless-primary relays fail closed. While relay state exists, primary-alias changes may stay within that storage domain but cannot clear or move to another domain; account/domain removal likewise fails while protected Kaigi dependencies remain.
-- The V1 registry admits at most 500 live descriptors. Domain metadata remains authoritative while a deterministic, snapshot-skipped relay-to-domain index bounds admission and query validation to registry entries rather than unrelated domain metadata. Restore validates malformed, duplicate, and mis-homed rows without rejecting valid legacy over-cap state. A new registration validates indexed relay rows and fails closed at the cap; an existing descriptor may still rotate at or above the cap so recovery is not blocked. Repeating the exact stored descriptor is a successful event-free no-op.
-- The `RegisterKaigiRelay` instruction persists the descriptor in domain metadata, emits a `KaigiRelayRegistered` summary (with HPKE fingerprint and bandwidth class), and can be re-invoked to rotate keys deterministically. `UnregisterKaigiRelay` is authorized by the relay or its active canonical account-ID rekey successor and atomically removes the descriptor plus retained feedback before emitting `KaigiRelayUnregistered`. Retirement prevents the descriptor from being admitted to future manifests. Existing manifests remain self-contained: they retain their pinned key until the host refreshes or ends the call, or until the manifest expires.
+- The V1 registry admits at most 500 live descriptors. Domain metadata remains authoritative while a deterministic, snapshot-skipped relay-to-domain index bounds admission and query validation to registry entries rather than unrelated domain metadata. Restore validates malformed, duplicate, and mis-homed rows without rejecting valid legacy over-cap state. A new registration validates indexed relay rows and fails closed at the cap; an existing descriptor may still rotate at or above the cap so recovery is not blocked. Repeating the exact stored descriptor is a successful event-free no-op. Index rebuilds reproduce both the current projection and the latest-block undo projection so a snapshot restart cannot change reorg behavior.
+- The `RegisterKaigiRelay` instruction persists the descriptor in domain metadata, emits a `KaigiRelayRegistered` summary (with HPKE fingerprint and bandwidth class), and can be re-invoked to rotate keys deterministically. `UnregisterKaigiRelay` is authorized by the relay or its active canonical account-ID rekey successor and atomically removes the descriptor plus retained feedback before emitting `KaigiRelayUnregistered`. The indexed storage domain remains the descriptor's authenticated home after its primary alias expires, so the stale descriptor cannot poison later registry admission and the relay can still retire it. Retirement prevents the descriptor from being admitted to future manifests. Existing manifests remain self-contained: they retain their pinned key until the host refreshes or ends the call, or until the manifest expires.
 - Governance can curate allowlists through domain metadata (`kaigi_relay_allowlist`); when an allowlist is configured, relay registration and manifest updates enforce membership before accepting new paths. Membership follows only a unique, explicitly typed account-ID rekey lineage, including retained canonical `AccountIdRekey` edges after lease expiry or reassignment, so a retired allowlist entry can authorize its valid successor without granting authority to an independent alias assignee. The relay itself still needs a live domain-qualified primary alias, and malformed allowlists in unrelated domains are never consulted.
+
+Snapshot JSON persists authoritative manifest-alias bindings, while omitted
+reverse account-alias, account-rekey, and relay-registry indexes are rebuilt
+deterministically. Each skipped index reconstructs its latest-block undo layer
+as well as its current view, preserving rollback semantics across restart.
 
 ## Manifest Creation
 
