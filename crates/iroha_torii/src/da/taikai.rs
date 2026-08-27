@@ -357,7 +357,8 @@ pub(crate) mod taikai_ingest {
             })?;
             let artifact_base_id = pending.artifact_base_id.as_deref().ok_or_else(|| {
                 internal_error(
-                    "pending Taikai routing manifest lineage is missing artifact provenance",
+                    "pending Taikai routing manifest lineage is missing artifact provenance"
+                        .to_owned(),
                 )
             })?;
             let coordinates = parse_taikai_artifact_base_id(artifact_base_id).map_err(|err| {
@@ -367,7 +368,8 @@ pub(crate) mod taikai_ingest {
             })?;
             if coordinates.storage_ticket.as_bytes() != coordinates.fingerprint.as_bytes() {
                 return Err(internal_error(
-                    "pending Taikai routing manifest artifact identity does not bind the storage ticket to its replay fingerprint",
+                    "pending Taikai routing manifest artifact identity does not bind the storage ticket to its replay fingerprint"
+                        .to_owned(),
                 ));
             }
             let receipt = receipt_log
@@ -387,7 +389,8 @@ pub(crate) mod taikai_ingest {
             };
             if receipt.storage_ticket != coordinates.storage_ticket {
                 return Err(internal_error(
-                    "pending Taikai routing manifest lineage does not match the durable receipt storage ticket",
+                    "pending Taikai routing manifest lineage does not match the durable receipt storage ticket"
+                        .to_owned(),
                 ));
             }
             validate_pending_trm_artifact(&self.manifest_store_dir, &pending).map_err(|err| {
@@ -628,7 +631,7 @@ pub(crate) mod taikai_ingest {
                 )));
             }
             let mut guard = TrmLineageGuard::new(spool_dir, &alias)?.ok_or_else(|| {
-                internal_error("Taikai lineage recovery requires durable storage")
+                internal_error("Taikai lineage recovery requires durable storage".to_owned())
             })?;
             guard.recover_pending(receipt_log)?;
         }
