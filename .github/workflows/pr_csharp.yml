@@ -61,6 +61,7 @@ jobs:
             target: aarch64-unknown-linux-gnu
             rid: linux-arm64
             library_name: libconnect_norito_bridge.so
+            cargo_jobs: "2"
           - os: macos-15-intel
             target: x86_64-apple-darwin
             rid: osx-x64
@@ -111,6 +112,17 @@ jobs:
           fi
           if [[ -e target ]]; then
             echo "C# native release build requires a fresh target directory" >&2
+            exit 1
+          fi
+          cargo_jobs="${{ matrix.cargo_jobs }}"
+          if [[ "$target" == "aarch64-unknown-linux-gnu" ]]; then
+            if [[ "$cargo_jobs" != "2" ]]; then
+              echo "C# native Linux ARM build requires exactly two Cargo jobs" >&2
+              exit 1
+            fi
+            export CARGO_BUILD_JOBS="$cargo_jobs"
+          elif [[ -n "$cargo_jobs" ]]; then
+            echo "C# native Cargo job override is restricted to Linux ARM" >&2
             exit 1
           fi
           cargo build --locked --release -p connect_norito_bridge --target "$target"

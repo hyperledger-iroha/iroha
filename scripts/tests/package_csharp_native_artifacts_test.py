@@ -317,6 +317,17 @@ class CSharpNativePackageTests(unittest.TestCase):
         self.assertIn("--sdk csharp", native_job)
         self.assertIn('if [[ "$host_target" != "$target" ]]', native_job)
         self.assertIn('if [[ -e target ]]', native_job)
+        self.assertEqual(native_job.count('cargo_jobs: "2"'), 1)
+        arm_start = native_job.index("          - os: ubuntu-24.04-arm")
+        arm_end = native_job.index("          - os: macos-15-intel")
+        arm_row = native_job[arm_start:arm_end]
+        self.assertIn('cargo_jobs: "2"', arm_row)
+        self.assertIn('cargo_jobs="${{ matrix.cargo_jobs }}"', native_job)
+        self.assertIn(
+            'if [[ "$target" == "aarch64-unknown-linux-gnu" ]]', native_job
+        )
+        self.assertIn('export CARGO_BUILD_JOBS="$cargo_jobs"', native_job)
+        self.assertNotIn("CARGO_BUILD_JOBS=1", native_job)
         self.assertIn('cp "target/$target/release/$library_name" "$artifact"', native_job)
         self.assertIn("package_csharp_native_artifacts.py stage", workflow)
         self.assertIn("package_csharp_native_artifacts.py verify-package", workflow)
