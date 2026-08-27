@@ -237,6 +237,61 @@ def test_raw_artifact_and_evidence_descriptors_request_binary_mode(
     assert all(flags & binary_flag for flags in opened_flags)
 
 
+def test_bounded_reader_ignores_only_windows_cross_api_ctime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Windows path/fd ctime differences do not hide descriptor mutations."""
+
+    payload = b"canonical manifest bytes\n"
+    manifest = tmp_path / "manifest.json"
+    manifest.write_bytes(payload)
+    real_fstat = checker.os.fstat
+
+    class ReportedStat:
+        def __init__(
+            self,
+            metadata: os.stat_result,
+            *,
+            ctime_delta: int = 1,
+        ) -> None:
+            self._metadata = metadata
+            self.st_ctime_ns = metadata.st_ctime_ns + ctime_delta
+
+        def __getattr__(self, name: str):
+            return getattr(self._metadata, name)
+
+    monkeypatch.setattr(checker, "_windows_host_semantics", lambda: True)
+    monkeypatch.setattr(
+        checker.os,
+        "fstat",
+        lambda descriptor: ReportedStat(real_fstat(descriptor)),
+    )
+    assert checker.stable_bounded_file_bytes(
+        manifest,
+        label="native artifact manifest",
+        maximum_bytes=len(payload),
+    ) == payload
+
+    observations = 0
+
+    def changed_fstat(descriptor: int) -> ReportedStat:
+        nonlocal observations
+        observations += 1
+        return ReportedStat(
+            real_fstat(descriptor),
+            ctime_delta=2 if observations == 2 else 1,
+        )
+
+    monkeypatch.setattr(checker.os, "fstat", changed_fstat)
+    with pytest.raises(checker.ArtifactContractError, match="changed while it was read"):
+        checker.stable_bounded_file_bytes(
+            manifest,
+            label="native artifact manifest",
+            maximum_bytes=len(payload),
+        )
+
+
 def test_checker_cli_loads_manifest_helper_under_python_isolation(
     tmp_path: Path,
 ) -> None:

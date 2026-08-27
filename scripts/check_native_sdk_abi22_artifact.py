@@ -117,6 +117,12 @@ class ArtifactContractError(RuntimeError):
     """Raised when native SDK artifact evidence is incomplete or stale."""
 
 
+def _windows_host_semantics() -> bool:
+    """Return whether pathname and descriptor ctime values are incomparable."""
+
+    return os.name == "nt"
+
+
 def fail(message: str) -> NoReturn:
     """Raise one stable checker error."""
 
@@ -301,25 +307,39 @@ def stable_bounded_file_bytes(
     finally:
         os.close(descriptor)
 
-    def identity(metadata: os.stat_result) -> tuple[int, ...]:
-        return (
+    def identity(
+        metadata: os.stat_result,
+        *,
+        compare_ctime: bool = True,
+    ) -> tuple[int, ...]:
+        stable = (
             metadata.st_dev,
             metadata.st_ino,
             metadata.st_mode,
             metadata.st_size,
             metadata.st_mtime_ns,
-            metadata.st_ctime_ns,
             metadata.st_nlink,
         )
+        return (*stable, metadata.st_ctime_ns) if compare_ctime else stable
 
     try:
         current = path.lstat()
     except OSError as error:
         raise ArtifactContractError(f"{label} changed while it was read") from error
-    opened_identity = identity(opened)
+    descriptor_changed = identity(opened) != identity(after)
+    pathname_changed = identity(before) != identity(current)
+    compare_path_ctime = not _windows_host_semantics()
+    cross_api_changed = identity(
+        before,
+        compare_ctime=compare_path_ctime,
+    ) != identity(
+        opened,
+        compare_ctime=compare_path_ctime,
+    )
     if (
-        opened_identity != identity(after)
-        or opened_identity != identity(current)
+        descriptor_changed
+        or pathname_changed
+        or cross_api_changed
         or not stat.S_ISREG(opened.st_mode)
         or stat.S_ISLNK(opened.st_mode)
         or opened.st_nlink != 1
