@@ -295,6 +295,10 @@ class CSharpNativePackageTests(unittest.TestCase):
         ]
         arm_retry_job = workflow[
             workflow.index("  native-release-artifact-linux-arm-retry:")
+            : workflow.index("  native-release-artifact-linux-arm-retry-2:")
+        ]
+        arm_retry_2_job = workflow[
+            workflow.index("  native-release-artifact-linux-arm-retry-2:")
             : workflow.index("  build-test-pack:")
         ]
         build_job = workflow[
@@ -336,14 +340,14 @@ class CSharpNativePackageTests(unittest.TestCase):
         self.assertIn('if [[ -e target ]]', native_job)
         self.assertIn('cp "target/$target/release/$library_name" "$artifact"', native_job)
 
-        for arm_job in (arm_primary_job, arm_retry_job):
+        for arm_job in (arm_primary_job, arm_retry_job, arm_retry_2_job):
             self.assertIn("runs-on: ubuntu-24.04-arm", arm_job)
             self.assertIn("target: aarch64-unknown-linux-gnu", arm_job)
             self.assertIn('target="aarch64-unknown-linux-gnu"', arm_job)
             self.assertIn('library_name="libconnect_norito_bridge.so"', arm_job)
             self.assertIn('if [[ "$host_target" != "$target" ]]', arm_job)
             self.assertIn('if [[ -e target ]]', arm_job)
-            self.assertIn("export CARGO_BUILD_JOBS=2", arm_job)
+            self.assertNotIn("CARGO_BUILD_JOBS", arm_job)
             self.assertIn(
                 "cargo build --locked --release -p connect_norito_bridge "
                 '--target "$target"',
@@ -385,8 +389,14 @@ class CSharpNativePackageTests(unittest.TestCase):
                 1,
             )
 
-        self.assertEqual(workflow.count("export CARGO_BUILD_JOBS=2"), 2)
-        self.assertNotIn("CARGO_BUILD_JOBS=1", workflow)
+        self.assertNotIn("CARGO_BUILD_JOBS", workflow)
+        self.assertEqual(workflow.count("continue-on-error: true"), 2)
+        self.assertEqual(
+            workflow.count(
+                "artifact_id: ${{ steps.upload.outputs.artifact-id }}"
+            ),
+            2,
+        )
         self.assertIn("continue-on-error: true", arm_primary_job)
         self.assertIn(
             "artifact_id: ${{ steps.upload.outputs.artifact-id }}", arm_primary_job
@@ -399,13 +409,36 @@ class CSharpNativePackageTests(unittest.TestCase):
             "needs.native-release-artifact-linux-arm.outputs.artifact_id == ''",
             arm_retry_job,
         )
-        self.assertNotIn("continue-on-error: true", arm_retry_job)
+        self.assertIn("continue-on-error: true", arm_retry_job)
+        self.assertIn(
+            "artifact_id: ${{ steps.upload.outputs.artifact-id }}", arm_retry_job
+        )
+        self.assertIn("        id: upload\n", arm_retry_job)
         self.assertEqual(arm_retry_job.count("overwrite: true"), 1)
+
+        self.assertIn("      - native-release-artifact-linux-arm", arm_retry_2_job)
+        self.assertIn(
+            "      - native-release-artifact-linux-arm-retry", arm_retry_2_job
+        )
+        self.assertIn("!cancelled()", arm_retry_2_job)
+        self.assertIn(
+            "needs.native-release-artifact-linux-arm.outputs.artifact_id == ''",
+            arm_retry_2_job,
+        )
+        self.assertIn(
+            "needs.native-release-artifact-linux-arm-retry.outputs.artifact_id == ''",
+            arm_retry_2_job,
+        )
+        self.assertNotIn("continue-on-error: true", arm_retry_2_job)
+        self.assertNotIn("    outputs:\n", arm_retry_2_job)
+        self.assertIn("        id: upload\n", arm_retry_2_job)
+        self.assertEqual(arm_retry_2_job.count("overwrite: true"), 1)
         self.assertNotIn("csharp-native-aarch64-unknown-linux-gnu-retry", workflow)
 
         self.assertIn("      - native-release-artifacts", build_job)
         self.assertIn("      - native-release-artifact-linux-arm", build_job)
         self.assertIn("      - native-release-artifact-linux-arm-retry", build_job)
+        self.assertIn("      - native-release-artifact-linux-arm-retry-2", build_job)
         self.assertIn("!cancelled()", build_job)
         self.assertIn(
             "needs.native-release-artifacts.result == 'success'", build_job
@@ -415,7 +448,11 @@ class CSharpNativePackageTests(unittest.TestCase):
             build_job,
         )
         self.assertIn(
-            "needs.native-release-artifact-linux-arm-retry.result == 'success'",
+            "needs.native-release-artifact-linux-arm-retry.outputs.artifact_id != ''",
+            build_job,
+        )
+        self.assertIn(
+            "needs.native-release-artifact-linux-arm-retry-2.result == 'success'",
             build_job,
         )
         self.assertIn("pattern: csharp-native-*", build_job)

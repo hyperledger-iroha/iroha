@@ -1852,6 +1852,12 @@ fn active_receiver_witness_survives_finality_promotion_restart_and_retry() {
     let lane_config = RuntimeLaneConfig::default();
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("open persistent Kura");
+    kura.establish_or_verify_configured_primary_geometry_anchor(
+        lane_config.primary(),
+        Hash::prehashed([0xC0; Hash::LENGTH]),
+        LaneLifecycleParameterV1::catalog_hash(&LaneCatalog::default()),
+    )
+    .expect("bind persistent receiver fixture to the configured primary lane");
     let block = DummyBlocks::new().next();
     let (witness, mut execution_commitment) = kagemusha_topup_witness([0xC1; 32], [0xC2; 32]);
     execution_commitment.executed_block_wire_len = u64::try_from(
@@ -1904,6 +1910,12 @@ fn parliament_casting_membership_survives_restart_and_tampering_fails_closed() {
     let lane_config = RuntimeLaneConfig::default();
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("open persistent Kura");
+    kura.establish_or_verify_configured_primary_geometry_anchor(
+        lane_config.primary(),
+        Hash::prehashed([0xC3; Hash::LENGTH]),
+        LaneLifecycleParameterV1::catalog_hash(&LaneCatalog::default()),
+    )
+    .expect("bind persistent casting fixture to the configured primary lane");
     let block = DummyBlocks::new().next();
     let height = block.header().height().get();
     let bindings = vec![

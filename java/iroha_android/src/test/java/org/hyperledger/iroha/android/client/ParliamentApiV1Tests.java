@@ -14,6 +14,7 @@ import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -198,6 +199,10 @@ public final class ParliamentApiV1Tests {
     assertEquals(
         ParliamentApiV1.BODY_STATE_FIELDS,
         objectValue(fixture.get("attempt_read_body_state")).get("json_fields"));
+    assertEquals(ParliamentApiV1.CANONICAL_BODY_ORDER, fixture.get("canonical_body_order"));
+    assertEquals(
+        "strictly increasing subset of canonical_body_order",
+        objectValue(fixture.get("attempt_read_body_presentation")).get("subset_rule"));
     assertEquals(
         List.of(
             "version",
@@ -560,10 +565,62 @@ public final class ParliamentApiV1Tests {
     final ParliamentApiV1.AttemptReadResponse parsed =
         ParliamentApiV1.parseAttemptReadResponse(encode(response), ATTEMPT_ID);
     assertEquals("9", parsed.currentHeight);
+    assertEquals(List.of("rules-committee"), parsed.requiredBodyOrder);
     assertEquals("rules-committee", parsed.bodyStates.get(0).body);
+    assertEquals(List.of("rules-committee"), parsed.certificateBodyOrder);
     assertEquals(
         List.of("11".repeat(32), "12".repeat(32)),
         parsed.publicFindingBindings.get(0).endorsingAssignments);
+
+    final Map<String, Object> canonicalOrder = new LinkedHashMap<>(response);
+    final Map<String, Object> canonicalAttempt =
+        new LinkedHashMap<>(objectValue(response.get("attempt")));
+    canonicalAttempt.put("stage", Map.of("stage", "Qualification"));
+    canonicalAttempt.put("status", Map.of("status", "Active"));
+    canonicalOrder.put("attempt", canonicalAttempt);
+    canonicalOrder.put("certificate", null);
+    final List<Map<String, Object>> requiredBodies = new ArrayList<>();
+    final List<Map<String, Object>> bodyStates = new ArrayList<>();
+    for (final String body : ParliamentApiV1.CANONICAL_BODY_ORDER) {
+      requiredBodies.add(
+          Map.of(
+              "body",
+              body,
+              "decision_mode",
+              Map.of(
+                  "mode",
+                  body.equals("policy-jury") || body.equals("confirmation-jury")
+                      ? "HiddenBindingBallot"
+                      : "PublicFinding")));
+      final Map<String, Object> state = new LinkedHashMap<>();
+      state.put("body", body);
+      state.put("body_instance_id", null);
+      state.put("status", null);
+      state.put("public_finding_opened_at_height", null);
+      state.put("public_finding_phase_blocks", null);
+      state.put("public_finding_deadline_height", null);
+      state.put("no_result_kind", null);
+      state.put("no_result_height", null);
+      state.put("timed_ovn_progress", null);
+      bodyStates.add(state);
+    }
+    canonicalOrder.put("required_bodies", requiredBodies);
+    canonicalOrder.put("body_states", bodyStates);
+    final ParliamentApiV1.AttemptReadResponse canonicalParsed =
+        ParliamentApiV1.parseAttemptReadResponse(encode(canonicalOrder), ATTEMPT_ID);
+    assertEquals(ParliamentApiV1.CANONICAL_BODY_ORDER, canonicalParsed.requiredBodyOrder);
+    assertEquals(
+        ParliamentApiV1.CANONICAL_BODY_ORDER,
+        canonicalParsed.bodyStates.stream().map(state -> state.body).toList());
+    assertEquals(List.of(), canonicalParsed.certificateBodyOrder);
+
+    final Map<String, Object> reordered = new LinkedHashMap<>(canonicalOrder);
+    final List<Map<String, Object>> reorderedRequired = new ArrayList<>(requiredBodies);
+    Collections.swap(reorderedRequired, 0, 1);
+    reordered.put("required_bodies", reorderedRequired);
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> ParliamentApiV1.parseAttemptReadResponse(encode(reordered), ATTEMPT_ID));
 
     final Map<String, Object> alias = new LinkedHashMap<>(response);
     alias.put("statePayloadHex", alias.remove("state_payload_hex"));

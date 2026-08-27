@@ -5244,10 +5244,24 @@ export interface ParliamentNoResultKindLayoutV1 {
   readonly jsonTag: ParliamentNoResultKindTagV1;
 }
 
+export type ParliamentBodyNameV1 =
+  | "rules-committee"
+  | "agenda-council"
+  | "interest-panel"
+  | "review-panel"
+  | "coordination-council"
+  | "mpc-committee"
+  | "fma-committee"
+  | "oversight-committee"
+  | "policy-jury"
+  | "confirmation-jury";
+
 export const PARLIAMENT_PUBLIC_TRANSITIONS_V1: ReadonlyArray<ParliamentTransitionLayoutV1>;
 /** Read/audit-only inventory; these tags are never accepted by the public builder. */
 export const PARLIAMENT_AUTOMATIC_EXECUTION_OUTCOMES_V1: ReadonlyArray<ParliamentAutomaticExecutionOutcomeLayoutV1>;
 export const PARLIAMENT_NO_RESULT_KINDS_V1: ReadonlyArray<ParliamentNoResultKindLayoutV1>;
+/** Canonical presentation order for first-release Parliament bodies. */
+export const PARLIAMENT_CANONICAL_BODY_ORDER_V1: ReadonlyArray<ParliamentBodyNameV1>;
 export const PARLIAMENT_BODY_STATE_FIELDS_V1: ReadonlyArray<
   | "body"
   | "body_instance_id"
@@ -5412,9 +5426,14 @@ export interface ParliamentAttemptReadResponseV1 extends Record<string, unknown>
   current_height: number | bigint;
   attempt: Record<string, unknown> & { id: string };
   policy_version: number | bigint;
-  required_bodies: ReadonlyArray<Record<string, unknown>>;
+  required_bodies: ReadonlyArray<{
+    body: ParliamentBodyNameV1;
+    decision_mode: { mode: "PublicFinding" | "HiddenBindingBallot" };
+  }>;
   body_states: ReadonlyArray<ParliamentBodyStateProjectionV1>;
-  certificate: Record<string, unknown> | null;
+  certificate: (Record<string, unknown> & {
+    body_bindings: ReadonlyArray<Record<string, unknown> & { body: ParliamentBodyNameV1 }>;
+  }) | null;
   terminal_height: number | bigint | null;
   execution_failure_root: ReadonlyArray<number> | null;
   superseding_head: Record<string, unknown> | null;

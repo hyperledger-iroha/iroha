@@ -154,6 +154,17 @@ final class ToriiParliamentAPIV1Tests: XCTestCase {
             bodyState["json_fields"] as? [String],
             ToriiParliamentAPIV1.bodyStateFields
         )
+        XCTAssertEqual(
+            fixture["canonical_body_order"] as? [String],
+            ToriiParliamentAPIV1.canonicalBodyOrder
+        )
+        let bodyPresentation = try XCTUnwrap(
+            fixture["attempt_read_body_presentation"] as? [String: String]
+        )
+        XCTAssertEqual(
+            bodyPresentation["subset_rule"],
+            "strictly increasing subset of canonical_body_order"
+        )
         let binding = try XCTUnwrap(fixture["certificate_body_binding"] as? [String: Any])
         XCTAssertEqual(
             binding["norito_field_order"] as? [String],
@@ -604,11 +615,69 @@ final class ToriiParliamentAPIV1Tests: XCTestCase {
             expectedGovernanceAttemptId: attemptID
         )
         XCTAssertEqual(parsed.bodyStates.count, 1)
+        XCTAssertEqual(parsed.requiredBodyOrder, ["rules-committee"])
         XCTAssertEqual(parsed.bodyStates[0].body, "rules-committee")
+        XCTAssertEqual(parsed.certificateBodyOrder, ["rules-committee"])
         XCTAssertEqual(parsed.bodyStates[0].publicFindingDeadlineHeight, 8)
         XCTAssertEqual(
             parsed.publicFindingBindings[0].endorsingAssignments,
             [identifier(0x11), identifier(0x12)]
+        )
+
+        var canonicalOrder = makeReadResponse()
+        var canonicalAttempt = try XCTUnwrap(canonicalOrder["attempt"] as? [String: Any])
+        canonicalAttempt["stage"] = ["stage": "Qualification"]
+        canonicalAttempt["status"] = ["status": "Active"]
+        canonicalOrder["attempt"] = canonicalAttempt
+        canonicalOrder["certificate"] = NSNull()
+        canonicalOrder["required_bodies"] = ToriiParliamentAPIV1.canonicalBodyOrder.map { body in
+            [
+                "body": body,
+                "decision_mode": [
+                    "mode": body == "policy-jury" || body == "confirmation-jury"
+                        ? "HiddenBindingBallot"
+                        : "PublicFinding",
+                ],
+            ] as [String: Any]
+        }
+        canonicalOrder["body_states"] = ToriiParliamentAPIV1.canonicalBodyOrder.map { body in
+            [
+                "body": body,
+                "body_instance_id": NSNull(),
+                "status": NSNull(),
+                "public_finding_opened_at_height": NSNull(),
+                "public_finding_phase_blocks": NSNull(),
+                "public_finding_deadline_height": NSNull(),
+                "no_result_kind": NSNull(),
+                "no_result_height": NSNull(),
+                "timed_ovn_progress": NSNull(),
+            ] as [String: Any]
+        }
+        let canonicalParsed = try ToriiParliamentAPIV1.decodeAttemptReadResponse(
+            jsonData(canonicalOrder),
+            expectedGovernanceAttemptId: attemptID
+        )
+        XCTAssertEqual(
+            canonicalParsed.requiredBodyOrder,
+            ToriiParliamentAPIV1.canonicalBodyOrder
+        )
+        XCTAssertEqual(
+            canonicalParsed.bodyStates.map(\.body),
+            ToriiParliamentAPIV1.canonicalBodyOrder
+        )
+        XCTAssertEqual(canonicalParsed.certificateBodyOrder, [])
+
+        var reordered = canonicalOrder
+        var reorderedRequired = try XCTUnwrap(
+            reordered["required_bodies"] as? [[String: Any]]
+        )
+        reorderedRequired.swapAt(0, 1)
+        reordered["required_bodies"] = reorderedRequired
+        XCTAssertThrowsError(
+            try ToriiParliamentAPIV1.decodeAttemptReadResponse(
+                jsonData(reordered),
+                expectedGovernanceAttemptId: attemptID
+            )
         )
 
         var wrongDeadline = makeReadResponse()

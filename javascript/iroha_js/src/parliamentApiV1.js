@@ -253,11 +253,12 @@ const BALLOT_CERTIFICATE_FIELDS = [
 const BALLOT_TALLY_FIELDS = [
   "original_seats", "accepted_ballots", "aye", "nay", "abstain",
 ];
-const PARLIAMENT_BODY_ORDER_V1 = [
+/** Canonical presentation order for first-release Parliament bodies. */
+export const PARLIAMENT_CANONICAL_BODY_ORDER_V1 = Object.freeze([
   "rules-committee", "agenda-council", "interest-panel", "review-panel",
   "coordination-council", "mpc-committee", "fma-committee",
   "oversight-committee", "policy-jury", "confirmation-jury",
-];
+]);
 const PRIVATE_KEY_FIELDS = new Set([
   "private_key", "privateKey", "seed", "mnemonic", "private_key_seed",
 ]);
@@ -861,7 +862,7 @@ function validateRequiredBodies(value) {
   return value.map((raw, index) => {
     const context = `required_bodies[${index}]`;
     const entry = exactObject(raw, ["body", "decision_mode"], context);
-    const bodyIndex = PARLIAMENT_BODY_ORDER_V1.indexOf(entry.body);
+    const bodyIndex = PARLIAMENT_CANONICAL_BODY_ORDER_V1.indexOf(entry.body);
     if (bodyIndex < 0 || bodyIndex <= previousBodyIndex) {
       throw new TypeError("required_bodies must use strict canonical body order");
     }
@@ -1264,7 +1265,7 @@ function validateBodyCertificateBinding(value, index, governanceAttemptId, certi
   ) {
     throw new TypeError(`${context}.result_height violates the certificate lifecycle`);
   }
-  const bodyIndex = PARLIAMENT_BODY_ORDER_V1.indexOf(binding.body);
+  const bodyIndex = PARLIAMENT_CANONICAL_BODY_ORDER_V1.indexOf(binding.body);
   if (bodyIndex < 0) throw new TypeError(`${context}.body is unknown`);
   const isPrivateJury = binding.body === "policy-jury" || binding.body === "confirmation-jury";
   let ballot = null;

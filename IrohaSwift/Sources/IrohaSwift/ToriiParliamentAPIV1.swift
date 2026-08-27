@@ -438,7 +438,11 @@ public struct ToriiParliamentAttemptReadResponseV1: Sendable, Equatable {
     public let terminalHeight: UInt64?
     public let executionFailureRoot: [UInt8]?
     public let statePayloadHex: String
+    /// Canonical ordered body names admitted from `required_bodies`.
+    public let requiredBodyOrder: [String]
     public let bodyStates: [ToriiParliamentBodyStateProjectionV1]
+    /// Canonical ordered body names carried by the certificate, or empty when absent.
+    public let certificateBodyOrder: [String]
     public let publicFindingBindings: [ToriiParliamentPublicFindingCertificateBindingV1]
     public let rawJSON: Data
 }
@@ -742,6 +746,20 @@ public enum ToriiParliamentAPIV1 {
         "timed_ovn_progress",
     ]
 
+    /// Canonical presentation order for first-release Parliament bodies.
+    public static let canonicalBodyOrder = [
+        "rules-committee",
+        "agenda-council",
+        "interest-panel",
+        "review-panel",
+        "coordination-council",
+        "mpc-committee",
+        "fma-committee",
+        "oversight-committee",
+        "policy-jury",
+        "confirmation-jury",
+    ]
+
     public static let certificateBodyBindingNoritoFields = [
         "body_instance_id",
         "election_attempt_id",
@@ -767,19 +785,7 @@ public enum ToriiParliamentAPIV1 {
         "quorum",
     ]
 
-    private static let bodyOrder = [
-        "rules-committee",
-        "agenda-council",
-        "interest-panel",
-        "review-panel",
-        "coordination-council",
-        "mpc-committee",
-        "fma-committee",
-        "oversight-committee",
-        "policy-jury",
-        "confirmation-jury",
-    ]
-    private static let bodies = Set(bodyOrder)
+    private static let bodies = Set(canonicalBodyOrder)
     private static let privateBodies: Set<String> = ["policy-jury", "confirmation-jury"]
     private static let riskTiers: Set<String> = [
         "Routine", "Standard", "Constitutional", "Emergency",
@@ -1133,6 +1139,7 @@ public enum ToriiParliamentAPIV1 {
             requiredBodies: requiredBodies,
             bodyStates: bodyStates
         )
+        let certificateBodyOrder = root["certificate"] is NSNull ? [] : requiredBodies
         if !(root["superseding_head"] is NSNull) {
             try validateExpectedHead(root["superseding_head"], context: "superseding_head")
         }
@@ -1148,7 +1155,9 @@ public enum ToriiParliamentAPIV1 {
             terminalHeight: terminalHeight,
             executionFailureRoot: executionFailureRoot,
             statePayloadHex: statePayloadHex,
+            requiredBodyOrder: requiredBodies,
             bodyStates: bodyStates,
+            certificateBodyOrder: certificateBodyOrder,
             publicFindingBindings: publicFindings,
             rawJSON: data
         )
@@ -2236,7 +2245,8 @@ fileprivate extension ToriiParliamentAPIV1 {
                 )
             }
             try requireBody(body, field: "required_bodies[\(index)].body")
-            guard let bodyIndex = bodyOrder.firstIndex(of: body), bodyIndex > previousBodyIndex else {
+            guard let bodyIndex = canonicalBodyOrder.firstIndex(of: body),
+                  bodyIndex > previousBodyIndex else {
                 throw ToriiClientError.invalidPayload(
                     "required_bodies must use strict canonical body order."
                 )

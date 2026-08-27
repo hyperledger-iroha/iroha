@@ -9088,23 +9088,14 @@ impl Iroha {
                     genesis
                 };
             let local_consensus_peer = config.common.trusted_peers.value().myself.id().clone();
-            match validate_threshold_signer_startup_readiness_v1(
+            // Active Parliament TLE custody is mandatory: private timed-OVN has no alternate
+            // ballot-opening path when this validator owns a release-share seat.
+            validate_threshold_signer_startup_readiness_v1(
                 &state,
                 &local_consensus_peer,
                 &runtime_deps,
             )
-            .map_err(|message| Report::new(StartError::StartP2p).attach(message))?
-            {
-                ThresholdSignerStartupReadinessV1::Ready => {}
-                ThresholdSignerStartupReadinessV1::ParliamentTleShareUnavailable {
-                    key_session_id,
-                } => {
-                    iroha_logger::warn!(
-                        key_session_id = ?key_session_id,
-                        "local Parliament TLE committee seat is not operational: no partial-release signer is resolved"
-                    );
-                }
-            }
+            .map_err(|message| Report::new(StartError::StartP2p).attach(message))?;
             log_startup_trace("irohad.sumeragi.starting", startup_trace_started_at);
             let (sumeragi, child) = SumeragiStartArgs {
                 config: config.sumeragi.clone(),

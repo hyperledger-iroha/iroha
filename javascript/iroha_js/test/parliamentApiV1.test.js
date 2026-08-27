@@ -19,6 +19,7 @@ import {
   PARLIAMENT_ATTEMPT_STATE_MAX_BYTES_V1,
   PARLIAMENT_GOVERNANCE_ATTEMPT_SEQUENCE_MAX_V1,
   PARLIAMENT_AUTOMATIC_EXECUTION_OUTCOMES_V1,
+  PARLIAMENT_CANONICAL_BODY_ORDER_V1,
   PARLIAMENT_BODY_STATE_FIELDS_V1,
   PARLIAMENT_CERTIFICATE_BODY_BINDING_FIELDS_V1,
   PARLIAMENT_NO_RESULT_KINDS_V1,
@@ -180,6 +181,14 @@ test("shared Parliament fixture pins routes, all transition inventories, and cer
   assert.deepEqual(
     fixture.attempt_read_body_state.json_fields,
     PARLIAMENT_BODY_STATE_FIELDS_V1,
+  );
+  assert.deepEqual(
+    fixture.canonical_body_order,
+    PARLIAMENT_CANONICAL_BODY_ORDER_V1,
+  );
+  assert.equal(
+    fixture.attempt_read_body_presentation.subset_rule,
+    "strictly increasing subset of canonical_body_order",
   );
 });
 
@@ -464,9 +473,54 @@ test("draft responses bind exact IDs, public kind, digest, and wire IDs", () => 
 test("attempt read validates NRT0 and the exact canonical public-finding supporter list", () => {
   const response = readResponse();
   const parsed = normalizeParliamentAttemptReadResponseV1(response, ATTEMPT_ID);
+  assert.deepEqual(parsed.required_bodies.map(({ body }) => body), ["rules-committee"]);
+  assert.deepEqual(
+    parsed.certificate.body_bindings.map(({ body }) => body),
+    ["rules-committee"],
+  );
   assert.deepEqual(
     parsed.certificate.body_bindings[0].public_finding.endorsing_assignments,
     [ID(0x11), ID(0x12)],
+  );
+
+  const fullOrder = readResponse();
+  fullOrder.attempt.stage = { stage: "Qualification" };
+  fullOrder.attempt.status = { status: "Active" };
+  fullOrder.certificate = null;
+  fullOrder.required_bodies = PARLIAMENT_CANONICAL_BODY_ORDER_V1.map((body) => ({
+    body,
+    decision_mode: {
+      mode: body === "policy-jury" || body === "confirmation-jury"
+        ? "HiddenBindingBallot"
+        : "PublicFinding",
+    },
+  }));
+  fullOrder.body_states = PARLIAMENT_CANONICAL_BODY_ORDER_V1.map((body) => ({
+    body,
+    body_instance_id: null,
+    status: null,
+    public_finding_opened_at_height: null,
+    public_finding_phase_blocks: null,
+    public_finding_deadline_height: null,
+    no_result_kind: null,
+    no_result_height: null,
+    timed_ovn_progress: null,
+  }));
+  const fullOrderParsed = normalizeParliamentAttemptReadResponseV1(fullOrder, ATTEMPT_ID);
+  assert.deepEqual(
+    fullOrderParsed.required_bodies.map(({ body }) => body),
+    PARLIAMENT_CANONICAL_BODY_ORDER_V1,
+  );
+  assert.deepEqual(
+    fullOrderParsed.body_states.map(({ body }) => body),
+    PARLIAMENT_CANONICAL_BODY_ORDER_V1,
+  );
+  const reordered = structuredClone(fullOrder);
+  [reordered.required_bodies[0], reordered.required_bodies[1]] =
+    [reordered.required_bodies[1], reordered.required_bodies[0]];
+  assert.throws(
+    () => normalizeParliamentAttemptReadResponseV1(reordered, ATTEMPT_ID),
+    /canonical body order/u,
   );
   const unsorted = structuredClone(response);
   unsorted.certificate.body_bindings[0].public_finding.endorsing_assignments.reverse();

@@ -164,6 +164,19 @@ public final class ParliamentApiV1 {
           "no_result_kind",
           "no_result_height",
           "timed_ovn_progress");
+  /** Canonical presentation order for first-release Parliament bodies. */
+  public static final List<String> CANONICAL_BODY_ORDER =
+      listOf(
+          "rules-committee",
+          "agenda-council",
+          "interest-panel",
+          "review-panel",
+          "coordination-council",
+          "mpc-committee",
+          "fma-committee",
+          "oversight-committee",
+          "policy-jury",
+          "confirmation-jury");
 
   private static final Pattern ID = Pattern.compile("[0-9a-f]{64}");
   private static final Map<String, TransitionLayout> PUBLIC_TRANSITIONS_BY_TAG =
@@ -275,19 +288,7 @@ public final class ParliamentApiV1 {
           "z_u");
   private static final Set<String> ATTEMPT_FIELDS =
       setOf("id", "proposal_content_id", "sequence", "risk_tier", "stage", "status");
-  private static final List<String> BODY_ORDER =
-      listOf(
-          "rules-committee",
-          "agenda-council",
-          "interest-panel",
-          "review-panel",
-          "coordination-council",
-          "mpc-committee",
-          "fma-committee",
-          "oversight-committee",
-          "policy-jury",
-          "confirmation-jury");
-  private static final Set<String> BODIES = new LinkedHashSet<>(BODY_ORDER);
+  private static final Set<String> BODIES = new LinkedHashSet<>(CANONICAL_BODY_ORDER);
   private static final Set<String> PRIVATE_BODIES =
       setOf("policy-jury", "confirmation-jury");
   private static final Set<String> BODY_STATUSES =
@@ -446,7 +447,11 @@ public final class ParliamentApiV1 {
     public final String governanceAttemptId;
     public final String currentHeight;
     public final String statePayloadHex;
+    /** Canonical ordered body names admitted from {@code required_bodies}. */
+    public final List<String> requiredBodyOrder;
     public final List<BodyStateProjection> bodyStates;
+    /** Canonical ordered body names carried by the certificate, or empty when absent. */
+    public final List<String> certificateBodyOrder;
     public final List<PublicFindingCertificateBinding> publicFindingBindings;
     public final Map<String, Object> raw;
 
@@ -454,13 +459,17 @@ public final class ParliamentApiV1 {
         final String governanceAttemptId,
         final String currentHeight,
         final String statePayloadHex,
+        final List<String> requiredBodyOrder,
         final List<BodyStateProjection> bodyStates,
+        final List<String> certificateBodyOrder,
         final List<PublicFindingCertificateBinding> publicFindingBindings,
         final Map<String, Object> raw) {
       this.governanceAttemptId = governanceAttemptId;
       this.currentHeight = currentHeight;
       this.statePayloadHex = statePayloadHex;
+      this.requiredBodyOrder = List.copyOf(requiredBodyOrder);
       this.bodyStates = List.copyOf(bodyStates);
+      this.certificateBodyOrder = List.copyOf(certificateBodyOrder);
       this.publicFindingBindings = List.copyOf(publicFindingBindings);
       this.raw = Collections.unmodifiableMap(new LinkedHashMap<>(raw));
     }
@@ -1258,12 +1267,22 @@ public final class ParliamentApiV1 {
             policyVersion,
             requiredBodies,
             bodyStates);
+    final List<String> certificateBodyOrder =
+        root.get("certificate") == null ? List.of() : List.copyOf(requiredBodies);
     final String stateHex = canonicalHex(root.get("state_payload_hex"), "state_payload_hex", false);
     if (stateHex.length() / 2 > MAX_STATE_BYTES) {
       throw new IllegalArgumentException("state_payload_hex exceeds its bound");
     }
     validateStateFrame(decodeHex(stateHex));
-    return new AttemptReadResponse(attemptId, height, stateHex, bodyStates, publicFindings, root);
+    return new AttemptReadResponse(
+        attemptId,
+        height,
+        stateHex,
+        requiredBodies,
+        bodyStates,
+        certificateBodyOrder,
+        publicFindings,
+        root);
   }
 
   /** Strictly admit one replay-validated public timed-OVN wallet context. */
@@ -1708,7 +1727,7 @@ public final class ParliamentApiV1 {
           || bodies.contains(body)) {
         throw new IllegalArgumentException(context + ".body is unknown or duplicated");
       }
-      final int bodyIndex = BODY_ORDER.indexOf(body);
+      final int bodyIndex = CANONICAL_BODY_ORDER.indexOf(body);
       if (bodyIndex <= previousBodyIndex) {
         throw new IllegalArgumentException(
             "required_bodies must use strict canonical body order");

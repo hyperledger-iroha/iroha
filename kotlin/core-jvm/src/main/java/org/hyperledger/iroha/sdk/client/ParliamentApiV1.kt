@@ -45,7 +45,11 @@ data class ParliamentAttemptReadResponseV1(
     val governanceAttemptId: String,
     val currentHeight: String,
     val statePayloadHex: String,
+    /** Canonical ordered body names admitted from `required_bodies`. */
+    val requiredBodyOrder: List<String>,
     val bodyStates: List<ParliamentBodyStateProjectionV1>,
+    /** Canonical ordered body names carried by the certificate, or empty when absent. */
+    val certificateBodyOrder: List<String>,
     val publicFindingBindings: List<ParliamentPublicFindingCertificateBindingV1>,
     val raw: Map<String, Any?>,
 )
@@ -470,6 +474,21 @@ object ParliamentApiV1 {
         "timed_ovn_progress",
     )
 
+    /** Canonical presentation order for first-release Parliament bodies. */
+    @JvmField
+    val CANONICAL_BODY_ORDER: List<String> = listOf(
+        "rules-committee",
+        "agenda-council",
+        "interest-panel",
+        "review-panel",
+        "coordination-council",
+        "mpc-committee",
+        "fma-committee",
+        "oversight-committee",
+        "policy-jury",
+        "confirmation-jury",
+    )
+
     @JvmField
     val CERTIFICATE_RESULT_ROOT_DOMAINS: Map<String, String?> = linkedMapOf(
         "public_finding_result_root" to null,
@@ -563,12 +582,7 @@ object ParliamentApiV1 {
     private val ATTEMPT_FIELDS = setOf(
         "id", "proposal_content_id", "sequence", "risk_tier", "stage", "status",
     )
-    private val BODY_ORDER = listOf(
-        "rules-committee", "agenda-council", "interest-panel", "review-panel",
-        "coordination-council", "mpc-committee", "fma-committee", "oversight-committee",
-        "policy-jury", "confirmation-jury",
-    )
-    private val BODIES = BODY_ORDER.toSet()
+    private val BODIES = CANONICAL_BODY_ORDER.toSet()
     private val PRIVATE_BODIES = setOf("policy-jury", "confirmation-jury")
     private val BODY_STATUSES = setOf(
         "AwaitingSortition", "AcceptingInvitations", "RosterSealed", "Deliberating",
@@ -886,6 +900,11 @@ object ParliamentApiV1 {
             requiredBodies,
             bodyStates,
         )
+        val certificateBodyOrder = if (root["certificate"] == null) {
+            emptyList()
+        } else {
+            requiredBodies.toList()
+        }
         val stateHex = canonicalHex(root["state_payload_hex"], "state_payload_hex", false)
         require(stateHex.length / 2 <= MAX_STATE_BYTES) { "state_payload_hex exceeds its bound" }
         validateStateFrame(decodeHex(stateHex))
@@ -893,7 +912,9 @@ object ParliamentApiV1 {
             attemptId,
             height,
             stateHex,
+            requiredBodies,
             bodyStates,
+            certificateBodyOrder,
             publicFindingBindings,
             root,
         )
@@ -1289,7 +1310,7 @@ object ParliamentApiV1 {
             val body = entry["body"] as? String
                 ?: throw IllegalArgumentException("$context.body must be text")
             require(body in BODIES && body !in bodies) { "$context.body is unknown or duplicated" }
-            val bodyIndex = BODY_ORDER.indexOf(body)
+            val bodyIndex = CANONICAL_BODY_ORDER.indexOf(body)
             require(bodyIndex > previousBodyIndex) {
                 "required_bodies must use strict canonical body order"
             }

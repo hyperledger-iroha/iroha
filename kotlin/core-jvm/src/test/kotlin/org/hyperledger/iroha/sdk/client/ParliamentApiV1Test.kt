@@ -195,6 +195,11 @@ class ParliamentApiV1Test {
         )
         val bodyState = fixture["attempt_read_body_state"] as Map<*, *>
         assertEquals(ParliamentApiV1.BODY_STATE_FIELDS, bodyState["json_fields"])
+        assertEquals(ParliamentApiV1.CANONICAL_BODY_ORDER, fixture["canonical_body_order"])
+        assertEquals(
+            "strictly increasing subset of canonical_body_order",
+            (fixture["attempt_read_body_presentation"] as Map<*, *>)["subset_rule"],
+        )
         val release = fixture["tle_release_context"] as Map<*, *>
         assertEquals(
             listOf(
@@ -633,11 +638,68 @@ class ParliamentApiV1Test {
         )
         val parsed = ParliamentApiV1.parseAttemptReadResponse(encode(response), attemptId)
         assertEquals("9", parsed.currentHeight)
+        assertEquals(listOf("rules-committee"), parsed.requiredBodyOrder)
         assertEquals("rules-committee", parsed.bodyStates.single().body)
+        assertEquals(listOf("rules-committee"), parsed.certificateBodyOrder)
         assertEquals(
             listOf("11".repeat(32), "12".repeat(32)),
             parsed.publicFindingBindings.single().endorsingAssignments,
         )
+
+        val canonicalOrder = LinkedHashMap(response)
+        @Suppress("UNCHECKED_CAST")
+        val canonicalAttempt = LinkedHashMap(response["attempt"] as Map<String, Any?>)
+        canonicalAttempt["stage"] = mapOf("stage" to "Qualification")
+        canonicalAttempt["status"] = mapOf("status" to "Active")
+        canonicalOrder["attempt"] = canonicalAttempt
+        canonicalOrder["certificate"] = null
+        canonicalOrder["required_bodies"] = ParliamentApiV1.CANONICAL_BODY_ORDER.map { body ->
+            mapOf(
+                "body" to body,
+                "decision_mode" to mapOf(
+                    "mode" to if (body == "policy-jury" || body == "confirmation-jury") {
+                        "HiddenBindingBallot"
+                    } else {
+                        "PublicFinding"
+                    },
+                ),
+            )
+        }
+        canonicalOrder["body_states"] = ParliamentApiV1.CANONICAL_BODY_ORDER.map { body ->
+            linkedMapOf<String, Any?>(
+                "body" to body,
+                "body_instance_id" to null,
+                "status" to null,
+                "public_finding_opened_at_height" to null,
+                "public_finding_phase_blocks" to null,
+                "public_finding_deadline_height" to null,
+                "no_result_kind" to null,
+                "no_result_height" to null,
+                "timed_ovn_progress" to null,
+            )
+        }
+        val canonicalParsed = ParliamentApiV1.parseAttemptReadResponse(
+            encode(canonicalOrder),
+            attemptId,
+        )
+        assertEquals(ParliamentApiV1.CANONICAL_BODY_ORDER, canonicalParsed.requiredBodyOrder)
+        assertEquals(
+            ParliamentApiV1.CANONICAL_BODY_ORDER,
+            canonicalParsed.bodyStates.map { it.body },
+        )
+        assertEquals(emptyList(), canonicalParsed.certificateBodyOrder)
+
+        val reordered = LinkedHashMap(canonicalOrder)
+        @Suppress("UNCHECKED_CAST")
+        val reorderedRequired =
+            (canonicalOrder["required_bodies"] as List<Map<String, Any?>>).toMutableList()
+        val first = reorderedRequired[0]
+        reorderedRequired[0] = reorderedRequired[1]
+        reorderedRequired[1] = first
+        reordered["required_bodies"] = reorderedRequired
+        assertFailsWith<IllegalArgumentException> {
+            ParliamentApiV1.parseAttemptReadResponse(encode(reordered), attemptId)
+        }
 
         val alias = LinkedHashMap(response)
         alias["statePayloadHex"] = alias.remove("state_payload_hex")

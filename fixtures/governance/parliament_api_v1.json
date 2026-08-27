@@ -100,6 +100,24 @@
     {"norito_index": 6, "json_tag": "BallotOpeningDeadlineExpired"},
     {"norito_index": 7, "json_tag": "SortitionRetriesExhausted"}
   ],
+  "canonical_body_order": [
+    "rules-committee",
+    "agenda-council",
+    "interest-panel",
+    "review-panel",
+    "coordination-council",
+    "mpc-committee",
+    "fma-committee",
+    "oversight-committee",
+    "policy-jury",
+    "confirmation-jury"
+  ],
+  "attempt_read_body_presentation": {
+    "required_body_order": "ordered body names from required_bodies",
+    "body_state_order": "same order as required_body_order",
+    "certificate_body_order": "same order as required_body_order when a certificate is present; otherwise empty",
+    "subset_rule": "strictly increasing subset of canonical_body_order"
+  },
   "attempt_read_body_state": {
     "json_fields": [
       "body",
