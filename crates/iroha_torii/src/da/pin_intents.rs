@@ -421,7 +421,10 @@ mod tests {
         block::{BlockHeader, builder::BlockBuilder},
         da::{
             commitment::DaCommitmentLocation,
-            ingest::{DaIngestAuthorizationV1, DaIngestSignatureV1},
+            ingest::{
+                DaIngestAuthorizationV1, DaIngestSignatureV1, DaPinScopeAuthorizationV1,
+                DaPinScopeV1,
+            },
             pin_intent::{DaPinIntent, DaPinIntentBundle},
             types::{BlobDigest, StorageTicketId},
         },
@@ -458,14 +461,18 @@ mod tests {
         authorization
     }
     fn sample_intent(lane: u32, epoch: u64, sequence: u64) -> DaPinIntent {
-        DaPinIntent::new(
-            LaneId::new(lane),
-            epoch,
-            sequence,
+        let key_pair = KeyPair::try_from_seed(vec![0xD5; 32], Algorithm::Ed25519)
+            .expect("valid deterministic DA query key");
+        let authorization = sample_authorization(LaneId::new(lane), epoch, sequence);
+        let scope = DaPinScopeV1::new(
+            &authorization,
             StorageTicketId::new([lane as u8; 32]),
             ManifestDigest::new([sequence as u8; 32]),
-            sample_authorization(LaneId::new(lane), epoch, sequence),
-        )
+            None,
+        );
+        let scope_authorization = DaPinScopeAuthorizationV1::try_sign(scope, &key_pair)
+            .expect("sign deterministic DA query pin scope");
+        DaPinIntent::new(authorization, scope_authorization)
     }
     fn store_with_records() -> DaPinStore {
         let intents = vec![
@@ -688,14 +695,21 @@ mod tests {
                 manifest[..8].copy_from_slice(&sequence.to_be_bytes());
                 manifest[31] = 1;
                 DaPinIntentWithLocation {
-                    intent: DaPinIntent::new(
-                        LaneId::new(1),
-                        1,
-                        sequence,
-                        StorageTicketId::new(ticket),
-                        ManifestDigest::new(manifest),
-                        sample_authorization(LaneId::new(1), 1, sequence),
-                    ),
+                    intent: {
+                        let key_pair = KeyPair::try_from_seed(vec![0xD5; 32], Algorithm::Ed25519)
+                            .expect("valid deterministic DA query key");
+                        let authorization = sample_authorization(LaneId::new(1), 1, sequence);
+                        let scope = DaPinScopeV1::new(
+                            &authorization,
+                            StorageTicketId::new(ticket),
+                            ManifestDigest::new(manifest),
+                            None,
+                        );
+                        let scope_authorization =
+                            DaPinScopeAuthorizationV1::try_sign(scope, &key_pair)
+                                .expect("sign deterministic DA query pin scope");
+                        DaPinIntent::new(authorization, scope_authorization)
+                    },
                     location: DaCommitmentLocation {
                         block_height: 1,
                         index_in_bundle: u32::try_from(sequence)

@@ -21312,6 +21312,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     private static let defaultListPageSize = 100
     private static let feeQuoteResponseMaximumBytes = 64 * 1024
     private static let feeSponsorProgramResponseMaximumBytes = 64 * 1024
+    private static let offlineCapabilityResponseMaximumBytes = 256 * 1024
     private static let sccpCapabilitiesResponseMaximumBytes = 64 * 1024
     private static let sccpRecentMessagesResponseMaximumBytes = 8 * 1024 * 1024
     private static let sccpDiscoveryResponseMaximumBytes = 64 * 1024 * 1024
@@ -26060,7 +26061,11 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     public func getOfflineCapability() async throws -> ToriiOfflineStatus {
         let request = try makeRequest(path: KagemushaToriiAPI.Endpoint.capability.path,
                                       headers: ["Accept": "application/json"])
-        let (data, response) = try await send(request)
+        let (data, response) = try await sendBoundedSccpResponse(
+            request,
+            context: "Offline capability",
+            maximumBytes: Self.offlineCapabilityResponseMaximumBytes
+        )
         try ensureStatus(response, equals: 200, responseBody: data)
         try ensureResponseMediaType(response, equals: "application/json")
         guard !data.isEmpty else {

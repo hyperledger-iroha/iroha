@@ -258,6 +258,9 @@ public struct KaigiRelayRegistrationV1: Equatable, Sendable {
 
 /// Host-supplied configuration for a new Kaigi session.
 public struct NewKaigiV1: Equatable, Sendable {
+  /// Maximum concurrent participants excluding the host in Kaigi V1.
+  public static let maxParticipantsV1: UInt32 = 4_096
+
   public let id: KaigiIdV1
   public let host: String
   public let title: String?
@@ -285,9 +288,10 @@ public struct NewKaigiV1: Equatable, Sendable {
     roomPolicy: KaigiRoomPolicyV1 = .authenticated,
     relayManifest: KaigiRelayManifestV1? = nil
   ) throws {
-    if let maxParticipants, maxParticipants == 0 {
+    if let maxParticipants,
+       maxParticipants == 0 || maxParticipants > Self.maxParticipantsV1 {
       throw KaigiV1Error.invalidValue(
-        "Kaigi maxParticipants must be greater than zero when provided."
+        "Kaigi maxParticipants must be between 1 and \(Self.maxParticipantsV1) when provided."
       )
     }
     let canonicalHost = try kaigiCanonicalAccountID(host, field: "host")

@@ -207,6 +207,7 @@
     "prepublishOnly": "npm run check:changelog && npm run build:dist && npm run lint:test && npm run bundle:check && npm run test:pack-install && npm run release:provenance",
     "test:integration": "node ./scripts/run_integration.mjs",
     "test:integration:qualification": "node ./scripts/run_integration.mjs --qualification",
+    "test:taira-kagemusha-read-only": "node ./scripts/run-test-profile.mjs taira-kagemusha-read-only",
     "report:bundle-size": "node ./scripts/report-bundle-size.mjs"
   },
   "keywords": [

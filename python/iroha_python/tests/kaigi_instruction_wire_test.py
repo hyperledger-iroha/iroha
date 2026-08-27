@@ -13,6 +13,7 @@ import pytest
 from iroha_python.address import AccountAddress
 from iroha_python.kaigi import (
     KAIGI_INSTRUCTION_WIRE_IDS_V1,
+    KAIGI_MAX_PARTICIPANTS_V1,
     KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1,
     KAIGI_RELAY_MANIFEST_MAX_HOPS_V1,
     REGISTER_KAIGI_RELAY_WIRE_ID_V1,
@@ -284,6 +285,19 @@ def test_static_native_admission_limits_are_enforced() -> None:
     call_id = KaigiIdV1(**_FIXTURE["call_id"])
     first, second, third = _FIXTURE["accounts"]
     assert KaigiIdV1("Wonderland.SORA", "weekly-sync") == call_id
+    assert KAIGI_MAX_PARTICIPANTS_V1 == 4_096
+
+    encode_create_kaigi_instruction_v1(
+        call_id=call_id,
+        host=first,
+        max_participants=KAIGI_MAX_PARTICIPANTS_V1,
+    )
+    with pytest.raises(ValueError, match="between 1 and 4096"):
+        encode_create_kaigi_instruction_v1(
+            call_id=call_id,
+            host=first,
+            max_participants=KAIGI_MAX_PARTICIPANTS_V1 + 1,
+        )
 
     with pytest.raises(ValueError, match="billing_account must equal"):
         encode_create_kaigi_instruction_v1(

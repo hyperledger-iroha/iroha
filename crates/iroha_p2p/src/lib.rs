@@ -14,6 +14,7 @@ use std::{io, net::AddrParseError};
 use thiserror::Error;
 pub mod network;
 pub mod peer;
+mod preauth;
 mod puzzle_work_admission;
 mod soranet_handshake_runtime;
 pub mod streaming;

@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.android.offline;
 
 import java.net.URI;
+import java.time.Duration;
 import java.util.Map;
 import java.util.Objects;
 import org.hyperledger.iroha.android.client.CanonicalRequestSigner;
@@ -17,6 +18,18 @@ final class KagemushaToriiLineageRequest {
       final KagemushaRecursiveSpendProver.RecipientLineageQueryV2 query,
       final LocalSigningContext localSigningContext,
       final ToriiCanonicalRequestAuth canonicalAuth) {
+    return build(baseUri, query, localSigningContext, canonicalAuth, null);
+  }
+
+  static TransportRequest build(
+      final String baseUri,
+      final KagemushaRecursiveSpendProver.RecipientLineageQueryV2 query,
+      final LocalSigningContext localSigningContext,
+      final ToriiCanonicalRequestAuth canonicalAuth,
+      final Duration requestTimeout) {
+    if (requestTimeout != null && requestTimeout.isNegative()) {
+      throw new IllegalArgumentException("requestTimeout must be non-negative");
+    }
     final URI target =
         URI.create(baseUri + KagemushaRecursiveSpendProver.ToriiClient.RECEIVER_LINEAGE_PATH);
     final byte[] body = Objects.requireNonNull(query, "query").noritoEncoded();
@@ -46,6 +59,7 @@ final class KagemushaToriiLineageRequest {
             .addHeader("Accept", KagemushaRecursiveSpendProver.ToriiClient.NORITO_MEDIA_TYPE)
             .addHeader("Content-Type", KagemushaRecursiveSpendProver.ToriiClient.NORITO_MEDIA_TYPE)
             .setBody(body)
+            .setTimeout(requestTimeout)
             .setMaximumResponseBytes(
                 (long) KagemushaRecursiveSpendProver.MAX_TORII_RESPONSE_BYTES);
     authHeaders.forEach(builder::addHeader);

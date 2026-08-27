@@ -18978,6 +18978,7 @@ test("Kaigi call views enforce exact variants, privacy fields, and requested ide
     [{ ...base, ended_at_ms: 2 }, /present exactly when status is ended/u],
     [{ ...base, status: "ended" }, /present exactly when status is ended/u],
     [{ ...base, max_participants: 0 }, /max_participants must be between 1/u],
+    [{ ...base, max_participants: 4_097 }, /max_participants must be between 1 and 4096/u],
     [{ ...base, status: "ended", ended_at_ms: 0 }, /must not precede created_at_ms/u],
     [{ ...base, host_account_id: FIXTURE_ALICE_ID }, /agree with privacy_mode/u],
     [{ ...base, privacy_mode: "transparent" }, /agree with privacy_mode/u],

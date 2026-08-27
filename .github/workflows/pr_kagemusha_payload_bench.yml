@@ -417,6 +417,9 @@ on:
       - "kotlin/offline-wallet-android/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/AndroidOfflineNoteSecureStore.kt"
       - "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/sdk/offline/wallet/AndroidOfflineNoteSecureStoreInstrumentedTest.java"
       - "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/android/offline/KagemushaDeviceLabArtifactExportTest.java"
+      - "kotlin/client-android/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaAndroidKeyMint.kt"
+      - "kotlin/client-android/src/test/java/org/hyperledger/iroha/sdk/offline/KagemushaAndroidKeyMintTest.kt"
+      - "kotlin/client-android/src/androidTest/java/org/hyperledger/iroha/sdk/offline/KagemushaAndroidKeyMintInstrumentedTest.kt"
       - "kotlin/kagemusha-candidate-evidence-lab/**"
       - "kotlin/settings.gradle.kts"
       - "kotlin/gradle/libs.versions.toml"
@@ -1289,6 +1292,13 @@ jobs:
           NORITO_MOBILE_JAVA_HOME="$JAVA_HOME"
           NORITO_MOBILE_ANDROID_HOME="$ANDROID_HOME"
           bash ci/check_kagemusha_jvm_native_bridge.sh
+      - name: Test Kotlin Android KeyMint authorization path
+        working-directory: kotlin
+        run: >-
+          ./gradlew --no-daemon
+          :client-android:testDebugUnitTest
+          :client-android:compileDebugAndroidTestKotlin
+          --console=plain
 
   csharp-torii:
     name: C# ABI-23/V4 Torii DTOs

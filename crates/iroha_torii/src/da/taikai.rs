@@ -284,6 +284,37 @@ pub(crate) mod taikai_ingest {
                         ),
                     ));
                 }
+                let expected_start = previous
+                    .window_end_sequence
+                    .checked_add(1)
+                    .ok_or_else(|| {
+                        internal_error(
+                            "committed Taikai routing manifest lineage has no representable successor"
+                                .into(),
+                        )
+                    })?;
+                if manifest.segment_window.start_sequence != expected_start {
+                    return Err(bad_request(
+                        META_TAIKAI_TRM,
+                        format!(
+                            "routing manifest window {}–{} does not immediately follow previously accepted window {}–{} for alias {}.{}; expected start {expected_start}",
+                            manifest.segment_window.start_sequence,
+                            manifest.segment_window.end_sequence,
+                            previous.window_start_sequence,
+                            previous.window_end_sequence,
+                            self.alias_name,
+                            self.alias_namespace
+                        ),
+                    ));
+                }
+            } else if manifest.segment_window.start_sequence != 0 {
+                return Err(bad_request(
+                    META_TAIKAI_TRM,
+                    format!(
+                        "initial routing manifest window for alias {}.{} must start at sequence 0",
+                        self.alias_name, self.alias_namespace
+                    ),
+                ));
             }
             Ok(())
         }
@@ -522,6 +553,11 @@ pub(crate) mod taikai_ingest {
             artifact_base_id: Option<String>,
         ) -> Result<(), (StatusCode, String)> {
             let record = self.build_record(window, manifest_digest_hex, artifact_base_id)?;
+            validate_lineage_successor(self.previous.as_ref(), &record).map_err(|err| {
+                internal_error(format!(
+                    "failed to validate Taikai routing manifest lineage before commit: {err}"
+                ))
+            })?;
             write_lineage_record(&self.record_path, &record).map_err(|err| {
                 internal_error(format!(
                     "failed to persist Taikai routing manifest lineage `{}`: {err}",
@@ -1248,6 +1284,21 @@ pub(crate) mod taikai_ingest {
                     "pending Taikai routing manifest overlaps the committed segment window",
                 ));
             }
+            let expected_start = previous.window_end_sequence.checked_add(1).ok_or_else(|| {
+                invalid_lineage_record(
+                    "committed Taikai routing manifest lineage has no representable successor",
+                )
+            })?;
+            if candidate.window_start_sequence != expected_start {
+                return Err(invalid_lineage_record(format!(
+                    "pending Taikai routing manifest starts at sequence {}; expected contiguous successor {expected_start}",
+                    candidate.window_start_sequence
+                )));
+            }
+        } else if candidate.window_start_sequence != 0 {
+            return Err(invalid_lineage_record(
+                "initial Taikai routing manifest lineage must start at sequence 0",
+            ));
         }
         Ok(())
     }
@@ -2923,11 +2974,12 @@ pub(crate) mod taikai_ingest {
                             })?;
                             continue;
                         }
+                    } else {
+                        return Err(format!(
+                            "Taikai anchor sentinel `{}` is not a regular file",
+                            sentinel_path.display()
+                        ));
                     }
-                    return Err(format!(
-                        "Taikai anchor sentinel `{}` is not a regular file",
-                        sentinel_path.display()
-                    ));
                 }
                 Err(err) if err.kind() == ErrorKind::NotFound => {}
                 Err(err) => {

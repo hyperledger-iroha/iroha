@@ -57,6 +57,8 @@ fn test_network_config(
         require_sm_handshake_match: true,
         require_sm_openssl_preview_match: true,
         idle_timeout,
+        preauth_timeout: network_defaults::PREAUTH_TIMEOUT,
+        preauth_max_connections_per_ip: network_defaults::PREAUTH_MAX_CONNECTIONS_PER_IP,
         reply_writer_flush_timeout: network_defaults::REPLY_WRITER_FLUSH_TIMEOUT,
         connect_startup_delay: network_defaults::CONNECT_STARTUP_DELAY,
         dial_timeout: network_defaults::DIAL_TIMEOUT,

@@ -6259,8 +6259,6 @@ fn parse_world(
     let domains: Storage<DomainId, Domain> = take_required(&mut map, "domains")?;
     let accounts: Storage<AccountId, AccountValue> = take_required(&mut map, "accounts")?;
     let account_aliases = take_required(&mut map, "account_aliases")?;
-    let account_aliases_by_account = take_required(&mut map, "account_aliases_by_account")?;
-    let account_scope_directory = take_required(&mut map, "account_scope_directory")?;
     let ram_lfe_program_policies = take_ram_lfe_program_policies(&mut map)?;
     validate_ram_lfe_program_policies(&ram_lfe_program_policies)?;
     let identifier_policies = take_required(&mut map, "identifier_policies")?;
@@ -6787,11 +6785,12 @@ fn parse_world(
         domains,
         domains_by_owner: Storage::default(),
         kaigi_relay_registry: Storage::default(),
+        kaigi_account_dependencies: Storage::default(),
         accounts,
         uaid_accounts: Storage::default(),
         account_aliases,
-        account_aliases_by_account,
-        account_scope_directory,
+        account_aliases_by_account: Storage::default(),
+        account_scope_directory: Storage::default(),
         account_scope_accounts: Storage::default(),
         opaque_uaids: Storage::default(),
         ram_lfe_program_policies,
@@ -6803,6 +6802,7 @@ fn parse_world(
         fee_sponsor_budget_counters,
         identifier_claims,
         account_rekey_records,
+        account_rekey_records_by_account: Storage::default(),
         account_recovery_policies,
         account_recovery_requests,
         asset_definitions,
@@ -7285,6 +7285,12 @@ fn parse_world(
     crate::smartcontracts::isi::kaigi::rebuild_kaigi_relay_registry(&mut world).map_err(
         |message| json::Error::InvalidField {
             field: "kaigi_relay_registry".into(),
+            message,
+        },
+    )?;
+    crate::smartcontracts::isi::kaigi::rebuild_kaigi_account_dependencies(&mut world).map_err(
+        |message| json::Error::InvalidField {
+            field: "kaigi_account_dependencies".into(),
             message,
         },
     )?;

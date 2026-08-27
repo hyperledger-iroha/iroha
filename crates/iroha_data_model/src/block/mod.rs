@@ -1667,7 +1667,10 @@ mod tests {
         block::consensus::SumeragiLanePayloadOwnership,
         da::{
             commitment::{DaCommitmentBundle, DaCommitmentRecord, DaProofScheme},
-            ingest::{DaIngestAuthorizationV1, DaIngestSignatureV1},
+            ingest::{
+                DaIngestAuthorizationV1, DaIngestSignatureV1, DaPinScopeAuthorizationV1,
+                DaPinScopeV1,
+            },
             pin_intent::{DaPinIntent, DaPinIntentBundle},
             types::{BlobDigest, RetentionPolicy, StorageTicketId},
         },
@@ -1834,6 +1837,21 @@ mod tests {
                 .expect("sign deterministic block pin-intent authorization"),
         });
         authorization
+    }
+    fn test_pin_intent(
+        lane: LaneId,
+        epoch: u64,
+        sequence: u64,
+        storage_ticket: StorageTicketId,
+        manifest_hash: ManifestDigest,
+    ) -> DaPinIntent {
+        let key_pair = KeyPair::try_from_seed(vec![0xDE; 32], Algorithm::Ed25519)
+            .expect("valid deterministic block pin-intent key");
+        let authorization = test_pin_authorization(lane, epoch, sequence);
+        let scope = DaPinScopeV1::new(&authorization, storage_ticket, manifest_hash, None);
+        let scope_authorization = DaPinScopeAuthorizationV1::try_sign(scope, &key_pair)
+            .expect("sign deterministic block pin scope");
+        DaPinIntent::new(authorization, scope_authorization)
     }
     fn sample_da_bundle() -> DaCommitmentBundle {
         let record = DaCommitmentRecord::new(
@@ -2446,13 +2464,12 @@ mod tests {
             },
             result: None,
         };
-        let intent = DaPinIntent::new(
+        let intent = test_pin_intent(
             LaneId::new(7),
             9,
             11,
             StorageTicketId::new([0xAB; 32]),
             ManifestDigest::new([0xCD; 32]),
-            test_pin_authorization(LaneId::new(7), 9, 11),
         );
         let bundle = DaPinIntentBundle::new(vec![intent]);
         block.set_da_pin_intents(Some(bundle));
@@ -3096,13 +3113,12 @@ mod tests {
         block.set_da_pin_intents(Some(DaPinIntentBundle::default()));
         assert!(block.da_pin_intents().is_none());
         assert!(block.payload.header.da_pin_intents_hash().is_none());
-        let intent = DaPinIntent::new(
+        let intent = test_pin_intent(
             LaneId::new(7),
             9,
             11,
             StorageTicketId::new([0xAB; 32]),
             ManifestDigest::new([0xCD; 32]),
-            test_pin_authorization(LaneId::new(7), 9, 11),
         );
         let bundle = DaPinIntentBundle::new(vec![intent]);
         let expected = bundle

@@ -143,6 +143,8 @@ pub enum GuardPinningProofValidationError {
         expected: usize,
         found: usize,
     },
+    #[error("field `{field}` must use canonical lowercase hex")]
+    NonCanonicalHex { field: &'static str },
     #[error(
         "guard pinning proof directory hash `{found}` does not match snapshot hash `{expected}`"
     )]
@@ -390,6 +392,11 @@ pub fn verify_guard_pinning_proof(
         });
     }
     let relay_id = hex_array_from_str::<32>(&proof.relay_id_hex, "relay_id_hex")?;
+    if proof.relay_id_hex != hex_encode(relay_id) {
+        return Err(GuardPinningProofValidationError::NonCanonicalHex {
+            field: "relay_id_hex",
+        });
+    }
     let descriptor_commit =
         hex_array_from_str::<32>(&proof.descriptor_commit_hex, "descriptor_commit_hex")?;
     let fingerprint =
@@ -847,6 +854,43 @@ mod tests {
         let snapshot =
             GuardDirectorySnapshotV2::inspect_bytes(&snapshot_bytes).expect("snapshot decodes");
         verify_guard_pinning_proof(&snapshot, &proof).expect("proof validates");
+    }
+    #[test]
+    fn verify_guard_pinning_proof_rejects_noncanonical_relay_id_hex() {
+        use std::{fs, time::Duration};
+        let fixture = snapshot_fixture();
+        let entry = load_guard_entry_at(
+            &fixture.config,
+            &fixture.relay_id,
+            &fixture.descriptor_commit,
+            fixture.at_unix,
+        )
+        .expect("guard snapshot validates");
+        let dir = tempfile::tempdir().expect("temp dir");
+        let proof_path = dir.path().join("guard_proof.json");
+        persist_guard_pinning_proof(
+            &proof_path,
+            fixture.config.snapshot_path(),
+            &entry,
+            &fixture.relay_id,
+            SystemTime::UNIX_EPOCH + Duration::from_secs(7),
+        )
+        .expect("proof serializes");
+        let proof_bytes = fs::read(&proof_path).expect("load proof");
+        let mut proof: GuardPinningProof =
+            json::from_slice(&proof_bytes).expect("decode guard proof");
+        proof.relay_id_hex.make_ascii_uppercase();
+        assert_ne!(proof.relay_id_hex, hex_encode(fixture.relay_id));
+        let snapshot_bytes = fs::read(fixture.config.snapshot_path()).expect("snapshot contents");
+        let snapshot =
+            GuardDirectorySnapshotV2::inspect_bytes(&snapshot_bytes).expect("snapshot decodes");
+
+        assert!(matches!(
+            verify_guard_pinning_proof(&snapshot, &proof),
+            Err(GuardPinningProofValidationError::NonCanonicalHex {
+                field: "relay_id_hex"
+            })
+        ));
     }
     #[test]
     fn guard_pinning_proof_accessors_surface_metadata() {

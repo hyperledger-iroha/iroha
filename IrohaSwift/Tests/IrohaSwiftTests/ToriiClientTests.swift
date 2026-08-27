@@ -12695,10 +12695,11 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testGetOfflineCapabilityRejectsDuplicateKeysAndInvalidUtf8() async throws {
+    func testGetOfflineCapabilityRejectsDuplicateKeysInvalidUtf8AndOversizedBodies() async throws {
         let payloads = [
             Data(#"{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":23,"max_hops":8,"ready":true,"ready":true}"#.utf8),
             Data([0xff, 0xfe, 0xfd]),
+            Data(repeating: UInt8(ascii: "x"), count: 256 * 1024 + 1),
         ]
         for payload in payloads {
             StubURLProtocol.handler = { request in

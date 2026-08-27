@@ -815,6 +815,9 @@ pub(crate) fn account_label_is_pii(label: &AccountAlias) -> bool {
     }
     matches!(digits, 8..=15)
 }
+fn account_ids_in_rekey_record(record: &AccountRekeyRecord) -> impl Iterator<Item = &AccountId> {
+    core::iter::once(&record.active_account_id).chain(record.previous_account_ids.iter())
+}
 pub(crate) fn current_axt_slot_from_block(header: &BlockHeader, slot_length_ms: NonZeroU64) -> u64 {
     header.creation_time_ms / slot_length_ms.get()
 }
@@ -901,6 +904,7 @@ macro_rules! with_world_overlay_fields {
             domains,
             domains_by_owner,
             kaigi_relay_registry,
+            kaigi_account_dependencies,
             accounts,
             uaid_accounts,
             account_aliases,
@@ -917,6 +921,7 @@ macro_rules! with_world_overlay_fields {
             fee_sponsor_budget_counters,
             identifier_claims,
             account_rekey_records,
+            account_rekey_records_by_account,
             account_recovery_policies,
             account_recovery_requests,
             asset_definitions,
@@ -3922,6 +3927,9 @@ pub struct World {
     /// Derived index from Kaigi relay account ids to authoritative metadata domains.
     #[norito(skip)]
     pub(crate) kaigi_relay_registry: Storage<AccountId, DomainId>,
+    /// Derived reverse index from raw Kaigi account references to typed metadata locations.
+    #[norito(skip)]
+    pub(crate) kaigi_account_dependencies: Storage<AccountId, BTreeSet<(u8, DomainId, Name)>>,
     /// Registered accounts.
     pub(crate) accounts: Storage<AccountId, AccountValue>,
     /// Index from UAID to bound account (1:1).
@@ -3962,6 +3970,9 @@ pub struct World {
     pub(crate) identifier_claims: Storage<OpaqueAccountId, IdentifierClaimRecord>,
     /// Stable account labels and signatory history.
     pub(crate) account_rekey_records: Storage<AccountAlias, AccountRekeyRecord>,
+    /// Derived reverse occurrence index from rekey-history account ids to supporting aliases.
+    #[norito(skip)]
+    pub(crate) account_rekey_records_by_account: Storage<AccountId, BTreeSet<AccountAlias>>,
     /// Alias-keyed account recovery policies.
     pub(crate) account_recovery_policies: Storage<AccountAlias, AccountRecoveryPolicy>,
     /// Alias-keyed account recovery requests.
@@ -4410,7 +4421,6 @@ pub struct World {
     /// `SoraFS` pin manifest registry keyed by manifest digest.
     pub(crate) pin_manifests: Storage<ManifestDigest, PinManifestRecord>,
     /// Active alias bindings keyed by `namespace/name`.
-    #[norito(skip)]
     pub(crate) manifest_aliases: Storage<ManifestAliasId, ManifestAliasRecord>,
     /// Outstanding replication orders keyed by order identifier.
     pub(crate) replication_orders: Storage<ReplicationOrderId, ReplicationOrderRecord>,
@@ -4585,6 +4595,10 @@ pub struct WorldBlock<'world> {
     /// Derived index from Kaigi relay account ids to authoritative metadata domains.
     #[norito(skip)]
     pub(crate) kaigi_relay_registry: StorageBlock<'world, AccountId, DomainId>,
+    /// Derived reverse index from raw Kaigi account references to typed metadata locations.
+    #[norito(skip)]
+    pub(crate) kaigi_account_dependencies:
+        StorageBlock<'world, AccountId, BTreeSet<(u8, DomainId, Name)>>,
     /// Registered accounts.
     pub(crate) accounts: StorageBlock<'world, AccountId, AccountValue>,
     /// Index from UAID to bound account (1:1).
@@ -4626,6 +4640,10 @@ pub struct WorldBlock<'world> {
     pub(crate) identifier_claims: StorageBlock<'world, OpaqueAccountId, IdentifierClaimRecord>,
     /// Stable account labels and signatory history.
     pub(crate) account_rekey_records: StorageBlock<'world, AccountAlias, AccountRekeyRecord>,
+    /// Derived reverse occurrence index from rekey-history account ids to supporting aliases.
+    #[norito(skip)]
+    pub(crate) account_rekey_records_by_account:
+        StorageBlock<'world, AccountId, BTreeSet<AccountAlias>>,
     /// Alias-keyed account recovery policies.
     pub(crate) account_recovery_policies: StorageBlock<'world, AccountAlias, AccountRecoveryPolicy>,
     /// Alias-keyed account recovery requests.
@@ -5120,7 +5138,6 @@ pub struct WorldBlock<'world> {
     /// `SoraFS` pin manifest registry keyed by manifest digest.
     pub(crate) pin_manifests: StorageBlock<'world, ManifestDigest, PinManifestRecord>,
     /// Active alias bindings keyed by alias identifier.
-    #[norito(skip)]
     pub(crate) manifest_aliases: StorageBlock<'world, ManifestAliasId, ManifestAliasRecord>,
     /// Outstanding replication orders keyed by order identifier.
     pub(crate) replication_orders: StorageBlock<'world, ReplicationOrderId, ReplicationOrderRecord>,
@@ -5586,6 +5603,7 @@ impl WorldBlock<'_> {
             domains,
             domains_by_owner,
             kaigi_relay_registry,
+            kaigi_account_dependencies,
             accounts,
             uaid_accounts,
             account_aliases,
@@ -5602,6 +5620,7 @@ impl WorldBlock<'_> {
             fee_sponsor_budget_counters,
             identifier_claims,
             account_rekey_records,
+            account_rekey_records_by_account,
             account_recovery_policies,
             account_recovery_requests,
             asset_definitions,
@@ -5830,6 +5849,9 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) domains_by_owner: StorageTransaction<'block, 'world, AccountId, BTreeSet<DomainId>>,
     /// Derived index from Kaigi relay account ids to authoritative metadata domains.
     pub(crate) kaigi_relay_registry: StorageTransaction<'block, 'world, AccountId, DomainId>,
+    /// Derived reverse index from raw Kaigi account references to typed metadata locations.
+    pub(crate) kaigi_account_dependencies:
+        StorageTransaction<'block, 'world, AccountId, BTreeSet<(u8, DomainId, Name)>>,
     /// Registered accounts.
     pub(crate) accounts: StorageTransaction<'block, 'world, AccountId, AccountValue>,
     /// Index from UAID to bound account (1:1).
@@ -5875,6 +5897,9 @@ pub struct WorldTransaction<'block, 'world> {
     /// Stable account labels and signatory history.
     pub(crate) account_rekey_records:
         StorageTransaction<'block, 'world, AccountAlias, AccountRekeyRecord>,
+    /// Derived reverse occurrence index from rekey-history account ids to supporting aliases.
+    pub(crate) account_rekey_records_by_account:
+        StorageTransaction<'block, 'world, AccountId, BTreeSet<AccountAlias>>,
     /// Alias-keyed account recovery policies.
     pub(crate) account_recovery_policies:
         StorageTransaction<'block, 'world, AccountAlias, AccountRecoveryPolicy>,
@@ -6977,16 +7002,20 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self.account_aliases_by_account
     }
     #[cfg(any(test, feature = "iroha-core-tests"))]
-    /// Provides mutable access to account rekey records for tests and API scaffolding.
-    pub fn account_rekey_records_mut_for_testing(
+    /// Insert or replace an account rekey fixture while maintaining its reverse index.
+    pub fn replace_account_rekey_record_for_testing(
         &mut self,
-    ) -> &mut StorageTransaction<
-        'block,
-        'world,
-        iroha_data_model::account::rekey::AccountAlias,
-        iroha_data_model::account::rekey::AccountRekeyRecord,
-    > {
-        &mut self.account_rekey_records
+        record: iroha_data_model::account::rekey::AccountRekeyRecord,
+    ) -> Option<iroha_data_model::account::rekey::AccountRekeyRecord> {
+        self.replace_account_rekey_record(record)
+    }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Remove an account rekey fixture while maintaining its reverse index.
+    pub fn remove_account_rekey_record_for_testing(
+        &mut self,
+        label: &iroha_data_model::account::rekey::AccountAlias,
+    ) -> Option<iroha_data_model::account::rekey::AccountRekeyRecord> {
+        self.remove_account_rekey_record(label)
     }
     /// Record that the given asset definition belongs to its domain.
     pub(crate) fn track_asset_definition_domain(&mut self, definition_id: &AssetDefinitionId) {
@@ -8044,6 +8073,9 @@ pub struct WorldView<'world> {
     pub(crate) domains_by_owner: StorageView<'world, AccountId, BTreeSet<DomainId>>,
     /// Derived index from Kaigi relay account ids to authoritative metadata domains.
     pub(crate) kaigi_relay_registry: StorageView<'world, AccountId, DomainId>,
+    /// Derived reverse index from raw Kaigi account references to typed metadata locations.
+    pub(crate) kaigi_account_dependencies:
+        StorageView<'world, AccountId, BTreeSet<(u8, DomainId, Name)>>,
     /// Registered accounts.
     pub(crate) accounts: StorageView<'world, AccountId, AccountValue>,
     /// Index from UAID to bound account (1:1).
@@ -8080,6 +8112,9 @@ pub struct WorldView<'world> {
     pub(crate) identifier_claims: StorageView<'world, OpaqueAccountId, IdentifierClaimRecord>,
     /// Stable account labels and signatory history.
     pub(crate) account_rekey_records: StorageView<'world, AccountAlias, AccountRekeyRecord>,
+    /// Derived reverse occurrence index from rekey-history account ids to supporting aliases.
+    pub(crate) account_rekey_records_by_account:
+        StorageView<'world, AccountId, BTreeSet<AccountAlias>>,
     /// Alias-keyed account recovery policies.
     pub(crate) account_recovery_policies: StorageView<'world, AccountAlias, AccountRecoveryPolicy>,
     /// Alias-keyed account recovery requests.
@@ -16451,7 +16486,68 @@ fn ensure_asset_quantity_value(value: &Quantity, spec: NumericSpec) -> Result<()
         .into()
     })
 }
+fn account_rekey_occurrence_index<'a>(
+    records: impl IntoIterator<Item = (&'a AccountAlias, &'a AccountRekeyRecord)>,
+) -> BTreeMap<AccountId, BTreeSet<AccountAlias>> {
+    let mut index = BTreeMap::<AccountId, BTreeSet<AccountAlias>>::new();
+    for (label, record) in records {
+        index
+            .entry(record.active_account_id.clone())
+            .or_default()
+            .insert(label.clone());
+        for previous_account_id in &record.previous_account_ids {
+            index
+                .entry(previous_account_id.clone())
+                .or_default()
+                .insert(label.clone());
+        }
+    }
+    index
+}
+/// Reconstruct a skipped derived storage together with its latest-block undo projection.
+pub(crate) fn rebuild_derived_storage_with_previous<K, V>(
+    current: BTreeMap<K, V>,
+    previous: BTreeMap<K, V>,
+) -> Storage<K, V>
+where
+    K: MvKey,
+    V: MvValue + PartialEq,
+{
+    let previous_keys = previous.keys().cloned().collect::<Vec<_>>();
+    let rebuilt: Storage<K, V> = previous.into_iter().collect();
+    {
+        let mut block = rebuilt.block();
+        for key in previous_keys {
+            if !current.contains_key(&key) {
+                block.remove(key);
+            }
+        }
+        for (key, value) in current {
+            if block.get(&key) != Some(&value) {
+                block.insert(key, value);
+            }
+        }
+        block.commit();
+    }
+    rebuilt
+}
 impl World {
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Insert or replace an account rekey fixture while maintaining its reverse index.
+    pub fn replace_account_rekey_record_for_testing(
+        &mut self,
+        record: AccountRekeyRecord,
+    ) -> Option<AccountRekeyRecord> {
+        let mut block = self.block();
+        let previous = {
+            let mut transaction = block.transaction_without_telemetry(LaneConfig::default(), 0);
+            let previous = transaction.replace_account_rekey_record_for_testing(record);
+            transaction.apply();
+            previous
+        };
+        block.commit();
+        previous
+    }
     /// Creates an empty `World`.
     pub fn new() -> Self {
         Self::default()
@@ -16950,9 +17046,11 @@ impl World {
             domains,
             domains_by_owner: Storage::default(),
             kaigi_relay_registry: Storage::default(),
+            kaigi_account_dependencies: Storage::default(),
             accounts,
             uaid_accounts: Storage::default(),
             account_rekey_records,
+            account_rekey_records_by_account: Storage::default(),
             account_recovery_policies: Storage::default(),
             account_recovery_requests: Storage::default(),
             account_scope_accounts: Storage::default(),
@@ -17042,6 +17140,8 @@ impl World {
             .expect("invalid account rekey state in world constructor");
         crate::smartcontracts::isi::kaigi::rebuild_kaigi_relay_registry(&mut world)
             .expect("invalid Kaigi relay registry in world constructor");
+        crate::smartcontracts::isi::kaigi::rebuild_kaigi_account_dependencies(&mut world)
+            .expect("invalid Kaigi account dependencies in world constructor");
         world
             .rebuild_asset_definition_alias_indexes()
             .expect("duplicate asset definition alias in world constructor");
@@ -17178,10 +17278,22 @@ impl World {
                 ));
             }
         }
-        // `account_aliases` is the authoritative binding ledger. Preserve its MV revert map so a
-        // restored node can still roll back the latest block; only the skipped reverse index is
-        // derived from it here.
-        self.account_aliases_by_account = reverse.into_iter().collect();
+        let previous_reverse = {
+            let reverted_aliases = self.account_aliases.block_and_revert();
+            let mut previous = BTreeMap::<AccountId, BTreeSet<AccountAlias>>::new();
+            for (label, account_id) in reverted_aliases.iter() {
+                previous
+                    .entry(account_id.clone())
+                    .or_default()
+                    .insert(label.clone());
+            }
+            // Abort the temporary revert view so the authoritative alias ledger and its undo
+            // journal remain byte-for-byte unchanged.
+            drop(reverted_aliases);
+            previous
+        };
+        self.account_aliases_by_account =
+            rebuild_derived_storage_with_previous(reverse, previous_reverse);
         Ok(())
     }
     fn rebuild_account_scope_directory(&mut self) -> Result<(), String> {
@@ -17214,7 +17326,7 @@ impl World {
         }
         self.account_scope_accounts = index.into_iter().collect();
     }
-    fn rebuild_account_rekey_records(&mut self) -> Result<(), String> {
+    pub(crate) fn rebuild_account_rekey_records(&mut self) -> Result<(), String> {
         let mut records = BTreeMap::new();
         let mut active_account_id_rekey_targets = BTreeMap::<AccountId, AccountId>::new();
         let existing_records: Vec<_> = self
@@ -17324,6 +17436,17 @@ impl World {
                 ));
             }
         }
+        let current_index = account_rekey_occurrence_index(records.iter());
+        let previous_index = {
+            let reverted_records = self.account_rekey_records.block_and_revert();
+            let previous = account_rekey_occurrence_index(reverted_records.iter());
+            // Dropping this uncommitted MV write transaction preserves the authoritative
+            // record and undo layers; only its projected previous view is needed here.
+            drop(reverted_records);
+            previous
+        };
+        self.account_rekey_records_by_account =
+            rebuild_derived_storage_with_previous(current_index, previous_index);
         Ok(())
     }
     fn rebuild_asset_definition_alias_indexes(&mut self) -> Result<(), String> {
@@ -18296,6 +18419,9 @@ macro_rules! world_ro_accessors {
             storage domains_by_owner: AccountId => BTreeSet<DomainId>;
             /// Kaigi relay account to authoritative metadata domain index (read-only).
             storage kaigi_relay_registry: AccountId => DomainId;
+            /// Raw Kaigi account reference to typed metadata locations index (read-only).
+            storage kaigi_account_dependencies:
+                AccountId => BTreeSet<(u8, DomainId, Name)>;
             /// Endorsement committees (read-only).
             storage domain_committees: String => DomainCommittee;
             /// Per-domain endorsement policies (read-only).
@@ -18343,6 +18469,8 @@ macro_rules! world_ro_accessors {
         world_ro_accessors!(@items $mode;
             /// Account label/signatory registry (read-only).
             storage account_rekey_records: AccountAlias => AccountRekeyRecord;
+            /// Reverse rekey-history occurrence index (read-only).
+            storage account_rekey_records_by_account: AccountId => BTreeSet<AccountAlias>;
             /// Alias-keyed account recovery policy registry (read-only).
             storage account_recovery_policies: AccountAlias => AccountRecoveryPolicy;
             /// Alias-keyed account recovery request registry (read-only).
@@ -20108,6 +20236,7 @@ impl<'world> WorldBlock<'world> {
             domains,
             domains_by_owner,
             kaigi_relay_registry,
+            kaigi_account_dependencies,
             accounts,
             uaid_accounts,
             account_aliases,
@@ -20124,6 +20253,7 @@ impl<'world> WorldBlock<'world> {
             fee_sponsor_budget_counters,
             identifier_claims,
             account_rekey_records,
+            account_rekey_records_by_account,
             account_recovery_policies,
             account_recovery_requests,
             asset_definitions,
@@ -20561,6 +20691,7 @@ impl<'world> WorldBlock<'world> {
         account_recovery_requests.commit();
         account_recovery_policies.commit();
         account_rekey_records.commit();
+        account_rekey_records_by_account.commit();
         asset_metadata.commit();
         asset_definition_alias_bindings.commit();
         asset_definition_aliases.commit();
@@ -20585,6 +20716,7 @@ impl<'world> WorldBlock<'world> {
         domains.commit();
         domains_by_owner.commit();
         kaigi_relay_registry.commit();
+        kaigi_account_dependencies.commit();
         peers.commit();
         parameters.commit();
     }
@@ -20800,6 +20932,80 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         if remove_entry {
             self.account_aliases_by_account.remove(account_id.clone());
         }
+    }
+    fn add_account_rekey_record_to_reverse_index(
+        &mut self,
+        label: &AccountAlias,
+        record: &AccountRekeyRecord,
+    ) {
+        for account_id in account_ids_in_rekey_record(record) {
+            if self
+                .account_rekey_records_by_account
+                .get(account_id)
+                .is_none()
+            {
+                self.account_rekey_records_by_account
+                    .insert(account_id.clone(), BTreeSet::new());
+            }
+            if let Some(aliases) = self.account_rekey_records_by_account.get_mut(account_id) {
+                aliases.insert(label.clone());
+            }
+        }
+    }
+    fn remove_account_rekey_record_from_reverse_index(
+        &mut self,
+        label: &AccountAlias,
+        record: &AccountRekeyRecord,
+    ) {
+        for account_id in account_ids_in_rekey_record(record) {
+            let remove_entry = self
+                .account_rekey_records_by_account
+                .get_mut(account_id)
+                .is_some_and(|aliases| {
+                    aliases.remove(label);
+                    aliases.is_empty()
+                });
+            if remove_entry {
+                self.account_rekey_records_by_account
+                    .remove(account_id.clone());
+            }
+        }
+    }
+    /// Insert a new account rekey record while maintaining its reverse occurrence index.
+    pub(crate) fn insert_account_rekey_record(
+        &mut self,
+        record: AccountRekeyRecord,
+    ) -> Option<AccountRekeyRecord> {
+        self.replace_account_rekey_record(record)
+    }
+    /// Replace an account rekey record while maintaining its reverse occurrence index.
+    pub(crate) fn replace_account_rekey_record(
+        &mut self,
+        record: AccountRekeyRecord,
+    ) -> Option<AccountRekeyRecord> {
+        let label = record.label.clone();
+        let previous = self.account_rekey_records.insert(label.clone(), record);
+        if let Some(previous) = previous.as_ref() {
+            self.remove_account_rekey_record_from_reverse_index(&label, previous);
+        }
+        let record = self
+            .account_rekey_records
+            .get(&label)
+            .cloned()
+            .expect("record was just inserted");
+        self.add_account_rekey_record_to_reverse_index(&label, &record);
+        previous
+    }
+    /// Remove an account rekey record while maintaining its reverse occurrence index.
+    pub(crate) fn remove_account_rekey_record(
+        &mut self,
+        label: &AccountAlias,
+    ) -> Option<AccountRekeyRecord> {
+        let removed = self.account_rekey_records.remove(label.clone());
+        if let Some(record) = removed.as_ref() {
+            self.remove_account_rekey_record_from_reverse_index(label, record);
+        }
+        removed
     }
     fn remove_account_scope_accounts_index_entry(&mut self, account_id: &AccountId) {
         let Some(entry) = self.account_scope_directory.get(account_id).cloned() else {
@@ -22159,6 +22365,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             domains,
             domains_by_owner,
             kaigi_relay_registry,
+            kaigi_account_dependencies,
             accounts,
             uaid_accounts,
             account_aliases,
@@ -22175,6 +22382,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             fee_sponsor_budget_counters,
             identifier_claims,
             account_rekey_records,
+            account_rekey_records_by_account,
             account_recovery_policies,
             account_recovery_requests,
             asset_definitions,
@@ -22658,6 +22866,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         account_recovery_requests.apply();
         account_recovery_policies.apply();
         account_rekey_records.apply();
+        account_rekey_records_by_account.apply();
         asset_metadata.apply();
         assets.apply();
         asset_definition_alias_bindings.apply();
@@ -22683,6 +22892,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         domains.apply();
         domains_by_owner.apply();
         kaigi_relay_registry.apply();
+        kaigi_account_dependencies.apply();
         peers.apply();
         parameters.apply();
         #[cfg(feature = "telemetry")]
@@ -24996,10 +25206,14 @@ impl State {
     pub(crate) fn rebuild_derived_state_indexes(&mut self) -> core::result::Result<(), String> {
         crate::smartcontracts::isi::kaigi::rebuild_kaigi_relay_registry(&mut self.world)
             .map_err(|error| format!("failed to rebuild Kaigi relay registry: {error}"))?;
+        crate::smartcontracts::isi::kaigi::rebuild_kaigi_account_dependencies(&mut self.world)
+            .map_err(|error| format!("failed to rebuild Kaigi account dependencies: {error}"))?;
         let nexus = self.nexus_snapshot();
         let world = self.world_view_with_nexus(&nexus);
         crate::smartcontracts::isi::kaigi::validate_rebuilt_kaigi_relay_registry(&world)
             .map_err(|error| format!("failed to validate Kaigi relay registry: {error}"))?;
+        crate::smartcontracts::isi::kaigi::validate_rebuilt_kaigi_account_dependencies(&world)
+            .map_err(|error| format!("failed to validate Kaigi account dependencies: {error}"))?;
         drop(world);
         self.world
             .rebuild_asset_definition_alias_indexes()
@@ -25042,6 +25256,13 @@ impl State {
             );
             return Ok(());
         }
+        let nexus = self.nexus_snapshot();
+        let world = self.world_view_with_nexus(&nexus);
+        crate::smartcontracts::isi::kaigi::validate_rebuilt_kaigi_relay_registry(&world)
+            .map_err(|error| format!("failed to validate Kaigi relay registry: {error}"))?;
+        crate::smartcontracts::isi::kaigi::validate_rebuilt_kaigi_account_dependencies(&world)
+            .map_err(|error| format!("failed to validate Kaigi account dependencies: {error}"))?;
+        drop(world);
         let leases = self.world.vpn_leases.view();
         for (_, record) in leases.iter() {
             validate_vpn_lease_network(record, &self.network_id)?;

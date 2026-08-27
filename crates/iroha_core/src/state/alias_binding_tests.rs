@@ -38,10 +38,10 @@ fn seed_active_account_alias_binding(world: &mut World, owner: &AccountId, alias
     world
         .account_aliases_by_account
         .insert(owner.clone(), aliases);
-    world.account_rekey_records.insert(
+    world.replace_account_rekey_record_for_testing(AccountRekeyRecord::new(
         alias.clone(),
-        AccountRekeyRecord::new(alias.clone(), owner.clone()),
-    );
+        owner.clone(),
+    ));
     let selector = crate::sns::selector_for_account_alias(alias, &DataSpaceCatalog::default())
         .expect("account alias selector");
     let address =

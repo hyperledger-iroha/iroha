@@ -1446,6 +1446,9 @@ mod tests {
             require_sm_openssl_preview_match:
                 iroha_config::parameters::defaults::network::REQUIRE_SM_OPENSSL_PREVIEW_MATCH,
             idle_timeout: iroha_config::parameters::defaults::network::IDLE_TIMEOUT,
+            preauth_timeout: iroha_config::parameters::defaults::network::PREAUTH_TIMEOUT,
+            preauth_max_connections_per_ip:
+                iroha_config::parameters::defaults::network::PREAUTH_MAX_CONNECTIONS_PER_IP,
             reply_writer_flush_timeout:
                 iroha_config::parameters::defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
             connect_startup_delay:

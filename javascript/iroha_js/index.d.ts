@@ -26,7 +26,7 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
-export const KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION: 22;
+export const KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION: 23;
 export const KAGEMUSHA_MANIFEST_VERSION: 4;
 export const KAGEMUSHA_MAX_HOPS: 8;
 export const KAGEMUSHA_CASH_HANDOFF_CAPABILITY: "cash_handoff_v1";
@@ -41,7 +41,7 @@ export interface KagemushaNoritoRequestV4 {
 
 export interface OfflineStatus {
   readonly cash_handoff_capability: "cash_handoff_v1";
-  readonly required_bridge_abi_version: 22;
+  readonly required_bridge_abi_version: 23;
   readonly max_hops: 8;
   readonly ready: true;
 }
@@ -6998,6 +6998,7 @@ export interface KaigiCallView {
   billing_account_id?: string | null;
   title?: string | null;
   description?: string | null;
+  /** Participant limit excluding the host, in 1...4096; omission uses 4096. */
   max_participants?: number | null;
   gas_rate_per_minute: ToriiU64;
   metadata: Record<string, unknown>;
@@ -7952,6 +7953,9 @@ export interface KaigiRelayManifestInput {
   hops: ReadonlyArray<KaigiRelayHopInput>;
 }
 
+/** Maximum concurrent participants excluding the host in a first-release Kaigi call. */
+export declare const KAIGI_MAX_PARTICIPANTS_V1: 4096;
+
 /** Maximum relay hops accepted by the first-release Kaigi manifest. */
 export declare const KAIGI_RELAY_MANIFEST_MAX_HOPS_V1: 8;
 
@@ -7990,6 +7994,7 @@ export interface CreateKaigiInput {
   host: string;
   title?: string | null;
   description?: string | null;
+  /** Participant limit excluding the host, in 1...4096; omission uses 4096. */
   maxParticipants?: NumericLike | null;
   gasRatePerMinute?: NumericLike;
   metadata?: object | null;

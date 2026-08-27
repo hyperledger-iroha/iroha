@@ -87,13 +87,7 @@ fn checked_vpn_account(seed: u8) -> AccountId {
     account_id_for(&checked_vpn_ed25519_keypair(seed))
 }
 fn vpn_test_network_id() -> iroha_data_model::NetworkId {
-    let mut bytes = [0_u8; Hash::LENGTH];
-    bytes[Hash::LENGTH - 1] = 1;
-    iroha_data_model::NetworkId::from_genesis_hash(
-        HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(Hash::prehashed(
-            bytes,
-        )),
-    )
+    crate::signed_query_test_network_id()
 }
 fn test_vpn_relay_trust() -> VpnRelayTrust {
     let relay_keypair = test_vpn_relay_keypair();
@@ -477,6 +471,68 @@ async fn create_quote_for_account(
     let quote = read_json(response).await;
     (quote, metering_keys)
 }
+fn signed_quote_from_response(quote: &VpnQuoteResponseDto) -> VpnSignedQuoteV1 {
+    let payload = hex::decode(&quote.open_lease_instruction.payload_hex)
+        .expect("quote open-lease instruction payload");
+    let decoded = iroha_data_model::isi::decode_instruction_from_pair(
+        &quote.open_lease_instruction.wire_id,
+        &payload,
+    )
+    .expect("decode quote open-lease instruction");
+    decoded
+        .as_any()
+        .downcast_ref::<OpenVpnLeaseEscrow>()
+        .expect("quote response carries OpenVpnLeaseEscrow")
+        .quote
+        .clone()
+}
+fn active_lease_record_from_quote(quote: &VpnQuoteResponseDto) -> VpnLeaseRecordV1 {
+    let signed_quote = signed_quote_from_response(quote);
+    let body = signed_quote.body.clone();
+    VpnLeaseRecordV1 {
+        lease_id: body.lease_id,
+        session_id: body.session_id,
+        quote_id: body.quote_id,
+        client_account_id: body.client_account_id,
+        operator_account_id: body.operator_account_id,
+        metering_public_key: body.metering_public_key,
+        asset_definition: body.asset_definition,
+        lease_fee: body.tariff.lease_fee.clone(),
+        custody_account_id: body.policy.escrow_account_id.clone(),
+        relay_id: body.policy.relay_id,
+        tariff: body.tariff,
+        quote_policy: body.policy,
+        address_slot: body.address_slot,
+        signed_quote,
+        // Unit fixtures use the quote id as the committed opening transaction hash.
+        // Production admission still resolves the canonical inner signed transaction hash.
+        open_tx_hash: body.quote_id,
+        status: VpnLeaseStatusV1::Active,
+        opened_at_ms: body.valid_after_ms,
+        expires_at_ms: body.expires_at_ms,
+        settlement_grace_ms: body.settlement_grace_ms,
+        settled_at_ms: None,
+        refunded_at_ms: None,
+        highest_voucher_sequence: 0,
+        client_voucher_hash: None,
+        settled_client_voucher: None,
+        relay_receipt_hash: None,
+        settled_relay_receipt: None,
+        earned_fee: Quantity::zero(),
+        refunded_fee: Quantity::zero(),
+    }
+}
+fn install_active_lease_for_quote(
+    app: &SharedAppState,
+    quote: &VpnQuoteResponseDto,
+) -> VpnLeaseRecordV1 {
+    let lease = active_lease_record_from_quote(quote);
+    app.state.insert_vpn_lease_for_testing(lease.clone());
+    lease
+}
+fn wsv_lease_record_by_id(app: &SharedAppState, lease_id: &[u8; 32]) -> Option<VpnLeaseRecordV1> {
+    app.state.world_view().vpn_leases().get(lease_id).cloned()
+}
 async fn create_session_for_quote(
     app: SharedAppState,
     account: &AccountId,
@@ -484,6 +540,7 @@ async fn create_session_for_quote(
     quote: &VpnQuoteResponseDto,
     metering_keys: &KeyPair,
 ) -> VpnSessionResponseDto {
+    install_active_lease_for_quote(&app, quote);
     let method = Method::POST;
     let uri: Uri = "/v1/vpn/sessions".parse().expect("session uri");
     let body = norito::json::to_vec(&VpnSessionCreateRequestDto {
@@ -1300,8 +1357,9 @@ fn helper_ticket_is_signed_by_the_vpn_operator() {
     let expires_at_ms = 50_000;
     let encoded =
         build_helper_ticket_hex(&record, expires_at_ms, issuer.private_key()).expect("ticket");
-    let parsed = VpnHelperTicketV1::parse_hex(&encoded, issuer.public_key(), 1)
-        .expect("ticket should parse");
+    let parsed =
+        VpnHelperTicketV1::parse_hex(&encoded, issuer.public_key(), record.connected_at_ms)
+            .expect("ticket should parse");
     assert_eq!(
         parse_vpn_session_id_hex(&record.session_id).expect("fixture session id"),
         parsed.session_id
@@ -1434,7 +1492,7 @@ async fn submit_vpn_receipt_canonicalizes_explicit_lease_id() {
     assert!(receipt.settle_lease_instruction.is_some());
     assert!(app.vpn_receipts.get(&user).is_none());
     assert_eq!(
-        lease_record_by_id(&app, &fixture.lease_id)
+        wsv_lease_record_by_id(&app, &fixture.lease_id)
             .expect("active lease remains consensus-owned")
             .status,
         VpnLeaseStatusV1::Active
@@ -1448,6 +1506,7 @@ async fn create_vpn_session_canonicalizes_payment_hash() {
     let app = vpn_enabled_app_with_operator(world_with_account(&account), &account);
     let (quote, metering_keys) =
         create_quote_for_account(app.clone(), &account, &key_pair, "standard").await;
+    install_active_lease_for_quote(&app, &quote);
     let method = Method::POST;
     let uri: Uri = "/v1/vpn/sessions".parse().expect("session uri");
     let submitted_payment_hash = format!("0X{}", quote.quote_id.to_uppercase());
@@ -1633,6 +1692,7 @@ async fn create_vpn_session_rejects_quote_owned_by_different_account() {
         vpn_enabled_app_with_operator(world_with_accounts(&[user.clone(), other.clone()]), &user);
     let (quote, metering_keys) =
         create_quote_for_account(app.clone(), &user, &user_keys, "standard").await;
+    install_active_lease_for_quote(&app, &quote);
     let method = Method::POST;
     let uri: Uri = "/v1/vpn/sessions".parse().expect("session uri");
     let body = norito::json::to_vec(&VpnSessionCreateRequestDto {
@@ -1645,14 +1705,9 @@ async fn create_vpn_session_rejects_quote_owned_by_different_account() {
     let headers = signed_app_headers(&other, &other_keys, &method, &uri, body.as_ref());
     let error = handle_create_vpn_session(app.clone(), &method, &uri, &headers, body.as_ref())
         .await
-        .expect_err("wrong account must not consume quote");
-    assert!(format!("{error:?}").contains("different account"));
-    assert!(app.vpn_quotes.contains_key(&quote.quote_id));
-    let runtime = lock_vpn_runtime(&app);
-    assert_eq!(
-        runtime.quote_ids_by_account.get(&user),
-        Some(&quote.quote_id)
-    );
+        .expect_err("wrong account must not admit the durable lease");
+    assert!(format!("{error:?}").contains("no exact active consensus-indexed paid lease"));
+    assert!(app.vpn_sessions.is_empty());
 }
 #[tokio::test]
 async fn create_vpn_session_rejects_exit_class_mismatch() {
@@ -1662,6 +1717,7 @@ async fn create_vpn_session_rejects_exit_class_mismatch() {
     let app = vpn_enabled_app_with_operator(world_with_account(&account), &account);
     let (quote, metering_keys) =
         create_quote_for_account(app.clone(), &account, &key_pair, "low-latency").await;
+    install_active_lease_for_quote(&app, &quote);
     let method = Method::POST;
     let uri: Uri = "/v1/vpn/sessions".parse().expect("session uri");
     let body = norito::json::to_vec(&VpnSessionCreateRequestDto {
@@ -1685,6 +1741,7 @@ async fn create_vpn_session_rejects_metering_key_mismatch() {
     let app = vpn_enabled_app_with_operator(world_with_account(&account), &account);
     let (quote, _metering_keys) =
         create_quote_for_account(app.clone(), &account, &key_pair, "standard").await;
+    install_active_lease_for_quote(&app, &quote);
     let wrong_metering_keys = checked_vpn_ed25519_keypair(0x63);
     let method = Method::POST;
     let uri: Uri = "/v1/vpn/sessions".parse().expect("session uri");
@@ -1746,9 +1803,13 @@ async fn create_and_get_vpn_session_preserve_the_active_lease() {
         .downcast_ref::<OpenVpnLeaseEscrow>()
         .expect("open vpn lease instruction");
     assert_eq!(open.quote.body.asset_definition, xor_asset_definition_id());
-    let quote_record = app.vpn_quotes.get(&quote.quote_id).expect("stored quote");
-    assert!(open_lease_matches_quote(open, quote_record.value()).expect("open lease shape"));
-    drop(quote_record);
+    open.quote.verify().expect("operator-signed quote");
+    assert_eq!(hex::encode(open.quote.body.quote_id), quote.quote_id);
+    assert_eq!(hex::encode(open.quote.body.lease_id), quote.lease_id_hex);
+    assert_eq!(
+        hex::encode(open.quote.body.session_id),
+        quote.session_id_hex
+    );
     let session =
         create_session_for_quote(app.clone(), &account, &key_pair, &quote, &metering_keys).await;
     assert_eq!(session.account_id, account.to_string());
@@ -1777,7 +1838,64 @@ async fn create_and_get_vpn_session_preserve_the_active_lease() {
     let active_body: VpnSessionResponseDto = read_json(active).await;
     assert_eq!(active_body.session_id, session.session_id);
     assert_eq!(active_body.connected_at_ms, session.connected_at_ms);
+    assert_eq!(active_body.helper_ticket_hex, session.helper_ticket_hex);
     assert_eq!(app.vpn_sessions.len(), 1);
+}
+#[tokio::test]
+async fn get_vpn_session_cache_hit_does_not_mask_settled_wsv_lease() {
+    let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+    let key_pair = checked_vpn_ed25519_keypair(0xBD);
+    let account = account_id_for(&key_pair);
+    let app = vpn_enabled_app_with_operator(world_with_account(&account), &account);
+    let (quote, metering_keys) =
+        create_quote_for_account(app.clone(), &account, &key_pair, "standard").await;
+    let session =
+        create_session_for_quote(app.clone(), &account, &key_pair, &quote, &metering_keys).await;
+    let active_record = app
+        .vpn_sessions
+        .get(&session.session_id)
+        .expect("active session")
+        .clone();
+    let fixture = receipt_fixture_for_session(&session, &active_record, &account, &metering_keys);
+    let mut lease =
+        lease_record_from_session_record(&active_record, VpnLeaseStatusV1::Active, None);
+    app.state.insert_vpn_lease_for_testing(lease.clone());
+    lease.status = VpnLeaseStatusV1::Settled;
+    lease.settled_at_ms = Some(fixture.relay_receipt.receipt.ended_at_ms);
+    lease.highest_voucher_sequence = fixture.relay_receipt.receipt.highest_voucher_sequence;
+    lease.client_voucher_hash = Some(fixture.voucher.hash());
+    lease.settled_client_voucher = Some(fixture.voucher.clone());
+    lease.relay_receipt_hash = Some(fixture.relay_receipt.hash());
+    lease.settled_relay_receipt = Some(fixture.relay_receipt);
+    lease.earned_fee = fixture.earned_fee.clone();
+    lease.refunded_fee = lease
+        .lease_fee
+        .checked_sub(&fixture.earned_fee)
+        .expect("fixture earned fee does not exceed lease fee");
+    app.state.insert_vpn_lease_for_testing(lease);
+
+    let method = Method::GET;
+    let uri: Uri = format!("/v1/vpn/sessions/{}", session.session_id)
+        .parse()
+        .expect("get uri");
+    let headers = signed_app_headers(&account, &key_pair, &method, &uri, &[]);
+    let response =
+        handle_get_vpn_session(app.clone(), &method, &uri, &headers, &session.session_id)
+            .await
+            .expect("settled session lookup")
+            .into_response();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert!(!app.vpn_sessions.contains_key(&session.session_id));
+    assert!(!app.vpn_used_payments.contains_key(&session.payment_tx_hash));
+    assert!(app.vpn_receipts.is_empty());
+    let vpn_state = lock_vpn_runtime(&app);
+    assert!(!vpn_state.session_ids_by_account.contains_key(&account));
+    assert!(
+        !vpn_state
+            .session_expirations
+            .iter()
+            .any(|(_, session_id)| session_id == &session.session_id)
+    );
 }
 #[tokio::test]
 async fn vpn_session_routes_reject_noncanonical_identifiers() {
@@ -1888,28 +2006,20 @@ async fn get_vpn_session_does_not_reconstruct_expired_wsv_lease() {
     let key_pair = checked_vpn_ed25519_keypair(0x67);
     let account = account_id_for(&key_pair);
     let app = vpn_enabled_app_with_operator(world_with_account(&account), &account);
-    let (quote, metering_keys) =
+    let (quote, _metering_keys) =
         create_quote_for_account(app.clone(), &account, &key_pair, "standard").await;
-    let session =
-        create_session_for_quote(app.clone(), &account, &key_pair, &quote, &metering_keys).await;
-    let active_record = app
-        .vpn_sessions
-        .get(&session.session_id)
-        .expect("active session")
-        .clone();
-    let mut lease_record =
-        lease_record_from_session_record(&active_record, VpnLeaseStatusV1::Active, None);
+    let mut lease_record = active_lease_record_from_quote(&quote);
     lease_record.expires_at_ms = now_ms().saturating_sub(1);
     lease_record.opened_at_ms = lease_record.expires_at_ms.saturating_sub(10_000);
     resign_lease_quote_projection(&mut lease_record);
+    let session_id = hex::encode(lease_record.session_id);
     app.state.insert_vpn_lease_for_testing(lease_record);
-    app.vpn_sessions.clear();
     let method = Method::GET;
-    let uri: Uri = format!("/v1/vpn/sessions/{}", session.session_id)
+    let uri: Uri = format!("/v1/vpn/sessions/{session_id}")
         .parse()
         .expect("get uri");
     let headers = signed_app_headers(&account, &key_pair, &method, &uri, &[]);
-    let response = handle_get_vpn_session(app, &method, &uri, &headers, &session.session_id)
+    let response = handle_get_vpn_session(app, &method, &uri, &headers, &session_id)
         .await
         .expect("expired wsv session")
         .into_response();
@@ -2011,31 +2121,20 @@ async fn vpn_quote_create_rejects_replayed_nonce() {
     assert!(format!("{error:?}").contains("nonce already used"));
 }
 #[tokio::test]
-async fn recreating_session_does_not_fabricate_a_financial_receipt() {
+async fn retrying_paid_session_is_idempotent_and_does_not_fabricate_a_receipt() {
     let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
     let key_pair = checked_vpn_ed25519_keypair(0x6F);
     let account = account_id_for(&key_pair);
     let app = vpn_enabled_app_with_operator(world_with_account(&account), &account);
-    let (first_quote, first_metering_keys) =
+    let (quote, metering_keys) =
         create_quote_for_account(app.clone(), &account, &key_pair, "standard").await;
-    let _ = create_session_for_quote(
-        app.clone(),
-        &account,
-        &key_pair,
-        &first_quote,
-        &first_metering_keys,
-    )
-    .await;
-    let (second_quote, second_metering_keys) =
-        create_quote_for_account(app.clone(), &account, &key_pair, "low-latency").await;
-    let _ = create_session_for_quote(
-        app.clone(),
-        &account,
-        &key_pair,
-        &second_quote,
-        &second_metering_keys,
-    )
-    .await;
+    let first =
+        create_session_for_quote(app.clone(), &account, &key_pair, &quote, &metering_keys).await;
+    let retry =
+        create_session_for_quote(app.clone(), &account, &key_pair, &quote, &metering_keys).await;
+    assert_eq!(retry.session_id, first.session_id);
+    assert_eq!(retry.payment_tx_hash, first.payment_tx_hash);
+    assert_eq!(retry.helper_ticket_hex, first.helper_ticket_hex);
     let receipts_method = Method::GET;
     let receipts_uri: Uri = "/v1/vpn/receipts".parse().expect("receipts uri");
     let receipts_headers =
@@ -2217,19 +2316,16 @@ fn list_vpn_receipts_cannot_reintroduce_a_global_lease_scan() {
     assert!(!implementation.contains("vpn_leases().iter()"));
 }
 #[test]
-fn vpn_runtime_rejects_unsigned_quote_record_projections() {
+fn vpn_quote_projection_rejects_unsigned_flat_field_substitution() {
     let account = checked_vpn_account(0xDF);
     let app = mk_app_state_for_tests_with_world(world_with_account(&account));
-    let mut state = VpnRuntimeState::with_capacities(1, 1);
     let mut quote = sample_quote_record(&account, "df".repeat(32), u64::MAX);
     validate_quote_record_projection(&quote, app.state.network_id_ref())
         .expect("exact signed projection");
     quote.relay_tls_spki_sha256[0] ^= 1;
-    let error = insert_quote_locked(&app, &mut state, quote, 0)
-        .expect_err("an unsigned flat-field substitution must fail before caching");
+    let error = validate_quote_record_projection(&quote, app.state.network_id_ref())
+        .expect_err("an unsigned flat-field substitution must fail validation");
     assert!(format!("{error:?}").contains("TLS SPKI"));
-    assert!(app.vpn_quotes.is_empty());
-    assert!(state.quote_ids_by_account.is_empty());
 }
 #[test]
 fn vpn_runtime_rejects_a_valid_quote_from_a_different_exact_network() {
@@ -2248,51 +2344,103 @@ fn vpn_runtime_rejects_a_valid_quote_from_a_different_exact_network() {
         .expect_err("foreign-network VPN quote must fail before runtime caching");
     assert!(format!("{error:?}").contains("different exact network"));
 }
+#[tokio::test]
+async fn unpaid_quotes_are_stateless_and_do_not_grow_runtime_indexes() {
+    let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+    let key_pair = checked_vpn_ed25519_keypair(0xE8);
+    let account = account_id_for(&key_pair);
+    let app = vpn_enabled_app_with_operator(world_with_account(&account), &account);
+    let mut quote_ids = BTreeSet::new();
+    for _ in 0..32 {
+        let (quote, _) =
+            create_quote_for_account(app.clone(), &account, &key_pair, "standard").await;
+        assert!(quote_ids.insert(quote.quote_id));
+    }
+    assert!(app.vpn_sessions.is_empty());
+    assert!(app.vpn_used_payments.is_empty());
+    let state = lock_vpn_runtime(&app);
+    assert!(state.session_ids_by_account.is_empty());
+    assert!(state.session_expirations.is_empty());
+}
+#[tokio::test]
+async fn signed_quote_survives_torii_restart_before_session_admission() {
+    let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+    let key_pair = checked_vpn_ed25519_keypair(0xE9);
+    let account = account_id_for(&key_pair);
+    let quote_app = vpn_enabled_app_with_operator(world_with_account(&account), &account);
+    let (quote, metering_keys) =
+        create_quote_for_account(quote_app.clone(), &account, &key_pair, "standard").await;
+    drop(quote_app);
+
+    let admission_app = vpn_enabled_app_with_operator(world_with_account(&account), &account);
+    let session = create_session_for_quote(
+        admission_app.clone(),
+        &account,
+        &key_pair,
+        &quote,
+        &metering_keys,
+    )
+    .await;
+    assert_eq!(session.quote_id, quote.quote_id);
+    assert_eq!(session.account_id, account.to_string());
+    assert!(admission_app.vpn_sessions.contains_key(&session.session_id));
+}
+#[tokio::test]
+async fn session_revalidation_rejects_a_consensus_transition_after_payment_snapshot() {
+    let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+    let key_pair = checked_vpn_ed25519_keypair(0xEA);
+    let account = account_id_for(&key_pair);
+    let app = vpn_enabled_app_with_operator(world_with_account(&account), &account);
+    let (response, _) =
+        create_quote_for_account(app.clone(), &account, &key_pair, "standard").await;
+    let mut lease = install_active_lease_for_quote(&app, &response);
+    let quote_id = lease.quote_id;
+    let current_ms = now_ms();
+    let (observed_lease, observed_quote) =
+        active_paid_lease_for_session(&app, &account, quote_id, current_ms)
+            .expect("fixture starts with an active paid lease");
+
+    lease.status = VpnLeaseStatusV1::Refunded;
+    lease.refunded_at_ms = Some(lease.refund_available_at_ms());
+    lease.refunded_fee = lease.lease_fee.clone();
+    app.state.insert_vpn_lease_for_testing(lease);
+
+    let error = revalidate_unchanged_paid_lease(
+        &app,
+        &account,
+        quote_id,
+        &observed_lease,
+        &observed_quote,
+        current_ms,
+    )
+    .expect_err("a terminal consensus transition must revoke session admission");
+    assert!(format!("{error:?}").contains("active consensus-indexed paid lease"));
+}
 #[test]
 fn vpn_runtime_account_expiry_is_constant_and_isolated() {
     let target = checked_vpn_account(0xE0);
     let app = mk_app_state_for_tests_with_world(world_with_account(&target));
-    let mut state = VpnRuntimeState::with_capacities(128, 128);
-    let mut unrelated_quote_ids = Vec::new();
+    let mut state = VpnRuntimeState::with_session_capacity(128);
     let mut unrelated_sessions = Vec::new();
     for ordinal in 1..=64_usize {
         let account = checked_vpn_account(u8::try_from(ordinal).expect("fixture seed"));
-        let quote_id = format!("{:064x}", ordinal.saturating_add(20_000));
-        insert_quote_locked(
-            &app,
-            &mut state,
-            sample_quote_record(&account, quote_id.clone(), u64::MAX),
-            100,
-        )
-        .expect("unrelated quote");
         let session = sample_indexed_session_record(&account, ordinal, u64::MAX);
-        insert_session_locked(&app, &mut state, session.clone(), 100).expect("unrelated session");
-        unrelated_quote_ids.push(quote_id);
+        assert!(
+            insert_session_locked(&app, &mut state, session.clone(), 100)
+                .expect("unrelated session")
+        );
         unrelated_sessions.push((session.session_id, session.payment_tx_hash));
     }
-    let target_quote_id = "aa".repeat(32);
-    insert_quote_locked(
-        &app,
-        &mut state,
-        sample_quote_record(&target, target_quote_id.clone(), 100),
-        99,
-    )
-    .expect("target quote");
     let target_session = sample_indexed_session_record(&target, 1_000, 100);
-    insert_session_locked(&app, &mut state, target_session.clone(), 99).expect("target session");
-    state.quote_account_lookups = 0;
+    assert!(
+        insert_session_locked(&app, &mut state, target_session.clone(), 99)
+            .expect("target session")
+    );
     state.session_account_lookups = 0;
-    expire_quote_for_account_locked(&app, &mut state, &target, 100);
     expire_session_for_account_locked(&app, &mut state, &target, 100);
-    assert_eq!(state.quote_account_lookups, 1);
     assert_eq!(state.session_account_lookups, 1);
-    assert_eq!(app.vpn_quotes.len(), unrelated_quote_ids.len());
     assert_eq!(app.vpn_sessions.len(), unrelated_sessions.len());
-    assert!(!app.vpn_quotes.contains_key(&target_quote_id));
     assert!(!app.vpn_sessions.contains_key(&target_session.session_id));
-    for quote_id in unrelated_quote_ids {
-        assert!(app.vpn_quotes.contains_key(&quote_id));
-    }
     for (session_id, payment_hash) in unrelated_sessions {
         assert!(app.vpn_sessions.contains_key(&session_id));
         assert!(app.vpn_used_payments.contains_key(&payment_hash));
@@ -2306,26 +2454,16 @@ fn vpn_runtime_account_expiry_is_constant_and_isolated() {
 fn vpn_runtime_replacement_and_exact_remove_keep_indexes_consistent() {
     let account = checked_vpn_account(0xE1);
     let app = mk_app_state_for_tests_with_world(world_with_account(&account));
-    let mut state = VpnRuntimeState::with_capacities(1, 1);
-    let first_quote = sample_quote_record(&account, "11".repeat(32), u64::MAX);
-    let second_quote = sample_quote_record(&account, "22".repeat(32), u64::MAX);
-    insert_quote_locked(&app, &mut state, first_quote.clone(), 100).expect("first quote");
-    insert_quote_locked(&app, &mut state, second_quote.clone(), 100).expect("replacement quote");
-    assert_eq!(app.vpn_quotes.len(), 1);
-    assert!(!app.vpn_quotes.contains_key(&first_quote.quote_id));
-    assert_eq!(
-        state.quote_ids_by_account.get(&account),
-        Some(&second_quote.quote_id)
-    );
-    let removed_quote = remove_quote_by_id_locked(&app, &mut state, &second_quote.quote_id)
-        .expect("exact quote remove");
-    assert_eq!(removed_quote.quote_id, second_quote.quote_id);
-    assert!(!state.quote_ids_by_account.contains_key(&account));
+    let mut state = VpnRuntimeState::with_session_capacity(1);
     let first_session = sample_indexed_session_record(&account, 1, u64::MAX);
     let second_session = sample_indexed_session_record(&account, 2, u64::MAX);
-    insert_session_locked(&app, &mut state, first_session.clone(), 100).expect("first session");
-    insert_session_locked(&app, &mut state, second_session.clone(), 200)
-        .expect("replacement session");
+    assert!(
+        insert_session_locked(&app, &mut state, first_session.clone(), 100).expect("first session")
+    );
+    assert!(
+        insert_session_locked(&app, &mut state, second_session.clone(), 200)
+            .expect("replacement session")
+    );
     assert_eq!(app.vpn_sessions.len(), 1);
     assert!(!app.vpn_sessions.contains_key(&first_session.session_id));
     assert!(
@@ -2353,32 +2491,69 @@ fn vpn_runtime_replacement_and_exact_remove_keep_indexes_consistent() {
             .contains_key(&second_session.payment_tx_hash)
     );
 }
-#[test]
-fn vpn_runtime_caps_fail_closed_without_evicting_unrelated_accounts() {
+#[tokio::test]
+async fn full_session_cache_does_not_reject_a_paid_wsv_valid_lease() {
+    let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
     let first = checked_vpn_account(0xE2);
     let second = checked_vpn_account(0xE3);
-    let app = mk_app_state_for_tests_with_world(world_with_account(&first));
-    let mut state = VpnRuntimeState::with_capacities(1, 1);
-    let first_quote = sample_quote_record(&first, "31".repeat(32), u64::MAX);
-    let second_quote = sample_quote_record(&second, "32".repeat(32), u64::MAX);
-    insert_quote_locked(&app, &mut state, first_quote.clone(), 100).expect("first quote");
-    let quote_error = insert_quote_locked(&app, &mut state, second_quote, 100)
-        .expect_err("full quote cache must reject another account");
-    assert!(format!("{quote_error:?}").contains("quote capacity"));
-    assert_eq!(app.vpn_quotes.len(), 1);
-    assert!(app.vpn_quotes.contains_key(&first_quote.quote_id));
-    let first_session = sample_indexed_session_record(&first, 31, u64::MAX);
-    let second_session = sample_indexed_session_record(&second, 32, u64::MAX);
-    insert_session_locked(&app, &mut state, first_session.clone(), 100).expect("first session");
-    let session_error = insert_session_locked(&app, &mut state, second_session, 100)
-        .expect_err("full session cache must reject another account");
-    assert!(format!("{session_error:?}").contains("session capacity"));
+    let first_keys = checked_vpn_ed25519_keypair(0xE2);
+    let second_keys = checked_vpn_ed25519_keypair(0xE3);
+    let app = vpn_enabled_app_with_operator(
+        world_with_accounts(&[first.clone(), second.clone()]),
+        &first,
+    );
+    lock_vpn_runtime(&app).session_capacity = 1;
+    let (first_quote, first_metering) =
+        create_quote_for_account(app.clone(), &first, &first_keys, "standard").await;
+    let first_session = create_session_for_quote(
+        app.clone(),
+        &first,
+        &first_keys,
+        &first_quote,
+        &first_metering,
+    )
+    .await;
+    let (second_quote, second_metering) =
+        create_quote_for_account(app.clone(), &second, &second_keys, "standard").await;
+    let second_session = create_session_for_quote(
+        app.clone(),
+        &second,
+        &second_keys,
+        &second_quote,
+        &second_metering,
+    )
+    .await;
+
     assert_eq!(app.vpn_sessions.len(), 1);
     assert!(app.vpn_sessions.contains_key(&first_session.session_id));
+    assert!(!app.vpn_sessions.contains_key(&second_session.session_id));
     assert!(
         app.vpn_used_payments
             .contains_key(&first_session.payment_tx_hash)
     );
+    assert!(
+        !app.vpn_used_payments
+            .contains_key(&second_session.payment_tx_hash)
+    );
+
+    let method = Method::GET;
+    let uri: Uri = format!("/v1/vpn/sessions/{}", second_session.session_id)
+        .parse()
+        .expect("session uri");
+    let headers = signed_app_headers(&second, &second_keys, &method, &uri, &[]);
+    let response = handle_get_vpn_session(
+        app.clone(),
+        &method,
+        &uri,
+        &headers,
+        &second_session.session_id,
+    )
+    .await
+    .expect("WSV-valid uncached session remains available")
+    .into_response();
+    assert_eq!(response.status(), StatusCode::OK);
+    let reconstructed: VpnSessionResponseDto = read_json(response).await;
+    assert_eq!(reconstructed.session_id, second_session.session_id);
 }
 
 #[test]
@@ -2386,24 +2561,18 @@ fn vpn_runtime_capacity_reclaims_expired_accounts_from_expiry_indexes() {
     let expired_account = checked_vpn_account(0xE4);
     let fresh_account = checked_vpn_account(0xE5);
     let app = mk_app_state_for_tests_with_world(world_with_account(&expired_account));
-    let mut state = VpnRuntimeState::with_capacities(1, 1);
-
-    let expired_quote = sample_quote_record(&expired_account, "41".repeat(32), 100);
-    insert_quote_locked(&app, &mut state, expired_quote.clone(), 99)
-        .expect("unexpired first quote");
-    let fresh_quote = sample_quote_record(&fresh_account, "42".repeat(32), u64::MAX);
-    insert_quote_locked(&app, &mut state, fresh_quote.clone(), 100)
-        .expect("expired quote capacity must be reclaimed");
-    assert!(!app.vpn_quotes.contains_key(&expired_quote.quote_id));
-    assert!(app.vpn_quotes.contains_key(&fresh_quote.quote_id));
-    assert_eq!(state.quote_expirations.len(), 1);
+    let mut state = VpnRuntimeState::with_session_capacity(1);
 
     let expired_session = sample_indexed_session_record(&expired_account, 41, 100);
-    insert_session_locked(&app, &mut state, expired_session.clone(), 99)
-        .expect("unexpired first session");
+    assert!(
+        insert_session_locked(&app, &mut state, expired_session.clone(), 99)
+            .expect("unexpired first session")
+    );
     let fresh_session = sample_indexed_session_record(&fresh_account, 42, u64::MAX);
-    insert_session_locked(&app, &mut state, fresh_session.clone(), 100)
-        .expect("expired session capacity must be reclaimed");
+    assert!(
+        insert_session_locked(&app, &mut state, fresh_session.clone(), 100)
+            .expect("expired session capacity must be reclaimed")
+    );
     assert!(!app.vpn_sessions.contains_key(&expired_session.session_id));
     assert!(app.vpn_sessions.contains_key(&fresh_session.session_id));
     assert!(
@@ -2427,13 +2596,15 @@ fn vpn_runtime_reserved_expiry_survives_reclaim_and_later_frees_capacity() {
     {
         let mut state = lock_vpn_runtime(&app);
         state.session_capacity = 1;
-        insert_session_locked(
-            &app,
-            &mut state,
-            session.clone(),
-            expires_at_ms.saturating_sub(1),
-        )
-        .expect("session exists before its fixture expiry");
+        assert!(
+            insert_session_locked(
+                &app,
+                &mut state,
+                session.clone(),
+                expires_at_ms.saturating_sub(1),
+            )
+            .expect("session exists before its fixture expiry")
+        );
     }
     let reservation =
         VpnSettlementReservation::reserve(&app, session.session_id.clone()).expect("reservation");
@@ -2461,8 +2632,10 @@ fn vpn_runtime_reserved_expiry_survives_reclaim_and_later_frees_capacity() {
     );
 
     let replacement = sample_indexed_session_record(&replacement_account, 44, u64::MAX);
-    insert_session_locked(&app, &mut state, replacement.clone(), expires_at_ms)
-        .expect("released expired reservation must free session capacity");
+    assert!(
+        insert_session_locked(&app, &mut state, replacement.clone(), expires_at_ms)
+            .expect("released expired reservation must free session capacity")
+    );
     assert!(!app.vpn_sessions.contains_key(&session.session_id));
     assert!(!state.session_ids_by_account.contains_key(&account));
     assert!(!app.vpn_used_payments.contains_key(&session.payment_tx_hash));
@@ -2471,7 +2644,7 @@ fn vpn_runtime_reserved_expiry_survives_reclaim_and_later_frees_capacity() {
 }
 
 #[test]
-fn vpn_runtime_expiry_uses_indexes_without_global_cache_scans() {
+fn vpn_runtime_has_no_quote_cache_and_uses_indexed_session_expiry() {
     let source = include_str!("vpn.rs");
     let implementation = &source[..source
         .find("#[cfg(all(test, feature = \"app_api\"))]")
@@ -2482,9 +2655,11 @@ fn vpn_runtime_expiry_uses_indexes_without_global_cache_scans() {
         .collect::<String>();
     assert!(!implementation.contains("remove_existing_sessions_for_account"));
     assert!(!implementation.contains("allocate_session_id_and_address_plan"));
-    assert!(!compact.contains("vpn_quotes.iter()"));
+    assert!(!implementation.contains("vpn_quotes"));
+    assert!(!implementation.contains("quote_ids_by_account"));
+    assert!(!implementation.contains("quote_expirations"));
+    assert!(!implementation.contains("insert_quote_locked"));
     assert!(!compact.contains("vpn_sessions.iter()"));
-    assert!(implementation.contains("quote_expirations"));
     assert!(implementation.contains("session_expirations"));
 }
 #[tokio::test]
@@ -2555,16 +2730,7 @@ async fn submit_vpn_receipt_allows_expired_session_within_wsv_grace() {
     );
     let (quote, metering_keys) =
         create_quote_for_account(app.clone(), &user, &user_keys, "standard").await;
-    let session =
-        create_session_for_quote(app.clone(), &user, &user_keys, &quote, &metering_keys).await;
-    let active_record = app
-        .vpn_sessions
-        .get(&session.session_id)
-        .expect("active session")
-        .clone();
-    let mut fixture = receipt_fixture_for_session(&session, &active_record, &user, &metering_keys);
-    let mut lease_record =
-        lease_record_from_session_record(&active_record, VpnLeaseStatusV1::Active, None);
+    let mut lease_record = active_lease_record_from_quote(&quote);
     let expires_at_ms = now_ms().saturating_sub(1_000);
     let issued_at_ms = expires_at_ms.saturating_sub(1);
     let opened_at_ms = issued_at_ms;
@@ -2572,6 +2738,9 @@ async fn submit_vpn_receipt_allows_expired_session_within_wsv_grace() {
     lease_record.expires_at_ms = expires_at_ms;
     lease_record.settlement_grace_ms = 60_000;
     resign_lease_quote_projection(&mut lease_record);
+    let active_record = session_record_from_lease(&lease_record).expect("expired lease projection");
+    let session = response_from_record(&active_record);
+    let mut fixture = receipt_fixture_for_session(&session, &active_record, &user, &metering_keys);
     let mut voucher_body = fixture.voucher.body;
     voucher_body.issued_at_ms = issued_at_ms;
     fixture.voucher = VpnUsageVoucherV1::try_sign(voucher_body, metering_keys.private_key())
@@ -2582,7 +2751,6 @@ async fn submit_vpn_receipt_allows_expired_session_within_wsv_grace() {
     resign_test_relay_receipt(&mut fixture.relay_receipt);
     fixture.body = receipt_submit_body(&fixture.relay_receipt, &fixture.voucher);
     app.state.insert_vpn_lease_for_testing(lease_record);
-    app.vpn_sessions.clear();
     let method = Method::POST;
     let uri: Uri = "/v1/vpn/receipts".parse().expect("receipts uri");
     let headers = signed_app_headers(
@@ -2618,22 +2786,15 @@ async fn submit_vpn_receipt_rejects_after_wsv_grace() {
     );
     let (quote, metering_keys) =
         create_quote_for_account(app.clone(), &user, &user_keys, "standard").await;
-    let session =
-        create_session_for_quote(app.clone(), &user, &user_keys, &quote, &metering_keys).await;
-    let active_record = app
-        .vpn_sessions
-        .get(&session.session_id)
-        .expect("active session")
-        .clone();
-    let fixture = receipt_fixture_for_session(&session, &active_record, &user, &metering_keys);
-    let mut lease_record =
-        lease_record_from_session_record(&active_record, VpnLeaseStatusV1::Active, None);
+    let mut lease_record = active_lease_record_from_quote(&quote);
     lease_record.expires_at_ms = now_ms().saturating_sub(10_000);
     lease_record.opened_at_ms = lease_record.expires_at_ms.saturating_sub(10_000);
     lease_record.settlement_grace_ms = 1;
     resign_lease_quote_projection(&mut lease_record);
+    let active_record = session_record_from_lease(&lease_record).expect("expired lease projection");
+    let session = response_from_record(&active_record);
+    let fixture = receipt_fixture_for_session(&session, &active_record, &user, &metering_keys);
     app.state.insert_vpn_lease_for_testing(lease_record);
-    app.vpn_sessions.clear();
     let method = Method::POST;
     let uri: Uri = "/v1/vpn/receipts".parse().expect("receipts uri");
     let headers = signed_app_headers(
@@ -3264,7 +3425,7 @@ async fn submit_vpn_receipt_rejects_settled_lease_after_cache_loss() {
     let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
     let (app, _user, _user_keys, operator, operator_keys, _metering_keys, fixture) =
         active_wsv_receipt_fixture().await;
-    let mut lease = lease_record_by_id(&app, &fixture.lease_id).expect("active lease");
+    let mut lease = wsv_lease_record_by_id(&app, &fixture.lease_id).expect("active lease");
     lease.status = VpnLeaseStatusV1::Settled;
     lease.settled_at_ms = Some(fixture.relay_receipt.receipt.ended_at_ms);
     lease.highest_voucher_sequence = fixture.relay_receipt.receipt.highest_voucher_sequence;
@@ -3293,7 +3454,7 @@ async fn submit_vpn_receipt_rejects_refunded_lease_after_cache_loss() {
     let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
     let (app, _user, _user_keys, operator, operator_keys, _metering_keys, fixture) =
         active_wsv_receipt_fixture().await;
-    let mut lease = lease_record_by_id(&app, &fixture.lease_id).expect("active lease");
+    let mut lease = wsv_lease_record_by_id(&app, &fixture.lease_id).expect("active lease");
     lease.status = VpnLeaseStatusV1::Refunded;
     lease.refunded_at_ms = Some(lease.refund_available_at_ms());
     lease.refunded_fee = lease.lease_fee.clone();

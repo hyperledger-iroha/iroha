@@ -1,7 +1,12 @@
-name: Verify Kagemusha V4 production readiness (publication blocked)
+name: Authorize Kagemusha V4 mobile production builds
 
 on:
   workflow_dispatch:
+    inputs:
+      mobile_release_manifest_sha256:
+        description: "Exact promoted Kagemusha V4 manifest digest to authorize for mobile builds."
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -43,11 +48,15 @@ jobs:
           retention-days: 1
 
   production-promotion:
-    name: Verify reviewed production inputs (does not publish or activate)
+    name: Qualify and authorize the Apple production build
     needs: controller-build
     environment: kagemusha-v4-production
     runs-on: [self-hosted, macOS, ARM64, kagemusha-production]
     timeout-minutes: 180
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       - name: Check out the exact workflow commit for identity binding
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -122,6 +131,7 @@ jobs:
           test "$PROMOTION_GITHUB_EVENT_NAME" = workflow_dispatch
           test "$PROMOTION_GITHUB_REPOSITORY" = hyperledger-iroha/iroha
           test "$PROMOTION_GITHUB_REF_PROTECTED" = true
+          test "$PROMOTION_GITHUB_REF" = refs/heads/main
           test "$PROMOTION_GITHUB_WORKFLOW_REF" = \
             "hyperledger-iroha/iroha/.github/workflows/promote_kagemusha_v4.yml@$PROMOTION_GITHUB_REF"
           [[ "$PROMOTION_GITHUB_RUN_ID" =~ ^[1-9][0-9]*$ ]]
@@ -346,3 +356,287 @@ jobs:
               --python-runtime-root "$KAGEMUSHA_PRODUCTION_READINESS_PYTHON_RUNTIME_ROOT" \
               --python-runtime-tree-sha256 "$KAGEMUSHA_PRODUCTION_READINESS_PYTHON_RUNTIME_TREE_SHA256" \
               --python-sha256 "$KAGEMUSHA_PRODUCTION_READINESS_PYTHON_SHA256"
+      - name: Issue the exact Apple mobile build authorization
+        shell: bash
+        env:
+          KAGEMUSHA_PRODUCTION_READINESS_PYTHON: ${{ vars.KAGEMUSHA_PRODUCTION_READINESS_PYTHON }}
+          KAGEMUSHA_PRODUCTION_READINESS_PYTHON_SHA256: ${{ vars.KAGEMUSHA_PRODUCTION_READINESS_PYTHON_SHA256 }}
+          KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_SHA256: ${{ vars.KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_SHA256 }}
+          KAGEMUSHA_V4_SEALED_CANDIDATE_BUILD_REPORT_SHA256: ${{ vars.KAGEMUSHA_V4_SEALED_CANDIDATE_BUILD_REPORT_SHA256 }}
+          KAGEMUSHA_V4_RELEASE_POLICY_PATH: ${{ vars.KAGEMUSHA_V4_RELEASE_POLICY_PATH }}
+          KAGEMUSHA_V4_ARTIFACT_ROOT: ${{ vars.KAGEMUSHA_V4_ARTIFACT_ROOT }}
+          KAGEMUSHA_V4_KAGAMI_BIN: ${{ vars.KAGEMUSHA_V4_KAGAMI_BIN }}
+          KAGEMUSHA_V4_KAGAMI_SHA256: ${{ vars.KAGEMUSHA_V4_KAGAMI_SHA256 }}
+          KAGEMUSHA_MOBILE_RELEASE_MANIFEST_SHA256: ${{ inputs.mobile_release_manifest_sha256 }}
+        run: |
+          set -Eeuo pipefail
+          readonly workflow_ref="hyperledger-iroha/iroha/.github/workflows/promote_kagemusha_v4.yml@refs/heads/main"
+          readonly promotion_identity_domain="iroha.kagemusha.github-promotion-run.v1"
+          promotion_id="$(
+            /usr/bin/printf '%s\0%s\0%s\0%s\0%s\0%s\0' \
+              "$promotion_identity_domain" \
+              "$GITHUB_REPOSITORY" \
+              "$workflow_ref" \
+              "$GITHUB_SHA" \
+              "$GITHUB_RUN_ID" \
+              "$GITHUB_RUN_ATTEMPT" \
+              | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}'
+          )"
+          release_version="$(<IrohaSwift/VERSION)"
+          [[ "$release_version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          release_tag="v${release_version}"
+          authorization_dir="$RUNNER_TEMP/kagemusha-mobile-apple-authorization"
+          test ! -e "$authorization_dir"
+          /bin/mkdir -m 0700 "$authorization_dir"
+          ios_receipt="/Library/SORA/Kagemusha/catalog-revalidation/$promotion_id.json"
+          test "$(/usr/bin/shasum -a 256 "$KAGEMUSHA_PRODUCTION_READINESS_PYTHON" | /usr/bin/awk '{print $1}')" = \
+            "$KAGEMUSHA_PRODUCTION_READINESS_PYTHON_SHA256"
+          test "$(/usr/bin/shasum -a 256 "$KAGEMUSHA_V4_KAGAMI_BIN" | /usr/bin/awk '{print $1}')" = \
+            "$KAGEMUSHA_V4_KAGAMI_SHA256"
+          release_dir="$KAGEMUSHA_V4_ARTIFACT_ROOT/$KAGEMUSHA_MOBILE_RELEASE_MANIFEST_SHA256"
+          verification_report="$authorization_dir/kagami-release-verification-report.json"
+          "$KAGEMUSHA_V4_KAGAMI_BIN" kagemusha verify-release-v4 \
+            --bundle-dir "$release_dir" \
+            --release-policy "$KAGEMUSHA_V4_RELEASE_POLICY_PATH" \
+            --benchmark-evidence "$release_dir/physical-device-benchmark.evidence" \
+            --cryptographic-review "$release_dir/cryptographic-review.evidence" \
+            > "$verification_report"
+          common=(
+            --repository "$GITHUB_REPOSITORY"
+            --workflow-ref "$workflow_ref"
+            --workflow-sha "$GITHUB_SHA"
+            --source-sha "$GITHUB_SHA"
+            --run-id "$GITHUB_RUN_ID"
+            --run-attempt "$GITHUB_RUN_ATTEMPT"
+            --promotion-id "$promotion_id"
+            --release-tag "$release_tag"
+            --reviewed-source-closure-sha256 \
+              "$KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_SHA256"
+            --sealed-candidate-build-report-sha256 \
+              "$KAGEMUSHA_V4_SEALED_CANDIDATE_BUILD_REPORT_SHA256"
+            --artifact-manifest-sha256 \
+              "$KAGEMUSHA_MOBILE_RELEASE_MANIFEST_SHA256"
+          )
+          "$KAGEMUSHA_PRODUCTION_READINESS_PYTHON" -I -S -B \
+            scripts/kagemusha_mobile_production_authorization.py issue \
+            --platform apple "${common[@]}" \
+            --evidence "$ios_receipt" \
+            --release-policy "$KAGEMUSHA_V4_RELEASE_POLICY_PATH" \
+            --artifact-root "$KAGEMUSHA_V4_ARTIFACT_ROOT" \
+            --release-verification-report "$verification_report" \
+            --output "$authorization_dir/apple-production-authorization-v1.json"
+          test "$(find "$authorization_dir" -maxdepth 1 -type f | wc -l | tr -d '[:space:]')" = 2
+      - name: Attest the Apple build authorization
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
+        with:
+          subject-path: ${{ runner.temp }}/kagemusha-mobile-apple-authorization/apple-production-authorization-v1.json
+      - name: Stage the Apple offline GitHub attestation bundle
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          authorization_dir="$RUNNER_TEMP/kagemusha-mobile-apple-authorization"
+          attestation_list="$RUNNER_TEMP/created_attestation_paths.txt"
+          test -f "$attestation_list"
+          test ! -L "$attestation_list"
+          mkdir -m 0700 "$authorization_dir/github-attestations"
+          count=0
+          while IFS= read -r attestation_path; do
+            [[ -n "$attestation_path" ]] || continue
+            [[ "$attestation_path" == "$RUNNER_TEMP/"* ]]
+            test -f "$attestation_path"
+            test ! -L "$attestation_path"
+            count=$((count + 1))
+            (( count <= 8 ))
+            /bin/cp -- "$attestation_path" \
+              "$authorization_dir/github-attestations/provenance-${count}.json"
+          done < "$attestation_list"
+          test "$count" = 1
+      - name: Upload the authenticated Apple production authorization
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: kagemusha-mobile-apple-production-authorization-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/kagemusha-mobile-apple-authorization/apple-production-authorization-v1.json
+            ${{ runner.temp }}/kagemusha-mobile-apple-authorization/kagami-release-verification-report.json
+            ${{ runner.temp }}/kagemusha-mobile-apple-authorization/github-attestations/*.json
+          if-no-files-found: error
+          retention-days: 90
+
+  android-production-qualification:
+    name: Qualify and authorize the Android production build
+    needs: production-promotion
+    environment: kagemusha-v4-android-production
+    runs-on: [self-hosted, macOS, ARM64, kagemusha-android-production]
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Check out the exact workflow commit for Android identity binding
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Validate the protected Android physical-device evidence matrix
+        shell: bash
+        env:
+          KAGEMUSHA_PRODUCTION_READINESS_PYTHON: ${{ vars.KAGEMUSHA_PRODUCTION_READINESS_PYTHON }}
+          KAGEMUSHA_PRODUCTION_READINESS_PYTHON_SHA256: ${{ vars.KAGEMUSHA_PRODUCTION_READINESS_PYTHON_SHA256 }}
+          KAGEMUSHA_ANDROID_DEVICE_EVIDENCE_ROOT: ${{ vars.KAGEMUSHA_ANDROID_DEVICE_EVIDENCE_ROOT }}
+          KAGEMUSHA_ANDROID_DEVICE_EVIDENCE_TRUSTED_SIGNER_PUBLIC_KEY: ${{ vars.KAGEMUSHA_ANDROID_DEVICE_EVIDENCE_TRUSTED_SIGNER_PUBLIC_KEY }}
+          KAGEMUSHA_ANDROID_JAVA: ${{ vars.KAGEMUSHA_ANDROID_JAVA }}
+          KAGEMUSHA_ANDROID_JAVA_SHA256: ${{ vars.KAGEMUSHA_ANDROID_JAVA_SHA256 }}
+          KAGEMUSHA_ANDROID_APKSIGNER_JAR: ${{ vars.KAGEMUSHA_ANDROID_APKSIGNER_JAR }}
+          KAGEMUSHA_ANDROID_APKSIGNER_JAR_SHA256: ${{ vars.KAGEMUSHA_ANDROID_APKSIGNER_JAR_SHA256 }}
+          KAGEMUSHA_ANDROID_OPENSSL: ${{ vars.KAGEMUSHA_ANDROID_OPENSSL }}
+          KAGEMUSHA_ANDROID_OPENSSL_SHA256: ${{ vars.KAGEMUSHA_ANDROID_OPENSSL_SHA256 }}
+          KAGEMUSHA_ANDROID_ATTESTATION_TRUST_ROOT: ${{ vars.KAGEMUSHA_ANDROID_ATTESTATION_TRUST_ROOT }}
+          KAGEMUSHA_ANDROID_ATTESTATION_TRUST_ROOT_SHA256: ${{ vars.KAGEMUSHA_ANDROID_ATTESTATION_TRUST_ROOT_SHA256 }}
+          KAGEMUSHA_ANDROID_ATTESTATION_REVOCATION_STATUS: ${{ vars.KAGEMUSHA_ANDROID_ATTESTATION_REVOCATION_STATUS }}
+          KAGEMUSHA_ANDROID_ATTESTATION_REVOCATION_STATUS_SHA256: ${{ vars.KAGEMUSHA_ANDROID_ATTESTATION_REVOCATION_STATUS_SHA256 }}
+          KAGEMUSHA_ANDROID_ATTESTATION_STATUS_CAPTURE_RECEIPT: ${{ vars.KAGEMUSHA_ANDROID_ATTESTATION_STATUS_CAPTURE_RECEIPT }}
+          KAGEMUSHA_ANDROID_ATTESTATION_STATUS_CAPTURE_RECEIPT_SHA256: ${{ vars.KAGEMUSHA_ANDROID_ATTESTATION_STATUS_CAPTURE_RECEIPT_SHA256 }}
+          PROMOTION_GITHUB_REF_PROTECTED: ${{ github.ref_protected }}
+          PROMOTION_GITHUB_WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -Eeuo pipefail
+          test "$GITHUB_REPOSITORY" = hyperledger-iroha/iroha
+          test "$GITHUB_REF" = refs/heads/main
+          test "$PROMOTION_GITHUB_REF_PROTECTED" = true
+          test "$PROMOTION_GITHUB_WORKFLOW_SHA" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(/usr/bin/shasum -a 256 "$KAGEMUSHA_PRODUCTION_READINESS_PYTHON" | /usr/bin/awk '{print $1}')" = \
+            "$KAGEMUSHA_PRODUCTION_READINESS_PYTHON_SHA256"
+          authorization_dir="$RUNNER_TEMP/kagemusha-mobile-android-authorization"
+          test ! -e "$authorization_dir"
+          /bin/mkdir -m 0700 "$authorization_dir"
+          "$KAGEMUSHA_PRODUCTION_READINESS_PYTHON" -I -S -B \
+            "$GITHUB_WORKSPACE/scripts/check_android_device_lab_slot.py" \
+            --root "$KAGEMUSHA_ANDROID_DEVICE_EVIDENCE_ROOT" \
+            --require-slot \
+            --require-kagemusha-production-evidence \
+            --require-kagemusha-standard-matrix \
+            --trusted-signer-public-key \
+              "$KAGEMUSHA_ANDROID_DEVICE_EVIDENCE_TRUSTED_SIGNER_PUBLIC_KEY" \
+            --java "$KAGEMUSHA_ANDROID_JAVA" \
+            --java-sha256 "$KAGEMUSHA_ANDROID_JAVA_SHA256" \
+            --apksigner-jar "$KAGEMUSHA_ANDROID_APKSIGNER_JAR" \
+            --apksigner-jar-sha256 "$KAGEMUSHA_ANDROID_APKSIGNER_JAR_SHA256" \
+            --openssl "$KAGEMUSHA_ANDROID_OPENSSL" \
+            --openssl-sha256 "$KAGEMUSHA_ANDROID_OPENSSL_SHA256" \
+            --android-attestation-trust-root \
+              "$KAGEMUSHA_ANDROID_ATTESTATION_TRUST_ROOT" \
+            --android-attestation-trust-root-sha256 \
+              "$KAGEMUSHA_ANDROID_ATTESTATION_TRUST_ROOT_SHA256" \
+            --android-attestation-revocation-status \
+              "$KAGEMUSHA_ANDROID_ATTESTATION_REVOCATION_STATUS" \
+            --android-attestation-revocation-status-sha256 \
+              "$KAGEMUSHA_ANDROID_ATTESTATION_REVOCATION_STATUS_SHA256" \
+            --android-attestation-status-capture-receipt \
+              "$KAGEMUSHA_ANDROID_ATTESTATION_STATUS_CAPTURE_RECEIPT" \
+            --android-attestation-status-capture-receipt-sha256 \
+              "$KAGEMUSHA_ANDROID_ATTESTATION_STATUS_CAPTURE_RECEIPT_SHA256" \
+            --json-out "$authorization_dir/android-device-lab-summary.json"
+      - name: Issue the exact Android mobile build authorization
+        shell: bash
+        env:
+          KAGEMUSHA_PRODUCTION_READINESS_PYTHON: ${{ vars.KAGEMUSHA_PRODUCTION_READINESS_PYTHON }}
+          KAGEMUSHA_PRODUCTION_READINESS_PYTHON_SHA256: ${{ vars.KAGEMUSHA_PRODUCTION_READINESS_PYTHON_SHA256 }}
+          KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE: ${{ vars.KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE }}
+          KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_SHA256: ${{ vars.KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_SHA256 }}
+          KAGEMUSHA_V4_SEALED_CANDIDATE_BUILD_REPORT_PATH: ${{ vars.KAGEMUSHA_V4_SEALED_CANDIDATE_BUILD_REPORT_PATH }}
+          KAGEMUSHA_V4_SEALED_CANDIDATE_BUILD_REPORT_SHA256: ${{ vars.KAGEMUSHA_V4_SEALED_CANDIDATE_BUILD_REPORT_SHA256 }}
+          KAGEMUSHA_V4_RELEASE_POLICY_PATH: ${{ vars.KAGEMUSHA_V4_RELEASE_POLICY_PATH }}
+          KAGEMUSHA_V4_ARTIFACT_ROOT: ${{ vars.KAGEMUSHA_V4_ARTIFACT_ROOT }}
+          KAGEMUSHA_V4_KAGAMI_BIN: ${{ vars.KAGEMUSHA_V4_KAGAMI_BIN }}
+          KAGEMUSHA_V4_KAGAMI_SHA256: ${{ vars.KAGEMUSHA_V4_KAGAMI_SHA256 }}
+          KAGEMUSHA_MOBILE_RELEASE_MANIFEST_SHA256: ${{ inputs.mobile_release_manifest_sha256 }}
+        run: |
+          set -Eeuo pipefail
+          test "$(/usr/bin/shasum -a 256 "$KAGEMUSHA_PRODUCTION_READINESS_PYTHON" | /usr/bin/awk '{print $1}')" = \
+            "$KAGEMUSHA_PRODUCTION_READINESS_PYTHON_SHA256"
+          test "$(/usr/bin/shasum -a 256 "$KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE" | /usr/bin/awk '{print $1}')" = \
+            "$KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_SHA256"
+          test "$(/usr/bin/shasum -a 256 "$KAGEMUSHA_V4_SEALED_CANDIDATE_BUILD_REPORT_PATH" | /usr/bin/awk '{print $1}')" = \
+            "$KAGEMUSHA_V4_SEALED_CANDIDATE_BUILD_REPORT_SHA256"
+          test "$(/usr/bin/shasum -a 256 "$KAGEMUSHA_V4_KAGAMI_BIN" | /usr/bin/awk '{print $1}')" = \
+            "$KAGEMUSHA_V4_KAGAMI_SHA256"
+          readonly workflow_ref="hyperledger-iroha/iroha/.github/workflows/promote_kagemusha_v4.yml@refs/heads/main"
+          promotion_id="$(
+            /usr/bin/printf '%s\0%s\0%s\0%s\0%s\0%s\0' \
+              iroha.kagemusha.github-promotion-run.v1 \
+              "$GITHUB_REPOSITORY" "$workflow_ref" "$GITHUB_SHA" \
+              "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" \
+              | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}'
+          )"
+          release_version="$(<IrohaSwift/VERSION)"
+          [[ "$release_version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          release_dir="$KAGEMUSHA_V4_ARTIFACT_ROOT/$KAGEMUSHA_MOBILE_RELEASE_MANIFEST_SHA256"
+          verification_report="$RUNNER_TEMP/kagemusha-mobile-android-authorization/kagami-release-verification-report.json"
+          "$KAGEMUSHA_V4_KAGAMI_BIN" kagemusha verify-release-v4 \
+            --bundle-dir "$release_dir" \
+            --release-policy "$KAGEMUSHA_V4_RELEASE_POLICY_PATH" \
+            --benchmark-evidence "$release_dir/physical-device-benchmark.evidence" \
+            --cryptographic-review "$release_dir/cryptographic-review.evidence" \
+            > "$verification_report"
+          "$KAGEMUSHA_PRODUCTION_READINESS_PYTHON" -I -S -B \
+            scripts/kagemusha_mobile_production_authorization.py issue \
+            --platform android \
+            --repository "$GITHUB_REPOSITORY" \
+            --workflow-ref "$workflow_ref" \
+            --workflow-sha "$GITHUB_SHA" \
+            --source-sha "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --promotion-id "$promotion_id" \
+            --release-tag "v${release_version}" \
+            --reviewed-source-closure-sha256 \
+              "$KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_SHA256" \
+            --sealed-candidate-build-report-sha256 \
+              "$KAGEMUSHA_V4_SEALED_CANDIDATE_BUILD_REPORT_SHA256" \
+            --artifact-manifest-sha256 \
+              "$KAGEMUSHA_MOBILE_RELEASE_MANIFEST_SHA256" \
+            --evidence \
+              "$RUNNER_TEMP/kagemusha-mobile-android-authorization/android-device-lab-summary.json" \
+            --release-policy "$KAGEMUSHA_V4_RELEASE_POLICY_PATH" \
+            --artifact-root "$KAGEMUSHA_V4_ARTIFACT_ROOT" \
+            --release-verification-report "$verification_report" \
+            --output \
+              "$RUNNER_TEMP/kagemusha-mobile-android-authorization/android-production-authorization-v1.json"
+      - name: Attest the Android build authorization
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
+        with:
+          subject-path: ${{ runner.temp }}/kagemusha-mobile-android-authorization/android-production-authorization-v1.json
+      - name: Stage the Android offline GitHub attestation bundle
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          authorization_dir="$RUNNER_TEMP/kagemusha-mobile-android-authorization"
+          attestation_list="$RUNNER_TEMP/created_attestation_paths.txt"
+          test -f "$attestation_list"
+          test ! -L "$attestation_list"
+          mkdir -m 0700 "$authorization_dir/github-attestations"
+          count=0
+          while IFS= read -r attestation_path; do
+            [[ -n "$attestation_path" ]] || continue
+            [[ "$attestation_path" == "$RUNNER_TEMP/"* ]]
+            test -f "$attestation_path"
+            test ! -L "$attestation_path"
+            count=$((count + 1))
+            (( count <= 8 ))
+            /bin/cp -- "$attestation_path" \
+              "$authorization_dir/github-attestations/provenance-${count}.json"
+          done < "$attestation_list"
+          test "$count" = 1
+      - name: Upload the authenticated Android production authorization
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: kagemusha-mobile-android-production-authorization-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/kagemusha-mobile-android-authorization/android-production-authorization-v1.json
+            ${{ runner.temp }}/kagemusha-mobile-android-authorization/kagami-release-verification-report.json
+            ${{ runner.temp }}/kagemusha-mobile-android-authorization/github-attestations/*.json
+          if-no-files-found: error
+          retention-days: 90

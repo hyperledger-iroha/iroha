@@ -43,11 +43,36 @@ use norito::codec::{Decode as _, Encode as _};
 use regex::Regex;
 #[cfg(test)]
 use std::time::SystemTime;
-use std::{collections::BTreeMap, str::FromStr};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    str::FromStr,
+};
 use thiserror::Error;
 const MS_PER_DAY: u64 = 86_400_000;
 const MS_PER_YEAR: u64 = iroha_data_model::alias_setup::ALIAS_LEASE_YEAR_MS;
 const EXPIRED_TOMBSTONE_REASON: &str = "expired";
+/// Maximum indexed rekey-history occurrences examined by one lineage request.
+pub(crate) const ACCOUNT_REKEY_LINEAGE_WORK_LIMIT: usize = 4_096;
+
+#[derive(Default)]
+struct AccountRekeyLineageWork {
+    consumed: usize,
+}
+
+impl AccountRekeyLineageWork {
+    fn charge(&mut self, units: usize) -> Result<(), SnsError> {
+        self.consumed = self
+            .consumed
+            .checked_add(units)
+            .filter(|consumed| *consumed <= ACCOUNT_REKEY_LINEAGE_WORK_LIMIT)
+            .ok_or_else(|| {
+                SnsError::Conflict(format!(
+                    "account rekey lineage exceeds the deterministic {ACCOUNT_REKEY_LINEAGE_WORK_LIMIT}-occurrence work limit"
+                ))
+            })?;
+        Ok(())
+    }
+}
 fn default_namespace_lease_price() -> Quantity {
     "0.5"
         .parse()
@@ -2536,7 +2561,9 @@ fn active_account_id_rekey_suffix_for_alias<'world>(
     catalog: &DataSpaceCatalog,
     alias: &AccountAlias,
     now_ms: u64,
+    work: &mut AccountRekeyLineageWork,
 ) -> Result<Option<(AccountId, &'world [AccountId])>, SnsError> {
+    work.charge(1)?;
     let Some(active_account_id) = resolve_active_account_alias(world, catalog, alias, now_ms)?
     else {
         return Ok(None);
@@ -2549,12 +2576,14 @@ fn active_account_id_rekey_suffix_for_alias<'world>(
             "active alias account rekey record does not match its canonical binding".to_owned(),
         ));
     }
+    work.charge(record.previous_account_ids.len())?;
     let predecessors = record
         .active_account_id_rekey_predecessors()
         .map_err(|error| SnsError::Conflict(error.to_string()))?;
-    for (index, predecessor) in predecessors.iter().enumerate() {
+    let mut seen_predecessors = BTreeSet::new();
+    for predecessor in predecessors {
         if predecessor == &active_account_id
-            || predecessors[..index].contains(predecessor)
+            || !seen_predecessors.insert(predecessor)
             || world.account(predecessor).is_ok()
         {
             return Err(SnsError::Conflict(
@@ -2582,8 +2611,9 @@ pub fn resolve_active_account_id_rekey_lineage_for_alias(
     account_id: &AccountId,
     now_ms: u64,
 ) -> Result<Option<AccountId>, SnsError> {
+    let mut work = AccountRekeyLineageWork::default();
     let Some((active_account_id, predecessors)) =
-        active_account_id_rekey_suffix_for_alias(world, catalog, alias, now_ms)?
+        active_account_id_rekey_suffix_for_alias(world, catalog, alias, now_ms, &mut work)?
     else {
         return Ok(None);
     };
@@ -2592,15 +2622,15 @@ pub fn resolve_active_account_id_rekey_lineage_for_alias(
             .then_some(active_account_id),
     )
 }
-/// Resolve an account id to its unique active account-id rekey target across all live aliases.
+/// Resolve an account id to its unique active account-id rekey target across connected aliases.
 ///
 /// A currently registered account resolves to itself. Any malformed live suffix, reused retired
 /// predecessor, cycle, or conflicting active target fails closed.
 ///
 /// # Errors
 ///
-/// Returns [`SnsError`] when any live lease or rekey record is malformed or
-/// maps the requested account to conflicting active targets.
+/// Returns [`SnsError`] when a connected live lease or rekey record is malformed, exceeds the
+/// deterministic request work limit, or maps the requested account to conflicting active targets.
 pub fn resolve_active_account_id_rekey_lineage(
     world: &impl WorldReadOnly,
     catalog: &DataSpaceCatalog,
@@ -2608,9 +2638,13 @@ pub fn resolve_active_account_id_rekey_lineage(
     now_ms: u64,
 ) -> Result<Option<AccountId>, SnsError> {
     let mut resolved = world.account(account_id).ok().map(|_| account_id.clone());
-    for (alias, _) in world.account_rekey_records().iter() {
+    let mut work = AccountRekeyLineageWork::default();
+    let Some(aliases) = world.account_rekey_records_by_account().get(account_id) else {
+        return Ok(resolved);
+    };
+    for alias in aliases {
         let Some((active_account_id, predecessors)) =
-            active_account_id_rekey_suffix_for_alias(world, catalog, alias, now_ms)?
+            active_account_id_rekey_suffix_for_alias(world, catalog, alias, now_ms, &mut work)?
         else {
             continue;
         };
@@ -3127,8 +3161,7 @@ mod tests {
             .smart_contract_state_mut_for_testing()
             .insert(record_storage_key(&selector), record.encode());
         world.account_aliases.insert(alias.clone(), owner.clone());
-        world.account_rekey_records.insert(
-            alias.clone(),
+        world.replace_account_rekey_record_for_testing(
             iroha_data_model::account::rekey::AccountRekeyRecord::new(alias.clone(), owner.clone()),
         );
         assert_eq!(selector.label, "treasury@banka.banking");
@@ -3225,8 +3258,7 @@ mod tests {
             .smart_contract_state_mut_for_testing()
             .insert(key.clone(), record.encode());
         world.account_aliases.insert(alias.clone(), owner.clone());
-        world.account_rekey_records.insert(
-            alias.clone(),
+        world.replace_account_rekey_record_for_testing(
             iroha_data_model::account::rekey::AccountRekeyRecord::new(alias.clone(), owner.clone()),
         );
         assert_eq!(
@@ -3272,8 +3304,7 @@ mod tests {
         world
             .smart_contract_state_mut_for_testing()
             .insert(key, record.encode());
-        world.account_rekey_records.insert(
-            alias.clone(),
+        world.replace_account_rekey_record_for_testing(
             iroha_data_model::account::rekey::AccountRekeyRecord::new(alias.clone(), other),
         );
         assert_eq!(
@@ -3321,9 +3352,7 @@ mod tests {
         let canonical = AccountRekeyRecord::new(alias.clone(), retired.clone())
             .repoint_for_account_id_rekey(active.clone())
             .expect("canonical account-id rekey fixture");
-        world
-            .account_rekey_records
-            .insert(alias.clone(), canonical.clone());
+        world.replace_account_rekey_record_for_testing(canonical.clone());
         assert_eq!(
             resolve_active_account_id_rekey_lineage_for_alias(
                 &world.view(),
@@ -3378,8 +3407,7 @@ mod tests {
         world
             .smart_contract_state_mut_for_testing()
             .insert(storage_key.clone(), lease.encode());
-        world.account_rekey_records.insert(
-            alias.clone(),
+        world.replace_account_rekey_record_for_testing(
             AccountRekeyRecord::new(alias.clone(), retired.clone())
                 .reassign_alias_to_account(active.clone())
                 .expect("alias reassignment fixture"),
@@ -3394,7 +3422,7 @@ mod tests {
         malformed
             .transition_provenance
             .push(AccountRekeyTransitionProvenance::AccountIdRekey);
-        world.account_rekey_records.insert(alias.clone(), malformed);
+        world.replace_account_rekey_record_for_testing(malformed);
         assert!(
             resolve_active_account_id_rekey_lineage(&world.view(), &catalog, &retired, 50).is_err(),
             "duplicate predecessor history must fail closed"
@@ -3404,12 +3432,12 @@ mod tests {
         cyclic
             .transition_provenance
             .push(AccountRekeyTransitionProvenance::AccountIdRekey);
-        world.account_rekey_records.insert(alias.clone(), cyclic);
+        world.replace_account_rekey_record_for_testing(cyclic);
         assert!(
             resolve_active_account_id_rekey_lineage(&world.view(), &catalog, &retired, 50).is_err(),
             "active-id cycles must fail closed"
         );
-        world.account_rekey_records.insert(alias.clone(), canonical);
+        world.replace_account_rekey_record_for_testing(canonical);
         let second_alias =
             AccountAlias::domainless("ambiguous".parse().expect("label"), DataSpaceId::UNIVERSAL);
         let second_selector =
@@ -3431,8 +3459,7 @@ mod tests {
         world
             .account_aliases
             .insert(second_alias.clone(), unrelated.clone());
-        world.account_rekey_records.insert(
-            second_alias.clone(),
+        world.replace_account_rekey_record_for_testing(
             AccountRekeyRecord::new(second_alias, retired.clone())
                 .repoint_for_account_id_rekey(unrelated)
                 .expect("ambiguous fixture transition"),

@@ -1263,7 +1263,8 @@ the application owns reconciliation and any later explicit submission.
 `POST /v1/offline/redeem`, `GET /v1/offline/operations/{operation_id}`, and
 `POST /v1/offline/receiver-lineage`.
 Use `getOfflineCapability()`, `submitKagemushaTopUp`,
-`submitKagemushaRedeem`, `getKagemushaOperationStatus(operationId:)`, and
+`submitKagemushaRedeem`,
+`getKagemushaOperationStatus(operationId:chainDiscriminant:)`, and
 `getKagemushaRecipientRegistrationLineage(query:canonicalAuth:)`.
 `getOfflineCapability()` takes no selector.
 

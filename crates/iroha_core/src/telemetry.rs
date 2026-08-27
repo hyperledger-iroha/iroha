@@ -5047,10 +5047,13 @@ impl From<&DaPinIntentValidationError> for PinIntentSpoolReason {
             }
             DaPinIntentValidationError::UnknownOwner { .. } => PinIntentSpoolReason::UnknownOwner,
             DaPinIntentValidationError::AuthorizationMismatch { .. }
+            | DaPinIntentValidationError::PinScopeMismatch { .. }
             | DaPinIntentValidationError::WrongNetwork { .. }
             | DaPinIntentValidationError::ZeroPayloadBytes { .. }
             | DaPinIntentValidationError::InvalidAuthorizationSignatures { .. }
+            | DaPinIntentValidationError::InvalidPinScopeSignatures { .. }
             | DaPinIntentValidationError::UnauthorizedOwner { .. }
+            | DaPinIntentValidationError::UnauthorizedPinScopeOwner { .. }
             | DaPinIntentValidationError::MissingAdmissionPolicy
             | DaPinIntentValidationError::InvalidAdmissionPolicy { .. }
             | DaPinIntentValidationError::AdmissionDenied { .. } => {
@@ -7393,6 +7396,9 @@ impl Actor {
         self.metrics
             .p2p_total_cap_reject_total
             .set(iroha_p2p::network::total_cap_reject_count());
+        self.metrics
+            .p2p_preauth_source_cap_reject_total
+            .set(iroha_p2p::network::preauth_source_cap_reject_count());
         self.metrics
             .p2p_scion_inbound_total
             .set(iroha_p2p::network::scion_inbound_total());

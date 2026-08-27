@@ -1816,10 +1816,10 @@ mod tests {
         world
             .smart_contract_state
             .insert(crate::sns::record_storage_key(&selector), record.encode());
-        world.account_rekey_records.insert(
-            recipient_alias.clone(),
-            AccountRekeyRecord::new(recipient_alias, BOB_ID.clone()),
-        );
+        world.replace_account_rekey_record_for_testing(AccountRekeyRecord::new(
+            recipient_alias,
+            BOB_ID.clone(),
+        ));
         let state = State::new(
             world,
             Kura::blank_kura_for_testing(),
@@ -1871,10 +1871,11 @@ mod tests {
         stx.world
             .smart_contract_state
             .insert(crate::sns::record_storage_key(&selector), record.encode());
-        stx.world.account_rekey_records.insert(
-            alias.clone(),
-            AccountRekeyRecord::new(alias.clone(), account_id.clone()),
-        );
+        stx.world
+            .replace_account_rekey_record(AccountRekeyRecord::new(
+                alias.clone(),
+                account_id.clone(),
+            ));
         stx.world.insert_account_alias_binding(alias, account_id);
     }
     fn fx_settlement(policy: &FxCorridorPolicy, id: &str, source_amount: u32) -> SettleFxCorridor {
