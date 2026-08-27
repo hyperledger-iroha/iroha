@@ -3,18 +3,10 @@
 use super::next_port;
 use futures::{prelude::*, stream::FuturesUnordered, task::AtomicWaker};
 use iroha_config::parameters::{
-    actual::{
-        Network as Config, RelayMode, SoranetHandshake as ActualSoranetHandshake, SoranetPow,
-    },
+    actual::{Network as Config, RelayMode, SoranetHandshake as ActualSoranetHandshake},
     defaults::network::{DEFAULT_AEAD_FRAME_OVERHEAD_BYTES, TRUST_GOSSIP},
 };
-use iroha_config_base::WithOrigin;
-use iroha_crypto::{
-    KeyPair,
-    soranet::handshake::{
-        DEFAULT_CLIENT_CAPABILITIES, DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_RELAY_CAPABILITIES,
-    },
-};
+use iroha_crypto::KeyPair;
 use iroha_data_model::prelude::{NetworkId, Peer};
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_logger::{prelude::*, test_logger};

@@ -1,14 +1,8 @@
 //! Trust-gossip capability gating integration tests.
 #![allow(unexpected_cfgs)]
 use super::next_port;
-use iroha_config::parameters::actual::{
-    Network as Config, SoranetHandshake as ActualSoranetHandshake, SoranetPow,
-};
+use iroha_config::parameters::actual::Network as Config;
 use iroha_config::parameters::defaults::network::TRUST_GOSSIP;
-use iroha_config_base::WithOrigin;
-use iroha_crypto::soranet::handshake::{
-    DEFAULT_CLIENT_CAPABILITIES, DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_RELAY_CAPABILITIES,
-};
 use iroha_data_model::prelude::Peer;
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_logger::test_logger;
@@ -40,23 +34,10 @@ impl<'a> norito::core::DecodeFromSlice<'a> for TrustTestMessage {
     }
 }
 fn make_config(addr: &SocketAddr, trust_gossip: bool) -> Config {
-    // Admission puzzles are covered by `p2p_puzzle`; keeping them out of this
-    // suite makes trust-gossip timing assertions test only gossip behavior.
-    let pow = SoranetPow {
-        required: false,
-        puzzle: None,
-        ..SoranetPow::default()
-    };
-    let soranet_handshake = ActualSoranetHandshake {
-        descriptor_commit: WithOrigin::inline(DEFAULT_DESCRIPTOR_COMMIT.to_vec()),
-        client_capabilities: WithOrigin::inline(DEFAULT_CLIENT_CAPABILITIES.to_vec()),
-        relay_capabilities: WithOrigin::inline(DEFAULT_RELAY_CAPABILITIES.to_vec()),
-        trust_gossip,
-        kem_id: 1,
-        sig_id: 1,
-        resume_hash: None,
-        pow,
-    };
+    // Keep mandatory admission inexpensive and replay-state isolated so this
+    // suite continues to measure trust-gossip behavior.
+    let mut soranet_handshake = super::mandatory_test_soranet_handshake();
+    soranet_handshake.trust_gossip = trust_gossip;
     Config {
         happy_eyeballs_stagger: Duration::from_millis(50),
         p2p_queue_cap_high: NonZeroUsize::new(4096).expect("non-zero"),

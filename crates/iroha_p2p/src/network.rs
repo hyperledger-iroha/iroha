@@ -58,9 +58,32 @@ fn test_network_id(seed: &str) -> NetworkId {
     )))
 }
 #[cfg(test)]
+fn low_cost_test_soranet_handshake(revocation_store_path: String) -> ActualSoranetHandshake {
+    let mut handshake = ActualSoranetHandshake::default();
+    handshake.pow.difficulty = 1;
+    handshake.pow.puzzle.memory_kib =
+        std::num::NonZeroU32::new(iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB)
+            .expect("minimum puzzle memory is non-zero");
+    handshake.pow.puzzle.time_cost = std::num::NonZeroU32::new(1).unwrap();
+    handshake.pow.puzzle.lanes = std::num::NonZeroU32::new(1).unwrap();
+    handshake.pow.revocation_store_path = revocation_store_path.into();
+    handshake
+}
+#[cfg(test)]
 fn test_soranet_handshake_runtime() -> Arc<SoranetHandshakeRuntime> {
-    runtime_from_handshake(ActualSoranetHandshake::default())
-        .expect("test SoraNet handshake runtime")
+    let revocation_dir = tempfile::tempdir().expect("test SoraNet revocation directory");
+    let handshake = low_cost_test_soranet_handshake(
+        revocation_dir
+            .path()
+            .join("ticket_revocations.norito")
+            .to_string_lossy()
+            .into_owned(),
+    );
+    let mut runtime = runtime_from_handshake(handshake).expect("test SoraNet handshake runtime");
+    Arc::get_mut(&mut runtime)
+        .expect("fresh test runtime is uniquely owned")
+        .retain_test_revocation_dir(revocation_dir);
+    runtime
 }
 #[cfg(feature = "quic")]
 static NEXT_QUIC_CONN_ID: OnceLock<AtomicU64> = OnceLock::new();
@@ -9391,16 +9414,9 @@ mod accept_stream_tests {
     use super::*;
     use crate::peer::test_support::{SpawnPath, snapshot};
     use iroha_config::parameters::actual::{
-        LaneProfile, Network as NetCfg, RelayMode, SoranetHandshake as ActualSoranetHandshake,
-        SoranetPow, SoranetPrivacy as ActualSoranetPrivacy,
+        LaneProfile, Network as NetCfg, RelayMode, SoranetPrivacy as ActualSoranetPrivacy,
     };
-    use iroha_crypto::{
-        KeyPair,
-        encryption::ChaCha20Poly1305,
-        soranet::handshake::{
-            DEFAULT_CLIENT_CAPABILITIES, DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_RELAY_CAPABILITIES,
-        },
-    };
+    use iroha_crypto::{KeyPair, encryption::ChaCha20Poly1305};
     use iroha_data_model::peer::{Peer, PeerId};
     use iroha_primitives::addr::socket_addr;
     use norito::codec::{Decode, DecodeAll, Encode};
@@ -9546,28 +9562,22 @@ mod accept_stream_tests {
         }
     }
     fn base_cfg() -> NetCfg {
+        let revocation_dir = tempfile::tempdir()
+            .expect("test SoraNet revocation directory")
+            .keep();
+        let soranet_handshake = low_cost_test_soranet_handshake(
+            revocation_dir
+                .join("ticket_revocations.norito")
+                .to_string_lossy()
+                .into_owned(),
+        );
         NetCfg {
             address: iroha_config_base::WithOrigin::inline(socket_addr!(127.0.0.1:0)),
             public_address: iroha_config_base::WithOrigin::inline(socket_addr!(127.0.0.1:0)),
             relay_mode: RelayMode::Disabled,
             relay_hub_addresses: Vec::new(),
             relay_ttl: iroha_config::parameters::defaults::network::RELAY_TTL,
-            soranet_handshake: ActualSoranetHandshake {
-                descriptor_commit: iroha_config_base::WithOrigin::inline(
-                    DEFAULT_DESCRIPTOR_COMMIT.to_vec(),
-                ),
-                client_capabilities: iroha_config_base::WithOrigin::inline(
-                    DEFAULT_CLIENT_CAPABILITIES.to_vec(),
-                ),
-                relay_capabilities: iroha_config_base::WithOrigin::inline(
-                    DEFAULT_RELAY_CAPABILITIES.to_vec(),
-                ),
-                trust_gossip: true,
-                kem_id: 1,
-                sig_id: 1,
-                resume_hash: None,
-                pow: SoranetPow::default(),
-            },
+            soranet_handshake,
             soranet_privacy: ActualSoranetPrivacy::default(),
             soranet_vpn: iroha_config::parameters::actual::SoranetVpn::default(),
             lane_profile: LaneProfile::Core,
@@ -18056,10 +18066,11 @@ mod tests {
             .soranet_handshake
             .snapshot()
             .expect("initial handshake policy");
+        let replay_state_path = network.soranet_handshake.test_replay_state_path();
         let initial_capacity = initial.puzzle_work_capacities().0;
         let changed_capacity = if initial_capacity.get() == 1 { 2 } else { 1 };
         let mut rejected = ActualSoranetHandshake::default();
-        rejected.pow.required = false;
+        rejected.pow.revocation_store_path = replay_state_path.clone().into();
         rejected.pow.outbound_mint_capacity =
             std::num::NonZeroUsize::new(changed_capacity).expect("non-zero capacity");
         let (rejected_response, rejected_result) = oneshot::channel();
@@ -18084,7 +18095,7 @@ mod tests {
         ));
 
         let mut accepted = ActualSoranetHandshake::default();
-        accepted.pow.required = false;
+        accepted.pow.revocation_store_path = replay_state_path.into();
         accepted.pow.difficulty = 6;
         let (accepted_response, accepted_result) = oneshot::channel();
         network.handle_soranet_handshake_update(message::UpdateHandshake {

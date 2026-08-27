@@ -1988,7 +1988,7 @@ fn assert_lifecycle_decision_apply_live_recovered_substitution_matrix(
     live_adapter: crate::sumeragi::v2::SumeragiV2Adapter,
     live_startup: Vec<AdapterEffect>,
     live_cleanup: LiveLifecycleDecisionApplyReconciliationAuthorityV1,
-    live_validate_dispatch_key: LifecycleValidateDispatchKeyV1,
+    _live_validate_dispatch_key: LifecycleValidateDispatchKeyV1,
     recovered_validate_retry_census: RecoveredDurableValidateRetryCensusV1,
     live_body_root: &std::path::Path,
 ) {
