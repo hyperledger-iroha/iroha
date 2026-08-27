@@ -2101,8 +2101,12 @@ def test_sorafs_soranet_handshake_admission_has_no_relaxation_path() -> None:
     for stale in (
         "pow-optional",
         "pow_optional",
+        "pow-required",
+        "pow_required",
         "pow-puzzle-disable",
         "pow_puzzle_disable",
+        "pow-puzzle-enable",
+        "pow_puzzle_enable",
         "allow-sm-handshake-mismatch",
         "allow_sm_handshake_mismatch",
         "allow-sm-openssl-preview-mismatch",
@@ -2117,6 +2121,7 @@ def test_sorafs_soranet_handshake_admission_has_no_relaxation_path() -> None:
     assert "require_sm_openssl_preview_match = Some(false)" not in into_payload
 
     assert "required:" not in actual_default_pow
+    assert "puzzle: SoranetPuzzle::default_const()" in actual_default_pow
     assert "required:" not in actual_pow
     assert "pub puzzle: SoranetPuzzle" in actual_pow
     assert "signed_ticket_public_key" not in actual_config
@@ -2125,6 +2130,7 @@ def test_sorafs_soranet_handshake_admission_has_no_relaxation_path() -> None:
     assert "required: bool" not in user_pow
     assert "enabled: bool" not in user_puzzle
     assert "pub required:" not in client_pow_summary
+    assert "Option<SoranetHandshakePuzzleSummary>" not in client_pow_summary
     assert "pub puzzle: SoranetHandshakePuzzleSummary" in client_pow_summary
     assert "pub enabled:" not in client_puzzle_update
     assert "pub required:" not in client_pow_update
@@ -2141,13 +2147,10 @@ def test_sorafs_soranet_handshake_admission_has_no_relaxation_path() -> None:
     )[0]
     assert "required:" not in parsed_user_pow
     assert "puzzle: puzzle.parse()" in parsed_user_pow
-    assert "puzzle: Some(puzzle.parse())" not in user_config.split(
-        "fn parse(self) -> actual::SoranetPow", 1
-    )[1].split("/// Puzzle configuration supplied at the user level.", 1)[0]
+    assert "puzzle: Some(puzzle.parse())" not in parsed_user_pow
     assert "actual::SoranetPuzzle" in user_config.split(
         "fn parse(self) -> actual::SoranetPuzzle", 1
     )[1].split("/// User-level configuration container for SoraNet privacy telemetry.", 1)[0]
-
     assert "SM handshake matching is mandatory" in apply_config_update
     assert "SM OpenSSL preview matching is mandatory" in apply_config_update
     assert "if !value" in apply_config_update
@@ -2156,6 +2159,9 @@ def test_sorafs_soranet_handshake_admission_has_no_relaxation_path() -> None:
     assert "update.required" not in apply_pow_update
     assert "puzzle_update.enabled" not in apply_pow_update
     assert "pow.required" not in apply_pow_update
+    assert "pow.puzzle.memory_kib" in apply_pow_update
+    assert "pow.puzzle.time_cost" in apply_pow_update
+    assert "pow.puzzle.lanes" in apply_pow_update
     assert "pow.puzzle = None" not in apply_pow_update
 
     assert "Fallback to unsigned tickets" not in peer

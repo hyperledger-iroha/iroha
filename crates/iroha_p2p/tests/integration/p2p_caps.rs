@@ -80,7 +80,9 @@ async fn wait_for_consensus_cap_increase(start_cap: u64, timeout: Duration) -> O
     .ok()
 }
 fn default_soranet_handshake() -> ActualSoranetHandshake {
-    super::lightweight_soranet_handshake()
+    // Keep mandatory admission inexpensive and replay-state isolated so these
+    // tests continue to measure frame-cap behavior.
+    super::mandatory_test_soranet_handshake()
 }
 fn make_config(
     addr: &SocketAddr,

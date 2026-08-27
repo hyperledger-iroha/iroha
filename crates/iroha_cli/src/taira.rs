@@ -1774,7 +1774,9 @@ fn prove_inrou_predecessor_applied(
                 args.mode,
             )?;
             if root.get("stage")
-                != Some(&json::to_value(PreparedInrouStageIdentityV1::from(&stage))?)
+                != Some(&json::to_value(&PreparedInrouStageIdentityV1::from(
+                    &stage,
+                ))?)
             {
                 eyre::bail!("Inrou predecessor retained-stage identity was substituted");
             }
@@ -7204,8 +7206,8 @@ mod tests {
                 "last_rollout".to_owned(),
                 norito::json!({
                     "rollout_handle": "taira-inrou-upgrade",
-                    "baseline_version": deployed_version.clone(),
-                    "candidate_version": upgraded_version.clone(),
+                    "baseline_version": (deployed_version.clone()),
+                    "candidate_version": (upgraded_version.clone()),
                     "canary_percent": 100,
                     "traffic_percent": 100,
                     "stage": { "stage": "Promoted", "value": null },
@@ -7498,7 +7500,7 @@ mod tests {
         let deployment = inrou_canary_deployment("upgrade", &service_version);
         let canonical = norito::json!({
             "service": "taira_inrou_canary",
-            "service_version": service_version.clone(),
+            "service_version": (service_version.clone()),
             "runtime": "Inrou",
             "replica_slot": 3,
             "identity": "taira_inrou_canary:replica:3"

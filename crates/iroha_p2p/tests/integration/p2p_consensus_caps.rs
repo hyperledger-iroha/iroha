@@ -48,7 +48,9 @@ fn consensus_config_caps_wire_roundtrip_preserves_admission_digests() {
     assert_eq!(decoded.ivm_gas_schedule_hash, [0xE7; 32]);
 }
 fn cfg(addr: iroha_primitives::addr::SocketAddr) -> Config {
-    let soranet_handshake = super::lightweight_soranet_handshake();
+    // Keep mandatory admission inexpensive and replay-state isolated so these
+    // tests continue to measure consensus capability matching.
+    let soranet_handshake = super::mandatory_test_soranet_handshake();
     Config {
         happy_eyeballs_stagger: Duration::from_millis(10),
         p2p_queue_cap_high: NonZeroUsize::new(128).unwrap(),

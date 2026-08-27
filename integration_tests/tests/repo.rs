@@ -796,9 +796,8 @@ fn repo_roundtrip_with_custodian_routes_collateral() -> Result<()> {
     Ok(())
 }
 fn alt_client(signatory: (AccountId, KeyPair), base_client: &Client) -> Client {
-    Client {
-        account: signatory.0,
-        key_pair: signatory.1,
-        ..base_client.clone()
-    }
+    let mut client = base_client.clone();
+    client.account = signatory.0;
+    client.key_pair = signatory.1;
+    client
 }
