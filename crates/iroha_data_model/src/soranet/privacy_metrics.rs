@@ -179,10 +179,6 @@ pub struct SoranetPrivacyPrioShareV1 {
     pub throttle_emergency_share: i64,
     /// Share for remote-quota throttles.
     pub throttle_remote_share: i64,
-    /// Share for descriptor quota throttles.
-    pub throttle_descriptor_share: i64,
-    /// Share for descriptor replay throttles.
-    pub throttle_descriptor_replay_share: i64,
     /// Share for the sum of active circuit samples within the bucket.
     pub active_circuits_sum_share: i64,
     /// Share for the number of active circuit samples contributing to `active_circuits_sum_share`.
@@ -223,8 +219,6 @@ impl SoranetPrivacyPrioShareV1 {
             throttle_cooldown_share: 0,
             throttle_emergency_share: 0,
             throttle_remote_share: 0,
-            throttle_descriptor_share: 0,
-            throttle_descriptor_replay_share: 0,
             active_circuits_sum_share: 0,
             active_circuits_sample_share: 0,
             active_circuits_max_observed: None,
@@ -254,6 +248,7 @@ impl SoranetLatencyPercentileV1 {
 /// Aggregated metrics for a privacy-preserving `SoraNet` telemetry bucket.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoranetPrivacyBucketMetricsV1 {
     /// Relay mode associated with the aggregated bucket.
     pub mode: SoranetPrivacyModeV1,
@@ -284,10 +279,6 @@ pub struct SoranetPrivacyBucketMetricsV1 {
     pub throttle_emergency_total: u64,
     /// Throttling decisions attributed to remote quota limits.
     pub throttle_remote_total: u64,
-    /// Throttling decisions attributed to descriptor quotas.
-    pub throttle_descriptor_total: u64,
-    /// Throttling decisions triggered by descriptor replay protection.
-    pub throttle_descriptor_replay_total: u64,
     /// Average number of concurrently active circuits observed during the window.
     #[norito(default)]
     pub active_circuits_mean: Option<u64>,
@@ -347,8 +338,6 @@ impl SoranetPrivacyBucketMetricsV1 {
             throttle_cooldown_total: 0,
             throttle_emergency_total: 0,
             throttle_remote_total: 0,
-            throttle_descriptor_total: 0,
-            throttle_descriptor_replay_total: 0,
             active_circuits_mean: None,
             active_circuits_max: None,
             verified_bytes_total: 0,
@@ -649,10 +638,6 @@ pub enum SoranetPrivacyThrottleScopeV1 {
     Emergency,
     /// Remote-quota limits throttled the origin.
     RemoteQuota,
-    /// Descriptor-level quota triggered the throttle.
-    DescriptorQuota,
-    /// Descriptor replay protection rejected the handshake.
-    DescriptorReplay,
 }
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for SoranetPrivacyThrottleScopeV1 {
@@ -662,8 +647,6 @@ impl norito::json::FastJsonWrite for SoranetPrivacyThrottleScopeV1 {
             Self::Cooldown => "cooldown",
             Self::Emergency => "emergency",
             Self::RemoteQuota => "remote_quota",
-            Self::DescriptorQuota => "descriptor_quota",
-            Self::DescriptorReplay => "descriptor_replay",
         };
         norito::json::write_json_string(label, out);
     }
@@ -676,8 +659,6 @@ impl norito::json::FastJsonWrite for SoranetPrivacyThrottleScopeV1 {
             Self::Cooldown => "cooldown",
             Self::Emergency => "emergency",
             Self::RemoteQuota => "remote_quota",
-            Self::DescriptorQuota => "descriptor_quota",
-            Self::DescriptorReplay => "descriptor_replay",
         };
         norito::json::write_json_string_to(label, out)
     }
@@ -693,8 +674,6 @@ impl norito::json::JsonDeserialize for SoranetPrivacyThrottleScopeV1 {
             "cooldown" => Ok(Self::Cooldown),
             "emergency" => Ok(Self::Emergency),
             "remote_quota" => Ok(Self::RemoteQuota),
-            "descriptor_quota" => Ok(Self::DescriptorQuota),
-            "descriptor_replay" => Ok(Self::DescriptorReplay),
             other => Err(norito::json::Error::unknown_field(other)),
         }
     }
@@ -803,6 +782,37 @@ mod gar_event_tests {
         assert_eq!(decoded, event);
     }
 }
+#[cfg(test)]
+mod throttle_scope_tests {
+    use super::*;
+    use norito::codec::DecodeAll as _;
+
+    #[test]
+    fn throttle_scope_norito_roundtrips_current_variants_and_rejects_retired_discriminants() {
+        for (scope, tag) in [
+            (SoranetPrivacyThrottleScopeV1::Congestion, 0_u32),
+            (SoranetPrivacyThrottleScopeV1::Cooldown, 1),
+            (SoranetPrivacyThrottleScopeV1::Emergency, 2),
+            (SoranetPrivacyThrottleScopeV1::RemoteQuota, 3),
+        ] {
+            let encoded = scope.encode();
+            assert_eq!(encoded, tag.to_le_bytes());
+            assert_eq!(
+                SoranetPrivacyThrottleScopeV1::decode_all(&mut encoded.as_slice())
+                    .expect("current throttle scope must decode"),
+                scope
+            );
+        }
+
+        for tag in [4_u32, 5] {
+            let encoded = tag.to_le_bytes();
+            assert!(
+                SoranetPrivacyThrottleScopeV1::decode_all(&mut encoded.as_slice()).is_err(),
+                "retired throttle-scope discriminant {tag} must fail closed"
+            );
+        }
+    }
+}
 #[cfg(all(test, feature = "json"))]
 mod checked_json_tests {
     use super::*;
@@ -822,7 +832,61 @@ mod checked_json_tests {
         assert_exact(&SoranetPrivacyModeV1::Middle);
         assert_exact(&SoranetPrivacySuppressionReasonV1::CollectorWindowElapsed);
         assert_exact(&SoranetPowFailureReasonV1::SignatureInvalid);
-        assert_exact(&SoranetPrivacyThrottleScopeV1::DescriptorReplay);
+        assert_exact(&SoranetPrivacyThrottleScopeV1::RemoteQuota);
         assert_exact(&SoranetPrivacyHandshakeFailureV1::Downgrade);
+    }
+
+    #[test]
+    fn retired_throttle_scope_json_labels_are_rejected() {
+        for label in ["descriptor_quota", "descriptor_replay"] {
+            let encoded = format!("\"{label}\"");
+            assert!(
+                norito::json::from_json::<SoranetPrivacyThrottleScopeV1>(&encoded).is_err(),
+                "retired throttle-scope label {label} must fail closed"
+            );
+        }
+    }
+
+    #[test]
+    fn retired_throttle_counter_json_fields_are_rejected() {
+        let share = SoranetPrivacyPrioShareV1::new([0x11; 32], 120, 60);
+        for field in [
+            "throttle_descriptor_share",
+            "throttle_descriptor_replay_share",
+        ] {
+            assert_retired_field_rejected(&share, field);
+        }
+
+        let bucket =
+            SoranetPrivacyBucketMetricsV1::suppressed(SoranetPrivacyModeV1::Middle, 120, 60);
+        for field in [
+            "throttle_descriptor_total",
+            "throttle_descriptor_replay_total",
+        ] {
+            assert_retired_field_rejected(&bucket, field);
+        }
+    }
+
+    fn assert_retired_field_rejected<T>(value: &T, field: &str)
+    where
+        T: core::fmt::Debug + norito::json::JsonDeserialize + norito::json::JsonSerialize,
+    {
+        let mut encoded = norito::json::to_value(value).expect("serialize canonical telemetry");
+        norito::json::from_value::<T>(encoded.clone()).expect("canonical telemetry must roundtrip");
+        encoded
+            .as_object_mut()
+            .expect("telemetry JSON object")
+            .insert(field.to_owned(), norito::json::Value::from(0_u64));
+        let error = norito::json::from_value::<T>(encoded)
+            .expect_err("retired telemetry field must fail closed");
+        assert!(
+            matches!(
+                error,
+                norito::json::Error::UnknownField {
+                    field: ref rejected
+                } if rejected == field
+            ),
+            "retired field {field} reported the wrong error: {error:?}"
+        );
     }
 }

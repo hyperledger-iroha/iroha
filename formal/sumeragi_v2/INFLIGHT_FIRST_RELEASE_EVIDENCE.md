@@ -33,7 +33,10 @@ checks:
   index, and reservation repairs modeled as stuttering;
 - the four-stage release protocol: Kura retirement plus prefix-recoverable
   ReleasePending claims, Queue PrepareRelease, prefix-recoverable Released
-  claims, then Queue CompleteRelease/FIFO restoration/ForgetRelease;
+  claims, then Queue CompleteRelease/FIFO restoration/ForgetRelease; a retired
+  non-producer replica may instead authenticate the same FIFO-only state only
+  after the complete ReleasePending prefix, without manufacturing the
+  producer's Queue reservation owner, before advancing its Released prefix;
 - exact binding scope for lane commit and release; and
 - the literal 4096 selected-entry ceiling.
 
@@ -83,9 +86,12 @@ three post-carrier cleanup stages advance one canonical ordered key at a time,
 retain partial prefixes across crash/recovery, and expose Commit cleanup as
 terminal canonical-WSV ownership only after the full ForgetCommit prefix. The
 reverse terminal-owner projection classifies that completed cleanup as canonical-WSV
-ownership and ordered/direct release as ordinary-FIFO ownership. V1 snapshot
-reconstruction is an exact abstract stutter. The V1 operation inventory has no
-lane-wide removal action.
+ownership and ordered/direct release as ordinary-FIFO ownership. Direct release
+retains the ordinary live/no-owner abort branch and also admits a strict retired
+non-producer replica only after its full ReleasePending prefix; the replica
+branch proves FIFO restoration and never fabricates producer Queue ownership
+while advancing its Released prefix. V1 snapshot reconstruction is an exact
+abstract stutter. The V1 operation inventory has no lane-wide removal action.
 
 Current production bindings cover several bounded slices. For selection, the
 canonical autonomous slot plan creates a move-only authorization containing
@@ -165,8 +171,25 @@ group. Separately, the pre-Kura reservation-batch release path uses the same
 complete-group revalidation predicate while holding the Queue transition and
 FIFO locks, checks committee geometry, then consumes its move-only
 checked `DirectReleased` token immediately before the journal `release_batch`
-append. These local slices are not a complete production trace-extraction
-theorem.
+append. A strict retired non-producer replica corridor requires the complete
+durable ReleasePending prefix and the exact signed actor/producer distinction.
+Queue proves that the unchanged ordered group is already FIFO-only, checks the
+same direct-release projection without inventing a Queue reservation owner, and
+keeps its move-only exact-hash fence live while Kura advances the replica's
+Released prefix and until Queue mints terminal evidence. These local slices are
+not a complete production trace-extraction theorem. The first FIFO proof remains
+a state-changing `ComposedNext`; an unchanged retry from an already
+`DirectReleased` state is accepted only as
+`ReleaseReservationDirectProofStutter`, with identical before/after states, and
+cannot masquerade as a state-changing `Next` step.
+
+Release qualification for this seam must exercise both production-shaped
+paths: an `author = false` live follower retiring a losing carrier from the
+exact FIFO-only/no-owner state, and strict cold-start replay at the
+all-`ReleasePending` and partial-`Released` cuts. Each path must preserve the
+Queue/FIFO journal bytes, mint no Queue reservation owner, complete Kura and
+Queue terminal cleanup, keep the follower runner live, and reject missing or
+misordered FIFO evidence before mutation.
 
 Post-carrier evidence repair now starts from the same authenticated autonomous
 source-bundle projection as `ApplyCarrier`. A move-only

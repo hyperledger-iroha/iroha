@@ -94,6 +94,7 @@ enum NoritoBridgeLoader {
         "ios-arm64_x86_64-simulator": "87be1e9f98bf46e5d3dd4a6ffaa9dbc6e079559f8e251b590502970a8e447f56"
     ]
     static let parliamentTimedOvnWalletRequiredSymbols = [
+        "connect_norito_parliament_timed_ovn_verify_casting_proof_page_v1",
         "connect_norito_parliament_timed_ovn_verify_casting_proof_v1",
         "connect_norito_parliament_timed_ovn_registration_from_proof_v1",
         "connect_norito_parliament_timed_ovn_ballot_from_proof_v1"
@@ -643,6 +644,27 @@ public struct ParliamentTimedOvnCastingTrustAnchorV1: Equatable, Sendable {
         self.ballotAttemptIDBytes = Array(expectedBallotAttemptID)
     }
 
+    /// Defensive copy of the raw genesis-derived network id.
+    public var networkID: Data { Data(networkIDBytes) }
+
+    /// Defensive copy of the trusted `HeightContextId`.
+    public var trustedCheckpointContextID: Data { Data(checkpointContextIDBytes) }
+
+    /// Defensive copy of the expected `BallotAttemptId`.
+    public var expectedBallotAttemptID: Data { Data(ballotAttemptIDBytes) }
+
+    /// Return a new immutable trust anchor promoted by one native-authenticated page.
+    public func promoted(
+        by verification: ParliamentTimedOvnCastingProofPageVerificationV1
+    ) throws -> ParliamentTimedOvnCastingTrustAnchorV1 {
+        try ParliamentTimedOvnCastingTrustAnchorV1(
+            networkID: networkID,
+            trustedCheckpointHeight: verification.evaluatedBlockHeight,
+            trustedCheckpointContextID: verification.evaluatedContextID,
+            expectedBallotAttemptID: expectedBallotAttemptID
+        )
+    }
+
     fileprivate func snapshot() -> (
         networkID: [UInt8],
         checkpointContextID: [UInt8],
@@ -652,12 +674,39 @@ public struct ParliamentTimedOvnCastingTrustAnchorV1: Equatable, Sendable {
     }
 }
 
+/// Native-authenticated promotion carried by one bounded casting-proof page.
+public struct ParliamentTimedOvnCastingProofPageVerificationV1: Equatable, Sendable {
+    /// Exact positive u64 height authenticated by the finality verifier.
+    public let evaluatedBlockHeight: UInt64
+    /// Exact authenticated `HeightContextId`.
+    public let evaluatedContextID: Data
+    /// Whether another independently fetched and verified page is required.
+    public let moreAvailable: Bool
+
+    public init(
+        evaluatedBlockHeight: UInt64,
+        evaluatedContextID: Data,
+        moreAvailable: Bool
+    ) throws {
+        guard evaluatedBlockHeight > 0,
+              evaluatedContextID.count == 32,
+              evaluatedContextID.contains(where: { $0 != 0 }) else {
+            throw ParliamentTimedOvnNativeWalletError.invalidPageVerification
+        }
+        self.evaluatedBlockHeight = evaluatedBlockHeight
+        self.evaluatedContextID = Data(evaluatedContextID)
+        self.moreAvailable = moreAvailable
+    }
+}
+
 /// Fail-closed errors from secret-local Parliament timed-OVN wallet operations.
 public enum ParliamentTimedOvnNativeWalletError: Error, Equatable, Sendable {
     /// The exact ABI-23 bridge and all proof-gated V1 wallet symbols are unavailable.
     case bridgeUnavailable
     /// The canonical proof response is empty or exceeds 8 MiB.
     case invalidCastingProof
+    /// Native code returned a page promotion with a noncanonical width, height, context, or flag.
+    case invalidPageVerification
     /// A trust-anchor field has the wrong width or zero checkpoint/ballot identity.
     case invalidTrustAnchor
     /// The authority is empty, contains NUL, or exceeds the bridge bound.
@@ -847,6 +896,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     static let privacyExact12FixtureBundleMaxBytes = 2 * 1024 * 1024
     private static let detachedTransactionNativeMaximumBytes = 16 * 1024 * 1024
     private static let parliamentTimedOvnCastingProofMaximumBytes = 8 * 1024 * 1024
+    /// Exact ABI-23 page-verification result width.
+    public static let parliamentTimedOvnCastingProofPageVerificationBytes = 41
     private static let parliamentTimedOvnSeedBytes = 32
     private static let parliamentTimedOvnAuthorityMaximumBytes = 8 * 1024
     private static let parliamentTimedOvnRegistrationRecordBytes = 3_624
@@ -1849,6 +1900,14 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafePointer<UInt8>?, CUnsignedLong
     ) -> Int32
+    private typealias ParliamentTimedOvnVerifyCastingProofPageFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UInt64,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafeMutablePointer<UInt8>?, CUnsignedLong
+    ) -> Int32
     private typealias ParliamentTimedOvnRegistrationFromProofFn = @convention(c) (
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafePointer<UInt8>?, CUnsignedLong,
@@ -1924,6 +1983,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var keypairFromSeedFn: KeypairFromSeedFn? = nil
     private var signDetachedFn: SignDetachedFn? = nil
     private var verifyDetachedFn: VerifyDetachedFn? = nil
+    private var parliamentTimedOvnVerifyCastingProofPageFn: ParliamentTimedOvnVerifyCastingProofPageFn? = nil
     private var parliamentTimedOvnVerifyCastingProofFn: ParliamentTimedOvnVerifyCastingProofFn? = nil
     private var parliamentTimedOvnRegistrationFromProofFn: ParliamentTimedOvnRegistrationFromProofFn? = nil
     private var parliamentTimedOvnBallotFromProofFn: ParliamentTimedOvnBallotFromProofFn? = nil
@@ -2051,6 +2111,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let keypairFromSeedFn: Any? = nil
     private let signDetachedFn: Any? = nil
     private let verifyDetachedFn: Any? = nil
+    private let parliamentTimedOvnVerifyCastingProofPageFn: Any? = nil
     private let parliamentTimedOvnVerifyCastingProofFn: Any? = nil
     private let parliamentTimedOvnRegistrationFromProofFn: Any? = nil
     private let parliamentTimedOvnBallotFromProofFn: Any? = nil
@@ -2210,6 +2271,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             dlsym($0, "connect_norito_encode_governance_cast_zk_ballot_signed_transaction")
         }), let castZkAlgSymbol = staticHandle.flatMap({
             dlsym($0, "connect_norito_encode_governance_cast_zk_ballot_signed_transaction_alg")
+        }), let timedOvnPageVerifySymbol = staticHandle.flatMap({
+            dlsym($0, "connect_norito_parliament_timed_ovn_verify_casting_proof_page_v1")
         }), let timedOvnVerifySymbol = staticHandle.flatMap({
             dlsym($0, "connect_norito_parliament_timed_ovn_verify_casting_proof_v1")
         }), let timedOvnRegistrationSymbol = staticHandle.flatMap({
@@ -2251,6 +2314,10 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         self.parliamentTimedOvnVerifyCastingProofFn = unsafeBitCast(
             timedOvnVerifySymbol,
             to: ParliamentTimedOvnVerifyCastingProofFn.self
+        )
+        self.parliamentTimedOvnVerifyCastingProofPageFn = unsafeBitCast(
+            timedOvnPageVerifySymbol,
+            to: ParliamentTimedOvnVerifyCastingProofPageFn.self
         )
         self.parliamentTimedOvnRegistrationFromProofFn = unsafeBitCast(
             timedOvnRegistrationSymbol,
@@ -2474,6 +2541,10 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 handle,
                 "connect_norito_parliament_timed_ovn_verify_casting_proof_v1"
             ).map { unsafeBitCast($0, to: ParliamentTimedOvnVerifyCastingProofFn.self) }
+            self.parliamentTimedOvnVerifyCastingProofPageFn = dlsym(
+                handle,
+                "connect_norito_parliament_timed_ovn_verify_casting_proof_page_v1"
+            ).map { unsafeBitCast($0, to: ParliamentTimedOvnVerifyCastingProofPageFn.self) }
             self.parliamentTimedOvnRegistrationFromProofFn = dlsym(
                 handle,
                 "connect_norito_parliament_timed_ovn_registration_from_proof_v1"
@@ -3149,6 +3220,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.encodeAccountOnboardingPlanBodyFn = nil
             self.aliasInstructionRoundTripFn = nil
             self.canonicalJSONBlake3Fn = nil
+            self.parliamentTimedOvnVerifyCastingProofPageFn = nil
             self.parliamentTimedOvnVerifyCastingProofFn = nil
             self.parliamentTimedOvnRegistrationFromProofFn = nil
             self.parliamentTimedOvnBallotFromProofFn = nil
@@ -3342,6 +3414,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #if canImport(Darwin)
         guard bridgeEnabledForRuntime else { return false }
         return loadedBridgeAbiVersion == NoritoBridgeLoader.expectedBridgeAbiVersion
+            && parliamentTimedOvnVerifyCastingProofPageFn != nil
             && parliamentTimedOvnVerifyCastingProofFn != nil
             && parliamentTimedOvnRegistrationFromProofFn != nil
             && parliamentTimedOvnBallotFromProofFn != nil
@@ -3349,6 +3422,84 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #else
         return false
         #endif
+    }
+
+    /// Authenticate one bounded casting-proof page without borrowing any seed material.
+    public func parliamentTimedOvnVerifyCastingProofPageV1(
+        castingProofResponseNorito: Data,
+        trustAnchor: ParliamentTimedOvnCastingTrustAnchorV1
+    ) throws -> ParliamentTimedOvnCastingProofPageVerificationV1 {
+        #if canImport(Darwin)
+        guard bridgeEnabledForRuntime,
+              loadedBridgeAbiVersion == NoritoBridgeLoader.expectedBridgeAbiVersion,
+              let verifyPageFn = parliamentTimedOvnVerifyCastingProofPageFn else {
+            throw ParliamentTimedOvnNativeWalletError.bridgeUnavailable
+        }
+        guard !castingProofResponseNorito.isEmpty,
+              castingProofResponseNorito.count <= Self.parliamentTimedOvnCastingProofMaximumBytes else {
+            throw ParliamentTimedOvnNativeWalletError.invalidCastingProof
+        }
+
+        let proofBytes = Array(castingProofResponseNorito)
+        let anchor = trustAnchor.snapshot()
+        var encoded = [UInt8](
+            repeating: 0,
+            count: Self.parliamentTimedOvnCastingProofPageVerificationBytes
+        )
+        let status = proofBytes.withUnsafeBytes { proof in
+            anchor.networkID.withUnsafeBytes { networkID in
+                anchor.checkpointContextID.withUnsafeBytes { checkpointContextID in
+                    anchor.ballotAttemptID.withUnsafeBytes { ballotAttemptID in
+                        encoded.withUnsafeMutableBytes { output in
+                            verifyPageFn(
+                                proof.bindMemory(to: UInt8.self).baseAddress,
+                                CUnsignedLong(proofBytes.count),
+                                networkID.bindMemory(to: UInt8.self).baseAddress,
+                                CUnsignedLong(anchor.networkID.count),
+                                trustAnchor.trustedCheckpointHeight,
+                                checkpointContextID.bindMemory(to: UInt8.self).baseAddress,
+                                CUnsignedLong(anchor.checkpointContextID.count),
+                                ballotAttemptID.bindMemory(to: UInt8.self).baseAddress,
+                                CUnsignedLong(anchor.ballotAttemptID.count),
+                                output.bindMemory(to: UInt8.self).baseAddress,
+                                CUnsignedLong(
+                                    Self.parliamentTimedOvnCastingProofPageVerificationBytes
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        guard status == 0 else {
+            throw ParliamentTimedOvnNativeWalletError.nativeRejected
+        }
+        return try Self.decodeParliamentTimedOvnCastingProofPageVerificationV1(
+            Data(encoded)
+        )
+        #else
+        _ = castingProofResponseNorito
+        _ = trustAnchor
+        throw ParliamentTimedOvnNativeWalletError.bridgeUnavailable
+        #endif
+    }
+
+    static func decodeParliamentTimedOvnCastingProofPageVerificationV1(
+        _ encoded: Data
+    ) throws -> ParliamentTimedOvnCastingProofPageVerificationV1 {
+        guard encoded.count == parliamentTimedOvnCastingProofPageVerificationBytes,
+              encoded[40] == 0 || encoded[40] == 1 else {
+            throw ParliamentTimedOvnNativeWalletError.invalidPageVerification
+        }
+        var evaluatedHeight: UInt64 = 0
+        for byte in encoded[0..<8] {
+            evaluatedHeight = (evaluatedHeight << 8) | UInt64(byte)
+        }
+        return try ParliamentTimedOvnCastingProofPageVerificationV1(
+            evaluatedBlockHeight: evaluatedHeight,
+            evaluatedContextID: Data(encoded[8..<40]),
+            moreAvailable: encoded[40] == 1
+        )
     }
 
     /// Derive one canonical public timed-OVN registration from an authenticated proof response.

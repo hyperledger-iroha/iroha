@@ -2930,6 +2930,9 @@ pub mod isi {
                         .into(),
                 ));
             }
+            crate::smartcontracts::isi::kaigi::validate_kaigi_relay_allowlist_metadata(
+                &key, &value,
+            )?;
             crate::smartcontracts::limits::enforce_json_size(
                 state_transaction,
                 &value,
@@ -3670,10 +3673,36 @@ mod tests {
         }
 
         let allowlist_key = kaigi_relay_allowlist_key().expect("allowlist metadata key");
-        let allowlist = Json::try_new(KaigiRelayAllowlist::default()).expect("allowlist JSON");
-        SetKeyValue::domain(domain_id.clone(), allowlist_key.clone(), allowlist)
+        let mut allowlist = KaigiRelayAllowlist::default();
+        for _ in 0..iroha_data_model::kaigi::KAIGI_RELAY_ALLOWLIST_MAX_ENTRIES_V1 {
+            let (relay_id, _) = iroha_test_samples::gen_account_in("allowlist");
+            allowlist.allowed_relays.insert(relay_id);
+        }
+        let exact_limit = Json::try_new(allowlist.clone()).expect("exact-limit allowlist JSON");
+        SetKeyValue::domain(
+            domain_id.clone(),
+            allowlist_key.clone(),
+            exact_limit.clone(),
+        )
+        .execute(&authority, &mut transaction)
+        .expect("domain governance must accept the exact relay allowlist limit");
+        let (extra_relay, _) = iroha_test_samples::gen_account_in("allowlist");
+        allowlist.allowed_relays.insert(extra_relay);
+        let over_limit = Json::try_new(allowlist).expect("over-limit allowlist JSON");
+        let error = SetKeyValue::domain(domain_id.clone(), allowlist_key.clone(), over_limit)
             .execute(&authority, &mut transaction)
-            .expect("domain governance must retain the relay allowlist metadata path");
+            .expect_err("domain governance must reject an over-limit relay allowlist");
+        assert!(instruction_error_contains(&error, "500-entry limit"));
+        assert_eq!(
+            transaction
+                .world
+                .domain(&domain_id)
+                .expect("domain")
+                .metadata()
+                .get(&allowlist_key),
+            Some(&exact_limit),
+            "a rejected allowlist replacement must preserve the previous value"
+        );
         RemoveKeyValue::domain(domain_id, allowlist_key)
             .execute(&authority, &mut transaction)
             .expect("domain governance must be able to remove the relay allowlist");

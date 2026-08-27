@@ -2414,7 +2414,7 @@ pub mod telemetry {
         ASSET_HOLDERS_QUERY,
     ];
 }
-/// Consensus evidence, SCCP, VRF, finality, and Sumeragi introspection routes.
+/// Consensus evidence, SCCP, finality, and Sumeragi introspection routes.
 pub mod sumeragi {
     use super::{
         AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,

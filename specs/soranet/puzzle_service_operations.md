@@ -217,10 +217,9 @@ deterministic purge without deleting the snapshot on disk.
 
 ## Emergency hardening procedure
 
-1. Keep `pow.required = true`, use a non-zero difficulty, and leave the Argon2
-   puzzle gate enabled. The first release has no operator-facing
-   puzzle-disable path; startup and live config updates reject attempts to make
-   PoW optional, set zero difficulty, or clear puzzle admission.
+1. Use a non-zero `pow.difficulty` and configure the Argon2 cost parameters.
+   First-release configuration has no admission or puzzle enable toggle, and
+   stale toggle fields are rejected.
 2. Enforce `pow.emergency` entries to reject stale descriptors while the service
    is degraded.
 3. Restart both the relay and the puzzle service after cost or emergency-list

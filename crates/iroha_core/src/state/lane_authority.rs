@@ -578,20 +578,34 @@ pub(super) fn resolve_from_sources(
             actual: pool.len(),
         });
     }
-    let seed = State::lane_relay_committee_seed_from_sources(
-        world,
-        network_id,
-        route.dataspace_id(),
-        route.lane_id(),
-        authority_height,
-    )
-    .map_err(|_| LaneAuthorityError::InvalidAuthoritySource {
-        lane_id: route.lane_id(),
-        dataspace_id: route.dataspace_id(),
-        authority_height,
-    })?;
-    let mut validators = State::lane_relay_committee_from_pool(&pool, required, seed)
-        .map_err(|_| LaneAuthorityError::CanonicalPeerEncoding)?;
+    // An exact-size pool has no selectable alternatives: every live candidate
+    // is a committee member for every possible seed. Requiring a prior pulse in
+    // that case creates an impossible first-post-genesis cycle (the transaction
+    // installing the first beacon session itself needs a route committee) while
+    // adding no entropy or bias resistance. This is not a fallback seed: any
+    // oversubscribed pool still requires a verified threshold-beacon pulse.
+    let mut validators = if pool.len() == required {
+        for peer in &pool {
+            norito::encode_canonical(peer)
+                .map_err(|_| LaneAuthorityError::CanonicalPeerEncoding)?;
+        }
+        pool
+    } else {
+        let seed = State::lane_relay_committee_seed_from_sources(
+            world,
+            network_id,
+            route.dataspace_id(),
+            route.lane_id(),
+            authority_height,
+        )
+        .map_err(|_| LaneAuthorityError::InvalidAuthoritySource {
+            lane_id: route.lane_id(),
+            dataspace_id: route.dataspace_id(),
+            authority_height,
+        })?;
+        State::lane_relay_committee_from_pool(&pool, required, seed)
+            .map_err(|_| LaneAuthorityError::CanonicalPeerEncoding)?
+    };
     if validators.len() != required {
         return Err(LaneAuthorityError::UndersizedPool {
             lane_id: route.lane_id(),

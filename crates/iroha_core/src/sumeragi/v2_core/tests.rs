@@ -47,6 +47,60 @@ fn context() -> HeightContext {
     context_with_powers(VotingMode::Permissioned, &[1, 1, 1, 1])
 }
 #[test]
+fn queue_plan_selection_mints_current_source_bound_witness() {
+    let binding_a = CanonicalIdentityProjection::from_bytes(
+        IDENTITY_DOMAIN_PAYLOAD,
+        IDENTITY_KIND_CANONICAL_PAYLOAD,
+        [0x61; 32],
+    );
+    let before = ProductionInFlightFirstReleaseStateProjection {
+        validator_count: 1,
+        producer: 1,
+        producer_selected_owner: 1,
+        replicated_carrier_owners: 0,
+        payload_binding_a: 1,
+        binding_a,
+        queue: ProductionInFlightFirstReleaseQueueProjection {
+            plan_state: IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_ABSENT,
+            selected_count: 0,
+            reservation_state: IN_FLIGHT_FIRST_RELEASE_RESERVATION_ABSENT,
+        },
+        carrier: ProductionInFlightFirstReleaseCarrierProjection::default(),
+        session: ProductionInFlightFirstReleaseSessionProjection {
+            bodies: 1,
+            producer_alive: true,
+            ..ProductionInFlightFirstReleaseSessionProjection::default()
+        },
+        history: ProductionInFlightFirstReleaseHistoryProjection::default(),
+        decision: ProductionInFlightFirstReleaseDecisionProjection::default(),
+        release: ProductionInFlightFirstReleaseReleaseProjection::default(),
+    };
+    let mut after = before;
+    after.queue.plan_state = IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED;
+    after.queue.selected_count = 2;
+    after.history.ever_queue_plan_v1 = true;
+    let projection = ProductionInFlightFirstReleaseTransitionProjection {
+        action: IN_FLIGHT_FIRST_RELEASE_ACTION_SELECT_QUEUE_PLAN_V1,
+        actor: 0,
+        target: 0,
+        before,
+        after,
+    };
+
+    let checked = check_production_in_flight_first_release_transition(projection)
+        .expect("QueuePlan selection must pass the source-bound production wrapper");
+    let witness = *checked
+        .first_release_witness()
+        .expect("production wrapper must attach a first-release witness");
+    assert_eq!(
+        witness.source_identity,
+        PRODUCTION_IN_FLIGHT_FIRST_RELEASE_TLA_SOURCE_SHA256
+    );
+    assert!(
+        authenticate_production_in_flight_first_release_transition_witness_v1(projection, witness,)
+    );
+}
+#[test]
 fn snapshot_bootstrap_context_is_explicit_and_cannot_replace_genesis() {
     let roster = (1_u8..=4)
         .map(|validator| Validator::new(id(validator), VotingPower::new(1)))
@@ -2646,6 +2700,226 @@ fn later_reproposal_commit_ack_retires_durable_old_round_commit_pool() {
             && pool.phase == Phase::Commit
             && pool.subject == subject
     }));
+}
+#[test]
+fn locally_formed_later_prepare_qc_refines_with_durable_old_round_commit_pool() {
+    let context = context();
+    let subject = Subject::repeat(0xa5);
+    let original_round = Round::new(context.height(), 0);
+    let reproposal_round = Round::new(context.height(), 1);
+    let original_prepare = qc(&context, 0, Phase::Prepare, subject, &[1, 2, 3]);
+    let old_commit = Vote::new(context.id(), original_round, Phase::Commit, subject, id(4));
+    let reproposal_commit = Vote::new(
+        context.id(),
+        reproposal_round,
+        Phase::Commit,
+        subject,
+        id(4),
+    );
+    let mut reducer = Reducer::recover(
+        context.clone(),
+        Some(id(4)),
+        Generation::new(52),
+        [WalEntry::new(
+            PersistenceId::new(1),
+            WalRecord::LockAndCommit {
+                prepare: original_prepare.clone(),
+                vote: old_commit,
+            },
+        )],
+    )
+    .expect("recover the original Commit intent");
+    assert!(matches!(
+        resume_after_replay(&mut reducer).effects(),
+        [Effect::Sign {
+            message: SignableMessage::Vote(vote),
+            ..
+        }] if *vote == old_commit
+    ));
+    reducer
+        .step(Event::Signed {
+            tag: reducer.current_tag(),
+            signature: signature(4),
+        })
+        .expect("rebuild the original Commit pool");
+    let timeout = tc_with_high(&context, 0, original_prepare, &[1, 2, 3]);
+    let install = only_persist(
+        reducer
+            .step(Event::TimeoutCertificateReceived {
+                tag: reducer.current_tag(),
+                certificate: timeout.clone(),
+            })
+            .expect("install the timeout certificate that opens the reproposal round"),
+    );
+    acknowledge(&mut reducer, &install);
+    assert_eq!(reducer.current_tag().view(), reproposal_round.view());
+    reducer
+        .step(Event::Signed {
+            tag: reducer.current_tag(),
+            signature: signature(5),
+        })
+        .expect("retransmit the still-authorized durable old-round Commit");
+    assert!(matches!(
+        reducer.vote_pool_snapshots().as_slice(),
+        [VotePoolSnapshot {
+            round,
+            proposal_round: origin,
+            phase: Phase::Commit,
+            ..
+        }] if *round == original_round && *origin == original_round
+    ));
+    assert!(matches!(
+        reducer
+            .step(Event::ProposalReceived {
+                tag: reducer.current_tag(),
+                proposal: proposal(
+                    &context,
+                    reproposal_round.view(),
+                    subject,
+                    ProposalJustification::Timeout(timeout),
+                ),
+            })
+            .expect("accept the unchanged locked subject at a new proposal origin")
+            .effects(),
+        [Effect::FetchBody {
+            round,
+            subject: fetched_subject,
+            ..
+        }] if *round == reproposal_round && *fetched_subject == subject
+    ));
+    assert!(matches!(
+        reducer
+            .step(Event::BodyAvailable {
+                tag: reducer.current_tag(),
+                round: reproposal_round,
+                subject,
+            })
+            .expect("recover the re-proposed locked body")
+            .effects(),
+        [Effect::StoreBody { .. }]
+    ));
+    assert!(matches!(
+        reducer
+            .step(Event::BodyStored {
+                tag: reducer.current_tag(),
+                round: reproposal_round,
+                subject,
+            })
+            .expect("store the re-proposed locked body")
+            .effects(),
+        [Effect::ValidateBody { .. }]
+    ));
+    let prepare_entry = only_persist(
+        reducer
+            .step(Event::ValidationCompleted {
+                tag: reducer.current_tag(),
+                round: reproposal_round,
+                subject,
+                valid: true,
+            })
+            .expect("validation starts the current Prepare intent"),
+    );
+    let prepared = acknowledge(&mut reducer, &prepare_entry);
+    assert!(matches!(
+        prepared.effects(),
+        [Effect::Sign {
+            message: SignableMessage::Vote(vote),
+            ..
+        }] if vote.phase() == Phase::Prepare && vote.round() == reproposal_round
+    ));
+    reducer
+        .step(Event::Signed {
+            tag: reducer.current_tag(),
+            signature: signature(6),
+        })
+        .expect("self-admit the current Prepare vote");
+    let first_remote = reducer
+        .step(Event::VoteReceived {
+            tag: reducer.current_tag(),
+            vote: SignedVote::new(
+                Vote::new(
+                    context.id(),
+                    reproposal_round,
+                    Phase::Prepare,
+                    subject,
+                    id(1),
+                ),
+                signature(1),
+            ),
+        })
+        .expect("the first remote Prepare vote remains below quorum");
+    assert!(first_remote.effects().is_empty());
+    let formed = reducer
+        .step(Event::VoteReceived {
+            tag: reducer.current_tag(),
+            vote: SignedVote::new(
+                Vote::new(
+                    context.id(),
+                    reproposal_round,
+                    Phase::Prepare,
+                    subject,
+                    id(2),
+                ),
+                signature(2),
+            ),
+        })
+        .expect("the locally formed PrepareQC passes the refinement gates");
+    let [
+        Effect::Broadcast(ConsensusMessageV2::QuorumCertificate(formed_prepare)),
+        Effect::Persist {
+            entry: commit_entry,
+            ..
+        },
+    ] = formed.effects()
+    else {
+        panic!(
+            "locally formed PrepareQC must broadcast before persisting Commit intent: {:?}",
+            formed.effects()
+        );
+    };
+    assert_eq!(formed_prepare.round(), reproposal_round);
+    assert_eq!(formed_prepare.phase(), Phase::Prepare);
+    assert_eq!(formed_prepare.subject(), subject);
+    assert_eq!(
+        formed_prepare
+            .signatures()
+            .iter()
+            .map(SignatureShare::signer)
+            .collect::<Vec<_>>(),
+        vec![id(1), id(2), id(4)]
+    );
+    assert!(matches!(
+        commit_entry.record(),
+        WalRecord::LockAndCommit { prepare, vote }
+            if prepare.reference() == formed_prepare.reference()
+                && *vote == reproposal_commit
+    ));
+    let pools_before_ack = reducer.vote_pool_snapshots();
+    assert!(pools_before_ack.iter().any(|pool| {
+        pool.round == original_round
+            && pool.proposal_round == original_round
+            && pool.phase == Phase::Commit
+    }));
+    assert!(pools_before_ack.iter().any(|pool| {
+        pool.round == reproposal_round
+            && pool.proposal_round == reproposal_round
+            && pool.phase == Phase::Prepare
+    }));
+    let committed = acknowledge(&mut reducer, commit_entry);
+    assert!(matches!(
+        committed.effects(),
+        [Effect::Sign {
+            message: SignableMessage::Vote(vote),
+            ..
+        }] if *vote == reproposal_commit
+    ));
+    assert!(
+        reducer
+            .vote_pool_snapshots()
+            .iter()
+            .all(|pool| pool.round == reproposal_round),
+        "the durable new lock retires the old-round Commit pool"
+    );
 }
 #[test]
 fn tc_highest_prepare_missed_locally_requires_same_subject_reproposal_before_commit() {

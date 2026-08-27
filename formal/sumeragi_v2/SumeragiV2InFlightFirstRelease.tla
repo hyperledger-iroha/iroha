@@ -31,8 +31,11 @@ only when the corresponding prefix is complete. Post-WSV sidecar/index repairs
 remain stuttering. The release
 path separately models Kura retirement/ReleasePending claim prefixes, the
 Queue PrepareRelease barrier, Released claim prefixes, and Queue
-CompleteRelease/FIFO restoration/ForgetRelease.  Prefix counters are durable
-and survive Crash/Recover.
+CompleteRelease/FIFO restoration/ForgetRelease. A nonproducer replica instead
+uses a move-only exact-group Queue observation to classify either complete
+local Queue absence or preservation of a pre-existing exact ordinary FIFO
+owner; that observer path never claims the Queue release barrier or FIFO
+restoration. Prefix counters are durable and survive Crash/Recover.
 
 `session.bodies` and `session.readyAuthorized` are volatile.  Crash loses the
 crashed validator's copies; durable Kura/input/QC and release-prefix facts
@@ -92,9 +95,13 @@ QueuePlanStates == {"Absent", "SelectedConjunction", "Tombstoned"}
 ReservationStates ==
   {"Absent", "Live", "Committed", "CommitForgotten",
    "ReleasePrepared", "ReleaseCompleted", "ReleaseForgotten",
-   "DirectReleased"}
+   "DirectReleased", "ReplicaQueueAbsent", "ReplicaQueueFifoPreserved"}
 PreparedReleaseStates ==
   {"ReleasePrepared", "ReleaseCompleted", "ReleaseForgotten"}
+ReplicaQueueReleaseStates ==
+  {"ReplicaQueueAbsent", "ReplicaQueueFifoPreserved"}
+ReleasedClaimGateStates ==
+  PreparedReleaseStates \union ReplicaQueueReleaseStates
 CompletedReleaseStates == {"ReleaseCompleted", "ReleaseForgotten"}
 FifoRestoredReservationStates ==
   CompletedReleaseStates \union {"DirectReleased"}
@@ -110,6 +117,24 @@ PrefixThrough(prefix) ==
 CanonicalKeyPrefix(keys, bound) ==
   /\ keys \subseteq PrefixThrough(bound)
   /\ keys = PrefixThrough(Cardinality(keys))
+
+CommitTerminal ==
+  /\ queue.reservation = "CommitForgotten"
+  /\ Cardinality(history.reservationCommitForgottenKeys) = queue.selectedCount
+
+ReplicaQueueAbsentTerminal ==
+  /\ queue.reservation = "ReplicaQueueAbsent"
+  /\ release.releasedPrefix = queue.selectedCount
+
+ReplicaQueueFifoPreservedTerminal ==
+  /\ queue.reservation = "ReplicaQueueFifoPreserved"
+  /\ release.releasedPrefix = queue.selectedCount
+
+OrdinaryFifoTerminal ==
+  \/ queue.reservation \in {"ReleaseForgotten", "DirectReleased"}
+  \/ ReplicaQueueFifoPreservedTerminal
+
+ReleaseTerminal == OrdinaryFifoTerminal \/ ReplicaQueueAbsentTerminal
 
 Configuration ==
   /\ Mode \in Modes
@@ -313,15 +338,23 @@ RecoverReservationSnapshot ==
 
 (***************************************************************************
 Direct abort/orphan release is a real journal action outside the ordered
-four-stage lane release. It ends with ordinary FIFO ownership and may not
-masquerade as a Commit cleanup or ordered-release transition. The V1 operation
-inventory contains no lane-wide removal action.
+four-stage lane release. The same physical FIFO state is authenticated by a
+strict retired non-producer replica only after the complete ReleasePending
+prefix; that branch never fabricates the producer's Queue reservation owner.
+Both branches end with ordinary FIFO ownership and may not masquerade as a
+Commit cleanup. The V1 operation inventory contains no lane-wide removal
+action.
 ***************************************************************************)
 ReleaseReservationDirect ==
   /\ queue.plan = "SelectedConjunction"
-  /\ queue.reservation = "Live"
-  /\ decision.laneCommitOwner = "None"
-  /\ decision.releaseOwner = "None"
+  /\ ((queue.reservation = "Live"
+       /\ decision.laneCommitOwner = "None"
+       /\ decision.releaseOwner = "None")
+      \/ (queue.reservation \in {"Live", "DirectReleased"}
+          /\ release.kuraRetired
+          /\ (queue.reservation = "DirectReleased" => release.fifoRestored)
+          /\ release.pendingPrefix = queue.selectedCount
+          /\ decision.releaseOwner \in (Validators \ {Producer})))
   /\ queue' = [queue EXCEPT !.reservation = "DirectReleased"]
   /\ release' = [release EXCEPT !.fifoRestored = TRUE]
   /\ UNCHANGED <<ownership, payloadBinding, carrier, session, history, decision>>
@@ -487,7 +520,7 @@ AdvanceReleasePendingPrefix ==
   /\ UNCHANGED <<ownership, payloadBinding, queue, carrier, session, decision>>
 
 PrepareReservationRelease ==
-  /\ decision.releaseOwner # "None"
+  /\ decision.releaseOwner = Producer
   /\ queue.reservation = "Live"
   /\ (release.pendingPrefix = queue.selectedCount
       \/ Mode = "ReleasePrepareBeforePending")
@@ -495,11 +528,36 @@ PrepareReservationRelease ==
   /\ UNCHANGED <<ownership, payloadBinding, carrier, session, history, decision,
                  release>>
 
+(***************************************************************************
+A remote replica consumes an external move-only exact-group Queue observation
+after every ReleasePending claim is durable. The disposition states distinguish
+complete local Queue absence from an exact ordinary FIFO owner that already
+existed and remains unchanged. This is not PrepareRelease or FIFO restoration.
+***************************************************************************)
+ObserveReplicaQueueRelease(disposition) ==
+  /\ disposition \in ReplicaQueueReleaseStates
+  /\ decision.releaseOwner \in Validators \ {Producer}
+  /\ queue.plan = "SelectedConjunction"
+  /\ queue.reservation = "Live"
+  /\ release.kuraRetired
+  /\ release.pendingPrefix = queue.selectedCount
+  /\ release.releasedPrefix = 0
+  /\ ~release.fifoRestored
+  /\ queue' = [queue EXCEPT !.reservation = disposition]
+  /\ UNCHANGED <<ownership, payloadBinding, carrier, session, history, decision,
+                 release>>
+
 AdvanceReleasedPrefix ==
   /\ decision.releaseOwner # "None"
   /\ release.releasedPrefix < queue.selectedCount
-  /\ ((queue.reservation = "ReleasePrepared"
+  /\ ((queue.reservation \in
+         {"ReleasePrepared", "ReplicaQueueAbsent", "ReplicaQueueFifoPreserved"}
        /\ release.pendingPrefix = queue.selectedCount)
+      \/ (queue.reservation = "DirectReleased"
+          /\ release.kuraRetired
+          /\ release.fifoRestored
+          /\ release.pendingPrefix = queue.selectedCount
+          /\ decision.releaseOwner \in (Validators \ {Producer}))
       \/ Mode = "ReleasedClaimsBeforePrepare")
   /\ release' = [release EXCEPT !.releasedPrefix = @ + 1]
   /\ history' = [history EXCEPT !.releasedHighWater = @ + 1]
@@ -569,6 +627,8 @@ Next ==
   \/ \E p \in Validators: PersistKuraRetirement(p)
   \/ AdvanceReleasePendingPrefix
   \/ PrepareReservationRelease
+  \/ \E disposition \in ReplicaQueueReleaseStates:
+       ObserveReplicaQueueRelease(disposition)
   \/ AdvanceReleasedPrefix
   \/ CompleteReservationRelease
   \/ RestoreReleasedFifo
@@ -742,8 +802,18 @@ MLReleaseStageOrder ==
   /\ queue.reservation \in PreparedReleaseStates =>
        /\ release.kuraRetired
        /\ release.pendingPrefix = queue.selectedCount
+       /\ decision.releaseOwner = Producer
+  /\ queue.reservation \in ReplicaQueueReleaseStates =>
+       /\ release.kuraRetired
+       /\ release.pendingPrefix = queue.selectedCount
+       /\ decision.releaseOwner \in Validators \ {Producer}
+       /\ ~release.fifoRestored
   /\ release.releasedPrefix > 0 =>
-       /\ queue.reservation \in PreparedReleaseStates
+       /\ (queue.reservation \in ReleasedClaimGateStates
+           \/ (queue.reservation = "DirectReleased"
+               /\ release.kuraRetired
+               /\ release.fifoRestored
+               /\ decision.releaseOwner \in (Validators \ {Producer})))
        /\ release.pendingPrefix = queue.selectedCount
   /\ queue.reservation \in CompletedReleaseStates =>
        release.releasedPrefix = queue.selectedCount
@@ -753,6 +823,16 @@ MLReleaseStageOrder ==
        release.fifoRestored
   /\ queue.reservation = "DirectReleased" =>
        release.fifoRestored
+  /\ queue.reservation = "DirectReleased" /\ release.kuraRetired =>
+       /\ release.pendingPrefix = queue.selectedCount
+       /\ decision.releaseOwner \in (Validators \ {Producer})
+
+MLTerminalDispositionExclusive ==
+  /\ ~(CommitTerminal /\ ReleaseTerminal)
+  /\ (ReplicaQueueAbsentTerminal => ~OrdinaryFifoTerminal)
+  /\ (ReplicaQueueFifoPreservedTerminal =>
+       /\ OrdinaryFifoTerminal
+       /\ ~release.fifoRestored)
 
 MLQueuePlanV1SelectedConjunctionBound4096 ==
   /\ queue.selectedCount <= 4096
@@ -776,6 +856,7 @@ InFlightFirstReleaseSafetyInvariant ==
   /\ MLPostCarrierCommitCleanupOrder
   /\ MLReleasePrefixesRecoverable
   /\ MLReleaseStageOrder
+  /\ MLTerminalDispositionExclusive
   /\ MLQueuePlanV1SelectedConjunctionBound4096
 
 InFlightFirstReleaseSpec == Init /\ [][Next]_vars

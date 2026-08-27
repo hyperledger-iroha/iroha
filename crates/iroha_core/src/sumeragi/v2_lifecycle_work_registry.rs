@@ -9,11 +9,12 @@ use super::replay_authority::CertifiedValidateReplayEvidenceV1;
 #[cfg(test)]
 use super::{AdmissionRequest, LeaseId};
 use super::{
-    AuthenticatedLifecycleRecoveryCut, CandidateAdmission, CapacityClass, InitialLifecycleState,
-    LifecycleContext, LifecycleCoordinator, LifecycleDigest, LifecycleKey, LifecyclePhase,
-    LifecycleRecord, LifecycleRound, LifecycleStage, LifecycleStageKind,
-    LifecycleValidateDispatchKeyV1, LifecycleWorkClass, OwnerId, PhysicalReplacement, PhysicalSlot,
-    PhysicalSlotId, PredecessorScope, ReadyEvent, TurnLease, WaitSource, WaitToken, authority,
+    AuthenticatedLifecycleRecoveryCut, AuthenticatedRecoveredReleasedValidateNoSuccessorV1,
+    CandidateAdmission, CapacityClass, InitialLifecycleState, LifecycleContext,
+    LifecycleCoordinator, LifecycleDigest, LifecycleKey, LifecyclePhase, LifecycleRecord,
+    LifecycleRound, LifecycleStage, LifecycleStageKind, LifecycleValidateDispatchKeyV1,
+    LifecycleWorkClass, OwnerId, PhysicalReplacement, PhysicalSlot, PhysicalSlotId,
+    PredecessorScope, ReadyEvent, TurnLease, WaitSource, WaitToken, authority,
     body_pipeline_transition::{
         SealedInvalidBodyReportProjection, SealedInvalidBodyReportProjectionPermit,
         SealedValidateApplyProjection, SealedValidateApplyProjectionPermit,
@@ -1970,7 +1971,7 @@ impl DurableRecoveredLifecycleSignedBroadcastWork {
                 ) && self
                     .broadcast
                     .exactly_matches_record(broadcast_record, parent.address.owner)
-                    && parent.predecessor_is_exact_in_ledger(ledger, true)
+                    && parent.predecessor_is_exact_in_ledger(ledger, Some(self.address.ordinal))
             }
             DurableRecoveredLifecycleSignParentV1::PhaseVote(parent) => ledger
                 .authenticate_recovered_phase_signed_broadcast(&self.verified, &parent.repair)
@@ -2254,6 +2255,16 @@ impl DurableRecoveredDecisionApplyWork {
                 == PhysicalSlotId::for_capacity(LifecycleWorkClass::Apply.capacity_class(), 0)
             && self.validates_digest(installed_digest)
     }
+    /// Recover the exact non-adjacent Validate predecessor only after the
+    /// coordinator reconstitutes this carrier's complete durable body chain.
+    fn validate_predecessor_ordinal_in_coordinator(
+        &self,
+        coordinator: &LifecycleCoordinator,
+    ) -> Option<u128> {
+        let ledger = super::ledger::LifecycleLedgerV1::from_coordinator(coordinator).ok()?;
+        self.carrier
+            .validate_predecessor_ordinal_in_ledger(&ledger, self.address.ordinal)
+    }
     fn matches_current_ready_record(
         &self,
         address: ConcreteWorkAddress,
@@ -2294,6 +2305,9 @@ impl DurableRecoveredDecisionApplyWork {
             && digest == installed_digest
             && metadata.matches_admission(&candidate)
             && self.carrier.exactly_matches_candidate(&candidate)
+            && self
+                .carrier
+                .validates_released_terminal_in_coordinator(coordinator)
             && coordinator.key_index.get(&record.key) == Some(&record.ordinal)
             && coordinator.owner_index.get(&record.owner.causal_root()) == Some(&record.owner)
             && coordinator.ready_index.contains(&record.ordinal)
@@ -2346,6 +2360,9 @@ impl DurableRecoveredDecisionApplyWork {
             && digest == installed_digest
             && metadata.matches_admission(&candidate)
             && self.carrier.exactly_matches_candidate(&candidate)
+            && self
+                .carrier
+                .validates_released_terminal_in_coordinator(coordinator)
             && coordinator.key_index.get(&record.key) == Some(&record.ordinal)
             && coordinator.owner_index.get(&record.owner.causal_root()) == Some(&record.owner)
             && !coordinator.ready_index.contains(&record.ordinal)
@@ -2431,6 +2448,7 @@ impl ReadyLifecycleDecisionApplyAttestationV1 {
 #[must_use = "live Apply decision cleanup must complete before capacity capture"]
 pub(in crate::sumeragi) struct LiveLifecycleDecisionApplyReconciliationAuthorityV1 {
     dispatch_key: LifecycleDecisionApplyDispatchKeyV1,
+    validate_predecessor_ordinal: u128,
     tag: crate::sumeragi::v2_core::EventTag,
     subject: wire::BlockSubject,
     certificate: wire::QuorumCertificate,
@@ -2448,6 +2466,10 @@ impl LiveLifecycleDecisionApplyReconciliationAuthorityV1 {
     /// Return the immutable full-coordinate live carrier key.
     pub(in crate::sumeragi) const fn dispatch_key(&self) -> LifecycleDecisionApplyDispatchKeyV1 {
         self.dispatch_key
+    }
+    /// Return the exact Validate row which durably advanced into this Apply.
+    pub(in crate::sumeragi) const fn validate_predecessor_ordinal(&self) -> u128 {
+        self.validate_predecessor_ordinal
     }
     /// Return the reducer incarnation which admitted the live Apply.
     pub(in crate::sumeragi) const fn tag(&self) -> crate::sumeragi::v2_core::EventTag {
@@ -3237,6 +3259,59 @@ enum ConcreteLifecycleWorkKind {
 }
 
 impl ConcreteLifecycleWorkRegistry {
+    /// Return a bounded, payload-free inventory for terminal-stall diagnostics.
+    ///
+    /// Ordinals and carrier kinds are sufficient to distinguish an already
+    /// refanned recovered Broadcast from a direct pending output without
+    /// exposing message bodies, signatures, or replay material.
+    pub(super) fn finalization_entry_kind_census(&self) -> (usize, Vec<(u128, &'static str)>) {
+        let entries = self
+            .entries
+            .iter()
+            .take(32)
+            .map(|(address, work)| {
+                let kind = match &work.kind {
+                    ConcreteLifecycleWorkKind::PendingAdapter { .. } => "PendingAdapter",
+                    ConcreteLifecycleWorkKind::CertifiedFetchCompletion(_) => {
+                        "CertifiedFetchCompletion"
+                    }
+                    ConcreteLifecycleWorkKind::DurableStoreBody(_) => "DurableStoreBody",
+                    ConcreteLifecycleWorkKind::DurableValidateBody(_) => "DurableValidateBody",
+                    ConcreteLifecycleWorkKind::DurableValidateCompletion(_) => {
+                        "DurableValidateCompletion"
+                    }
+                    ConcreteLifecycleWorkKind::DurableLiveWalApply(_) => "DurableLiveWalApply",
+                    ConcreteLifecycleWorkKind::DurableLiveWalSign(_) => "DurableLiveWalSign",
+                    ConcreteLifecycleWorkKind::DurableRecoveredWalSign(_) => {
+                        "DurableRecoveredWalSign"
+                    }
+                    ConcreteLifecycleWorkKind::DurableRecoveredLifecycleNextWalVoteSign(_) => {
+                        "DurableRecoveredLifecycleNextWalVoteSign"
+                    }
+                    ConcreteLifecycleWorkKind::DurableRecoveredWalControlSign(_) => {
+                        "DurableRecoveredWalControlSign"
+                    }
+                    ConcreteLifecycleWorkKind::DurableRecoveredLifecycleSignedBroadcast(_) => {
+                        "DurableRecoveredLifecycleSignedBroadcast"
+                    }
+                    ConcreteLifecycleWorkKind::DurableRecoveredWalDecisionFetch(_) => {
+                        "DurableRecoveredWalDecisionFetch"
+                    }
+                    ConcreteLifecycleWorkKind::DurableRecoveredDecisionStore(_) => {
+                        "DurableRecoveredDecisionStore"
+                    }
+                    ConcreteLifecycleWorkKind::DurableRecoveredDecisionApply(_) => {
+                        "DurableRecoveredDecisionApply"
+                    }
+                    ConcreteLifecycleWorkKind::DurableCertifiedServe(_) => "DurableCertifiedServe",
+                    ConcreteLifecycleWorkKind::DurableProducerTurn(_) => "DurableProducerTurn",
+                };
+                (address.ordinal, kind)
+            })
+            .collect();
+        (self.entries.len(), entries)
+    }
+
     /// Project every exact executable Store publication retained by the
     /// authenticated registry for finalized rollover cross-checking.
     pub(super) fn published_lifecycle_store_retry_census(

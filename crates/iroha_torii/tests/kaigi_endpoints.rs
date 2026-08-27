@@ -10,7 +10,7 @@ use http_body_util::BodyExt;
 use iroha_core::{kiso::KisoHandle, kura::Kura, query::store::LiveQueryStore, state::State};
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
-    ChainId, Registrable,
+    NetworkId, Registrable,
     account::{
         Account, AccountAddress,
         rekey::{AccountAlias, AccountAliasDomain, AccountRekeyRecord},
@@ -94,6 +94,8 @@ fn kaigi_ed25519_fixture_uses_checked_key_generation() {
 }
 fn build_app() -> (axum::Router, AccountId, AccountId, KeyPair) {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
+    let chain_id = cfg.common.chain.clone();
+    let network_id = NetworkId::from_genesis_hash(cfg.genesis.expected_hash);
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -141,7 +143,13 @@ fn build_app() -> (axum::Router, AccountId, AccountId, KeyPair) {
     );
     seed_relay_primary_alias(&mut world, &domain_id, &relay_id);
     fixtures::seed_peer(&mut world, local_peer_id.clone());
-    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
+    let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
+        world,
+        kura.clone(),
+        query,
+        chain_id.clone(),
+        network_id,
+    ));
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(64).0;
     let queue = Arc::new(iroha_core::queue::Queue::from_config(
@@ -183,8 +191,8 @@ fn build_app() -> (axum::Router, AccountId, AccountId, KeyPair) {
     let operator_key_pair = cfg.common.key_pair.clone();
     let da_receipt_signer = operator_key_pair.clone();
     let torii = iroha_torii::Torii::new(
-        ChainId::from("test-chain"),
-        iroha_torii::test_utils::signed_query_network_id(),
+        chain_id,
+        network_id,
         kiso,
         cfg.torii.clone(),
         queue,
@@ -241,8 +249,7 @@ async fn kaigi_endpoints_report_metadata() {
     // Summary endpoint
     let resp = get_kaigi(&app, &operator_key_pair, "/v1/kaigi/relays", None).await;
     assert_eq!(resp.status(), StatusCode::OK);
-    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
-    let summary: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
+    let summary = norito_json_body(resp).await;
     assert_eq!(summary["total"].as_u64(), Some(1));
     assert_eq!(
         summary["items"][0]["relay_id"].as_str().unwrap(),
@@ -257,8 +264,7 @@ async fn kaigi_endpoints_report_metadata() {
     let detail_path = format!("/v1/kaigi/relays/{relay_literal}");
     let detail_resp = get_kaigi(&app, &operator_key_pair, detail_path, None).await;
     assert_eq!(detail_resp.status(), StatusCode::OK);
-    let detail_bytes = detail_resp.into_body().collect().await.unwrap().to_bytes();
-    let detail: norito::json::Value = norito::json::from_slice(&detail_bytes).unwrap();
+    let detail = norito_json_body(detail_resp).await;
     assert_eq!(
         detail["relay"]["hpke_fingerprint_hex"]
             .as_str()
@@ -271,8 +277,7 @@ async fn kaigi_endpoints_report_metadata() {
     // Health snapshot
     let health_resp = get_kaigi(&app, &operator_key_pair, "/v1/kaigi/relays/health", None).await;
     assert_eq!(health_resp.status(), StatusCode::OK);
-    let health_bytes = health_resp.into_body().collect().await.unwrap().to_bytes();
-    let health: norito::json::Value = norito::json::from_slice(&health_bytes).unwrap();
+    let health = norito_json_body(health_resp).await;
     assert_eq!(health["healthy_total"].as_u64(), Some(1));
     assert!(!health["domains"].as_array().unwrap().is_empty());
 }
@@ -283,8 +288,7 @@ async fn kaigi_endpoints_emit_i105_literals() {
     let owner_literal = owner_account.to_string();
     let resp = get_kaigi(&app, &operator_key_pair, "/v1/kaigi/relays", None).await;
     assert_eq!(resp.status(), StatusCode::OK);
-    let body = resp.into_body().collect().await.unwrap().to_bytes();
-    let summary: norito::json::Value = norito::json::from_slice(&body).unwrap();
+    let summary = norito_json_body(resp).await;
     assert_eq!(
         summary["items"][0]["relay_id"].as_str(),
         Some(relay_literal.as_str())
@@ -293,8 +297,7 @@ async fn kaigi_endpoints_emit_i105_literals() {
     let detail_path = format!("/v1/kaigi/relays/{relay_literal}");
     let detail_resp = get_kaigi(&app, &operator_key_pair, detail_path, None).await;
     assert_eq!(detail_resp.status(), StatusCode::OK);
-    let detail_bytes = detail_resp.into_body().collect().await.unwrap().to_bytes();
-    let detail: norito::json::Value = norito::json::from_slice(&detail_bytes).unwrap();
+    let detail = norito_json_body(detail_resp).await;
     assert_eq!(
         detail["relay"]["relay_id"].as_str(),
         Some(relay_literal.as_str())

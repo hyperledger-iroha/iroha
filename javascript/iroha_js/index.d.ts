@@ -26,7 +26,7 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
-export const KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION: 22;
+export const KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION: 23;
 export const KAGEMUSHA_MANIFEST_VERSION: 4;
 export const KAGEMUSHA_MAX_HOPS: 8;
 export const KAGEMUSHA_CASH_HANDOFF_CAPABILITY: "cash_handoff_v1";
@@ -41,7 +41,7 @@ export interface KagemushaNoritoRequestV4 {
 
 export interface OfflineStatus {
   readonly cash_handoff_capability: "cash_handoff_v1";
-  readonly required_bridge_abi_version: 22;
+  readonly required_bridge_abi_version: 23;
   readonly max_hops: 8;
   readonly ready: true;
 }
@@ -5172,12 +5172,22 @@ export const PARLIAMENT_ATTEMPT_DRAFT_PATH_V1: "/v1/gov/parliament/attempts/draf
 export const PARLIAMENT_ATTEMPT_READ_PATH_V1: "/v1/gov/parliament/attempts/{governance_attempt_id}";
 export const PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_READ_PATH_V1: "/v1/gov/parliament/ballots/{ballot_attempt_id}/casting-context";
 export const PARLIAMENT_TIMED_OVN_CASTING_PROOF_PATH_V1: "/v1/gov/parliament/ballots/{ballot_attempt_id}/casting-proof";
+export const PARLIAMENT_TIMED_OVN_CASTING_PROOF_VERSION_V1: 1;
+export const PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA_NAME_V1: "iroha.torii.v1.parliament.timed_ovn_casting_proof.request";
+export const PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA_HASH_HEX_V1: "adccf322a5fcf43040e20bea238f55f3";
+export const PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_NAME_V1: "iroha.torii.v1.parliament.timed_ovn_casting_proof.response";
+export const PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_HASH_HEX_V1: "46d29299272433b1299646bee722bd11";
+export const PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_FLAGS_V1: 2;
+export const PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_PAYLOAD_ALIGNMENT_V1: 8;
+export const PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_PADDING_BYTES_V1: 0;
+export const PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_BYTES_V1: 52;
 export const PARLIAMENT_TLE_RELEASE_CONTEXT_READ_PATH_V1: "/v1/gov/parliament/ballots/{ballot_attempt_id}/release-context";
 export const PARLIAMENT_TLE_PARTIAL_RELEASE_PATH_V1: "/v1/gov/parliament/ballots/{ballot_attempt_id}/partial-release";
 export const PARLIAMENT_TRANSITION_DRAFT_PATH_V1: "/v1/gov/parliament/transitions/draft";
 export const PARLIAMENT_ATTEMPT_CREATE_WIRE_ID_V1: "iroha.governance.parliament.attempt.create.v1";
 export const PARLIAMENT_TRANSITION_SUBMIT_WIRE_ID_V1: "iroha.governance.parliament.transition.submit.v1";
 export const PARLIAMENT_ATTEMPT_STATE_MAX_BYTES_V1: 16777216;
+export const PARLIAMENT_GOVERNANCE_ATTEMPT_SEQUENCE_MAX_V1: 16;
 export const PARLIAMENT_TIMED_OVN_REGISTRATION_RECORD_BYTES_V1: 3624;
 export const PARLIAMENT_TIMED_OVN_BALLOT_RECORD_BYTES_V1: 2858;
 export const PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1: 32;
@@ -5240,17 +5250,32 @@ export type ParliamentNoResultKindTagV1 =
   | "BallotSurvivorDeadlineExpired"
   | "BallotCommitmentDeadlineExpired"
   | "BallotReleasePulseUnavailable"
-  | "BallotOpeningDeadlineExpired";
+  | "BallotOpeningDeadlineExpired"
+  | "SortitionRetriesExhausted";
 
 export interface ParliamentNoResultKindLayoutV1 {
   readonly noritoIndex: number;
   readonly jsonTag: ParliamentNoResultKindTagV1;
 }
 
+export type ParliamentBodyNameV1 =
+  | "rules-committee"
+  | "agenda-council"
+  | "interest-panel"
+  | "review-panel"
+  | "coordination-council"
+  | "mpc-committee"
+  | "fma-committee"
+  | "oversight-committee"
+  | "policy-jury"
+  | "confirmation-jury";
+
 export const PARLIAMENT_PUBLIC_TRANSITIONS_V1: ReadonlyArray<ParliamentTransitionLayoutV1>;
 /** Read/audit-only inventory; these tags are never accepted by the public builder. */
 export const PARLIAMENT_AUTOMATIC_EXECUTION_OUTCOMES_V1: ReadonlyArray<ParliamentAutomaticExecutionOutcomeLayoutV1>;
 export const PARLIAMENT_NO_RESULT_KINDS_V1: ReadonlyArray<ParliamentNoResultKindLayoutV1>;
+/** Canonical presentation order for first-release Parliament bodies. */
+export const PARLIAMENT_CANONICAL_BODY_ORDER_V1: ReadonlyArray<ParliamentBodyNameV1>;
 export const PARLIAMENT_BODY_STATE_FIELDS_V1: ReadonlyArray<
   | "body"
   | "body_instance_id"
@@ -5415,9 +5440,14 @@ export interface ParliamentAttemptReadResponseV1 extends Record<string, unknown>
   current_height: number | bigint;
   attempt: Record<string, unknown> & { id: string };
   policy_version: number | bigint;
-  required_bodies: ReadonlyArray<Record<string, unknown>>;
+  required_bodies: ReadonlyArray<{
+    body: ParliamentBodyNameV1;
+    decision_mode: { mode: "PublicFinding" | "HiddenBindingBallot" };
+  }>;
   body_states: ReadonlyArray<ParliamentBodyStateProjectionV1>;
-  certificate: Record<string, unknown> | null;
+  certificate: (Record<string, unknown> & {
+    body_bindings: ReadonlyArray<Record<string, unknown> & { body: ParliamentBodyNameV1 }>;
+  }) | null;
   terminal_height: number | bigint | null;
   execution_failure_root: ReadonlyArray<number> | null;
   superseding_head: Record<string, unknown> | null;
@@ -5572,6 +5602,12 @@ export interface ParliamentTlePartialReleaseOptionsV1 extends RequiredCanonicalR
 export function parliamentAttemptReadPathV1(governanceAttemptId: string): string;
 export function parliamentTimedOvnCastingContextReadPathV1(ballotAttemptId: string): string;
 export function parliamentTimedOvnCastingProofPathV1(ballotAttemptId: string): string;
+export function encodeParliamentTimedOvnCastingProofRequestV1(
+  trustedCheckpointHeight: number | bigint,
+): Buffer;
+export function validateParliamentTimedOvnCastingProofResponseFrameV1(
+  value: Buffer | ArrayBuffer | ArrayBufferView,
+): Buffer;
 export function parliamentTleReleaseContextReadPathV1(ballotAttemptId: string): string;
 export function parliamentTlePartialReleasePathV1(ballotAttemptId: string): string;
 export function buildParliamentAttemptDraftRequestV1(
@@ -6962,6 +6998,7 @@ export interface KaigiCallView {
   billing_account_id?: string | null;
   title?: string | null;
   description?: string | null;
+  /** Participant limit excluding the host, in 1...4096; omission uses 4096. */
   max_participants?: number | null;
   gas_rate_per_minute: ToriiU64;
   metadata: Record<string, unknown>;
@@ -7916,6 +7953,9 @@ export interface KaigiRelayManifestInput {
   hops: ReadonlyArray<KaigiRelayHopInput>;
 }
 
+/** Maximum concurrent participants excluding the host in a first-release Kaigi call. */
+export declare const KAIGI_MAX_PARTICIPANTS_V1: 4096;
+
 /** Maximum relay hops accepted by the first-release Kaigi manifest. */
 export declare const KAIGI_RELAY_MANIFEST_MAX_HOPS_V1: 8;
 
@@ -7954,6 +7994,7 @@ export interface CreateKaigiInput {
   host: string;
   title?: string | null;
   description?: string | null;
+  /** Participant limit excluding the host, in 1...4096; omission uses 4096. */
   maxParticipants?: NumericLike | null;
   gasRatePerMinute?: NumericLike;
   metadata?: object | null;
@@ -11712,6 +11753,11 @@ export declare class ToriiClient {
     ballotAttemptId: string,
     options: RequiredCanonicalRequestOptions,
   ): Promise<ParliamentTimedOvnCastingContextResponseV1>;
+  getParliamentTimedOvnCastingProofPageV1(
+    ballotAttemptId: string,
+    trustedCheckpointHeight: number | bigint,
+    options: RequiredCanonicalRequestOptions,
+  ): Promise<Buffer>;
   getParliamentTleReleaseContextV1(
     ballotAttemptId: string,
     options: RequiredCanonicalRequestOptions,

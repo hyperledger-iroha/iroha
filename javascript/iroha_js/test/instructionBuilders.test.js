@@ -39,6 +39,7 @@ import {
   buildRegisterKaigiRelayInstruction,
   buildUnregisterKaigiRelayInstruction,
   buildReportKaigiRelayHealthInstruction,
+  KAIGI_MAX_PARTICIPANTS_V1,
   KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1,
   KAIGI_RELAY_MANIFEST_MAX_HOPS_V1,
   buildRegisterSmartContractCodeInstruction,
@@ -1653,13 +1654,14 @@ baseTest("buildLeaveKaigiInstruction rejects reserved V1 privacy artifacts", () 
   );
 });
 
-baseTest("Kaigi builders preserve the full u64 and u32 wire domains", () => {
+baseTest("Kaigi builders preserve full-width u64 values and the participant limit", () => {
   const maxU64 = "18446744073709551615";
-  const maxU32 = 0xffff_ffff;
+  const maxParticipants = KAIGI_MAX_PARTICIPANTS_V1;
+  assert.equal(maxParticipants, 4_096);
   const create = buildCreateKaigiInstruction({
     id: "wonderland.sora:full-width",
     host: ACCOUNT_ID,
-    maxParticipants: maxU32,
+    maxParticipants,
     gasRatePerMinute: BigInt(maxU64),
     scheduledStartMs: maxU64,
     relayManifest: {
@@ -1667,7 +1669,7 @@ baseTest("Kaigi builders preserve the full u64 and u32 wire domains", () => {
       hops: kaigiRelayHops(),
     },
   });
-  assert.equal(create.Kaigi.CreateKaigi.call.max_participants, maxU32);
+  assert.equal(create.Kaigi.CreateKaigi.call.max_participants, maxParticipants);
   assert.equal(create.Kaigi.CreateKaigi.call.gas_rate_per_minute, maxU64);
   assert.equal(create.Kaigi.CreateKaigi.call.scheduled_start_ms, maxU64);
   assert.equal(create.Kaigi.CreateKaigi.call.relay_manifest.expiry_ms, maxU64);
@@ -1699,7 +1701,7 @@ baseTest("Kaigi builders preserve the full u64 and u32 wire domains", () => {
   assert.deepEqual(encodeAndDecode(health), health);
 });
 
-baseTest("Kaigi builders reject values outside their unsigned wire domains", () => {
+baseTest("Kaigi builders reject values outside their protocol bounds", () => {
   const overflowU64 = "18446744073709551616";
   assert.throws(
     () =>
@@ -1718,7 +1720,7 @@ baseTest("Kaigi builders reject values outside their unsigned wire domains", () 
       buildCreateKaigiInstruction({
         id: "wonderland.sora:overflow",
         host: ACCOUNT_ID,
-        maxParticipants: 0x1_0000_0000,
+        maxParticipants: 4_097,
       }),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.VALUE_OUT_OF_RANGE);

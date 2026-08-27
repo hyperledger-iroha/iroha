@@ -2,6 +2,7 @@ package org.hyperledger.iroha.sdk.governance
 
 import java.io.File
 import java.lang.reflect.Modifier
+import java.math.BigInteger
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -23,6 +24,14 @@ class ParliamentTimedOvnWalletV1Test {
         val abi = nativeClass.getDeclaredMethod("nativeBridgeAbiVersion")
         val verify = nativeClass.getDeclaredMethod(
             "nativeVerifyCastingProofV1",
+            ByteArray::class.java,
+            ByteArray::class.java,
+            java.lang.Long.TYPE,
+            ByteArray::class.java,
+            ByteArray::class.java,
+        )
+        val verifyPage = nativeClass.getDeclaredMethod(
+            "nativeVerifyCastingProofPageV1",
             ByteArray::class.java,
             ByteArray::class.java,
             java.lang.Long.TYPE,
@@ -54,9 +63,10 @@ class ParliamentTimedOvnWalletV1Test {
         assertEquals(23, ParliamentTimedOvnWalletV1.REQUIRED_BRIDGE_ABI_VERSION)
         assertEquals(Integer.TYPE, abi.returnType)
         assertEquals(java.lang.Boolean.TYPE, verify.returnType)
+        assertEquals(ByteArray::class.java, verifyPage.returnType)
         assertEquals(ByteArray::class.java, registration.returnType)
         assertEquals(ByteArray::class.java, ballot.returnType)
-        for (method in listOf(abi, verify, registration, ballot)) {
+        for (method in listOf(abi, verifyPage, verify, registration, ballot)) {
             assertTrue(Modifier.isPrivate(method.modifiers))
             assertTrue(Modifier.isStatic(method.modifiers))
             assertTrue(Modifier.isNative(method.modifiers))
@@ -86,6 +96,7 @@ class ParliamentTimedOvnWalletV1Test {
                 ?: error("cannot locate connect_norito_bridge platform_jni/part_3.rs")
         val symbols = listOf(
             "Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeBridgeAbiVersion",
+            "Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeVerifyCastingProofPageV1",
             "Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeVerifyCastingProofV1",
             "Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeRegistrationFromProofV1",
             "Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeBallotFromProofV1",
@@ -97,6 +108,7 @@ class ParliamentTimedOvnWalletV1Test {
         for (requiredSourceContract in listOf(
             "CONNECT_NORITO_BRIDGE_ABI_VERSION as jni::sys::jint",
             "CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_BYTES_V1",
+            "CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_RESULT_BYTES_V1",
             "CONNECT_NORITO_PARLIAMENT_TIMED_OVN_TRUST_ANCHOR_BYTES_V1",
             "CONNECT_NORITO_PARLIAMENT_TIMED_OVN_SEED_BYTES_V1",
             "AUTHORITY_UTF8_MAX_BYTES_V1",
@@ -107,6 +119,7 @@ class ParliamentTimedOvnWalletV1Test {
             "clear_parliament_jni_exception",
             ".filter(|choice| *choice <= 2)",
             "verified_casting_context_from_proof_v1",
+            "verified_casting_proof_page_v1",
             "registration_from_verified_context_v1",
             "ballot_from_verified_context_v1",
         )) {
@@ -143,7 +156,8 @@ class ParliamentTimedOvnWalletV1Test {
                 ?: error("cannot locate ParliamentTimedOvnWalletV1.kt")
 
         assertTrue(source.contains("context.applicationContext ?: context"))
-        assertTrue(source.contains("!verifyProbe && registrationProbe == null && ballotProbe == null"))
+        assertTrue(source.contains("pageVerifyProbe == null"))
+        assertTrue(source.contains("pageVerifyProbe?.fill(0)"))
         assertTrue(source.contains("registrationProbe?.fill(0)"))
         assertTrue(source.contains("ballotProbe?.fill(0)"))
         assertTrue(source.contains("private const val ENVELOPE_VERSION = 2"))
@@ -233,6 +247,9 @@ class ParliamentTimedOvnWalletV1Test {
         ballot.fill(9)
 
         val snapshot = anchor.snapshot()
+        assertEquals(BigInteger.valueOf(7), anchor.trustedCheckpointHeight)
+        assertEquals(BigInteger.valueOf(7), snapshot.trustedCheckpointHeight)
+        assertEquals(7L, snapshot.trustedCheckpointHeightJniBits())
         assertContentEquals(ByteArray(32) { 1 }, snapshot.networkIdBytes())
         assertContentEquals(ByteArray(32) { 3 }, snapshot.checkpointContextIdBytes())
         assertContentEquals(ByteArray(32) { 5 }, snapshot.ballotAttemptIdBytes())
@@ -243,7 +260,84 @@ class ParliamentTimedOvnWalletV1Test {
             ParliamentTimedOvnCastingTrustAnchorV1(network, 0, context, ballot)
         }
         assertFailsWith<IllegalArgumentException> {
+            ParliamentTimedOvnCastingTrustAnchorV1(
+                network,
+                BigInteger.ZERO,
+                context,
+                ballot,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            ParliamentTimedOvnCastingTrustAnchorV1(
+                network,
+                BigInteger.ONE.shiftLeft(64),
+                context,
+                ballot,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
             ParliamentTimedOvnCastingTrustAnchorV1(network, 7, context, ByteArray(32))
+        }
+    }
+
+    @Test
+    fun `trust anchor admits max u64 and transports its raw JNI bits`() {
+        val maximumU64 = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
+        val network = ByteArray(32) { 1 }
+        val context = ByteArray(32) { 3 }
+        val ballot = ByteArray(32) { 5 }
+        val anchor = ParliamentTimedOvnCastingTrustAnchorV1(
+            network,
+            maximumU64,
+            context,
+            ballot,
+        )
+
+        assertEquals(maximumU64, anchor.trustedCheckpointHeight)
+        assertEquals(maximumU64, anchor.snapshot().trustedCheckpointHeight)
+        assertEquals(-1L, anchor.snapshot().trustedCheckpointHeightJniBits())
+
+        val wallet = ParliamentTimedOvnWalletV1.withComponentsForTests(
+            FakeSeedVault(),
+            FakeEndpoint(pageResult = pageVerificationBytes(maximumU64, 0x22, 0)),
+        )
+        val verification = wallet.verifyCastingProofPageV1(byteArrayOf(7), trustAnchor())
+        assertEquals(maximumU64, verification.evaluatedBlockHeight)
+        val promoted = trustAnchor().promoted(verification)
+        assertEquals(maximumU64, promoted.trustedCheckpointHeight)
+        assertEquals(-1L, promoted.snapshot().trustedCheckpointHeightJniBits())
+        assertContentEquals(ByteArray(32) { 0x22 }, promoted.trustedCheckpointContextId())
+    }
+
+    @Test
+    fun `native page verification admits only exact 41 byte big endian results`() {
+        val endpoint = FakeEndpoint(
+            pageResult = pageVerificationBytes(70, 0x22, 1),
+        )
+        val wallet = ParliamentTimedOvnWalletV1.withComponentsForTests(
+            FakeSeedVault(),
+            endpoint,
+        )
+        val verification = wallet.verifyCastingProofPageV1(byteArrayOf(7), trustAnchor())
+
+        assertEquals(BigInteger.valueOf(70), verification.evaluatedBlockHeight)
+        assertContentEquals(ByteArray(32) { 0x22 }, verification.evaluatedContextId())
+        assertTrue(verification.moreAvailable)
+        assertEquals(0, endpoint.pageResult!!.count { it != 0.toByte() })
+
+        for (malformed in listOf(
+            ByteArray(40),
+            pageVerificationBytes(70, 0x22, 2),
+            pageVerificationBytes(0, 0x22, 0),
+            pageVerificationBytes(70, 0, 0),
+        )) {
+            val malformedWallet = ParliamentTimedOvnWalletV1.withComponentsForTests(
+                FakeSeedVault(),
+                FakeEndpoint(pageResult = malformed),
+            )
+            assertFailsWith<IllegalStateException> {
+                malformedWallet.verifyCastingProofPageV1(byteArrayOf(7), trustAnchor())
+            }
         }
     }
 
@@ -431,8 +525,14 @@ class ParliamentTimedOvnWalletV1Test {
 
     private class FakeEndpoint(
         private val proofAccepted: Boolean = true,
+        val pageResult: ByteArray? = pageVerificationBytes(7, 3, 0),
     ) : ParliamentTimedOvnWalletV1.Endpoint {
         val choices = mutableListOf<Int>()
+
+        override fun verifyCastingProofPage(
+            proofResponse: ByteArray,
+            trustAnchor: ParliamentTimedOvnCastingTrustAnchorSnapshotV1,
+        ): ByteArray? = pageResult
 
         override fun verifyCastingProof(
             proofResponse: ByteArray,
@@ -451,7 +551,7 @@ class ParliamentTimedOvnWalletV1Test {
         ): ByteArray? {
             check(
                 proofResponse.isNotEmpty() &&
-                    trustAnchor.trustedCheckpointHeight == 7L &&
+                    trustAnchor.trustedCheckpointHeight == BigInteger.valueOf(7) &&
                     authority == AUTHORITY &&
                     seed.size == 32,
             )
@@ -467,7 +567,7 @@ class ParliamentTimedOvnWalletV1Test {
         ): ByteArray? {
             check(
                 proofResponse.isNotEmpty() &&
-                    trustAnchor.trustedCheckpointHeight == 7L &&
+                    trustAnchor.trustedCheckpointHeight == BigInteger.valueOf(7) &&
                     authority == AUTHORITY &&
                     seed.size == 32,
             )
@@ -516,5 +616,28 @@ class ParliamentTimedOvnWalletV1Test {
                 ByteArray(32) { 3 },
                 ByteArray(32) { 5 },
             )
+
+        private fun pageVerificationBytes(
+            height: Long,
+            contextByte: Int,
+            moreAvailable: Int,
+        ): ByteArray = pageVerificationBytes(
+            BigInteger.valueOf(height),
+            contextByte,
+            moreAvailable,
+        )
+
+        private fun pageVerificationBytes(
+            height: BigInteger,
+            contextByte: Int,
+            moreAvailable: Int,
+        ): ByteArray = ByteArray(41).also { encoded ->
+            require(height.signum() >= 0 && height.bitLength() <= 64)
+            for (index in 0 until 8) {
+                encoded[7 - index] = height.shiftRight(index * 8).toByte()
+            }
+            encoded.fill(contextByte.toByte(), 8, 40)
+            encoded[40] = moreAvailable.toByte()
+        }
     }
 }

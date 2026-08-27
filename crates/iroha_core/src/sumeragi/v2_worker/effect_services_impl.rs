@@ -717,7 +717,8 @@ impl V2EffectServices for ProductionV2Services {
 ///
 /// Payload chunks and request-bound body acquisition traffic return `None`
 /// because their exact task owner, rather than a later certified view, controls
-/// retirement. Beacon partials carry their exact round.
+/// retirement. Height-only recovery requests also return `None`; global
+/// threshold-beacon partials retain their exact round.
 fn global_v2_output_round(message: &NetworkMessage) -> Option<wire::ConsensusRound> {
     let NetworkMessage::SumeragiBlock(envelope) = message else {
         return None;

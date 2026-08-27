@@ -17,17 +17,18 @@ use super::{
         DurableValidateDispatch, DurableValidateExecutionError,
         DurableValidateRegistryPublicationErrorV1, ExecutedDurableValidateDispatch,
         LifecycleDecisionApplyDispatchProjectionErrorV1, LifecycleOutputRegistryJoinV1,
-        LiveLifecycleDecisionApplyReconciliationAuthorityV1, LiveWalRegistryPublicationErrorV1,
+        LiveLifecycleDecisionApplyReconciliationAuthorityV1,
+        LiveReleasedValidateApplyRegistryReservation, LiveWalRegistryPublicationErrorV1,
         OpenedRecoveredWalValidateLedger, PendingDurableValidateAdmissionV1,
         PendingLifecycleOutputAdmissionV1, PendingLiveWalSignAdmissionV1,
         PreparedCertifiedFetchAdmissionV1, PreparedLifecycleAdmissionErrorV1,
         PreparedLifecycleAdmissionOwnerV1, PreparedLifecycleAdmissionV1,
         PreparedLifecycleDecisionApplyDispatchV1, PreparedLifecycleOutputExecutionV1,
-        PreparedLifecycleOutputRegistryRetirementV1, PublishedDurableValidateCompletion,
-        ReadyLifecycleDecisionApplyAttestationErrorV1, ReadyLifecycleDecisionApplyAttestationV1,
-        ReadyValidateCarrierError, RecoveredDurableValidateRetryCensusV1,
-        RecoveredDurableValidateRetryOwnerErrorV1, RecoveredWalParentFactoryError, RegistryError,
-        reconstruct_recovered_wal_validate_parent,
+        PreparedLifecycleOutputRegistryRetirementV1, PreparedLiveValidateApplyRegistryWork,
+        PublishedDurableValidateCompletion, ReadyLifecycleDecisionApplyAttestationErrorV1,
+        ReadyLifecycleDecisionApplyAttestationV1, ReadyValidateCarrierError,
+        RecoveredDurableValidateRetryCensusV1, RecoveredDurableValidateRetryOwnerErrorV1,
+        RecoveredWalParentFactoryError, RegistryError, reconstruct_recovered_wal_validate_parent,
     },
 };
 use crate::sumeragi::{
@@ -56,6 +57,27 @@ impl LifecycleWorkRegistryHolder {
     /// Borrow the concrete map only for one coordinator-owned composite transaction.
     pub(super) fn registry_mut(&mut self) -> &mut ConcreteLifecycleWorkRegistry {
         &mut self.registry
+    }
+
+    /// Reserve one independently owned released-Validate Apply carrier across
+    /// its exact standalone LedgerV1 publication.
+    pub(super) fn prepare_released_validate_apply_reservation(
+        &mut self,
+        prepared: PreparedLiveValidateApplyRegistryWork,
+        terminal: crate::sumeragi::v2::ReleasedLifecycleValidateTerminalProofV1,
+        address: ConcreteWorkAddress,
+        digest: LifecycleDigest,
+        staged_coordinator: &LifecycleCoordinator,
+        staged_ledger: &super::ledger::LifecycleLedgerV1,
+    ) -> Result<LiveReleasedValidateApplyRegistryReservation<'_>, RegistryError> {
+        self.registry.prepare_released_validate_apply_reservation(
+            prepared,
+            terminal,
+            address,
+            digest,
+            staged_coordinator,
+            staged_ledger,
+        )
     }
     /// Project the complete recovered Ready Validate retry-owner census.
     pub(super) fn project_recovered_durable_validate_retry_census(

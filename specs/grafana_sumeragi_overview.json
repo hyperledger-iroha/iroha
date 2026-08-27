@@ -3,7 +3,7 @@
   "title": "Sumeragi Consensus Overview",
   "timezone": "",
   "editable": false,
-  "version": 1,
+  "version": 2,
   "panels": [
     {
       "type": "timeseries",

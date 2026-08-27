@@ -42,12 +42,33 @@ ROSTER_REQUIRED_VALIDATOR_KEYS = frozenset(
 )
 ROSTER_ALIAS_ROUTE_KEYS = frozenset({"alias", "edge_upstream"})
 PUBLIC_TORII_CORS_ORIGINS = [
-    "https://test.soraswap.org",
     "http://127.0.0.1:3000",
     "http://localhost:3000",
+    "https://test.soraswap.org",
+    "https://dweb.link",
+    "https://ipfs.io",
+    "https://cloudflare-ipfs.com",
+    "https://w3s.link",
+    "https://nftstorage.link",
+    "https://bokolo.soramitsu.io",
+    "https://cbsi-banking.soramitsu.io",
+    "https://cbsi-core.soramitsu.io",
+    "https://bokolo-pob.soramitsu.io",
+    "https://bokolo-bred.soramitsu.io",
+    "https://bokolo-anz.soramitsu.io",
+    "https://bokolo-bsp.soramitsu.io",
+    "https://bokolo-m-selen.soramitsu.io",
+    "https://bokolo-ezipei.soramitsu.io",
+    "https://bpng.soramitsu.io",
+    "https://bokolo-explorer.soramitsu.io",
 ]
 PUBLIC_TORII_CORS_METHODS = "GET, POST, DELETE, OPTIONS"
-PUBLIC_TORII_CORS_HEADERS = "accept, authorization, content-type"
+PUBLIC_TORII_CORS_HEADERS = (
+    "accept, authorization, content-type, idempotency-key, x-api-token, "
+    "x-iroha-onboarding-token, x-iroha-account, x-iroha-signature, "
+    "x-iroha-timestamp-ms, x-iroha-nonce, x-iroha-witness"
+)
+PUBLIC_TORII_CORS_EXPOSED_HEADERS = "etag, location, retry-after"
 PUBLIC_TORII_CORS_MAX_AGE = "3600"
 CANONICAL_DNS_LABEL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
 CANONICAL_SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -444,6 +465,7 @@ def _render_public_torii_cors_server_lines() -> list[str]:
         "  add_header Access-Control-Allow-Origin $taira_public_torii_cors_origin always;",
         f'  add_header Access-Control-Allow-Methods "{PUBLIC_TORII_CORS_METHODS}" always;',
         f'  add_header Access-Control-Allow-Headers "{PUBLIC_TORII_CORS_HEADERS}" always;',
+        f'  add_header Access-Control-Expose-Headers "{PUBLIC_TORII_CORS_EXPOSED_HEADERS}" always;',
         f'  add_header Access-Control-Max-Age "{PUBLIC_TORII_CORS_MAX_AGE}" always;',
         '  add_header Vary "Origin" always;',
         "",

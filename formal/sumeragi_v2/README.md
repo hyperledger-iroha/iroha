@@ -46,15 +46,17 @@ intentionally not embedded here because this README is itself a cone member.
 The production shape retains one direct deferred pending-Kura validated marker
 and emits one opaque move-only direct Apply child only after successful
 validation; no recovered carrier or carrier alias is admitted.
-`crates/iroha_core/src/sumeragi/source_contracts_v1.txt` contains exactly
-52 cases, is 475,201 bytes, and hashes to
-`2366606c6c57c95a97ebd34b75a9edf89669b47aaee2d4a22005b0f8d76b5f6b`.
+The current `crates/iroha_core/src/sumeragi/source_contracts_v1.txt` contains
+exactly 54 cases, is 590,841 bytes, and hashes to
+`dc6881a036a7bec6b624692f7b9ba91762c876e7b83e04e439e8550f045de77c`.
 
-On that frozen postimage, support-equivalent raw evaluation completed 52 cases
-with 0 failures; compaction passed 4/4; the reviewed-source mirror,
-release/source-seal, authoritative successor-production-fidelity, and
-same-round semantic kernel-source/caller filters passed; all 18/18 item seals
-matched; and all six tamper controls passed.
+On this mutable-tree postimage, the focused Rust source-contract inventory
+meta-test completed all 54 cases with 0 failures, and the compaction suite
+passed 5/5 while preserving the historical 2,161-line reduction floor. The
+prior reviewed-source mirror, release/source-seal, successor-fidelity,
+semantic-filter, item-seal, and tamper-control results apply only to the
+preceding frozen postimage recorded in `status.md`; they have not been
+refreshed for this asset.
 
 These are source, structure, fidelity, and mutation results only. No fresh
 TLAPS proof, pinned-Verus proof, or external signing receipt exists for this
@@ -708,7 +710,24 @@ height-context state are not migrated in place.
   direct-release path. The latter revalidates the exact V1,
   FIFO, group, and committee binding under the Queue transition and FIFO locks,
   consumes a move-only checked projection immediately before the durable
-  release append, and publishes FIFO ownership afterward. These slices do not
+  release append, and publishes FIFO ownership afterward. A strict retired
+  non-producer replica may consume the same direct-release projection only
+  after its complete durable ReleasePending prefix and exact signed
+  actor/producer check. Queue proves that the ordered group is already
+  FIFO-only without fabricating the producer's reservation owner, then retains
+  the move-only exact-hash fence while Kura advances the Released prefix and
+  through terminal Queue evidence. Its first FIFO proof remains a state-changing
+  `ComposedNext`; an unchanged retry from an already `DirectReleased` state is
+  accepted only as `ReleaseReservationDirectProofStutter`, with identical
+  before/after states, and cannot masquerade as a state-changing `Next` step.
+  Release qualification for this seam must exercise both production-shaped
+  paths: an `author = false` live follower retiring a losing carrier from the
+  exact FIFO-only/no-owner state, and strict cold-start replay at the
+  all-`ReleasePending` and partial-`Released` cuts. Each path must preserve the
+  Queue/FIFO journal bytes, mint no Queue reservation owner, complete Kura and
+  Queue terminal cleanup, keep the follower runner live, and reject missing or
+  misordered FIFO evidence before mutation.
+  These slices do not
   cover every production linearization point and are not an end-to-end trace
   extraction theorem. The
   release receipt requires the five

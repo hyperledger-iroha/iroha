@@ -893,6 +893,19 @@ struct LiveLifecycleValidateSuccessorOwnerV1 {
     apply_is_authorized: bool,
 }
 impl LiveLifecycleValidateSuccessorOwnerV1 {
+    /// Return whether a freshly attested carrier is the sole legal physical
+    /// refinement of this same logical Validate row.
+    fn can_refine_to(&self, candidate: &Self) -> bool {
+        self.dispatch_key != candidate.dispatch_key
+            && self.apply_is_authorized
+            && self.dispatch_key.owner() == candidate.dispatch_key.owner()
+            && self.dispatch_key.lifecycle_ordinal()
+                == candidate.dispatch_key.lifecycle_ordinal()
+            && self.dispatch_key.slot() == candidate.dispatch_key.slot()
+            && self.round == candidate.round
+            && self.subject == candidate.subject
+    }
+
     fn exactly_matches_apply(
         &self,
         subject: wire::BlockSubject,
@@ -911,9 +924,12 @@ impl LiveLifecycleValidateSuccessorOwnerV1 {
         authority: &LiveLifecycleDecisionApplyReconciliationAuthorityV1,
     ) -> bool {
         let certificate = authority.certificate();
+        let validate_predecessor_ordinal = authority.validate_predecessor_ordinal();
         self.apply_is_authorized
             && self.dispatch_key.owner() == authority.dispatch_key().owner()
-            && self.dispatch_key.lifecycle_ordinal() < authority.dispatch_key().lifecycle_ordinal()
+            && validate_predecessor_ordinal != 0
+            && self.dispatch_key.lifecycle_ordinal() == validate_predecessor_ordinal
+            && validate_predecessor_ordinal < authority.dispatch_key().lifecycle_ordinal()
             && self.round == certificate.proposal_round
             && self.subject == authority.subject()
             && certificate.subject == self.subject

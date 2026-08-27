@@ -54,6 +54,8 @@ UNREGISTER_KAIGI_RELAY_WIRE_ID_V1: Final[str] = (
 REPORT_KAIGI_RELAY_HEALTH_WIRE_ID_V1: Final[str] = (
     "iroha.instruction.v1::kaigi::ReportKaigiRelayHealth"
 )
+# Maximum concurrent participants excluding the host in a Kaigi V1 call.
+KAIGI_MAX_PARTICIPANTS_V1: Final[int] = 4_096
 KAIGI_RELAY_MANIFEST_MAX_HOPS_V1: Final[int] = 8
 KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1: Final[int] = 4_096
 
@@ -217,6 +219,15 @@ def _u32(value: Any, context: str, *, positive: bool = False) -> bytes:
         qualifier = "positive " if positive else ""
         raise ValueError(f"{context} must be a {qualifier}unsigned 32-bit integer")
     return struct.pack("<I", value)
+
+
+def _max_participants(value: Any, context: str) -> bytes:
+    payload = _u32(value, context, positive=True)
+    if value > KAIGI_MAX_PARTICIPANTS_V1:
+        raise ValueError(
+            f"{context} must be between 1 and {KAIGI_MAX_PARTICIPANTS_V1}"
+        )
+    return payload
 
 
 def _u8(value: Any, context: str, *, positive: bool = False) -> bytes:
@@ -760,7 +771,11 @@ def encode_create_kaigi_instruction_v1(
     roster_root: bytes | str | None = None,
     proof: bytes | None = None,
 ) -> KaigiInstructionWireV1:
-    """Encode one typed ``CreateKaigi`` as its canonical registered wire payload."""
+    """Encode one typed ``CreateKaigi`` as its canonical registered wire payload.
+
+    An explicit ``max_participants`` (excluding the host) must be between one
+    and 4096. ``None`` preserves the absent wire field and uses that maximum.
+    """
 
     host_literal, host_payload = _account_id(host, "CreateKaigi.host")
     if title is not None:
@@ -768,7 +783,7 @@ def encode_create_kaigi_instruction_v1(
     if description is not None:
         description = _text(description, "CreateKaigi.description")
     if max_participants is not None:
-        _u32(max_participants, "CreateKaigi.max_participants", positive=True)
+        _max_participants(max_participants, "CreateKaigi.max_participants")
     if scheduled_start_ms is not None:
         _u64(scheduled_start_ms, "CreateKaigi.scheduled_start_ms")
     billing_payload = None
@@ -804,7 +819,7 @@ def encode_create_kaigi_instruction_v1(
         _option(description, _string),
         _option(
             max_participants,
-            lambda value: _u32(value, "CreateKaigi.max_participants", positive=True),
+            lambda value: _max_participants(value, "CreateKaigi.max_participants"),
         ),
         _u64(gas_rate_per_minute, "CreateKaigi.gas_rate_per_minute"),
         _metadata(metadata, "CreateKaigi.metadata"),
@@ -1182,6 +1197,7 @@ __all__ = [
     "CREATE_KAIGI_WIRE_ID_V1",
     "END_KAIGI_WIRE_ID_V1",
     "JOIN_KAIGI_WIRE_ID_V1",
+    "KAIGI_MAX_PARTICIPANTS_V1",
     "KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1",
     "KAIGI_INSTRUCTION_WIRE_IDS_V1",
     "KAIGI_RELAY_MANIFEST_MAX_HOPS_V1",

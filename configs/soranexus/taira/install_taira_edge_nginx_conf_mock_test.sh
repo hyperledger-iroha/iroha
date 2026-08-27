@@ -23,12 +23,21 @@ canonical_test_root() {
 
 make_fake_repo() {
   local root="$1"
+  local test_gid
+  local test_uid
+
+  test_uid="$(id -u)"
+  test_gid="$(id -g)"
   mkdir -p \
     "${root}/configs/soranexus/taira" \
     "${root}/scripts" \
     "${root}/mockbin" \
     "${root}/state"
-  cp "$SOURCE_SCRIPT" "${root}/configs/soranexus/taira/install_taira_edge_nginx_conf.sh"
+  sed \
+    -e "s|^readonly NGINX_BIN=.*$|readonly NGINX_BIN=\"${root}/mockbin/nginx\"|" \
+    -e "s|^readonly SYSTEM_OWNER_UID=.*$|readonly SYSTEM_OWNER_UID=${test_uid}|" \
+    -e "s|^readonly SYSTEM_OWNER_GID=.*$|readonly SYSTEM_OWNER_GID=${test_gid}|" \
+    "$SOURCE_SCRIPT" >"${root}/configs/soranexus/taira/install_taira_edge_nginx_conf.sh"
   chmod 755 "${root}/configs/soranexus/taira/install_taira_edge_nginx_conf.sh"
   printf '# fake roster\n' >"${root}/configs/soranexus/taira/validator_roster.local.toml"
 
@@ -101,6 +110,9 @@ server {
         + alias_block
         + invalid_block
     )
+render_mode = os.environ.get("MOCK_RENDER_MODE")
+if render_mode:
+    os.chmod(output, int(render_mode, 8))
 PY
   chmod 755 "${root}/scripts/render_taira_edge_nginx_conf.py"
 
@@ -144,9 +156,21 @@ if [[ -z "$config_path" && $live_test -eq 1 && "${MOCK_LIVE_NGINX_TEST_FAIL:-0}"
   exit 1
 fi
 
+if [[ -z "$config_path" && $live_test -eq 1 && "${MOCK_MUTATE_TARGET_ON_LIVE_TEST:-0}" == "1" ]]; then
+  printf '# mutated during live test\n' >>"${MOCK_INSTALLED_TARGET:?}"
+fi
+
+if [[ -z "$config_path" && $live_test -eq 1 && "${MOCK_MUTATE_TARGET_MODE_ON_LIVE_TEST:-0}" == "1" ]]; then
+  chmod 0666 "${MOCK_INSTALLED_TARGET:?}"
+fi
+
 if [[ "$*" == "-s reload" && "${MOCK_NGINX_RELOAD_FAIL:-0}" == "1" ]]; then
   echo "nginx: reload failed" >&2
   exit 1
+fi
+
+if [[ "$*" == "-s reload" && "${MOCK_MUTATE_TARGET_ON_RELOAD:-0}" == "1" ]]; then
+  printf '# mutated during reload\n' >>"${MOCK_INSTALLED_TARGET:?}"
 fi
 
 if [[ -n "$config_path" ]]; then
@@ -176,9 +200,24 @@ SH
 
 run_fake_script() {
   local root="$1"
+  local arg
+  local previous=""
+  local target_conf=""
   shift
+
+  for arg in "$@"; do
+    if [[ "$previous" == "--target-conf" ]]; then
+      target_conf="$arg"
+      previous=""
+      continue
+    fi
+    if [[ "$arg" == "--target-conf" ]]; then
+      previous="$arg"
+    fi
+  done
   PATH="${root}/mockbin:${PATH}" \
     MOCK_STATE_DIR="${root}/state" \
+    MOCK_INSTALLED_TARGET="$target_conf" \
     bash "${root}/configs/soranexus/taira/install_taira_edge_nginx_conf.sh" "$@"
 }
 
@@ -194,6 +233,16 @@ assert_contains() {
   fi
 }
 
+file_mode() {
+  local path="$1"
+  stat -c '%a' "$path" 2>/dev/null || stat -f '%Lp' "$path"
+}
+
+file_owner() {
+  local path="$1"
+  stat -c '%u:%g' "$path" 2>/dev/null || stat -f '%u:%g' "$path"
+}
+
 test_dry_run_renders_and_checks_required_alias() {
   local root
   root="$(canonical_test_root)"
@@ -205,7 +254,6 @@ test_dry_run_renders_and_checks_required_alias() {
     --target-conf "${root}/nginx/servers/taira.sora.org.conf" \
     --soracloud-alias-route solswap-indexer.sora=127.0.0.1:8788 \
     --require-alias solswap-indexer.sora \
-    --nginx-bin nginx \
     >"${root}/state/stdout"
 
   assert_contains "${root}/state/stdout" "dry run only"
@@ -232,7 +280,6 @@ test_dry_run_rejects_invalid_rendered_nginx() {
     --target-conf "${root}/nginx/servers/taira.sora.org.conf" \
     --soracloud-alias-route solswap-indexer.sora=127.0.0.1:8788 \
     --require-alias solswap-indexer.sora \
-    --nginx-bin nginx \
     >"${root}/state/stdout" 2>"${root}/state/stderr"; then
     echo "invalid rendered nginx unexpectedly passed" >&2
     exit 1
@@ -258,7 +305,6 @@ test_install_reload_copies_and_reloads() {
     --target-conf "${root}/nginx/servers/taira.sora.org.conf" \
     --soracloud-alias-route solswap-indexer.sora=127.0.0.1:8788 \
     --require-alias solswap-indexer.sora \
-    --nginx-bin nginx \
     --install \
     --reload \
     >"${root}/state/stdout"
@@ -270,6 +316,37 @@ test_install_reload_copies_and_reloads() {
   assert_contains "${root}/state/nginx.calls" "-c"
   assert_contains "${root}/state/nginx.calls" "-s reload"
   assert_contains "${root}/state/nginx.rendered_targets" "${root}/dist/taira-edge/taira.sora.org.conf"
+}
+
+test_install_normalizes_metadata_and_leaves_no_candidate() {
+  local root
+  root="$(canonical_test_root)"
+  cleanup_paths+=("$root")
+  make_fake_repo "$root"
+  mkdir -p "${root}/nginx/servers"
+
+  MOCK_RENDER_MODE=0666 run_fake_script "$root" \
+    --output "${root}/dist/taira-edge/taira.sora.org.conf" \
+    --target-conf "${root}/nginx/servers/taira.sora.org.conf" \
+    --install \
+    >"${root}/state/stdout"
+
+  [[ "$(file_mode "${root}/dist/taira-edge/taira.sora.org.conf")" == "666" ]] || {
+    echo "test setup did not produce a writable rendered source" >&2
+    exit 1
+  }
+  [[ "$(file_mode "${root}/nginx/servers/taira.sora.org.conf")" == "644" ]] || {
+    echo "installed nginx config did not have mode 0644" >&2
+    exit 1
+  }
+  [[ "$(file_owner "${root}/nginx/servers/taira.sora.org.conf")" == "$(id -u):$(id -g)" ]] || {
+    echo "installed nginx config did not have the pinned owner/group" >&2
+    exit 1
+  }
+  if find "${root}/nginx/servers" -maxdepth 1 -name '.taira-edge-install.*' -print -quit | grep -q .; then
+    echo "atomic publication left an install candidate behind" >&2
+    exit 1
+  fi
 }
 
 test_install_validation_failure_restores_existing_target() {
@@ -285,7 +362,6 @@ test_install_validation_failure_restores_existing_target() {
     --target-conf "${root}/nginx/servers/taira.sora.org.conf" \
     --soracloud-alias-route solswap-indexer.sora=127.0.0.1:8788 \
     --require-alias solswap-indexer.sora \
-    --nginx-bin nginx \
     --install \
     >"${root}/state/stdout" 2>"${root}/state/stderr"; then
     echo "install unexpectedly passed after live nginx validation failed" >&2
@@ -309,7 +385,6 @@ test_install_validation_failure_removes_new_target() {
     --target-conf "${root}/nginx/servers/taira.sora.org.conf" \
     --soracloud-alias-route solswap-indexer.sora=127.0.0.1:8788 \
     --require-alias solswap-indexer.sora \
-    --nginx-bin nginx \
     --install \
     >"${root}/state/stdout" 2>"${root}/state/stderr"; then
     echo "install unexpectedly passed after live nginx validation failed" >&2
@@ -379,7 +454,6 @@ test_reload_failure_restores_existing_target() {
     --target-conf "${root}/nginx/servers/taira.sora.org.conf" \
     --soracloud-alias-route solswap-indexer.sora=127.0.0.1:8788 \
     --require-alias solswap-indexer.sora \
-    --nginx-bin nginx \
     --install \
     --reload \
     >"${root}/state/stdout" 2>"${root}/state/stderr"; then
@@ -387,6 +461,74 @@ test_reload_failure_restores_existing_target() {
     exit 1
   fi
   assert_contains "${root}/state/stderr" "reload failed after installing candidate"
+  assert_contains "${root}/state/stderr" "restored previous nginx config"
+  assert_contains "${root}/nginx/servers/taira.sora.org.conf" "# previous live config"
+}
+
+test_live_validation_detects_content_change_and_restores_target() {
+  local root
+  root="$(canonical_test_root)"
+  cleanup_paths+=("$root")
+  make_fake_repo "$root"
+  mkdir -p "${root}/nginx/servers"
+  printf '# previous live config\n' >"${root}/nginx/servers/taira.sora.org.conf"
+
+  if MOCK_MUTATE_TARGET_ON_LIVE_TEST=1 run_fake_script "$root" \
+    --output "${root}/dist/taira-edge/taira.sora.org.conf" \
+    --target-conf "${root}/nginx/servers/taira.sora.org.conf" \
+    --install \
+    >"${root}/state/stdout" 2>"${root}/state/stderr"; then
+    echo "install ignored a live-validation content change" >&2
+    exit 1
+  fi
+  assert_contains "${root}/state/stderr" "changed during live nginx validation"
+  assert_contains "${root}/state/stderr" "restored previous nginx config"
+  assert_contains "${root}/nginx/servers/taira.sora.org.conf" "# previous live config"
+}
+
+test_live_validation_detects_mode_change_and_restores_target() {
+  local root
+  root="$(canonical_test_root)"
+  cleanup_paths+=("$root")
+  make_fake_repo "$root"
+  mkdir -p "${root}/nginx/servers"
+  printf '# previous live config\n' >"${root}/nginx/servers/taira.sora.org.conf"
+
+  if MOCK_MUTATE_TARGET_MODE_ON_LIVE_TEST=1 run_fake_script "$root" \
+    --output "${root}/dist/taira-edge/taira.sora.org.conf" \
+    --target-conf "${root}/nginx/servers/taira.sora.org.conf" \
+    --install \
+    >"${root}/state/stdout" 2>"${root}/state/stderr"; then
+    echo "install ignored a live-validation mode change" >&2
+    exit 1
+  fi
+  assert_contains "${root}/state/stderr" "must be root-owned with mode 0644"
+  assert_contains "${root}/state/stderr" "restored previous nginx config"
+  assert_contains "${root}/nginx/servers/taira.sora.org.conf" "# previous live config"
+  [[ "$(file_mode "${root}/nginx/servers/taira.sora.org.conf")" == "644" ]] || {
+    echo "rollback did not restore the fixed nginx config mode" >&2
+    exit 1
+  }
+}
+
+test_reload_detects_content_change_and_restores_target() {
+  local root
+  root="$(canonical_test_root)"
+  cleanup_paths+=("$root")
+  make_fake_repo "$root"
+  mkdir -p "${root}/nginx/servers"
+  printf '# previous live config\n' >"${root}/nginx/servers/taira.sora.org.conf"
+
+  if MOCK_MUTATE_TARGET_ON_RELOAD=1 run_fake_script "$root" \
+    --output "${root}/dist/taira-edge/taira.sora.org.conf" \
+    --target-conf "${root}/nginx/servers/taira.sora.org.conf" \
+    --install \
+    --reload \
+    >"${root}/state/stdout" 2>"${root}/state/stderr"; then
+    echo "reload ignored an installed-config content change" >&2
+    exit 1
+  fi
+  assert_contains "${root}/state/stderr" "changed during nginx reload"
   assert_contains "${root}/state/stderr" "restored previous nginx config"
   assert_contains "${root}/nginx/servers/taira.sora.org.conf" "# previous live config"
 }
@@ -403,7 +545,6 @@ test_install_rejects_symlink_and_hardlinked_targets() {
   if run_fake_script "$root" \
     --output "${root}/dist/taira-edge/taira.sora.org.conf" \
     --target-conf "${root}/nginx/servers/taira.sora.org.conf" \
-    --nginx-bin nginx \
     --install \
     >"${root}/state/stdout" 2>"${root}/state/stderr"; then
     echo "symlinked nginx target unexpectedly passed" >&2
@@ -418,7 +559,6 @@ test_install_rejects_symlink_and_hardlinked_targets() {
   if run_fake_script "$root" \
     --output "${root}/dist/taira-edge/taira.sora.org.conf" \
     --target-conf "${root}/nginx/servers/taira.sora.org.conf" \
-    --nginx-bin nginx \
     --install \
     >"${root}/state/stdout" 2>"${root}/state/stderr"; then
     echo "hardlinked nginx target unexpectedly passed" >&2
@@ -431,7 +571,6 @@ test_install_rejects_symlink_and_hardlinked_targets() {
   if run_fake_script "$root" \
     --output "${root}/dist/taira-edge/taira.sora.org.conf" \
     --target-conf "${root}/nginx/linked-servers/second.conf" \
-    --nginx-bin nginx \
     --install \
     >"${root}/state/stdout" 2>"${root}/state/stderr"; then
     echo "symlinked nginx target directory unexpectedly passed" >&2
@@ -472,16 +611,79 @@ test_backup_conf_bypass_option_is_retired() {
   assert_contains "${root}/state/stderr" "unknown argument: --allow-backup-confs"
 }
 
+test_nginx_override_is_retired_and_environment_is_ignored() {
+  local root
+  root="$(canonical_test_root)"
+  cleanup_paths+=("$root")
+  make_fake_repo "$root"
+
+  if run_fake_script "$root" --nginx-bin "${root}/state/foreign-nginx" \
+    >"${root}/state/stdout" 2>"${root}/state/stderr"; then
+    echo "retired nginx executable override unexpectedly passed" >&2
+    exit 1
+  fi
+  assert_contains "${root}/state/stderr" "unknown argument: --nginx-bin"
+
+  NGINX_BIN="${root}/state/foreign-nginx" run_fake_script "$root" \
+    --output "${root}/dist/taira-edge/taira.sora.org.conf" \
+    --target-conf "${root}/nginx/servers/taira.sora.org.conf" \
+    >"${root}/state/stdout"
+  assert_contains "${root}/state/nginx.calls" "-t"
+}
+
+test_rejects_mutable_nginx_binary() {
+  local root
+  root="$(canonical_test_root)"
+  cleanup_paths+=("$root")
+  make_fake_repo "$root"
+  chmod 0777 "${root}/mockbin/nginx"
+
+  if run_fake_script "$root" \
+    --output "${root}/dist/taira-edge/taira.sora.org.conf" \
+    --target-conf "${root}/nginx/servers/taira.sora.org.conf" \
+    >"${root}/state/stdout" 2>"${root}/state/stderr"; then
+    echo "mutable nginx executable unexpectedly passed" >&2
+    exit 1
+  fi
+  assert_contains "${root}/state/stderr" "nginx executable must be root-owned and non-writable"
+}
+
+test_install_rejects_mutable_target_directory() {
+  local root
+  root="$(canonical_test_root)"
+  cleanup_paths+=("$root")
+  make_fake_repo "$root"
+  mkdir -p "${root}/nginx/servers"
+  chmod 0777 "${root}/nginx/servers"
+
+  if run_fake_script "$root" \
+    --output "${root}/dist/taira-edge/taira.sora.org.conf" \
+    --target-conf "${root}/nginx/servers/taira.sora.org.conf" \
+    --install \
+    >"${root}/state/stdout" 2>"${root}/state/stderr"; then
+    echo "mutable nginx include directory unexpectedly passed" >&2
+    exit 1
+  fi
+  assert_contains "${root}/state/stderr" "must be root-owned and non-writable"
+}
+
 test_dry_run_renders_and_checks_required_alias
 test_dry_run_rejects_invalid_rendered_nginx
 test_install_reload_copies_and_reloads
+test_install_normalizes_metadata_and_leaves_no_candidate
 test_install_validation_failure_restores_existing_target
 test_install_validation_failure_removes_new_target
 test_missing_required_alias_fails
 test_backup_confs_fail_before_install
 test_reload_failure_restores_existing_target
+test_live_validation_detects_content_change_and_restores_target
+test_live_validation_detects_mode_change_and_restores_target
+test_reload_detects_content_change_and_restores_target
 test_install_rejects_symlink_and_hardlinked_targets
 test_validation_bypass_option_is_retired
 test_backup_conf_bypass_option_is_retired
+test_nginx_override_is_retired_and_environment_is_ignored
+test_rejects_mutable_nginx_binary
+test_install_rejects_mutable_target_directory
 
 echo "install_taira_edge_nginx_conf mock tests passed"

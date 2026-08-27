@@ -421,10 +421,10 @@ impl fmt::Display for MlKemSuite {
 impl FromStr for MlKemSuite {
     type Err = SuiteParseError;
     fn from_str(input: &str) -> Result<Self, Self::Err> {
-        match input.to_ascii_lowercase().as_str() {
-            "mlkem512" | "kyber512" => Ok(MlKemSuite::MlKem512),
-            "mlkem768" | "kyber768" => Ok(MlKemSuite::MlKem768),
-            "mlkem1024" | "kyber1024" => Ok(MlKemSuite::MlKem1024),
+        match input {
+            "mlkem512" => Ok(MlKemSuite::MlKem512),
+            "mlkem768" => Ok(MlKemSuite::MlKem768),
+            "mlkem1024" => Ok(MlKemSuite::MlKem1024),
             _ => Err(SuiteParseError(input.to_string())),
         }
     }
@@ -728,17 +728,6 @@ fn mlkem_backend_status(
         })
     }
 }
-/// Fallibly generate an ML-KEM keypair for the given parameter set.
-///
-/// # Errors
-/// Returns an error when generated key material fails ML-KEM key-pair
-/// validation or the backend reports key-generation failure.
-pub fn try_generate_mlkem_keypair(
-    suite: MlKemSuite,
-    rng: &mut HedgedChaCha20Rng,
-) -> Result<MlKemKeyPair, MlKemError> {
-    generate_mlkem_keypair(suite, rng)
-}
 /// Generate an ML-KEM keypair for the given parameter set.
 ///
 /// # Errors
@@ -772,19 +761,7 @@ pub fn generate_mlkem_keypair_from_rng<R: TryCryptoRng + ?Sized>(
     rng: &mut R,
 ) -> Result<MlKemKeyPair, MlKemError> {
     let mut rng = hedged_chacha20_rng_from_rng(b"soranet-pq:mlkem:keypair", rng)?;
-    try_generate_mlkem_keypair(suite, &mut rng)
-}
-/// Fallibly and deterministically generate an ML-KEM keypair from explicit seed material.
-///
-/// # Errors
-/// Returns an error when generated key material fails ML-KEM key-pair
-/// validation or the backend reports key-generation failure.
-pub fn try_generate_mlkem_keypair_from_seed(
-    suite: MlKemSuite,
-    seed: HedgedRngSeed,
-    personalization: &[u8],
-) -> Result<MlKemKeyPair, MlKemError> {
-    generate_mlkem_keypair_from_seed(suite, seed, personalization)
+    generate_mlkem_keypair(suite, &mut rng)
 }
 /// Deterministically generate an ML-KEM keypair from explicit seed material.
 ///
@@ -1418,8 +1395,7 @@ mod tests {
                 HedgedRngSeed::from_entropy([suite.kem_id().wrapping_add(0x90); 32]),
                 b"checked-keygen",
             );
-            let keys =
-                try_generate_mlkem_keypair(suite, &mut rng).expect("checked keygen succeeds");
+            let keys = generate_mlkem_keypair(suite, &mut rng).expect("keygen succeeds");
             validate_mlkem_key_pair(suite, keys.public_key(), keys.secret_key())
                 .expect("checked ML-KEM keypair validates");
         }
@@ -1447,20 +1423,6 @@ mod tests {
                 ..
             }
         ));
-    }
-    #[test]
-    fn checked_seeded_keypair_matches_compatibility_helper() {
-        for suite in MlKemSuite::ALL {
-            let seed = HedgedRngSeed::from_entropy([suite.kem_id().wrapping_add(0x98); 32]);
-            let checked =
-                try_generate_mlkem_keypair_from_seed(suite, seed.clone(), b"checked-seeded-keygen")
-                    .expect("checked seeded keygen succeeds");
-            let compatibility =
-                generate_mlkem_keypair_from_seed(suite, seed, b"checked-seeded-keygen")
-                    .expect("seeded keygen succeeds");
-            assert_eq!(checked.public_key(), compatibility.public_key());
-            assert_eq!(checked.secret_key(), compatibility.secret_key());
-        }
     }
     #[test]
     fn seeded_keypair_is_deterministic() {
@@ -2222,29 +2184,25 @@ mod tests {
         }
     }
     #[test]
-    fn suite_parsing_accepts_common_aliases() {
+    fn suite_parsing_requires_canonical_names() {
         assert_eq!(
             MlKemSuite::from_str("mlkem512").unwrap(),
             MlKemSuite::MlKem512
         );
         assert_eq!(
-            MlKemSuite::from_str("kyber512").unwrap(),
-            MlKemSuite::MlKem512
-        );
-        assert_eq!(
-            MlKemSuite::from_str("KYBER768").unwrap(),
+            MlKemSuite::from_str("mlkem768").unwrap(),
             MlKemSuite::MlKem768
         );
         assert_eq!(
-            MlKemSuite::from_str("MlKeM1024").unwrap(),
+            MlKemSuite::from_str("mlkem1024").unwrap(),
             MlKemSuite::MlKem1024
         );
-        assert_eq!(
-            MlKemSuite::from_str("KyBeR1024").unwrap(),
-            MlKemSuite::MlKem1024
-        );
-        let err = MlKemSuite::from_str("unknown-suite").unwrap_err();
-        assert_eq!(err, SuiteParseError("unknown-suite".to_string()));
+        for rejected in ["kyber512", "KYBER768", "MlKeM1024", "unknown-suite"] {
+            assert_eq!(
+                MlKemSuite::from_str(rejected).unwrap_err(),
+                SuiteParseError(rejected.to_string())
+            );
+        }
     }
     #[test]
     fn suite_parse_error_display_preserves_input() {

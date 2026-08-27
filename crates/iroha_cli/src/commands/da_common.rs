@@ -1,8 +1,18 @@
 //! Shared data-availability ingest helpers reused by the Taikai tooling and the
 //! standalone `iroha da` commands.
 use eyre::{Result, WrapErr, eyre};
-use iroha::{config::Config, crypto::KeyPair, da::DaManifestBundle};
+use iroha::{
+    client::{
+        canonical_network_request_signature_message, canonical_request_account_header_value,
+        canonical_request_signature_header_value, canonical_request_timestamp_header_value,
+    },
+    config::Config,
+    crypto::{KeyPair, Signature},
+    da::DaManifestBundle,
+    http::Method as HttpMethod,
+};
 use iroha_data_model::{
+    NetworkId,
     da::{
         ingest::{DaIngestReceipt, DaIngestRequest, DaPinScopeV1},
         types::{
@@ -10,6 +20,7 @@ use iroha_data_model::{
             MetadataVisibility,
         },
     },
+    prelude::AccountId,
     sorafs::pin_registry::StorageClass,
 };
 use norito::{
@@ -21,14 +32,25 @@ use reqwest::{
     blocking::Client as HttpClient,
     header::{ACCEPT, CONTENT_TYPE, HeaderValue},
 };
-use std::path::Path;
+use std::{
+    io::Read as _,
+    path::Path,
+    time::{SystemTime, UNIX_EPOCH},
+};
 use url::Url;
+const DA_INGEST_RESPONSE_MAX_BYTES_V1: usize = 256 * 1024;
 const HEADER_SORA_PDP_COMMITMENT: &str = "sora-pdp-commitment";
+const HEADER_IROHA_ACCOUNT: &str = "x-iroha-account";
+const HEADER_IROHA_SIGNATURE: &str = "x-iroha-signature";
+const HEADER_IROHA_TIMESTAMP_MS: &str = "x-iroha-timestamp-ms";
+const HEADER_IROHA_NONCE: &str = "x-iroha-nonce";
 /// Blocking Torii publisher for `/v1/da/ingest`.
 pub(super) struct DaPublisher {
     client: HttpClient,
     endpoint: Url,
     basic_auth: Option<(String, String)>,
+    network_id: NetworkId,
+    account: AccountId,
     key_pair: KeyPair,
 }
 /// Receipt bundle containing Norito bytes, rendered JSON, and the typed record.
@@ -75,7 +97,11 @@ impl DaPublisher {
                 .join("v1/da/ingest")
                 .wrap_err("failed to derive /v1/da/ingest from torii_api_url")?
         };
-        let client = HttpClient::builder()
+        let mut client_builder = HttpClient::builder().redirect(reqwest::redirect::Policy::none());
+        if !config.torii_request_timeout.is_zero() {
+            client_builder = client_builder.timeout(config.torii_request_timeout);
+        }
+        let client = client_builder
             .build()
             .wrap_err("failed to build HTTP client for DA ingest")?;
         let basic_auth = config.basic_auth.as_ref().map(|auth| {
@@ -88,6 +114,8 @@ impl DaPublisher {
             client,
             endpoint,
             basic_auth,
+            network_id: config.network_id,
+            account: config.account.clone(),
             key_pair: config.key_pair.clone(),
         })
     }
@@ -99,6 +127,14 @@ impl DaPublisher {
     pub(super) fn publish(&self, request_bytes: &[u8]) -> Result<DaPublisherReceipt> {
         let request: DaIngestRequest = decode_from_bytes(request_bytes)
             .map_err(|err| eyre!("failed to decode DA ingest request: {err}"))?;
+        if request.network_id != self.network_id || request.owner != self.account {
+            return Err(eyre!(
+                "DA ingest request network or owner does not match the configured canonical HTTP signer"
+            ));
+        }
+        request
+            .verify_signatures()
+            .map_err(|err| eyre!("DA ingest request signatures are invalid: {err}"))?;
         let first = self.publish_once(&request)?;
         validate_da_ingest_response(&request, &first)?;
         let (response, submitted_request) = match first.status.as_str() {
@@ -119,9 +155,12 @@ impl DaPublisher {
                         retried.status
                     ));
                 }
-                if retried.pin_scope != first.pin_scope || retried.receipt != first.receipt {
+                if retried.pin_scope != first.pin_scope
+                    || retried.receipt != first.receipt
+                    || retried.pdp_commitment_header != first.pdp_commitment_header
+                {
                     return Err(eyre!(
-                        "Torii changed the durable DA receipt or pin scope during authorization"
+                        "Torii changed the durable DA receipt, pin scope, or commitment header during authorization"
                     ));
                 }
                 (retried, authorized_request)
@@ -154,24 +193,48 @@ impl DaPublisher {
     fn publish_once(&self, request_body: &DaIngestRequest) -> Result<DaIngestResponse> {
         let request_json = norito::json::to_vec(request_body)
             .map_err(|err| eyre!("failed to encode DA ingest request JSON: {err}"))?;
+        let auth = self.canonical_auth_headers(&request_json)?;
         let mut request = self
             .client
             .post(self.endpoint.clone())
             .header(CONTENT_TYPE, "application/json")
             .header(ACCEPT, "application/json")
+            .header(HEADER_IROHA_ACCOUNT, auth.account)
+            .header(HEADER_IROHA_SIGNATURE, auth.signature)
+            .header(HEADER_IROHA_TIMESTAMP_MS, auth.timestamp_ms)
+            .header(HEADER_IROHA_NONCE, auth.nonce)
             .body(request_json);
         if let Some((ref login, ref password)) = self.basic_auth {
             request = request.basic_auth(login, Some(password));
         }
-        let response = request
+        let mut response = request
             .send()
             .wrap_err("failed to submit DA ingest request to Torii")?;
         let status = response.status();
         let pdp_commitment_header = extract_pdp_header(response.headers())?;
-        let bytes = response
-            .bytes()
-            .wrap_err("failed to read DA ingest response body")?
-            .to_vec();
+        if response
+            .content_length()
+            .is_some_and(|length| length > DA_INGEST_RESPONSE_MAX_BYTES_V1 as u64)
+        {
+            return Err(eyre!(
+                "Torii DA ingest response exceeds the first-release {}-byte limit",
+                DA_INGEST_RESPONSE_MAX_BYTES_V1
+            ));
+        }
+        let read_limit = u64::try_from(DA_INGEST_RESPONSE_MAX_BYTES_V1)
+            .expect("DA ingest response limit fits u64")
+            .saturating_add(1);
+        let mut bytes = Vec::new();
+        response
+            .take(read_limit)
+            .read_to_end(&mut bytes)
+            .wrap_err("failed to read DA ingest response body")?;
+        if bytes.len() > DA_INGEST_RESPONSE_MAX_BYTES_V1 {
+            return Err(eyre!(
+                "Torii DA ingest response exceeds the first-release {}-byte limit",
+                DA_INGEST_RESPONSE_MAX_BYTES_V1
+            ));
+        }
         if !status.is_success() {
             let preview = String::from_utf8_lossy(&bytes);
             return Err(eyre!(
@@ -190,6 +253,48 @@ impl DaPublisher {
             pdp_commitment_header,
         })
     }
+
+    fn canonical_auth_headers(&self, body: &[u8]) -> Result<CanonicalAuthHeaders> {
+        use rand::{rand_core::TryRngCore as _, rngs::OsRng};
+
+        let timestamp_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .wrap_err("DA canonical request clock precedes the Unix epoch")?
+            .as_millis()
+            .try_into()
+            .wrap_err("DA canonical request timestamp exceeds u64 milliseconds")?;
+        let mut nonce_bytes = [0_u8; 16];
+        OsRng
+            .try_fill_bytes(&mut nonce_bytes)
+            .map_err(|err| eyre!("DA canonical request nonce OS RNG failed: {err}"))?;
+        let nonce = hex::encode(nonce_bytes);
+        let message = canonical_network_request_signature_message(
+            &self.network_id,
+            &HttpMethod::POST,
+            &self.endpoint,
+            body,
+            timestamp_ms,
+            &nonce,
+        )
+        .wrap_err("failed to build canonical DA request authentication message")?;
+        let signature = Signature::try_new(self.key_pair.private_key(), &message)
+            .wrap_err("failed to sign canonical DA request headers")?;
+        Ok(CanonicalAuthHeaders {
+            account: canonical_request_account_header_value(&self.account)
+                .wrap_err("failed to encode canonical DA request account")?,
+            signature: canonical_request_signature_header_value(&signature)
+                .wrap_err("failed to encode canonical DA request signature")?,
+            timestamp_ms: canonical_request_timestamp_header_value(timestamp_ms)
+                .wrap_err("failed to encode canonical DA request timestamp")?,
+            nonce,
+        })
+    }
+}
+struct CanonicalAuthHeaders {
+    account: String,
+    signature: String,
+    timestamp_ms: String,
+    nonce: String,
 }
 struct DaIngestResponse {
     status: String,
@@ -386,6 +491,7 @@ pub(super) fn load_metadata_from_path(path: &Path) -> Result<ExtraMetadata> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::{Engine as _, engine::general_purpose::STANDARD as Base64Standard};
     use iroha::{
         crypto::{Algorithm, Hash, HashOf, Signature},
         da::{DaIngestParams, build_da_request},
@@ -513,6 +619,22 @@ mod tests {
             + 4;
         &raw_request[body_start..]
     }
+
+    fn request_header<'a>(raw_request: &'a [u8], expected_name: &str) -> &'a str {
+        let header_end = raw_request
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .expect("HTTP header terminator");
+        std::str::from_utf8(&raw_request[..header_end])
+            .expect("ASCII HTTP headers")
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case(expected_name)
+                    .then(|| value.trim())
+            })
+            .unwrap_or_else(|| panic!("missing {expected_name} request header"))
+    }
     #[test]
     fn parse_blob_class_supports_aliases() {
         assert!(matches!(
@@ -584,12 +706,18 @@ mod tests {
         })
         .expect("encode accepted response");
         let (endpoint, server) = spawn_ingest_server(vec![pending, accepted]);
+        let auth_endpoint = endpoint.clone();
+        let network_id = request.network_id;
+        let account = request.owner.clone();
+        let public_key = key_pair.public_key().clone();
         let publisher = DaPublisher {
             client: HttpClient::builder()
                 .build()
                 .expect("build mock HTTP client"),
             endpoint,
             basic_auth: Some(("alice".to_owned(), "secret".to_owned())),
+            network_id,
+            account: account.clone(),
             key_pair,
         };
 
@@ -600,12 +728,40 @@ mod tests {
         let requests = server.join().expect("mock server thread");
 
         assert_eq!(requests.len(), 2, "publisher must retry exactly once");
+        let mut nonces = Vec::new();
         for raw in &requests {
             let headers = String::from_utf8_lossy(raw).to_ascii_lowercase();
             assert!(headers.contains("content-type: application/json"));
             assert!(headers.contains("accept: application/json"));
             assert!(headers.contains("authorization: basic ywxpy2u6c2vjcmv0"));
+            assert_eq!(
+                request_header(raw, HEADER_IROHA_ACCOUNT),
+                canonical_request_account_header_value(&account).expect("canonical account")
+            );
+            let timestamp_ms = request_header(raw, HEADER_IROHA_TIMESTAMP_MS)
+                .parse::<u64>()
+                .expect("canonical timestamp");
+            let nonce = request_header(raw, HEADER_IROHA_NONCE);
+            nonces.push(nonce.to_owned());
+            let message = canonical_network_request_signature_message(
+                &network_id,
+                &HttpMethod::POST,
+                &auth_endpoint,
+                request_body(raw),
+                timestamp_ms,
+                nonce,
+            )
+            .expect("rebuild canonical request message");
+            let signature_bytes = Base64Standard
+                .decode(request_header(raw, HEADER_IROHA_SIGNATURE))
+                .expect("decode canonical signature header");
+            let signature = Signature::try_from_bytes(&signature_bytes)
+                .expect("decode canonical request signature");
+            signature
+                .verify(&public_key, &message)
+                .expect("verify canonical request signature against exact JSON body");
         }
+        assert_ne!(nonces[0], nonces[1], "each attempt needs a fresh nonce");
         let first: DaIngestRequest =
             norito::json::from_slice(request_body(&requests[0])).expect("decode prepare request");
         let finalized: DaIngestRequest =
@@ -622,5 +778,41 @@ mod tests {
         assert!(result.duplicate);
         assert_eq!(result.pin_scope, Some(scope));
         assert_eq!(result.submitted_request, finalized);
+    }
+
+    #[test]
+    fn publisher_rejects_oversized_ingest_response_before_reading_body() {
+        let (key_pair, request) = publisher_request_fixture();
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind oversized-response server");
+        let address = listener.local_addr().expect("oversized-response address");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept DA ingest request");
+            let _ = read_http_request(&mut stream);
+            write!(
+                stream,
+                "HTTP/1.1 202 Accepted\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                DA_INGEST_RESPONSE_MAX_BYTES_V1 + 1
+            )
+            .expect("write oversized response headers");
+        });
+        let endpoint =
+            Url::parse(&format!("http://{address}/v1/da/ingest")).expect("mock endpoint URL");
+        let publisher = DaPublisher {
+            client: HttpClient::builder()
+                .build()
+                .expect("build mock HTTP client"),
+            endpoint,
+            basic_auth: None,
+            network_id: request.network_id,
+            account: request.owner.clone(),
+            key_pair,
+        };
+
+        let error = publisher
+            .publish(&to_bytes(&request).expect("encode initial request"))
+            .err()
+            .expect("oversized response must fail before body allocation");
+        server.join().expect("oversized-response server");
+        assert!(error.to_string().contains("262144-byte limit"));
     }
 }

@@ -117,6 +117,8 @@ specs/da/_generated/threat_model_report.json
 
 # Developer-local caches and sandboxes
 .cargo-temp/
+/.codex-*/
+/.codex-target/
 /crates/irohad/.tmp*/
 /.codex/*
 !/.codex/.gitkeep

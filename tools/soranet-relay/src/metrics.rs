@@ -78,12 +78,9 @@ pub struct Metrics {
     capacity_reject: AtomicU64,
     pow_difficulty: AtomicU64,
     throttled_remote_quota: AtomicU64,
-    throttled_descriptor_quota: AtomicU64,
-    throttled_descriptor_replay: AtomicU64,
     throttled_cooldown: AtomicU64,
     throttled_emergency: AtomicU64,
     active_remote_cooldowns: AtomicU64,
-    active_descriptor_cooldowns: AtomicU64,
     handshake_mode_counts: [AtomicU64; 2],
     handshake_bytes: AtomicU64,
     puzzle_solve_count: AtomicU64,
@@ -153,12 +150,9 @@ impl Default for Metrics {
             capacity_reject: AtomicU64::new(0),
             pow_difficulty: AtomicU64::new(0),
             throttled_remote_quota: AtomicU64::new(0),
-            throttled_descriptor_quota: AtomicU64::new(0),
-            throttled_descriptor_replay: AtomicU64::new(0),
             throttled_cooldown: AtomicU64::new(0),
             throttled_emergency: AtomicU64::new(0),
             active_remote_cooldowns: AtomicU64::new(0),
-            active_descriptor_cooldowns: AtomicU64::new(0),
             handshake_mode_counts: std::array::from_fn(|_| AtomicU64::new(0)),
             handshake_bytes: AtomicU64::new(0),
             puzzle_solve_count: AtomicU64::new(0),
@@ -245,14 +239,6 @@ impl Metrics {
     pub fn record_remote_quota_throttle(&self) {
         self.throttled_remote_quota.fetch_add(1, Ordering::Relaxed);
     }
-    pub fn record_descriptor_quota_throttle(&self) {
-        self.throttled_descriptor_quota
-            .fetch_add(1, Ordering::Relaxed);
-    }
-    pub fn record_descriptor_replay_throttle(&self) {
-        self.throttled_descriptor_replay
-            .fetch_add(1, Ordering::Relaxed);
-    }
     pub fn record_handshake_cooldown_throttle(&self) {
         self.throttled_cooldown.fetch_add(1, Ordering::Relaxed);
     }
@@ -261,10 +247,6 @@ impl Metrics {
     }
     pub fn set_active_remote_cooldowns(&self, count: u64) {
         self.active_remote_cooldowns.store(count, Ordering::Relaxed);
-    }
-    pub fn set_active_descriptor_cooldowns(&self, count: u64) {
-        self.active_descriptor_cooldowns
-            .store(count, Ordering::Relaxed);
     }
     pub fn set_descriptor_commit_hex(&self, commit: Option<String>) {
         let mut guard = recover_metrics_lock(&self.descriptor_commit);
@@ -515,12 +497,9 @@ impl Metrics {
             capacity_reject: self.capacity_reject.load(Ordering::Relaxed),
             pow_difficulty: self.pow_difficulty.load(Ordering::Relaxed),
             throttled_remote_quota: self.throttled_remote_quota.load(Ordering::Relaxed),
-            throttled_descriptor_quota: self.throttled_descriptor_quota.load(Ordering::Relaxed),
-            throttled_descriptor_replay: self.throttled_descriptor_replay.load(Ordering::Relaxed),
             throttled_cooldown: self.throttled_cooldown.load(Ordering::Relaxed),
             throttled_emergency: self.throttled_emergency.load(Ordering::Relaxed),
             active_remote_cooldowns: self.active_remote_cooldowns.load(Ordering::Relaxed),
-            active_descriptor_cooldowns: self.active_descriptor_cooldowns.load(Ordering::Relaxed),
             handshake_mode_counts: [
                 self.handshake_mode_counts[0].load(Ordering::Relaxed),
                 self.handshake_mode_counts[1].load(Ordering::Relaxed),
@@ -1142,24 +1121,6 @@ impl Metrics {
             value = snapshot.throttled_remote_quota
         );
         help_and_type!(
-            "# HELP soranet_handshake_throttled_descriptor_quota_total Handshake attempts throttled by per-descriptor quotas.",
-            "# TYPE soranet_handshake_throttled_descriptor_quota_total counter"
-        );
-        metric_line!(
-            "soranet_handshake_throttled_descriptor_quota_total{{{labels}}} {value}",
-            labels = labels,
-            value = snapshot.throttled_descriptor_quota
-        );
-        help_and_type!(
-            "# HELP soranet_handshake_throttled_descriptor_replay_total Handshake attempts throttled by descriptor replay filter.",
-            "# TYPE soranet_handshake_throttled_descriptor_replay_total counter"
-        );
-        metric_line!(
-            "soranet_handshake_throttled_descriptor_replay_total{{{labels}}} {value}",
-            labels = labels,
-            value = snapshot.throttled_descriptor_replay
-        );
-        help_and_type!(
             "# HELP soranet_handshake_throttled_cooldown_total Handshake attempts throttled by the congestion cooldown.",
             "# TYPE soranet_handshake_throttled_cooldown_total counter"
         );
@@ -1185,15 +1146,6 @@ impl Metrics {
             "soranet_abuse_remote_cooldowns{{{labels}}} {value}",
             labels = labels,
             value = snapshot.active_remote_cooldowns
-        );
-        help_and_type!(
-            "# HELP soranet_abuse_descriptor_cooldowns Active descriptor cooldown entries enforced by the relay.",
-            "# TYPE soranet_abuse_descriptor_cooldowns gauge"
-        );
-        metric_line!(
-            "soranet_abuse_descriptor_cooldowns{{{labels}}} {value}",
-            labels = labels,
-            value = snapshot.active_descriptor_cooldowns
         );
         help_and_type!(
             "# HELP soranet_proxy_policy_queue_depth Downgrade events queued for proxy remediation.",
@@ -1369,18 +1321,12 @@ pub struct MetricsSnapshot {
     pub pow_difficulty: u64,
     /// Requests throttled by remote quota.
     pub throttled_remote_quota: u64,
-    /// Requests throttled by descriptor quota.
-    pub throttled_descriptor_quota: u64,
-    /// Requests throttled by descriptor replay filter.
-    pub throttled_descriptor_replay: u64,
     /// Requests throttled due to handshake cooldown.
     pub throttled_cooldown: u64,
     /// Requests throttled due to emergency limits.
     pub throttled_emergency: u64,
     /// Active cooldowns keyed by remote.
     pub active_remote_cooldowns: u64,
-    /// Active cooldowns keyed by descriptor.
-    pub active_descriptor_cooldowns: u64,
     /// Handshake mode counts (entry/middle/exit).
     pub handshake_mode_counts: [u64; 2],
     /// Bytes consumed during handshakes.
@@ -1655,12 +1601,9 @@ mod tests {
         metrics.set_descriptor_commit_hex(Some("deadbeef".to_string()));
         metrics.set_pow_difficulty(12);
         metrics.record_remote_quota_throttle();
-        metrics.record_descriptor_quota_throttle();
-        metrics.record_descriptor_replay_throttle();
         metrics.record_handshake_cooldown_throttle();
         metrics.record_emergency_throttle();
         metrics.set_active_remote_cooldowns(3);
-        metrics.set_active_descriptor_cooldowns(2);
         metrics.record_padding_cell_sent(512);
         metrics.record_padding_cell_sent(256);
         metrics.record_padding_cell_throttled();
@@ -1769,12 +1712,6 @@ mod tests {
             "soranet_handshake_throttled_remote_quota_total{{{label_block}}} 1"
         )));
         assert!(rendered.contains(&format!(
-            "soranet_handshake_throttled_descriptor_quota_total{{{label_block}}} 1"
-        )));
-        assert!(rendered.contains(&format!(
-            "soranet_handshake_throttled_descriptor_replay_total{{{label_block}}} 1"
-        )));
-        assert!(rendered.contains(&format!(
             "soranet_handshake_throttled_cooldown_total{{{label_block}}} 1"
         )));
         assert!(rendered.contains(&format!(
@@ -1791,9 +1728,6 @@ mod tests {
         )));
         assert!(rendered.contains(&format!(
             "soranet_abuse_remote_cooldowns{{{label_block}}} 3"
-        )));
-        assert!(rendered.contains(&format!(
-            "soranet_abuse_descriptor_cooldowns{{{label_block}}} 2"
         )));
         assert!(rendered.contains(&format!(
             "soranet_proxy_policy_queue_depth{{{label_block}}} 2"

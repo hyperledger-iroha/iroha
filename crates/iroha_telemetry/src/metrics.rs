@@ -8319,6 +8319,7 @@ construct {
             "ballot_commitment_deadline_expired",
             "ballot_release_pulse_unavailable",
             "ballot_opening_deadline_expired",
+            "sortition_retries_exhausted",
         ] {
             let _ = governance_parliament_no_result_total.with_label_values(&[class]);
         }
@@ -10560,8 +10561,6 @@ impl Metrics {
             ("cooldown", bucket.throttle_cooldown_total),
             ("emergency", bucket.throttle_emergency_total),
             ("remote_quota", bucket.throttle_remote_total),
-            ("descriptor_quota", bucket.throttle_descriptor_total),
-            ("descriptor_replay", bucket.throttle_descriptor_replay_total),
         ] {
             if value > 0 {
                 self.soranet_privacy_throttles_total

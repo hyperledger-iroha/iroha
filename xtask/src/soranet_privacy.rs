@@ -315,14 +315,6 @@ fn bucket_to_value(bucket: &SoranetPrivacyBucketMetricsV1) -> Value {
         "remote_quota".to_string(),
         Value::from(bucket.throttle_remote_total),
     );
-    throttle.insert(
-        "descriptor_quota".to_string(),
-        Value::from(bucket.throttle_descriptor_total),
-    );
-    throttle.insert(
-        "descriptor_replay".to_string(),
-        Value::from(bucket.throttle_descriptor_replay_total),
-    );
     let mut active = json::Map::new();
     active.insert(
         "mean".to_string(),
@@ -425,8 +417,6 @@ fn format_bucket(bucket: &SoranetPrivacyBucketMetricsV1) -> String {
                 .saturating_add(bucket.throttle_cooldown_total)
                 .saturating_add(bucket.throttle_emergency_total)
                 .saturating_add(bucket.throttle_remote_total)
-                .saturating_add(bucket.throttle_descriptor_total)
-                .saturating_add(bucket.throttle_descriptor_replay_total)
         )
     }
 }

@@ -1,5 +1,5 @@
-use crate::sync::get_status_with_retry;
-use eyre::{Report, Result};
+use crate::sync::get_status_with_retry_at_least;
+use eyre::{Report, Result, WrapErr};
 use iroha_test_network::{Network, NetworkBuilder, NetworkPeer};
 use std::{
     any::Any,
@@ -486,6 +486,9 @@ fn panic_reason(panic: &(dyn Any + Send)) -> Option<String> {
         .or_else(|| panic.downcast_ref::<String>().cloned())
 }
 fn is_retryable_network_startup_error(err: &Report) -> bool {
+    if sandbox_reason(err).is_some() {
+        return false;
+    }
     if err.chain().any(|cause| {
         let normalized = cause.to_string().to_ascii_lowercase();
         normalized.contains("failed closed")
@@ -501,6 +504,8 @@ fn is_retryable_network_startup_error(err: &Report) -> bool {
         let text = cause.to_string();
         text.contains("expected peers to start within timeout")
             || text.contains("peer startup failed; startup snapshot:")
+            || text.contains("network startup applied-height barrier failed")
+            || text.contains("network startup authoritative status-height barrier failed")
     })
 }
 /// Attempt to start a blocking test network.
@@ -534,13 +539,24 @@ pub fn start_network_blocking_or_skip(
                     panic::resume_unwind(panic);
                 }
             };
-        match runtime.block_on(async { network.start_all().await }) {
-            Ok(_) => {
+        let attempt_result = runtime
+            .block_on(async { network.start_all().await })
+            .map(|_| ())
+            .and_then(|()| {
                 runtime
                     .block_on(async { network.ensure_blocks(1).await })
-                    .map_err(|err| sandbox_error(err.wrap_err("reach block 1"), context))?;
-                get_status_with_retry(&network.client())
-                    .map_err(|err| sandbox_error(err.wrap_err("wait for /status"), context))?;
+                    .wrap_err(
+                        "network startup applied-height barrier failed while reaching block 1",
+                    )
+                    .map(|_| ())
+            })
+            .and_then(|()| {
+                get_status_with_retry_at_least(&network.client(), 1)
+                    .map(|_| ())
+                    .wrap_err("network startup authoritative status-height barrier failed")
+            });
+        match attempt_result {
+            Ok(_) => {
                 return Ok(Some((
                     SerializedNetwork::new_with_handle(network, guard, runtime.handle().clone()),
                     runtime,
@@ -629,17 +645,24 @@ pub async fn start_network_async_or_skip(
                 panic::resume_unwind(panic);
             }
         };
-        match network.start_all().await {
+        let attempt_result = async {
+            network.start_all().await?;
+            network
+                .ensure_blocks(1)
+                .await
+                .wrap_err("network startup applied-height barrier failed while reaching block 1")?;
+            let client = network.client();
+            let status_result =
+                tokio::task::spawn_blocking(move || get_status_with_retry_at_least(&client, 1))
+                    .await
+                    .map_err(Report::new)
+                    .wrap_err("network startup authoritative status-height task failed")?;
+            status_result.wrap_err("network startup authoritative status-height barrier failed")?;
+            Ok::<(), Report>(())
+        }
+        .await;
+        match attempt_result {
             Ok(_) => {
-                network
-                    .ensure_blocks(1)
-                    .await
-                    .map_err(|err| sandbox_error(err.wrap_err("reach block 1"), context))?;
-                let client = network.client();
-                let status = tokio::task::spawn_blocking(move || get_status_with_retry(&client))
-                    .await
-                    .map_err(|err| sandbox_error(Report::new(err), context))?;
-                status.map_err(|err| sandbox_error(err.wrap_err("wait for /status"), context))?;
                 return Ok(Some(SerializedNetwork::new(network, guard)));
             }
             Err(err) => {
@@ -1036,6 +1059,21 @@ mod tests {
         assert!(is_retryable_network_startup_error(&err));
         let err = Report::msg("peer startup failed; startup snapshot: [peer#1 running=false]");
         assert!(is_retryable_network_startup_error(&err));
+        let err = Report::msg(
+            "network startup applied-height barrier failed while reaching block 1: timed out",
+        );
+        assert!(is_retryable_network_startup_error(&err));
+        let err = Report::msg(
+            "network startup authoritative status-height barrier failed: status retry budget exhausted",
+        );
+        assert!(is_retryable_network_startup_error(&err));
+    }
+    #[test]
+    fn startup_retry_classifier_never_retries_sandbox_denials() {
+        let err = Report::msg(
+            "network startup authoritative status-height barrier failed: operation not permitted",
+        );
+        assert!(!is_retryable_network_startup_error(&err));
     }
     #[test]
     fn startup_retry_classifier_rejects_decisive_fatal_evidence() {

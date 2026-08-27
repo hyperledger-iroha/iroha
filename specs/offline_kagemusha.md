@@ -721,13 +721,14 @@ required by that transaction, and the production verifier must construct from
 authenticated material. There is no process-wide boolean admission shortcut,
 per-asset enablement bit, or node-readiness consequence.
 
-`KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE` remains `false` in the
-candidate change set. It may be changed only by the final signed promotion
-commit after the authenticated review, benchmark, physical-device, and
-role-threshold evidence has been added. Even after promotion it is not by
-itself authorization for a transaction: the exact authenticated ABI-21/V4
-material referenced by that transaction must validate and construct
-successfully. None of these transaction checks gates node startup or health.
+`KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE` is `false` in ordinary
+candidate and development artifacts. The protected production SDK build sets
+it through the `privacy-production-enabled` bridge feature only after the
+authenticated review, benchmark, physical-device, and role-threshold evidence
+has authorized promotion. That build-time signal is not by itself
+authorization for a transaction: the exact authenticated ABI-21/V4 material
+referenced by that transaction must validate and construct successfully. None
+of these transaction checks gates node startup or health.
 Top-up and redemption change additionally require the governed selected
 release's issuance window to be active. Full redemption authenticates the
 parent release for its longer redemption lifetime, so a legitimately issued

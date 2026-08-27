@@ -1737,9 +1737,10 @@ pub(super) mod tests {
         };
         assert_eq!(rebound.request_hash, restarted_hash);
         assert_eq!(rebound.certificate, fixture.artifact.commit_qc);
-        restarted_discovery
+        let discovered = restarted_discovery
             .authenticate_response(rebound.clone(), &peer(responder))
             .expect("restarted requester accepts rebound response");
+        assert_eq!(discovered.response(), &rebound);
         Signature::try_from_bytes(&rebound.signature)
             .expect("parse rebound response signature")
             .verify(responder.public_key(), &rebound.signature_preimage())
@@ -2351,9 +2352,10 @@ pub(super) mod tests {
             },
         )
         .expect("authenticate rotated archive request");
-        rotated_request
-            .authenticate_response(&context, rotated_response, &rotated_peer)
+        let authenticated_rotated_response = rotated_request
+            .authenticate_response(&context, rotated_response.clone(), &rotated_peer)
             .expect("lagging peer accepts current key for exact historical body");
+        assert_eq!(authenticated_rotated_response.response(), &rotated_response);
         assert_eq!(server.body_len(), 1);
         let mut forged = request;
         forged.certificate.aggregate_signature = vec![0xEE; 96];

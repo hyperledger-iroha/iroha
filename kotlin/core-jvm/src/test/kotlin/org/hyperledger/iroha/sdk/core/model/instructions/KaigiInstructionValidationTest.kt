@@ -23,21 +23,21 @@ class KaigiInstructionValidationTest {
     }
 
     @Test
-    fun `full width unsigned Kaigi fields round trip through signed JVM carriers`() {
+    fun `bounded participants and full width u64 fields round trip through JVM carriers`() {
         val callId = KaigiInstructionUtils.CallId("wonderland", "unsigned-boundary")
         val u64Max = -1L
-        val u32Max = -1
         val u64MaxText = "18446744073709551615"
-        val u32MaxText = "4294967295"
+        val maxParticipants = CreateKaigiInstruction.MAX_PARTICIPANTS_V1
+        val maxParticipantsText = "4096"
 
         val create = CreateKaigiInstruction.create(
             callId = callId,
             host = "host",
-            maxParticipants = u32Max,
+            maxParticipants = maxParticipants,
             gasRatePerMinute = u64Max,
             scheduledStartMs = u64Max,
         )
-        assertEquals(u32MaxText, create.arguments["max_participants"])
+        assertEquals(maxParticipantsText, create.arguments["max_participants"])
         assertEquals(u64MaxText, create.arguments["gas_rate_per_minute"])
         assertEquals(u64MaxText, create.arguments["scheduled_start_ms"])
         assertEquals(create, CreateKaigiInstruction.fromArguments(create.arguments))
@@ -88,6 +88,25 @@ class KaigiInstructionValidationTest {
         assertFailsWith<IllegalArgumentException> {
             CreateKaigiInstruction.fromArguments(
                 create.arguments + ("max_participants" to "4294967296"),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            CreateKaigiInstruction.create(
+                callId = callId,
+                host = "host",
+                maxParticipants = maxParticipants + 1,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            CreateKaigiInstruction.create(
+                callId = callId,
+                host = "host",
+                maxParticipants = -1,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            CreateKaigiInstruction.fromArguments(
+                create.arguments + ("max_participants" to "4097"),
             )
         }
     }

@@ -179,16 +179,18 @@ requiring global-roster overlap.
 The production adapter obtains its immutable settings from
 `Sumeragi::v2_config(block_cadence, mode)`. The cadence and mode arguments come from the signed
 genesis/current `HeightContext`; the legacy local `consensus_mode` selector cannot override them.
-The returned `SumeragiV2Config` is a versioned Norito value containing only fixed-width integers:
-protocol and mode, cadence, the one round deadline and derived one-fifth retransmission interval,
-finite transaction/body/queue/ready-work bounds, consensus-key policy, and (in NPoS mode) the
-epoch, election, and reconfiguration policy. Its domain-separated hash is the canonical
-shared-config fingerprint used by the adapter, peer gate, status API, and rollout checker.
+The returned `SumeragiV2Config` is a versioned Norito projection containing protocol and mode,
+cadence, finite transaction/body/queue/ready-work bounds, and consensus-key policy. The one round
+deadline and its one-fifth retransmission interval are derived deterministically from cadence rather
+than carried as mutable timing fields. Its
+domain-separated hash is the canonical shared-config fingerprint used by the adapter, peer gate,
+status API, and rollout checker.
 
 Peer admission also checks a distinct, domain-separated genesis fingerprint. Its canonical Norito
-projection contains the chain and protocol, genesis-selected mode, cadence, one round timeout,
-finite block bound, signed DA/Nexus context, and (for NPoS) the epoch seed plus election and
-reconfiguration inputs. Legacy collectors, phase-specific/adaptive timeouts, the old global-DA
+projection contains the protocol, genesis-selected mode, signed cadence and block bound,
+DA/Nexus/execution-policy context, and (for NPoS) the epoch seed, election and reconfiguration
+inputs. Network identity is authenticated separately and deliberately excluded from this
+genesis-embedded value. Legacy collectors, phase-specific/adaptive timeouts, the old global-DA
 boolean, and mutable BLS-domain strings are excluded. The former full-parameter fingerprint is
 available only to archival tooling and is never an input to live v2 admission.
 
@@ -242,6 +244,10 @@ session and threshold signature again, checks the singleton history tail, and de
 committee-election seed and `leader_seed` from that pulse. Missing, duplicated, stale,
 foreign-chain, or otherwise inconsistent pulse state fails context construction.
 
+Committed Parliament sortition and timed-ballot requests use the same producer, but their slots are
+optional for chain liveness so the governance reducer can classify objective pulse absence and
+advance to a fresh attempt.
+
 The pre-release per-validator VRF commit/reveal protocol is not part of the wire enum, runner, or
 signed effects schema. Pre-release frames and effects therefore fail exact decoding instead of
 entering a compatibility-and-rejection branch. There is no alternate hash-chain seed fallback and
@@ -263,9 +269,8 @@ separate reserved progress queue. Thus a valid old-view flood cannot consume the
 needed to form the current QC or TC.
 
 At the local P2P scheduler, authoritative v2 proposals, votes, QCs, timeout votes/certificates,
-commit-certificate responses, and global threshold-beacon partial signatures use
-`ConsensusSafety`. This tag is
-derived after decode and is not part of the wire format. It has independent bounded network-actor,
+commit-certificate responses, and `GlobalBeaconPartialSignature` messages use `ConsensusSafety`.
+This tag is derived after decode and is not part of the wire format. It has independent bounded network-actor,
 per-peer, encrypted-frame, deferred-send, inbound-dispatch, and relay-subscriber queues. Auxiliary
 lane traffic uses `Consensus`; Torii proxy and streaming-control traffic use `Control`. Genesis is
 a local trust-root input and has no peer request/response route. An auxiliary or control-plane flood
@@ -965,8 +970,9 @@ The same certified transition retires strictly older global control,
 payload-chunk, and merge-share fanouts from the exact-output worker before
 retry arbitration. A permanently unreachable topology target therefore cannot
 accumulate one old-view owner per timeout until the shared corridor rejects the
-current Proposal or TimeoutVote for every responsive peer. Height-only recovery
-and the height/view-bound threshold-beacon lifecycle remain outside this cleanup. Exact identical topology
+current Proposal or TimeoutVote for every responsive peer. Height-only recovery is outside this
+view cut. Threshold-beacon partials are rerouted for the new exact view while their height-bound
+threshold-signed payload and retained aggregate remain fixed. Exact identical topology
 retries reuse their incumbent worker owner, and each frozen target has one
 separate pacemaker reservation so the TimeoutVote needed to certify the cleanup
 view cannot itself be starved by ordinary Safety-class backlog.

@@ -477,12 +477,6 @@ pub mod uri {
     pub const GOV_CITIZENS_COUNT: &str = "/v1/gov/citizens";
     /// Governance: query citizenship status for an account
     pub const GOV_CITIZEN_STATUS: &str = "/v1/gov/citizens/{account_id}";
-    /// Governance: persist a VRF-derived council for an epoch (app API)
-    pub const GOV_COUNCIL_PERSIST: &str = "/v1/gov/council/persist";
-    /// Governance: replace a council member using the next alternate
-    pub const GOV_COUNCIL_REPLACE: &str = "/v1/gov/council/replace";
-    /// Governance: audit info for council derivation (seed/epoch)
-    pub const GOV_COUNCIL_AUDIT: &str = "/v1/gov/council/audit";
     /// Governance: get a proposal by id (hex)
     pub const GOV_PROPOSAL_GET: &str = "/v1/gov/proposals/{id}";
     /// Governance: get token locks for a referendum id

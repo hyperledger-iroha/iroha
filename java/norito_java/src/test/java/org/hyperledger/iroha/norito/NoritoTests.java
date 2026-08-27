@@ -37,7 +37,6 @@ public final class NoritoTests {
     testSequenceAcceptsEmptyPackedTail();
     testSequenceAcceptsEmptyPackedTailWithFollowingData();
     testOption();
-    testResult();
     testTryDecode();
     testTryDecodeSurfacesStructErrors();
     testArchiveViewFlags();
@@ -98,17 +97,6 @@ public final class NoritoTests {
     assert NoritoCodec.CompressionConfig.zstdProfile(compact, 128 * 1024).level() == 11;
     assert NoritoCodec.CompressionConfig.zstdProfile(compact, 2 * 1024 * 1024).level() == 15;
     assert NoritoCodec.CompressionConfig.zstdProfile(compact, 8 * 1024 * 1024).level() == 19;
-
-    assert NoritoCodec.CompressionConfig.zstdProfile("balanced", 256 * 1024).level() == 5;
-    assert NoritoCodec.CompressionConfig.zstdProfile("compact", 6 * 1024 * 1024).level() == 19;
-
-    boolean unknownProfileFailed = false;
-    try {
-      NoritoCodec.CompressionConfig.zstdProfile("unknown", 1024);
-    } catch (IllegalArgumentException ex) {
-      unknownProfileFailed = true;
-    }
-    assert unknownProfileFailed : "Expected unknown profile to throw";
 
     boolean negativeLenFailed = false;
     try {
@@ -484,18 +472,6 @@ public final class NoritoTests {
     byte[] encodedSome = NoritoCodec.encode(Optional.of("alice"), "iroha.test.Option", adapter);
     Optional<String> decodedSome = NoritoCodec.decode(encodedSome, adapter, "iroha.test.Option");
     assert decodedSome.isPresent() && decodedSome.get().equals("alice");
-  }
-
-  private static void testResult() {
-    TypeAdapter<Result<Long, String>> adapter =
-        NoritoAdapters.result(NoritoAdapters.uint(8), NoritoAdapters.stringAdapter());
-    byte[] encodedOk = NoritoCodec.encode(new Result.Ok<Long, String>(7L), "iroha.test.Result", adapter);
-    Result<Long, String> decodedOk = NoritoCodec.decode(encodedOk, adapter, "iroha.test.Result");
-    assert decodedOk instanceof Result.Ok<Long, String> ok && ok.value() == 7L;
-    byte[] encodedErr =
-        NoritoCodec.encode(new Result.Err<Long, String>("bad"), "iroha.test.Result", adapter);
-    Result<Long, String> decodedErr = NoritoCodec.decode(encodedErr, adapter, "iroha.test.Result");
-    assert decodedErr instanceof Result.Err<Long, String> err && err.error().equals("bad");
   }
 
   private static void testTryDecode() {

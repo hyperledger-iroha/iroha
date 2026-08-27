@@ -105,6 +105,42 @@ pub(in crate::sumeragi) struct LifecycleDecidedLaneRecoveryPermitV1 {
 
 struct LifecycleDecidedLaneRecoveryPermitSealV1;
 
+/// Monotonic fence between a terminal executor and finalized ingress closure.
+///
+/// The fence is minted only from an exact current-height Decision together with
+/// either authoritative terminal executor readiness or the typed settled-Apply
+/// disposition. It keeps already-owned cold output and Completion work
+/// serviceable, but forbids a return to Runtime, fresh Ingress, or Producer
+/// planning while the lifecycle finalization census converges.
+pub(in crate::sumeragi) struct LifecycleTerminalFinalizationCutV1 {
+    _seal: LifecycleTerminalFinalizationCutSealV1,
+}
+
+struct LifecycleTerminalFinalizationCutSealV1;
+
+impl LifecycleTerminalFinalizationCutV1 {
+    /// Mint the narrower authority needed to reconcile an already-owned Serve
+    /// or exact terminal output while the finalization fence remains active.
+    pub(in crate::sumeragi) const fn decided_lane_recovery_permit(
+        &self,
+    ) -> LifecycleDecidedLaneRecoveryPermitV1 {
+        LifecycleDecidedLaneRecoveryPermitV1 {
+            _seal: LifecycleDecidedLaneRecoveryPermitSealV1,
+        }
+    }
+
+    /// Mint Broadcast-only Ready authority for an already-owned recovered
+    /// output. General Ready dispatch could queue fresh Sign, Fetch, or Apply
+    /// runtime work and is therefore unavailable past this cut.
+    const fn terminal_ready_broadcast_permit(
+        &self,
+    ) -> LifecycleApplyTerminalReadyBroadcastPermitV1 {
+        LifecycleApplyTerminalReadyBroadcastPermitV1 {
+            _seal: LifecycleApplyTerminalReadyBroadcastPermitSealV1,
+        }
+    }
+}
+
 /// Sealed authority to finish only authenticated Broadcast output after Apply.
 ///
 /// The terminal Apply disposition cannot authorize the general Ready dispatcher because fresh
@@ -256,6 +292,13 @@ impl LifecycleProducerClaimDispositionV1 {
         )
     }
 
+    /// Return whether the unresolved Apply worker may still consume open fair
+    /// ingress. Once Apply is terminal, only the finite prefix captured after
+    /// finalized ingress closure may enter decided-lane recovery.
+    pub(super) const fn permits_open_decided_lane_recovery_ingress(self) -> bool {
+        matches!(self, Self::AwaitingApplyCompletion)
+    }
+
     /// Return whether authoritative terminal executor state may repair a stale
     /// process-local claim and enter decided-lane recovery directly.
     ///
@@ -273,6 +316,7 @@ impl LifecycleProducerClaimDispositionV1 {
     }
 
     /// Mint decided-lane authority from authoritative terminal executor state.
+    #[cfg(test)]
     pub(in crate::sumeragi) const fn terminal_ready_decided_lane_recovery_permit(
         self,
         executor_ready_to_finish: bool,
@@ -284,6 +328,30 @@ impl LifecycleProducerClaimDispositionV1 {
         ) {
             Some(LifecycleDecidedLaneRecoveryPermitV1 {
                 _seal: LifecycleDecidedLaneRecoveryPermitSealV1,
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Freeze fresh Ingress and Producer ownership after authoritative terminal
+    /// state is visible. The returned cut is monotonic for the rest of this
+    /// process-height. Completion remains serviceable only through the
+    /// Broadcast-only terminal dispatcher and cannot reopen serialized runtime.
+    pub(in crate::sumeragi) const fn terminal_finalization_cut(
+        self,
+        executor_ready_to_finish: bool,
+        decided_subject_present: bool,
+    ) -> Option<LifecycleTerminalFinalizationCutV1> {
+        if decided_subject_present
+            && (self.apply_terminal_settled()
+                || self.permits_terminal_ready_decided_lane_recovery(
+                    executor_ready_to_finish,
+                    decided_subject_present,
+                ))
+        {
+            Some(LifecycleTerminalFinalizationCutV1 {
+                _seal: LifecycleTerminalFinalizationCutSealV1,
             })
         } else {
             None
@@ -772,8 +840,9 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
     npos_beacon: &mut V2GlobalBeaconLifecycle,
     limit: usize,
     mut producer_claim: LifecycleProducerClaimDispositionV1,
+    terminal_finalization_cut: Option<&LifecycleTerminalFinalizationCutV1>,
 ) -> Result<LifecycleV2IngressDrainDispositionV1, V2RunnerError> {
-    if producer_claim.apply_terminal_settled() {
+    if terminal_finalization_cut.is_some() || producer_claim.apply_terminal_settled() {
         // Make an expired lower direct-output row visible to the cold-output
         // order check before it can service a higher recovered Broadcast.
         // Waking is itself a bounded state transition, so re-enter Completion
@@ -802,6 +871,8 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                 producer_claim,
             ));
         }
+    }
+    if producer_claim.apply_terminal_settled() {
         // Applied is already the exact reducer terminal. First drain retained,
         // authenticated cold-open output rows required by the finalization
         // census. If none owns this turn, continue only far enough for the
@@ -875,6 +946,18 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                         None
                     }
                     PreGate::Selected(selected) => Some(selected),
+                    PreGate::Ready(ready) if terminal_finalization_cut.is_some() => {
+                        let permit = terminal_finalization_cut
+                            .expect("the terminal cut remains borrowed for this Completion turn")
+                            .terminal_ready_broadcast_permit();
+                        match activated.drive_apply_terminal_ready_broadcast_turn(ready, permit) {
+                            CompletionTurn::PassThrough(empty_turn) => {
+                                drop(empty_turn);
+                                None
+                            }
+                            CompletionTurn::Selected(selected) => Some(selected),
+                        }
+                    }
                     PreGate::Ready(ready) if producer_claim.apply_terminal_settled() => {
                         let permit = producer_claim
                             .apply_terminal_ready_broadcast_permit()
@@ -948,8 +1031,17 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                         return Err(V2RunnerError::RestartRequired);
                     }
                 }
+                if terminal_finalization_cut.is_some() {
+                    // The sealed cut owns exactly the Completion-ranked turn.
+                    // Return before asking the cursor for Runtime or Ingress.
+                    return Ok(LifecycleV2IngressDrainDispositionV1::ready(producer_claim));
+                }
             }
             LifecycleRunnerRankTarget::Runtime => {
+                debug_assert!(
+                    terminal_finalization_cut.is_none(),
+                    "terminal finalization cannot acquire a Runtime turn"
+                );
                 if producer_claim.blocks_runtime() {
                     // A typed Apply or registered Validate sidecar wait can
                     // advance outside this batch. Its exact Completion owner
@@ -1104,6 +1196,10 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                 }
             }
             LifecycleRunnerRankTarget::Ingress => {
+                debug_assert!(
+                    terminal_finalization_cut.is_none(),
+                    "terminal finalization must stop before the open Ingress turn"
+                );
                 match activated.drive_ingress_turn(current_turn) {
                     super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressTurnV1::PassThrough(
                         empty_turn,
@@ -1284,6 +1380,26 @@ mod tests {
             !LifecycleProducerClaimDispositionV1::AwaitingApplyCompletion
                 .permits_terminal_ready_decided_lane_recovery(true, true),
             "the existing Apply-only recovery corridor remains authoritative"
+        );
+
+        assert!(eligible.terminal_finalization_cut(true, true).is_some());
+        assert!(eligible.terminal_finalization_cut(false, true).is_none());
+        assert!(eligible.terminal_finalization_cut(true, false).is_none());
+        assert!(
+            LifecycleProducerClaimDispositionV1::ApplyTerminalSettled
+                .terminal_finalization_cut(false, true)
+                .is_some(),
+            "typed Apply settlement fences admission even before its invariant check"
+        );
+        assert!(
+            LifecycleProducerClaimDispositionV1::AwaitingApplyCompletion
+                .permits_open_decided_lane_recovery_ingress(),
+            "an unresolved Apply may still recover the carrier needed to finish"
+        );
+        assert!(
+            !LifecycleProducerClaimDispositionV1::ApplyTerminalSettled
+                .permits_open_decided_lane_recovery_ingress(),
+            "settled Apply must wait for the finite closed-ingress drain"
         );
     }
 

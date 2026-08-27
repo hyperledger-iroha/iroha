@@ -44,6 +44,17 @@ METHOD_COUNTS = {
     "int_gauge_vec": 24,
 }
 
+RETIRED_CONSENSUS_VRF_METRICS = (
+    "sumeragi_vrf_commits_emitted_total",
+    "sumeragi_vrf_reveals_emitted_total",
+    "sumeragi_vrf_reveals_late_total",
+    "sumeragi_vrf_non_reveal_penalties_total",
+    "sumeragi_vrf_non_reveal_by_signer",
+    "sumeragi_vrf_no_participation_total",
+    "sumeragi_vrf_no_participation_by_signer",
+    "sumeragi_vrf_rejects_total_by_reason",
+)
+
 DSL_MACROS_START = "macro_rules! metric_field_type {"
 DSL_MACROS_END = "define_metrics! {"
 FACTORY_START = "#[derive(Clone, Copy)]\nstruct MetricSpec {"
@@ -567,6 +578,14 @@ def check_contents(catalog_raw: bytes, source: str) -> list[str]:
     for literal in expected_literals:
         if source.count(literal) != 1:
             findings.append(f"Rust catalog invariant changed or duplicated: {literal}")
+    catalog_keys = {row[0] for row in rows}
+    catalog_names = {row[1] for row in rows}
+    compacted_source = _compact_rust(source)
+    for retired in RETIRED_CONSENSUS_VRF_METRICS:
+        if retired in catalog_keys or retired in catalog_names:
+            findings.append(f"retired consensus-VRF catalog row returned: {retired}")
+        if re.search(r"\b" + re.escape(retired) + r"\b", compacted_source):
+            findings.append(f"retired consensus-VRF metric source returned: {retired}")
 
     if len(calls) != ROWS:
         findings.append(f"DSL factory calls: expected {ROWS}, got {len(calls)}")

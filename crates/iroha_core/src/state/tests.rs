@@ -1,5 +1,8 @@
 use super::{deserialize::default_zk, *};
-use crate::{smartcontracts::ValidQuery, telemetry::StateTelemetry};
+use crate::{
+    governance::parliament::ParliamentReducerErrorV1, smartcontracts::ValidQuery,
+    telemetry::StateTelemetry,
+};
 use core::{
     mem,
     num::{NonZeroU32, NonZeroU64},
@@ -24445,6 +24448,58 @@ state_test! { sync same_dataspace_stake_authority_projects_to_restricted_sibling
     );
 }
 
+state_test! { sync exact_size_lane_authority_bootstraps_without_beacon_entropy
+    let state = blank_test_state();
+    let (validators, keypairs) = bls_accounts_in("validators", 4);
+    seed_consensus_keys_with_pops(&state, &keypairs);
+    install_lane_manifest_registry(
+        &state,
+        &[(LaneId::SINGLE, DataSpaceId::UNIVERSAL, validators)],
+    );
+    {
+        let world = state.world.view();
+        assert!(world.global_beacon_key_sessions().iter().next().is_none());
+        assert!(world.global_beacon_pulses().iter().next().is_none());
+        assert!(world.global_beacon_latest_pulse().iter().next().is_none());
+    }
+    let mut expected = keypairs
+        .iter()
+        .map(|keypair| PeerId::new(keypair.public_key().clone()))
+        .collect::<Vec<_>>();
+    expected.sort();
+    assert_eq!(
+        state
+            .resolve_lane_committee_at_height(
+                LaneAuthorityRoute::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                1,
+            )
+            .expect("an exact 3f+1 pool needs no ineffective selection entropy")
+            .into_validators(),
+        expected,
+    );
+}
+
+state_test! { sync oversubscribed_lane_authority_still_requires_verified_beacon_entropy
+    let state = blank_test_state();
+    let (validators, keypairs) = bls_accounts_in("validators", 5);
+    seed_consensus_keys_with_pops(&state, &keypairs);
+    install_lane_manifest_registry(
+        &state,
+        &[(LaneId::SINGLE, DataSpaceId::UNIVERSAL, validators)],
+    );
+    assert!(matches!(
+        state.resolve_lane_committee_at_height(
+            LaneAuthorityRoute::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            1,
+        ),
+        Err(LaneAuthorityError::InvalidAuthoritySource {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            authority_height: 1,
+        })
+    ));
+}
+
 state_test! { sync same_dataspace_manifest_authority_projects_to_policy_only_sibling_lane
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -39256,6 +39311,235 @@ fn parliament_timed_ovn_resource_reservations_cover_both_heavy_windows() {
 }
 
 #[test]
+fn parliament_timed_ovn_resource_reservation_capacity_is_exact_and_fail_atomic() {
+    let mut reservations = BTreeMap::new();
+    let maximum =
+        iroha_data_model::parliament_casting::MAX_PARLIAMENT_CONCURRENT_CASTING_CONTEXTS_V1;
+    for index in 0..maximum {
+        let mut ballot_id = [0_u8; 32];
+        ballot_id[..4].copy_from_slice(&index.to_be_bytes());
+        ballot_id[31] = 1;
+        let base = u64::from(index) * 10 + 1;
+        insert_parliament_timed_ovn_resource_reservation_v1(
+            &mut reservations,
+            BallotAttemptId::new(ballot_id),
+            ParliamentTimedOvnResourceReservationV1 {
+                governance_attempt_id: GovernanceAttemptId::new([0x71; 32]),
+                resource_windows: [(base, base + 1), (base + 2, base + 3)],
+                cast_capable: true,
+            },
+        )
+        .expect("every reservation through the exact capacity is admissible");
+    }
+    assert_eq!(reservations.len(), usize::try_from(maximum).unwrap());
+
+    let before_rejection = reservations.clone();
+    assert_eq!(
+        insert_parliament_timed_ovn_resource_reservation_v1(
+            &mut reservations,
+            BallotAttemptId::new([0x72; 32]),
+            ParliamentTimedOvnResourceReservationV1 {
+                governance_attempt_id: GovernanceAttemptId::new([0x73; 32]),
+                resource_windows: [(20_001, 20_002), (20_003, 20_004)],
+                cast_capable: true,
+            },
+        ),
+        Err(ParliamentTimedOvnResourceReservationErrorV1::TooManyConcurrentCastingContexts)
+    );
+    assert_eq!(
+        reservations, before_rejection,
+        "capacity rejection must not leak the candidate reservation"
+    );
+}
+
+#[test]
+fn parliament_attempt_admission_rejects_conflicting_reservation_without_index_leak() {
+    let incumbent =
+        crate::governance::parliament::tests::active_timed_ovn_reservation_attempt_fixture_v1(
+            0x31, 0x41, 27,
+        );
+    let conflicting =
+        crate::governance::parliament::tests::active_timed_ovn_reservation_attempt_fixture_v1(
+            0x32, 0x43, 28,
+        );
+    let nonoverlapping =
+        crate::governance::parliament::tests::active_timed_ovn_reservation_attempt_fixture_v1(
+            0x33, 0x45, 43,
+        );
+    let incumbent_id = incumbent.attempt().id;
+    let conflicting_id = conflicting.attempt().id;
+    let nonoverlapping_id = nonoverlapping.attempt().id;
+
+    let world = World::new();
+    let mut block = world.block();
+    let mut transaction = block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
+    transaction
+        .put_parliament_attempt(incumbent)
+        .expect("admit the incumbent reservation");
+    let before_rejection = transaction
+        .parliament_timed_ovn_resource_reservations
+        .iter()
+        .map(|(id, reservation)| (*id, *reservation))
+        .collect::<BTreeMap<_, _>>();
+
+    assert_eq!(
+        transaction.put_parliament_attempt(conflicting),
+        Err(ParliamentReducerErrorV1::TimedOvnResourceScheduleConflict)
+    );
+    assert!(
+        transaction
+            .parliament_attempts
+            .get(&conflicting_id)
+            .is_none()
+    );
+    assert_eq!(
+        transaction
+            .parliament_timed_ovn_resource_reservations
+            .iter()
+            .map(|(id, reservation)| (*id, *reservation))
+            .collect::<BTreeMap<_, _>>(),
+        before_rejection,
+        "failed attempt admission must retain the exact incumbent index"
+    );
+    assert!(transaction.parliament_attempts.get(&incumbent_id).is_some());
+
+    transaction
+        .put_parliament_attempt(nonoverlapping)
+        .expect("the first schedule after both closed incumbent windows is admissible");
+    assert!(
+        transaction
+            .parliament_attempts
+            .get(&nonoverlapping_id)
+            .is_some()
+    );
+    assert_eq!(
+        transaction
+            .parliament_timed_ovn_resource_reservations
+            .iter()
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn oversized_parliament_attempt_admission_is_fail_atomic() {
+    let incumbent =
+        crate::governance::parliament::tests::active_timed_ovn_reservation_attempt_fixture_v1(
+            0xD1, 0xD2, 27,
+        );
+    let oversized = crate::governance::parliament::tests::oversized_attempt_state_fixture_v1(0xD3);
+    let incumbent_id = incumbent.attempt().id;
+    let oversized_id = oversized.attempt().id;
+
+    let world = World::new();
+    let mut block = world.block();
+    let mut transaction = block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
+    transaction
+        .put_parliament_attempt(incumbent)
+        .expect("admit the incumbent attempt");
+    let attempts_before = transaction
+        .parliament_attempts
+        .iter()
+        .map(|(id, attempt)| (*id, attempt.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let reservations_before = transaction
+        .parliament_timed_ovn_resource_reservations
+        .iter()
+        .map(|(id, reservation)| (*id, *reservation))
+        .collect::<BTreeMap<_, _>>();
+
+    assert_eq!(
+        transaction.put_parliament_attempt(oversized),
+        Err(ParliamentReducerErrorV1::AttemptStateSizeLimitExceeded)
+    );
+    assert!(transaction.parliament_attempts.get(&incumbent_id).is_some());
+    assert!(transaction.parliament_attempts.get(&oversized_id).is_none());
+    assert_eq!(
+        transaction
+            .parliament_attempts
+            .iter()
+            .map(|(id, attempt)| (*id, attempt.clone()))
+            .collect::<BTreeMap<_, _>>(),
+        attempts_before,
+        "failed size admission must retain every authoritative attempt"
+    );
+    assert_eq!(
+        transaction
+            .parliament_timed_ovn_resource_reservations
+            .iter()
+            .map(|(id, reservation)| (*id, *reservation))
+            .collect::<BTreeMap<_, _>>(),
+        reservations_before,
+        "failed size admission must retain the exact derived reservation index"
+    );
+}
+
+#[test]
+fn parliament_timed_ovn_resource_index_rebuild_is_deterministic_and_fail_atomic() {
+    let first =
+        crate::governance::parliament::tests::active_timed_ovn_reservation_attempt_fixture_v1(
+            0x51, 0x61, 27,
+        );
+    let second =
+        crate::governance::parliament::tests::active_timed_ovn_reservation_attempt_fixture_v1(
+            0x52, 0x63, 43,
+        );
+    let mut world = World::new();
+    world.parliament_attempts.insert(first.attempt().id, first);
+    world
+        .parliament_attempts
+        .insert(second.attempt().id, second);
+    world
+        .rebuild_governance_read_indexes()
+        .expect("nonoverlapping authoritative schedules rebuild");
+    let first_rebuild = world
+        .parliament_timed_ovn_resource_reservations
+        .view()
+        .iter()
+        .map(|(id, reservation)| (*id, *reservation))
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(first_rebuild.len(), 2);
+    world.parliament_timed_ovn_resource_reservations = Storage::default();
+    world
+        .rebuild_governance_read_indexes()
+        .expect("repeating the authoritative rebuild succeeds");
+    assert_eq!(
+        world
+            .parliament_timed_ovn_resource_reservations
+            .view()
+            .iter()
+            .map(|(id, reservation)| (*id, *reservation))
+            .collect::<BTreeMap<_, _>>(),
+        first_rebuild
+    );
+
+    let conflicting =
+        crate::governance::parliament::tests::active_timed_ovn_reservation_attempt_fixture_v1(
+            0x53, 0x65, 28,
+        );
+    world
+        .parliament_attempts
+        .insert(conflicting.attempt().id, conflicting);
+    let before_failed_rebuild = world
+        .parliament_timed_ovn_resource_reservations
+        .view()
+        .iter()
+        .map(|(id, reservation)| (*id, *reservation))
+        .collect::<BTreeMap<_, _>>();
+    assert!(world.rebuild_governance_read_indexes().is_err());
+    assert_eq!(
+        world
+            .parliament_timed_ovn_resource_reservations
+            .view()
+            .iter()
+            .map(|(id, reservation)| (*id, *reservation))
+            .collect::<BTreeMap<_, _>>(),
+        before_failed_rebuild,
+        "a failed restore rebuild must not publish a partial derived index"
+    );
+}
+
+#[test]
 fn parliament_timed_ovn_resource_index_tracks_only_the_active_retry() {
     let key_session_id = TleKeySessionId::new([0x56; 32]);
     let attempt =
@@ -39318,7 +39602,9 @@ fn parliament_timed_ovn_resource_index_is_snapshot_skipped_and_rebuilt() {
     let encoded = norito::json::to_json(&world).expect("serialize world snapshot");
     assert!(!encoded.contains("parliament_timed_ovn_resource_reservations"));
 
-    world.rebuild_governance_read_indexes();
+    world
+        .rebuild_governance_read_indexes()
+        .expect("empty authoritative attempts rebuild an empty reservation index");
     assert!(
         world
             .parliament_timed_ovn_resource_reservations
@@ -39326,6 +39612,45 @@ fn parliament_timed_ovn_resource_index_is_snapshot_skipped_and_rebuilt() {
             .iter()
             .next()
             .is_none()
+    );
+}
+
+#[test]
+fn global_beacon_pulse_slot_index_is_snapshot_skipped_rebuilt_and_unique() {
+    let (_key_session, pulse) = crate::beacon::signed_persisted_pulse_fixture_for_world(
+        iroha_data_model::NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB1; 32])),
+        ),
+        41,
+    );
+    let mut world = World::new();
+    world.global_beacon_pulses.insert(pulse.pulse_id, pulse);
+    world
+        .global_beacon_pulse_slots
+        .insert((pulse.network_id, pulse.height), pulse.pulse_id);
+
+    let encoded = norito::json::to_json(&world).expect("serialize world snapshot");
+    assert!(!encoded.contains("global_beacon_pulse_slots"));
+
+    world.global_beacon_pulse_slots = Storage::default();
+    world
+        .rebuild_global_beacon_pulse_slots()
+        .expect("restore rebuilds the skipped exact-slot index");
+    assert_eq!(
+        world
+            .view()
+            .global_beacon_pulse_at_slot(&pulse.network_id, pulse.height),
+        Some(&pulse)
+    );
+
+    let mut duplicate_slot = pulse;
+    duplicate_slot.pulse_id[0] ^= 1;
+    world
+        .global_beacon_pulses
+        .insert(duplicate_slot.pulse_id, duplicate_slot);
+    assert!(
+        world.rebuild_global_beacon_pulse_slots().is_err(),
+        "restore must reject two pulse records claiming one network-height slot"
     );
 }
 

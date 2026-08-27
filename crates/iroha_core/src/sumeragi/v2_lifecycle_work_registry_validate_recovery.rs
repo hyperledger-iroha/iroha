@@ -198,6 +198,15 @@ pub(in crate::sumeragi) struct LiveValidateApplyRegistryReservation<'registry> {
     child_digest: LifecycleDigest,
     work: ConcreteLifecycleWork,
 }
+/// Exclusive vacant-child reservation for a standalone released-Validate Apply.
+#[must_use = "a released-Validate Apply reservation has not crossed LedgerV1 publication"]
+pub(super) struct LiveReleasedValidateApplyRegistryReservation<'registry> {
+    registry: &'registry mut ConcreteLifecycleWorkRegistry,
+    child_address: ConcreteWorkAddress,
+    child_digest: LifecycleDigest,
+    work: ConcreteLifecycleWork,
+    reconciliation: LiveLifecycleDecisionApplyReconciliationAuthorityV1,
+}
 /// Pre-fsync Apply publication retaining the reservation and staged adapter.
 #[must_use = "a live Validate-to-Apply registry publication awaits LedgerV1 fsync"]
 pub(super) struct PreparedLiveValidateApplyRegistryPublication<'registry, 'adapter> {
@@ -1192,6 +1201,76 @@ impl LiveValidateApplyRegistryReservation<'_> {
         entry.insert(work);
     }
 }
+impl ConcreteLifecycleWorkRegistry {
+    /// Reserve one vacant standalone Apply carrier while retaining exclusive
+    /// registry ownership across the matching LedgerV1 fsync.
+    pub(super) fn prepare_released_validate_apply_reservation(
+        &mut self,
+        prepared: PreparedLiveValidateApplyRegistryWork,
+        terminal: crate::sumeragi::v2::ReleasedLifecycleValidateTerminalProofV1,
+        address: ConcreteWorkAddress,
+        digest: LifecycleDigest,
+        staged_coordinator: &LifecycleCoordinator,
+        staged_ledger: &super::ledger::LifecycleLedgerV1,
+    ) -> Result<LiveReleasedValidateApplyRegistryReservation<'_>, RegistryError> {
+        if self.entries.contains_key(&address) {
+            return Err(RegistryError::Occupied);
+        }
+        let work = prepared
+            .into_released_typed_concrete(
+                terminal,
+                address,
+                digest,
+                staged_coordinator,
+                staged_ledger,
+            )
+            .map_err(|_| RegistryError::CorruptWork)?;
+        let dispatch_key = LifecycleDecisionApplyDispatchKeyV1::new(
+            staged_coordinator.active_context,
+            address,
+            digest,
+            LifecycleDecisionApplyLineageV1::Live,
+        );
+        let reconciliation = match &work.kind {
+            ConcreteLifecycleWorkKind::DurableLiveWalApply(carrier) => carrier
+                .project_reconciliation(dispatch_key)
+                .ok_or(RegistryError::CorruptWork)?,
+            _ => return Err(RegistryError::CorruptWork),
+        };
+        Ok(LiveReleasedValidateApplyRegistryReservation {
+            registry: self,
+            child_address: address,
+            child_digest: digest,
+            work,
+            reconciliation,
+        })
+    }
+}
+impl LiveReleasedValidateApplyRegistryReservation<'_> {
+    /// Install the already-preflighted carrier after LedgerV1 fsync and return
+    /// its precomputed executor reconciliation authority.
+    pub(super) fn install_after_ledger_fsync(
+        self,
+    ) -> LiveLifecycleDecisionApplyReconciliationAuthorityV1 {
+        let Self {
+            registry,
+            child_address,
+            child_digest,
+            work,
+            reconciliation,
+        } = self;
+        assert!(!registry.entries.contains_key(&child_address));
+        assert_eq!(work.digest(), child_digest);
+        assert!(work.validates_at(child_address));
+        let std::collections::btree_map::Entry::Vacant(entry) =
+            registry.entries.entry(child_address)
+        else {
+            unreachable!("exclusive released Apply reservation kept its child vacant")
+        };
+        entry.insert(work);
+        reconciliation
+    }
+}
 impl PreparedReadyDurableValidatePersistedSignPreAdmission<'_, '_> {
     /// Project the exact post-WAL Sign child while all effect, pending, replay,
     /// and durable-body authority remains nested in this fixed join.
@@ -1382,6 +1461,7 @@ impl<'registry> ReadyDurableValidateAdapterPreviewError<'registry> {
             _failure: ReadyDurableValidateAdapterPreviewFailure::Adapter(error),
         }
     }
+
 }
 // DURABLE_VALIDATE_ASYNC_HANDOFF_DECLARATIONS_BEGIN
 /// Move-only registry authority detached from one exact durable Validate row.
@@ -1666,6 +1746,44 @@ impl ReadyValidateSuccessorV1 {
                 Some((key, *round, *subject, true))
             }
         }
+    }
+
+    /// Reconstruct the pre-publication same-row owner for refinement tests.
+    #[cfg(test)]
+    pub(in crate::sumeragi::v2_lifecycle_coordinator) fn predecessor_retransmit_identity_for_test(
+        &self,
+        attestation: AttestedReadyValidateDemand,
+    ) -> Option<(
+        LifecycleValidateDispatchKeyV1,
+        wire::ConsensusRound,
+        wire::BlockSubject,
+        bool,
+    )> {
+        if !self.exactly_matches_ready_attestation(attestation) {
+            return None;
+        }
+        let location = match &self.identity {
+            ReadyValidateSuccessorIdentityV1::PublishedValidated(location)
+            | ReadyValidateSuccessorIdentityV1::PublishedRejected(location) => location,
+            ReadyValidateSuccessorIdentityV1::SidecarWake { .. } => return None,
+        };
+        let current = attestation.dispatch_key();
+        if current.digest() != location.replacement_digest
+            || location.incumbent_digest == location.replacement_digest
+        {
+            return None;
+        }
+        let mut context = [0_u8; 32];
+        context.copy_from_slice(location.round.context_id.0.as_ref());
+        let predecessor = LifecycleValidateDispatchKeyV1::from_recovered_validate_registration(
+            LifecycleDigest::new(context),
+            location.round.height,
+            current.owner(),
+            current.lifecycle_ordinal(),
+            current.slot(),
+            location.incumbent_digest,
+        )?;
+        Some((predecessor, location.round, location.subject, true))
     }
 
     /// Borrow the exact reducer-fence wait retained by a Busy preview.

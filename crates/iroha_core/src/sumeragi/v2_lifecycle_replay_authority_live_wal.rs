@@ -89,6 +89,33 @@ impl SealedLiveWalPersistedEffectV1 {
         };
         sealed.exactly_matches_effect().then_some(sealed)
     }
+    /// Compare one still-source-only live Decision WAL seal without exposing
+    /// or consuming its affine replay authority.
+    pub(in crate::sumeragi) fn exactly_binds_pending_apply_decision(
+        &self,
+        tag: EventTag,
+        decision_round: wire::ConsensusRound,
+        proposal_round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+        execution_commitment: wire::ExecutionCommitment,
+    ) -> bool {
+        matches!(&self.pending, LiveWalPersistedPendingV1::ApplyPending)
+            && matches!(
+                &self.effect,
+                AdapterEffect::Apply {
+                    tag: effect_tag,
+                    subject: effect_subject,
+                    certificate,
+                } if *effect_tag == tag
+                    && *effect_subject == subject
+                    && certificate.phase == wire::GlobalPhase::Commit
+                    && certificate.round == decision_round
+                    && certificate.proposal_round == proposal_round
+                    && certificate.subject == subject
+                    && certificate.execution_commitment == execution_commitment
+            )
+            && self.replay.exactly_matches_persisted_effect(&self.effect)
+    }
     /// Replace the frame-derived placeholder owner of one exact vote-sign
     /// continuation with the predecessor-derived binding sealed by the Ready
     /// Validate adapter preflight.
@@ -441,7 +468,7 @@ impl SealedLiveWalPersistedEffectV1 {
     /// The work-registry Validate join is its sole production caller and keeps
     /// the receipt-bound completion private to that atomic transition.
     #[allow(clippy::result_large_err)]
-    pub(super) fn complete_exact_apply(
+    pub(in crate::sumeragi) fn complete_exact_apply(
         self,
         predecessor_effect: &AdapterEffect,
         predecessor_pending: &PendingRuntimeEffectBinding,

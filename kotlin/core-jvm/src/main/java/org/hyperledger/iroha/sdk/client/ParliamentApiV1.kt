@@ -5,6 +5,7 @@ import java.math.BigInteger
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.util.Base64
+import org.hyperledger.iroha.sdk.norito.CRC64
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
 
 /** One canonical native instruction returned by a Parliament draft route. */
@@ -44,7 +45,11 @@ data class ParliamentAttemptReadResponseV1(
     val governanceAttemptId: String,
     val currentHeight: String,
     val statePayloadHex: String,
+    /** Canonical ordered body names admitted from `required_bodies`. */
+    val requiredBodyOrder: List<String>,
     val bodyStates: List<ParliamentBodyStateProjectionV1>,
+    /** Canonical ordered body names carried by the certificate, or empty when absent. */
+    val certificateBodyOrder: List<String>,
     val publicFindingBindings: List<ParliamentPublicFindingCertificateBindingV1>,
     val raw: Map<String, Any?>,
 )
@@ -168,6 +173,113 @@ data class ParliamentTimedOvnCastingContextResponseV1(
     val archiveNorito: ByteArray,
 )
 
+/** Canonical bounded checkpoint request for the Parliament timed-OVN casting proof route. */
+class ParliamentTimedOvnCastingProofRequestV1(
+    trustedCheckpointHeight: BigInteger,
+) {
+    @JvmField
+    val trustedCheckpointHeight: BigInteger =
+        ParliamentApiV1.requireTimedOvnCastingCheckpointHeight(trustedCheckpointHeight)
+
+    /** Convenience constructor for positive signed heights. */
+    constructor(trustedCheckpointHeight: Long) : this(BigInteger.valueOf(trustedCheckpointHeight))
+
+    /** Encode the exact uncompressed, zero-padding Norito request frame. */
+    fun toNoritoBytes(): ByteArray =
+        ParliamentApiV1.timedOvnCastingProofRequestNorito(trustedCheckpointHeight)
+}
+
+/**
+ * Schema- and checksum-admitted response frame passed unchanged to the native wallet bridge.
+ *
+ * Framing admission does not establish consensus validity. Wallets must verify the page with the
+ * external network, checkpoint context, and expected ballot before accessing seed material.
+ */
+class ParliamentTimedOvnCastingProofResponseV1 internal constructor(
+    canonicalNorito: ByteArray,
+    payload: ByteArray,
+) {
+    private val canonicalNoritoBytes = canonicalNorito.copyOf()
+    private val payloadBytes = payload.copyOf()
+
+    /** Exact canonical response frame, including its Norito header. */
+    fun canonicalNorito(): ByteArray = canonicalNoritoBytes.copyOf()
+
+    /** Exact payload bytes covered by the frame CRC64-XZ checksum. */
+    fun payload(): ByteArray = payloadBytes.copyOf()
+}
+
+/** Native-authenticated promotion carried by one bounded casting-proof page. */
+class ParliamentTimedOvnCastingProofPageVerificationV1(
+    evaluatedBlockHeight: BigInteger,
+    evaluatedContextId: ByteArray,
+    /** Whether another independently fetched and verified page is required. */
+    val moreAvailable: Boolean,
+) {
+    /** Exact positive u64 height authenticated by the native finality verifier. */
+    val evaluatedBlockHeight: BigInteger =
+        ParliamentApiV1.requireTimedOvnCastingCheckpointHeight(evaluatedBlockHeight)
+    private val evaluatedContextIdBytes = evaluatedContextId.copyOf()
+
+    init {
+        require(evaluatedContextIdBytes.size == 32) {
+            "evaluatedContextId must contain exactly 32 bytes"
+        }
+        require(evaluatedContextIdBytes.any { it != 0.toByte() }) {
+            "evaluatedContextId must be nonzero"
+        }
+    }
+
+    /** Defensive copy of the authenticated `HeightContextId`. */
+    fun evaluatedContextId(): ByteArray = evaluatedContextIdBytes.copyOf()
+
+    override fun equals(other: Any?): Boolean =
+        other is ParliamentTimedOvnCastingProofPageVerificationV1 &&
+            evaluatedBlockHeight == other.evaluatedBlockHeight &&
+            evaluatedContextIdBytes.contentEquals(other.evaluatedContextIdBytes) &&
+            moreAvailable == other.moreAvailable
+
+    override fun hashCode(): Int =
+        31 * (31 * evaluatedBlockHeight.hashCode() + evaluatedContextIdBytes.contentHashCode()) +
+            moreAvailable.hashCode()
+}
+
+/** Native page verifier used by the bounded transport loop. */
+fun interface ParliamentTimedOvnCastingProofPageVerifierV1 {
+    /** Authenticate [response] against the supplied durable checkpoint. */
+    fun verify(
+        response: ParliamentTimedOvnCastingProofResponseV1,
+        trustedCheckpointHeight: BigInteger,
+        trustedCheckpointContextId: ByteArray,
+    ): ParliamentTimedOvnCastingProofPageVerificationV1
+}
+
+/** Durable checkpoint sink; completion must mean the promoted anchor is committed. */
+fun interface ParliamentTimedOvnCastingCheckpointPersisterV1 {
+    /** Persist one native-authenticated promotion before any subsequent page is requested. */
+    fun persist(
+        verification: ParliamentTimedOvnCastingProofPageVerificationV1,
+    ): java.util.concurrent.CompletableFuture<Void>
+}
+
+/** Terminal proof page plus the exact checkpoint against which native code authenticated it. */
+class ParliamentTimedOvnCastingProofTerminalV1 internal constructor(
+    /** Canonical terminal response suitable for a proof-gated native wallet operation. */
+    val response: ParliamentTimedOvnCastingProofResponseV1,
+    /** Checkpoint height supplied while authenticating [response]. */
+    val verificationAnchorHeight: BigInteger,
+    verificationAnchorContextId: ByteArray,
+    /** Native-authenticated terminal promotion. */
+    val verification: ParliamentTimedOvnCastingProofPageVerificationV1,
+    /** Total number of independently fetched and verified pages. */
+    val verifiedPageCount: Int,
+) {
+    private val verificationAnchorContextIdBytes = verificationAnchorContextId.copyOf()
+
+    /** Defensive copy of the context supplied while authenticating [response]. */
+    fun verificationAnchorContextId(): ByteArray = verificationAnchorContextIdBytes.copyOf()
+}
+
 /** Core-authorized release context available only during the inclusive Opening window. */
 data class ParliamentTleReleaseContextResponseV1(
     val currentHeight: String,
@@ -240,11 +352,35 @@ object ParliamentApiV1 {
     const val MAX_TLE_COMMITTEE_SIZE: Int = 31
     const val MAX_TIMED_OVN_CASTING_ARCHIVE_BYTES: Int = 4 * 1024 * 1024
     const val MAX_TIMED_OVN_CASTING_PROOF_RESPONSE_BYTES: Int = 8 * 1024 * 1024
+    const val MAX_TIMED_OVN_CASTING_PROOF_FINALITY_PROOFS: Int = 64
+    /** Maximum checkpoint advance authenticated by one checkpoint-inclusive finality page. */
+    const val MAX_TIMED_OVN_CASTING_PROOF_PAGE_HEIGHT_ADVANCE: Int =
+        MAX_TIMED_OVN_CASTING_PROOF_FINALITY_PROOFS - 1
+    /** Deterministic maximum number of pages admitted by one client catch-up operation. */
+    const val MAX_TIMED_OVN_CASTING_PROOF_PAGES: Int = 64
+    /** Deterministic aggregate height advance admitted by one client catch-up operation. */
+    const val MAX_TIMED_OVN_CASTING_PROOF_HEIGHT_ADVANCE: Int =
+        MAX_TIMED_OVN_CASTING_PROOF_PAGE_HEIGHT_ADVANCE * MAX_TIMED_OVN_CASTING_PROOF_PAGES
+    const val TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA: String =
+        "iroha.torii.v1.parliament.timed_ovn_casting_proof.request"
+    const val TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA: String =
+        "iroha.torii.v1.parliament.timed_ovn_casting_proof.response"
+    const val TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA_HASH_HEX: String =
+        "adccf322a5fcf43040e20bea238f55f3"
+    const val TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_HASH_HEX: String =
+        "46d29299272433b1299646bee722bd11"
+    const val TIMED_OVN_CASTING_PROOF_REQUEST_VERSION: Int = 1
+    const val TIMED_OVN_CASTING_PROOF_REQUEST_FLAGS: Int = NoritoHeader.COMPACT_LEN
+    const val TIMED_OVN_CASTING_PROOF_REQUEST_PAYLOAD_ALIGNMENT: Int = 8
+    const val TIMED_OVN_CASTING_PROOF_REQUEST_PADDING_BYTES: Int = 0
+    const val TIMED_OVN_CASTING_PROOF_REQUEST_BYTES: Int = 52
     const val TIMED_OVN_REGISTRATION_RECORD_BYTES: Int = 3_624
     const val TIMED_OVN_BALLOT_RECORD_BYTES: Int = 2_858
     /** Maximum records appended by one transition; the complete corpus may contain 1,000. */
     const val TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS: Int = 32
     const val MAX_TIMED_OVN_CORPUS_ENTRIES: Int = 1_000
+    /** Maximum retry sequence for a whole governance attempt; valid sequences are 0 through 16. */
+    const val MAX_GOVERNANCE_ATTEMPT_RETRIES: Int = 16
     const val PUBLIC_TRANSITION_DIGEST_DOMAIN: String =
         "iroha.governance.parliament.lifecycle_transition.digest.v1"
     const val AUTOMATIC_OUTCOME_DIGEST_DOMAIN: String =
@@ -322,6 +458,7 @@ object ParliamentApiV1 {
         ParliamentNoResultKindLayoutV1(4, "BallotCommitmentDeadlineExpired"),
         ParliamentNoResultKindLayoutV1(5, "BallotReleasePulseUnavailable"),
         ParliamentNoResultKindLayoutV1(6, "BallotOpeningDeadlineExpired"),
+        ParliamentNoResultKindLayoutV1(7, "SortitionRetriesExhausted"),
     )
 
     @JvmField
@@ -335,6 +472,21 @@ object ParliamentApiV1 {
         "no_result_kind",
         "no_result_height",
         "timed_ovn_progress",
+    )
+
+    /** Canonical presentation order for first-release Parliament bodies. */
+    @JvmField
+    val CANONICAL_BODY_ORDER: List<String> = listOf(
+        "rules-committee",
+        "agenda-council",
+        "interest-panel",
+        "review-panel",
+        "coordination-council",
+        "mpc-committee",
+        "fma-committee",
+        "oversight-committee",
+        "policy-jury",
+        "confirmation-jury",
     )
 
     @JvmField
@@ -430,12 +582,7 @@ object ParliamentApiV1 {
     private val ATTEMPT_FIELDS = setOf(
         "id", "proposal_content_id", "sequence", "risk_tier", "stage", "status",
     )
-    private val BODY_ORDER = listOf(
-        "rules-committee", "agenda-council", "interest-panel", "review-panel",
-        "coordination-council", "mpc-committee", "fma-committee", "oversight-committee",
-        "policy-jury", "confirmation-jury",
-    )
-    private val BODIES = BODY_ORDER.toSet()
+    private val BODIES = CANONICAL_BODY_ORDER.toSet()
     private val PRIVATE_BODIES = setOf("policy-jury", "confirmation-jury")
     private val BODY_STATUSES = setOf(
         "AwaitingSortition", "AcceptingInvitations", "RosterSealed", "Deliberating",
@@ -470,6 +617,85 @@ object ParliamentApiV1 {
             canonicalId(ballotAttemptId),
         )
 
+    /** Encode one positive u64 checkpoint height as the canonical zero-padding request frame. */
+    @JvmStatic
+    fun timedOvnCastingProofRequestNorito(trustedCheckpointHeight: BigInteger): ByteArray {
+        val height = requireTimedOvnCastingCheckpointHeight(trustedCheckpointHeight)
+        val payload = ByteArray(12)
+        // Compact-Norito struct field count, version field, then aligned u64 field.
+        payload[0] = 2
+        payload[1] = TIMED_OVN_CASTING_PROOF_REQUEST_VERSION.toByte()
+        payload[2] = 0
+        payload[3] = TIMED_OVN_CASTING_PROOF_REQUEST_PAYLOAD_ALIGNMENT.toByte()
+        for (index in 0 until 8) {
+            payload[4 + index] =
+                height.shiftRight(index * 8).and(BigInteger.valueOf(0xffL)).toByte()
+        }
+        val header = NoritoHeader(
+            decodeHex(TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA_HASH_HEX),
+            payload.size,
+            CRC64.compute(payload),
+            TIMED_OVN_CASTING_PROOF_REQUEST_FLAGS,
+            NoritoHeader.COMPRESSION_NONE,
+        )
+        return (header.encode() + payload).also { frame ->
+            check(frame.size == TIMED_OVN_CASTING_PROOF_REQUEST_BYTES)
+        }
+    }
+
+    /** Convenience overload for positive signed heights. */
+    @JvmStatic
+    fun timedOvnCastingProofRequestNorito(trustedCheckpointHeight: Long): ByteArray =
+        timedOvnCastingProofRequestNorito(BigInteger.valueOf(trustedCheckpointHeight))
+
+    /** Admit one exact, uncompressed, compact-length response frame with no header padding. */
+    @JvmStatic
+    fun parseTimedOvnCastingProofResponse(
+        bytes: ByteArray,
+    ): ParliamentTimedOvnCastingProofResponseV1 {
+        require(bytes.isNotEmpty()) { "Parliament timed-OVN casting proof response is empty" }
+        require(bytes.size <= MAX_TIMED_OVN_CASTING_PROOF_RESPONSE_BYTES) {
+            "Parliament timed-OVN casting proof response exceeds its 8 MiB bound"
+        }
+        val decoded = try {
+            NoritoHeader.decode(
+                bytes,
+                decodeHex(TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_HASH_HEX),
+            )
+        } catch (error: RuntimeException) {
+            throw IllegalArgumentException(
+                "Parliament timed-OVN casting proof response is not a valid Norito frame",
+                error,
+            )
+        }
+        require(decoded.header.compression == NoritoHeader.COMPRESSION_NONE) {
+            "Parliament timed-OVN casting proof response must use identity encoding"
+        }
+        require(decoded.header.flags == TIMED_OVN_CASTING_PROOF_REQUEST_FLAGS) {
+            "Parliament timed-OVN casting proof response has non-canonical Norito flags"
+        }
+        require(bytes.size == NoritoHeader.HEADER_LENGTH + decoded.header.payloadLength) {
+            "Parliament timed-OVN casting proof response must not contain header padding"
+        }
+        require(
+            decoded.header.encode().contentEquals(
+                bytes.copyOfRange(0, NoritoHeader.HEADER_LENGTH),
+            ),
+        ) { "Parliament timed-OVN casting proof response header is not canonical" }
+        require(decoded.payload.isNotEmpty()) {
+            "Parliament timed-OVN casting proof response payload is empty"
+        }
+        decoded.header.validateChecksum(decoded.payload)
+        return ParliamentTimedOvnCastingProofResponseV1(bytes, decoded.payload)
+    }
+
+    internal fun requireTimedOvnCastingCheckpointHeight(value: BigInteger): BigInteger {
+        require(value.signum() > 0 && value.bitLength() <= 64) {
+            "trustedCheckpointHeight must be a positive u64"
+        }
+        return value
+    }
+
     /** Replace the release-context ballot parameter after exact lowercase validation. */
     @JvmStatic
     fun tleReleaseContextReadPath(ballotAttemptId: String): String =
@@ -486,7 +712,9 @@ object ParliamentApiV1 {
     /** Build the exact V1 attempt-draft JSON envelope without reflection. */
     @JvmStatic
     fun attemptDraftRequestJson(proposal: Proposal, attemptSequence: Long): ByteArray {
-        require(attemptSequence in 0..0xffff_ffffL) { "attempt_sequence is outside u32" }
+        require(attemptSequence in 0..MAX_GOVERNANCE_ATTEMPT_RETRIES.toLong()) {
+            "attempt_sequence must be between 0 and 16"
+        }
         return encode(
             linkedMapOf(
                 "version" to VERSION,
@@ -672,6 +900,11 @@ object ParliamentApiV1 {
             requiredBodies,
             bodyStates,
         )
+        val certificateBodyOrder = if (root["certificate"] == null) {
+            emptyList()
+        } else {
+            requiredBodies.toList()
+        }
         val stateHex = canonicalHex(root["state_payload_hex"], "state_payload_hex", false)
         require(stateHex.length / 2 <= MAX_STATE_BYTES) { "state_payload_hex exceeds its bound" }
         validateStateFrame(decodeHex(stateHex))
@@ -679,7 +912,9 @@ object ParliamentApiV1 {
             attemptId,
             height,
             stateHex,
+            requiredBodies,
             bodyStates,
+            certificateBodyOrder,
             publicFindingBindings,
             root,
         )
@@ -1075,7 +1310,7 @@ object ParliamentApiV1 {
             val body = entry["body"] as? String
                 ?: throw IllegalArgumentException("$context.body must be text")
             require(body in BODIES && body !in bodies) { "$context.body is unknown or duplicated" }
-            val bodyIndex = BODY_ORDER.indexOf(body)
+            val bodyIndex = CANONICAL_BODY_ORDER.indexOf(body)
             require(bodyIndex > previousBodyIndex) {
                 "required_bodies must use strict canonical body order"
             }

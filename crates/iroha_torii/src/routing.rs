@@ -1584,7 +1584,8 @@ pub struct KaigiCallViewDto {
     /// Optional description assigned by the host.
     #[norito(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    /// Maximum allowed participants excluding the host.
+    /// Explicit participant limit excluding the host (1..=4096).
+    /// An omitted value uses the Kaigi V1 protocol maximum of 4096.
     #[norito(skip_serializing_if = "Option::is_none")]
     pub max_participants: Option<u32>,
     /// Host-selected gas rate for the call.
@@ -46811,6 +46812,7 @@ mod validation_fee_torii_ingress_tests {
                 status: GovernanceAttemptStatusV1::Active,
             },
             TEST_PARLIAMENT_POLICY_VERSION,
+            10,
             proposal_kind.effect_preimage_hash_v1(),
             expected_head,
             requirements.clone(),

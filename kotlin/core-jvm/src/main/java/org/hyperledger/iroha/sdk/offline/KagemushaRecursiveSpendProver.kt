@@ -2,6 +2,7 @@ package org.hyperledger.iroha.sdk.offline
 
 import java.net.URI
 import java.nio.charset.StandardCharsets
+import java.time.Duration
 import java.util.ArrayList
 import java.util.Collections
 import java.util.concurrent.CompletableFuture
@@ -1851,7 +1852,16 @@ class KagemushaRecursiveSpendProver private constructor() {
             baseUri: URI,
             transport: TransportExecutor,
             localSigningContext: LocalSigningContext,
-        ): ToriiClient = ToriiClient(baseUri, transport, localSigningContext)
+        ): ToriiClient = newToriiClient(baseUri, transport, localSigningContext, null)
+
+        /** Build a Kagemusha Torii client with an optional per-request timeout. */
+        @JvmStatic
+        fun newToriiClient(
+            baseUri: URI,
+            transport: TransportExecutor,
+            localSigningContext: LocalSigningContext,
+            requestTimeout: Duration?,
+        ): ToriiClient = ToriiClient(baseUri, transport, localSigningContext, requestTimeout)
 
         internal fun isExactBridgeAbi(abiVersion: Int): Boolean =
             abiVersion == REQUIRED_NATIVE_BRIDGE_ABI_VERSION
@@ -3932,7 +3942,14 @@ class KagemushaRecursiveSpendProver private constructor() {
         baseUri: URI,
         private val transport: TransportExecutor,
         private val localSigningContext: LocalSigningContext,
+        private val requestTimeout: Duration?,
     ) {
+        internal constructor(
+            baseUri: URI,
+            transport: TransportExecutor,
+            localSigningContext: LocalSigningContext,
+        ) : this(baseUri, transport, localSigningContext, null)
+
         companion object {
             const val CAPABILITY_PATH: String = "/v1/offline/readiness"
             const val TOP_UP_PATH: String = "/v1/offline/top-up"
@@ -3995,6 +4012,9 @@ class KagemushaRecursiveSpendProver private constructor() {
             require(baseUri.scheme.equals("http", true) || baseUri.scheme.equals("https", true)) {
                 "baseUri must use HTTP or HTTPS"
             }
+            require(requestTimeout == null || !requestTimeout.isNegative) {
+                "requestTimeout must be non-negative"
+            }
             this.baseUri = stripTrailingSlash(baseUri.toString())
         }
 
@@ -4004,6 +4024,7 @@ class KagemushaRecursiveSpendProver private constructor() {
                     .setMethod("GET")
                     .setUri(URI.create("$baseUri$CAPABILITY_PATH"))
                     .addHeader("Accept", JSON_MEDIA_TYPE)
+                    .setTimeout(requestTimeout)
                     .setMaximumResponseBytes(MAX_TORII_RESPONSE_BYTES.toLong())
                     .build(),
                 200,
@@ -4049,6 +4070,7 @@ class KagemushaRecursiveSpendProver private constructor() {
                 .addHeader("Accept", NORITO_MEDIA_TYPE)
                 .addHeader("Content-Type", NORITO_MEDIA_TYPE)
                 .setBody(body)
+                .setTimeout(requestTimeout)
                 .setMaximumResponseBytes(MAX_TORII_RESPONSE_BYTES.toLong())
             authHeaders.forEach { (name, value) -> builder.addHeader(name, value) }
             return execute(
@@ -4082,6 +4104,7 @@ class KagemushaRecursiveSpendProver private constructor() {
                     .setMethod("GET")
                     .setUri(URI.create("$baseUri$OPERATIONS_PATH/$id"))
                     .addHeader("Accept", NORITO_MEDIA_TYPE)
+                    .setTimeout(requestTimeout)
                     .setMaximumResponseBytes(MAX_TORII_RESPONSE_BYTES.toLong())
                     .build(),
                 200,
@@ -4102,6 +4125,7 @@ class KagemushaRecursiveSpendProver private constructor() {
                     .addHeader("Content-Type", NORITO_MEDIA_TYPE)
                     .addHeader("Idempotency-Key", id)
                     .setBody(request)
+                    .setTimeout(requestTimeout)
                     .setMaximumResponseBytes(MAX_TORII_RESPONSE_BYTES.toLong())
                     .build(),
                 202,

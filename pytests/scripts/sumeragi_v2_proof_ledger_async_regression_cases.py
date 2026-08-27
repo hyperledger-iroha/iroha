@@ -1735,18 +1735,30 @@ def test_lifecycle_decision_apply_corridor_semantics_survive_effect_item_reseal(
             "lifecycle_decision_apply_dispatch_available",
             "&& self.finality_completion.is_none()",
             "&& self.finality_completion.is_some()",
-            "freeze every executor mutation owner and the runtime barrier",
+            "freeze every executor mutation owner and drain runtime ingress",
+        ),
+        (
+            "lifecycle_decision_apply_dispatch_available",
+            "&& self.runtime.queued_commands() == 0",
+            "&& true",
+            "freeze every executor mutation owner and drain runtime ingress",
         ),
         (
             "prepare_lifecycle_decision_apply_executor_dispatch",
             "prepared.exactly_matches_pending_kura_recovery(",
             "prepared.matches_pending_kura_recovery(",
-            "bind its exact stage, context, ordinal, Decision, and receipt",
+            "bind its exact stage, context, Decision, and receipt",
         ),
         (
             "prepare_lifecycle_decision_apply_completion",
             "|| !lineage_owner_is_exact",
             "|| lineage_owner_is_exact",
+            "reject every competing executor owner",
+        ),
+        (
+            "prepare_lifecycle_decision_apply_completion",
+            "|| self.runtime.queued_commands() != 0",
+            "|| false",
             "reject every competing executor owner",
         ),
         (
@@ -1788,7 +1800,7 @@ def test_lifecycle_decision_apply_corridor_semantics_survive_effect_item_reseal(
             "ready_to_finish",
             "&& self.live_lifecycle_decision_apply.is_none()",
             "&& self.live_lifecycle_decision_apply.is_some()",
-            "exclude every live Apply or preliminary Validate owner",
+            "ready_to_finish must retain the runner Decision-cleanup and lifecycle ownership fences",
         ),
     )
 

@@ -116,6 +116,18 @@ paths = {
         "java/iroha_android/android/src/main/java/org/hyperledger/iroha/android/offline/"
         "KagemushaAndroidKeyMint.java"
     ),
+    "kotlin_android_keymint": Path(
+        "kotlin/client-android/src/main/java/org/hyperledger/iroha/sdk/offline/"
+        "KagemushaAndroidKeyMint.kt"
+    ),
+    "kotlin_android_keymint_test": Path(
+        "kotlin/client-android/src/test/java/org/hyperledger/iroha/sdk/offline/"
+        "KagemushaAndroidKeyMintTest.kt"
+    ),
+    "kotlin_android_keymint_device_test": Path(
+        "kotlin/client-android/src/androidTest/java/org/hyperledger/iroha/sdk/offline/"
+        "KagemushaAndroidKeyMintInstrumentedTest.kt"
+    ),
     "xcframework_build": Path("scripts/build_norito_xcframework.sh"),
     "mobile_check": Path("scripts/check_mobile_sdk_artifacts.sh"),
     "mobile_check_test": Path("scripts/check_mobile_sdk_artifacts_test.sh"),
@@ -603,6 +615,49 @@ if "KeyProperties.DIGEST_NONE" in texts["android_keymint"]:
 if "PREFERRED" in texts["android_keymint"]:
     errors.append(
         f"{paths['android_keymint']}: physical KeyMint path must not silently prefer/downgrade StrongBox"
+    )
+
+for needle in (
+    "PackageManager.FEATURE_KEYSTORE_SINGLE_USE_KEY",
+    "KeyProperties.KEY_ALGORITHM_EC",
+    'const val CURVE_NAME: String = "secp256r1"',
+    "KeyProperties.PURPOSE_SIGN",
+    "KeyProperties.DIGEST_SHA256",
+    ".setAttestationChallenge(request.challenge())",
+    ".setMaxUsageCount(MAX_USAGE_COUNT)",
+    'const val MAX_USAGE_COUNT: Int = 1',
+    'const val SIGNATURE_ALGORITHM: String = "SHA256withECDSA"',
+    "StrongBoxPolicy.REQUIRED",
+    "builder.setIsStrongBoxBacked(true)",
+    "keyInfo.isInsideSecureHardware",
+    "keyInfo.remainingUsageCount != MAX_USAGE_COUNT",
+    "getCertificateChain(request.alias())",
+    "DeviceAttestationRegistration.androidPreKeyGenerationChallengeHash",
+    "MessageDigest.isEqual(generatedPublicKey, attestedPublicKey)",
+    "KagemushaP256Codec.rawLowSFromStrictDer(signatureDer)",
+):
+    require("kotlin_android_keymint", needle)
+for needle in (
+    "class KagemushaAndroidKeyMintTest",
+    "high-level registration derives and uses the exact pre-key challenge",
+    "generates exact single-use P256 profile and signs preparation bytes",
+    "StrongBox is explicit required and never downgrades",
+):
+    require("kotlin_android_keymint_test", needle)
+for needle in (
+    "class KagemushaAndroidKeyMintInstrumentedTest",
+    "PackageManager.FEATURE_KEYSTORE_SINGLE_USE_KEY",
+    "generateRegistrationMaterial",
+    "keyMint.delete(material)",
+):
+    require("kotlin_android_keymint_device_test", needle)
+if "KeyProperties.DIGEST_NONE" in texts["kotlin_android_keymint"]:
+    errors.append(
+        f"{paths['kotlin_android_keymint']}: physical KeyMint path must not use DIGEST_NONE"
+    )
+if "PREFERRED" in texts["kotlin_android_keymint"]:
+    errors.append(
+        f"{paths['kotlin_android_keymint']}: physical KeyMint path must not silently prefer/downgrade StrongBox"
     )
 
 swift_v4_types = (
@@ -1639,6 +1694,15 @@ if mode == "--self-test":
             ".setMaxUsageCount(2);",
         ),
         "exact sign-only P-256/SHA-256/challenge/single-use KeyMint generation profile",
+    )
+    run_negative(
+        "Kotlin Android KeyMint cannot relax the hardware usage count",
+        lambda fixture: replace_once(
+            fixture / paths["kotlin_android_keymint"],
+            ".setMaxUsageCount(MAX_USAGE_COUNT)",
+            ".setMaxUsageCount(2)",
+        ),
+        "missing '.setMaxUsageCount(MAX_USAGE_COUNT)'",
     )
     run_negative(
         "required bridge symbol order drift is rejected",

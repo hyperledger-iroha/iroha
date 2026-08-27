@@ -1221,6 +1221,20 @@ fn stale_validation_completion_uses_the_current_tag_when_decision_arrives_first(
         adapter.pending_live_decision_apply.is_some(),
         "a decided Durable body must retain its WAL seal for the Ready Validate join"
     );
+    assert!(adapter.has_exact_pending_live_decision_apply(
+        current_tag,
+        decision.round,
+        decision.proposal_round,
+        decision.subject,
+        decision.execution_commitment,
+    ));
+    assert!(!adapter.has_exact_pending_live_decision_apply(
+        stale_tag,
+        decision.round,
+        decision.proposal_round,
+        decision.subject,
+        decision.execution_commitment,
+    ));
 
     let DirectValidationSucceededPreparation::Apply(preview) = adapter
         .prepare_direct_validation_succeeded(
@@ -1245,6 +1259,115 @@ fn stale_validation_completion_uses_the_current_tag_when_decision_arrives_first(
             certificate,
         } if *tag == current_tag && *subject == manifest.subject && certificate == &decision
     ));
+}
+
+#[test]
+fn released_lifecycle_validated_marker_stages_current_decision_apply_and_consumes_wal_seal() {
+    let directory = TempDir::new().expect("temporary released-validation directory");
+    let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+    assert!(startup.is_empty());
+    let (_stale_tag, manifest, durable, validated) =
+        advance_direct_validation_fixture_to_durable(&mut adapter, 0xB5);
+    let core_round = reducer::Round::new(manifest.round.height, manifest.round.view);
+    let core_subject = reducer::Subject::new(Hash::new(manifest.subject.encode()).into());
+    let current_tag = advance_direct_validation_fixture_to_next_view(
+        &mut adapter,
+        &manifest,
+        &durable,
+        validated.execution_commitment(),
+        0xB5,
+    );
+    assert_eq!(
+        adapter.reducer.body_state(core_round, core_subject),
+        reducer::BodyState::Durable
+    );
+
+    let decision = wire::QuorumCertificate {
+        round: manifest.round,
+        proposal_round: manifest.round,
+        phase: wire::GlobalPhase::Commit,
+        subject: manifest.subject,
+        execution_commitment: validated.execution_commitment(),
+        signers: vec![0, 1, 2],
+        aggregate_signature: vec![0xB5; 96],
+    };
+    let decided = adapter
+        .receive_authenticated(AuthenticatedConsensusMessage::for_test(
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+                decision.clone(),
+            )),
+        ))
+        .expect("install the exact Decision before released validation publication");
+    assert!(
+        decided.effects().is_empty(),
+        "a Decision over the Durable body must await its released Validate completion"
+    );
+    assert!(
+        adapter.pending_live_decision_apply.is_some(),
+        "the persisted Decision must retain its exact Apply WAL seal"
+    );
+    let wal_records_before = adapter.wal.recovered_records().len();
+
+    let validate_effect = AdapterEffect::ValidateBody {
+        tag: current_tag,
+        round: manifest.round,
+        subject: manifest.subject,
+    };
+    let certified_fetch = AdapterEffect::FetchBody {
+        tag: current_tag,
+        round: decision.proposal_round,
+        subject: decision.subject,
+        manifest: Some(manifest.clone()),
+        certified_sources: Vec::new(),
+        certificate: Some(decision.clone()),
+    };
+    let validate_ownership = bind_adapter_effect_batch_ownership(
+        core::slice::from_ref(&certified_fetch),
+        vec![
+            RuntimeEffectOwnership::fresh_for_test_with_semantic_identity(
+                current_tag,
+                0xB5_01,
+                b"released validation current Commit Fetch",
+            ),
+        ],
+    )
+    .expect("bind the current Commit Fetch owner")
+    .pop()
+    .expect("one current Commit Fetch owner")
+    .rebind_as_inherited_adapter_effect(&validate_effect)
+    .expect("carry current Commit authority into the released Validate");
+    assert!(validate_ownership.binds_durable_decision_authority(
+        decision.round,
+        decision.proposal_round,
+        decision.subject,
+        decision.execution_commitment,
+    ));
+    let validate_pending = validate_ownership
+        .exact_pending_adapter_effect_binding(&validate_effect)
+        .expect("the released Validate retains one exact pending binding");
+
+    let marker = DeferredReleasedLifecycleValidatedMarkerV1::for_test(
+        current_tag,
+        &manifest,
+        &durable,
+        &validated,
+        &decision,
+        validate_effect.clone(),
+        validate_pending,
+        0xB5_00,
+    )
+    .expect("seal the exact released lifecycle validation marker");
+    let prepared = marker
+        .prepare_apply(&mut adapter)
+        .unwrap_or_else(|(_, error)| panic!("prepare released validation Apply: {error}"));
+    assert!(prepared.validates_staged_apply_for_test(&decision, &validated));
+    drop(prepared);
+    assert_eq!(
+        adapter.wal.recovered_records().len(),
+        wal_records_before,
+        "cached validation cannot append a second Decision record"
+    );
+    assert!(!adapter.fail_closed);
 }
 
 #[test]

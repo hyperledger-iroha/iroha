@@ -2336,6 +2336,16 @@ impl PendingRuntimeEffectFingerprintV1 {
     pub(crate) const fn candidate_statement(&self) -> Option<RuntimeCandidateSemanticStatement> {
         self.candidate_statement
     }
+
+    /// Borrow the immutable causal key retained by this comparison-only owner.
+    pub(in crate::sumeragi) const fn causal_lifecycle_key(&self) -> &iroha_crypto::Hash {
+        &self.causal_lifecycle_key
+    }
+
+    /// Borrow the physical effect identity retained at lifecycle publication.
+    pub(in crate::sumeragi) const fn exact_effect_identity(&self) -> &iroha_crypto::Hash {
+        &self.effect_identity
+    }
 }
 /// Move-only restart successor derived from one exact recovered WAL vote.
 ///
@@ -2967,6 +2977,29 @@ impl PendingRuntimeEffectBinding {
         effect: &AdapterEffect,
     ) -> Option<PendingRuntimeEffectFingerprintV1> {
         if !matches!(effect, AdapterEffect::StoreBody { .. }) || !self.validate_exact(effect) {
+            return None;
+        }
+        Some(PendingRuntimeEffectFingerprintV1 {
+            causal_lifecycle_key: self.causal_lifecycle_key,
+            effect_kind: self.effect_kind,
+            effect_identity: self.effect_identity,
+            candidate_kind: self.candidate_kind,
+            candidate_statement: self.candidate_statement,
+            candidate_semantic_identity: self.candidate_semantic_identity,
+            projection_hash: self.projection_hash,
+        })
+    }
+
+    /// Project a comparison-only fingerprint for one exact Validate binding.
+    ///
+    /// This has no admission or execution surface. It is retained only to
+    /// authenticate the terminal `AdvancedNoSuccessor` row after its concrete
+    /// Validate carrier has completed.
+    pub(in crate::sumeragi) fn published_validate_retry_fingerprint(
+        &self,
+        effect: &AdapterEffect,
+    ) -> Option<PendingRuntimeEffectFingerprintV1> {
+        if !matches!(effect, AdapterEffect::ValidateBody { .. }) || !self.validate_exact(effect) {
             return None;
         }
         Some(PendingRuntimeEffectFingerprintV1 {
@@ -10732,6 +10765,25 @@ pub(crate) struct SerializedV2Runtime<D: RuntimeDriver = SumeragiV2Adapter> {
     fail_closed: bool,
     fail_closed_reason: Option<String>,
 }
+impl SerializedV2Runtime<SumeragiV2Adapter> {
+    /// Borrow the production adapter's exact deferred Decision-WAL Apply source.
+    pub(crate) fn has_exact_pending_live_decision_apply(
+        &self,
+        tag: EventTag,
+        decision_round: wire::ConsensusRound,
+        proposal_round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+        execution_commitment: wire::ExecutionCommitment,
+    ) -> bool {
+        self.driver.has_exact_pending_live_decision_apply(
+            tag,
+            decision_round,
+            proposal_round,
+            subject,
+            execution_commitment,
+        )
+    }
+}
 impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     fn latch_fail_closed(&mut self, reason: impl Into<String>) {
         if self.fail_closed_reason.is_none() {
@@ -15260,6 +15312,36 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             return Err((marker, AdapterError::RecoveredPendingKuraApplyMismatch));
         }
         marker.prepare_apply(&mut self.driver, predecessor, ownership)
+    }
+
+    /// Stage one released live lifecycle validation and its exact Apply child.
+    ///
+    /// Stable queued ingress is inert. Live clocks must already be armed, and
+    /// every active runtime ownership transfer must have left the serialized
+    /// shell before this cached fsynced result may re-enter the reducer.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn prepare_released_lifecycle_validated_apply(
+        &mut self,
+        marker: super::v2::DeferredReleasedLifecycleValidatedMarkerV1,
+    ) -> Result<
+        super::v2::PreparedReleasedLifecycleValidatedApplyV1<'_>,
+        (
+            super::v2::DeferredReleasedLifecycleValidatedMarkerV1,
+            AdapterError,
+        ),
+    > {
+        if self.fail_closed
+            || !self.clocks_armed
+            || self.pending_effect_ownership.is_some()
+            || self.last_scheduler_ownership.is_some()
+            || !self.pending_leader_wire_terminals.is_empty()
+        {
+            return Err((
+                marker,
+                AdapterError::ReleasedLifecycleValidatedApplyMismatch,
+            ));
+        }
+        marker.prepare_apply(&mut self.driver)
     }
 
     /// Freeze the serialized shell around one ordinary Fetch-to-Store preview.

@@ -100,10 +100,10 @@ const ROUTE_CHECKS: &[(&str, RouteCheckMethod, &str, &[u16])] = &[
         &[400],
     ),
     (
-        "retired_transaction_status_alias",
+        "offline_capability",
         RouteCheckMethod::Get,
-        "/v1/transactions/status",
-        &[404],
+        "/v1/offline/readiness",
+        &[200],
     ),
     (
         "sccp_capabilities",
@@ -402,9 +402,6 @@ pub struct WriteCanary {
     /// Public Torii root URL.
     #[arg(long, default_value = DEFAULT_PUBLIC_ROOT)]
     pub public_root: String,
-    /// Prefix used for the authorization-bound account alias.
-    #[arg(long, default_value = DEFAULT_ALIAS_PREFIX)]
-    pub alias_prefix: String,
     /// Independently trusted faucet authority; required for the faucet child.
     #[arg(long, required_if_eq("operation", "faucet"))]
     pub faucet_authority: Option<String>,
@@ -417,9 +414,6 @@ pub struct WriteCanary {
     /// Owner-only onboarding token; required only while preparing or submitting the envelope.
     #[arg(long, value_name = "PATH")]
     pub onboarding_token_file: Option<PathBuf>,
-    /// Use the signer from the loaded client config; ephemeral canary identities are forbidden.
-    #[arg(long, required = true)]
-    pub use_config_signer: bool,
     /// Exact ordered child operation; each invocation handles one transaction only.
     #[arg(long, value_enum)]
     pub operation: WriteCanaryOperation,
@@ -2021,6 +2015,7 @@ fn run_doctor(public_root: &str) -> Result<Value> {
             match *name {
                 "status" => validate_public_status(result.body.as_ref()).err(),
                 "time_now" => validate_time_snapshot(result.body.as_ref()).err(),
+                "offline_capability" => validate_offline_capability(result.body.as_ref()).err(),
                 _ => None,
             }
         } else {
@@ -2722,9 +2717,6 @@ enum PreparedRecoveryClassification {
 }
 
 fn run_write_canary_exact<C: RunContext>(context: &mut C, args: &WriteCanary) -> Result<Value> {
-    if !args.use_config_signer {
-        eyre::bail!("exact prepared write-canary operations require --use-config-signer");
-    }
     ensure_canonical_taira_client_identity(context.config())?;
     let _guard = ChainDiscriminantGuard::enter(DEFAULT_CHAIN_DISCRIMINANT);
     let public_root = normalize_root_url(&args.public_root)?;
@@ -3195,7 +3187,7 @@ fn validate_prepared_operation(
     let transaction = match operation {
         PreparedTransactionOperationV1::OnboardingPrepared(prepared) => {
             let expected_alias = build_alias(
-                &args.alias_prefix,
+                DEFAULT_ALIAS_PREFIX,
                 signer.key_pair.public_key(),
                 TAIRA_CANARY_ALIAS_SCOPE,
             )?;
@@ -3220,7 +3212,7 @@ fn validate_prepared_operation(
         }
         PreparedTransactionOperationV1::OnboardingProofRequired(proof_required) => {
             let expected_alias = build_alias(
-                &args.alias_prefix,
+                DEFAULT_ALIAS_PREFIX,
                 signer.key_pair.public_key(),
                 TAIRA_CANARY_ALIAS_SCOPE,
             )?;
@@ -3942,7 +3934,7 @@ fn prepare_onboarding_operation(
     let canary_config = write_canary_config(config, public_root, &signer)?;
     let client = IrohaClient::new(canary_config.clone());
     let alias = build_alias(
-        &args.alias_prefix,
+        DEFAULT_ALIAS_PREFIX,
         signer.key_pair.public_key(),
         TAIRA_CANARY_ALIAS_SCOPE,
     )?;
@@ -4060,7 +4052,7 @@ fn submit_server_prepared_operation(
             let token = read_onboarding_token_file(args.require_onboarding_token()?)?;
             let request = AccountOnboardingPlanRequestV1::try_new(
                 build_alias(
-                    &args.alias_prefix,
+                    DEFAULT_ALIAS_PREFIX,
                     signer.key_pair.public_key(),
                     TAIRA_CANARY_ALIAS_SCOPE,
                 )?,
@@ -4585,6 +4577,44 @@ fn validate_time_snapshot(snapshot: Option<&Value>) -> Result<(), String> {
         {
             return Err(format!("/v1/time/now health field `{field}` is not true"));
         }
+    }
+    Ok(())
+}
+
+fn validate_offline_capability(capability: Option<&Value>) -> Result<(), String> {
+    let capability = capability
+        .cloned()
+        .ok_or_else(|| "/v1/offline/readiness returned no JSON body".to_owned())?;
+    let capability: iroha::data_model::offline::OfflineStatus = json::from_value(capability)
+        .map_err(|error| {
+            format!("/v1/offline/readiness is not exact OfflineStatus JSON: {error}")
+        })?;
+    if capability.cash_handoff_capability
+        != iroha::data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1
+    {
+        return Err(
+            "/v1/offline/readiness does not advertise the exact cash_handoff_v1 contract"
+                .to_owned(),
+        );
+    }
+    if capability.required_bridge_abi_version
+        != iroha::data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4
+    {
+        return Err(
+            "/v1/offline/readiness does not require the exact Kagemusha bridge ABI 23".to_owned(),
+        );
+    }
+    if capability.max_hops != iroha::data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2
+    {
+        return Err(
+            "/v1/offline/readiness does not advertise the exact eight-hop bound".to_owned(),
+        );
+    }
+    if !capability.ready {
+        return Err(
+            "/v1/offline/readiness reports the universally compiled Kagemusha capability unavailable"
+                .to_owned(),
+        );
     }
     Ok(())
 }
@@ -6096,7 +6126,6 @@ mod tests {
             key,
             "--execution-expires-at-unix-ms".to_owned(),
             u64::MAX.to_string(),
-            "--use-config-signer".to_owned(),
             "--prepare-envelope".to_owned(),
             "--prepared-output-fd".to_owned(),
             "3".to_owned(),
@@ -6113,7 +6142,12 @@ mod tests {
             PreparedEnvelopeAction::Prepare(3)
         );
 
-        for retired in ["--recover-only", "--write-config"] {
+        for retired in [
+            "--recover-only",
+            "--write-config",
+            "--alias-prefix",
+            "--use-config-signer",
+        ] {
             let error = TestTairaCli::try_parse_from(["taira-test", "write-canary", retired])
                 .expect_err("retired one-shot flags must fail closed");
             assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
@@ -6505,12 +6539,10 @@ mod tests {
         );
         WriteCanary {
             public_root: DEFAULT_PUBLIC_ROOT.to_owned(),
-            alias_prefix: DEFAULT_ALIAS_PREFIX.to_owned(),
             faucet_authority: Some(faucet_authority.to_string()),
             faucet_asset_id: Some(DEFAULT_GAS_ASSET_ID.to_owned()),
             faucet_amount: Some("25000".to_owned()),
             onboarding_token_file: None,
-            use_config_signer: true,
             operation,
             authorization_sha256: "ab".repeat(32),
             authorization_nonce,
@@ -6816,7 +6848,15 @@ mod tests {
             ("GET", "/v1/pipeline/transactions/status") => {
                 MockResponse::json(400, norito::json!({"error": "missing transaction hash"}))
             }
-            ("GET", "/v1/transactions/status") => MockResponse::text(404, "not found"),
+            ("GET", "/v1/offline/readiness") => MockResponse::json(
+                200,
+                norito::json!({
+                    "cash_handoff_capability": "cash_handoff_v1",
+                    "required_bridge_abi_version": 23,
+                    "max_hops": 8,
+                    "ready": true
+                }),
+            ),
             ("POST", "/v1/musubi/queries/ordered-prefix") => MockResponse::json(
                 401,
                 norito::json!({
@@ -7504,10 +7544,10 @@ mod tests {
                 && path_only(&request.path) == "/v1/pipeline/transactions/status"
         }));
         assert!(requests.iter().any(|request| {
-            request.method == "GET" && path_only(&request.path) == "/v1/transactions/status"
+            request.method == "GET" && path_only(&request.path) == "/v1/time/now"
         }));
         assert!(requests.iter().any(|request| {
-            request.method == "GET" && path_only(&request.path) == "/v1/time/now"
+            request.method == "GET" && path_only(&request.path) == "/v1/offline/readiness"
         }));
         assert!(requests.iter().any(|request| {
             request.method == "POST"
@@ -7697,6 +7737,38 @@ mod tests {
             );
         }
         assert!(validate_time_snapshot(None).is_err());
+    }
+    #[test]
+    fn offline_capability_requires_exact_universal_kagemusha_contract() {
+        let canonical = norito::json!({
+            "cash_handoff_capability": "cash_handoff_v1",
+            "required_bridge_abi_version": 23,
+            "max_hops": 8,
+            "ready": true
+        });
+        validate_offline_capability(Some(&canonical)).expect("canonical capability");
+
+        for (field, replacement) in [
+            ("cash_handoff_capability", Value::from("legacy")),
+            ("required_bridge_abi_version", Value::from(22_u64)),
+            ("max_hops", Value::from(7_u64)),
+            ("ready", Value::Bool(false)),
+        ] {
+            let mut hostile = canonical.clone();
+            hostile
+                .as_object_mut()
+                .expect("capability fixture is an object")
+                .insert(field.to_owned(), replacement);
+            assert!(validate_offline_capability(Some(&hostile)).is_err());
+        }
+
+        let mut expanded = canonical;
+        expanded
+            .as_object_mut()
+            .expect("capability fixture is an object")
+            .insert("release_ready".to_owned(), Value::Bool(true));
+        assert!(validate_offline_capability(Some(&expanded)).is_err());
+        assert!(validate_offline_capability(None).is_err());
     }
     #[test]
     fn write_canary_exit_gate_fails_closed() {

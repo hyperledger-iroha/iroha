@@ -5,6 +5,8 @@ from __future__ import annotations
 import base64
 import copy
 import hashlib
+import json
+from pathlib import Path
 from typing import Any, List, Optional
 
 import iroha_torii_client.parliament_api as parliament_api_module
@@ -13,9 +15,17 @@ import requests
 from client_test_support import CANONICAL_OWNER
 from iroha_torii_client import (
     PARLIAMENT_ATTEMPT_CREATE_WIRE_ID_V1,
+    PARLIAMENT_GOVERNANCE_ATTEMPT_SEQUENCE_MAX_V1,
     PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1,
+    PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_BYTES_V1,
+    PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_FLAGS_V1,
+    PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_PADDING_BYTES_V1,
+    PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_PAYLOAD_ALIGNMENT_V1,
+    PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA_HASH_HEX_V1,
     PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA_V1,
+    PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_HASH_HEX_V1,
     PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_V1,
+    PARLIAMENT_TIMED_OVN_CASTING_PROOF_VERSION_V1,
     PARLIAMENT_TRANSITION_SUBMIT_WIRE_ID_V1,
     GovernanceCapabilitiesV1,
     ParliamentAttemptDraftResponseV1,
@@ -26,6 +36,7 @@ from iroha_torii_client import (
     ParliamentTransitionDraftResponseV1,
     ToriiCanonicalRequestAuth,
     ToriiClient,
+    encode_parliament_timed_ovn_casting_proof_request_v1,
 )
 from iroha_torii_client.norito_frame import (
     schema_hash_for_type_name,
@@ -86,6 +97,7 @@ def _frame(
     schema: str = "test.opaque.v1",
     *,
     padding: int = 0,
+    flags: int = 0,
 ) -> bytes:
     return b"".join(
         (
@@ -95,7 +107,7 @@ def _frame(
             b"\x00",
             len(payload).to_bytes(8, "little"),
             _crc64_xz(payload).to_bytes(8, "little"),
-            b"\x00",
+            flags.to_bytes(1, "little"),
             bytes(padding),
             payload,
         )
@@ -149,6 +161,27 @@ def _runtime_upgrade_proposal(start_height: int, end_height: int) -> dict[str, A
                 "provenance": [],
             }
         },
+    }
+
+
+def _sortition_request(
+    *,
+    body: str = "rules-committee",
+    request_id: str = "88" * 32,
+    election_attempt_id: str = "77" * 32,
+    candidate_count: int = 1,
+) -> dict[str, Any]:
+    return {
+        "id": request_id,
+        "governance_attempt_id": ATTEMPT_ID,
+        "body_election_attempt_id": election_attempt_id,
+        "body": body,
+        "candidate_root": [0x31] * 32,
+        "candidate_count": candidate_count,
+        "target_seats": 1,
+        "request_height": 10,
+        "pulse_height": 20,
+        "beacon_session_id": "99" * 32,
     }
 
 
@@ -519,13 +552,10 @@ def _partial_release() -> dict[str, Any]:
 
 def test_all_canonical_routes_are_authenticated_bounded_and_bound() -> None:
     session = RecordingSession()
-    request_frame = _frame(
-        b"request",
-        PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA_V1,
-    )
     response_frame = _frame(
         b"response",
         PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_V1,
+        flags=PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_FLAGS_V1,
     )
     transition_digest = bytes([0xE1]) * 32
     for response in (
@@ -581,7 +611,7 @@ def test_all_canonical_routes_are_authenticated_bounded_and_bound() -> None:
     assert isinstance(
         client.draft_parliament_attempt_v1(
             _proposal(),
-            0,
+            PARLIAMENT_GOVERNANCE_ATTEMPT_SEQUENCE_MAX_V1,
             expected_proposal_content_id=PROPOSAL_ID,
             expected_governance_attempt_id=ATTEMPT_ID,
             canonical_auth=auth,
@@ -598,7 +628,7 @@ def test_all_canonical_routes_are_authenticated_bounded_and_bound() -> None:
     )
     assert (
         client.get_parliament_timed_ovn_casting_proof_page_v1(
-            BALLOT_ID, request_frame, canonical_auth=auth
+            BALLOT_ID, 17, canonical_auth=auth
         )
         == response_frame
     )
@@ -636,9 +666,13 @@ def test_all_canonical_routes_are_authenticated_bounded_and_bound() -> None:
     assert partial_call["data"] is None
     assert "Content-Type" not in partial_call["headers"]
     casting_call = session.calls[4]
-    assert casting_call["data"] == request_frame
+    assert casting_call["data"] == encode_parliament_timed_ovn_casting_proof_request_v1(17)
     assert casting_call["headers"]["Content-Type"] == "application/x-norito"
     assert casting_call["headers"]["Accept"] == "application/x-norito"
+    attempt_call = session.calls[1]
+    assert json.loads(attempt_call["data"].decode("utf-8"))["attempt_sequence"] == (
+        PARLIAMENT_GOVERNANCE_ATTEMPT_SEQUENCE_MAX_V1
+    )
 
 
 @pytest.mark.parametrize("identifier", ["0" * 64, "AA" * 32, "11" * 31, "not-an-id"])
@@ -691,17 +725,22 @@ def test_strict_json_rejects_duplicates_media_type_and_size() -> None:
 def test_casting_proof_requires_exact_schema_frames() -> None:
     session = RecordingSession()
     client = ToriiClient("https://node.test", session=session)
-    with pytest.raises(ValueError, match="schema hash"):
-        client.get_parliament_timed_ovn_casting_proof_page_v1(
-            BALLOT_ID, _frame(b"wrong", "wrong.schema"), canonical_auth=_auth()
-        )
+    for invalid_height in (0, -1, 1 << 64, True, "17"):
+        with pytest.raises((TypeError, ValueError), match="trusted_checkpoint_height"):
+            client.get_parliament_timed_ovn_casting_proof_page_v1(
+                BALLOT_ID, invalid_height, canonical_auth=_auth()
+            )
     assert session.calls == []
 
     bad_response = RecordingSession()
     bad_response.queue(
         StubResponse(
             200,
-            raw=_frame(b"wrong response", "wrong.response.schema"),
+            raw=_frame(
+                b"wrong response",
+                "wrong.response.schema",
+                flags=PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_FLAGS_V1,
+            ),
             headers={"Content-Type": "application/x-norito"},
         )
     )
@@ -709,26 +748,118 @@ def test_casting_proof_requires_exact_schema_frames() -> None:
         ToriiClient(
             "https://node.test", session=bad_response
         ).get_parliament_timed_ovn_casting_proof_page_v1(
-            BALLOT_ID,
-            _frame(b"request", PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA_V1),
-            canonical_auth=_auth(),
+            BALLOT_ID, 17, canonical_auth=_auth()
         )
     assert len(bad_response.calls) == 1
 
     padded = RecordingSession()
+    padded.queue(
+        StubResponse(
+            200,
+            raw=_frame(
+                b"response",
+                PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_V1,
+                padding=1,
+                flags=PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_FLAGS_V1,
+            ),
+            headers={"Content-Type": "application/x-norito"},
+        )
+    )
     with pytest.raises(ValueError, match="uses 1 bytes of alignment padding"):
         ToriiClient(
             "https://node.test", session=padded
         ).get_parliament_timed_ovn_casting_proof_page_v1(
-            BALLOT_ID,
-            _frame(
-                b"request",
-                PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA_V1,
-                padding=1,
-            ),
-            canonical_auth=_auth(),
+            BALLOT_ID, 17, canonical_auth=_auth()
         )
-    assert padded.calls == []
+    assert len(padded.calls) == 1
+
+    wrong_flags = RecordingSession()
+    wrong_flags.queue(
+        StubResponse(
+            200,
+            raw=_frame(
+                b"response",
+                PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_V1,
+            ),
+            headers={"Content-Type": "application/x-norito"},
+        )
+    )
+    with pytest.raises(ValueError, match="expected 0x02"):
+        ToriiClient(
+            "https://node.test", session=wrong_flags
+        ).get_parliament_timed_ovn_casting_proof_page_v1(
+            BALLOT_ID, 17, canonical_auth=_auth()
+        )
+    assert len(wrong_flags.calls) == 1
+
+
+def test_casting_proof_request_matches_shared_rust_golden() -> None:
+    fixture_path = (
+        Path(__file__).resolve().parents[3]
+        / "fixtures"
+        / "governance"
+        / "parliament_api_v1.json"
+    )
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    wallet = fixture["timed_ovn_native_wallet"]
+    golden = wallet["casting_proof_request_golden"]
+
+    assert wallet["casting_proof_request_schema_hash_hex"] == (
+        PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA_HASH_HEX_V1
+    )
+    assert wallet["casting_proof_response_schema_hash_hex"] == (
+        PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_HASH_HEX_V1
+    )
+    assert schema_hash_for_type_name(
+        PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA_V1
+    ).hex() == PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA_HASH_HEX_V1
+    assert schema_hash_for_type_name(
+        PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_V1
+    ).hex() == PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_HASH_HEX_V1
+    assert wallet["casting_proof_request_version"] == (
+        PARLIAMENT_TIMED_OVN_CASTING_PROOF_VERSION_V1
+    )
+    assert wallet["casting_proof_request_flags"] == (
+        PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_FLAGS_V1
+    )
+    assert wallet["casting_proof_request_payload_alignment"] == (
+        PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_PAYLOAD_ALIGNMENT_V1
+    )
+    assert wallet["casting_proof_request_padding_bytes"] == (
+        PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_PADDING_BYTES_V1
+    )
+    request = encode_parliament_timed_ovn_casting_proof_request_v1(
+        golden["trusted_checkpoint_height"]
+    )
+    assert request.hex() == golden["frame_hex"]
+    assert request[40:].hex() == golden["payload_hex"]
+    assert len(request) == golden["frame_bytes"]
+    assert len(request) == fixture["limits"]["timed_ovn_casting_proof_request_bytes"]
+    assert len(request) == PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_BYTES_V1
+    assert fixture["limits"]["governance_attempt_sequence_max"] == (
+        PARLIAMENT_GOVERNANCE_ATTEMPT_SEQUENCE_MAX_V1
+    )
+    assert fixture["no_result_kinds"][-1] == {
+        "norito_index": 7,
+        "json_tag": "SortitionRetriesExhausted",
+    }
+
+
+def test_attempt_read_accepts_sortition_retries_exhausted_no_result() -> None:
+    payload = _attempt_read()
+    state = payload["body_states"][0]
+    state["body_instance_id"] = BODY_ID
+    state["status"] = {"status": "NoResult"}
+    state["no_result_kind"] = {"reason": "SortitionRetriesExhausted"}
+    state["no_result_height"] = 20
+    session = RecordingSession()
+    session.queue(_json_response(payload))
+    parsed = ToriiClient(
+        "https://node.test", session=session
+    ).get_parliament_attempt_v1(ATTEMPT_ID, canonical_auth=_auth())
+    assert parsed.raw["body_states"][0]["no_result_kind"] == {
+        "reason": "SortitionRetriesExhausted"
+    }
 
 
 def test_release_digest_and_partial_context_rebinding_fail_closed() -> None:
@@ -808,6 +939,14 @@ def test_request_bindings_and_exact_proposal_integers_fail_before_dispatch() -> 
             expected_transition_digest=bytes(32),
             canonical_auth=_auth(),
         )
+    with pytest.raises(TypeError, match="attempt_sequence"):
+        client.draft_parliament_attempt_v1(
+            _proposal(),
+            PARLIAMENT_GOVERNANCE_ATTEMPT_SEQUENCE_MAX_V1 + 1,
+            expected_proposal_content_id=PROPOSAL_ID,
+            expected_governance_attempt_id=ATTEMPT_ID,
+            canonical_auth=_auth(),
+        )
     assert session.calls == []
 
 
@@ -834,15 +973,93 @@ def test_transition_nested_shapes_fail_before_dispatch() -> None:
             {
                 "transition": "RegisterSortitionRequest",
                 "payload": {
-                    "sequence": 0,
-                    "request": {},
-                    "candidate_snapshot": [CANONICAL_OWNER],
+                    "requests": [{"sequence": 0, "request": {}}],
                 },
             },
             expected_transition_digest=bytes([1]) * 32,
             canonical_auth=_auth(),
         )
     assert session.calls == []
+
+
+def test_register_sortition_request_uses_one_atomic_body_ordered_batch() -> None:
+    digest = bytes([0xE3]) * 32
+    transition = {
+        "transition": "RegisterSortitionRequest",
+        "payload": {
+            "requests": [
+                {
+                    "sequence": 0,
+                    "request": _sortition_request(candidate_count=1_001),
+                },
+                {
+                    "sequence": 0,
+                    "request": _sortition_request(
+                        body="agenda-council",
+                        request_id="89" * 32,
+                        election_attempt_id="78" * 32,
+                        candidate_count=1_001,
+                    ),
+                },
+            ]
+        },
+    }
+    accepted = RecordingSession()
+    accepted.queue(
+        _json_response(
+            {
+                "version": 1,
+                "governance_attempt_id": ATTEMPT_ID,
+                "transition_kind": {"kind": "RegisterSortitionRequest"},
+                "transition_digest": list(digest),
+                "tx_instructions": [
+                    {
+                        "wire_id": PARLIAMENT_TRANSITION_SUBMIT_WIRE_ID_V1,
+                        "payload_hex": _frame(b"atomic sortition instruction").hex(),
+                    }
+                ],
+            }
+        )
+    )
+    result = ToriiClient(
+        "https://node.test", session=accepted
+    ).draft_parliament_transition_v1(
+        ATTEMPT_ID,
+        transition,
+        expected_transition_digest=digest,
+        canonical_auth=_auth(),
+    )
+    assert result.transition_kind == "RegisterSortitionRequest"
+    sent = json.loads(accepted.calls[0]["data"].decode("utf-8"))
+    assert sent["transition"] == transition
+    assert "candidate_snapshot" not in accepted.calls[0]["data"].decode("utf-8")
+
+    forbidden_snapshot = copy.deepcopy(transition)
+    forbidden_snapshot["payload"]["candidate_snapshot"] = [CANONICAL_OWNER]
+    reversed_order = copy.deepcopy(transition)
+    reversed_order["payload"]["requests"].reverse()
+    different_count = copy.deepcopy(transition)
+    different_count["payload"]["requests"][1]["request"]["candidate_count"] = 1_002
+    oversized_batch = copy.deepcopy(transition)
+    oversized_batch["payload"]["requests"] = oversized_batch["payload"]["requests"] * 6
+
+    for malformed, message in (
+        (forbidden_snapshot, "unknown field `candidate_snapshot`"),
+        (reversed_order, "strictly body-ordered"),
+        (different_count, "share one pulse slot and count"),
+        (oversized_batch, "one through 10 requests"),
+    ):
+        rejected = RecordingSession()
+        with pytest.raises((TypeError, ValueError), match=message):
+            ToriiClient(
+                "https://node.test", session=rejected
+            ).draft_parliament_transition_v1(
+                ATTEMPT_ID,
+                malformed,
+                expected_transition_digest=digest,
+                canonical_auth=_auth(),
+            )
+        assert rejected.calls == []
 
 
 def test_freeze_timed_ovn_corpus_enforces_the_32_record_call_boundary() -> None:
@@ -1159,7 +1376,7 @@ def test_attempt_certificate_rejects_forged_repeated_and_sortition_bindings() ->
         (
             lambda payload: payload["certificate"]["body_bindings"][0][
                 "sortition_request"
-            ].__setitem__("candidate_count", 1_001),
+            ].__setitem__("candidate_count", 0),
             "candidate_count",
         ),
     )
@@ -1173,6 +1390,24 @@ def test_attempt_certificate_rejects_forged_repeated_and_sortition_bindings() ->
             ToriiClient(
                 "https://node.test", session=session
             ).get_parliament_attempt_v1(ATTEMPT_ID, canonical_auth=_auth())
+
+
+def test_attempt_certificate_allows_nonzero_u32_candidate_count_above_corpus_cap() -> None:
+    payload = _certificate_attempt_read()
+    payload["certificate"]["body_bindings"][0]["sortition_request"][
+        "candidate_count"
+    ] = 1_001
+    session = RecordingSession()
+    session.queue(_json_response(payload))
+    parsed = ToriiClient(
+        "https://node.test", session=session
+    ).get_parliament_attempt_v1(ATTEMPT_ID, canonical_auth=_auth())
+    assert (
+        parsed.raw["certificate"]["body_bindings"][0]["sortition_request"][
+            "candidate_count"
+        ]
+        == 1_001
+    )
 
 
 def test_attempt_certificate_rejects_required_body_and_hidden_ballot_forgery() -> None:

@@ -367,6 +367,15 @@ fn production_recovered_apply_ready_fixture(marker: u8) -> ProductionRecoveredAp
         fixture.verified.context().roster.len(),
         "recovered Apply fixture retains one signing key per validator"
     );
+    assert!(
+        validator_keys
+            .iter()
+            .zip(&fixture.verified.context().roster)
+            .all(|(key, power)| {
+                iroha_data_model::peer::PeerId::new(key.public_key().clone()) == power.validator
+            }),
+        "recovered Apply fixture keys must exactly match the ordered authenticated roster"
+    );
     let store_fixture = durable_validate_store_fixture_from_existing(
         fixture,
         directory,
@@ -533,6 +542,8 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
             mut ready,
             store,
             coordinator,
+            successor,
+            retry_owner,
         } = owned;
         let context = ready.fixture.verified.context().clone();
         let committee = crate::sumeragi::v2_core::Committee::project_indices(
@@ -558,10 +569,17 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
             Ok(expected_role),
             "{row:?}"
         );
-        let AdapterEffect::ValidateBody { tag, .. } = &ready.fixture.effect else {
+        let AdapterEffect::ValidateBody {
+            tag,
+            round: validate_round,
+            subject: validate_subject,
+        } = &ready.fixture.effect
+        else {
             unreachable!("Ready fixture retains one Validate effect")
         };
         let tag = *tag;
+        let validate_round = *validate_round;
+        let validate_subject = *validate_subject;
         let adapter_directory =
             TempDir::new().expect("temporary production Ready Validate adapter");
         let wal_path = adapter_directory.path().join("safety.wal");
@@ -643,6 +661,10 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
             lease,
             durable: _,
         } = ready;
+        let retry_key = match &fixture.effect {
+            AdapterEffect::ValidateBody { round, subject, .. } => (*round, *subject),
+            _ => unreachable!("Ready fixture retains one Validate effect"),
+        };
         let wal_before = std::fs::read(&wal_path)
             .unwrap_or_else(|error| panic!("{row:?}: read pre-dispatch WAL: {error}"));
         let now = std::time::Instant::now();
@@ -698,21 +720,21 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                 2,
             )
         };
-        if matches!(row, ProductionReadyValidateDispatchRow::ValidatedApply) {
+        let scenario = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             // Production retains this exact marker continuously from the
             // durable Store-to-Validate publication. This focused fixture
             // constructs its executor only after the volatile Validate worker
             // completion, so reinstall the same closed parent authority before
-            // exercising the live Validate-to-Apply upgrade.
+            // exercising any synchronous successor outcome.
             let work = owner
                 .registry
                 .registry_for_test()
                 .entries
                 .get(&fixture.address)
-                .expect("ValidatedApply fixture retains its exact completion carrier");
+                .expect("Ready Validate fixture retains its exact completion carrier");
             let ConcreteLifecycleWorkKind::DurableValidateCompletion(completion) = &work.kind
             else {
-                panic!("ValidatedApply fixture must retain a completed Validate parent")
+                panic!("Ready Validate fixture must retain a completed Validate parent")
             };
             executor
                 .install_recovered_published_lifecycle_validate_retry_marker(
@@ -722,41 +744,44 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                     lease.ordinal(),
                 )
                 .expect("restore the exact long-lived Validate retry marker");
-        }
-        if matches!(row, ProductionReadyValidateDispatchRow::LocalValidatedBusy) {
-            let keys = durable_store_keys(marker);
-            let signer = usize::try_from(local_validator)
-                .expect("local Busy validator index is representable");
-            crate::sumeragi::v2_worker::tests::install_local_signer_for_test(
-                &mut services,
-                &keys[signer],
-            );
             assert_eq!(
-                executor
-                    .consume_effects(returned_startup, &mut services)
-                    .unwrap_or_else(|error| {
-                        panic!("{row:?}: dispatch the real timeout Sign fence: {error}")
-                    }),
-                1,
-                "{row:?}: the recovered timeout owns one physical Sign"
+                executor.validate_retry_lifecycle_ordinal_for_test((
+                    validate_round,
+                    validate_subject,
+                )),
+                Some(Some(lease.ordinal())),
+                "{row:?}: recovered retry authority must bind the Ready parent"
             );
-            assert_eq!(executor.status().pending_signatures, 1, "{row:?}");
-        } else {
-            assert!(
-                returned_startup.is_empty(),
-                "{row:?}: only local Busy retains a startup Sign effect"
-            );
-        }
-        executor
+            if matches!(row, ProductionReadyValidateDispatchRow::LocalValidatedBusy) {
+                let keys = durable_store_keys(marker);
+                let signer = usize::try_from(local_validator)
+                    .expect("local Busy validator index is representable");
+                crate::sumeragi::v2_worker::tests::install_local_signer_for_test(
+                    &mut services,
+                    &keys[signer],
+                );
+                assert_eq!(
+                    executor
+                        .consume_effects(returned_startup, &mut services)
+                        .unwrap_or_else(|error| {
+                            panic!("{row:?}: dispatch the real timeout Sign fence: {error}")
+                        }),
+                    1,
+                    "{row:?}: the recovered timeout owns one physical Sign"
+                );
+                assert_eq!(executor.status().pending_signatures, 1, "{row:?}");
+            } else {
+                assert!(
+                    returned_startup.is_empty(),
+                    "{row:?}: only local Busy retains a startup Sign effect"
+                );
+            }
+            executor
             .arm_live_clocks(
                 crate::sumeragi::v2_lifecycle_coordinator::ProductionLifecycleLiveClockActivationPermitV1::for_test(),
                 now,
             )
             .unwrap_or_else(|error| panic!("{row:?}: arm exact runtime clocks: {error}"));
-        if matches!(row, ProductionReadyValidateDispatchRow::ValidatedApply) {
-            let commit_qc = recovered_apply
-                .as_ref()
-                .expect("ValidatedApply retains its exact production fixture");
             let validate_attestation = owner
                 .coordinator
                 .attest_ready_validate_demand(&owner.registry, lease.ordinal())
@@ -764,411 +789,448 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
             executor
                 .arm_live_lifecycle_validate_successor(
                     validate_attestation.dispatch_key(),
-                    commit_qc.proposal_round,
-                    commit_qc.subject,
-                    true,
+                    validate_round,
+                    validate_subject,
+                    matches!(row, ProductionReadyValidateDispatchRow::ValidatedApply),
                 )
-                .expect("restore the exact Validate successor before Decision import");
-            assert_eq!(
-                executor
-                    .reconcile_reopened_decision_for_lifecycle_apply_lineage_test(&mut services)
-                    .expect("import the adapter's exact durable Decision into the executor"),
-                (
-                    commit_qc.round,
-                    commit_qc.proposal_round,
-                    commit_qc.subject,
-                    commit_qc.execution_commitment,
-                ),
-                "{row:?}: executor protection must match the adapter's decided body"
-            );
-        }
-        let queued_apply_snapshot =
-            matches!(row, ProductionReadyValidateDispatchRow::ValidatedApply).then(|| {
+                .expect("restore the exact preliminary Validate successor owner");
+            if matches!(row, ProductionReadyValidateDispatchRow::ValidatedApply) {
                 let commit_qc = recovered_apply
                     .as_ref()
                     .expect("ValidatedApply retains its exact production fixture");
-                let queued_progress = wire::ConsensusMessageV2::new(
-                    wire::ConsensusMessageV2Payload::QuorumCertificate(commit_qc.clone()),
-                );
-                executor
-                    .enqueue_network(queued_progress)
-                    .expect("queue authenticated runtime ingress beside typed live Apply");
-                let snapshot = executor.runtime_queue_snapshot_for_test(now);
                 assert_eq!(
-                    snapshot.progress.depth, 1,
-                    "ValidatedApply fixture retains one authentic Progress wire"
-                );
-                snapshot
-            });
-        let expected_reducer_fence_wait = row.is_busy().then(|| {
-            let reducer_fence = executor.lifecycle_reducer_fence_observation();
-            super::super::WaitToken::new(
-                super::super::reducer_fence_wait_source(active_context),
-                reducer_fence.generation(),
-            )
-        });
-        let expected_successor_ordinal = row.successor().map(|_| {
-            lifecycle_ordinal_observer
-                .next_ordinal_for_test()
-                .expect("inspect the paired actor-global ordinal source")
-                .expect("Ready Validate successor ordinal remains representable")
-        });
-        let dispatched = owner
-            .dispatch_completion_for_test(&mut services, &mut executor, 0)
-            .unwrap_or_else(|error| panic!("{row:?}: production Completion dispatch: {error:?}"));
-        assert_eq!(
-            dispatched,
-            row.expected_dispatch(
-                lease.ordinal(),
-                expected_reducer_fence_wait,
-                expected_successor_ordinal,
-            ),
-            "{row:?}"
-        );
-        if matches!(row, ProductionReadyValidateDispatchRow::LocalValidatedBusy) {
-            let parked_queue = executor.runtime_queue_snapshot_for_test(now);
-            assert_eq!(
-                parked_queue.normal.depth, 0,
-                "{row:?}: local Busy publication cannot create ordinary ingress"
-            );
-            assert_eq!(
-                parked_queue.progress.depth, 0,
-                "{row:?}: local Busy publication cannot create progress ingress"
-            );
-            assert_eq!(
-                parked_queue.completion.depth, 1,
-                "{row:?}: local Busy publication retains one exact LocalProposalReady command"
-            );
-            let parked_status = executor.status();
-            assert_eq!(parked_status.queued_runtime_completions, 1, "{row:?}");
-            assert_eq!(parked_status.pending_stores, 0, "{row:?}");
-            assert_eq!(parked_status.pending_validations, 0, "{row:?}");
-            assert!(!parked_status.fail_closed, "{row:?}");
-            assert!(!output_guard.restart_required(), "{row:?}");
-
-            executor
-                .step(std::time::Instant::now(), &mut services)
-                .unwrap_or_else(|error| {
-                    panic!("{row:?}: park LocalProposalReady behind the Sign fence: {error}")
-                });
-            let initial_deferred_completion_depth = crate::sumeragi::status::v2_status()
-                .and_then(|status| {
-                    status.liveness.queues.into_iter().find_map(|queue| {
-                        (queue.queue == wire::SumeragiV2QueueKind::DeferredCompletion)
-                            .then_some(queue.depth)
-                    })
-                })
-                .unwrap_or(0);
-            assert_eq!(
-                initial_deferred_completion_depth, 1,
-                "{row:?}: LocalProposalReady must enter DeferredCompletion before Sign service"
-            );
-            planner_io.execute_one_consensus_sign_fixture(&services);
-
-            let mut wait = expected_reducer_fence_wait
-                .expect("local Busy retains its exact initial reducer fence");
-            let completion_deadline = std::time::Instant::now()
-                .checked_add(std::time::Duration::from_secs(5))
-                .expect("local Busy completion deadline is representable");
-            let resolved = loop {
-                loop {
-                    services
-                        .drain_completions(&mut executor)
-                        .unwrap_or_else(|error| {
-                            panic!("{row:?}: drain the real Sign worker completion: {error}")
-                        });
                     executor
-                        .step(std::time::Instant::now(), &mut services)
-                        .unwrap_or_else(|error| {
-                            panic!("{row:?}: advance the fenced serialized runtime: {error}")
-                        });
-                    let fence = executor.lifecycle_reducer_fence_observation();
-                    let status = executor.status();
-                    let deferred_completion_depth = crate::sumeragi::status::v2_status()
-                        .and_then(|status| {
-                            status.liveness.queues.into_iter().find_map(|queue| {
-                                (queue.queue == wire::SumeragiV2QueueKind::DeferredCompletion)
-                                    .then_some(queue.depth)
-                            })
-                        })
-                        .unwrap_or(0);
-                    if fence.source() == wait.source()
-                        && fence.generation() > wait.observed_generation()
-                        && status.pending_signatures == 0
-                        && status.queued_runtime_completions == 0
-                        && deferred_completion_depth == 0
-                    {
-                        break;
-                    }
-                    assert!(!status.fail_closed, "{row:?}");
-                    assert!(!output_guard.restart_required(), "{row:?}");
-                    if std::time::Instant::now() >= completion_deadline {
-                        panic!(
-                            "{row:?}: timed out draining the Sign/fence bridge: \
-                             fence={fence:?}, wait={wait:?}, status={status:?}"
-                        );
-                    }
-                    std::thread::yield_now();
-                }
-
-                let next = owner
-                    .dispatch_completion_for_test(&mut services, &mut executor, 0)
-                    .unwrap_or_else(|error| {
-                        panic!("{row:?}: retry the exact same-ordinal Validate: {error:?}")
-                    });
-                match next {
-                    super::super::ProductionCompletionDispatchV1::ReducerFenceWait {
-                        ordinal,
-                        wait: next_wait,
-                    } => {
-                        assert_eq!(ordinal, lease.ordinal(), "{row:?}");
-                        assert_eq!(next_wait.source(), wait.source(), "{row:?}");
-                        assert!(
-                            next_wait.observed_generation() > wait.observed_generation(),
-                            "{row:?}: a repeated Busy must bind a newly advanced fence"
-                        );
-                        wait = next_wait;
-                    }
-                    resolved => break resolved,
-                }
-            };
-            assert!(
-                !matches!(
-                    resolved,
-                    super::super::ProductionCompletionDispatchV1::ReducerFenceWait { .. }
-                ),
-                "{row:?}: the exact same-ordinal successor must resolve after Sign completion"
-            );
-            assert!(
-                matches!(
-                    owner.coordinator.records[&lease.ordinal()].state,
-                    super::super::LifecycleState::Terminal(_)
-                ),
-                "{row:?}: the parked Validate parent must terminalize exactly once"
-            );
-            let settled_queue = executor.runtime_queue_snapshot_for_test(std::time::Instant::now());
-            assert_eq!(settled_queue.completion.depth, 0, "{row:?}");
-            let settled_status = executor.status();
-            assert_eq!(settled_status.queued_runtime_completions, 0, "{row:?}");
-            assert_eq!(settled_status.pending_signatures, 0, "{row:?}");
-            assert!(!settled_status.fail_closed, "{row:?}");
-            assert!(!output_guard.restart_required(), "{row:?}");
-        }
-        let mut expected_apply_successor_broadcast_ordinal = None;
-        if let Some(child_ordinal) = expected_successor_ordinal {
-            assert_eq!(owner.coordinator.high_water(), child_ordinal, "{row:?}");
-            assert!(
-                owner.coordinator.records.contains_key(&child_ordinal),
-                "{row:?}: sampled actor-global successor must be the installed child"
-            );
-            for runtime_ordinal in lease.ordinal() + 1..child_ordinal {
-                assert!(
-                    !owner.coordinator.records.contains_key(&runtime_ordinal),
-                    "{row:?}: runtime-owned actor-global ordinals cannot enter LedgerV1"
+                        .reconcile_reopened_decision_for_lifecycle_apply_lineage_test(
+                            &mut services,
+                            true,
+                        )
+                        .expect("import the adapter's exact durable Decision into the executor"),
+                    (
+                        commit_qc.round,
+                        commit_qc.proposal_round,
+                        commit_qc.subject,
+                        commit_qc.execution_commitment,
+                    ),
+                    "{row:?}: executor protection must match the adapter's decided body"
                 );
             }
-        }
-        if matches!(row, ProductionReadyValidateDispatchRow::ValidatedApply) {
-            let apply_ordinal = expected_successor_ordinal
-                .expect("Validate-to-Apply sampled its actor-global child ordinal");
-            let apply_attestation = owner
-                .registry
-                .attest_ready_lifecycle_decision_apply(&owner.coordinator, apply_ordinal)
-                .expect("attest the exact sampled live Apply child");
-            assert_eq!(
-                apply_attestation.dispatch_key().lifecycle_ordinal(),
-                apply_ordinal,
-                "{row:?}: registry Apply authority must bind the sampled shared ordinal"
-            );
-            let blocked = owner
-                .dispatch_completion_for_test(&mut services, &mut executor, 0)
-                .unwrap_or_else(|error| {
-                    panic!("{row:?}: classify live Apply behind runtime ingress: {error:?}")
+            let queued_apply_snapshot =
+                matches!(row, ProductionReadyValidateDispatchRow::ValidatedApply).then(|| {
+                    let commit_qc = recovered_apply
+                        .as_ref()
+                        .expect("ValidatedApply retains its exact production fixture");
+                    let queued_progress = wire::ConsensusMessageV2::new(
+                        wire::ConsensusMessageV2Payload::QuorumCertificate(commit_qc.clone()),
+                    );
+                    executor
+                        .enqueue_network(queued_progress)
+                        .expect("queue authenticated runtime ingress beside typed live Apply");
+                    let snapshot = executor.runtime_queue_snapshot_for_test(now);
+                    assert_eq!(
+                        snapshot.progress.depth, 1,
+                        "ValidatedApply fixture retains one authentic Progress wire"
+                    );
+                    snapshot
                 });
-            assert_eq!(
-                blocked,
-                super::super::ProductionCompletionDispatchV1::CapacityUnavailable {
-                    protected_live_apply_ordinal: Some(apply_ordinal),
-                },
-                "{row:?}: live Apply must retain its exact Ready owner until the finite runtime FIFO drains"
-            );
-            assert_eq!(
-                Some(executor.runtime_queue_snapshot_for_test(now)),
-                queued_apply_snapshot,
-                "{row:?}: the blocked Apply probe cannot consume or reorder runtime ingress"
-            );
-            assert!(matches!(
-                owner.coordinator.records[&apply_ordinal].state,
-                super::super::LifecycleState::Ready
-            ));
-
-            executor.step(now, &mut services).unwrap_or_else(|error| {
-                panic!("{row:?}: drain the pre-Apply authenticated runtime command: {error}")
+            let expected_reducer_fence_wait = row.is_busy().then(|| {
+                let reducer_fence = executor.lifecycle_reducer_fence_observation();
+                super::super::WaitToken::new(
+                    super::super::reducer_fence_wait_source(active_context),
+                    reducer_fence.generation(),
+                )
             });
-            let drained_queue = executor.runtime_queue_snapshot_for_test(now);
-            assert_eq!(drained_queue.progress.depth, 0, "{row:?}");
-            assert_eq!(
-                executor.status().queued_runtime_completions,
-                0,
-                "{row:?}: normal Runtime must settle the finite pre-Apply FIFO"
-            );
-
-            let periodic_due = now
-                .checked_add(retransmit_interval)
-                .expect("ValidatedApply periodic deadline remains representable");
-            let periodic_step =
-                executor
-                    .step(periodic_due, &mut services)
-                    .unwrap_or_else(|error| {
-                        panic!("{row:?}: execute the exact decided-body periodic retry: {error}")
-                    });
-            assert!(
-                matches!(
-                    periodic_step,
-                    crate::sumeragi::v2_effects::EffectExecutorStep::Advanced { effects: 1 }
-                ),
-                "{row:?}: periodic [CommitQC Broadcast, Apply] must park its first effect and retain its second: {periodic_step:?}"
-            );
-            let periodic_observation = executor
-                .last_runtime_step_observation_for_test()
-                .expect("ValidatedApply periodic step retains its raw reducer observation");
-            assert_eq!(
-                periodic_observation.selected(),
-                Some(crate::sumeragi::v2_runtime::RuntimeSelectedOwnerKind::PeriodicTimer),
-                "{row:?}"
-            );
-            assert_eq!(periodic_observation.effect_count(), 2, "{row:?}");
-            assert_eq!(periodic_observation.validate_count(), 0, "{row:?}");
-            assert_eq!(
-                periodic_observation.non_validate_class(),
-                Some(crate::sumeragi::v2_effects::RuntimeEffectClassV1::Multiple),
-                "{row:?}: the real periodic retry must retain its two distinct output/Apply effects"
-            );
-            let periodic_status = executor.status();
-            assert_eq!(periodic_status.pending_outputs, 1, "{row:?}");
-            assert_eq!(
-                periodic_status.effect_dispatch_queue.depth, 1,
-                "{row:?}: the exact retransmit Apply remains at the retained FIFO head"
-            );
-
-            let generic_settlement = executor
-                .settle_pending_lifecycle_output_admissions(&mut owner, &mut services)
-                .unwrap_or_else(|error| {
-                    panic!("{row:?}: generically admit the periodic CommitQC output: {error}")
-                });
-            assert_eq!(generic_settlement.newly_completed(), 0, "{row:?}");
-            assert_eq!(generic_settlement.already_completed(), 0, "{row:?}");
-            assert!(
-                executor.has_pending_lifecycle_output_admissions(),
-                "{row:?}: generic output service must defer behind the globally earlier Apply"
-            );
-            let mut exact_commit_qc_broadcasts =
-                owner.coordinator.records.iter().filter(|(_, record)| {
-                    record.work_class == LifecycleWorkClass::Broadcast
-                        && record.key.phase() == LifecyclePhase::BroadcastCommitQc
-                        && record.stage.kind() == LifecycleStageKind::BroadcastCommitQc
-                });
-            let (&broadcast_ordinal, broadcast_record) = exact_commit_qc_broadcasts
-                .next()
-                .expect("periodic CommitQC generic admission installs one exact Broadcast row");
-            assert!(
-                exact_commit_qc_broadcasts.next().is_none(),
-                "{row:?}: the periodic episode installs one CommitQC Broadcast carrier"
-            );
-            assert!(broadcast_ordinal > apply_ordinal, "{row:?}");
-            assert_eq!(
-                broadcast_record.state,
-                super::super::LifecycleState::Ready,
-                "{row:?}"
-            );
-            assert_eq!(
-                owner
-                    .coordinator
-                    .ready_index
-                    .iter()
-                    .copied()
-                    .collect::<Vec<_>>(),
-                vec![apply_ordinal, broadcast_ordinal],
-                "{row:?}: lifecycle order must keep Apply ahead of its periodic CommitQC output"
-            );
-            expected_apply_successor_broadcast_ordinal = Some(broadcast_ordinal);
-            let commit_qc = recovered_apply
-                .as_ref()
-                .expect("ValidatedApply retains its exact CommitQC");
-            let commit_qc_envelope = wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::QuorumCertificate(commit_qc.clone()),
-            );
-            assert_eq!(
-                services.consensus_broadcast_count_for_test(&commit_qc_envelope),
-                0,
-                "{row:?}: ordinal deferral must precede CommitQC service I/O"
-            );
-
+            let expected_successor_ordinal = row.successor().map(|_| {
+                lifecycle_ordinal_observer
+                    .next_ordinal_for_test()
+                    .expect("inspect the paired actor-global ordinal source")
+                    .expect("Ready Validate successor ordinal remains representable")
+            });
             let dispatched = owner
                 .dispatch_completion_for_test(&mut services, &mut executor, 0)
                 .unwrap_or_else(|error| {
-                    panic!("{row:?}: dispatch typed live Decision Apply: {error:?}")
+                    panic!("{row:?}: production Completion dispatch: {error:?}")
                 });
             assert_eq!(
                 dispatched,
-                super::super::ProductionCompletionDispatchV1::ApplyQueued {
-                    ordinal: apply_ordinal,
-                },
-                "{row:?}: live Validate child must enter the dedicated Apply worker"
-            );
-            assert_eq!(
-                executor.status().effect_dispatch_queue.depth,
-                0,
-                "{row:?}: scheduler dispatch consumes only the byte-exact retransmit Apply suffix"
-            );
-            planner_io
-                .execute_one_lifecycle_decision_apply_fixture(std::sync::Arc::clone(&output_guard));
-            let completion = match services
-                .take_next_lifecycle_completion()
-                .expect("classify typed live Apply worker completion")
-            {
-                crate::sumeragi::v2_worker::LifecycleCompletionTakeV1::Apply(completion) => {
-                    completion
-                }
-                other => {
-                    drop(other);
-                    panic!("{row:?}: typed live Apply lost physical completion priority");
-                }
-            };
-            assert!(matches!(
-                super::super::settle_applied_live_lifecycle_decision_apply_completion_for_test(
-                    &mut owner,
-                    &mut executor,
-                    completion,
+                row.expected_dispatch(
+                    lease.ordinal(),
+                    expected_reducer_fence_wait,
+                    expected_successor_ordinal,
                 ),
-                Ok(super::super::ProductionLifecycleDecisionApplyCompletionV1::Applied)
-            ));
-            assert!(
-                !executor.ready_to_finish(),
-                "{row:?}: the attested post-Apply Broadcast must remain a rollover blocker"
-            );
-            let post_apply_blockers = executor.ready_to_finish_blockers();
-            assert!(
-                post_apply_blockers.contains(&"lifecycle-output-admission")
-                    && post_apply_blockers.contains(&"post-apply-output-census"),
-                "{row:?}: terminal Apply lost its exact successor-output blockers: {post_apply_blockers:?}"
-            );
-            assert!(matches!(
-                owner.coordinator.records[&apply_ordinal].state,
-                super::super::LifecycleState::Terminal(TerminalOutcome::Advanced)
-            ));
-            assert_eq!(
-                owner.coordinator.records[&broadcast_ordinal].state,
-                super::super::LifecycleState::Ready,
                 "{row:?}"
             );
+            if matches!(row, ProductionReadyValidateDispatchRow::LocalValidatedBusy) {
+                let parked_queue = executor.runtime_queue_snapshot_for_test(now);
+                assert_eq!(
+                    parked_queue.normal.depth, 0,
+                    "{row:?}: local Busy publication cannot create ordinary ingress"
+                );
+                assert_eq!(
+                    parked_queue.progress.depth, 0,
+                    "{row:?}: local Busy publication cannot create progress ingress"
+                );
+                assert_eq!(
+                    parked_queue.completion.depth, 1,
+                    "{row:?}: local Busy publication retains one exact LocalProposalReady command"
+                );
+                let parked_status = executor.status();
+                assert_eq!(parked_status.queued_runtime_completions, 1, "{row:?}");
+                assert_eq!(parked_status.pending_stores, 0, "{row:?}");
+                assert_eq!(parked_status.pending_validations, 0, "{row:?}");
+                assert!(!parked_status.fail_closed, "{row:?}");
+                assert!(!output_guard.restart_required(), "{row:?}");
 
-            services.set_exact_output_admission_hook(|_post, _ticket| Ok(()));
-            let prepared_broadcast = owner
-                .prepare_apply_terminal_direct_broadcast()
-                .expect("bind the exact post-Apply CommitQC Broadcast carrier");
-            assert_eq!(prepared_broadcast.ordinal(), broadcast_ordinal, "{row:?}");
+                executor
+                    .step(std::time::Instant::now(), &mut services)
+                    .unwrap_or_else(|error| {
+                        panic!("{row:?}: park LocalProposalReady behind the Sign fence: {error}")
+                    });
+                let initial_deferred_completion_depth = crate::sumeragi::status::v2_status()
+                    .and_then(|status| {
+                        status.liveness.queues.into_iter().find_map(|queue| {
+                            (queue.queue == wire::SumeragiV2QueueKind::DeferredCompletion)
+                                .then_some(queue.depth)
+                        })
+                    })
+                    .unwrap_or(0);
+                assert_eq!(
+                    initial_deferred_completion_depth, 1,
+                    "{row:?}: LocalProposalReady must enter DeferredCompletion before Sign service"
+                );
+                planner_io.execute_one_consensus_sign_fixture(&services);
+
+                let mut wait = expected_reducer_fence_wait
+                    .expect("local Busy retains its exact initial reducer fence");
+                let completion_deadline = std::time::Instant::now()
+                    .checked_add(std::time::Duration::from_secs(5))
+                    .expect("local Busy completion deadline is representable");
+                let resolved = loop {
+                    loop {
+                        services
+                            .drain_completions(&mut executor)
+                            .unwrap_or_else(|error| {
+                                panic!("{row:?}: drain the real Sign worker completion: {error}")
+                            });
+                        executor
+                            .step(std::time::Instant::now(), &mut services)
+                            .unwrap_or_else(|error| {
+                                panic!("{row:?}: advance the fenced serialized runtime: {error}")
+                            });
+                        let fence = executor.lifecycle_reducer_fence_observation();
+                        let status = executor.status();
+                        let deferred_completion_depth = crate::sumeragi::status::v2_status()
+                            .and_then(|status| {
+                                status.liveness.queues.into_iter().find_map(|queue| {
+                                    (queue.queue == wire::SumeragiV2QueueKind::DeferredCompletion)
+                                        .then_some(queue.depth)
+                                })
+                            })
+                            .unwrap_or(0);
+                        if fence.source() == wait.source()
+                            && fence.generation() > wait.observed_generation()
+                            && status.pending_signatures == 0
+                            && status.queued_runtime_completions == 0
+                            && deferred_completion_depth == 0
+                        {
+                            break;
+                        }
+                        assert!(!status.fail_closed, "{row:?}");
+                        assert!(!output_guard.restart_required(), "{row:?}");
+                        if std::time::Instant::now() >= completion_deadline {
+                            panic!(
+                                "{row:?}: timed out draining the Sign/fence bridge: \
+                             fence={fence:?}, wait={wait:?}, status={status:?}"
+                            );
+                        }
+                        std::thread::yield_now();
+                    }
+
+                    let next = owner
+                        .dispatch_completion_for_test(&mut services, &mut executor, 0)
+                        .unwrap_or_else(|error| {
+                            panic!("{row:?}: retry the exact same-ordinal Validate: {error:?}")
+                        });
+                    match next {
+                        super::super::ProductionCompletionDispatchV1::ReducerFenceWait {
+                            ordinal,
+                            wait: next_wait,
+                        } => {
+                            assert_eq!(ordinal, lease.ordinal(), "{row:?}");
+                            assert_eq!(next_wait.source(), wait.source(), "{row:?}");
+                            assert!(
+                                next_wait.observed_generation() > wait.observed_generation(),
+                                "{row:?}: a repeated Busy must bind a newly advanced fence"
+                            );
+                            wait = next_wait;
+                        }
+                        resolved => break resolved,
+                    }
+                };
+                assert_eq!(
+                    resolved,
+                    super::super::ProductionCompletionDispatchV1::ValidateNoSuccessor {
+                        ordinal: lease.ordinal(),
+                    },
+                    "{row:?}: the exact same-ordinal successor must resolve after Sign completion"
+                );
+                assert!(
+                    matches!(
+                        owner.coordinator.records[&lease.ordinal()].state,
+                        super::super::LifecycleState::Terminal(_)
+                    ),
+                    "{row:?}: the parked Validate parent must terminalize exactly once"
+                );
+                let settled_queue =
+                    executor.runtime_queue_snapshot_for_test(std::time::Instant::now());
+                assert_eq!(settled_queue.completion.depth, 0, "{row:?}");
+                let settled_status = executor.status();
+                assert_eq!(settled_status.queued_runtime_completions, 0, "{row:?}");
+                assert_eq!(settled_status.pending_signatures, 0, "{row:?}");
+                assert!(!settled_status.fail_closed, "{row:?}");
+                assert!(!output_guard.restart_required(), "{row:?}");
+            }
+            let expected_retry_ordinal = matches!(
+                row,
+                ProductionReadyValidateDispatchRow::ValidatedBusy
+                    | ProductionReadyValidateDispatchRow::RejectedBusy
+            )
+            .then_some(lease.ordinal());
             assert_eq!(
+                executor.validate_retry_lifecycle_ordinal_for_test((
+                    validate_round,
+                    validate_subject,
+                )),
+                Some(expected_retry_ordinal),
+                "{row:?}: only an unresolved Busy parent may retain its retry ordinal"
+            );
+            let mut expected_apply_successor_broadcast_ordinal = None;
+            if let Some(child_ordinal) = expected_successor_ordinal {
+                assert_eq!(owner.coordinator.high_water(), child_ordinal, "{row:?}");
+                assert!(
+                    owner.coordinator.records.contains_key(&child_ordinal),
+                    "{row:?}: sampled actor-global successor must be the installed child"
+                );
+                for runtime_ordinal in lease.ordinal() + 1..child_ordinal {
+                    assert!(
+                        !owner.coordinator.records.contains_key(&runtime_ordinal),
+                        "{row:?}: runtime-owned actor-global ordinals cannot enter LedgerV1"
+                    );
+                }
+                assert_eq!(
+                    owner
+                        .coordinator
+                        .ready_index
+                        .iter()
+                        .copied()
+                        .collect::<Vec<_>>(),
+                    vec![child_ordinal],
+                    "{row:?}: the published successor must be the sole Ready lifecycle owner"
+                );
+            }
+            if matches!(row, ProductionReadyValidateDispatchRow::ValidatedApply) {
+                let apply_ordinal = expected_successor_ordinal
+                    .expect("Validate-to-Apply sampled its actor-global child ordinal");
+                let apply_attestation = owner
+                    .registry
+                    .attest_ready_lifecycle_decision_apply(&owner.coordinator, apply_ordinal)
+                    .expect("attest the exact sampled live Apply child");
+                assert_eq!(
+                    apply_attestation.dispatch_key().lifecycle_ordinal(),
+                    apply_ordinal,
+                    "{row:?}: registry Apply authority must bind the sampled shared ordinal"
+                );
+                let blocked = owner
+                    .dispatch_completion_for_test(&mut services, &mut executor, 0)
+                    .unwrap_or_else(|error| {
+                        panic!("{row:?}: classify live Apply behind runtime ingress: {error:?}")
+                    });
+                assert_eq!(
+                    blocked,
+                    super::super::ProductionCompletionDispatchV1::CapacityUnavailable {
+                        protected_live_apply_ordinal: Some(apply_ordinal),
+                    },
+                    "{row:?}: live Apply must retain its exact Ready owner until the finite runtime FIFO drains"
+                );
+                assert_eq!(
+                    Some(executor.runtime_queue_snapshot_for_test(now)),
+                    queued_apply_snapshot,
+                    "{row:?}: the blocked Apply probe cannot consume or reorder runtime ingress"
+                );
+                assert!(matches!(
+                    owner.coordinator.records[&apply_ordinal].state,
+                    super::super::LifecycleState::Ready
+                ));
+
+                executor.step(now, &mut services).unwrap_or_else(|error| {
+                    panic!("{row:?}: drain the pre-Apply authenticated runtime command: {error}")
+                });
+                let drained_queue = executor.runtime_queue_snapshot_for_test(now);
+                assert_eq!(drained_queue.progress.depth, 0, "{row:?}");
+                assert_eq!(
+                    executor.status().queued_runtime_completions,
+                    0,
+                    "{row:?}: normal Runtime must settle the finite pre-Apply FIFO"
+                );
+
+                let periodic_due = now
+                    .checked_add(retransmit_interval)
+                    .expect("ValidatedApply periodic deadline remains representable");
+                let periodic_step =
+                    executor
+                        .step(periodic_due, &mut services)
+                        .unwrap_or_else(|error| {
+                            panic!(
+                                "{row:?}: execute the exact decided-body periodic retry: {error}"
+                            )
+                        });
+                assert!(
+                    matches!(
+                        periodic_step,
+                        crate::sumeragi::v2_effects::EffectExecutorStep::Advanced { effects: 1 }
+                    ),
+                    "{row:?}: periodic [CommitQC Broadcast, Apply] must park its first effect and retain its second: {periodic_step:?}"
+                );
+                let periodic_observation = executor
+                    .last_runtime_step_observation_for_test()
+                    .expect("ValidatedApply periodic step retains its raw reducer observation");
+                assert_eq!(
+                    periodic_observation.selected(),
+                    Some(crate::sumeragi::v2_runtime::RuntimeSelectedOwnerKind::PeriodicTimer),
+                    "{row:?}"
+                );
+                assert_eq!(periodic_observation.effect_count(), 2, "{row:?}");
+                assert_eq!(periodic_observation.validate_count(), 0, "{row:?}");
+                assert_eq!(
+                    periodic_observation.non_validate_class(),
+                    Some(crate::sumeragi::v2_effects::RuntimeEffectClassV1::Multiple),
+                    "{row:?}: the real periodic retry must retain its two distinct output/Apply effects"
+                );
+                let periodic_status = executor.status();
+                assert_eq!(periodic_status.pending_outputs, 1, "{row:?}");
+                assert_eq!(
+                    periodic_status.effect_dispatch_queue.depth, 1,
+                    "{row:?}: the exact retransmit Apply remains at the retained FIFO head"
+                );
+
+                let generic_settlement = executor
+                    .settle_pending_lifecycle_output_admissions(&mut owner, &mut services)
+                    .unwrap_or_else(|error| {
+                        panic!("{row:?}: generically admit the periodic CommitQC output: {error}")
+                    });
+                assert_eq!(generic_settlement.newly_completed(), 0, "{row:?}");
+                assert_eq!(generic_settlement.already_completed(), 0, "{row:?}");
+                assert!(
+                    executor.has_pending_lifecycle_output_admissions(),
+                    "{row:?}: generic output service must defer behind the globally earlier Apply"
+                );
+                let mut exact_commit_qc_broadcasts =
+                    owner.coordinator.records.iter().filter(|(_, record)| {
+                        record.work_class == LifecycleWorkClass::Broadcast
+                            && record.key.phase() == LifecyclePhase::BroadcastCommitQc
+                            && record.stage.kind() == LifecycleStageKind::BroadcastCommitQc
+                    });
+                let (&broadcast_ordinal, broadcast_record) = exact_commit_qc_broadcasts
+                    .next()
+                    .expect("periodic CommitQC generic admission installs one exact Broadcast row");
+                assert!(
+                    exact_commit_qc_broadcasts.next().is_none(),
+                    "{row:?}: the periodic episode installs one CommitQC Broadcast carrier"
+                );
+                assert!(broadcast_ordinal > apply_ordinal, "{row:?}");
+                assert_eq!(
+                    broadcast_record.state,
+                    super::super::LifecycleState::Ready,
+                    "{row:?}"
+                );
+                assert_eq!(
+                    owner
+                        .coordinator
+                        .ready_index
+                        .iter()
+                        .copied()
+                        .collect::<Vec<_>>(),
+                    vec![apply_ordinal, broadcast_ordinal],
+                    "{row:?}: lifecycle order must keep Apply ahead of its periodic CommitQC output"
+                );
+                expected_apply_successor_broadcast_ordinal = Some(broadcast_ordinal);
+                let commit_qc = recovered_apply
+                    .as_ref()
+                    .expect("ValidatedApply retains its exact CommitQC");
+                let commit_qc_envelope = wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::QuorumCertificate(commit_qc.clone()),
+                );
+                assert_eq!(
+                    services.consensus_broadcast_count_for_test(&commit_qc_envelope),
+                    0,
+                    "{row:?}: ordinal deferral must precede CommitQC service I/O"
+                );
+
+                let dispatched = owner
+                    .dispatch_completion_for_test(&mut services, &mut executor, 0)
+                    .unwrap_or_else(|error| {
+                        panic!("{row:?}: dispatch typed live Decision Apply: {error:?}")
+                    });
+                assert_eq!(
+                    dispatched,
+                    super::super::ProductionCompletionDispatchV1::ApplyQueued {
+                        ordinal: apply_ordinal,
+                    },
+                    "{row:?}: live Validate child must enter the dedicated Apply worker"
+                );
+                assert_eq!(
+                    executor.status().effect_dispatch_queue.depth,
+                    0,
+                    "{row:?}: scheduler dispatch consumes only the byte-exact retransmit Apply suffix"
+                );
+                planner_io.execute_one_lifecycle_decision_apply_fixture(std::sync::Arc::clone(
+                    &output_guard,
+                ));
+                let completion = match services
+                    .take_next_lifecycle_completion()
+                    .expect("classify typed live Apply worker completion")
+                {
+                    crate::sumeragi::v2_worker::LifecycleCompletionTakeV1::Apply(completion) => {
+                        completion
+                    }
+                    other => {
+                        drop(other);
+                        panic!("{row:?}: typed live Apply lost physical completion priority");
+                    }
+                };
+                assert!(matches!(
+                    super::super::settle_applied_live_lifecycle_decision_apply_completion_for_test(
+                        &mut owner,
+                        &mut executor,
+                        completion,
+                    ),
+                    Ok(super::super::ProductionLifecycleDecisionApplyCompletionV1::Applied)
+                ));
+                assert!(
+                    !executor.ready_to_finish(),
+                    "{row:?}: the attested post-Apply Broadcast must remain a rollover blocker"
+                );
+                let post_apply_blockers = executor.ready_to_finish_blockers();
+                assert!(
+                    post_apply_blockers.contains(&"lifecycle-output-admission")
+                        && post_apply_blockers.contains(&"post-apply-output-census"),
+                    "{row:?}: terminal Apply lost its exact successor-output blockers: {post_apply_blockers:?}"
+                );
+                assert!(matches!(
+                    owner.coordinator.records[&apply_ordinal].state,
+                    super::super::LifecycleState::Terminal(TerminalOutcome::Advanced)
+                ));
+                assert_eq!(
+                    owner.coordinator.records[&broadcast_ordinal].state,
+                    super::super::LifecycleState::Ready,
+                    "{row:?}"
+                );
+
+                services.set_exact_output_admission_hook(|_post, _ticket| Ok(()));
+                let prepared_broadcast = owner
+                    .prepare_apply_terminal_direct_broadcast()
+                    .expect("bind the exact post-Apply CommitQC Broadcast carrier");
+                assert_eq!(prepared_broadcast.ordinal(), broadcast_ordinal, "{row:?}");
+                assert_eq!(
                 executor
                     .settle_apply_terminal_direct_broadcast(
                         &mut owner,
@@ -1181,62 +1243,74 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                 crate::sumeragi::v2_effects::ProductionApplyTerminalDirectBroadcastSettlementV1::Completed,
                 "{row:?}"
             );
-            assert_eq!(
-                services.consensus_broadcast_count_for_test(&commit_qc_envelope),
-                1,
-                "{row:?}: dedicated settlement services the deferred CommitQC exactly once"
-            );
-            assert!(!executor.has_pending_lifecycle_output_admissions());
-            assert!(matches!(
-                owner.coordinator.records[&broadcast_ordinal].state,
-                super::super::LifecycleState::Terminal(TerminalOutcome::Advanced)
-            ));
-            assert!(owner.coordinator.ready_index.is_empty(), "{row:?}");
-            assert!(owner.coordinator.active_lease.is_none(), "{row:?}");
-            assert!(
-                executor.ready_to_finish(),
-                "{row:?}: settled post-Apply Broadcast retained rollover blockers: {:?}",
-                executor.ready_to_finish_blockers()
-            );
-            crate::sumeragi::status::clear_v2_status();
-        }
+                assert_eq!(
+                    services.consensus_broadcast_count_for_test(&commit_qc_envelope),
+                    1,
+                    "{row:?}: dedicated settlement services the deferred CommitQC exactly once"
+                );
+                assert!(!executor.has_pending_lifecycle_output_admissions());
+                assert!(matches!(
+                    owner.coordinator.records[&broadcast_ordinal].state,
+                    super::super::LifecycleState::Terminal(TerminalOutcome::Advanced)
+                ));
+                assert!(owner.coordinator.ready_index.is_empty(), "{row:?}");
+                assert!(owner.coordinator.active_lease.is_none(), "{row:?}");
+                assert!(
+                    executor.ready_to_finish(),
+                    "{row:?}: settled post-Apply Broadcast retained rollover blockers: {:?}",
+                    executor.ready_to_finish_blockers()
+                );
+                crate::sumeragi::status::clear_v2_status();
+            }
 
-        let ledger_after = std::fs::read(&ledger_path)
-            .unwrap_or_else(|error| panic!("{row:?}: read post-dispatch LedgerV1: {error}"));
-        if row.is_busy() && !matches!(row, ProductionReadyValidateDispatchRow::LocalValidatedBusy) {
-            assert_eq!(
-                ledger_after, ledger_before,
-                "{row:?}: reducer-fence parking is deliberately volatile"
-            );
-        } else {
-            assert_ne!(
-                ledger_after, ledger_before,
-                "{row:?}: every terminal publication must fsync LedgerV1"
-            );
-        }
-        let wal_after = std::fs::read(&wal_path)
-            .unwrap_or_else(|error| panic!("{row:?}: read post-dispatch WAL: {error}"));
-        if matches!(row, ProductionReadyValidateDispatchRow::LocalValidatedBusy) {
+            let ledger_after = std::fs::read(&ledger_path)
+                .unwrap_or_else(|error| panic!("{row:?}: read post-dispatch LedgerV1: {error}"));
+            if row.is_busy()
+                && !matches!(row, ProductionReadyValidateDispatchRow::LocalValidatedBusy)
+            {
+                assert_eq!(
+                    ledger_after, ledger_before,
+                    "{row:?}: reducer-fence parking is deliberately volatile"
+                );
+            } else {
+                assert_ne!(
+                    ledger_after, ledger_before,
+                    "{row:?}: every terminal publication must fsync LedgerV1"
+                );
+            }
+            let wal_after = std::fs::read(&wal_path)
+                .unwrap_or_else(|error| panic!("{row:?}: read post-dispatch WAL: {error}"));
+            if matches!(row, ProductionReadyValidateDispatchRow::LocalValidatedBusy) {
+                assert!(
+                    wal_after.starts_with(&wal_before),
+                    "{row:?}: real Sign settlement may only append to the safety WAL"
+                );
+            } else if row.grows_safety_wal() {
+                assert!(
+                    wal_after.len() > wal_before.len() && wal_after != wal_before,
+                    "{row:?}: Validate-to-Sign must append the safety WAL"
+                );
+            } else {
+                assert_eq!(
+                    wal_after, wal_before,
+                    "{row:?}: only the Persist publication appends the safety WAL"
+                );
+            }
             assert!(
-                wal_after.starts_with(&wal_before),
-                "{row:?}: real Sign settlement may only append to the safety WAL"
+                !output_guard.restart_required(),
+                "{row:?}: exact publication cannot trip fail-stop"
             );
-        } else if row.grows_safety_wal() {
-            assert!(
-                wal_after.len() > wal_before.len() && wal_after != wal_before,
-                "{row:?}: Validate-to-Sign must append the safety WAL"
-            );
-        } else {
-            assert_eq!(
-                wal_after, wal_before,
-                "{row:?}: only the Persist publication appends the safety WAL"
-            );
-        }
-        assert!(
-            !output_guard.restart_required(),
-            "{row:?}: exact publication cannot trip fail-stop"
-        );
+            (
+                expected_successor_ordinal,
+                expected_apply_successor_broadcast_ordinal,
+            )
+        }));
         planner_io.detach(&mut services);
+        let (expected_successor_ordinal, expected_apply_successor_broadcast_ordinal) =
+            match scenario {
+                Ok(ordinals) => ordinals,
+                Err(payload) => std::panic::resume_unwind(payload),
+            };
         drop(executor);
         drop(owner);
         if matches!(row, ProductionReadyValidateDispatchRow::LocalValidatedBusy) {

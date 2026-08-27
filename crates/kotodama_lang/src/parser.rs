@@ -301,6 +301,9 @@ impl<T> PendingValues<T> {
     fn iter(&self) -> std::slice::Iter<'_, T> {
         self.values.iter()
     }
+    fn len(&self) -> usize {
+        self.values.len()
+    }
     fn into_inner(mut self) -> Vec<T> {
         std::mem::take(&mut self.values)
     }
@@ -4141,11 +4144,11 @@ impl<'a> CstAstLowerer<'a> {
             Generic {
                 start: u32,
                 base: String,
-                args: Vec<TypeExpr>,
+                args: PendingValues<TypeExpr>,
             },
             Tuple {
                 opening: Token,
-                args: Vec<TypeExpr>,
+                args: PendingValues<TypeExpr>,
             },
         }
         let mut frames = Vec::new();
@@ -4159,7 +4162,7 @@ impl<'a> CstAstLowerer<'a> {
                     }
                     frames.push(Frame::Tuple {
                         opening,
-                        args: Vec::new(),
+                        args: PendingValues::new(crate::ast::drop_type_iterative),
                     });
                     continue;
                 }
@@ -4231,7 +4234,7 @@ impl<'a> CstAstLowerer<'a> {
                     frames.push(Frame::Generic {
                         start: base_token.range.start,
                         base,
-                        args: Vec::new(),
+                        args: PendingValues::new(crate::ast::drop_type_iterative),
                     });
                     continue;
                 }
@@ -4256,7 +4259,10 @@ impl<'a> CstAstLowerer<'a> {
                         self.expect(TokenKind::Greater)?;
                         current = self.source_type(
                             TextRange::new(start, self.previous_end(start)),
-                            TypeExpr::Generic { base, args },
+                            TypeExpr::Generic {
+                                base,
+                                args: args.into_inner(),
+                            },
                         );
                     }
                     Frame::Tuple { opening, mut args } => {
@@ -4273,7 +4279,7 @@ impl<'a> CstAstLowerer<'a> {
                         }
                         current = self.source_type(
                             TextRange::new(opening.range.start, closing.range.end),
-                            TypeExpr::Tuple(args),
+                            TypeExpr::Tuple(args.into_inner()),
                         );
                     }
                 }

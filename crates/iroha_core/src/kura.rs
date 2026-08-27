@@ -16,11 +16,12 @@ use crate::{
     block::CommittedBlock,
     queue::{
         AutonomousLaneCanonicalQueueTerminalEvidence, AutonomousLaneKuraActivationAuthorization,
-        AutonomousLaneReleaseQueueTerminalEvidence, DurableLaneQueueReleaseBarrierAuthorization,
-        LaneQueueReservationGroupBindingV1, LaneQueueReservationGroupIdentityV1,
-        LaneQueueReservationKeyV1, LaneQueueReservationReconciliationGroupV1,
-        LaneQueueReservationReleaseBarrierV1, RoutingPlan,
-        canonical_lane_queue_reservation_group_identity_projection,
+        AutonomousLaneReleaseQueueTerminalEvidence, AutonomousLaneReplicaQueueDisposition,
+        AutonomousLaneReplicaQueueDispositionAuthorization,
+        DurableLaneQueueReleaseBarrierAuthorization, LaneQueueReservationGroupBindingV1,
+        LaneQueueReservationGroupIdentityV1, LaneQueueReservationKeyV1,
+        LaneQueueReservationReconciliationGroupV1, LaneQueueReservationReleaseBarrierV1,
+        RoutingPlan, canonical_lane_queue_reservation_group_identity_projection,
         lane_queue_reservation_group_binding_from_ordered_keys,
     },
     secure_file_metadata::{self, SecureMetadata},
@@ -45,12 +46,16 @@ use crate::{
             IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_KURA_RETIREMENT,
             IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_READY_QC,
             IN_FLIGHT_FIRST_RELEASE_ACTION_PREPARE_RESERVATION_RELEASE,
+            IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT,
             IN_FLIGHT_FIRST_RELEASE_ACTION_RESTORE_RELEASED_FIFO,
             IN_FLIGHT_FIRST_RELEASE_ACTION_SIGN_READY, IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED,
+            IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED,
             IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE,
             IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_COMPLETED,
             IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_FORGOTTEN,
             IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_PREPARED,
+            IN_FLIGHT_FIRST_RELEASE_RESERVATION_REPLICA_QUEUE_ABSENT,
+            IN_FLIGHT_FIRST_RELEASE_RESERVATION_REPLICA_QUEUE_FIFO_PRESERVED,
             ProductionInFlightFirstReleaseCarrierProjection,
             ProductionInFlightFirstReleaseDecisionProjection,
             ProductionInFlightFirstReleaseHistoryProjection,
@@ -59,6 +64,7 @@ use crate::{
             ProductionInFlightFirstReleaseSessionProjection,
             ProductionInFlightFirstReleaseStateProjection,
             ProductionInFlightFirstReleaseTransitionProjection,
+            check_production_in_flight_first_release_observe_replica_queue_release_transition,
             check_production_in_flight_first_release_transition,
             production_in_flight_first_release_state_kernel,
             production_in_flight_first_release_terminal_owner,
@@ -229,9 +235,15 @@ fn kagemusha_active_receiver_decode_limits(wire_bytes: usize) -> norito::DecodeL
         iroha_data_model::parliament_casting::MAX_PARLIAMENT_CONCURRENT_CASTING_CONTEXTS_V1,
     )
     .expect("u32 casting-context bound fits usize");
+    // Norito accounts the decoded sequence elements separately from their
+    // compact wire representation. Reserve one bounded byte of bookkeeping
+    // headroom per protocol-permitted casting context so a valid short
+    // sidecar cannot exceed the payload-scaled estimate by a few bytes. The
+    // absolute 4 MiB allocation ceiling remains authoritative.
     let max_allocated_bytes = wire_bytes
         .saturating_mul(4)
         .saturating_add(64 * 1024)
+        .saturating_add(max_sequence_elements)
         .min(MAX_KAGEMUSHA_ACTIVE_RECEIVER_DECODE_ALLOCATED_BYTES);
     norito::DecodeLimits::new(
         max_sequence_elements,
@@ -3222,6 +3234,7 @@ impl Kura {
         }
         if !provisional_open {
             if config.init_mode == InitMode::Strict {
+                kura.seal_completed_autonomous_lifecycle_replica_claims_on_startup()?;
                 kura.recover_retained_block_rewrite_stage_on_startup(&blocks_root)?;
                 kura.recover_lane_block_execution_input_pairs_on_startup()?;
                 kura.reconcile_historical_autonomous_recovery_atomic_temps_on_startup()?;
@@ -5552,6 +5565,7 @@ impl Kura {
             );
             return Ok(());
         }
+        self.seal_completed_autonomous_lifecycle_replica_claims_on_startup()?;
         self.recover_lane_block_execution_input_pairs_on_startup()?;
         self.reconcile_historical_autonomous_recovery_atomic_temps_on_startup()?;
         self.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()?;
@@ -5640,6 +5654,7 @@ impl Kura {
             );
             return Ok(());
         }
+        self.seal_completed_autonomous_lifecycle_replica_claims_on_startup()?;
         self.recover_lane_block_execution_input_pairs_on_startup()?;
         self.reconcile_historical_autonomous_recovery_atomic_temps_on_startup()?;
         self.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()?;
@@ -30445,6 +30460,9 @@ impl Kura {
             || claim
                 .retirement_hash()
                 .is_some_and(|hash| hash.as_ref().iter().all(|byte| *byte == 0))
+            || claim
+                .replica_terminal_outcome_hash()
+                .is_some_and(|hash| hash.as_ref().iter().all(|byte| *byte == 0))
         {
             return Err("invalid autonomous entrypoint claim identity");
         }
@@ -30612,6 +30630,18 @@ impl Kura {
             && incoming.proposal_height > activation_height
             && (existing.lane_incarnation != active_incarnation
                 || existing.proposal_height <= activation_height))
+    }
+    fn autonomous_lane_entrypoint_claim_is_replaceable_terminal_locked(
+        &self,
+        claim: &AutonomousLaneEntrypointClaimV1,
+    ) -> Result<bool> {
+        match claim.state {
+            AutonomousLaneEntrypointClaimStateV1::Released(_) => Ok(true),
+            AutonomousLaneEntrypointClaimStateV1::ReplicaReleased(_, _) => Ok(false),
+            AutonomousLaneEntrypointClaimStateV1::ReplicaReleasedComplete(_, _, _) => Ok(true),
+            AutonomousLaneEntrypointClaimStateV1::Active
+            | AutonomousLaneEntrypointClaimStateV1::ReleasePending(_) => Ok(false),
+        }
     }
     fn promote_autonomous_lane_entrypoint_claim_temp(temp_path: &Path, path: &Path) -> Result<()> {
         let temp = std::fs::OpenOptions::new()
@@ -30806,12 +30836,11 @@ impl Kura {
                 let target_is_durable =
                     self.autonomous_lane_claim_target_may_be_durable_locked(&pending);
                 if target_is_durable {
-                    if existing.as_ref().is_some_and(|claim| {
-                        !matches!(
-                            claim.state,
-                            AutonomousLaneEntrypointClaimStateV1::Released(_)
-                        )
-                    }) {
+                    if let Some(claim) = existing.as_ref()
+                        && !self.autonomous_lane_entrypoint_claim_is_replaceable_terminal_locked(
+                            claim,
+                        )?
+                    {
                         return Err(Self::invalid_lane_artifact_error(
                             main_path,
                             "durable autonomous claim temp conflicts with a live main owner",
@@ -30828,12 +30857,11 @@ impl Kura {
                     }
                     shard_mutated = true;
                 } else {
-                    if existing.as_ref().is_some_and(|claim| {
-                        !matches!(
-                            claim.state,
-                            AutonomousLaneEntrypointClaimStateV1::Released(_)
-                        )
-                    }) {
+                    if let Some(claim) = existing.as_ref()
+                        && !self.autonomous_lane_entrypoint_claim_is_replaceable_terminal_locked(
+                            claim,
+                        )?
+                    {
                         return Err(Self::invalid_lane_artifact_error(
                             main_path,
                             "orphan autonomous claim temp conflicts with a live main owner",
@@ -30915,13 +30943,12 @@ impl Kura {
                         "autonomous entrypoint belongs to a durably retired lane payload",
                     ));
                 }
-                if !matches!(
-                    existing.state,
-                    AutonomousLaneEntrypointClaimStateV1::Released(_)
-                ) && !self
-                    .autonomous_lane_entrypoint_claim_is_superseded_by_active_recreation_locked(
-                        &existing, &incoming,
-                    )?
+                if !self
+                    .autonomous_lane_entrypoint_claim_is_replaceable_terminal_locked(&existing)?
+                    && !self
+                        .autonomous_lane_entrypoint_claim_is_superseded_by_active_recreation_locked(
+                            &existing, &incoming,
+                        )?
                 {
                     return Err(Self::invalid_lane_artifact_error(
                         path,
@@ -31014,13 +31041,12 @@ impl Kura {
                     self.remove_autonomous_lane_entrypoint_claim_file(&temp_path)?;
                     continue;
                 }
-                if !matches!(
-                    existing.state,
-                    AutonomousLaneEntrypointClaimStateV1::Released(_)
-                ) && !self
-                    .autonomous_lane_entrypoint_claim_is_superseded_by_active_recreation_locked(
-                        &existing, expected,
-                    )?
+                if !self
+                    .autonomous_lane_entrypoint_claim_is_replaceable_terminal_locked(&existing)?
+                    && !self
+                        .autonomous_lane_entrypoint_claim_is_superseded_by_active_recreation_locked(
+                            &existing, expected,
+                        )?
                 {
                     return Err(Self::invalid_lane_artifact_error(
                         path.clone(),
@@ -31058,6 +31084,8 @@ impl Kura {
         payload: &LaneExecutablePayloadV1,
         retirement: &AutonomousLaneSlotRetirementV1,
         finalize_release: bool,
+        release_mode: AutonomousLaneClaimReleaseAuthorizationMode,
+        released_disposition: AutonomousLaneReleasedClaimDisposition,
     ) -> Result<()> {
         if !retirement.matches_payload(payload) {
             return Err(Self::invalid_lane_artifact_error(
@@ -31066,6 +31094,18 @@ impl Kura {
             ));
         }
         let retirement_hash = retirement.digest()?;
+        let replica_complete_outcome_hash =
+            if let Some(queue_disposition) = released_disposition.replica_queue_disposition() {
+                let entry = self.lane_storage_entry(payload.origin_proposal.descriptor.lane_id)?;
+                self.autonomous_lifecycle_replica_terminal_outcome_is_complete_locked(
+                    &entry,
+                    payload,
+                    retirement,
+                    queue_disposition,
+                )?
+            } else {
+                None
+            };
         let projection_context =
             AutonomousLaneReleaseProjectionContext::from_payload(self, payload, retirement)
                 .map_err(|message| {
@@ -31178,17 +31218,38 @@ impl Kura {
                 *entrypoint_hash,
                 retirement_hash,
             );
-            let released = AutonomousLaneEntrypointClaimV1::released_for_payload(
-                payload,
-                *entrypoint_hash,
-                retirement_hash,
-            );
+            let released =
+                if let Some(queue_disposition) = released_disposition.replica_queue_disposition() {
+                    AutonomousLaneEntrypointClaimV1::replica_released_for_payload(
+                        payload,
+                        *entrypoint_hash,
+                        retirement_hash,
+                        queue_disposition,
+                    )
+                } else {
+                    AutonomousLaneEntrypointClaimV1::released_for_payload(
+                        payload,
+                        *entrypoint_hash,
+                        retirement_hash,
+                    )
+                };
+            let replica_released_complete = released_disposition
+                .replica_queue_disposition()
+                .is_some_and(|queue_disposition| {
+                    existing.owns_payload(payload)
+                        && existing.retirement_hash() == Some(retirement_hash)
+                        && existing.replica_queue_disposition() == Some(queue_disposition)
+                        && existing.replica_terminal_outcome_hash() == replica_complete_outcome_hash
+                })
+                && replica_complete_outcome_hash.is_some();
             let stage = if existing == expected_active {
                 0
             } else if existing == pending {
                 1
             } else if existing == released {
                 2
+            } else if replica_released_complete {
+                3
             } else {
                 return Err(Self::invalid_lane_artifact_error(
                     path,
@@ -31217,9 +31278,10 @@ impl Kura {
                 released,
             });
         }
-        let mut previous_stage = 2_u8;
+        let mut previous_stage = 3_u8;
         let mut saw_active = false;
         let mut saw_released = false;
+        let mut saw_complete = false;
         for claim in &observed {
             if claim.stage > previous_stage {
                 return Err(Self::invalid_lane_artifact_error(
@@ -31229,7 +31291,14 @@ impl Kura {
             }
             previous_stage = claim.stage;
             saw_active |= claim.stage == 0;
-            saw_released |= claim.stage == 2;
+            saw_released |= claim.stage >= 2;
+            saw_complete |= claim.stage == 3;
+        }
+        if saw_complete && observed.iter().any(|claim| claim.stage < 2) {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "sealed replica claims cannot precede ReleasePending or Active claims",
+            ));
         }
         if saw_released && saw_active {
             return Err(Self::invalid_lane_artifact_error(
@@ -31244,7 +31313,7 @@ impl Kura {
             ));
         }
         let released_prefix = u64::try_from(
-            observed.iter().take_while(|claim| claim.stage == 2).count(),
+            observed.iter().take_while(|claim| claim.stage >= 2).count(),
         )
         .map_err(|_| {
             Self::invalid_lane_artifact_error(
@@ -31294,7 +31363,9 @@ impl Kura {
                         &claim.path,
                         &replacement,
                         finalize_release,
+                        release_mode,
                         prefix_before,
+                        released_disposition,
                     )
                     .map_err(|message| {
                         Self::invalid_lane_artifact_error(claim.path.clone(), message)
@@ -31426,6 +31497,28 @@ impl Kura {
             payload,
             retirement,
             false,
+            AutonomousLaneClaimReleaseAuthorizationMode::QueuePrepared,
+            AutonomousLaneReleasedClaimDisposition::QueueReleasePrepared,
+        )
+    }
+    fn prepare_autonomous_lane_entrypoint_claim_release_for_replica_locked(
+        &self,
+        pending_canonical_bytes: u64,
+        payload: &LaneExecutablePayloadV1,
+        retirement: &AutonomousLaneSlotRetirementV1,
+        exact_ordinary_fifo_preserved: bool,
+    ) -> Result<()> {
+        self.transition_autonomous_lane_entrypoint_claims_locked(
+            pending_canonical_bytes,
+            payload,
+            retirement,
+            false,
+            AutonomousLaneClaimReleaseAuthorizationMode::ReplicaDisposition,
+            if exact_ordinary_fifo_preserved {
+                AutonomousLaneReleasedClaimDisposition::ReplicaQueueFifoPreserved
+            } else {
+                AutonomousLaneReleasedClaimDisposition::ReplicaQueueAbsent
+            },
         )
     }
     fn finalize_autonomous_lane_entrypoint_claim_release_locked(
@@ -31434,11 +31527,47 @@ impl Kura {
         payload: &LaneExecutablePayloadV1,
         retirement: &AutonomousLaneSlotRetirementV1,
     ) -> Result<()> {
+        self.finalize_autonomous_lane_entrypoint_claim_release_with_mode_locked(
+            pending_canonical_bytes,
+            payload,
+            retirement,
+            AutonomousLaneClaimReleaseAuthorizationMode::QueuePrepared,
+        )
+    }
+    fn finalize_autonomous_lane_entrypoint_claim_release_with_mode_locked(
+        &self,
+        pending_canonical_bytes: u64,
+        payload: &LaneExecutablePayloadV1,
+        retirement: &AutonomousLaneSlotRetirementV1,
+        release_mode: AutonomousLaneClaimReleaseAuthorizationMode,
+    ) -> Result<()> {
         self.transition_autonomous_lane_entrypoint_claims_locked(
             pending_canonical_bytes,
             payload,
             retirement,
             true,
+            release_mode,
+            AutonomousLaneReleasedClaimDisposition::QueueReleasePrepared,
+        )
+    }
+    fn finalize_autonomous_lane_entrypoint_claim_release_for_replica_locked(
+        &self,
+        pending_canonical_bytes: u64,
+        payload: &LaneExecutablePayloadV1,
+        retirement: &AutonomousLaneSlotRetirementV1,
+        exact_ordinary_fifo_preserved: bool,
+    ) -> Result<()> {
+        self.transition_autonomous_lane_entrypoint_claims_locked(
+            pending_canonical_bytes,
+            payload,
+            retirement,
+            true,
+            AutonomousLaneClaimReleaseAuthorizationMode::ReplicaDisposition,
+            if exact_ordinary_fifo_preserved {
+                AutonomousLaneReleasedClaimDisposition::ReplicaQueueFifoPreserved
+            } else {
+                AutonomousLaneReleasedClaimDisposition::ReplicaQueueAbsent
+            },
         )
     }
     fn require_autonomous_lane_entrypoint_claims_released_locked(
@@ -31469,6 +31598,316 @@ impl Kura {
                 ));
             }
         }
+        Ok(())
+    }
+    fn require_autonomous_lane_entrypoint_claims_released_for_replica_locked(
+        &self,
+        payload: &LaneExecutablePayloadV1,
+        retirement: &AutonomousLaneSlotRetirementV1,
+        queue_disposition: AutonomousLifecycleReplicaQueueDispositionV1,
+    ) -> Result<()> {
+        let retirement_hash = retirement.digest()?;
+        let entry = self.lane_storage_entry(payload.origin_proposal.descriptor.lane_id)?;
+        let replica_complete_outcome_hash = self
+            .autonomous_lifecycle_replica_terminal_outcome_is_complete_locked(
+                &entry,
+                payload,
+                retirement,
+                queue_disposition,
+            )?;
+        for entrypoint_hash in &payload.entrypoint_hashes {
+            let path = Self::autonomous_lane_entrypoint_claim_path(
+                &self.store_root,
+                &payload.network_id,
+                entrypoint_hash,
+            );
+            let released = AutonomousLaneEntrypointClaimV1::replica_released_for_payload(
+                payload,
+                *entrypoint_hash,
+                retirement_hash,
+                queue_disposition,
+            );
+            let existing = Self::decode_autonomous_lane_entrypoint_claim(&path)
+                .map_err(|message| Self::invalid_lane_artifact_error(path.clone(), message))?;
+            let released_complete = existing.owns_payload(payload)
+                && existing.retirement_hash() == Some(retirement_hash)
+                && existing.replica_queue_disposition() == Some(queue_disposition)
+                && existing.replica_terminal_outcome_hash() == replica_complete_outcome_hash
+                && replica_complete_outcome_hash.is_some();
+            if (existing != released && !released_complete)
+                || !self.autonomous_lane_entrypoint_claim_path_matches(&existing, &path)
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "replica terminal outcome requires every exact claim to retain one Queue disposition",
+                ));
+            }
+        }
+        Ok(())
+    }
+    fn require_autonomous_lane_entrypoint_claims_replica_complete_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        payload: &LaneExecutablePayloadV1,
+        retirement: &AutonomousLaneSlotRetirementV1,
+        queue_disposition: AutonomousLifecycleReplicaQueueDispositionV1,
+        terminal_outcome_hash: Hash,
+    ) -> Result<()> {
+        let retirement_hash = retirement.digest()?;
+        let descriptor = &payload.origin_proposal.descriptor;
+        let mut newer_attempts =
+            BTreeMap::<(u64, u64, u64), AutonomousLaneBlockDurableRecord>::new();
+        for entrypoint_hash in &payload.entrypoint_hashes {
+            let path = Self::autonomous_lane_entrypoint_claim_path(
+                &self.store_root,
+                &payload.network_id,
+                entrypoint_hash,
+            );
+            let temp_path = Self::autonomous_lane_entrypoint_claim_temp_path(&path);
+            if Self::autonomous_lane_entrypoint_claim_file_exists(&temp_path)? {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::WouldBlock,
+                        "replica Complete claim seal has a staged successor owner",
+                    ),
+                    temp_path,
+                ));
+            }
+            let expected = AutonomousLaneEntrypointClaimV1::replica_released_complete_for_payload(
+                payload,
+                *entrypoint_hash,
+                retirement_hash,
+                queue_disposition,
+                terminal_outcome_hash,
+            );
+            let existing = Self::decode_autonomous_lane_entrypoint_claim(&path)
+                .map_err(|message| Self::invalid_lane_artifact_error(path.clone(), message))?;
+            if !self.autonomous_lane_entrypoint_claim_path_matches(&existing, &path) {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "replica Complete claim seal has a mismatched hash path",
+                ));
+            }
+            if existing == expected {
+                continue;
+            }
+            if existing.owns_payload(payload) {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::WouldBlock,
+                        "replica Complete outcome awaits its archive-independent claim seal",
+                    ),
+                    path,
+                ));
+            }
+            if existing.network_id != payload.network_id
+                || existing.epoch < payload.epoch
+                || existing.entrypoint_hash != *entrypoint_hash
+                || existing.lane_id != descriptor.lane_id
+                || existing.dataspace_id != descriptor.dataspace_id
+                || existing.lane_incarnation != descriptor.lane_incarnation
+                || existing.lane_block_height != descriptor.lane_block_height
+                || existing.proposal_height <= descriptor.proposal_height
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "replica Complete claim seal is neither exact nor authenticatedly superseded",
+                ));
+            }
+            let newer_key = (
+                existing.lane_block_height,
+                existing.proposal_height,
+                existing.epoch,
+            );
+            if !newer_attempts.contains_key(&newer_key) {
+                let newer = self
+                    .read_autonomous_lane_block_attempt_record_locked(
+                        entry,
+                        existing.lane_id,
+                        existing.lane_block_height,
+                        existing.proposal_height,
+                        existing.network_id,
+                        existing.epoch,
+                        None,
+                    )?
+                    .ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            path.clone(),
+                            "superseding replica claim seal lacks its durable attempt",
+                        )
+                    })?;
+                newer_attempts.insert(newer_key, newer);
+            }
+            let newer = newer_attempts
+                .get(&newer_key)
+                .expect("superseding replica attempt was cached");
+            let mut expected_new = AutonomousLaneEntrypointClaimV1::new(
+                &newer.artifact.executable_payload,
+                *entrypoint_hash,
+            );
+            expected_new.state = existing.state;
+            if existing != expected_new {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "superseding replica claim seal differs from its durable attempt",
+                ));
+            }
+        }
+        Ok(())
+    }
+    fn complete_autonomous_lane_entrypoint_claims_released_for_replica_locked(
+        &self,
+        pending_canonical_bytes: u64,
+        current_attempt_view_recovery_bytes: Option<u64>,
+        payload: &LaneExecutablePayloadV1,
+        retirement: &AutonomousLaneSlotRetirementV1,
+        queue_disposition: AutonomousLifecycleReplicaQueueDispositionV1,
+        outcome: &AutonomousLifecycleTerminalOutcomeV1,
+    ) -> Result<()> {
+        let expected_source =
+            AutonomousLifecycleTerminalOutcomeSourceV1::RetiredReplicaQueueDisposition {
+                retirement_hash: retirement.digest()?,
+                queue_disposition,
+            };
+        if !outcome.is_complete() || outcome.source() != expected_source {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "replica claim completion lacks its exact Complete terminal outcome",
+            ));
+        }
+        outcome.validate_for_payload(payload).map_err(|message| {
+            Self::invalid_lane_artifact_error(self.store_root.clone(), message)
+        })?;
+        let entry = self.lane_storage_entry(payload.origin_proposal.descriptor.lane_id)?;
+        let current = self
+            .read_current_autonomous_lane_block_record_self_context_locked(
+                &entry,
+                payload.origin_proposal.descriptor.lane_block_height,
+                current_attempt_view_recovery_bytes,
+            )?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "replica claim completion lost its current lane attempt",
+                )
+            })?;
+        let exact_attempt_is_current = current.artifact.executable_payload == *payload;
+        if !exact_attempt_is_current {
+            self.require_autonomous_lane_replica_release_completed_or_superseded_locked(
+                &entry,
+                payload,
+                retirement,
+                queue_disposition,
+            )?;
+        }
+        let retirement_hash = retirement.digest()?;
+        let mut plan = Vec::with_capacity(payload.entrypoint_hashes.len());
+        let mut saw_released = false;
+        for entrypoint_hash in &payload.entrypoint_hashes {
+            let path = Self::autonomous_lane_entrypoint_claim_path(
+                &self.store_root,
+                &payload.network_id,
+                entrypoint_hash,
+            );
+            let temp_path = Self::autonomous_lane_entrypoint_claim_temp_path(&path);
+            if Self::autonomous_lane_entrypoint_claim_file_exists(&temp_path)? {
+                let staged = Self::decode_autonomous_lane_entrypoint_claim(&temp_path).map_err(
+                    |message| Self::invalid_lane_artifact_error(temp_path.clone(), message),
+                )?;
+                if !matches!(staged.state, AutonomousLaneEntrypointClaimStateV1::Active)
+                    || !self.autonomous_lane_entrypoint_claim_path_matches(&staged, &path)
+                {
+                    return Err(Self::invalid_lane_artifact_error(
+                        temp_path,
+                        "replica claim completion found an invalid staged successor owner",
+                    ));
+                }
+            }
+            let existing = Self::decode_autonomous_lane_entrypoint_claim(&path)
+                .map_err(|message| Self::invalid_lane_artifact_error(path.clone(), message))?;
+            if !self.autonomous_lane_entrypoint_claim_path_matches(&existing, &path) {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "replica claim completion found a mismatched hash path",
+                ));
+            }
+            let released = AutonomousLaneEntrypointClaimV1::replica_released_for_payload(
+                payload,
+                *entrypoint_hash,
+                retirement_hash,
+                queue_disposition,
+            );
+            let complete = AutonomousLaneEntrypointClaimV1::replica_released_complete_for_payload(
+                payload,
+                *entrypoint_hash,
+                retirement_hash,
+                queue_disposition,
+                outcome.outcome_hash,
+            );
+            if existing == complete {
+                if saw_released {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "replica Complete claims are not a canonical durable prefix",
+                    ));
+                }
+                plan.push((path, 0, None));
+                continue;
+            }
+            if !exact_attempt_is_current && !existing.owns_payload(payload) {
+                plan.push((path, 0, None));
+                continue;
+            }
+            if existing != released
+                || !self.autonomous_lane_entrypoint_claim_path_matches(&existing, &path)
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "replica claim completion changed its retirement or Queue disposition",
+                ));
+            }
+            saw_released = true;
+            let bytes = norito::encode_canonical(&complete).map_err(Error::NoritoFrame)?;
+            if bytes.is_empty() || bytes.len() > AUTONOMOUS_LANE_ENTRYPOINT_CLAIM_MAX_BYTES {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "completed replica entrypoint claim exceeds its hard byte limit",
+                ));
+            }
+            let current_bytes = Self::file_len_or_zero(&path)?;
+            plan.push((path, current_bytes, Some(bytes)));
+        }
+        let capacity_path = self.store_root.join("blocks");
+        let mut capacity = AutonomousClaimMutationPeak::default();
+        for (path, current_bytes, replacement) in &plan {
+            let Some(replacement) = replacement else {
+                continue;
+            };
+            capacity
+                .atomic_replace(*current_bytes, u64::try_from(replacement.len())?)
+                .map_err(|message| Self::invalid_lane_artifact_error(path.clone(), message))?;
+        }
+        let additional_peak_bytes = capacity
+            .additional_peak_bytes()
+            .map_err(|message| Self::invalid_lane_artifact_error(capacity_path.clone(), message))?;
+        self.validate_configured_autonomous_mutation_disk_peak_locked(
+            pending_canonical_bytes,
+            additional_peak_bytes,
+            false,
+            false,
+            &capacity_path,
+        )?;
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        for (path, _, replacement) in plan {
+            let Some(bytes) = replacement else {
+                continue;
+            };
+            let before = Self::file_len_or_zero(&path)?;
+            self.write_atomic_synced_replace(&path, &bytes)?;
+            let after = Self::file_len_or_zero(&path)?;
+            self.update_disk_usage_delta(before, after);
+        }
+        accounting_mutation.finish();
         Ok(())
     }
     fn require_autonomous_lane_release_completed_or_superseded_locked(
@@ -31537,6 +31976,112 @@ impl Kura {
                 return Err(Self::invalid_lane_artifact_error(
                     path,
                     "superseding autonomous entrypoint claim does not match its signed payload",
+                ));
+            }
+        }
+        Ok(())
+    }
+    fn require_autonomous_lane_replica_release_completed_or_superseded_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        payload: &LaneExecutablePayloadV1,
+        retirement: &AutonomousLaneSlotRetirementV1,
+        queue_disposition: AutonomousLifecycleReplicaQueueDispositionV1,
+    ) -> Result<()> {
+        let Some(complete_outcome_hash) = self
+            .autonomous_lifecycle_replica_terminal_outcome_is_complete_locked(
+                entry,
+                payload,
+                retirement,
+                queue_disposition,
+            )?
+        else {
+            let descriptor = &payload.origin_proposal.descriptor;
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::WouldBlock,
+                    "superseded replica release lacks its exact Complete Queue disposition",
+                ),
+                Self::autonomous_lifecycle_terminal_outcome_path_for_entry(
+                    entry,
+                    &self.store_root,
+                    descriptor.lane_block_height,
+                    descriptor.proposal_height,
+                ),
+            ));
+        };
+        let retirement_hash = retirement.digest()?;
+        let descriptor = &payload.origin_proposal.descriptor;
+        for entrypoint_hash in &payload.entrypoint_hashes {
+            let path = Self::autonomous_lane_entrypoint_claim_path(
+                &self.store_root,
+                &payload.network_id,
+                entrypoint_hash,
+            );
+            let temp_path = Self::autonomous_lane_entrypoint_claim_temp_path(&path);
+            if Self::autonomous_lane_entrypoint_claim_file_exists(&temp_path)? {
+                let staged = Self::decode_autonomous_lane_entrypoint_claim(&temp_path).map_err(
+                    |message| Self::invalid_lane_artifact_error(temp_path.clone(), message),
+                )?;
+                if !matches!(staged.state, AutonomousLaneEntrypointClaimStateV1::Active)
+                    || !self.autonomous_lane_entrypoint_claim_path_matches(&staged, &path)
+                {
+                    return Err(Self::invalid_lane_artifact_error(
+                        temp_path,
+                        "superseded replica release found an invalid staged successor owner",
+                    ));
+                }
+            }
+            let existing = Self::decode_autonomous_lane_entrypoint_claim(&path)
+                .map_err(|message| Self::invalid_lane_artifact_error(path.clone(), message))?;
+            let replica_released = AutonomousLaneEntrypointClaimV1::replica_released_for_payload(
+                payload,
+                *entrypoint_hash,
+                retirement_hash,
+                queue_disposition,
+            );
+            let replica_released_complete = existing.owns_payload(payload)
+                && existing.retirement_hash() == Some(retirement_hash)
+                && existing.replica_queue_disposition() == Some(queue_disposition)
+                && existing.replica_terminal_outcome_hash() == Some(complete_outcome_hash);
+            if existing == replica_released || replica_released_complete {
+                continue;
+            }
+            if existing.network_id != payload.network_id
+                || existing.epoch < payload.epoch
+                || existing.entrypoint_hash != *entrypoint_hash
+                || existing.lane_id != descriptor.lane_id
+                || existing.dataspace_id != descriptor.dataspace_id
+                || existing.lane_incarnation != descriptor.lane_incarnation
+                || existing.lane_block_height != descriptor.lane_block_height
+                || existing.proposal_height <= descriptor.proposal_height
+                || !self.autonomous_lane_entrypoint_claim_path_matches(&existing, &path)
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "replica release claim is neither exact nor authenticatedly superseded",
+                ));
+            }
+            let newer = self
+                .read_autonomous_lane_block_attempt_record_locked(
+                    entry,
+                    existing.lane_id,
+                    existing.lane_block_height,
+                    existing.proposal_height,
+                    existing.network_id,
+                    existing.epoch,
+                    None,
+                )?
+                .ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        path.clone(),
+                        "superseding replica entrypoint claim lacks its durable attempt",
+                    )
+                })?;
+            if !existing.owns_payload(&newer.artifact.executable_payload) {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "superseding replica entrypoint claim does not match its signed payload",
                 ));
             }
         }
@@ -32029,9 +32574,45 @@ impl Kura {
         payload: &LaneExecutablePayloadV1,
         retirement: &AutonomousLaneSlotRetirementV1,
     ) -> Result<(u64, u64)> {
+        self.autonomous_lane_entrypoint_claim_release_progress_for_disposition_locked(
+            payload, retirement, None,
+        )
+    }
+    fn autonomous_lane_entrypoint_replica_claim_release_progress_locked(
+        &self,
+        payload: &LaneExecutablePayloadV1,
+        retirement: &AutonomousLaneSlotRetirementV1,
+        queue_disposition: AutonomousLifecycleReplicaQueueDispositionV1,
+    ) -> Result<(u64, u64)> {
+        self.autonomous_lane_entrypoint_claim_release_progress_for_disposition_locked(
+            payload,
+            retirement,
+            Some(queue_disposition),
+        )
+    }
+    fn autonomous_lane_entrypoint_claim_release_progress_for_disposition_locked(
+        &self,
+        payload: &LaneExecutablePayloadV1,
+        retirement: &AutonomousLaneSlotRetirementV1,
+        replica_queue_disposition: Option<AutonomousLifecycleReplicaQueueDispositionV1>,
+    ) -> Result<(u64, u64)> {
         let retirement_hash = retirement.digest()?;
+        let replica_complete_outcome_hash =
+            if let Some(queue_disposition) = replica_queue_disposition {
+                let entry = self.lane_storage_entry(payload.origin_proposal.descriptor.lane_id)?;
+                self.autonomous_lifecycle_replica_terminal_outcome_is_complete_locked(
+                    &entry,
+                    payload,
+                    retirement,
+                    queue_disposition,
+                )?
+            } else {
+                None
+            };
         let mut released_prefix = 0_u64;
         let mut saw_pending = false;
+        let mut saw_replica_released = false;
+        let mut saw_replica_complete = false;
         for entrypoint_hash in &payload.entrypoint_hashes {
             let path = Self::autonomous_lane_entrypoint_claim_path(
                 &self.store_root,
@@ -32060,12 +32641,42 @@ impl Kura {
                 *entrypoint_hash,
                 retirement_hash,
             );
-            let released = AutonomousLaneEntrypointClaimV1::released_for_payload(
-                payload,
-                *entrypoint_hash,
-                retirement_hash,
-            );
-            if existing == released {
+            let released = if let Some(queue_disposition) = replica_queue_disposition {
+                AutonomousLaneEntrypointClaimV1::replica_released_for_payload(
+                    payload,
+                    *entrypoint_hash,
+                    retirement_hash,
+                    queue_disposition,
+                )
+            } else {
+                AutonomousLaneEntrypointClaimV1::released_for_payload(
+                    payload,
+                    *entrypoint_hash,
+                    retirement_hash,
+                )
+            };
+            let replica_released_complete =
+                replica_queue_disposition.is_some_and(|queue_disposition| {
+                    existing.owns_payload(payload)
+                        && existing.retirement_hash() == Some(retirement_hash)
+                        && existing.replica_queue_disposition() == Some(queue_disposition)
+                        && existing.replica_terminal_outcome_hash() == replica_complete_outcome_hash
+                }) && replica_complete_outcome_hash.is_some();
+            if replica_released_complete {
+                if saw_pending || saw_replica_released {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "sealed replica claims are not a canonical Complete prefix",
+                    ));
+                }
+                saw_replica_complete = true;
+                released_prefix = released_prefix.checked_add(1).ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        path.clone(),
+                        "autonomous Released prefix exceeds u64",
+                    )
+                })?;
+            } else if existing == released {
                 if saw_pending {
                     return Err(Self::invalid_lane_artifact_error(
                         path,
@@ -32078,7 +32689,14 @@ impl Kura {
                         "autonomous Released prefix exceeds u64",
                     )
                 })?;
+                saw_replica_released |= replica_queue_disposition.is_some();
             } else if existing == pending {
+                if saw_replica_complete {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "sealed replica claims cannot precede ReleasePending claims",
+                    ));
+                }
                 saw_pending = true;
             } else {
                 return Err(Self::invalid_lane_artifact_error(
@@ -32094,6 +32712,212 @@ impl Kura {
             )
         })?;
         Ok((pending_prefix, released_prefix))
+    }
+    /// Persist the first exact `Released` claim of a two-entrypoint replica
+    /// release, modelling a crash before the second atomic replacement.
+    #[cfg(test)]
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn inject_autonomous_lane_first_released_claim_crash_cut_for_test(
+        &self,
+        payload: &LaneExecutablePayloadV1,
+        retirement: &AutonomousLaneSlotRetirementV1,
+    ) -> Result<()> {
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        self.durable_mutation_authorized()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let pending_canonical_bytes =
+            self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        payload
+            .validate(payload.network_id, payload.epoch)
+            .map_err(|error| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    format!("invalid autonomous claim crash-cut payload: {error}"),
+                )
+            })?;
+        let [first_entrypoint_hash, second_entrypoint_hash] = payload.entrypoint_hashes.as_slice()
+        else {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "autonomous claim crash cut requires exactly two entrypoints",
+            ));
+        };
+        if first_entrypoint_hash == second_entrypoint_hash || !retirement.matches_payload(payload) {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "autonomous claim crash cut has duplicate entrypoints or another retirement",
+            ));
+        }
+        let descriptor = &payload.origin_proposal.descriptor;
+        let entry = self.lane_storage_entry(descriptor.lane_id)?;
+        let attempt_path = Self::autonomous_lane_block_attempt_path_for_entry(
+            &entry,
+            &self.store_root,
+            descriptor.lane_block_height,
+            descriptor.proposal_height,
+        );
+        let _sidecar_guard = self.sidecar_lock.lock();
+        let record = self
+            .read_autonomous_lane_block_attempt_record_locked(
+                &entry,
+                descriptor.lane_id,
+                descriptor.lane_block_height,
+                descriptor.proposal_height,
+                payload.network_id,
+                payload.epoch,
+                Some(pending_canonical_bytes),
+            )?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    attempt_path,
+                    "missing exact retired attempt for autonomous claim crash cut",
+                )
+            })?;
+        if record.artifact.executable_payload != *payload
+            || record.retirement.as_ref() != Some(retirement)
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                record.view_state_path,
+                "autonomous claim crash cut changed its exact durable retirement",
+            ));
+        }
+        let current = self
+            .read_current_autonomous_lane_block_record_self_context_locked(
+                &entry,
+                descriptor.lane_block_height,
+                Some(pending_canonical_bytes),
+            )?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "autonomous claim crash cut has no current lane-height attempt",
+                )
+            })?;
+        if current.artifact.executable_payload != *payload
+            || current.retirement.as_ref() != Some(retirement)
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                current.view_state_path,
+                "autonomous claim crash cut attempt is not the current exact retirement",
+            ));
+        }
+        if self.autonomous_lane_entrypoint_claim_release_progress_locked(payload, retirement)?
+            != (2, 0)
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "autonomous claim crash cut requires the complete two-claim ReleasePending prefix",
+            ));
+        }
+        let retirement_hash = retirement.digest()?;
+        let claim_path = Self::autonomous_lane_entrypoint_claim_path(
+            &self.store_root,
+            &payload.network_id,
+            first_entrypoint_hash,
+        );
+        let pending = AutonomousLaneEntrypointClaimV1::release_pending_for_payload(
+            payload,
+            *first_entrypoint_hash,
+            retirement_hash,
+        );
+        let existing = Self::decode_autonomous_lane_entrypoint_claim(&claim_path)
+            .map_err(|message| Self::invalid_lane_artifact_error(claim_path.clone(), message))?;
+        if existing != pending
+            || !self.autonomous_lane_entrypoint_claim_path_matches(&existing, &claim_path)
+            || !existing.owns_payload(payload)
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                claim_path,
+                "autonomous claim crash cut found another first ReleasePending owner",
+            ));
+        }
+        let released = AutonomousLaneEntrypointClaimV1::released_for_payload(
+            payload,
+            *first_entrypoint_hash,
+            retirement_hash,
+        );
+        let bytes = norito::encode_canonical(&released).map_err(Error::NoritoFrame)?;
+        if bytes.is_empty() || bytes.len() > AUTONOMOUS_LANE_ENTRYPOINT_CLAIM_MAX_BYTES {
+            return Err(Self::invalid_lane_artifact_error(
+                claim_path,
+                "autonomous claim crash-cut replacement exceeds its hard byte limit",
+            ));
+        }
+        let projection_context =
+            AutonomousLaneReleaseProjectionContext::from_payload(self, payload, retirement)
+                .map_err(|message| {
+                    Self::invalid_lane_artifact_error(self.store_root.clone(), message)
+                })?;
+        let authorization = projection_context
+            .claim_transition_authorization(
+                &claim_path,
+                &released,
+                true,
+                AutonomousLaneClaimReleaseAuthorizationMode::ReplicaFifo,
+                0,
+                AutonomousLaneReleasedClaimDisposition::QueueReleasePrepared,
+            )
+            .map_err(|message| Self::invalid_lane_artifact_error(claim_path.clone(), message))?;
+        let before_bytes = Self::file_len_or_zero(&claim_path)?;
+        let replacement_bytes = u64::try_from(bytes.len())?;
+        let capacity_path = self.store_root.join("blocks");
+        let mut capacity = AutonomousClaimMutationPeak::default();
+        capacity
+            .atomic_replace(before_bytes, replacement_bytes)
+            .map_err(|message| Self::invalid_lane_artifact_error(capacity_path.clone(), message))?;
+        let additional_peak_bytes = capacity
+            .additional_peak_bytes()
+            .map_err(|message| Self::invalid_lane_artifact_error(capacity_path.clone(), message))?;
+        self.validate_configured_autonomous_mutation_disk_peak_locked(
+            pending_canonical_bytes,
+            additional_peak_bytes,
+            false,
+            false,
+            &capacity_path,
+        )?;
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        let projection: ProductionInFlightFirstReleaseTransitionProjection = authorization
+            .consume_for_persistence(&claim_path, &released)
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    claim_path.clone(),
+                    "autonomous claim crash-cut authority changed before persistence",
+                )
+            })?;
+        if projection.action != IN_FLIGHT_FIRST_RELEASE_ACTION_ADVANCE_RELEASED {
+            return Err(Self::invalid_lane_artifact_error(
+                claim_path,
+                "autonomous claim crash-cut authority names another transition",
+            ));
+        }
+        let checked =
+            check_production_in_flight_first_release_transition(projection).ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    claim_path.clone(),
+                    "autonomous claim crash-cut persistence failed the composed transition gate",
+                )
+            })?;
+        if checked.into_projection() != projection {
+            return Err(Self::invalid_lane_artifact_error(
+                claim_path,
+                "checked autonomous claim crash-cut projection changed before persistence",
+            ));
+        }
+        self.write_atomic_synced_replace(&claim_path, &bytes)?;
+        let after_bytes = Self::file_len_or_zero(&claim_path)?;
+        self.update_disk_usage_delta(before_bytes, after_bytes);
+        accounting_mutation.finish();
+        if self.autonomous_lane_entrypoint_claim_release_progress_locked(payload, retirement)?
+            != (2, 1)
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                claim_path,
+                "autonomous claim crash cut did not persist exactly one Released prefix member",
+            ));
+        }
+        Ok(())
     }
 }
 include!("kura/autonomous_release_authority.rs");
@@ -32965,10 +33789,10 @@ impl Kura {
                                 })?;
                             if !self
                                 .autonomous_lane_entrypoint_claim_path_matches(&claim, &claim_path)
-                                || !matches!(
-                                    claim.state,
-                                    AutonomousLaneEntrypointClaimStateV1::Released(_)
-                                )
+                                || !self
+                                    .autonomous_lane_entrypoint_claim_is_replaceable_terminal_locked(
+                                        &claim,
+                                    )?
                                 || claim.owns_payload(&record.artifact.executable_payload)
                             {
                                 return Err(Self::invalid_lane_artifact_error(

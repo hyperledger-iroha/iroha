@@ -257,6 +257,38 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
             .map_err(|message| Self::invalid_lane_artifact_error(path.to_path_buf(), message))?;
         Ok(Some(claim))
     }
+    fn charge_autonomous_reservation_regular_sidecar_locked(
+        &self,
+        path: &Path,
+        max_bytes: usize,
+        scanned_entries: &mut usize,
+        decoded_bytes: &mut u64,
+    ) -> std::result::Result<(), AutonomousLaneReservationEvidenceError> {
+        let parent = path
+            .parent()
+            .ok_or(AutonomousLaneReservationEvidenceError::OtherAttemptConflict)?;
+        let metadata = self
+            .regular_sidecar_metadata(path, parent)?
+            .ok_or(AutonomousLaneReservationEvidenceError::OtherAttemptConflict)?;
+        if metadata.file.len() == 0
+            || metadata.file.len() > u64::try_from(max_bytes).unwrap_or(u64::MAX)
+        {
+            return Err(AutonomousLaneReservationEvidenceError::AggregateBudgetExceeded);
+        }
+        *scanned_entries = scanned_entries
+            .checked_add(1)
+            .ok_or(AutonomousLaneReservationEvidenceError::AggregateBudgetExceeded)?;
+        if *scanned_entries > MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES {
+            return Err(AutonomousLaneReservationEvidenceError::AggregateBudgetExceeded);
+        }
+        *decoded_bytes = decoded_bytes
+            .checked_add(metadata.file.len())
+            .ok_or(AutonomousLaneReservationEvidenceError::AggregateBudgetExceeded)?;
+        if *decoded_bytes > AUTONOMOUS_LANE_ARTIFACT_AGGREGATE_BYTES as u64 {
+            return Err(AutonomousLaneReservationEvidenceError::AggregateBudgetExceeded);
+        }
+        Ok(())
+    }
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     fn preflight_autonomous_reservation_claims_locked(
         &self,
@@ -291,6 +323,14 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
         }
         let retirement_hash = retirement.map(AutonomousLaneSlotRetirementV1::digest).transpose()?;
         let descriptor = &payload.origin_proposal.descriptor;
+        let mut replica_queue_disposition = None;
+        let mut saw_ordinary_released = false;
+        let mut previous_current_stage = 2_u8;
+        let mut current_saw_active = false;
+        let mut current_saw_released = false;
+        let mut validated_replica_complete = None;
+        let mut replica_saw_unsealed = false;
+        let mut historical_saw_old_replica = false;
         for entrypoint_hash in &payload.entrypoint_hashes {
             let path = Self::autonomous_lane_entrypoint_claim_path(
                 &self.store_root,
@@ -321,7 +361,7 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
             }) {
                 return Err(conflict(&temp_path));
             }
-            let Some(_retirement) = retirement else {
+            let Some(retirement) = retirement else {
                 if existing.as_ref().is_some_and(|claim| claim != &expected_active)
                     || existing.is_none() && staged.is_none()
                 {
@@ -340,11 +380,123 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
                 *entrypoint_hash,
                 retirement_hash,
             );
+            let replica_released = existing.as_ref().and_then(|claim| {
+                (claim.owns_payload(payload)
+                    && claim.retirement_hash() == Some(retirement_hash))
+                    .then(|| claim.replica_queue_disposition())
+                    .flatten()
+            });
+            if let Some(disposition) = replica_released {
+                if saw_ordinary_released {
+                    return Err(conflict(&path));
+                }
+                if replica_queue_disposition
+                    .replace(disposition)
+                    .is_some_and(|observed| observed != disposition)
+                {
+                    return Err(conflict(&path));
+                }
+                if let Some(sealed_hash) = existing
+                    .as_ref()
+                    .and_then(AutonomousLaneEntrypointClaimV1::replica_terminal_outcome_hash)
+                {
+                    if replica_saw_unsealed {
+                        return Err(conflict(&path));
+                    }
+                    if let Some(validated) = validated_replica_complete {
+                        if validated != (disposition, sealed_hash) {
+                            return Err(conflict(&path));
+                        }
+                    } else {
+                        let terminal_path =
+                            Self::autonomous_lifecycle_terminal_outcome_path_for_entry(
+                                entry,
+                                &self.store_root,
+                                descriptor.lane_block_height,
+                                descriptor.proposal_height,
+                            );
+                        self.charge_autonomous_reservation_regular_sidecar_locked(
+                            &terminal_path,
+                            AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_MAX_BYTES,
+                            scanned_entries,
+                            decoded_bytes,
+                        )?;
+                        let cursor_path = Self::autonomous_lifecycle_cursor_path_for_entry(
+                            entry,
+                            &self.store_root,
+                            descriptor.lane_block_height,
+                            descriptor.proposal_height,
+                        );
+                        self.charge_autonomous_reservation_regular_sidecar_locked(
+                            &cursor_path,
+                            AUTONOMOUS_LIFECYCLE_CURSOR_MAX_BYTES,
+                            scanned_entries,
+                            decoded_bytes,
+                        )?;
+                        let process_generation_path =
+                            Self::autonomous_lifecycle_process_generation_path_for(
+                                &self.store_root,
+                            );
+                        self.charge_autonomous_reservation_regular_sidecar_locked(
+                            &process_generation_path,
+                            AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_MAX_BYTES,
+                            scanned_entries,
+                            decoded_bytes,
+                        )?;
+                        let Some(complete_hash) = self
+                            .autonomous_lifecycle_replica_terminal_outcome_is_complete_locked(
+                                entry,
+                                payload,
+                                retirement,
+                                disposition,
+                            )?
+                        else {
+                            return Err(conflict(&path));
+                        };
+                        if complete_hash != sealed_hash {
+                            return Err(conflict(&path));
+                        }
+                        validated_replica_complete = Some((disposition, complete_hash));
+                    }
+                } else {
+                    replica_saw_unsealed = true;
+                }
+            }
+            if existing.as_ref() == Some(&released) {
+                if replica_queue_disposition.is_some() {
+                    return Err(conflict(&path));
+                }
+                saw_ordinary_released = true;
+            }
             if current_lane_height_attempt {
+                if validated_replica_complete.is_some() && replica_released.is_none() {
+                    return Err(conflict(&path));
+                }
                 if existing.as_ref().is_some_and(|claim| {
-                    claim != &expected_active && claim != &pending && claim != &released
+                    claim != &expected_active
+                        && claim != &pending
+                        && claim != &released
+                        && replica_released.is_none()
                 }) || existing.is_none() && staged.is_none()
                 {
+                    return Err(conflict(&path));
+                }
+                let stage = if existing.as_ref() == Some(&released)
+                    || replica_released.is_some()
+                {
+                    2
+                } else if existing.as_ref() == Some(&pending) {
+                    1
+                } else {
+                    0
+                };
+                if stage > previous_current_stage {
+                    return Err(conflict(&path));
+                }
+                previous_current_stage = stage;
+                current_saw_active |= stage == 0;
+                current_saw_released |= stage == 2;
+                if current_saw_active && current_saw_released {
                     return Err(conflict(&path));
                 }
                 continue;
@@ -361,6 +513,69 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
             };
             if existing == released {
                 continue;
+            }
+            if let Some(disposition) = replica_released {
+                historical_saw_old_replica = true;
+                if !validated_replica_complete
+                    .is_some_and(|(validated_disposition, _)| {
+                        validated_disposition == disposition
+                    })
+                {
+                    let terminal_path =
+                        Self::autonomous_lifecycle_terminal_outcome_path_for_entry(
+                            entry,
+                            &self.store_root,
+                            descriptor.lane_block_height,
+                            descriptor.proposal_height,
+                        );
+                    self.charge_autonomous_reservation_regular_sidecar_locked(
+                        &terminal_path,
+                        AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_MAX_BYTES,
+                        scanned_entries,
+                        decoded_bytes,
+                    )?;
+                    let cursor_path = Self::autonomous_lifecycle_cursor_path_for_entry(
+                        entry,
+                        &self.store_root,
+                        descriptor.lane_block_height,
+                        descriptor.proposal_height,
+                    );
+                    self.charge_autonomous_reservation_regular_sidecar_locked(
+                        &cursor_path,
+                        AUTONOMOUS_LIFECYCLE_CURSOR_MAX_BYTES,
+                        scanned_entries,
+                        decoded_bytes,
+                    )?;
+                    let process_generation_path =
+                        Self::autonomous_lifecycle_process_generation_path_for(&self.store_root);
+                    self.charge_autonomous_reservation_regular_sidecar_locked(
+                        &process_generation_path,
+                        AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_MAX_BYTES,
+                        scanned_entries,
+                        decoded_bytes,
+                    )?;
+                    let Some(complete_hash) = self
+                        .autonomous_lifecycle_replica_terminal_outcome_is_complete_locked(
+                            entry,
+                            payload,
+                            retirement,
+                            disposition,
+                        )?
+                    else {
+                        return Err(conflict(&path));
+                    };
+                    if existing
+                        .replica_terminal_outcome_hash()
+                        .is_some_and(|sealed_hash| sealed_hash != complete_hash)
+                    {
+                        return Err(conflict(&path));
+                    }
+                    validated_replica_complete = Some((disposition, complete_hash));
+                }
+                continue;
+            }
+            if historical_saw_old_replica {
+                return Err(conflict(&path));
             }
             if existing.network_id != payload.network_id
                 || existing.epoch < payload.epoch

@@ -21603,7 +21603,8 @@ def test_terminal_authority_batch_commit_waits_for_complete_macro_step_after_dig
             "owner.token.source_class == FairV2IngressLeaderWireSourceClass::Control",
             "owner.token.source_class == FairV2IngressLeaderWireSourceClass::Chunk",
             "leader_wire",
-            "only an exact Control-class leader-wire owner may authorize dependency bypass",
+            "ordinary and timeout-control dependency bypasses require an exact "
+            "Control-class leader-wire owner",
         ),
         (
             "fair_v2_ingress_queue_gate_verdict",

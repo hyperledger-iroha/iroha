@@ -29,26 +29,18 @@ fn absolute_replay_state_path(path: &Path) -> std::io::Result<PathBuf> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SoranetHandshakeOwnerConfig {
-    required: bool,
-    replay_state_path: Option<PathBuf>,
+    replay_state_path: PathBuf,
     revocation_limits: TicketRevocationStoreLimits,
     outbound_mint_capacity: NonZeroUsize,
     inbound_verify_capacity: NonZeroUsize,
 }
 impl SoranetHandshakeOwnerConfig {
     fn ensure_reload_compatible(&self, requested: &Self) -> Result<(), Error> {
-        if self.required != requested.required {
-            return Err(restart_required_error(
-                "pow.required",
-                self.required,
-                requested.required,
-            ));
-        }
         if self.replay_state_path != requested.replay_state_path {
             return Err(restart_required_error(
                 "pow.revocation_store_path",
-                replay_path_label(self.replay_state_path.as_deref()),
-                replay_path_label(requested.replay_state_path.as_deref()),
+                self.replay_state_path.display(),
+                requested.replay_state_path.display(),
             ));
         }
         if self.revocation_limits.max_entries != requested.revocation_limits.max_entries {
@@ -83,13 +75,6 @@ impl SoranetHandshakeOwnerConfig {
     }
 }
 
-fn replay_path_label(path: Option<&Path>) -> String {
-    path.map_or_else(
-        || "<in-memory>".to_owned(),
-        |path| path.display().to_string(),
-    )
-}
-
 fn restart_required_error(
     field: &str,
     active: impl std::fmt::Display,
@@ -108,9 +93,8 @@ struct ValidatedSoranetHandshake {
     kem_id: u8,
     sig_id: u8,
     resume_hash: Option<Vec<u8>>,
-    pow_required: bool,
     pow_params: PowParameters,
-    puzzle_params: Option<puzzle::Parameters>,
+    puzzle_params: puzzle::Parameters,
     ticket_ttl: std::time::Duration,
     owner: SoranetHandshakeOwnerConfig,
 }
@@ -127,9 +111,9 @@ impl ValidatedSoranetHandshake {
             self.kem_id,
             self.sig_id,
             self.resume_hash,
-            self.pow_required,
+            true,
             self.pow_params,
-            self.puzzle_params,
+            Some(self.puzzle_params),
             self.ticket_ttl,
             shared_state,
         )?))
@@ -182,30 +166,17 @@ pub(crate) fn runtime_from_handshake(
     let puzzle_work_admission =
         process_wide_admission(owner.outbound_mint_capacity, owner.inbound_verify_capacity)
             .map_err(Error::HandshakeSoranet)?;
-    let revocation_store = if owner.required {
-        let replay_state_path = owner.replay_state_path.as_deref().ok_or_else(|| {
-            Error::HandshakeSoranet(
-                "required SoraNet replay state is missing its validated path".to_owned(),
-            )
-        })?;
-        TicketRevocationStore::load(
-            replay_state_path,
-            owner.revocation_limits,
-            SystemTime::now(),
-        )
-        .map_err(|err| {
-            Error::HandshakeSoranet(format!(
-                "failed to load soranet revocation store at {}: {err}",
-                replay_state_path.display()
-            ))
-        })?
-    } else {
-        // Production configuration fixes `required = true`. Programmatic test
-        // configurations that disable admission use only in-memory replay state.
-        TicketRevocationStore::in_memory(owner.revocation_limits).map_err(|err| {
-            Error::HandshakeSoranet(format!("invalid soranet revocation configuration: {err}"))
-        })?
-    };
+    let revocation_store = TicketRevocationStore::load(
+        &owner.replay_state_path,
+        owner.revocation_limits,
+        SystemTime::now(),
+    )
+    .map_err(|err| {
+        Error::HandshakeSoranet(format!(
+            "failed to load soranet revocation store at {}: {err}",
+            owner.replay_state_path.display()
+        ))
+    })?;
     let shared_state = SoranetHandshakeSharedState::new(
         Arc::new(Mutex::new(revocation_store)),
         puzzle_work_admission,
@@ -232,7 +203,6 @@ fn validate_handshake(
         pow,
     } = handshake;
     let ActualSoranetPow {
-        required,
         difficulty,
         max_future_skew,
         min_ticket_ttl,
@@ -250,22 +220,18 @@ fn validate_handshake(
         PowParameters::try_new(difficulty, max_future_skew, min_ticket_ttl).map_err(|err| {
             Error::HandshakeSoranet(format!("invalid soranet PoW configuration: {err}"))
         })?;
-    let puzzle_params = puzzle
-        .map(|cfg| {
-            puzzle::Parameters::try_new(
-                cfg.memory_kib,
-                cfg.time_cost,
-                cfg.lanes,
-                difficulty,
-                max_future_skew,
-                min_ticket_ttl,
-            )
-            .map_err(|err| {
-                Error::HandshakeSoranet(format!("invalid soranet puzzle configuration: {err}"))
-            })
-        })
-        .transpose()?;
-    if puzzle_params.is_some() && ticket_ttl <= min_ticket_ttl {
+    let puzzle_params = puzzle::Parameters::try_new(
+        puzzle.memory_kib,
+        puzzle.time_cost,
+        puzzle.lanes,
+        difficulty,
+        max_future_skew,
+        min_ticket_ttl,
+    )
+    .map_err(|err| {
+        Error::HandshakeSoranet(format!("invalid soranet puzzle configuration: {err}"))
+    })?;
+    if ticket_ttl <= min_ticket_ttl {
         return Err(Error::HandshakeSoranet(format!(
             "invalid soranet puzzle ticket timing: ticket_ttl {ticket_ttl:?} must exceed min_ticket_ttl {min_ticket_ttl:?}"
         )));
@@ -276,14 +242,12 @@ fn validate_handshake(
                 Error::HandshakeSoranet(format!("invalid soranet revocation configuration: {err}"))
             },
         )?;
-    let replay_state_path = required
-        .then(|| absolute_replay_state_path(Path::new(revocation_store_path.as_ref())))
-        .transpose()
+    let replay_state_path = absolute_replay_state_path(Path::new(revocation_store_path.as_ref()))
         .map_err(|err| {
-            Error::HandshakeSoranet(format!(
-                "failed to resolve soranet revocation store path {revocation_store_path}: {err}"
-            ))
-        })?;
+        Error::HandshakeSoranet(format!(
+            "failed to resolve soranet revocation store path {revocation_store_path}: {err}"
+        ))
+    })?;
     Ok(ValidatedSoranetHandshake {
         descriptor_commit: descriptor_commit.into_value(),
         client_capabilities: client_capabilities.into_value(),
@@ -292,12 +256,10 @@ fn validate_handshake(
         kem_id,
         sig_id,
         resume_hash: resume_hash.map(iroha_config::base::WithOrigin::into_value),
-        pow_required: required,
         pow_params,
         puzzle_params,
         ticket_ttl,
         owner: SoranetHandshakeOwnerConfig {
-            required,
             replay_state_path,
             revocation_limits,
             outbound_mint_capacity,

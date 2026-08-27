@@ -326,6 +326,8 @@ fn apply_barriers_reconcile_current_serve_and_unadmitted_fetch_capacity_before_d
             "producer_claim.decided_lane_recovery_permit()",
             ".reconcile_decided_lane_certified_serve(&mut active_runner, permit)",
             "activated.with_runner_runtime(",
+            "producer_claim.permits_decided_lane_recovery_ingress()",
+            "settle_apply_barrier_runner_decision_handoff(",
             "retry_decided_lane_recovery_exact_output(permit",
             "drain_decided_lane_recovery_ingress(",
         ],
@@ -333,6 +335,22 @@ fn apply_barriers_reconcile_current_serve_and_unadmitted_fetch_capacity_before_d
     assert!(
         !barrier.contains("drive_ingress_turn("),
         "an Apply barrier may inherit a capacity wait but cannot admit fresh ordinary ingress"
+    );
+
+    let handoff = source_region(
+        run_inner,
+        "pub(in crate::sumeragi) fn settle_apply_barrier_runner_decision_handoff(",
+        "#[allow(clippy::too_many_arguments, clippy::too_many_lines)]",
+    );
+    assert_source_tokens_in_order(
+        handoff,
+        &[
+            "executor.reconcile_pending_runner_decision_cleanup(services)?",
+            "let directive = executor.local_proposal_directive()?",
+            "local_proposal\n        .state\n        .reconcile(LocalProposalOwner::from(directive))",
+            "lane_work.retain_merge_sidecars_for_global_view(",
+            "executor.acknowledge_runner_decision_cleanup(",
+        ],
     );
 
     let turn_driver = include_str!("v2_lifecycle_turn_driver.rs");

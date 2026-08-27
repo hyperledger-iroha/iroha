@@ -4408,9 +4408,24 @@ pub closed spec fn production_in_flight_first_release_terminal_owner(
         == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_FORGOTTEN)
         || projection.queue.reservation_state
             == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED)
+        || (projection.queue.reservation_state
+            == refinement_tag_value!(
+                IN_FLIGHT_FIRST_RELEASE_RESERVATION_REPLICA_QUEUE_FIFO_PRESERVED
+            )
+            && projection.release.released_prefix == projection.queue.selected_count)
     {
         Some(ProductionInFlightFirstReleaseTerminalOwnerProjection {
             ordinary_fifo_owner: true,
+            canonical_wsv_owner: false,
+            commit_terminal: false,
+            release_terminal: true,
+        })
+    } else if projection.queue.reservation_state
+        == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_REPLICA_QUEUE_ABSENT)
+        && projection.release.released_prefix == projection.queue.selected_count
+    {
+        Some(ProductionInFlightFirstReleaseTerminalOwnerProjection {
+            ordinary_fifo_owner: false,
             canonical_wsv_owner: false,
             commit_terminal: false,
             release_terminal: true,

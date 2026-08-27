@@ -1,4 +1,4 @@
-name: Publish (Iroha 3 release)
+name: Qualify Iroha 3 release candidates
 
 on:
   push:
@@ -17,7 +17,7 @@ env:
   IROHA_RUNTIME_IMAGE: ${{ vars.IROHA_RUNTIME_IMAGE }}
 
 jobs:
-  registry-no-profiling:
+  candidate-no-profiling:
     runs-on: [self-hosted, Linux, iroha2]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -38,15 +38,12 @@ jobs:
           PREFIX='v'
           TAG=${RELEASE_VERSION#$PREFIX}
           echo "TAG=$TAG" >>$GITHUB_ENV
-      - name: Build and export the Iroha 3 image to Docker
+      - name: Build and load the Iroha 3 release candidate
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
-        if: always()
         with:
           context: .
           load: true
-          tags: |
-            hyperledger/iroha:${{ env.TAG }}
-            docker.soramitsu.co.jp/iroha3/iroha:${{ env.TAG }}
+          tags: iroha-release-candidate:${{ env.TAG }}
           build-args: |
             "IROHA_RUST_BUILDER_IMAGE=${{ env.IROHA_RUST_BUILDER_IMAGE }}"
             "IROHA_RUNTIME_IMAGE=${{ env.IROHA_RUNTIME_IMAGE }}"
@@ -61,7 +58,7 @@ jobs:
             --user "$(id -u):$(id -g)" \
             --mount "type=bind,src=$bundle_root,dst=/bundle" \
             --entrypoint kagami \
-            "hyperledger/iroha:${TAG}" \
+            "iroha-release-candidate:${TAG}" \
             localnet --seed Iroha --peers 4 --sora-profile nexus \
               --consensus-mode npos --out-dir /bundle > /dev/null
           test -s "$bundle_root/genesis.signed.nrt"
@@ -70,7 +67,11 @@ jobs:
           echo "IROHA_GENESIS_SIGNED_FILE=$bundle_root/genesis.signed.nrt" >> "$GITHUB_ENV"
           echo "IROHA_GENESIS_PUBLIC_KEY_FILE=$bundle_root/genesis.public_key" >> "$GITHUB_ENV"
           echo "IROHA_GENESIS_EXPECTED_HASH_FILE=$bundle_root/genesis.expected_hash" >> "$GITHUB_ENV"
-      - name: Test docker-compose.single.yml before pushing
+      - name: Prepare candidate tags for compose qualification
+        run: |
+          docker tag "iroha-release-candidate:${TAG}" hyperledger/iroha:local
+          docker tag "iroha-release-candidate:${TAG}" hyperledger/iroha:dev
+      - name: Test docker-compose.single.yml against the candidate
         run: |
           docker compose -p iroha-single-${{ github.run_id }}-${{ github.run_attempt }} -f ${{ env.DEFAULTS_DIR }}/docker-compose.single.yml up --wait || {
             echo "docker-compose failed. Logs:";
@@ -79,7 +80,7 @@ jobs:
             exit 1;
           }
           docker compose -p iroha-single-${{ github.run_id }}-${{ github.run_attempt }} -f ${{ env.DEFAULTS_DIR }}/docker-compose.single.yml down --volumes --remove-orphans
-      - name: Test docker-compose.local.yml before pushing
+      - name: Test docker-compose.local.yml against the candidate
         run: |
           docker compose -p iroha-local-${{ github.run_id }}-${{ github.run_attempt }} -f ${{ env.DEFAULTS_DIR }}/docker-compose.local.yml up --wait || {
             echo "docker-compose failed. Logs:";
@@ -88,7 +89,7 @@ jobs:
             exit 1;
           }
           docker compose -p iroha-local-${{ github.run_id }}-${{ github.run_attempt }} -f ${{ env.DEFAULTS_DIR }}/docker-compose.local.yml down --volumes --remove-orphans
-      - name: Test docker-compose.yml before pushing
+      - name: Test docker-compose.yml against the candidate
         run: |
           docker compose -p iroha-default-${{ github.run_id }}-${{ github.run_attempt }} -f ${{ env.DEFAULTS_DIR }}/docker-compose.yml up --wait || {
             echo "docker-compose failed. Logs:";
@@ -106,31 +107,11 @@ jobs:
             *) echo "Refusing to remove an unexpected genesis bundle path" >&2; exit 1 ;;
           esac
           rm -rf -- "$IROHA_GENESIS_BUNDLE_ROOT"
-      - name: Login to DockerHub
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Login to Soramitsu Harbor
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
-        with:
-          registry: docker.soramitsu.co.jp
-          username: ${{ secrets.HARBOR_USERNAME }}
-          password: ${{ secrets.HARBOR_TOKEN }}
-      - name: Build and push the Iroha 3 image
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
-        with:
-          context: .
-          push: true
-          tags: |
-            hyperledger/iroha:${{ env.TAG }}
-            docker.soramitsu.co.jp/iroha3/iroha:${{ env.TAG }}
-          labels: commit=${{ github.sha }}
-          build-args: |
-            "IROHA_RUST_BUILDER_IMAGE=${{ env.IROHA_RUST_BUILDER_IMAGE }}"
-            "IROHA_RUNTIME_IMAGE=${{ env.IROHA_RUNTIME_IMAGE }}"
+      # Official publication is intentionally absent here. Promotion must use
+      # scripts/run_release_pipeline.py with the complete externally reviewed
+      # timed-OVN audit bundle verified by scripts/release_manifest_signing.py.
 
-  registry-with-profiling:
+  candidate-with-profiling:
     runs-on: [self-hosted, Linux, iroha2]
     container:
       image: ${{ vars.IROHA_CI_IMAGE }}
@@ -150,31 +131,17 @@ jobs:
           PREFIX='v'
           TAG=${RELEASE_VERSION#$PREFIX}
           echo "TAG=$TAG" >>$GITHUB_ENV
-      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Login to Soramitsu Harbor
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
-        with:
-          registry: docker.soramitsu.co.jp
-          username: ${{ secrets.HARBOR_USERNAME }}
-          password: ${{ secrets.HARBOR_TOKEN }}
       - name: Set up Docker Buildx
         id: buildx
-        if: always()
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
         with:
           install: true
           version: v0.34.1
-      - name: Build and push the Iroha 3 profiling image
+      - name: Build and load the Iroha 3 profiling release candidate
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
-        if: always()
         with:
-          push: true
-          tags: |
-            hyperledger/iroha:${{ env.TAG }}-${{ env.IROHA_PROFILE }}
-            docker.soramitsu.co.jp/iroha3/iroha:${{ env.TAG }}-${{ env.IROHA_PROFILE }}
+          load: true
+          tags: iroha-release-candidate:${{ env.TAG }}-${{ env.IROHA_PROFILE }}
           labels: commit=${{ github.sha }}
           build-args: |
             "IROHA_RUST_BUILDER_IMAGE=${{ env.IROHA_RUST_BUILDER_IMAGE }}"

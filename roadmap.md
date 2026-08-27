@@ -49,9 +49,13 @@ Completed history lives in [`status.md`](./status.md).
   closure to every maintained SDK. CI should reject unreferenced shipping files, generated package
   metadata, deprecated annotations, compatibility-only aliases, and test helpers in production
   artifacts.
-- Finish the Kotlin/Java reflection audit by replacing the remaining optional compression,
-  telemetry, and transport probes with direct typed dependencies or explicit unsupported results.
-  Remove raw-string status adapters and unused profile parameters in the same mirrored changes.
+- Finish the remaining Java Android platform-reflection audit by moving telemetry, HTTP transport,
+  and keystore integrations behind typed Android source-set implementations with explicit JVM
+  injection or unsupported results. Norito compression and generic adapter dispatch are now direct;
+  raw subscription/compression spellings and unused peer-profile limit parameters are removed.
+- Rebase the stale Android direct-`javac` lint lane on the complete Gradle-owned SDK dependency
+  classpath, then clear its existing source warnings and missing test dependencies. The lane now
+  resolves mandatory Norito compression correctly, but does not yet qualify the full Java SDK.
 - Reduce Python transaction signing to one typed credential input per operation and remove any
   remaining alternate keyword shapes. Keep exact canonical request validation before transport.
 - Select one first-release transaction executable carrier in the data model and every SDK. Migrate
@@ -266,8 +270,11 @@ Completed history lives in [`status.md`](./status.md).
   per-session runtime custody, threshold aggregation, candidate-effect
   assembly, and authoritative finalized-pulse persistence on at least four
   peers. Include optional Parliament demand batches, mandatory NPoS boundary
-  slots, missing/invalid shares, restart and idempotent retransmission, and key
-  rotation. The certified lifecycle now compare-and-sets the expected active
+  slots, missing/invalid shares, selective withholding, repeated-retry bias and
+  domain separation, restart and idempotent retransmission, and key rotation.
+  Measure the remaining selection advantage across the bounded retry sequence;
+  single-round uniformity is not sufficient evidence. The certified lifecycle
+  now compare-and-sets the expected active
   predecessor and makes a block-`H` global key change effective at `H + 1`;
   qualification must prove that optional and mandatory pulses authorized by
   the parent state are resolved by the session active at the pulse height and
@@ -297,16 +304,20 @@ Completed history lives in [`status.md`](./status.md).
   material and never a continuing authorization. Qualify the separate app-signed
   casting-proof route and exact ABI 23 proof-only C/JNI wallet surface. The native
   verifier must continue to consume an explicit immutable raw-network/checkpoint/
-  context/ballot trust anchor, reject nonterminal proof pages, verify finality,
+  context/ballot trust anchor, authenticate strictly advancing nonterminal pages
+  for durable checkpoint promotion without seed access, verify terminal finality,
   the fixed witness, and membership, replay-validate the embedded archive, and
-  exact-match its rederived compact binding before keystore seed access. Preserve
+  exact-match its rederived compact binding before any seed-bearing operation.
+  Preserve
   removal of every archive-only wallet export. Qualify Core's exact half-open
   phase-window and nonmonotone-schedule rejection, the generation-bound Android
   seed handles, and the Swift/Kotlin/Java immutable no-default trust-anchor APIs.
   Keep the aligned served OpenAPI and JavaScript/Kotlin/Java/Swift projections
   strict, including negative tests for malformed proofs, fake chains, wrong
-  network/context/ballot anchors, intermediate pages, archive substitution, and
-  binding tampering. Cargo-qualify the bounded proof decoder and
+  network/context/ballot anchors, non-advancing intermediate pages, intermediate
+  pages at terminal seed-bearing entry points, archive substitution, and binding
+  tampering, plus a positive multi-page checkpoint-promotion path. Cargo-qualify
+  the bounded proof decoder and
   multi-registration native ballot path before treating the corridor as
   operational. Rebuild and execute same-source ABI-23 Swift XCFramework and
   Android native artifacts rather than treating parse, JVM-descriptor, or
@@ -377,6 +388,11 @@ Completed history lives in [`status.md`](./status.md).
   release-scale archive. Add a durable, version-bound rebuild checkpoint only if
   that evidence warrants it; preserve fail-closed reads for incomplete,
   poisoned, or pruning-recovery state and never restore the ledger-history scan.
+- Replace the first-release 4,096-entry retained Kaigi private-usage log with a
+  versioned rolling accumulator before supporting longer fine-grained sessions.
+  Preserve deterministic replay protection, bind the accumulator into the
+  privacy proof statement, and migrate only through an explicit protocol
+  version rather than weakening the V1 record bound.
 - Finish non-Rust Kaigi parity against one Rust-generated nine-instruction
   Norito fixture set. Wire the Kotlin/Java typed templates into canonical
   `WirePayload` encoding and consume the same complete fixture set from
@@ -529,6 +545,22 @@ to:
   a substitute for operator approval.
 
 ## Kagemusha production evidence closeout
+
+Public Taira remains the deployment gate rather than a source-code toggle:
+
+- Restore `taira.sora.org:443`, render the four validator configurations with
+  the reviewed `[settlement.offline]` release, deploy the exact eight-role
+  ABI-21/V4 artifact set plus catalog/reservation/revalidation/validator seals,
+  and restart all four peers from the same signed genesis and flattened-config
+  digest.
+- Use the existing Taira Kagami bootstrap generator to register and fund the
+  command authority with `CanManageOfflineEscrow`, install the verifier records
+  and Convertible XOR definition, complete governed Stage/Enable activation,
+  activate the device policy, and enroll qualified hardware-backed users.
+- Publish the protected `privacy-production-enabled` SDK artifacts, then run a
+  same-revision `iroha taira doctor` and every SDK's credential-free live probe.
+  Perform top-up/redemption canaries only under a separate explicit live-write
+  authorization and retain their four-validator finality/liveness evidence.
 
 The exact V4 lifecycle source corridor is implemented end to end: Core's
 direct-carrier and atomic state rules, the six-phase archive CLI, the
@@ -724,7 +756,7 @@ close the internal blockers below:
   timeout envelope, then prove the empty queue leaves total and non-empty block
   heights stable; empty blocks are not a liveness mechanism.
 - Treat Sumeragi Validate/replay production wiring as complete and keep the
-  remaining gate evidence-driven. The source-contract harness covers all 50
+  remaining gate evidence-driven. The source-contract harness covers all 54
   named cases, and the specialized live-WAL mint census is exactly four sealed
   replay authorities and three frame-bound pending owners. Capture fresh
   focused, Core, static, formal, and relevant workspace results from the frozen

@@ -540,6 +540,170 @@ fn live_decision_installed_before_apply_step_still_waits_for_runner_cleanup() {
     assert_eq!(services.apply_tasks[0].subject(), decision.2);
     assert!(executor.pending_runner_decision_cleanup.is_none());
 }
+
+#[test]
+fn lifecycle_apply_dispatch_waits_for_exact_runner_decision_cleanup() {
+    let mut fixture = Fixture::new();
+    fixture.manifest = canonical_payload_manifest(
+        &fixture.context,
+        round(&fixture.context, 3),
+        fixture.manifest.subject,
+        &fixture.body,
+    );
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let mut services = fixture.services();
+    install_fsynced_validation_fixture(
+        &mut executor,
+        &mut services,
+        &fixture,
+        fixture.manifest.clone(),
+    );
+    let commit = fixture.qc(wire::GlobalPhase::Commit);
+    let decision = (
+        commit.round,
+        commit.proposal_round,
+        commit.subject,
+        commit.execution_commitment,
+    );
+    executor.runtime.decided_body = Some(decision);
+    executor.runtime.live_clocks_armed = true;
+    executor.runtime.steps.push_back(Ok(RuntimeStep::Idle));
+
+    assert_eq!(
+        executor
+            .step(Instant::now(), &mut services)
+            .expect("observe the live Decision before any Apply effect exists"),
+        EffectExecutorStep::Idle
+    );
+    assert_eq!(
+        executor
+            .reconcile_runtime_decision(&mut services)
+            .expect("protect the exact runtime Decision before runner cleanup"),
+        Some(decision)
+    );
+    assert_eq!(executor.protected_decision, Some(decision));
+    assert_eq!(
+        executor
+            .pending_runner_decision_cleanup
+            .map(|pending| pending.decision),
+        Some(decision)
+    );
+    assert!(executor.retained_effect_batch.is_none());
+    assert!(executor.parked_effect_batch.is_none());
+    assert_eq!(executor.pending_work(), 0);
+    assert!(
+        !executor.lifecycle_decision_apply_executor_owners_are_empty(),
+        "the runner's process-local Decision handoff must be an independent Apply fence"
+    );
+
+    executor
+        .acknowledge_runner_decision_cleanup(tag(0), Some(decision.2))
+        .expect("retire the exact current runner Decision owner");
+    assert!(
+        executor.lifecycle_decision_apply_executor_owners_are_empty(),
+        "retiring only the exact runner handoff must reopen the otherwise-empty Apply cut"
+    );
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn apply_barrier_handoff_retires_exact_live_proposal_and_lane_losers() {
+    let mut fixture = ProductionTransportFixture::new();
+    let started = Instant::now();
+    fixture
+        .executor
+        .arm_live_clocks(
+            ProductionLifecycleLiveClockActivationPermitV1::for_test(),
+            started,
+        )
+        .expect("arm the production serialized runtime");
+    assert!(!fixture.executor.has_pending_runner_decision_cleanup_for_test());
+
+    let pre_decision_directive = fixture
+        .executor
+        .local_proposal_directive()
+        .expect("read the live pre-Decision proposal owner");
+    assert!(pre_decision_directive.decided_subject().is_none());
+    let mut local_proposal =
+        super::super::v2_runner::ProductionLifecycleLocalProposalStateV1::with_attempted_for_test(
+            pre_decision_directive,
+        );
+    assert!(local_proposal.already_attempted(pre_decision_directive));
+    let mut lane_work =
+        super::super::v2_lane_work::tests::runner_handoff_losing_merge_fixture_for_test();
+    assert_eq!(
+        super::super::v2_lane_work::tests::runner_handoff_losing_merge_counts_for_test(
+            &lane_work,
+        ),
+        (1, 1)
+    );
+
+    let commit =
+        fixture.quorum_certificate(wire::GlobalPhase::Commit, fixture.canonical_commitment);
+    let decision = (
+        commit.round,
+        commit.proposal_round,
+        commit.subject,
+        commit.execution_commitment,
+    );
+    let message =
+        wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+            commit,
+        ));
+    let sender = PeerId::new(fixture.validator_keys[0].public_key().clone());
+    let ownership = fair_transport_ingress_ownership(message.clone(), sender);
+    let _admission = fixture
+        .executor
+        .enqueue_discovered_commit_certificate(message.clone(), ownership)
+        .expect("enqueue the authenticated live CommitQC");
+    let output_guard = Arc::clone(&fixture.executor.output_guard);
+    let mut services = FakeServices::default();
+    for _ in 0..8 {
+        fixture
+            .executor
+            .step(Instant::now(), &mut services)
+            .expect("advance the authenticated live CommitQC");
+        if fixture.executor.has_pending_runner_decision_cleanup_for_test() {
+            break;
+        }
+    }
+    assert_eq!(fixture.executor.protected_decision, Some(decision));
+    assert_eq!(
+        fixture
+            .executor
+            .pending_runner_decision_cleanup
+            .map(|pending| pending.decision),
+        Some(decision)
+    );
+    assert!(fixture.executor.retained_effect_batch.is_none());
+    assert!(fixture.executor.parked_effect_batch.is_none());
+    assert!(services.apply_tasks.is_empty());
+    assert!(local_proposal.already_attempted(pre_decision_directive));
+
+    let permit = super::super::v2_runner::LifecycleProducerClaimDispositionV1::AwaitingApplyCompletion
+        .decided_lane_recovery_permit()
+        .expect("the typed Apply barrier mints only decided-lane authority");
+    super::super::v2_runner::lifecycle_run_inner::settle_apply_barrier_runner_decision_handoff(
+        &mut fixture.executor,
+        &mut services,
+        &mut local_proposal,
+        &mut lane_work,
+        output_guard.as_ref(),
+        &permit,
+    )
+    .expect("retire the exact live Decision handoff behind Apply");
+    assert!(!fixture.executor.has_pending_runner_decision_cleanup_for_test());
+    assert!(local_proposal.is_pristine_for_test());
+    assert!(!local_proposal.already_attempted(pre_decision_directive));
+    assert_eq!(
+        super::super::v2_lane_work::tests::runner_handoff_losing_merge_counts_for_test(
+            &lane_work,
+        ),
+        (0, 0)
+    );
+    assert!(!output_guard.restart_required());
+}
+
 #[test]
 fn decision_cleanup_batch_accepts_zero_or_one_exact_apply_only() {
     let fixture = Fixture::new();
@@ -1994,6 +2158,192 @@ fn protected_prepare_validate_reseeds_missing_replay_from_exact_recovered_body()
 }
 
 #[test]
+fn protected_prepare_readmission_replaces_terminal_live_validate_tombstone() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let mut services = fixture.services();
+    let (key, durable) =
+        install_exact_recovered_body_without_lifecycle_replay(&mut executor, &fixture);
+    let terminal_ordinal = 9_106;
+    install_bound_validate_retry_authority_for_cleanup(
+        &mut executor,
+        &fixture,
+        key,
+        BoundValidateRetryAuthorityKind::Live,
+        terminal_ordinal,
+    );
+    assert!(
+        executor
+            .release_validate_retry_lifecycle_ordinal(key, terminal_ordinal)
+            .expect("release the old view's terminal Validate row")
+    );
+    assert_eq!(
+        executor.durable_validate_retry_seals[&key].lifecycle_ordinal(),
+        None,
+        "the completed old row remains only as an inert retry tombstone"
+    );
+
+    let current_tag = tag(1);
+    let prepare = fixture.qc(wire::GlobalPhase::Prepare);
+    let validated =
+        ValidatedBodyReceipt::for_test_with_commitment(durable, prepare.execution_commitment);
+    assert!(
+        executor
+            .validated_bodies
+            .insert(key, validated.clone())
+            .is_none()
+    );
+    let validate = AdapterEffect::ValidateBody {
+        tag: current_tag,
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let ownership =
+        recovered_validate_retry_ownership(&fixture, &validate, Some(prepare.clone()), 9_110);
+    let mut timeout = timeout_certificate(&fixture);
+    timeout.groups[0].highest_prepare_qc = Some(prepare.clone());
+    executor.runtime.round_tag = Some(current_tag);
+    executor.runtime.locked_body = Some(key);
+    executor
+        .install_view(
+            current_tag,
+            timeout,
+            Some(prepare.clone()),
+            None,
+            &mut services,
+        )
+        .expect("install the exact protected view before its Validate retry");
+    executor.runtime.durable_body_authority_certificate = Some(prepare);
+    executor.runtime.exact_effect_ownership = Some((validate.clone(), ownership.clone()));
+
+    assert_eq!(
+        executor
+            .consume_effects(vec![validate.clone()], &mut services)
+            .expect("the protected Prepare reopens one normal Validate admission"),
+        1,
+        "an ordinal-free old-view tombstone cannot supply the current view's completion",
+    );
+    let pending = executor
+        .pending_durable_validate_admissions
+        .get(&key)
+        .expect("the protected Prepare owns one fresh pending Validate admission");
+    assert!(pending.exactly_matches_retry(&validate, &ownership));
+    let DurableValidateRetrySealV1::Live {
+        effect: retained_effect,
+        ownership: retained_ownership,
+        lifecycle_ordinal,
+        ..
+    } = &executor.durable_validate_retry_seals[&key]
+    else {
+        panic!("the fresh protected Validate must retain live lineage")
+    };
+    assert_eq!(retained_effect, &validate);
+    assert_eq!(retained_ownership, &ownership);
+    assert_eq!(*lifecycle_ordinal, None);
+    assert_eq!(executor.validated_bodies.get(&key), Some(&validated));
+    assert!(executor.pending_applications.is_empty());
+    assert!(executor.live_lifecycle_decision_apply.is_none());
+    assert!(services.apply_tasks.is_empty());
+    assert!(!executor.status().fail_closed);
+    assert!(!executor.output_guard.restart_required());
+    assert!(services.closed.is_empty());
+}
+
+#[test]
+fn protected_prepare_readmission_rolls_back_with_a_malformed_later_effect() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let mut services = fixture.services();
+    let (key, _) = install_exact_recovered_body_without_lifecycle_replay(&mut executor, &fixture);
+    let terminal_ordinal = 9_120;
+    install_bound_validate_retry_authority_for_cleanup(
+        &mut executor,
+        &fixture,
+        key,
+        BoundValidateRetryAuthorityKind::Live,
+        terminal_ordinal,
+    );
+    assert!(
+        executor
+            .release_validate_retry_lifecycle_ordinal(key, terminal_ordinal)
+            .expect("release the old terminal Validate before rollback preflight")
+    );
+    let tombstone_before = executor.durable_validate_retry_seals[&key].clone();
+
+    let current_tag = tag(1);
+    let prepare = fixture.qc(wire::GlobalPhase::Prepare);
+    let mut timeout = timeout_certificate(&fixture);
+    timeout.groups[0].highest_prepare_qc = Some(prepare.clone());
+    executor.runtime.round_tag = Some(current_tag);
+    executor.runtime.locked_body = Some(key);
+    executor
+        .install_view(
+            current_tag,
+            timeout,
+            Some(prepare.clone()),
+            None,
+            &mut services,
+        )
+        .expect("install the exact protected view for rollback preflight");
+
+    let prepare_fetch = AdapterEffect::FetchBody {
+        tag: current_tag,
+        round: prepare.proposal_round,
+        subject: prepare.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: certified_sources(&fixture, &prepare),
+        certificate: Some(prepare),
+    };
+    let validate = AdapterEffect::ValidateBody {
+        tag: current_tag,
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let store = AdapterEffect::StoreBody {
+        tag: current_tag,
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let source_effects = vec![prepare_fetch, store];
+    let mut owners = bind_adapter_effect_batch_ownership(
+        &source_effects,
+        vec![
+            RuntimeEffectOwnership::fresh_for_test(current_tag, 9_121),
+            RuntimeEffectOwnership::fresh_for_test(current_tag, 9_122),
+        ],
+    )
+    .expect("bind the two-position rollback source batch");
+    let prepare_validate_owner = owners
+        .remove(0)
+        .rebind_as_inherited_adapter_effect(&validate)
+        .expect("carry Prepare authority into the first Validate position");
+    let malformed_later_owner = owners.remove(0);
+    let terminal_commits_before = executor.runtime.terminal_body_candidate_commits;
+
+    assert!(
+        executor
+            .retain_effect_batch(
+                vec![validate.clone(), validate],
+                vec![prepare_validate_owner, malformed_later_owner],
+            )
+            .is_err(),
+        "the Store-bound second owner must fail the later Validate position"
+    );
+    assert_eq!(
+        executor.durable_validate_retry_seals[&key], tombstone_before,
+        "the transactional clone must restore the first position's tombstone"
+    );
+    assert!(executor.retained_effect_batch.is_none());
+    assert!(executor.pending_durable_validate_admissions.is_empty());
+    assert_eq!(
+        executor.runtime.terminal_body_candidate_commits,
+        terminal_commits_before
+    );
+    assert!(!executor.status().fail_closed);
+    assert!(!executor.output_guard.restart_required());
+}
+
+#[test]
 fn missing_replay_validate_rejects_absent_protected_lock_or_durable_prepare_qc() {
     let fixture = Fixture::new();
 
@@ -2251,6 +2601,93 @@ fn bound_validate_retry_ordinal_for_cleanup(
 }
 
 #[test]
+fn recovered_apply_releases_only_its_authenticated_validate_retry_predecessor() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let commit = fixture.qc(wire::GlobalPhase::Commit);
+    let key = (commit.proposal_round, commit.subject);
+    let validate_predecessor_ordinal = 40_030;
+    let apply_ordinal = 40_042;
+    assert!(
+        validate_predecessor_ordinal + 1 < apply_ordinal,
+        "the regression must retain a non-adjacent recovered predecessor"
+    );
+    install_bound_validate_retry_authority_for_cleanup(
+        &mut executor,
+        &fixture,
+        key,
+        BoundValidateRetryAuthorityKind::Recovered,
+        validate_predecessor_ordinal,
+    );
+    executor.protected_decision = Some((
+        commit.round,
+        commit.proposal_round,
+        commit.subject,
+        commit.execution_commitment,
+    ));
+    let dispatch_key = LifecycleDecisionApplyDispatchKeyV1::for_height_context_test(
+        &fixture.context,
+        apply_ordinal,
+        0xD4,
+    );
+
+    assert!(matches!(
+        executor.preflight_recovered_apply_validate_retry_predecessor(
+            dispatch_key,
+            key,
+            validate_predecessor_ordinal + 1,
+        ),
+        Err(EffectExecutorError::Contract(reason))
+            if reason.contains("exact durable Validate predecessor ordinal")
+    ));
+    assert_eq!(
+        bound_validate_retry_ordinal_for_cleanup(
+            &executor,
+            key,
+            BoundValidateRetryAuthorityKind::Recovered,
+        ),
+        Some(validate_predecessor_ordinal),
+        "a foreign predecessor ordinal must not mutate the recovered retry owner"
+    );
+    assert_eq!(
+        executor
+            .preflight_recovered_apply_validate_retry_predecessor(
+                dispatch_key,
+                key,
+                validate_predecessor_ordinal,
+            )
+            .expect("preflight the authenticated non-adjacent Validate predecessor"),
+        Some(validate_predecessor_ordinal)
+    );
+    assert!(
+        executor
+            .release_recovered_apply_validate_retry_predecessor(
+                dispatch_key,
+                key,
+                validate_predecessor_ordinal,
+            )
+            .expect("release the authenticated recovered Validate predecessor")
+    );
+    assert_eq!(
+        bound_validate_retry_ordinal_for_cleanup(
+            &executor,
+            key,
+            BoundValidateRetryAuthorityKind::Recovered,
+        ),
+        None
+    );
+    assert!(
+        !executor
+            .release_recovered_apply_validate_retry_predecessor(
+                dispatch_key,
+                key,
+                validate_predecessor_ordinal,
+            )
+            .expect("an already-inert recovered predecessor is idempotent")
+    );
+}
+
+#[test]
 fn missing_replay_validate_rejects_ordinary_phase_none_binding() {
     let fixture = Fixture::new();
     let mut executor = fixture.executor(EffectQueueConfig::default());
@@ -2368,6 +2805,98 @@ fn decision_cleanup_defers_live_validate_authority_retirement_until_exact_resolu
             }
         }
     }
+}
+
+#[test]
+fn live_validate_successor_refines_only_the_same_attested_row() {
+    let fixture = Fixture::new();
+    let round = fixture.manifest.round;
+    let subject = fixture.manifest.subject;
+    let ordinal = 41_u128;
+    let key = |causal_root, first_ordinal, ordinal, slot_index, digest| {
+        LifecycleValidateDispatchKeyV1::for_test(
+            &fixture.context,
+            LifecycleDigest::new([causal_root; 32]),
+            first_ordinal,
+            ordinal,
+            slot_index,
+            LifecycleDigest::new([digest; 32]),
+        )
+        .expect("construct an exact Validate dispatch key")
+    };
+    let wake_key = key(0x41, ordinal, ordinal, 0, 0x51);
+    let validated_key = key(0x41, ordinal, ordinal, 0, 0x52);
+    let rejected_key = key(0x41, ordinal, ordinal, 0, 0x53);
+    let true_owner = LiveLifecycleValidateSuccessorOwnerV1 {
+        dispatch_key: wake_key,
+        round,
+        subject,
+        apply_is_authorized: true,
+    };
+    let validated = LiveLifecycleValidateSuccessorOwnerV1 {
+        dispatch_key: validated_key,
+        round,
+        subject,
+        apply_is_authorized: true,
+    };
+    let rejected = LiveLifecycleValidateSuccessorOwnerV1 {
+        dispatch_key: rejected_key,
+        round,
+        subject,
+        apply_is_authorized: false,
+    };
+    assert!(!true_owner.can_refine_to(&true_owner));
+    assert!(true_owner.can_refine_to(&validated));
+    assert!(true_owner.can_refine_to(&rejected));
+    assert!(!rejected.can_refine_to(&validated));
+    assert!(!rejected.can_refine_to(&LiveLifecycleValidateSuccessorOwnerV1 {
+        dispatch_key: key(0x41, ordinal, ordinal, 0, 0x54),
+        round,
+        subject,
+        apply_is_authorized: false,
+    }));
+
+    let mut foreign_round = round;
+    foreign_round.view = foreign_round.view.saturating_add(1);
+    let mut foreign_subject = subject;
+    foreign_subject.payload_hash = Hash::new(b"foreign Validate successor subject");
+    let logical_substitutions = [
+        LiveLifecycleValidateSuccessorOwnerV1 {
+            dispatch_key: key(0x42, ordinal, ordinal, 0, 0x52),
+            round,
+            subject,
+            apply_is_authorized: true,
+        },
+        LiveLifecycleValidateSuccessorOwnerV1 {
+            dispatch_key: key(0x41, ordinal, ordinal + 1, 0, 0x52),
+            round,
+            subject,
+            apply_is_authorized: true,
+        },
+        LiveLifecycleValidateSuccessorOwnerV1 {
+            dispatch_key: key(0x41, ordinal, ordinal, 1, 0x52),
+            round,
+            subject,
+            apply_is_authorized: true,
+        },
+        LiveLifecycleValidateSuccessorOwnerV1 {
+            dispatch_key: validated_key,
+            round: foreign_round,
+            subject,
+            apply_is_authorized: true,
+        },
+        LiveLifecycleValidateSuccessorOwnerV1 {
+            dispatch_key: validated_key,
+            round,
+            subject: foreign_subject,
+            apply_is_authorized: true,
+        },
+    ];
+    assert!(
+        logical_substitutions
+            .iter()
+            .all(|candidate| !true_owner.can_refine_to(candidate))
+    );
 }
 
 #[test]
@@ -3315,6 +3844,9 @@ fn admitted_validate_retry_seal_coalesces_exact_authority_upgrade_without_replay
             .is_some(),
         "model the move-only owner transferring into the lifecycle registry"
     );
+    executor
+        .bind_validate_retry_lifecycle_ordinal(key, 9_021)
+        .expect("bind the transferred Validate to its active registry row");
 
     let prepare = fixture.qc(wire::GlobalPhase::Prepare);
     let prepare_fetch = AdapterEffect::FetchBody {
@@ -3629,15 +4161,18 @@ fn published_lifecycle_validate_marker_coalesces_timer_authority_upgrade() {
     assert!(executor.pending_durable_validate_admissions.is_empty());
     assert!(executor.durable_validate_retry_seals.is_empty());
     let marker = &executor.published_lifecycle_validate_retry_markers[&key];
-    assert_eq!(marker.effect, timer_validate);
-    assert_eq!(marker.statement.phase(), Some(wire::GlobalPhase::Commit));
+    assert_eq!(marker.latest_effect, timer_validate);
+    assert_eq!(
+        marker.latest_statement.phase(),
+        Some(wire::GlobalPhase::Commit)
+    );
     assert_eq!(executor.pending_work(), 0);
     assert!(!executor.status().fail_closed);
     assert!(!executor.output_guard.restart_required());
 }
 
 #[test]
-fn terminal_published_validate_retry_does_not_bypass_live_wal_apply_admission() {
+fn terminal_published_validate_retry_requires_live_wal_apply_admission() {
     let fixture = Fixture::new();
     let mut executor = fixture.executor(EffectQueueConfig::default());
     let mut services = fixture.services();
@@ -3728,12 +4263,13 @@ fn terminal_published_validate_retry_does_not_bypass_live_wal_apply_admission() 
     executor.runtime.round_tag = Some(current_tag);
     executor.reconciled_tag = Some(current_tag);
     assert_eq!(
-        executor.published_lifecycle_validate_retry_markers[&key].effect,
+        executor.published_lifecycle_validate_retry_markers[&key].published_effect,
         initial_validate
     );
     assert_eq!(executor.validated_bodies.get(&key), Some(&validated));
     assert!(executor.pending_durable_validate_admissions.is_empty());
     assert_eq!(executor.pending_work(), 0);
+    let terminal_marker = executor.published_lifecycle_validate_retry_markers[&key].clone();
 
     let commit = fixture.qc(wire::GlobalPhase::Commit);
     let decision = (
@@ -3765,38 +4301,100 @@ fn terminal_published_validate_retry_does_not_bypass_live_wal_apply_admission() 
     );
     executor.runtime.decided_body = Some(decision);
     executor.runtime.durable_body_authority_certificate = Some(commit);
+    executor.runtime.live_clocks_armed = true;
     executor.runtime.exact_effect_ownership =
-        Some((current_validate.clone(), current_validate_ownership));
+        Some((current_validate.clone(), current_validate_ownership.clone()));
 
     assert_eq!(
         executor
             .consume_effects(vec![current_validate.clone()], &mut services)
-            .expect("keep the cached marker inert without live WAL Apply authority"),
-        0,
-        "a terminal marker cannot manufacture an Apply outside lifecycle admission",
+            .expect("consume the released marker through exact live Decision authority"),
+        1,
+        "the Commit-owned Validate must consume its retained FIFO occurrence",
     );
     assert_eq!(executor.protected_decision, Some(decision));
     assert!(executor.retained_effect_batch.is_none());
     assert!(executor.parked_effect_batch.is_none());
-    let marker = &executor.published_lifecycle_validate_retry_markers[&key];
-    assert_eq!(
-        marker.effect, current_validate,
-        "the inert marker must refine to the exact current-view retry"
-    );
-    assert_eq!(marker.statement.phase(), Some(wire::GlobalPhase::Commit));
-    assert_eq!(marker.statement.round(), decision.0);
-    assert_eq!(marker.statement.proposal_round(), decision.1);
-    assert_eq!(marker.statement.subject(), Some(decision.2));
-    assert_eq!(marker.statement.execution_commitment(), Some(decision.3));
-    assert!(!marker.owns_live_lifecycle_row());
+    assert!(executor
+        .published_lifecycle_validate_retry_markers
+        .contains_key(&key));
+    assert!(executor.pending_released_lifecycle_validate_apply.is_some());
     assert!(executor.pending_durable_validate_admissions.is_empty());
     assert!(executor.durable_validate_retry_seals.is_empty());
     assert_eq!(executor.validated_bodies.get(&key), Some(&validated));
     assert!(executor.pending_applications.is_empty());
     assert!(executor.live_lifecycle_decision_apply.is_none());
-    assert_eq!(executor.pending_work(), 0);
+    assert_eq!(executor.pending_work(), 1);
     assert!(services.apply_tasks.is_empty());
     assert_eq!(executor.status().pending_applications, 0);
+    assert!(!executor.status().fail_closed);
+    assert!(!executor.output_guard.restart_required());
+    assert!(services.closed.is_empty());
+
+    // Restore the exact pre-refinement terminal cut and add the affine source
+    // which only the real acknowledged Decision WAL can mint. The same Commit
+    // retry may now re-enter normal Validate admission, but it still cannot
+    // manufacture or enqueue Apply at the executor boundary.
+    assert!(
+        executor
+            .published_lifecycle_validate_retry_markers
+            .insert(key, terminal_marker.clone())
+            .is_some()
+    );
+    executor.runtime.pending_live_decision_apply = Some((current_tag, decision));
+    let malformed_store = AdapterEffect::StoreBody {
+        tag: current_tag,
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let malformed_later_owner = bound_test_effect_ownership(&malformed_store, current_tag, 9_028);
+    assert!(
+        executor
+            .retain_effect_batch(
+                vec![current_validate.clone(), current_validate.clone()],
+                vec![current_validate_ownership.clone(), malformed_later_owner],
+            )
+            .is_err(),
+        "a malformed later position must roll back the projected marker readmission"
+    );
+    assert_eq!(
+        executor.published_lifecycle_validate_retry_markers[&key], terminal_marker,
+        "batch preflight failure must retain the exact terminal marker"
+    );
+    assert!(executor.retained_effect_batch.is_none());
+    assert!(executor.pending_durable_validate_admissions.is_empty());
+    assert!(executor.durable_validate_retry_seals.is_empty());
+
+    executor.runtime.exact_effect_ownership = Some((
+        current_validate.clone(),
+        current_validate_ownership.clone(),
+    ));
+    assert_eq!(
+        executor
+            .consume_effects(vec![current_validate.clone()], &mut services)
+            .expect("readmit the exact terminal Validate beneath its live Decision WAL source"),
+        1,
+    );
+    assert!(executor.retained_effect_batch.is_none());
+    assert!(executor.parked_effect_batch.is_none());
+    assert!(!executor
+        .published_lifecycle_validate_retry_markers
+        .contains_key(&key));
+    assert!(executor.pending_durable_validate_admissions[&key]
+        .exactly_matches_retry(&current_validate, &current_validate_ownership));
+    assert!(matches!(
+        executor.durable_validate_retry_seals.get(&key),
+        Some(DurableValidateRetrySealV1::Live {
+            lifecycle_ordinal: None,
+            ..
+        })
+    ));
+    assert_eq!(executor.validated_bodies.get(&key), Some(&validated));
+    assert!(executor.pending_applications.is_empty());
+    assert!(executor.live_lifecycle_decision_apply.is_none());
+    assert_eq!(executor.pending_work(), 1);
+    assert!(services.apply_tasks.is_empty());
+    assert_eq!(executor.status().pending_validations, 1);
     assert!(!executor.status().fail_closed);
     assert!(!executor.output_guard.restart_required());
     assert!(services.closed.is_empty());
@@ -4029,7 +4627,7 @@ fn published_store_marker_carries_stronger_authority_through_validate_handoff() 
     let accepted_validate_marker =
         executor.published_lifecycle_validate_retry_markers[&key].clone();
     assert_eq!(
-        accepted_validate_marker.statement.phase(),
+        accepted_validate_marker.latest_statement.phase(),
         Some(wire::GlobalPhase::Commit),
     );
     assert_eq!(
@@ -4857,8 +5455,11 @@ fn cold_recovered_lifecycle_validate_marker_coalesces_timer_authority_upgrade() 
     assert!(executor.durable_validate_retry_seals.is_empty());
     assert_eq!(executor.published_lifecycle_validate_retry_markers.len(), 1);
     let marker = &executor.published_lifecycle_validate_retry_markers[&key];
-    assert_eq!(marker.effect, timer_validate);
-    assert_eq!(marker.statement.phase(), Some(wire::GlobalPhase::Commit));
+    assert_eq!(marker.latest_effect, timer_validate);
+    assert_eq!(
+        marker.latest_statement.phase(),
+        Some(wire::GlobalPhase::Commit)
+    );
     assert_eq!(executor.pending_work(), 0);
     assert!(!executor.status().fail_closed);
     assert!(!executor.output_guard.restart_required());

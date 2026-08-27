@@ -2065,69 +2065,24 @@ mod tests {
         }
     }
     #[test]
-    fn verify_pow_ticket_rejects_wrong_relay_binding() {
-        let params = PowParameters::new(16, Duration::from_secs(180), Duration::from_secs(45));
-        let descriptor = [0xAA; 32];
-        let relay_a = [0x01; 32];
-        let relay_b = [0x02; 32];
-        let transcript = [0x03; 32];
-        let mut rng = StdRng::from_seed([0x22; 32]);
-        let binding = pow::ChallengeBinding::new(&descriptor, &relay_a, &transcript);
-        let ticket = pow::mint_ticket(&params, &binding, Duration::from_secs(60), &mut rng)
-            .expect("mint pow ticket");
-        let replays = in_memory_ticket_replays(4);
-        let err = verify_pow_ticket_binding(
-            &ticket,
-            &params,
-            &descriptor,
-            &relay_b,
-            &transcript,
-            &replays,
-        )
-        .expect_err("relay mismatch must fail verification");
-        match err {
-            HandshakeError::Pow(pow::Error::InvalidSolution) => {}
-            other => panic!("unexpected pow verification error: {other:?}"),
-        }
-    }
-    #[test]
-    fn verify_pow_ticket_respects_transcript_binding() {
-        let params = PowParameters::new(16, Duration::from_secs(120), Duration::from_secs(30));
-        let descriptor = [0x0C; 32];
-        let relay_id = [0x0D; 32];
-        let transcript = [0xFE; 32];
-        let mut rng = StdRng::from_seed([0x33; 32]);
-        let binding = pow::ChallengeBinding::new(&descriptor, &relay_id, &transcript);
-        let ticket = pow::mint_ticket(&params, &binding, Duration::from_secs(40), &mut rng)
-            .expect("mint pow ticket with transcript");
-        let replays = in_memory_ticket_replays(4);
-        let mismatched = [0xAA; 32];
-        let err = verify_pow_ticket_binding(
-            &ticket,
-            &params,
-            &descriptor,
-            &relay_id,
-            &mismatched,
-            &replays,
-        )
-        .expect_err("mismatched transcript must fail verification");
-        match err {
-            HandshakeError::Pow(pow::Error::InvalidSolution) => {}
-            other => panic!("unexpected pow verification error: {other:?}"),
-        }
-    }
-    #[test]
     fn relay_ticket_replay_is_rejected_after_store_reload() {
         let dir = secure_test_tempdir();
         let path = dir.path().join("relay-ticket-replays.norito");
         let limits = TicketRevocationStoreLimits::new(4, Duration::from_secs(300)).expect("limits");
-        let params = PowParameters::new(0, Duration::from_secs(180), Duration::from_secs(30));
+        let params = PuzzleParameters::new(
+            NonZeroU32::new(4_096).expect("non-zero memory"),
+            NonZeroU32::new(1).expect("non-zero iterations"),
+            NonZeroU32::new(1).expect("non-zero lanes"),
+            1,
+            Duration::from_secs(180),
+            Duration::from_secs(30),
+        );
         let descriptor = [0x35; 32];
         let relay_id = [0x46; 32];
         let transcript = [0x57; 32];
-        let binding = pow::ChallengeBinding::new(&descriptor, &relay_id, &transcript);
+        let binding = PuzzleBinding::new(&descriptor, &relay_id, &transcript);
         let mut rng = StdRng::from_seed([0x68; 32]);
-        let ticket = pow::mint_ticket(&params, &binding, Duration::from_secs(60), &mut rng)
+        let ticket = puzzle::mint_ticket(&params, &binding, Duration::from_secs(60), &mut rng)
             .expect("mint ticket");
         let persisted =
             TicketRevocationStore::load(&path, limits, SystemTime::now()).expect("load store");
@@ -2136,7 +2091,7 @@ mod tests {
             pending: HashSet::new(),
             capacity: limits.max_entries,
         });
-        verify_pow_ticket_binding(
+        verify_puzzle_ticket_binding(
             &ticket,
             &params,
             &descriptor,
@@ -2154,7 +2109,7 @@ mod tests {
             capacity: limits.max_entries,
         });
         assert!(matches!(
-            verify_pow_ticket_binding(
+            verify_puzzle_ticket_binding(
                 &ticket,
                 &params,
                 &descriptor,
@@ -3538,7 +3493,7 @@ mod tests {
         );
     }
     #[test]
-    fn runtime_enables_pow_when_required() {
+    fn runtime_uses_mandatory_pow_policy() {
         let dir = secure_test_tempdir();
         let replay_path = dir.path().join("ticket-replays.norito");
         let fixture = CertificateTestFixture::new();
@@ -3548,7 +3503,6 @@ mod tests {
                 "listen": "127.0.0.1:0",
                 "handshake": {},
                 "pow": {{
-                    "required": true,
                     "difficulty": 6,
                     "max_future_skew_secs": 120,
                     "min_ticket_ttl_secs": 10,
@@ -3561,8 +3515,8 @@ mod tests {
         let config = load_config(&json);
         let runtime = RelayRuntime::new_for_test(config.config).expect("runtime");
         let context = runtime.circuit_context();
-        assert!(context.dos.is_pow_required());
         assert_eq!(context.dos.current_pow_parameters().difficulty(), 6);
+        assert_eq!(context.dos.current_puzzle_parameters().difficulty(), 6);
         let replay_state = context.ticket_replays.lock().expect("ticket replay lock");
         assert_eq!(replay_state.capacity, 8_192);
     }
@@ -3583,7 +3537,6 @@ mod tests {
                 "listen": "127.0.0.1:0",
                 "handshake": {},
                 "pow": {{
-                    "required": true,
                     "difficulty": 6,
                     "max_future_skew_secs": 120,
                     "min_ticket_ttl_secs": 10,
@@ -3962,7 +3915,7 @@ mod tests {
         privacy_events.record_throttle(
             privacy_mode,
             event_time,
-            SoranetPrivacyThrottleScopeV1::DescriptorQuota,
+            SoranetPrivacyThrottleScopeV1::RemoteQuota,
         );
         proxy_policy_events.record_downgrade(privacy_mode, event_time);
         let listener = match StdTcpListener::bind("127.0.0.1:0") {

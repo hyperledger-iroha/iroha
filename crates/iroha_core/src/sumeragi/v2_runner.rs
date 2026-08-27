@@ -798,6 +798,20 @@ impl ProductionLifecycleLocalProposalStateV1 {
         }
     }
 
+    /// Build one exact attempted owner for runner-handoff regression tests.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn with_attempted_for_test(directive: LocalProposalDirective) -> Self {
+        Self {
+            state: LocalProposalState::from_recovered_lifecycle_attempt(true, directive),
+        }
+    }
+
+    /// Report whether every process-local proposal owner has retired in a test.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn is_pristine_for_test(&self) -> bool {
+        self.state.is_pristine()
+    }
+
     /// Check whether the retained state owns the exact recovered attempt.
     pub(in crate::sumeragi) fn already_attempted(&self, directive: LocalProposalDirective) -> bool {
         self.state.attempted == Some(LocalProposalOwner::from(directive))
@@ -1911,6 +1925,8 @@ pub(in crate::sumeragi) enum AdvanceExecutorYieldCauseV1 {
     RecoveredLifecycleOutputSourceRetained,
     SettledLiveWalSign,
     PendingLiveWalSign,
+    SettledReleasedValidateApply,
+    PendingReleasedValidateApply,
     SettledLifecycleOutput,
     PendingLifecycleOutput,
     SettledDurableValidate,
@@ -1976,6 +1992,24 @@ fn advance_executor(
                 AdvanceExecutorYieldV1::new(
                     AdvanceExecutorYieldCheckpointV1::BeforeStep,
                     AdvanceExecutorYieldCauseV1::PendingLiveWalSign,
+                ),
+            ));
+        }
+        if executor.settle_pending_released_validate_apply_publication(lifecycle_owner, services)?
+            > 0
+        {
+            return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                AdvanceExecutorYieldV1::new(
+                    AdvanceExecutorYieldCheckpointV1::BeforeStep,
+                    AdvanceExecutorYieldCauseV1::SettledReleasedValidateApply,
+                ),
+            ));
+        }
+        if executor.has_pending_released_validate_apply_publication() {
+            return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                AdvanceExecutorYieldV1::new(
+                    AdvanceExecutorYieldCheckpointV1::BeforeStep,
+                    AdvanceExecutorYieldCauseV1::PendingReleasedValidateApply,
                 ),
             ));
         }
@@ -2048,6 +2082,24 @@ fn advance_executor(
                 AdvanceExecutorYieldV1::new(
                     AdvanceExecutorYieldCheckpointV1::AfterStep,
                     AdvanceExecutorYieldCauseV1::PendingLiveWalSign,
+                ),
+            ));
+        }
+        if executor.settle_pending_released_validate_apply_publication(lifecycle_owner, services)?
+            > 0
+        {
+            return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                AdvanceExecutorYieldV1::new(
+                    AdvanceExecutorYieldCheckpointV1::AfterStep,
+                    AdvanceExecutorYieldCauseV1::SettledReleasedValidateApply,
+                ),
+            ));
+        }
+        if executor.has_pending_released_validate_apply_publication() {
+            return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                AdvanceExecutorYieldV1::new(
+                    AdvanceExecutorYieldCheckpointV1::AfterStep,
+                    AdvanceExecutorYieldCauseV1::PendingReleasedValidateApply,
                 ),
             ));
         }
@@ -2991,6 +3043,9 @@ pub(super) enum V2RunnerError {
     /// Bounded lane-local/merge/Native-AMX adapter failed closed.
     #[error(transparent)]
     LaneWork(#[from] super::v2_lane_work::V2LaneWorkError),
+    /// Retired NPoS VRF tombstone or committed epoch-parameter boundary failed closed.
+    #[error(transparent)]
+    NposVrf(#[from] super::v2_npos::V2NposError),
     /// Durable lane reservation ownership could not be reconciled exactly.
     #[error(transparent)]
     Reservation(#[from] V2ReservationLifecycleError),

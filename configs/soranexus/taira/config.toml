@@ -120,6 +120,7 @@ allowed_headers = [
   "x-iroha-signature",
   "x-iroha-timestamp-ms",
   "x-iroha-nonce",
+  "x-iroha-witness",
 ]
 exposed_headers = ["etag", "location", "retry-after"]
 

@@ -77,6 +77,7 @@ class RecordingSession(requests.Session):
                 "data": data,
                 "allow_redirects": kwargs.get("allow_redirects"),
                 "stream": kwargs.get("stream"),
+                "timeout": kwargs.get("timeout"),
             }
         )
         if not self._responses:
@@ -99,6 +100,7 @@ class RecordingSession(requests.Session):
                 "data": request.body,
                 "allow_redirects": kwargs.get("allow_redirects"),
                 "stream": kwargs.get("stream"),
+                "timeout": kwargs.get("timeout"),
             }
         )
         if not self._responses:

@@ -22,15 +22,17 @@ intentionally not embedded here because this proof document is itself a cone
 member. The production shape retains one direct deferred pending-Kura validated
 marker and emits one opaque move-only direct Apply child only after successful
 validation; no recovered carrier or carrier alias is admitted.
-`crates/iroha_core/src/sumeragi/source_contracts_v1.txt` contains exactly
-52 cases, is 475,201 bytes, and hashes to
-`2366606c6c57c95a97ebd34b75a9edf89669b47aaee2d4a22005b0f8d76b5f6b`.
+The current `crates/iroha_core/src/sumeragi/source_contracts_v1.txt` contains
+exactly 54 cases, is 590,841 bytes, and hashes to
+`dc6881a036a7bec6b624692f7b9ba91762c876e7b83e04e439e8550f045de77c`.
 
-On that frozen postimage, support-equivalent raw evaluation completed 52 cases
-with 0 failures; compaction passed 4/4; the reviewed-source mirror,
-release/source-seal, authoritative successor-production-fidelity, and
-same-round semantic kernel-source/caller filters passed; all 18/18 item seals
-matched; and all six tamper controls passed.
+On this mutable-tree postimage, the focused Rust source-contract inventory
+meta-test completed all 54 cases with 0 failures, and the compaction suite
+passed 5/5 while preserving the historical 2,161-line reduction floor. The
+prior reviewed-source mirror, release/source-seal, successor-fidelity,
+semantic-filter, item-seal, and tamper-control results apply only to the
+preceding frozen postimage recorded in `status.md`; they have not been
+refreshed for this asset.
 
 These are source, structure, fidelity, and mutation results only. No fresh
 TLAPS proof, pinned-Verus proof, or external signing receipt exists for this

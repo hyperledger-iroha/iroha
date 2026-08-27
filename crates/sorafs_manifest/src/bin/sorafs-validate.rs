@@ -4,7 +4,14 @@
 //! validates Norito-encoded provider adverts and replication orders, then emits stable
 //! `ValidationOutcomeV1` JSON/table/YAML output.
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
-use iroha_crypto::sha256;
+use iroha_crypto::{
+    sha256,
+    timed_ovn::{
+        TIMED_OVN_OFFICIAL_RELEASE_AUDIT_MANIFEST_BYTES_V1,
+        TimedOvnOfficialReleaseAuditArtifactsV1,
+        validate_timed_ovn_official_release_audit_manifest_bytes_v1,
+    },
+};
 use norito::json;
 use sorafs_manifest::{
     AdvertSignature, FixtureBundlePayloadKindV1, FixtureBundlePayloadV1, GovernanceLogNodeV1,
@@ -71,9 +78,12 @@ fn run(args: impl IntoIterator<Item = String>) -> Result<ExitCode, CliError> {
         "bundle" => run_bundle(BundleArgs::parse(&args[1..])?),
         "governance" => run_governance(GovernanceArgs::parse(&args[1..])?),
         "release-manifest" => run_release_manifest(ReleaseManifestArgs::parse(&args[1..])?),
+        "timed-ovn-release-audit" => {
+            run_timed_ovn_release_audit(TimedOvnReleaseAuditArgs::parse(&args[1..])?)
+        }
         "sign" => run_sign(SignArgs::parse(&args[1..])?),
         other => Err(CliError::Config(format!(
-            "unsupported sorafs-validate command `{other}`; implemented commands: advert, admission, order, orderbook, pdp, pop, hedging, por, potr, repair, bundle, governance, release-manifest, sign"
+            "unsupported sorafs-validate command `{other}`; implemented commands: advert, admission, order, orderbook, pdp, pop, hedging, por, potr, repair, bundle, governance, release-manifest, timed-ovn-release-audit, sign"
         ))),
     }
 }
@@ -610,6 +620,153 @@ fn run_governance(args: GovernanceArgs) -> Result<ExitCode, CliError> {
     }
 }
 const RELEASE_MANIFEST_MAX_BYTES: u64 = 1024 * 1024;
+const TIMED_OVN_RELEASE_AUDIT_TOTAL_ARTIFACT_BYTES_V1: u64 = 1024 * 1024 * 1024;
+
+fn run_timed_ovn_release_audit(args: TimedOvnReleaseAuditArgs) -> Result<ExitCode, CliError> {
+    let audit_manifest_path = args.audit_manifest.ok_or(CliError::Config(
+        "timed-ovn-release-audit requires --audit-manifest <path>".to_owned(),
+    ))?;
+    let implementation_source_archive_path =
+        args.implementation_source_archive.ok_or(CliError::Config(
+            "timed-ovn-release-audit requires --implementation-source-archive <path>".to_owned(),
+        ))?;
+    let release_artifact_manifest_path = args.release_artifact_manifest.ok_or(CliError::Config(
+        "timed-ovn-release-audit requires --release-artifact-manifest <path>".to_owned(),
+    ))?;
+    let supported_target_inventory_path =
+        args.supported_target_inventory.ok_or(CliError::Config(
+            "timed-ovn-release-audit requires --supported-target-inventory <path>".to_owned(),
+        ))?;
+    let audit_report_path = args.audit_report.ok_or(CliError::Config(
+        "timed-ovn-release-audit requires --audit-report <path>".to_owned(),
+    ))?;
+    let audit_evidence_archive_path = args.audit_evidence_archive.ok_or(CliError::Config(
+        "timed-ovn-release-audit requires --audit-evidence-archive <path>".to_owned(),
+    ))?;
+    let trusted_reviewer_public_key_path =
+        args.trusted_reviewer_public_key.ok_or(CliError::Config(
+            "timed-ovn-release-audit requires --trusted-reviewer-public-key <path>".to_owned(),
+        ))?;
+
+    let artifact_inputs = [
+        (
+            implementation_source_archive_path.as_path(),
+            "timed-OVN implementation source archive",
+        ),
+        (
+            release_artifact_manifest_path.as_path(),
+            "timed-OVN release artifact manifest",
+        ),
+        (
+            supported_target_inventory_path.as_path(),
+            "timed-OVN supported target inventory",
+        ),
+        (audit_report_path.as_path(), "timed-OVN audit report"),
+        (
+            audit_evidence_archive_path.as_path(),
+            "timed-OVN audit evidence archive",
+        ),
+    ];
+    preflight_release_input_total(
+        &artifact_inputs,
+        TIMED_OVN_RELEASE_AUDIT_TOTAL_ARTIFACT_BYTES_V1,
+    )?;
+
+    let audit_manifest = read_release_input(
+        &audit_manifest_path,
+        "timed-OVN official-release audit manifest",
+        TIMED_OVN_OFFICIAL_RELEASE_AUDIT_MANIFEST_BYTES_V1 as u64,
+        Some(TIMED_OVN_OFFICIAL_RELEASE_AUDIT_MANIFEST_BYTES_V1 as u64),
+        false,
+    )?;
+    let implementation_source_archive = read_release_input(
+        &implementation_source_archive_path,
+        artifact_inputs[0].1,
+        TIMED_OVN_RELEASE_AUDIT_TOTAL_ARTIFACT_BYTES_V1,
+        None,
+        false,
+    )?;
+    let release_artifact_manifest = read_release_input(
+        &release_artifact_manifest_path,
+        artifact_inputs[1].1,
+        TIMED_OVN_RELEASE_AUDIT_TOTAL_ARTIFACT_BYTES_V1,
+        None,
+        false,
+    )?;
+    let supported_target_inventory = read_release_input(
+        &supported_target_inventory_path,
+        artifact_inputs[2].1,
+        TIMED_OVN_RELEASE_AUDIT_TOTAL_ARTIFACT_BYTES_V1,
+        None,
+        false,
+    )?;
+    let audit_report = read_release_input(
+        &audit_report_path,
+        artifact_inputs[3].1,
+        TIMED_OVN_RELEASE_AUDIT_TOTAL_ARTIFACT_BYTES_V1,
+        None,
+        false,
+    )?;
+    let audit_evidence_archive = read_release_input(
+        &audit_evidence_archive_path,
+        artifact_inputs[4].1,
+        TIMED_OVN_RELEASE_AUDIT_TOTAL_ARTIFACT_BYTES_V1,
+        None,
+        false,
+    )?;
+    let actual_artifact_bytes = [
+        implementation_source_archive.len(),
+        release_artifact_manifest.len(),
+        supported_target_inventory.len(),
+        audit_report.len(),
+        audit_evidence_archive.len(),
+    ]
+    .into_iter()
+    .try_fold(0_u64, |total, length| {
+        let length = u64::try_from(length).map_err(|_| {
+            CliError::Validation("timed-OVN release-audit artifact size overflow".to_owned())
+        })?;
+        total.checked_add(length).ok_or_else(|| {
+            CliError::Validation("timed-OVN release-audit artifact size overflow".to_owned())
+        })
+    })?;
+    if actual_artifact_bytes > TIMED_OVN_RELEASE_AUDIT_TOTAL_ARTIFACT_BYTES_V1 {
+        return Err(CliError::Validation(format!(
+            "timed-OVN release-audit artifacts exceed the {}-byte aggregate ceiling",
+            TIMED_OVN_RELEASE_AUDIT_TOTAL_ARTIFACT_BYTES_V1
+        )));
+    }
+    let trusted_reviewer_public_key = read_release_input(
+        &trusted_reviewer_public_key_path,
+        "timed-OVN trusted audit reviewer public key",
+        32,
+        Some(32),
+        false,
+    )?;
+    let trusted_reviewer_public_key: [u8; 32] = trusted_reviewer_public_key
+        .try_into()
+        .expect("exact reviewer public-key length checked above");
+    let artifacts = TimedOvnOfficialReleaseAuditArtifactsV1::new(
+        &implementation_source_archive,
+        &release_artifact_manifest,
+        &supported_target_inventory,
+        &audit_report,
+        &audit_evidence_archive,
+    )
+    .map_err(|error| CliError::Validation(error.to_string()))?;
+    let manifest = validate_timed_ovn_official_release_audit_manifest_bytes_v1(
+        &audit_manifest,
+        &artifacts,
+        &trusted_reviewer_public_key,
+    )
+    .map_err(|error| CliError::Validation(error.to_string()))?;
+    println!(
+        "timed-OVN official-release audit verified\nreviewer_public_key_sha256={}",
+        hex::encode(sha256(manifest.statement().reviewer_public_key()))
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
 fn run_release_manifest(args: ReleaseManifestArgs) -> Result<ExitCode, CliError> {
     let manifest_path = args.manifest.ok_or(CliError::Config(
         "release-manifest requires --manifest <path>".to_owned(),
@@ -1704,6 +1861,129 @@ struct ReleaseManifestArgs {
     signature_out: Option<PathBuf>,
     development_local_signing: bool,
 }
+
+#[derive(Debug, Default)]
+struct TimedOvnReleaseAuditArgs {
+    audit_manifest: Option<PathBuf>,
+    implementation_source_archive: Option<PathBuf>,
+    release_artifact_manifest: Option<PathBuf>,
+    supported_target_inventory: Option<PathBuf>,
+    audit_report: Option<PathBuf>,
+    audit_evidence_archive: Option<PathBuf>,
+    trusted_reviewer_public_key: Option<PathBuf>,
+}
+
+impl TimedOvnReleaseAuditArgs {
+    fn parse(args: &[String]) -> Result<Self, CliError> {
+        let mut parsed = Self::default();
+        let mut index = 0;
+        while index < args.len() {
+            let arg = &args[index];
+            let (target, flag, inline_value) = if let Some(value) =
+                arg.strip_prefix("--audit-manifest=")
+            {
+                (&mut parsed.audit_manifest, "--audit-manifest", Some(value))
+            } else if arg == "--audit-manifest" {
+                (&mut parsed.audit_manifest, "--audit-manifest", None)
+            } else if let Some(value) = arg.strip_prefix("--implementation-source-archive=") {
+                (
+                    &mut parsed.implementation_source_archive,
+                    "--implementation-source-archive",
+                    Some(value),
+                )
+            } else if arg == "--implementation-source-archive" {
+                (
+                    &mut parsed.implementation_source_archive,
+                    "--implementation-source-archive",
+                    None,
+                )
+            } else if let Some(value) = arg.strip_prefix("--release-artifact-manifest=") {
+                (
+                    &mut parsed.release_artifact_manifest,
+                    "--release-artifact-manifest",
+                    Some(value),
+                )
+            } else if arg == "--release-artifact-manifest" {
+                (
+                    &mut parsed.release_artifact_manifest,
+                    "--release-artifact-manifest",
+                    None,
+                )
+            } else if let Some(value) = arg.strip_prefix("--supported-target-inventory=") {
+                (
+                    &mut parsed.supported_target_inventory,
+                    "--supported-target-inventory",
+                    Some(value),
+                )
+            } else if arg == "--supported-target-inventory" {
+                (
+                    &mut parsed.supported_target_inventory,
+                    "--supported-target-inventory",
+                    None,
+                )
+            } else if let Some(value) = arg.strip_prefix("--audit-report=") {
+                (&mut parsed.audit_report, "--audit-report", Some(value))
+            } else if arg == "--audit-report" {
+                (&mut parsed.audit_report, "--audit-report", None)
+            } else if let Some(value) = arg.strip_prefix("--audit-evidence-archive=") {
+                (
+                    &mut parsed.audit_evidence_archive,
+                    "--audit-evidence-archive",
+                    Some(value),
+                )
+            } else if arg == "--audit-evidence-archive" {
+                (
+                    &mut parsed.audit_evidence_archive,
+                    "--audit-evidence-archive",
+                    None,
+                )
+            } else if let Some(value) = arg.strip_prefix("--trusted-reviewer-public-key=") {
+                (
+                    &mut parsed.trusted_reviewer_public_key,
+                    "--trusted-reviewer-public-key",
+                    Some(value),
+                )
+            } else if arg == "--trusted-reviewer-public-key" {
+                (
+                    &mut parsed.trusted_reviewer_public_key,
+                    "--trusted-reviewer-public-key",
+                    None,
+                )
+            } else {
+                return Err(CliError::Config(format!(
+                    "unknown timed-ovn-release-audit option `{arg}`; run `sorafs-validate --help`"
+                )));
+            };
+            let value = if let Some(value) = inline_value {
+                value
+            } else {
+                index += 1;
+                require_value(args, index, flag)?
+            };
+            set_timed_ovn_release_audit_path(target, value, flag)?;
+            index += 1;
+        }
+        Ok(parsed)
+    }
+}
+
+fn set_timed_ovn_release_audit_path(
+    target: &mut Option<PathBuf>,
+    value: &str,
+    flag: &str,
+) -> Result<(), CliError> {
+    if target.is_some() {
+        return Err(CliError::Config(format!(
+            "duplicate timed-ovn-release-audit option `{flag}`"
+        )));
+    }
+    if value.is_empty() {
+        return Err(CliError::Config(format!("{flag} requires a value")));
+    }
+    *target = Some(PathBuf::from(value));
+    Ok(())
+}
+
 impl ReleaseManifestArgs {
     fn parse(args: &[String]) -> Result<Self, CliError> {
         let mut parsed = Self::default();
@@ -2371,6 +2651,28 @@ fn read_release_input(
     }
     Ok(bytes)
 }
+
+fn preflight_release_input_total(
+    inputs: &[(&Path, &str)],
+    maximum_total_bytes: u64,
+) -> Result<(), CliError> {
+    let mut total_bytes = 0_u64;
+    for &(path, label) in inputs {
+        let direct_path = release_direct_path(path, label)?;
+        let metadata = fs::symlink_metadata(&direct_path)
+            .map_err(|error| CliError::Io(format!("failed to inspect {label}: {error}")))?;
+        validate_release_metadata(label, &metadata, maximum_total_bytes, false)?;
+        total_bytes = total_bytes.checked_add(metadata.len()).ok_or_else(|| {
+            CliError::Validation("timed-OVN release-audit artifact size overflow".to_owned())
+        })?;
+        if total_bytes > maximum_total_bytes {
+            return Err(CliError::Validation(format!(
+                "timed-OVN release-audit artifacts exceed the {maximum_total_bytes}-byte aggregate ceiling"
+            )));
+        }
+    }
+    Ok(())
+}
 fn release_direct_path(path: &Path, label: &str) -> Result<PathBuf, CliError> {
     if path.as_os_str().is_empty()
         || path
@@ -2969,6 +3271,7 @@ Usage:
   sorafs-validate governance --head <path> --block <path> [--block <path>...] [--format table|json|yaml] [--telemetry-out <path>]
   sorafs-validate release-manifest --manifest <path> --public-key <raw-32-byte-path> --public-key-fingerprint <lowercase-sha256-hex> --signature <raw-64-byte-path>
   sorafs-validate release-manifest --manifest <path> --public-key <raw-32-byte-path> --public-key-fingerprint <lowercase-sha256-hex> --signing-seed <raw-32-byte-path> --signature-out <path> --development-local-signing
+  sorafs-validate timed-ovn-release-audit --audit-manifest <raw-301-byte-path> --implementation-source-archive <path> --release-artifact-manifest <path> --supported-target-inventory <path> --audit-report <path> --audit-evidence-archive <path> --trusted-reviewer-public-key <raw-32-byte-path>
   sorafs-validate sign --kind advert --input <advert.to> --out <signed-advert.to> (--key-hex <hex> | --key <path>) [--format table|json|yaml] [--now <unix-seconds>]
   sorafs-validate sign --kind order --input <order.to> --out <signed-order.to> (--key-hex <hex> | --key <path>) [--format table|json|yaml]
   sorafs-validate sign --kind orderbook --payload-kind order-request|order-cancel|settlement-receipt --input <payload.to> --out <signed-payload.to> (--key-hex <hex> | --key <path>) [--format table|json|yaml]

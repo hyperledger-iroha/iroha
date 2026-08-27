@@ -1204,6 +1204,241 @@ class HttpClientTransport(
         )
     }
 
+    /** Fetch one authenticated pre-seal timed-OVN casting context. */
+    fun getParliamentTimedOvnCastingContextV1(
+        ballotAttemptId: String,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<ParliamentTimedOvnCastingContextResponseV1> = fetchJson(
+        buildVpnRequest(
+            "GET",
+            ParliamentApiV1.timedOvnCastingContextReadPath(ballotAttemptId),
+            null,
+            canonicalAuth,
+            ParliamentApiV1.MAX_STATE_BYTES.toLong(),
+        ),
+        Function { response ->
+            ParliamentApiV1.parseTimedOvnCastingContextResponse(response, ballotAttemptId)
+        },
+        "Parliament timed-OVN casting context",
+        200,
+    )
+
+    /** Request one exact, consensus-authenticated timed-OVN casting-proof page. */
+    fun requestParliamentTimedOvnCastingProofV1(
+        ballotAttemptId: String,
+        trustedCheckpointHeight: BigInteger,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<ParliamentTimedOvnCastingProofResponseV1> {
+        val body = ParliamentApiV1.timedOvnCastingProofRequestNorito(trustedCheckpointHeight)
+        val request = buildExactNoritoPostRequest(
+            ParliamentApiV1.timedOvnCastingProofPath(ballotAttemptId),
+            body,
+            ParliamentApiV1.MAX_TIMED_OVN_CASTING_PROOF_RESPONSE_BYTES.toLong(),
+            canonicalAuth,
+        )
+        return fetchExactNoritoBytes(
+            request,
+            "Parliament timed-OVN casting proof",
+            requireIdentityEncoding = true,
+        )
+            .thenApply(ParliamentApiV1::parseTimedOvnCastingProofResponse)
+    }
+
+    /** Convenience overload for positive signed checkpoint heights. */
+    fun requestParliamentTimedOvnCastingProofV1(
+        ballotAttemptId: String,
+        trustedCheckpointHeight: Long,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<ParliamentTimedOvnCastingProofResponseV1> =
+        requestParliamentTimedOvnCastingProofV1(
+            ballotAttemptId,
+            BigInteger.valueOf(trustedCheckpointHeight),
+            canonicalAuth,
+        )
+
+    /** Fetch one bounded checkpoint-promotion page for native wallet verification. */
+    fun getParliamentTimedOvnCastingProofPageV1(
+        ballotAttemptId: String,
+        trustedCheckpointHeight: BigInteger,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<ParliamentTimedOvnCastingProofResponseV1> =
+        requestParliamentTimedOvnCastingProofV1(
+            ballotAttemptId,
+            trustedCheckpointHeight,
+            canonicalAuth,
+        )
+
+    /** Convenience overload for positive signed checkpoint heights. */
+    fun getParliamentTimedOvnCastingProofPageV1(
+        ballotAttemptId: String,
+        trustedCheckpointHeight: Long,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<ParliamentTimedOvnCastingProofResponseV1> =
+        getParliamentTimedOvnCastingProofPageV1(
+            ballotAttemptId,
+            BigInteger.valueOf(trustedCheckpointHeight),
+            canonicalAuth,
+        )
+
+    /**
+     * Fetch, natively authenticate, and durably promote bounded proof pages until terminal.
+     *
+     * The supplied authentication must leave timestamp and nonce unpinned so every exact POST is
+     * signed with a fresh anti-replay tuple. A promotion is never used for the next request until
+     * [checkpointPersister] completes successfully.
+     */
+    fun requestParliamentTimedOvnCastingProofUntilTerminalV1(
+        ballotAttemptId: String,
+        initialTrustedCheckpointHeight: BigInteger,
+        initialTrustedCheckpointContextId: ByteArray,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+        pageVerifier: ParliamentTimedOvnCastingProofPageVerifierV1,
+        checkpointPersister: ParliamentTimedOvnCastingCheckpointPersisterV1,
+    ): CompletableFuture<ParliamentTimedOvnCastingProofTerminalV1> {
+        val initialHeight =
+            ParliamentApiV1.requireTimedOvnCastingCheckpointHeight(initialTrustedCheckpointHeight)
+        val initialContext = requireCastingCheckpointContext(initialTrustedCheckpointContextId)
+        require(canonicalAuth.timestampMs == null && canonicalAuth.nonce == null) {
+            "casting-proof paging requires unpinned canonical authentication"
+        }
+        return requestParliamentTimedOvnCastingProofPageV1(
+            ballotAttemptId = ballotAttemptId,
+            currentHeight = initialHeight,
+            currentContext = initialContext,
+            initialHeight = initialHeight,
+            canonicalAuth = canonicalAuth,
+            pageVerifier = pageVerifier,
+            checkpointPersister = checkpointPersister,
+            verifiedPages = 0,
+        )
+    }
+
+    /** Convenience overload for a positive signed initial checkpoint. */
+    fun requestParliamentTimedOvnCastingProofUntilTerminalV1(
+        ballotAttemptId: String,
+        initialTrustedCheckpointHeight: Long,
+        initialTrustedCheckpointContextId: ByteArray,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+        pageVerifier: ParliamentTimedOvnCastingProofPageVerifierV1,
+        checkpointPersister: ParliamentTimedOvnCastingCheckpointPersisterV1,
+    ): CompletableFuture<ParliamentTimedOvnCastingProofTerminalV1> =
+        requestParliamentTimedOvnCastingProofUntilTerminalV1(
+            ballotAttemptId,
+            BigInteger.valueOf(initialTrustedCheckpointHeight),
+            initialTrustedCheckpointContextId,
+            canonicalAuth,
+            pageVerifier,
+            checkpointPersister,
+        )
+
+    private fun requestParliamentTimedOvnCastingProofPageV1(
+        ballotAttemptId: String,
+        currentHeight: BigInteger,
+        currentContext: ByteArray,
+        initialHeight: BigInteger,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+        pageVerifier: ParliamentTimedOvnCastingProofPageVerifierV1,
+        checkpointPersister: ParliamentTimedOvnCastingCheckpointPersisterV1,
+        verifiedPages: Int,
+    ): CompletableFuture<ParliamentTimedOvnCastingProofTerminalV1> {
+        if (verifiedPages >= ParliamentApiV1.MAX_TIMED_OVN_CASTING_PROOF_PAGES) {
+            return failedCastingProofPageFuture(
+                IllegalStateException("Parliament casting-proof page limit was reached"),
+            )
+        }
+        return requestParliamentTimedOvnCastingProofV1(
+            ballotAttemptId,
+            currentHeight,
+            canonicalAuth,
+        ).thenCompose { response ->
+            val verification = pageVerifier.verify(
+                response,
+                currentHeight,
+                currentContext.copyOf(),
+            )
+            validateCastingProofPromotion(
+                initialHeight,
+                currentHeight,
+                currentContext,
+                verification,
+            )
+            val persisted = checkpointPersister.persist(verification)
+            persisted.thenCompose {
+                val nextPageCount = verifiedPages + 1
+                if (!verification.moreAvailable) {
+                    CompletableFuture.completedFuture(
+                        ParliamentTimedOvnCastingProofTerminalV1(
+                            response,
+                            currentHeight,
+                            currentContext,
+                            verification,
+                            nextPageCount,
+                        ),
+                    )
+                } else {
+                    requestParliamentTimedOvnCastingProofPageV1(
+                        ballotAttemptId,
+                        verification.evaluatedBlockHeight,
+                        verification.evaluatedContextId(),
+                        initialHeight,
+                        canonicalAuth,
+                        pageVerifier,
+                        checkpointPersister,
+                        nextPageCount,
+                    )
+                }
+            }
+        }
+    }
+
+    private fun validateCastingProofPromotion(
+        initialHeight: BigInteger,
+        currentHeight: BigInteger,
+        currentContext: ByteArray,
+        verification: ParliamentTimedOvnCastingProofPageVerificationV1,
+    ) {
+        val evaluatedHeight = verification.evaluatedBlockHeight
+        require(evaluatedHeight >= currentHeight) {
+            "native casting-proof verification regressed the checkpoint height"
+        }
+        val pageAdvance = evaluatedHeight.subtract(currentHeight)
+        require(
+            pageAdvance <=
+                BigInteger.valueOf(
+                    ParliamentApiV1.MAX_TIMED_OVN_CASTING_PROOF_PAGE_HEIGHT_ADVANCE.toLong(),
+                ),
+        ) { "native casting-proof verification exceeded the page height bound" }
+        require(
+            evaluatedHeight.subtract(initialHeight) <=
+                BigInteger.valueOf(
+                    ParliamentApiV1.MAX_TIMED_OVN_CASTING_PROOF_HEIGHT_ADVANCE.toLong(),
+                ),
+        ) { "native casting-proof verification exceeded the aggregate height bound" }
+        if (verification.moreAvailable) {
+            require(pageAdvance.signum() > 0) {
+                "nonterminal casting-proof page did not advance its checkpoint"
+            }
+        } else if (pageAdvance.signum() == 0) {
+            require(MessageDigest.isEqual(currentContext, verification.evaluatedContextId())) {
+                "terminal casting-proof page changed context without advancing height"
+            }
+        }
+    }
+
+    private fun requireCastingCheckpointContext(value: ByteArray): ByteArray {
+        require(value.size == 32 && value.any { it != 0.toByte() }) {
+            "initialTrustedCheckpointContextId must contain exactly 32 nonzero bytes"
+        }
+        return value.copyOf()
+    }
+
+    private fun failedCastingProofPageFuture(
+        error: Throwable,
+    ): CompletableFuture<ParliamentTimedOvnCastingProofTerminalV1> =
+        CompletableFuture<ParliamentTimedOvnCastingProofTerminalV1>().also {
+            it.completeExceptionally(error)
+        }
+
     /** Fetch the complete public transcript for one currently authorized TLE release. */
     fun getParliamentTleReleaseContextV1(
         ballotAttemptId: String,
@@ -1549,6 +1784,45 @@ class HttpClientTransport(
         return builder.build()
     }
 
+    private fun buildExactNoritoPostRequest(
+        path: String,
+        body: ByteArray,
+        maximumResponseBytes: Long,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): TransportRequest {
+        val managedHeaders = listOf(
+            "Accept",
+            "Content-Type",
+            "Accept-Encoding",
+            "Content-Encoding",
+        )
+        require(config.defaultHeaders().keys.none { candidate ->
+            managedHeaders.any { it.equals(candidate, ignoreCase = true) }
+        }) { "exact Norito POST headers must not be overridden" }
+        requireCanonicalHeadersUnset()
+        val target = resolvePath(path)
+        val builder = TransportRequest.builder()
+            .setUri(target)
+            .setMethod("POST")
+            .setBody(body)
+            .addHeader("Content-Type", APPLICATION_NORITO)
+            .addHeader("Accept", APPLICATION_NORITO)
+            .addHeader("Accept-Encoding", "identity")
+            .setMaximumResponseBytes(maximumResponseBytes)
+            .setTimeout(config.requestTimeout())
+        for ((key, value) in config.defaultHeaders()) builder.addHeader(key, value)
+        val canonicalHeaders = buildCanonicalHeaders("POST", target, body, canonicalAuth)
+        for ((key, value) in canonicalHeaders) builder.addHeader(key, value)
+        TransportSecurity.requireHttpRequestAllowed(
+            "HttpClientTransport",
+            config.baseUri(),
+            target,
+            canonicalHeaders,
+            body,
+        )
+        return builder.build()
+    }
+
     private fun requireCanonicalHeadersUnset() {
         require(config.defaultHeaders().keys.none { candidate ->
             CANONICAL_AUTH_HEADERS.any { it.equals(candidate, ignoreCase = true) }
@@ -1761,6 +2035,7 @@ class HttpClientTransport(
     private fun fetchExactNoritoBytes(
         request: TransportRequest,
         errorContext: String,
+        requireIdentityEncoding: Boolean = false,
     ): CompletableFuture<ByteArray> {
         notifyRequest(request)
         val future = CompletableFuture<ByteArray>()
@@ -1784,6 +2059,9 @@ class HttpClientTransport(
                     "$errorContext request failed with status ${response.statusCode}"
                 }
                 requireExactHeader(response.headers, "Content-Type", APPLICATION_NORITO, errorContext)
+                if (requireIdentityEncoding) {
+                    requireHeaderAbsent(response.headers, "Content-Encoding", errorContext)
+                }
                 require(body.isNotEmpty()) { "$errorContext response must not be empty" }
                 val maximumResponseBytes = requireNotNull(request.maximumResponseBytes) {
                     "$errorContext request must declare a response-body limit"
@@ -1815,6 +2093,16 @@ class HttpClientTransport(
             .toList()
         require(values.size == 1 && values[0] == expected) {
             "$errorContext response $name must be exactly $expected"
+        }
+    }
+
+    private fun requireHeaderAbsent(
+        headers: Map<String, List<String>>,
+        name: String,
+        errorContext: String,
+    ) {
+        require(headers.keys.none { it.equals(name, ignoreCase = true) }) {
+            "$errorContext response must not contain $name"
         }
     }
 

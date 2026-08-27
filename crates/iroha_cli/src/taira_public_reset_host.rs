@@ -10235,7 +10235,6 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             OsString::from("write-canary"),
             OsString::from("--public-root"),
             OsString::from(&self.admitted.inventory.inrou_canary.public_root),
-            OsString::from("--use-config-signer"),
             OsString::from("--operation"),
             OsString::from(match kind {
                 "onboarding" => "onboarding",

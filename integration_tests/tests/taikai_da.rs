@@ -5,6 +5,7 @@ use eyre::Result;
 use integration_tests::sandbox::start_network_async_or_skip;
 use iroha_config::parameters::actual::DaReplicationPolicy;
 use iroha_config_base::toml::Writer;
+use iroha_crypto::Signature;
 use iroha_data_model::{
     da::{
         ingest::{DaIngestRequest, DaIngestRequestIntentV1},
@@ -19,9 +20,17 @@ use iroha_data_model::{
 };
 use iroha_test_network::{Network, NetworkBuilder};
 use iroha_test_samples::ALICE_KEYPAIR;
+use iroha_torii::{
+    HEADER_ACCOUNT, HEADER_NONCE, HEADER_SIGNATURE, HEADER_TIMESTAMP_MS, Method, Uri,
+    canonical_network_request_signature_message, signature_header_value,
+};
 use norito::json::{self, Value};
 use reqwest::{Client, Response, StatusCode};
-use std::path::Path;
+use std::{
+    path::Path,
+    sync::atomic::{AtomicU64, Ordering},
+    time::{SystemTime, UNIX_EPOCH},
+};
 use tempfile::tempdir;
 use toml::Value as TomlValue;
 const META_EVENT_ID: &str = "taikai.event_id";
@@ -374,17 +383,45 @@ fn taikai_ingest_tags_cover_replication_and_proofs() {
     );
 }
 async fn post_ingest(network: &Network, request: &DaIngestRequest) -> Result<Response> {
+    static NONCE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
     let http = Client::new();
-    let json_value = json::to_value(request)?;
-    let request_body = json::to_string(&json_value)?;
+    let request_body = json::to_vec(request)?;
     let url = network
         .client()
         .torii_url
         .join("/v1/da/ingest")
         .expect("compose DA ingest URL");
+    let timestamp_ms: u64 = SystemTime::now()
+        .duration_since(UNIX_EPOCH)?
+        .as_millis()
+        .try_into()?;
+    let nonce = format!(
+        "taikai-da-ingest-{}",
+        NONCE_COUNTER.fetch_add(1, Ordering::Relaxed)
+    );
+    let signing_uri: Uri = match url.query() {
+        Some(query) => format!("{}?{query}", url.path()).parse()?,
+        None => url.path().parse()?,
+    };
+    let message = canonical_network_request_signature_message(
+        &network.network_id(),
+        &Method::POST,
+        &signing_uri,
+        &request_body,
+        timestamp_ms,
+        &nonce,
+    )?;
+    let signature = Signature::try_new(ALICE_KEYPAIR.private_key(), &message)
+        .expect("sign canonical Taikai DA ingest HTTP request");
     let response = http
         .post(url)
         .header("Content-Type", "application/json")
+        .header("Accept", "application/json")
+        .header(HEADER_ACCOUNT, request.owner.to_canonical_hex()?)
+        .header(HEADER_SIGNATURE, signature_header_value(&signature)?)
+        .header(HEADER_TIMESTAMP_MS, timestamp_ms.to_string())
+        .header(HEADER_NONCE, nonce)
         .body(request_body)
         .send()
         .await?;

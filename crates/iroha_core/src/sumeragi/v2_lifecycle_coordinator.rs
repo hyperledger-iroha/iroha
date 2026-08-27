@@ -85,8 +85,8 @@ pub(in crate::sumeragi) use authority::{
 };
 use body_pipeline_transition::durable_validate_payload_is_exact;
 pub(in crate::sumeragi) use body_pipeline_transition::{
-    SealedInvalidBodyReportProjectionPermit, SealedValidateApplyProjectionPermit,
-    SealedValidateSignProjectionPermit,
+    ReleasedValidateApplyPublicationPreflightV1, SealedInvalidBodyReportProjectionPermit,
+    SealedValidateApplyProjectionPermit, SealedValidateSignProjectionPermit,
 };
 pub(crate) use concrete_admission::LifecycleWorkRegistryHolder;
 pub(in crate::sumeragi) use concrete_admission::{
@@ -175,6 +175,7 @@ pub(in crate::sumeragi) use ledger::{
     install_non_timeout_broadcast_before_current_control_for_test,
     install_timeout_broadcasts_before_current_control_for_test,
 };
+pub(in crate::sumeragi) use open::AuthenticatedRecoveredReleasedValidateNoSuccessorV1;
 pub(in crate::sumeragi) use open::RecoveredLifecycleOutputSettlementV1;
 pub(super) use open::TerminalValidateNoSuccessorClaim;
 #[allow(unused_imports, reason = "release-bound lifecycle error seam")]

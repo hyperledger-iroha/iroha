@@ -122,7 +122,7 @@ fn pipeline_status_openapi_exposes_only_the_exact_first_release_scope() {
 }
 
 #[test]
-fn npos_schema_excludes_retired_process_local_counters() {
+fn npos_schema_excludes_retired_process_local_and_vrf_surfaces() {
     let document = canonical_document();
     let schemas = component_schemas(&document);
     let retired = [
@@ -149,6 +149,8 @@ fn npos_schema_excludes_retired_process_local_counters() {
             "epoch_seed",
             "prf_height",
             "prf_view",
+            "vrf_commit_deadline_offset",
+            "vrf_reveal_deadline_offset",
         ])
     );
     for field in retired {
@@ -157,6 +159,20 @@ fn npos_schema_excludes_retired_process_local_counters() {
             "retired process-local VRF counter remains in OpenAPI: {field}"
         );
     }
+    assert!(
+        !schemas.contains_key("SumeragiVrfPenaltiesReport"),
+        "retired VRF penalty report schema remains in OpenAPI"
+    );
+    let paths = document
+        .get("paths")
+        .and_then(Value::as_object)
+        .expect("OpenAPI paths");
+    assert!(
+        paths
+            .keys()
+            .all(|path| !path.starts_with("/v1/sumeragi/vrf/")),
+        "retired Sumeragi VRF path remains in OpenAPI"
+    );
 }
 
 #[test]
