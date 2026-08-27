@@ -20,14 +20,22 @@ cleanup() {
 }
 trap cleanup EXIT
 
-rustc --edition 2024 -D warnings -D unsafe-code "$SOURCE" \
-  -o "$QUALIFICATION_ROOT/iroha_authenticated_tool_controller"
+HOST_KERNEL="$(uname -s)"
+if [[ "$HOST_KERNEL" != "Darwin" ]]; then
+  # The non-macOS production entrypoint only reports backend unavailability,
+  # leaving the authenticated macOS controller graph intentionally unreachable.
+  rustc --edition 2024 -D warnings -D unsafe-code -A dead-code "$SOURCE" \
+    -o "$QUALIFICATION_ROOT/iroha_authenticated_tool_controller"
+else
+  rustc --edition 2024 -D warnings -D unsafe-code "$SOURCE" \
+    -o "$QUALIFICATION_ROOT/iroha_authenticated_tool_controller"
+fi
 # The test harness replaces the binary entrypoint, leaving the production-only
 # controller graph intentionally unreachable; keep every other warning denied.
 rustc --edition 2024 -D warnings -D unsafe-code -A dead-code --test "$SOURCE" \
   -o "$QUALIFICATION_ROOT/iroha_authenticated_tool_controller_tests"
 "$QUALIFICATION_ROOT/iroha_authenticated_tool_controller_tests"
-if [[ "$(uname -s)" == "Darwin" ]]; then
+if [[ "$HOST_KERNEL" == "Darwin" ]]; then
   env -i \
     LANG=C \
     LC_ALL=C \
