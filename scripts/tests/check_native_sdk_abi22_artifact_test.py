@@ -60,7 +60,9 @@ NATIVE_ESCROW_WORKFLOW_SPECIFIC_TRIGGER_PATHS = {
         ".github/workflows/pr_csharp.yml",
         "ci/check_csharp_sdk_package_consumer.sh",
         "csharp/**",
+        "scripts/csharp_linux_arm_cross_handoff.py",
         "scripts/package_csharp_native_artifacts.py",
+        "scripts/tests/csharp_linux_arm_cross_handoff_test.py",
         "scripts/tests/package_csharp_native_artifacts_test.py",
     },
     "mobile_sdk_artifacts.yml": {
