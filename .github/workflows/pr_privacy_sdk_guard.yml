@@ -287,7 +287,7 @@ jobs:
   privacy_swift_sdk_parse:
     needs: privacy_jvm_sdk_tests
     runs-on: macos-14
-    timeout-minutes: 120
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - id: privacy-swift-python

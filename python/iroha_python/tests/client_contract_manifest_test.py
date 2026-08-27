@@ -775,7 +775,7 @@ def test_manifest_rejects_exact_amount_in_every_identifier_position() -> None:
             "state:Amount",
         ),
     )
-    for label, path, replacement in cases:
+    for _label, path, replacement in cases:
         payload = _full_manifest_payload()
         parent = payload
         for component in path[:-1]:

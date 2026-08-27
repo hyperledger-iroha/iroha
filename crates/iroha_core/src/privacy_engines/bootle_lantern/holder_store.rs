@@ -34,12 +34,14 @@ use iroha_data_model::privacy::{
 };
 use rand_core_06::{CryptoRng, OsRng, RngCore};
 use sha2::{Digest as _, Sha256};
+#[cfg(unix)]
+use std::io::Read as _;
 #[cfg(test)]
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
-    io::{Read, Write},
+    io::Write,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock},
 };
@@ -56,8 +58,11 @@ const HOLDER_PENDING_TAG_V1: u8 = 0;
 const HOLDER_RESPONSE_CACHED_TAG_V1: u8 = 1;
 const HOLDER_FINALIZED_TAG_V1: u8 = 2;
 const HOLDER_REJECTED_TAG_V1: u8 = 3;
+#[cfg(any(unix, test))]
 const HOLDER_OBJECTS_DIRECTORY_V1: &str = "objects";
+#[cfg(any(unix, test))]
 const HOLDER_TEMP_DIRECTORY_V1: &str = ".tmp";
+#[cfg(any(unix, test))]
 const HOLDER_WRITER_LOCK_FILE_V1: &str = ".writer.lock";
 const HOLDER_OBJECT_EXTENSION_V1: &str = ".blh1";
 const HOLDER_TEMP_EXTENSION_V1: &str = ".tmp";
@@ -373,6 +378,7 @@ struct HolderManifestV1 {
     revision: [u8; 32],
 }
 impl HolderManifestV1 {
+    #[cfg(any(unix, test))]
     fn empty(vault_id: [u8; 32]) -> Result<Self, BootleLanternHolderStoreErrorV1> {
         let mut manifest = Self {
             vault_id,
@@ -1111,6 +1117,7 @@ impl BootleLanternFileHolderStoreV1 {
         validate_pending_against_entry_v1(&pending, entry)?;
         Ok(pending)
     }
+    #[cfg(any(unix, test))]
     fn validate_active_secrets_v1(&self) -> Result<(), BootleLanternHolderStoreErrorV1> {
         let state = self
             .state
@@ -1662,6 +1669,7 @@ fn encode_manifest_v1(
     }
     Ok(bytes)
 }
+#[cfg(any(unix, test))]
 fn decode_manifest_v1(
     bytes: &[u8],
     expected_vault_id: [u8; 32],
@@ -2527,6 +2535,7 @@ const fn plaintext_length_v1(phase: BootleLanternHolderPhaseV1) -> usize {
         BootleLanternHolderPhaseV1::Rejected => BOOTLE_LANTERN_HOLDER_REJECTED_PLAINTEXT_BYTES_V1,
     }
 }
+#[cfg(any(unix, test))]
 fn load_or_create_manifest_v1(
     vault_id: [u8; 32],
     config: BootleLanternHolderStoreConfigV1,
@@ -2614,6 +2623,7 @@ fn publish_manifest_v1(
         }
     }
 }
+#[cfg(any(unix, test))]
 fn validate_sealed_head_v1(
     head: BootleLanternHolderSealedHeadV1,
     vault_id: [u8; 32],
@@ -2729,6 +2739,7 @@ fn validate_runtime_handle_v1(value: &str) -> Result<(), BootleLanternHolderStor
 fn validate_key_id_v1(value: &str) -> Result<(), BootleLanternHolderStoreErrorV1> {
     validate_runtime_handle_v1(value).map_err(|_| BootleLanternHolderStoreErrorV1::KeyWrapping)
 }
+#[cfg(any(unix, test))]
 fn ensure_holder_root_v1(root: &Path) -> Result<(), BootleLanternHolderStoreErrorV1> {
     match fs::symlink_metadata(root) {
         Ok(metadata) => {
@@ -2746,7 +2757,10 @@ fn ensure_holder_root_v1(root: &Path) -> Result<(), BootleLanternHolderStoreErro
             if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
                 return Err(BootleLanternHolderStoreErrorV1::Corrupt);
             }
+            #[cfg(unix)]
             let mut builder = fs::DirBuilder::new();
+            #[cfg(not(unix))]
+            let builder = fs::DirBuilder::new();
             #[cfg(unix)]
             {
                 use std::os::unix::fs::DirBuilderExt as _;
@@ -2768,6 +2782,7 @@ fn ensure_holder_root_v1(root: &Path) -> Result<(), BootleLanternHolderStoreErro
     }
     validate_private_directory_v1(root)
 }
+#[cfg(any(unix, test))]
 fn ensure_private_subdirectory_v1(
     parent: &Path,
     path: &Path,
@@ -2775,7 +2790,10 @@ fn ensure_private_subdirectory_v1(
     match fs::symlink_metadata(path) {
         Ok(_) => validate_private_directory_v1(path),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            #[cfg(unix)]
             let mut builder = fs::DirBuilder::new();
+            #[cfg(not(unix))]
+            let builder = fs::DirBuilder::new();
             #[cfg(unix)]
             {
                 use std::os::unix::fs::DirBuilderExt as _;
@@ -2797,6 +2815,7 @@ fn ensure_private_subdirectory_v1(
         Err(_) => Err(BootleLanternHolderStoreErrorV1::Backend),
     }
 }
+#[cfg(any(unix, test))]
 fn validate_private_directory_v1(path: &Path) -> Result<(), BootleLanternHolderStoreErrorV1> {
     let metadata =
         fs::symlink_metadata(path).map_err(|_| BootleLanternHolderStoreErrorV1::Backend)?;
@@ -2813,6 +2832,7 @@ fn validate_private_directory_v1(path: &Path) -> Result<(), BootleLanternHolderS
     }
     Ok(())
 }
+#[cfg(any(unix, test))]
 fn validate_holder_root_namespace_v1(root: &Path) -> Result<(), BootleLanternHolderStoreErrorV1> {
     let mut expected = BTreeSet::from([
         HOLDER_OBJECTS_DIRECTORY_V1,
@@ -2834,6 +2854,7 @@ fn validate_holder_root_namespace_v1(root: &Path) -> Result<(), BootleLanternHol
     }
     Ok(())
 }
+#[cfg(any(unix, test))]
 fn clean_holder_temp_v1(path: &Path) -> Result<(), BootleLanternHolderStoreErrorV1> {
     let mut removed = false;
     for entry in fs::read_dir(path).map_err(|_| BootleLanternHolderStoreErrorV1::Backend)? {
@@ -2877,6 +2898,7 @@ fn clean_holder_temp_v1(path: &Path) -> Result<(), BootleLanternHolderStoreError
     }
     Ok(())
 }
+#[cfg(any(unix, test))]
 fn validate_object_namespace_v1(
     objects_root: &Path,
     manifest: &HolderManifestV1,
@@ -2910,6 +2932,7 @@ fn validate_object_namespace_v1(
     }
     Ok(())
 }
+#[cfg(any(unix, test))]
 fn load_holder_object_entry_v1(
     entry: fs::DirEntry,
 ) -> Result<(PathBuf, [u8; 32], HolderEnvelopeV1), BootleLanternHolderStoreErrorV1> {
@@ -2953,6 +2976,7 @@ fn load_holder_object_entry_v1(
     }
     Ok((path, digest, decode_envelope_v1(&bytes)?))
 }
+#[cfg(any(unix, test))]
 fn remove_orphan_holder_objects_v1(
     objects_root: &Path,
     manifest: &HolderManifestV1,
@@ -3061,6 +3085,7 @@ fn holder_object_file_name_v1(digest: [u8; 32]) -> String {
     name.push_str(HOLDER_OBJECT_EXTENSION_V1);
     name
 }
+#[cfg(any(unix, test))]
 fn parse_holder_object_file_name_v1(
     name: &str,
 ) -> Result<[u8; 32], BootleLanternHolderStoreErrorV1> {
@@ -3093,6 +3118,7 @@ fn hex_lower_v1(bytes: [u8; 32]) -> String {
     }
     output
 }
+#[cfg(any(unix, test))]
 fn hex_nibble_v1(byte: u8) -> Result<u8, BootleLanternHolderStoreErrorV1> {
     match byte {
         b'0'..=b'9' => Ok(byte - b'0'),
@@ -3156,10 +3182,11 @@ fn acquire_holder_writer_lock_v1(root: &Path) -> Result<File, BootleLanternHolde
     sync_directory_v1(root).map_err(|_| BootleLanternHolderStoreErrorV1::DurabilityUncertain)?;
     Ok(file)
 }
-#[cfg(not(unix))]
+#[cfg(all(test, not(unix)))]
 fn acquire_holder_writer_lock_v1(_root: &Path) -> Result<File, BootleLanternHolderStoreErrorV1> {
     Err(BootleLanternHolderStoreErrorV1::UnsupportedPlatform)
 }
+#[cfg(any(unix, test))]
 fn acquire_holder_lease_v1(
     canonical_root: PathBuf,
 ) -> Result<HolderDirectoryLeaseV1, BootleLanternHolderStoreErrorV1> {

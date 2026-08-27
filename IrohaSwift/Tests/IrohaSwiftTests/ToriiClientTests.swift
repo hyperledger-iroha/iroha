@@ -374,7 +374,17 @@ func tcMakeClient() -> ToriiClient {
     let configuration = URLSessionConfiguration.ephemeral
     configuration.protocolClasses = [StubURLProtocol.self]
     let session = URLSession(configuration: configuration)
-    return ToriiClient(baseURL: URL(string: "https://example.test")!, session: session)
+    let seed = Data(repeating: 0x41, count: 32)
+    let auth = ToriiCanonicalRequestAuth(
+        accountId: try! Keypair(privateKeyBytes: seed)
+            .accountId(networkPrefix: AccountId.defaultNetworkPrefix),
+        privateKey: seed
+    )
+    return ToriiClient(
+        baseURL: URL(string: "https://example.test")!,
+        session: session,
+        canonicalRequestAuth: auth
+    )
 }
 
 func tcBodyJSON(from request: URLRequest) -> [String: Any] {
@@ -498,6 +508,7 @@ final class ToriiClientTests: XCTestCase {
             session: session,
             defaultHeaders: defaultHeaders,
             localSigningContext: ToriiLocalSigningContext(networkId: TestNetworkIds.canonical),
+            canonicalRequestAuth: canonicalReadAuth,
             operatorSigningContext: operatorSigningContext
         )
     }
@@ -1279,7 +1290,7 @@ final class ToriiClientTests: XCTestCase {
                 networkId: TestNetworkIds.canonical,
                 anchor: try AliasPlanAnchorV1(
                     blockHeight: 9,
-                    blockHash: String(repeating: "01", count: 32)
+                    blockHash: NetworkId(bytes: Data(repeating: 0x01, count: 32)).literal
                 ),
                 resources: [],
                 instructions: [],
@@ -1347,7 +1358,7 @@ final class ToriiClientTests: XCTestCase {
                 networkId: TestNetworkIds.canonical,
                 anchor: try AliasPlanAnchorV1(
                     blockHeight: 9,
-                    blockHash: String(repeating: "01", count: 32)
+                    blockHash: NetworkId(bytes: Data(repeating: 0x01, count: 32)).literal
                 ),
                 operation: .renewLease(renewal),
                 disposition: .apply,
@@ -4827,6 +4838,10 @@ final class ToriiClientTests: XCTestCase {
         let session = URLSession(configuration: configuration)
         let client = ToriiClient(baseURL: URL(string: "https://example.test")!,
                                  session: session,
+                                 localSigningContext: ToriiLocalSigningContext(
+                                     networkId: TestNetworkIds.canonical
+                                 ),
+                                 canonicalRequestAuth: canonicalReadAuth,
                                  wireFormatPreference: .jsonOnly)
 
         let payload = try await client.submitTransaction(jsonData: Data("{\"version\":1,\"content\":{}}".utf8))
@@ -7499,18 +7514,11 @@ final class ToriiClientTests: XCTestCase {
         )
         let fixture = try tcLoadDaProofFixture()
         let options = ToriiDaProofSummaryOptions(sampleCount: 0, sampleSeed: 42, leafIndexes: [0, 1, 1])
-        let summary: ToriiDaProofSummary
-        do {
-            summary = try NativeDaProofSummaryGenerator.shared.makeProofSummary(
-                manifest: fixture.manifest,
-                payload: fixture.payload,
-                options: options
-            )
-        } catch ToriiClientError.invalidPayload {
-            try failRequiredNativeTestCapability(
-                "Native DA proof summary generator unavailable in this environment"
-            )
-        }
+        let summary = try NativeDaProofSummaryGenerator.shared.makeProofSummary(
+            manifest: fixture.manifest,
+            payload: fixture.payload,
+            options: options
+        )
         XCTAssertEqual(summary.blobHashHex.lowercased(), fixture.blobHashHex.lowercased())
         XCTAssertEqual(summary.sampleCount, 0)
         XCTAssertEqual(summary.proofCount, 2)
@@ -10417,7 +10425,7 @@ final class ToriiClientTests: XCTestCase {
             networkId: TestNetworkIds.canonical,
             anchor: try AliasPlanAnchorV1(
                 blockHeight: 1,
-                blockHash: String(repeating: "11", count: 32)
+                blockHash: NetworkId(bytes: Data(repeating: 0x11, count: 32)).literal
             ),
             resource: AliasPlanResourceV1(
                 intent: intent,
@@ -11930,8 +11938,6 @@ final class ToriiClientTests: XCTestCase {
             alias: "alice@universal",
             accountId: canonicalOwnerLiteral()
         )
-        let expectedAuthority = try canonicalOwnerLiteral()
-
         do {
             _ = try await makeClient().planAccountOnboarding(
                 intent,
@@ -13681,11 +13687,12 @@ final class ToriiClientHeaderTests: XCTestCase {
         for field in [
             domainOverride ?? networkDomain.data,
             authorityPayload,
-            uint64(0),
+            uint64(1),
             executable.data,
             option(uint64(100_000)),
             Data([0]),
             feePayment.data,
+            TransactionAdmissionIntentV1.queuePlanSynced.norito,
             uint64(0),
             Data([0]),
         ] {
@@ -18678,7 +18685,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
 
         let epochMismatch = try mutatedNativeAmxDiagnosticsPayload { root in
             mutateFirstNativeAmxQcBody(in: &root, qcKey: "commit_qc") { body in
-                body["epoch"] = 3
+                body["epoch"] = 4
             }
         }
         XCTAssertThrowsError(
@@ -20309,7 +20316,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let bodyData = """
-            {"ok":true,"submitted":true,"dataspace":"universal","contract_address":"irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)","creation_time_ms":321,"transaction_ttl_ms":60000,"tx_hash_hex":"\(txHash)","pipeline_status":{"hash":"\(txHash)","status":{"kind":"Rejected","block_height":12,"rejection_reason":{"Validation":"missing permission"}},"summary":"Rejected: missing permission","diagnostics":[{"category":"validation","code":"validation","message":"missing permission","decoded_reason":"missing permission","raw_reason":"Validation(missing permission)"}],"scope":"local","resolved_from":"state"},"entrypoint_hash_hex":"\(entrypointHash)","entrypoint":"create","operation_receipt":{"operation_kind":"contract_call","status":"submitted","transport":"torii","dataspace":"universal","contract_alias":"mint::universal","contract_address":"irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)","tx_hash_hex":"\(txHash)","entrypoint":"create","entrypoint_hash_hex":"\(entrypointHash)","gas_limit":7,"gas_used":3,"fee_payment":{"payer":"authority","value":{"charge_limits":[],"gas_limit":7}},"payload_digest_hex":"\(payloadDigest)"}}
+            {"ok":true,"submitted":true,"dataspace":"universal","contract_address":"irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)","creation_time_ms":321,"transaction_ttl_ms":60000,"tx_hash_hex":"\(txHash)","pipeline_status":{"hash":"\(txHash)","status":{"kind":"Rejected","block_height":12},"scope":"local","resolved_from":"state"},"entrypoint_hash_hex":"\(entrypointHash)","entrypoint":"create","operation_receipt":{"operation_kind":"contract_call","status":"submitted","transport":"torii","dataspace":"universal","contract_alias":"mint::universal","contract_address":"irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)","tx_hash_hex":"\(txHash)","entrypoint":"create","entrypoint_hash_hex":"\(entrypointHash)","gas_limit":7,"gas_used":3,"fee_payment":{"payer":"authority","value":{"charge_limits":[],"gas_limit":7}},"payload_digest_hex":"\(payloadDigest)"}}
             """.data(using: .utf8)!
             return (response, bodyData)
         }

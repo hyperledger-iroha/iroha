@@ -192,6 +192,51 @@ quote, or fall back to the authority. Legacy transaction metadata keys
 from the deployment genesis; a display chain label is never accepted as a
 signing domain.
 
+## SORA Parliament V1
+
+The account-authenticated Parliament surface is available through strict V1
+methods for readiness, attempt drafting and reading, timed-OVN casting context
+and proof pages, TLE release context and local partial release, and lifecycle
+transition drafting. Draft callers supply the independently derived IDs or
+transition digest that the response must match before an instruction is exposed
+for signing:
+
+```python
+capabilities = client.get_governance_capabilities_v1(canonical_auth=auth)
+draft = client.draft_parliament_attempt_v1(
+    proposal,
+    attempt_sequence=0,
+    expected_proposal_content_id=proposal_content_id,
+    expected_governance_attempt_id=governance_attempt_id,
+    canonical_auth=auth,
+)
+attempt = client.get_parliament_attempt_v1(
+    governance_attempt_id, canonical_auth=auth
+)
+```
+
+`get_parliament_timed_ovn_casting_proof_page_v1(...)` accepts an immutable
+canonical Norito request frame and returns an opaque, schema-bound Norito
+response frame. The lightweight Python package validates media type, schema,
+checksum, and the 8 MiB response bound only. Before any ballot seed is used,
+pass the response and the independently pinned network ID, checkpoint height,
+checkpoint context ID, and ballot-attempt ID to the ABI-23 native verifier.
+Python does not claim to verify finality, the ordinary-write witness,
+application membership, or the embedded Core archive. Local partial-release
+requests are deliberately bodyless and their public response is rebound to a
+previously validated release context.
+
+`FreezeTimedOvnCorpus` transition drafts accept one contiguous batch of at
+most 32 canonical 2,858-byte records per call; the complete frozen corpus may
+still contain up to 1,000 records across calls. Parliament requests reject
+ambient session auth headers, cookies, and `Session.auth`, and suppress
+Requests' environment/netrc credential fallback during preparation.
+
+The separate `get_parliament_timed_ovn_casting_context_v1(...)` response is a
+node-local diagnostic projection, not a finality proof or authorization
+capability. Its archive must not reach a secret-local operation unless the
+casting-proof response has been verified by the ABI-23 native verifier.
+
 ## Signed SoraFS orderbook submission
 
 The lightweight client exposes the three signed orderbook submit routes only

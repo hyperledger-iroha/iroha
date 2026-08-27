@@ -23,12 +23,12 @@ ivm/                         # → Cargo workspace root (a single Rust library c
 │   ├── gas.rs               # gas table and accounting utilities
 │   ├── error.rs             # `VMError`, `Perm` and other enums
 │   ├── instruction.rs       # opcode constants, field extractors, immed‑helpers
-│   ├── decoder.rs           # 16‑/32‑bit instruction decoding logic
+│   ├── decoder.rs           # fixed-width 32-bit instruction decoder
 │   ├── host.rs              # `IVMHost` trait + default/dummy host impls
 │   ├── syscalls.rs          # Iroha‑specific syscall number map & helpers
 │   ├── vector.rs            # SIMD helpers, SHA‑256 compression adapter
 │   ├── zk.rs                # zero‑knowledge‑mode helpers (ASSERT tracking, padding)
-│   └── vm.rs                # `IVM` struct, fetch‑decode‑execute loop, public API
+│   └── ivm.rs               # `IVM` struct, fetch-decode-execute loop, public API
 ├── tests/                   # `cargo test` integration + property tests
 │   ├── arithmetic.rs        # ADD/SUB/MUL/… correctness
 │   ├── memory.rs            # loads/stores, OOB & alignment traps
@@ -49,12 +49,12 @@ For the latest architecture ideas including deterministic parallel execution and
 
 - Implemented:
   - 256 general-purpose registers with privacy tags and Merkle commitments (current implementation; the encoding leaves headroom for future expansion).
-  - Segmented memory with permissions and alignment checks; bulk copy helpers.
+  - Region-based memory with permissions and alignment checks; bulk copy helpers.
   - Gas metering; `GETGAS` and per-op cost accounting.
   - Syscall/host trait with a default host implementation.
   - Vector helpers with runtime SIMD detection (SSE/AVX/NEON) and scalar fallback; SHA-256 compression accelerated via Apple Metal when available.
   - AES, SHA-3, Poseidon helpers and BN254 utilities on CPU; Ed25519, ECDSA, and deterministic ML-DSA verification.
-  - Deterministic parallel scheduler with conflict-aware grouping; optional HTM fast path on x86_64 (feature `htm`).
+  - Deterministic block scheduler with a declared-access dependency graph and ordered software commits.
   - Halo2 constraint gadgets exercised by circuit tests, OpenVerify IPA/Pasta proof-envelope verification in the host, and ZK trace logging (see `halo2.rs`, `zk.rs`, and `zk_verify.rs`).
 
 ### Gated test suites
@@ -67,7 +67,7 @@ For the latest architecture ideas including deterministic parallel execution and
 
 ### Zero-knowledge backend
 
-`ivm` links the Halo2-backed verifiers from `iroha_zkp_halo2` in every build (feature `halo2`, enabled by default). Runtime proof checks go through OpenVerify IPA/Pasta envelopes; `MockProver` is limited to targeted circuit-gadget tests behind flags such as `ivm_zk_tests`. End users do not need a feature toggle to exercise the production verifier path.
+`ivm` links the Halo2-backed verifiers from `iroha_zkp_halo2` unconditionally. Runtime proof checks go through OpenVerify IPA/Pasta envelopes; `MockProver` is limited to targeted circuit-gadget tests behind flags such as `ivm_zk_tests`. There is no production verifier feature toggle.
 
 Notes
 - Real proving is not performed on consensus paths; the host verifies proofs only. Any future proving flows should run off‑chain or outside consensus‑critical logic.
@@ -90,9 +90,7 @@ High-level smart contract language targeting IVM bytecode:
 ## Features
 
 - **Register-based ISA:** 256 general-purpose **64-bit** registers (`r0`–`r255`) with `r0` fixed at zero. In zero-knowledge mode each register carries a 1-bit privacy tag. The ISA supports arithmetic (ADD, SUB, MUL, DIV, etc.), logic (AND, OR, XOR), memory loads/stores, control flow (jumps and branches), and system calls.
-- **Compressed Instructions:** 16-bit compressed forms for common operations to reduce program size (e.g., short jumps, immediate moves, etc.).
-- **Mixed Encoding:** 32-bit instructions expose full-width register fields, while
-  the 16-bit variants operate on a smaller register subset. The encoding is sized to address the current 256-register file and leaves headroom for future extensions.
+- **One Canonical Encoding:** Every executable instruction is one aligned 32-bit word. Program loading rejects compact and mixed-width streams before execution.
 - **Memory Management:** Region-based memory with permission checks. Code, heap, input, output and stack regions are predefined. Misaligned or out-of-bounds accesses cause traps.
 - **Indexed Literals:** `LDLIT` loads a validated pointer TLV and `LDI64` loads an exact signed scalar by a 16-bit table index, each in one word. Authenticated descriptor kinds, complete payload validation, and instruction-kind checks prevent aliases, malformed objects, and pointer/scalar confusion before execution.
 - **Relaxed Direct Transfers:** The compiler uses one-word `JAL` for nearby calls/jumps and automatically relaxes farther targets to signed 24-bit `JMP`/`JALS` forms. `JALS` uses `r1` as the implicit link register.
@@ -100,7 +98,7 @@ High-level smart contract language targeting IVM bytecode:
 - **GETGAS Instruction:** Programs may query the current remaining gas via opcode `0x61` which writes the value to a destination register.
 - **Extended Arithmetic:** Support for `DIVU`, `REMU`, `MULH` and `MULHU` instructions providing unsigned division, unsigned remainder and high-word multiplication.
 - **Host Interoperability (Syscalls):** A trait-based host interface (`IVMHost`) allows the VM to invoke host environment services via the `SCALL` instruction (opcode `0x60`) with an 8-bit call number. A default host implementation is provided (which treats all calls as unimplemented).
- - **Vector Extensions (feature: `simd`)**: Compile-time gated intrinsics (x86 SSE/AVX, aarch64 NEON) with runtime selection among the compiled-in options. If disabled, the scalar path is used. `SHA256BLOCK` uses a Metal kernel on macOS when enabled (`metal` feature). Lane‑wise ops (vadd32/vadd64/and/xor/or/rot32) leverage SIMD when compiled in; deterministic CPU fallbacks remain.
+ - **Vector Extensions:** CPU intrinsics (x86 SSE/AVX and AArch64 NEON) ship in every build and are selected at runtime after deterministic self-tests. The scalar implementation remains the fail-closed fallback. `SHA256BLOCK` may use a Metal kernel on macOS when the `metal` feature is enabled.
  - **Apple Metal (feature: `metal`, macOS-only):** When enabled and a compatible device is present, Metal kernels accelerate vector ops (`vadd*`, `vand`, `vxor`, `vor`, `vrot32`) and SHA‑256 compression. The code is not compiled on non-macOS targets and falls back to CPU/SIMD when Metal is unavailable or disabled.
  - **CUDA (feature: `cuda`):** Optional PTX kernels with a `build.rs` that installs checked-in PTX by default and fails closed if an artifact is missing or structurally invalid. Explicit `generate` and byte-for-byte `check` modes are reserved for qualified CUDA runners. If the feature is not enabled or runtime hardware is unavailable, CPU fallbacks are used.
 - **Zero-Knowledge Support:** When a program specifies a non-zero `max_cycles` limit, execution traces are padded to that length and assertion failures do not immediately abort. Per-cycle Merkle roots of registers and memory are logged so proofs can verify each step without reconstructing the entire state. The default padding limit has been increased to **131,072 cycles** so more complex programs can be proven.
@@ -109,21 +107,20 @@ High-level smart contract language targeting IVM bytecode:
 - **Turing Complete & Gas-Limited:** Branching, jumping and memory operations allow any algorithm to be expressed. A contract must also supply a gas budget, ensuring execution halts deterministically.
 - **Optimised for Financial Operations:** Fast 64-bit arithmetic and register access keep asset calculations efficient, suitable for high-throughput ledgers.
 - **Bulk Memory Helpers:** `load_bytes` and `store_bytes` efficiently copy contiguous regions, speeding up cryptographic hashing and serialization.
-- **Quantum-Resistant Signatures:** Deterministic ML‑DSA (Crystals Dilithium) verification is included in every build.
+- **Quantum-Resistant Signatures:** Deterministic ML‑DSA (Crystals Dilithium) verification ships in every IVM build.
 - **SIMD Poseidon Hashing:** `POSEIDON2` hashes two scalar registers and `POSEIDON6` hashes one six-register window, avoiding transient memory traffic. Both automatically use deterministic hardware acceleration when supported by the host CPU.
 - **SIMD Field Arithmetic:** BN254 helpers are implemented on CPU with runtime SIMD detection plumbed through vector utilities. For benchmarking or deterministic testing, thread `AccelerationPolicy::with_forced_simd(Some(SimdChoice::{Scalar|Sse2|Avx2|Avx512|Neon}))` through `IvmConfig`, or call `ivm::set_forced_simd` in tests; unsupported requests automatically fall back to the scalar implementation to preserve safety. Future work: add architecture-specific intrinsics where beneficial.
 - **Apple Metal Acceleration:** On macOS the VM accelerates vector lanes (`vadd32`/`vadd64`/`vand`/`vxor`/`vor`/`vrot32`), SHA‑256 compression and tree reductions, Keccak‑f1600, AES rounds/batches, and non-opcode Ed25519 batch helpers via Metal when a compatible device is present. Acceleration is gated by `AccelerationPolicy::with_metal(true)`, honours developer toggles like `IVM_DISABLE_METAL`/`IVM_FORCE_METAL_ENUM`, and falls back to CPU/SIMD with identical semantics when Metal is unavailable or disabled. The consensus-visible `ED25519BATCHVERIFY` opcode always uses ordered strict CPU verification.
 - **Optional backends remain deterministic:** Metal/CUDA are best-effort accelerators; when features are disabled or hardware is unavailable, helpers fall back to scalar/SIMD paths so results stay identical across hosts.
 - **CUDA Acceleration:** The `cuda` feature enables CUDA bindings for the explicit helper surface covering vectors, SHA‑256/Merkle, Keccak‑f1600, Poseidon2/6, AES rounds/batches, BN254 arithmetic, non-opcode Ed25519 batch verification, and the scheduler bitonic-sort helper. `build.rs` uses checked-in PTX by default. `IVM_CUDA_PTX_MODE=generate` invokes `nvcc`, while `IVM_CUDA_PTX_MODE=check` regenerates every artifact and requires byte identity with the checked-in copy. `IVM_CUDA_NVCC`/`NVCC`, `IVM_CUDA_GENCODE`, and `IVM_CUDA_NVCC_EXTRA` configure those explicit modes. Use `IVM_DISABLE_CUDA=1` to force CPU-only execution and `IVM_MAX_GPUS` to cap device count. The required 11 PTX artifacts and signed provenance are still a release blocker documented in [`cuda/README.md`](cuda/README.md).
-- **Hybrid STM/HTM Transactions:** When built with the optional `htm` feature on x86‑64, the scheduler attempts to commit transactions using hardware transactional memory (RTM) and falls back to a mutex-based path if unavailable.
+- **Deterministic Parallel Transactions:** Conflict-free transactions can execute concurrently, while successful write sets commit through one ordered, software-owned state path on every host.
 - **Startup Jingle:** When built with the optional `beep` feature,
   `irohad` calls `IVM::beep_music()` and plays a short tune when the
   configuration enables it. Disable via `ivm.banner.beep = false` in your node
   config.
-- **Adaptive Branch Prediction:** A built‑in two‑bit predictor tracks recent branch outcomes so tight loops execute faster. Accuracy can be queried via `IVM::branch_prediction_accuracy()` for diagnostics.
 - **Merkle‑Backed Memory:** Memory writes are batched until `commit()` recomputes a Merkle root over the entire image. The root calculation now hashes chunks in parallel with Rayon for faster commits. Authentication paths can be requested for proofs.
 - **Governed Heap Growth:** Hosts set a per-runtime heap ceiling. `SYSCALL_GROW_HEAP` may extend the active heap only up to that ceiling and never beyond the ABI address window.
-- **Conflict Prediction Scheduler:** Parallel execution groups transactions by predicted access conflicts to maximize throughput while preserving determinism.
+- **Declared-Conflict Scheduler:** Parallel execution derives dependencies directly from declared access sets; it does not predict from execution history.
 - **Expanded Crypto Opcodes:** Poseidon permutations, BLS12‑381 key operations and pairings are provided for advanced ZK applications.
 
 ## Memory Model
@@ -296,11 +293,10 @@ cargo doc --open
 This builds the crate documentation and opens it in your browser so you can
 explore the VM implementation in detail.
 
-You can skip building dependencies with `--no-deps` or enable optional crate
-features when generating the docs:
+You can skip building dependencies with `--no-deps`:
 
 ```bash
-cargo doc --no-deps --features "parallel"
+cargo doc -p ivm --no-deps
 ```
 
 The rendered API documentation for the latest release is also available online

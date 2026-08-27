@@ -79,12 +79,6 @@ pub struct FunctionModifiers {
     pub kind: FunctionKind,
     /// Optional caller authorization declared with `authorize("Permission")`.
     pub permission: Option<String>,
-    /// Reserved parser storage for access hints; first-release Kotodama rejects
-    /// user-written access attributes before lowering.
-    pub access_reads: Vec<String>,
-    /// Reserved parser storage for access hints; first-release Kotodama rejects
-    /// user-written access attributes before lowering.
-    pub access_writes: Vec<String>,
     /// Marks a function as a local-only Kotodama test.
     pub is_test: bool,
     /// Optional fixture bound to a Kotodama test function.

@@ -64,6 +64,24 @@ class RecordingSession(requests.Session):
         )
         return self._response
 
+    def send(
+        self,
+        request: requests.PreparedRequest,
+        **kwargs: Any,
+    ) -> requests.Response:
+        """Capture the exact prepared request used by canonical authentication."""
+
+        self.calls.append(
+            {
+                "method": request.method,
+                "url": request.url,
+                "params": {},
+                "headers": dict(request.headers),
+                "data": request.body,
+            }
+        )
+        return self._response
+
     def get(
         self,
         url: Union[str, bytes],

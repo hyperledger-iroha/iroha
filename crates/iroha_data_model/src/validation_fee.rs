@@ -1350,8 +1350,8 @@ mod parliament_tests {
             election_attempt_id,
             ParliamentBody::PolicyJury,
             root(1),
-            500,
-            500,
+            3,
+            3,
             base + 1,
             base + 2,
             beacon_session_id,
@@ -1365,7 +1365,7 @@ mod parliament_tests {
             BallotAttemptId::derive_v1(body_instance_id, ballot_attempt_sequence);
         let release_beacon_session_id = BeaconSessionId::new(root(7));
         let tle_key_session_id = TleKeySessionId::new(root(8));
-        let release_height = base + 7;
+        let release_height = base + 12;
         let tle_session_id = TleSessionId::derive_v1(
             ballot_attempt_id,
             tle_key_session_id,
@@ -1374,14 +1374,14 @@ mod parliament_tests {
         );
         let opening_root = root(16);
         let tally = ParliamentAggregateTallyV1 {
-            original_seats: 500,
-            accepted_ballots: 334,
-            aye: 200,
-            nay: 100,
-            abstain: 34,
+            original_seats: 3,
+            accepted_ballots: 3,
+            aye: 2,
+            nay: 1,
+            abstain: 0,
         };
         let outcome = ParliamentAggregateOutcomeV1::Approved;
-        let result_height = base + 8;
+        let result_height = base + 13;
         let result_root = parliament_ballot_result_root_v1(
             governance_attempt_id,
             body_instance_id,
@@ -1391,8 +1391,8 @@ mod parliament_tests {
             outcome,
             result_height,
         );
-        let certified_at_height = base + 9;
-        let enact_at_height = base + 10;
+        let certified_at_height = base + 14;
+        let enact_at_height = base + 15;
         let governance_certificate = GovernanceCertificateV1 {
             proposal_content_id,
             governance_attempt_id,
@@ -1426,14 +1426,14 @@ mod parliament_tests {
                     timed_commitment_root: root(14),
                     release_beacon_session_id,
                     registered_at_height: base + 3,
-                    registration_close_height: base + 4,
-                    survivor_freeze_height: base + 5,
-                    commitment_close_height: base + 6,
-                    registration_closed_at_height: base + 4,
-                    survivors_frozen_at_height: base + 5,
-                    commitment_closed_at_height: base + 6,
+                    registration_close_height: base + 7,
+                    survivor_freeze_height: base + 10,
+                    commitment_close_height: base + 11,
+                    registration_closed_at_height: base + 7,
+                    survivors_frozen_at_height: base + 10,
+                    commitment_closed_at_height: base + 11,
                     max_ballot_retries: 3,
-                    max_corpus_entries: 1_000,
+                    max_corpus_entries: 3,
                     release_height,
                     opening_deadline_height: result_height,
                     release_pulse_id: BeaconPulseId::new(root(15)),
@@ -1465,7 +1465,7 @@ mod parliament_tests {
     fn policy_effective_height(version: u64) -> u64 {
         version
             .checked_mul(TEST_AUTHORIZATION_STRIDE)
-            .and_then(|base| base.checked_add(7))
+            .and_then(|base| base.checked_add(15))
             .and_then(|enacted| enacted.checked_add(VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS))
             .expect("test policy effective height")
     }

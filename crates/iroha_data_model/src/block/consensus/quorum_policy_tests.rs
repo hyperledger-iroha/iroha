@@ -21,17 +21,3 @@ fn qc_vote_roundtrip_codec_and_decode_from_slice() {
     assert_eq!(vote, slice_dec);
     assert_eq!(used, bytes.len());
 }
-#[test]
-fn vrf_commit_roundtrip_codec() {
-    let commit = sample_vrf_commit();
-    let bytes = commit.encode();
-    let dec = VrfCommit::decode(&mut &bytes[..]).expect("decode vrf commit");
-    assert_eq!(commit, dec);
-}
-#[test]
-fn vrf_reveal_roundtrip_codec() {
-    let reveal = sample_vrf_reveal();
-    let bytes = reveal.encode();
-    let dec = VrfReveal::decode(&mut &bytes[..]).expect("decode vrf reveal");
-    assert_eq!(reveal, dec);
-}

@@ -222,8 +222,6 @@ struct ForgedNexusFeeReceipt {
 struct ForgedNposGenesisParams {
     epoch_length_blocks: NonZeroU64,
     epoch_seed: [u8; 32],
-    vrf_commit_window_blocks: u64,
-    vrf_reveal_window_blocks: u64,
     max_validators: u32,
     min_self_bond: Numeric,
     min_nomination_bond: Numeric,
@@ -430,8 +428,6 @@ fn negative_numeric_payloads_cannot_decode_as_npos_bonds() {
     let forged = ForgedNposGenesisParams {
         epoch_length_blocks: NonZeroU64::new(10).expect("nonzero epoch"),
         epoch_seed: [1; 32],
-        vrf_commit_window_blocks: 2,
-        vrf_reveal_window_blocks: 2,
         max_validators: 4,
         min_self_bond: Numeric::new(-1_i32, 0),
         min_nomination_bond: Numeric::one(),
@@ -448,34 +444,6 @@ fn negative_numeric_payloads_cannot_decode_as_npos_bonds() {
         NposGenesisParams::decode(&mut encoded.as_slice()).is_err(),
         "a negative signed payload must not decode as an NPoS minimum bond"
     );
-}
-#[test]
-fn npos_genesis_reveal_window_must_close_before_boundary() {
-    let params = NposGenesisParams {
-        epoch_length_blocks: NonZeroU64::new(4).expect("non-zero epoch"),
-        epoch_seed: [1; 32],
-        vrf_commit_window_blocks: 2,
-        vrf_reveal_window_blocks: 2,
-        max_validators: 4,
-        min_self_bond: Quantity::one(),
-        min_nomination_bond: Quantity::one(),
-        max_nominator_concentration_pct: 100,
-        seat_band_pct: 10,
-        max_entity_correlation_pct: 100,
-        finality_margin_blocks: 1,
-        evidence_horizon_blocks: 10,
-        activation_lag_blocks: 1,
-        slashing_delay_blocks: 1,
-    };
-    assert_eq!(
-        params.validate(),
-        Err("VRF reveal window must close before the epoch boundary")
-    );
-    let mut valid = params;
-    valid.epoch_length_blocks = NonZeroU64::new(5).expect("non-zero epoch");
-    valid
-        .validate()
-        .expect("one finalized pre-boundary block is sufficient");
 }
 #[test]
 fn negative_numeric_payloads_cannot_decode_as_lane_amounts() {
@@ -2263,22 +2231,6 @@ fn sample_proposal() -> Proposal {
     Proposal {
         header: sample_consensus_header(),
         payload_hash: Hash::new(b"payload"),
-    }
-}
-fn sample_vrf_commit() -> VrfCommit {
-    VrfCommit {
-        epoch: 7,
-        commitment: [0xAB; 32],
-        signer: 5,
-        bls_sig: Vec::new(),
-    }
-}
-fn sample_vrf_reveal() -> VrfReveal {
-    VrfReveal {
-        epoch: 7,
-        reveal: [0xCD; 32],
-        signer: 5,
-        bls_sig: Vec::new(),
     }
 }
 #[test]

@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import pytest
-
 from client_test_support import canonical_hash
 from sumeragi_exact_json_test_support import RecordingSession, StubResponse
 

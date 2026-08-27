@@ -35,8 +35,8 @@ public final class IrohaPeerKagemushaAdapterV1Tests {
     assertEquals(IrohaPeerPayloadKind.RECEIVE_REQUEST, wrapped.canonicalPayload().kind());
     assertArrayEquals(archive, wrapped.canonicalPayload().bytes());
     assertArrayEquals(archive, IrohaPeerKagemushaAdapterV1.decode(wrapped).archive());
-    assertEquals(12_425, archive.length);
-    assertEquals(12_509, wrapped.encode().length);
+    assertEquals(12_435, archive.length);
+    assertEquals(12_519, wrapped.encode().length);
 
     final IrohaPeerWireLimitsV1 tooSmall =
         new IrohaPeerWireLimitsV1(32 * 1024, archive.length - 1);

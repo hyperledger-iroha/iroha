@@ -7,7 +7,6 @@ import binascii
 import re
 from typing import Any
 
-
 _CURSOR_MAX_LENGTH = 256
 
 

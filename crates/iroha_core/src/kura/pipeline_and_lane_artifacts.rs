@@ -12,10 +12,8 @@ pub struct PipelineRecoverySidecar {
     /// Per-transaction access summaries for recovery heuristics.
     pub txs: Vec<PipelineTxSnapshot>,
     /// Optional zero-knowledge proof attachments captured for this block.
-    #[norito(default)]
     pub proofs: Vec<PipelineProofSnapshot>,
     /// FASTPQ proof artifacts generated asynchronously for committed execution witnesses.
-    #[norito(default)]
     pub fastpq_proofs: Vec<FastpqProofSnapshot>,
 }
 impl PipelineRecoverySidecar {
@@ -223,7 +221,6 @@ pub struct PipelineProofSnapshot {
     /// Code hash of the executed program producing the trace.
     pub code_hash: [u8; 32],
     /// Optional transaction hash associated with the trace.
-    #[norito(default)]
     pub tx_hash: Option<[u8; 32]>,
 }
 /// FASTPQ proof artifact captured after block commit for local AXT packaging and audits.
@@ -2418,7 +2415,6 @@ impl AutonomousLifecycleCursorRead {
 }
 /// Authenticated origin of local executable-payload custody before Kura activation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
-#[allow(dead_code)] // Reserved for source-specific validators at the audited persistence sinks.
 pub(crate) enum AutonomousLifecyclePayloadCustodySourceV1 {
     /// Producer-side custody remains fenced by the exact live Queue reservation group.
     #[codec(index = 0)]
@@ -2566,16 +2562,6 @@ pub(crate) struct AutonomousLifecyclePayloadCustodyAuthorization {
     binding: AutonomousLifecycleAttemptBindingV1,
     custody: AutonomousLifecyclePayloadCustodyBindingV1,
     activate_kura: ProductionInFlightFirstReleaseTransitionProjection,
-}
-impl AutonomousLifecyclePayloadCustodyAuthorization {
-    /// Borrow the exact checked ActivateKura projection callers must sign.
-    #[must_use]
-    #[allow(dead_code)] // Consumed by source-specific bootstrap adapters.
-    pub(crate) const fn activate_kura_projection(
-        &self,
-    ) -> ProductionInFlightFirstReleaseTransitionProjection {
-        self.activate_kura
-    }
 }
 #[allow(variant_size_differences)] // Ephemeral checked Queue facts stay inline and allocation-free.
 enum AutonomousLifecycleBootstrapPersistenceAuthentication<'authorization> {

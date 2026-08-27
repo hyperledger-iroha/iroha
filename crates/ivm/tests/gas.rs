@@ -1,4 +1,4 @@
-use ivm::{IVM, VMError, VmTrapKind, encoding, instruction, kotodama::wide};
+use ivm::{IVM, VMError, VmTrapKind, encoding, instruction};
 mod common;
 use common::{assemble, assemble_zk};
 const HALT: [u8; 4] = encoding::wide::encode_halt().to_le_bytes();
@@ -8,7 +8,9 @@ fn test_out_of_gas() {
     vm.set_register(1, 1);
     vm.set_register(2, 2);
     let mut prog = Vec::new();
-    prog.extend_from_slice(&wide::encode_add(3, 1, 2).to_le_bytes());
+    prog.extend_from_slice(
+        &encoding::wide::encode_rr(instruction::wide::arithmetic::ADD, 3, 1, 2).to_le_bytes(),
+    );
     prog.extend_from_slice(&HALT);
     let prog = assemble(&prog);
     vm.load_program(&prog).unwrap();
@@ -25,7 +27,9 @@ fn test_exact_gas_limit() {
     vm.set_register(1, 1);
     vm.set_register(2, 2);
     let mut prog = Vec::new();
-    prog.extend_from_slice(&wide::encode_add(3, 1, 2).to_le_bytes());
+    prog.extend_from_slice(
+        &encoding::wide::encode_rr(instruction::wide::arithmetic::ADD, 3, 1, 2).to_le_bytes(),
+    );
     prog.extend_from_slice(&HALT);
     let prog = assemble(&prog);
     vm.load_program(&prog).unwrap();
@@ -39,8 +43,12 @@ fn test_gas_accounting_multiple_ops() {
     vm.set_register(1, 1);
     vm.set_register(2, 2);
     let mut prog = Vec::new();
-    prog.extend_from_slice(&wide::encode_add(3, 1, 2).to_le_bytes());
-    prog.extend_from_slice(&wide::encode_add(3, 1, 2).to_le_bytes());
+    prog.extend_from_slice(
+        &encoding::wide::encode_rr(instruction::wide::arithmetic::ADD, 3, 1, 2).to_le_bytes(),
+    );
+    prog.extend_from_slice(
+        &encoding::wide::encode_rr(instruction::wide::arithmetic::ADD, 3, 1, 2).to_le_bytes(),
+    );
     prog.extend_from_slice(&HALT);
     let prog = assemble(&prog);
     vm.load_program(&prog).unwrap();
@@ -70,13 +78,17 @@ fn test_getgas_progress() {
     vm.set_register(2, 2);
     let mut prog = Vec::new();
     // add r3 = r1 + r2
-    prog.extend_from_slice(&wide::encode_add(3, 1, 2).to_le_bytes());
+    prog.extend_from_slice(
+        &encoding::wide::encode_rr(instruction::wide::arithmetic::ADD, 3, 1, 2).to_le_bytes(),
+    );
     // GETGAS r4
     prog.extend_from_slice(
         &encoding::wide::encode_rr(instruction::wide::system::GETGAS, 4, 0, 0).to_le_bytes(),
     );
     // add r5 = r1 + r2
-    prog.extend_from_slice(&wide::encode_add(5, 1, 2).to_le_bytes());
+    prog.extend_from_slice(
+        &encoding::wide::encode_rr(instruction::wide::arithmetic::ADD, 5, 1, 2).to_le_bytes(),
+    );
     // GETGAS r6
     prog.extend_from_slice(
         &encoding::wide::encode_rr(instruction::wide::system::GETGAS, 6, 0, 0).to_le_bytes(),
@@ -96,8 +108,12 @@ fn test_getgas_zero_remaining() {
     vm.set_register(1, 1);
     vm.set_register(2, 2);
     let mut prog = Vec::new();
-    prog.extend_from_slice(&wide::encode_add(3, 1, 2).to_le_bytes());
-    prog.extend_from_slice(&wide::encode_add(3, 1, 2).to_le_bytes());
+    prog.extend_from_slice(
+        &encoding::wide::encode_rr(instruction::wide::arithmetic::ADD, 3, 1, 2).to_le_bytes(),
+    );
+    prog.extend_from_slice(
+        &encoding::wide::encode_rr(instruction::wide::arithmetic::ADD, 3, 1, 2).to_le_bytes(),
+    );
     prog.extend_from_slice(
         &encoding::wide::encode_rr(instruction::wide::system::GETGAS, 3, 0, 0).to_le_bytes(),
     );

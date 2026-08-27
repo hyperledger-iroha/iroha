@@ -18,7 +18,10 @@ use crate::{
 use base64::Engine as _;
 use core::str::FromStr;
 use iroha_core::{
-    governance::parliament::ParliamentDecisionModeV1,
+    governance::{
+        parliament::{ParliamentBallotStateV1, ParliamentDecisionModeV1},
+        timed_ovn::TimedOvnLifecycleStateV1,
+    },
     kura::Kura,
     smartcontracts::Execute as _,
     state::{StateReadOnly, WorldReadOnly},
@@ -47,12 +50,12 @@ use iroha_torii_shared::parliament_api::{
     ParliamentBodyStateProjectionV1, ParliamentDecisionModeProjectionV1,
     ParliamentInstructionDraftV1, ParliamentTimedOvnCastingContextResponseV1,
     ParliamentTimedOvnCastingPhaseProjectionV1, ParliamentTimedOvnCastingProofRequestV1,
-    ParliamentTimedOvnCastingProofResponseV1, ParliamentTimedOvnReleaseIdentityProjectionV1,
-    ParliamentTimedOvnSessionProjectionV1, ParliamentTleAdaptiveDealerCommitmentV1,
-    ParliamentTleAdaptivePublicShareV1, ParliamentTleKeySessionBindingV1,
-    ParliamentTleReleaseContextResponseV1, ParliamentTransitionDraftRequestV1,
-    ParliamentTransitionDraftResponseV1, RequiredParliamentBodyProjectionV1,
-    parliament_timed_ovn_casting_proof_page_tip,
+    ParliamentTimedOvnCastingProofResponseV1, ParliamentTimedOvnProgressProjectionV1,
+    ParliamentTimedOvnReleaseIdentityProjectionV1, ParliamentTimedOvnSessionProjectionV1,
+    ParliamentTleAdaptiveDealerCommitmentV1, ParliamentTleAdaptivePublicShareV1,
+    ParliamentTleKeySessionBindingV1, ParliamentTleReleaseContextResponseV1,
+    ParliamentTransitionDraftRequestV1, ParliamentTransitionDraftResponseV1,
+    RequiredParliamentBodyProjectionV1, parliament_timed_ovn_casting_proof_page_tip,
 };
 use mv::storage::StorageReadOnly;
 use norito::{
@@ -836,7 +839,8 @@ pub async fn handle_gov_capabilities(
 /// the exact proposal and retry sequence and contains no signing material.
 ///
 /// # Errors
-/// Returns a conversion error for an unsupported request version.
+/// Returns a conversion error for an unsupported request version or a proposal
+/// containing a public JSON integer that is not exactly representable by every SDK.
 pub async fn handle_gov_parliament_attempt_draft(
     NoritoJson(body): NoritoJson<ParliamentAttemptDraftRequestV1>,
 ) -> Result<JsonBody<ParliamentAttemptDraftResponseV1>, crate::Error> {
@@ -845,6 +849,9 @@ pub async fn handle_gov_parliament_attempt_draft(
             "unsupported Parliament attempt draft version {}; expected {}",
             body.version, PARLIAMENT_API_VERSION_V1
         )));
+    }
+    if let Some(reason) = body.proposal.first_release_exact_json_u64_invariant_error() {
+        return Err(crate::routing::conversion_error(reason.to_owned()));
     }
     let instruction = iroha_data_model::isi::governance::CreateParliamentGovernanceAttemptV1 {
         proposal: body.proposal,
@@ -981,7 +988,22 @@ pub async fn handle_gov_parliament_attempt_read(
                         iroha_core::governance::parliament::ParliamentBallotStateV1::failure_height,
                     )
                 });
-            ParliamentBodyStateProjectionV1 {
+            let timed_ovn_progress = ballot
+                .map(|ballot| {
+                    let ballot_attempt_id = ballot.attempt().id;
+                    let lifecycle = view
+                        .world()
+                        .timed_ovn_evidence()
+                        .get(&ballot_attempt_id)
+                        .ok_or_else(|| {
+                            parliament_attempt_projection_error(
+                                "active Parliament ballot has no timed-OVN lifecycle",
+                            )
+                        })?;
+                    project_parliament_timed_ovn_progress_v1(ballot, lifecycle)
+                })
+                .transpose()?;
+            Ok(ParliamentBodyStateProjectionV1 {
                 body: entry.body,
                 body_instance_id: state.map(|body| body.instance().id),
                 status: state.map(|body| body.instance().status),
@@ -993,9 +1015,10 @@ pub async fn handle_gov_parliament_attempt_read(
                     .and_then(iroha_core::governance::parliament::ParliamentBodyStateV1::public_finding_deadline_height),
                 no_result_kind,
                 no_result_height,
-            }
+                timed_ovn_progress,
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, crate::Error>>()?;
     Ok(JsonBody(ParliamentAttemptReadResponseV1 {
         version: PARLIAMENT_API_VERSION_V1,
         current_height: u64::try_from(view.height()).unwrap_or(u64::MAX),
@@ -1009,6 +1032,58 @@ pub async fn handle_gov_parliament_attempt_read(
         superseding_head: attempt.superseding_head(),
         state_payload_hex: hex::encode(state_payload),
     }))
+}
+
+fn parliament_attempt_projection_error(message: &'static str) -> crate::Error {
+    crate::Error::Query(iroha_data_model::ValidationFail::InternalError(
+        message.into(),
+    ))
+}
+
+fn project_parliament_timed_ovn_progress_v1(
+    ballot: &ParliamentBallotStateV1,
+    lifecycle: &TimedOvnLifecycleStateV1,
+) -> Result<ParliamentTimedOvnProgressProjectionV1, crate::Error> {
+    let ballot_attempt_id = ballot.attempt().id;
+    if lifecycle.ballot_attempt_id() != *ballot_attempt_id.as_bytes() {
+        return Err(parliament_attempt_projection_error(
+            "active Parliament ballot and timed-OVN lifecycle identifiers disagree",
+        ));
+    }
+    let survivor_count = match lifecycle {
+        TimedOvnLifecycleStateV1::Registered(_)
+        | TimedOvnLifecycleStateV1::RegistrationClosed(_) => None,
+        TimedOvnLifecycleStateV1::SurvivorsFrozen(state) => {
+            Some(state.survivor_participant_hashes().len())
+        }
+        TimedOvnLifecycleStateV1::CorpusOpen(state) => {
+            Some(state.frozen().survivor_participant_hashes().len())
+        }
+        TimedOvnLifecycleStateV1::Sealed(state) => Some(state.survivor_participant_hashes.len()),
+        TimedOvnLifecycleStateV1::Released(state) => {
+            Some(state.sealed.survivor_participant_hashes.len())
+        }
+    }
+    .map(|count| {
+        u32::try_from(count).map_err(|_| {
+            parliament_attempt_projection_error(
+                "timed-OVN frozen survivor count exceeds the public projection width",
+            )
+        })
+    })
+    .transpose()?;
+    let projection = ParliamentTimedOvnProgressProjectionV1 {
+        ballot_attempt_id,
+        status: ballot.attempt().status,
+        frozen_survivor_count: survivor_count,
+        accepted_ballot_prefix_count: lifecycle.accepted_ballot_prefix_count(),
+    };
+    projection.validate_static().map_err(|_| {
+        parliament_attempt_projection_error(
+            "active Parliament ballot has phase-inconsistent timed-OVN progress",
+        )
+    })?;
+    Ok(projection)
 }
 
 fn project_parliament_tle_key_session_v1(
@@ -2767,6 +2842,70 @@ mod tests {
             transition_instruction.transition.digest_v1(),
             expected_digest
         );
+    }
+    #[tokio::test]
+    async fn parliament_attempt_draft_rejects_inexact_json_u64_proposals_before_framing() {
+        use iroha_data_model::{
+            governance::types::{
+                FIRST_RELEASE_MAX_EXACT_JSON_U64, ProposalKind, RuntimeUpgradeProposal,
+            },
+            runtime::RuntimeUpgradeManifest,
+        };
+
+        let proposal = |start_height, end_height| {
+            ProposalKind::RuntimeUpgrade(RuntimeUpgradeProposal {
+                manifest: RuntimeUpgradeManifest {
+                    name: "bounded Parliament runtime upgrade".to_owned(),
+                    description: "Torii exact JSON integer guard".to_owned(),
+                    abi_version: 1,
+                    abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
+                    added_syscalls: Vec::new(),
+                    added_pointer_types: Vec::new(),
+                    start_height,
+                    end_height,
+                    sbom_digests: Vec::new(),
+                    slsa_attestation: Vec::new(),
+                    provenance: Vec::new(),
+                },
+            })
+        };
+        let maximum = FIRST_RELEASE_MAX_EXACT_JSON_U64;
+        for (start_height, end_height, expected_message) in [
+            (
+                maximum + 1,
+                maximum + 1,
+                "runtime-upgrade proposal start height exceeds the exact JSON integer maximum",
+            ),
+            (
+                maximum,
+                maximum + 1,
+                "runtime-upgrade proposal end height exceeds the exact JSON integer maximum",
+            ),
+        ] {
+            let request = ParliamentAttemptDraftRequestV1 {
+                version: PARLIAMENT_API_VERSION_V1,
+                proposal: proposal(start_height, end_height),
+                attempt_sequence: 0,
+            };
+            let error = handle_gov_parliament_attempt_draft(NoritoJson(request))
+                .await
+                .expect_err("an inexact public JSON integer must not produce a draft");
+            assert!(
+                format!("{error:?}").contains(expected_message),
+                "unexpected rejection for ({start_height}, {end_height}): {error:?}"
+            );
+        }
+
+        let boundary_request = ParliamentAttemptDraftRequestV1 {
+            version: PARLIAMENT_API_VERSION_V1,
+            proposal: proposal(maximum - 1, maximum),
+            attempt_sequence: 0,
+        };
+        let boundary_response = handle_gov_parliament_attempt_draft(NoritoJson(boundary_request))
+            .await
+            .expect("the exact JSON u64 boundary remains admissible")
+            .0;
+        assert_eq!(boundary_response.tx_instructions.len(), 1);
     }
     #[test]
     fn unlock_stats_handler_cannot_reintroduce_an_expiry_index_scan() {

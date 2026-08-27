@@ -979,7 +979,6 @@ fn autonomous_payload_and_new_view_ingress_are_exact_and_contiguous() {
     commit_test_block_to_state(adapter.state.as_ref(), &committed, &adapter.context);
     let historical_epoch = adapter.context.epoch;
     let historical_height = adapter.context.height;
-    install_finalized_vrf_epoch(&adapter, historical_epoch, historical_height);
     let execution_commitment = finality.commit_qc.execution_commitment;
     let mut historical_install = HistoricalAutonomousReservationInstallV1 {
         version: HistoricalAutonomousReservationInstallV1::VERSION,

@@ -16,7 +16,7 @@ public struct NexusAppError: Error, LocalizedError, Equatable {
 }
 
 public struct NexusAppConfig: Sendable {
-    public let chainId: String
+    public let networkId: NetworkId
     public let accountChainDiscriminant: UInt16
     public let appId: String?
     public let relayURL: URL?
@@ -25,7 +25,7 @@ public struct NexusAppConfig: Sendable {
     public let signingPublicKey: Data?
     public let appMetadata: [String: String]
 
-    public init(chainId: String,
+    public init(networkId: NetworkId,
                 accountChainDiscriminant: UInt16,
                 appId: String? = nil,
                 relayURL: URL? = nil,
@@ -33,7 +33,7 @@ public struct NexusAppConfig: Sendable {
                 authority: String? = nil,
                 signingPublicKey: Data? = nil,
                 appMetadata: [String: String] = [:]) {
-        self.chainId = chainId
+        self.networkId = networkId
         self.accountChainDiscriminant = accountChainDiscriminant
         self.appId = appId
         self.relayURL = relayURL
@@ -277,7 +277,7 @@ public struct SwiftNexusTransactionCodec: NexusTransactionCodec {
                                      config: NexusAppConfig,
                                      authority: String) throws -> Data {
         try SwiftNexusTransferPayloadEncoder.encode(input: input,
-                                                    chainId: config.chainId,
+                                                    networkId: config.networkId,
                                                     accountChainDiscriminant: config.accountChainDiscriminant,
                                                     authority: authority)
     }
@@ -772,7 +772,7 @@ private enum SwiftNexusTransferPayloadEncoder {
     }
 
     static func encode(input: NexusTransferInput,
-                       chainId: String,
+                       networkId: NetworkId,
                        accountChainDiscriminant: UInt16,
                        authority: String) throws -> Data {
         let quantity = try KotodamaNumericV1Codec.decodeQuantityJSON(input.quantity).canonicalString
@@ -783,7 +783,7 @@ private enum SwiftNexusTransferPayloadEncoder {
         )
         return try encodePayload(
             instructions: [instruction],
-            chainId: chainId,
+            networkId: networkId,
             accountChainDiscriminant: accountChainDiscriminant,
             authority: authority,
             creationTimeMs: input.creationTimeMs ?? currentTimeMillis(),
@@ -795,7 +795,7 @@ private enum SwiftNexusTransferPayloadEncoder {
     }
 
     private static func encodePayload(instructions instructionInputs: [TransferInstructionInput],
-                                      chainId: String,
+                                      networkId: NetworkId,
                                       accountChainDiscriminant: UInt16,
                                       authority: String,
                                       creationTimeMs: UInt64,
@@ -823,7 +823,7 @@ private enum SwiftNexusTransferPayloadEncoder {
         executable.writeField(instructions.data)
 
         var payload = CompactNoritoWriter()
-        payload.writeField(encodeChainId(chainId))
+        payload.writeField(encodeNetworkId(networkId))
         payload.writeField(
             try encodeAccountId(authority,
                                 accountChainDiscriminant: accountChainDiscriminant)
@@ -877,9 +877,11 @@ private enum SwiftNexusTransferPayloadEncoder {
         return instruction.data
     }
 
-    private static func encodeChainId(_ value: String) -> Data {
+    private static func encodeNetworkId(_ value: NetworkId) -> Data {
         var writer = CompactNoritoWriter()
-        writer.writeField(CompactNorito.encodeString(value))
+        writer.writeUInt32LE(0)
+        writer.writeLength(UInt64(NetworkId.byteCount))
+        writer.writeBytes(value.bytes)
         return writer.data
     }
 

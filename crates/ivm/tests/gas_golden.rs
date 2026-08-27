@@ -29,7 +29,7 @@ fn cost_of(word: u32) -> u64 {
     cost_of_opt(word).expect("valid opcode must have gas cost")
 }
 fn cost_of_with_vl(word: u32, vector_len: usize) -> u64 {
-    ivm::cost_of_with_params(word, vector_len, 0).expect("valid opcode must have gas cost")
+    ivm::cost_of_with_vector_len(word, vector_len).expect("valid opcode must have gas cost")
 }
 fn wide_rr(op: u8, rd: u8, rs1: u8, rs2: u8) -> u32 {
     ivm::encoding::wide::encode_rr(op, rd, rs1, rs2)

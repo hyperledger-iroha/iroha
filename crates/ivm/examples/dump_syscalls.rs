@@ -13,8 +13,8 @@ fn dump(src: &str) {
     println!("code_len={}, off={}", code.len(), parsed.code_offset);
     let mut count = 0;
     let mut pc = 0u64;
-    while pc + 2 <= mem.code_len() {
-        let (w, len) = ivm_decode(&mem, pc).unwrap();
+    while pc + 4 <= mem.code_len() {
+        let w = ivm_decode(&mem, pc).unwrap();
         let opcode = (w >> 24) as u8;
         let (_, imm) = ivm::encoding::wide::decode_sys(w);
         if opcode == ivm::instruction::wide::system::SCALL {
@@ -24,7 +24,7 @@ fn dump(src: &str) {
             println!("+{pc:03}: op=0x{opcode:02x} imm=0x{imm:02x} raw=0x{w:08x}");
             count += 1;
         }
-        pc += len as u64;
+        pc += 4;
     }
 }
 fn main() {

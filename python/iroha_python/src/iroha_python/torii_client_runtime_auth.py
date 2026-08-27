@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 
 def _validate_client_data_model(
@@ -46,10 +46,17 @@ def create_torii_client_runtime_auth_mixin(
     node_admin_snapshot_type: Any,
     runtime_metrics_type: Any,
     runtime_abi_active_type: Any,
-) -> type:
+) -> Any:
     """Create protected runtime helpers without coupling to client model imports."""
 
     class ToriiClientRuntimeAuthMixin:
+        get_configuration_typed: Callable[..., Any]
+        list_peers_typed: Callable[..., Any]
+        get_time_status_typed: Callable[..., Any]
+        get_time_now_typed: Callable[..., Any]
+        list_telemetry_peers_info_typed: Callable[..., Any]
+        _account_request_json: Callable[..., Any]
+
         def capture_node_admin_snapshot(
             self, *, canonical_auth: Any, include_peer_telemetry: bool = True
         ) -> Any:

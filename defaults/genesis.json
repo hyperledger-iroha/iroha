@@ -138,8 +138,6 @@
             "id": "sumeragi_npos_parameters",
             "payload": {
               "epoch_seed": "A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5",
-              "vrf_commit_window_blocks": 100,
-              "vrf_reveal_window_blocks": 40,
               "max_validators": 31,
               "min_self_bond": "1000",
               "min_nomination_bond": "1",

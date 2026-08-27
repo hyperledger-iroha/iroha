@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import binascii
 import hashlib
 import json
 import re
@@ -456,42 +457,44 @@ class _MockState:
                 raise ValueError("capabilities must be an object")
             self.sccp_capabilities = dict(capabilities)
 
-        for field, attribute in (
+        for field_name, attribute in (
             ("registry", "sccp_registry"),
             ("recent_messages", "sccp_recent_messages"),
             ("bridge_proof_response", "sccp_bridge_proof_response"),
             ("bridge_message_response", "sccp_bridge_message_response"),
         ):
-            value = payload.get(field)
+            value = payload.get(field_name)
             if value is not None:
                 if not isinstance(value, dict):
-                    raise ValueError(f"{field} must be an object")
+                    raise ValueError(f"{field_name} must be an object")
                 setattr(self, attribute, dict(value))
 
-        for field, attribute in (
+        for field_name, attribute in (
             ("message_bundles", "sccp_message_bundles"),
             ("proof_requests", "sccp_proof_requests"),
         ):
-            value = payload.get(field)
+            value = payload.get(field_name)
             if value is not None:
                 if not isinstance(value, dict) or not all(
                     isinstance(key, str) and isinstance(entry, dict)
                     for key, entry in value.items()
                 ):
-                    raise ValueError(f"{field} must map message ids to objects")
+                    raise ValueError(f"{field_name} must map message ids to objects")
                 setattr(self, attribute, {key: dict(entry) for key, entry in value.items()})
 
-        for field, attribute in (
+        for field_name, attribute in (
             ("message_bundle_norito_b64", "sccp_message_bundle_norito"),
             ("proof_request_norito_b64", "sccp_proof_request_norito"),
         ):
-            value = payload.get(field)
+            value = payload.get(field_name)
             if value is not None:
                 if not isinstance(value, dict) or not all(
                     isinstance(key, str) and isinstance(entry, str)
                     for key, entry in value.items()
                 ):
-                    raise ValueError(f"{field} must map message ids to base64 strings")
+                    raise ValueError(
+                        f"{field_name} must map message ids to base64 strings"
+                    )
                 try:
                     decoded = {
                         key: base64.b64decode(entry, validate=True) for key, entry in value.items()
@@ -952,25 +955,29 @@ class _MockState:
         unknown = sorted(set(payload).difference(supported_fields))
         if unknown:
             raise ValueError(f"zk-v1 ballot payload contains unknown field {unknown[0]!r}")
-        for field in ("authority", "chain_id", "election_id", "backend"):
-            value = payload.get(field)
+        for field_name in ("authority", "chain_id", "election_id", "backend"):
+            value = payload.get(field_name)
             if (
                 not isinstance(value, str)
                 or not value
                 or value != value.strip()
                 or any(char.isspace() for char in value)
             ):
-                raise ValueError(f"zk-v1 ballot payload.{field} must be an exact token")
+                raise ValueError(
+                    f"zk-v1 ballot payload.{field_name} must be an exact token"
+                )
         envelope_b64 = payload.get("envelope_b64")
         if not isinstance(envelope_b64, str) or not envelope_b64:
             raise ValueError("zk-v1 ballot payload.envelope_b64 must be non-empty base64")
         try:
             envelope = base64.b64decode(envelope_b64, validate=True)
-        except (ValueError, base64.binascii.Error) as err:
+        except (ValueError, binascii.Error) as err:
             raise ValueError("zk-v1 ballot payload.envelope_b64 must be valid base64") from err
         if not envelope or base64.b64encode(envelope).decode("ascii") != envelope_b64:
             raise ValueError("zk-v1 ballot payload.envelope_b64 must be canonical base64")
         election_id = payload.get("election_id")
+        if not isinstance(election_id, str):
+            raise ValueError("zk-v1 ballot payload.election_id must be an exact token")
         has_owner = payload.get("owner") is not None
         has_amount = payload.get("amount") is not None
         has_duration = payload.get("duration_blocks") is not None
@@ -1085,6 +1092,7 @@ class _MockState:
         response_body = {
             "payload": {
                 "entrypoint_hash": hash_value,
+                "signed_transaction_hash": None,
                 "submitted_at_ms": 0,
                 "submitted_at_height": 0,
                 "signer": "mock-signer",
@@ -1107,7 +1115,7 @@ class _MockState:
                 current = dict(remaining.pop(0))
                 sequence["last"] = current
             else:
-                current = dict(sequence.get("last") or {"kind": "Queued", "content": None})
+                current = dict(sequence.get("last") or {"kind": "Queued"})
                 sequence["last"] = current
                 if not sequence["repeat_last"]:
                     self.pipeline_sequences.pop(hash_value, None)
@@ -1125,6 +1133,13 @@ class _MockState:
             payload: Dict[str, Any] = raw
         else:
             payload = {}
+
+        supported_fields = {"scenario", "hash", "statuses", "repeat_last", "submit_status"}
+        unsupported_fields = sorted(set(payload) - supported_fields)
+        if unsupported_fields:
+            raise ValueError(
+                f"pipeline config contains unsupported fields: {', '.join(unsupported_fields)}"
+            )
 
         scenario_value = payload.get("scenario")
         if scenario_value is not None:
@@ -1144,7 +1159,6 @@ class _MockState:
         overrides: Dict[str, Any] = {
             "hash": payload.get("hash"),
             "submit_status": payload.get("submit_status"),
-            "accepted": payload.get("accepted"),
             "repeat_last": payload.get("repeat_last"),
             "statuses": statuses_override,
         }
@@ -1217,7 +1231,6 @@ class _MockState:
             hash_value = str(hash_override)
 
         submit_status = overrides.get("submit_status") if overrides and overrides.get("submit_status") is not None else base["submit_status"]
-        accepted = overrides.get("accepted") if overrides and overrides.get("accepted") is not None else base["accepted"]
         repeat_last = overrides.get("repeat_last") if overrides and overrides.get("repeat_last") is not None else base["repeat_last"]
         statuses_source = overrides.get("statuses") if overrides and overrides.get("statuses") is not None else base["statuses"]
 
@@ -1228,7 +1241,6 @@ class _MockState:
         plan = {
             "hash": hash_value,
             "submit_status": int(submit_status_value),
-            "accepted": bool(accepted),
             "repeat_last": bool(repeat_last),
             "statuses": statuses,
         }
@@ -1237,21 +1249,20 @@ class _MockState:
     def _scenario_plan(self, scenario: Optional[str]) -> Dict[str, Any]:
         if scenario == "failure":
             statuses: List[Dict[str, Any]] = [
-                {"kind": "Queued", "content": None},
-                {"kind": "Rejected", "content": "mock rejection"},
+                {"kind": "Queued"},
+                {"kind": "Rejected"},
             ]
         elif scenario == "timeout":
-            statuses = [{"kind": "Queued", "content": None}]
+            statuses = [{"kind": "Queued"}]
         else:
             statuses = [
-                {"kind": "Queued", "content": None},
-                {"kind": "Approved", "content": None},
-                {"kind": "Committed", "content": None},
+                {"kind": "Queued"},
+                {"kind": "Approved"},
+                {"kind": "Committed"},
             ]
         return {
             "hash": None,
             "submit_status": HTTPStatus.ACCEPTED,
-            "accepted": True,
             "repeat_last": True,
             "statuses": statuses,
         }
@@ -1259,91 +1270,50 @@ class _MockState:
     @staticmethod
     def _normalize_status_entry(entry: object) -> Dict[str, Any]:
         if isinstance(entry, str):
-            return {"kind": entry, "content": None}
+            entry = {"kind": entry}
         if isinstance(entry, Mapping):
+            unsupported = sorted(
+                set(entry) - {"kind", "block_height", "scope", "resolved_from"}
+            )
+            if unsupported:
+                raise ValueError(
+                    f"status entry contains unsupported fields: {', '.join(unsupported)}"
+                )
             if "kind" not in entry:
                 raise ValueError("status entry missing 'kind'")
             kind = str(entry["kind"])
-            content = entry.get("content")
-            if isinstance(content, (bytes, bytearray)):
-                content_value: object = content.decode("utf-8", errors="ignore")
-            elif content is None or isinstance(content, (str, int, float, bool)):
-                content_value = content
-            else:
-                content_value = str(content)
+            if kind not in {"Queued", "Approved", "Committed", "Applied", "Rejected", "Expired"}:
+                raise ValueError("unsupported pipeline status kind")
             block_height = entry.get("block_height")
-            if not isinstance(block_height, int):
-                block_height = None
-            rejection_reason = entry.get("rejection_reason")
-            if not isinstance(rejection_reason, Mapping):
-                rejection_reason = None
-            summary = entry.get("summary")
-            if summary is not None:
-                summary = str(summary)
-            diagnostics = entry.get("diagnostics")
-            if not isinstance(diagnostics, list):
-                diagnostics = []
+            if block_height is not None and (
+                type(block_height) is not int or block_height <= 0
+            ):
+                raise ValueError("status block_height must be a positive integer")
             scope = entry.get("scope")
-            if scope is not None:
-                scope = str(scope)
+            if scope is not None and scope not in {"local", "auto", "global"}:
+                raise ValueError("unsupported pipeline status scope")
             resolved_from = entry.get("resolved_from")
+            if resolved_from is not None and resolved_from not in {"queue", "cache", "state"}:
+                raise ValueError("unsupported pipeline status provenance")
+            normalized: Dict[str, Any] = {"kind": kind}
+            if block_height is not None:
+                normalized["block_height"] = block_height
+            if scope is not None:
+                normalized["scope"] = scope
             if resolved_from is not None:
-                resolved_from = str(resolved_from)
-            return {
-                "kind": kind,
-                "content": content_value,
-                "block_height": block_height,
-                "rejection_reason": rejection_reason,
-                "summary": summary,
-                "diagnostics": diagnostics,
-                "scope": scope,
-                "resolved_from": resolved_from,
-            }
+                normalized["resolved_from"] = resolved_from
+            return normalized
         raise ValueError("invalid status entry")
 
     @staticmethod
     def _make_status_payload(hash_value: str, entry: Mapping[str, Any]) -> Dict[str, Any]:
         kind = str(entry.get("kind", "Queued"))
         block_height = entry.get("block_height")
-        if block_height is None:
-            content = entry.get("content")
-            if isinstance(content, int) and kind in {"Committed", "Applied"}:
-                block_height = content
-            elif kind == "Applied":
-                block_height = 1
-        if not isinstance(block_height, int):
-            block_height = None
-
-        rejection_reason = entry.get("rejection_reason")
-        if not isinstance(rejection_reason, dict):
-            rejection_reason = None
-        diagnostics = entry.get("diagnostics")
-        if not isinstance(diagnostics, list):
-            diagnostics = []
-        content = entry.get("content")
-        if kind == "Rejected" and not diagnostics:
-            message = content if isinstance(content, str) and content else "transaction rejected"
-            diagnostics = [
-                {
-                    "category": "rejected",
-                    "code": "rejected",
-                    "message": message,
-                    "decoded_reason": message,
-                    "raw_reason": message,
-                }
-            ]
-        summary = entry.get("summary")
-        if not isinstance(summary, str) or not summary.strip():
-            first_message = None
-            if diagnostics and isinstance(diagnostics[0], Mapping):
-                message_value = diagnostics[0].get("message")
-                if isinstance(message_value, str) and message_value:
-                    first_message = message_value
-            summary = (
-                f"{kind}: {first_message}"
-                if first_message
-                else kind
-            )
+        if block_height is None and kind == "Applied":
+            block_height = 1
+        status: Dict[str, Any] = {"kind": kind}
+        if block_height is not None:
+            status["block_height"] = block_height
         scope = entry.get("scope")
         if scope is None:
             scope = "global"
@@ -1358,20 +1328,14 @@ class _MockState:
             )
         return {
             "hash": hash_value,
-            "status": {
-                "kind": kind,
-                "block_height": block_height,
-                "rejection_reason": rejection_reason,
-            },
-            "summary": summary,
-            "diagnostics": diagnostics,
+            "status": status,
             "scope": str(scope),
             "resolved_from": str(resolved_from),
         }
 
     def _next_pipeline_hash_locked(self) -> str:
         self._pipeline_submit_seq += 1
-        return f"mock-pipeline-hash-{self._pipeline_submit_seq:04d}"
+        return f"{self._pipeline_submit_seq:064x}"
 
     # ------------------------------------------------------------------
     # Attachments

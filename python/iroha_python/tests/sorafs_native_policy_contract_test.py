@@ -6,7 +6,6 @@ import pytest
 
 from iroha_python import sorafs
 
-
 CANONICAL_DEFAULTS: dict[str, int] = {
     "positive_ttl_secs": 600,
     "refresh_window_secs": 120,

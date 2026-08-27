@@ -1,9 +1,0 @@
-
-            {
-                "mode": "Entry",
-                "listen": "127.0.0.1:0",
-                "handshake": {
-                    "identity_private_key_hex": "0011"
-                }
-            }
-        

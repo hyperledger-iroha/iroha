@@ -235,27 +235,49 @@ or dropout records only from the exact seated authority named by the record.
 The registration-close and survivor-freeze transitions carry no caller-selected
 registration corpus or survivor subset: Core derives those ordered collections
 and their roots from accepted authority-bound records. `FreezeTimedOvnCorpus`
-still carries the complete survivor-ordered masked-ballot batch; Core requires
-exactly one proof-valid record for every frozen survivor. Because that batch can
-contain 1,000 attacker-controlled proofs, the freeze requires exact
-`CanManageParliament` authorization before parsing or cryptographic validation.
-The manager still cannot forge, omit, reorder, or alter a survivor's ballot.
-Core enforces record widths, the frozen maximum of 1,000 entries, exact coverage,
-and immutable roots. Before registration close, survivor freeze, or corpus
-freeze replays a proof corpus, Core checks the reducer-owned active ballot,
-exact phase, body binding, predecessor checkpoint, and containing height using
-bounded scalar state. Wrong-height and replayed checkpoint traffic therefore
-fails before proof work; exact-height calls still perform the complete replay.
+appends the next nonempty contiguous survivor-ordered masked-ballot chunk. Each
+payload carries at most 32 exact canonical records; Core derives its starting
+offset from committed state, verifies only those new proofs, and advances a
+replay-checkable public aggregate and duplicate-ephemeral set. The lifecycle
+remains internally corpus-open until the accepted prefix reaches the exact
+frozen survivor count; only that terminal chunk seals the corpus and advances
+the Parliament reducer to `AwaitingRelease`. Chunks are admitted throughout
+`(survivor_freeze_height, commitment_close_height]`, and the actual terminal
+completion height is retained while the configured release and opening heights
+remain unchanged. Policy validation reserves at least
+`max_corpus_entries + 1` registration blocks (one admission-boundary block plus
+one maximum-cost registration per block), at least `max_corpus_entries`
+survivor-freeze blocks, and at least `ceil(max_corpus_entries / 32)` commitment
+blocks. A standard default-genesis block can therefore carry the worst-case
+bounded transition traffic and still complete every policy-valid corpus.
+Because every chunk contains
+attacker-controlled proofs, each append requires exact `CanManageParliament`
+authorization before parsing or cryptographic validation. The manager still
+cannot forge, omit, reorder, overlap, or alter a survivor's ballot. Core enforces
+fixed record widths, the 32-record chunk cap, the frozen 1,000-survivor total,
+exact coverage, and immutable roots. Snapshot restoration discards trust in
+the cache: it replays the raw registration and ballot evidence and rejects any
+cached mask, prefix aggregate, or duplicate set that differs. Before
+registration close, survivor freeze, or a corpus append, Core checks the
+reducer-owned active ballot, lifecycle phase, body binding, predecessor
+checkpoint, and containing-height window using bounded scalar state.
+Out-of-window and replayed checkpoint traffic therefore fails before proof
+work. A prefix still incomplete after the commitment close stays in
+`TimedCommitment`, making `CommitmentDeadlineExpired` objectively derivable by
+the permissionless no-result transition rather than leaving a stuck ballot.
 The frozen schedule also fixes an inclusive opening deadline as
 `release_height + opening_phase_blocks` (default 600 blocks).
 Release consumes the exact finalized pulse and a public threshold-BLS final
 release bound to the dedicated TLE identity, and both release consumption and
 result finalization reject after that deadline. Aggregate finalization first
 checks the fixed-size public TLE/session/release binding and final threshold
-signature, before replaying either corpus, and retains the complete replay and
-second signature verification before mutation. Only the aggregate tally is
-opened; there is no instruction variant for a plaintext ballot, individual
-opening, manual release, or fallback electorate.
+signature before inspecting either corpus. It then verifies the committed
+public aggregate/transcript cache, verifies the release again while opening the
+aggregate, and mutates only after the bounded tally succeeds. Raw proof replay
+is mandatory when a snapshot is restored, so the live cache never replaces the
+persisted evidence as consensus truth. Only the aggregate tally is opened;
+there is no instruction variant for a plaintext ballot, individual opening,
+manual release, or fallback electorate.
 
 `FailBallotNoResult` carries only the ballot attempt id. Core derives the
 eligible failure class and evidence commitment from persisted phase state and
@@ -292,7 +314,21 @@ domain-separated digest. The authenticated
 `GET /v1/gov/parliament/attempts/{governance_attempt_id}` projection exposes
 `terminal_height`, `superseding_head`, and `execution_failure_root` alongside
 the exact reducer payload so clients can distinguish and independently audit
-all three outcomes.
+all three outcomes. Each ordered body-state row also carries nullable
+`timed_ovn_progress`. It is absent until that body has an active hidden ballot;
+otherwise its exact four fields bind `ballot_attempt_id`, reducer `status`,
+`frozen_survivor_count`, and `accepted_ballot_prefix_count`. Both counts are
+null before survivor freeze. After freeze the survivor count is positive and
+the prefix count is the proof-verified next contiguous corpus offset: zero
+before the first chunk, strictly below the survivor count while
+`TimedCommitment` remains open, and exactly equal after the corpus seals or the
+aggregate releases. A terminal `NoResult`/`Superseded` retry preserves the
+progress shape reached before failure. Clients therefore recover the next
+offset after restart or an ambiguous submission without receiving participant
+identifiers, registration or ballot records, roots, shares, individual
+openings, or secrets. The opaque Norito reducer payload remains an audit
+artifact; clients do not pretend to recompute its content-derived roots from
+this count-only projection.
 
 `GovernanceParliamentLifecycleTransitionApplied` carries the closed transition
 kind, an optional `no_result_kind`, and an optional typed
@@ -585,13 +621,25 @@ make the current-council read endpoint derive an implicit roster:
 
 [gov.parliament_timed_ovn]
   registration_phase_blocks = 3600
-  survivor_freeze_phase_blocks = 300
+  survivor_freeze_phase_blocks = 1000
   commitment_phase_blocks = 3600
   release_delay_blocks = 600
   opening_phase_blocks = 600
   max_ballot_retries = 3
   max_corpus_entries = 1000
 ```
+
+`registration_phase_blocks` must be at least `max_corpus_entries + 1`,
+`survivor_freeze_phase_blocks` must be at least `max_corpus_entries`, and
+`commitment_phase_blocks` must be at least
+`ceil(max_corpus_entries / 32)`. The corpus bound must cover both configured
+jury sizes. Configuration, reducer admission, restored state, and certificate
+validation fail closed when any window cannot carry its maximum bounded work.
+Every active hidden ballot also reserves its closed registration-through-
+commitment and release-through-opening windows globally. A new or restored
+ballot whose reservation intersects another nonterminal ballot is rejected, so
+nominally valid per-ballot schedules cannot oversubscribe consensus transition
+capacity.
 
 Governance monetary parameters are canonical non-negative `Quantity` values. TOML
 uses their exact decimal string form (for example `"150"` or `"0.5"`), so the

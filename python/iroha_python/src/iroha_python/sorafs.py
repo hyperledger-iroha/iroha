@@ -43,12 +43,7 @@ except RuntimeError as err:  # pragma: no cover - optional dependency
     _crypto = _UnavailableCrypto()
 
 if TYPE_CHECKING:
-    from .client import (
-        SorafsPorIngestionProviderStatus,
-        SorafsPorIngestionStatus,
-        SorafsPorSubmissionResponse,
-        SorafsPorVerdictResponse,
-    )
+    pass
 
 __all__ = [
     "SorafsAliasPolicy",

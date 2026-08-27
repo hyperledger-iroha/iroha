@@ -164,6 +164,45 @@ test("buildRegisterAssetDefinitionInstruction preserves alias metadata", () => {
     },
   });
   assert.deepEqual(encodeAndDecode(instruction), canonicalizeClone(instruction));
+  assert.equal(
+    buildRegisterAssetDefinitionInstruction({
+      assetDefinitionId: ASSET_DEFINITION_ID,
+      name: "é".repeat(64),
+      owningDomain: null,
+      balanceScopePolicy: "Global",
+    }).Register.AssetDefinition.name,
+    "é".repeat(64),
+  );
+  for (const name of [
+    undefined,
+    "",
+    " demo ",
+    "demo#settlement",
+    "demo@settlement",
+    "demo\nsettlement",
+    "é".repeat(65),
+  ]) {
+    assert.throws(
+      () =>
+        buildRegisterAssetDefinitionInstruction({
+          assetDefinitionId: ASSET_DEFINITION_ID,
+          name,
+          owningDomain: null,
+          balanceScopePolicy: "Global",
+        }),
+      /registerAssetDefinition\.name must /u,
+    );
+  }
+  assert.throws(
+    () =>
+      buildRegisterAssetDefinitionInstruction({
+        assetDefinitionId: ASSET_DEFINITION_ID,
+        name: "\uD800",
+        owningDomain: null,
+        balanceScopePolicy: "Global",
+      }),
+    /unpaired UTF-16 surrogates/u,
+  );
   assert.throws(
     () =>
       buildRegisterAssetDefinitionInstruction({
@@ -266,6 +305,6 @@ test("native codec rejects every retired confidential instruction", () => {
       nativeBinding.noritoDecodeInstruction(
         Buffer.from(LEGACY_UNSHIELD_WITH_OUTPUT_WIRE_BASE64, "base64"),
       ),
-    /decode|canonical|trailing|field|not registered|unknown instruction/u,
+    /decode|canonical|trailing|field|length mismatch|not registered|unknown instruction/u,
   );
 });

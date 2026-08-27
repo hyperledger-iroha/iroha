@@ -11,14 +11,8 @@ use crate::{
 use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(test)]
 pub static DECODE_CALLS: AtomicU64 = AtomicU64::new(0);
-/// Decode the instruction at `pc`, returning the raw word and its length (always 4).
-pub fn decode(memory: &Memory, pc: u64) -> Result<(u32, u32), VMError> {
-    decode_wide(memory, pc)
-}
-/// Decode assuming the stream contains only 32-bit words aligned on 4-byte boundaries.
-/// This helper bypasses the compressed-instruction logic and is intended for the
-/// upcoming wide-encoding pipeline.
-pub fn decode_wide(memory: &Memory, pc: u64) -> Result<(u32, u32), VMError> {
+/// Decode the instruction at `pc` and return its raw word.
+pub fn decode(memory: &Memory, pc: u64) -> Result<u32, VMError> {
     #[cfg(test)]
     {
         DECODE_CALLS.fetch_add(1, Ordering::Relaxed);
@@ -40,14 +34,14 @@ pub fn decode_wide(memory: &Memory, pc: u64) -> Result<(u32, u32), VMError> {
         });
     }
     let word = memory.load_u32(pc)?;
-    Ok((word, 4))
+    Ok(word)
 }
 /// Decode one instruction directly from a code slice.
 ///
 /// This is the allocation-free admission/predecode path. It deliberately has the same alignment,
-/// bounds, byte order, errors, and fixed width as [`decode_wide`], without constructing the VM's
+/// bounds, byte order, errors, and fixed width as [`decode`], without constructing the VM's
 /// multi-megabyte memory and Merkle image merely to inspect immutable code.
-pub fn decode_slice(code: &[u8], pc: u64) -> Result<(u32, u32), VMError> {
+pub fn decode_slice(code: &[u8], pc: u64) -> Result<u32, VMError> {
     #[cfg(test)]
     {
         DECODE_CALLS.fetch_add(1, Ordering::Relaxed);
@@ -70,9 +64,8 @@ pub fn decode_slice(code: &[u8], pc: u64) -> Result<(u32, u32), VMError> {
         addr: pc as u32,
         perm: Perm::EXECUTE,
     })?;
-    Ok((
-        u32::from_le_bytes(bytes.try_into().expect("four-byte slice")),
-        4,
+    Ok(u32::from_le_bytes(
+        bytes.try_into().expect("four-byte slice"),
     ))
 }
 #[cfg(test)]
@@ -88,10 +81,10 @@ mod tests {
         let mut memory = Memory::new(code.len() as u64);
         memory.load_code(&code);
         for pc in [0, 4] {
-            assert_eq!(decode_slice(&code, pc), decode_wide(&memory, pc));
+            assert_eq!(decode_slice(&code, pc), decode(&memory, pc));
         }
         for pc in [1, 8, u64::MAX] {
-            assert_eq!(decode_slice(&code, pc), decode_wide(&memory, pc));
+            assert_eq!(decode_slice(&code, pc), decode(&memory, pc));
         }
     }
 }

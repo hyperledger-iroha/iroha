@@ -1,6 +1,4 @@
-//! Penalty enforcement for `NPoS`: VRF non-participation and consensus evidence slashing.
-#[cfg(test)]
-use crate::state::WorldTransaction;
+//! Deterministic `NPoS` consensus-evidence slashing.
 #[cfg(feature = "telemetry")]
 use crate::telemetry::StateTelemetry;
 use crate::{
@@ -10,18 +8,14 @@ use crate::{
 };
 use eyre::{Result, WrapErr, eyre};
 use iroha_crypto::{Hash, PublicKey};
-#[cfg(test)]
-use iroha_data_model::consensus::{NposMarkVrfPenaltiesAppliedAction, NposVrfJailAction};
-#[cfg(test)]
-use iroha_data_model::nexus::PublicLaneValidatorStatus;
 use iroha_data_model::{
     block::{
         consensus::{Evidence, EvidenceRecord},
-        consensus_v2::{ConsensusMode, HeightContext},
+        consensus_v2::HeightContext,
     },
     consensus::{
         NposConsensusEffects, NposConsensusSlashAction, NposMarkConsensusEvidenceAppliedAction,
-        NposPenaltyAction, VrfEpochRecord,
+        NposPenaltyAction,
     },
     nexus::LaneId,
     prelude::{AccountId, PeerId},
@@ -33,8 +27,6 @@ use std::collections::{BTreeMap, BTreeSet};
 pub struct PenaltyOutcome {
     pub applied: u64,
     pub slashed: u64,
-    #[cfg(test)]
-    pub jailed: u64,
 }
 #[derive(Clone)]
 struct ValidatorLocator {
@@ -54,27 +46,12 @@ pub struct PenaltyApplier<'a> {
     state: &'a State,
 }
 impl<'a> PenaltyApplier<'a> {
-    pub(crate) fn from_committed_state(
+    pub(crate) fn new(
         state: &'a State,
-        _consensus_mode: ConsensusMode,
         #[cfg(feature = "telemetry")] _telemetry: Option<&'a StateTelemetry>,
         #[cfg(not(feature = "telemetry"))] _telemetry: Option<()>,
     ) -> Self {
         Self { state }
-    }
-    pub(crate) fn from_parts(
-        state: &'a State,
-        #[cfg(feature = "telemetry")] telemetry: Option<&'a StateTelemetry>,
-        #[cfg(not(feature = "telemetry"))] telemetry: Option<()>,
-    ) -> Self {
-        Self::from_committed_state(
-            state,
-            ConsensusMode::Npos,
-            #[cfg(feature = "telemetry")]
-            telemetry,
-            #[cfg(not(feature = "telemetry"))]
-            telemetry,
-        )
     }
     fn build_validator_locator_map(&self) -> BTreeMap<PublicKey, ValidatorLocator> {
         let world = self.state.world_view();
@@ -113,142 +90,24 @@ impl<'a> PenaltyApplier<'a> {
     pub(crate) fn derive_npos_consensus_effects(
         &self,
         current_height: u64,
-        vrf_epoch_seals: impl IntoIterator<Item = VrfEpochRecord>,
     ) -> Result<NposConsensusEffects> {
-        let vrf_epoch_seals = vrf_epoch_seals.into_iter().collect::<Vec<_>>();
-        #[cfg(not(test))]
-        if !vrf_epoch_seals.is_empty() {
-            return Err(eyre!(
-                "legacy NPoS VRF effect assembly is retired; threshold-beacon pulses are authoritative"
-            ));
-        }
-        let mut effects = NposConsensusEffects {
+        Ok(NposConsensusEffects {
             finalized_global_beacon_pulse: None,
-            vrf_epoch_seals,
             v2_evidence_admissions: super::evidence::pending_v2_evidence_admissions(
                 self.state,
                 current_height,
             ),
             penalty_actions: self.derive_npos_penalty_actions(current_height)?,
-        };
-        effects.vrf_epoch_seals.sort_by_key(|record| record.epoch);
-        effects.vrf_epoch_seals.dedup_by_key(|record| record.epoch);
-        Ok(effects)
+        })
     }
     /// Derive only deterministic penalty actions from pre-block state.
     pub(crate) fn derive_npos_penalty_actions(
         &self,
         current_height: u64,
     ) -> Result<Vec<NposPenaltyAction>> {
-        let mut actions = self.derive_vrf_penalty_actions(current_height)?;
-        actions.extend(self.derive_consensus_penalty_actions(current_height)?);
+        let mut actions = self.derive_consensus_penalty_actions(current_height)?;
         actions.sort();
         actions.dedup();
-        Ok(actions)
-    }
-    #[cfg(not(test))]
-    fn derive_vrf_penalty_actions(&self, _current_height: u64) -> Result<Vec<NposPenaltyAction>> {
-        Ok(Vec::new())
-    }
-    #[cfg(test)]
-    fn derive_vrf_penalty_actions(&self, current_height: u64) -> Result<Vec<NposPenaltyAction>> {
-        let view = self.state.world.vrf_epochs.view();
-        let mut due_records: Vec<VrfEpochRecord> = Vec::new();
-        for (_epoch, record) in view.iter() {
-            if !record.finalized || record.penalties_applied {
-                continue;
-            }
-            // A boundary record becomes immutable pre-state only at the next
-            // height.  Its canonical Kura finality artifact is verified below
-            // before any absence can authorize a state change.
-            if record.updated_at_height >= current_height {
-                continue;
-            }
-            due_records.push(record.clone());
-        }
-        drop(view);
-        if due_records.is_empty() {
-            return Ok(Vec::new());
-        }
-        let validator_map = self.build_validator_locator_map();
-        let mut actions = Vec::new();
-        for record in due_records {
-            let artifact = self
-                .state
-                .kura()
-                .v2_finality_artifact(record.updated_at_height)
-                .wrap_err_with(|| {
-                    format!(
-                        "failed to read the VRF epoch {} boundary finality artifact at height {}",
-                        record.epoch, record.updated_at_height
-                    )
-                })?
-                .ok_or_else(|| {
-                    eyre!(
-                        "missing canonical finality artifact for VRF epoch {} boundary height {}",
-                        record.epoch,
-                        record.updated_at_height
-                    )
-                })?;
-            if &artifact.height_context.network_id != self.state.network_id_ref() {
-                return Err(eyre!(
-                    "VRF epoch {} boundary finality artifact belongs to another chain",
-                    record.epoch
-                ));
-            }
-            super::v2_npos::validate_finalized_epoch_record(
-                &artifact.height_context,
-                &record,
-            )
-            .map_err(|error| {
-                eyre!(
-                    "VRF epoch {} is not authenticated by its boundary finality artifact: {error}",
-                    record.epoch
-                )
-            })?;
-            // The reason encodes the epoch through which the status remains
-            // jailed.  Using the successor keeps the offender ineligible for
-            // the next election instead of restoring it one block later.
-            let jail_epoch = record.epoch.checked_add(1).ok_or_else(|| {
-                eyre!(
-                    "VRF epoch {} cannot identify a finite successor jail epoch",
-                    record.epoch
-                )
-            })?;
-            // A signed commitment is an attributable promise to reveal.  The
-            // exact boundary record (including its non-reveal partition) is
-            // covered by the verified CommitQC, so a proposer cannot jail a
-            // validator unilaterally.  Validators with no commitment are not
-            // jailed: network absence alone is not attributable evidence.
-            for signer in &record.committed_no_reveal {
-                let peer_id = artifact
-                    .height_context
-                    .roster
-                    .get(usize::try_from(*signer).map_err(|_| {
-                        eyre!("VRF non-reveal signer index cannot address the certified roster")
-                    })?)
-                    .ok_or_else(|| eyre!("VRF non-reveal signer is outside the certified roster"))?
-                    .validator
-                    .clone();
-                let Some(locator) = validator_map.get(peer_id.public_key()) else {
-                    continue;
-                };
-                actions.push(NposPenaltyAction::VrfJail(NposVrfJailAction {
-                    epoch: record.epoch,
-                    signer: *signer,
-                    peer_id,
-                    lane_id: locator.lane_id,
-                    validator: locator.validator.clone(),
-                    reason: format!("vrf_penalty_epoch_{jail_epoch}"),
-                }));
-            }
-            actions.push(NposPenaltyAction::MarkVrfPenaltiesApplied(
-                NposMarkVrfPenaltiesAppliedAction {
-                    epoch: record.epoch,
-                    height: current_height,
-                },
-            ));
-        }
         Ok(actions)
     }
     #[allow(clippy::too_many_lines)]
@@ -367,8 +226,7 @@ pub(crate) fn apply_npos_consensus_effects_to_transaction(
     current_height: u64,
     current_view: u64,
     now_ms: u64,
-    #[cfg(all(feature = "telemetry", test))] telemetry: Option<&StateTelemetry>,
-    #[cfg(all(feature = "telemetry", not(test)))] _telemetry: Option<&StateTelemetry>,
+    #[cfg(feature = "telemetry")] _telemetry: Option<&StateTelemetry>,
 ) -> Result<PenaltyOutcome> {
     let mut outcome = PenaltyOutcome::default();
     if let Some(pulse) = effects.finalized_global_beacon_pulse {
@@ -413,16 +271,6 @@ pub(crate) fn apply_npos_consensus_effects_to_transaction(
             .verify_and_advance_global_beacon_pulse(&session, pulse, expected_anchor)
             .wrap_err("failed to persist finalized global beacon pulse")?;
     }
-    #[cfg(not(test))]
-    if !effects.vrf_epoch_seals.is_empty() {
-        return Err(eyre!(
-            "legacy NPoS VRF epoch persistence is retired; threshold-beacon pulses are authoritative"
-        ));
-    }
-    #[cfg(test)]
-    for record in &effects.vrf_epoch_seals {
-        tx.world.vrf_epochs.insert(record.epoch, record.clone());
-    }
     for admission in &effects.v2_evidence_admissions {
         let evidence = super::evidence::canonical_v2_evidence(admission);
         let key = super::evidence::v2_evidence_admission_key(admission);
@@ -453,37 +301,6 @@ pub(crate) fn apply_npos_consensus_effects_to_transaction(
     }
     for action in &effects.penalty_actions {
         match action {
-            NposPenaltyAction::VrfJail(action) => {
-                #[cfg(not(test))]
-                {
-                    let _ = action;
-                    return Err(eyre!(
-                        "legacy NPoS VRF penalty actions are retired with commit/reveal entropy"
-                    ));
-                }
-                #[cfg(test)]
-                {
-                    if !tx.is_lane_active_for_authority(action.lane_id) {
-                        continue;
-                    }
-                    let locator = ValidatorLocator {
-                        lane_id: action.lane_id,
-                        validator: action.validator.clone(),
-                    };
-                    if jail_in_transaction(
-                        &mut tx.world,
-                        &locator,
-                        &action.reason,
-                        #[cfg(feature = "telemetry")]
-                        telemetry,
-                        #[cfg(not(feature = "telemetry"))]
-                        None,
-                    ) {
-                        outcome.applied = outcome.applied.saturating_add(1);
-                        outcome.jailed = outcome.jailed.saturating_add(1);
-                    }
-                }
-            }
             NposPenaltyAction::ConsensusSlash(action) => {
                 if !tx.is_lane_active_for_authority(action.lane_id) {
                     continue;
@@ -498,24 +315,6 @@ pub(crate) fn apply_npos_consensus_effects_to_transaction(
                 )?;
                 outcome.applied = outcome.applied.saturating_add(1);
                 outcome.slashed = outcome.slashed.saturating_add(1);
-            }
-            NposPenaltyAction::MarkVrfPenaltiesApplied(action) => {
-                #[cfg(not(test))]
-                {
-                    let _ = action;
-                    return Err(eyre!(
-                        "legacy NPoS VRF penalty bookkeeping is retired with commit/reveal entropy"
-                    ));
-                }
-                #[cfg(test)]
-                {
-                    let mut record = tx.world.vrf_epochs.get(&action.epoch).cloned();
-                    if let Some(record) = record.as_mut() {
-                        record.penalties_applied = true;
-                        record.penalties_applied_at_height = Some(action.height);
-                        tx.world.vrf_epochs.insert(action.epoch, record.clone());
-                    }
-                }
             }
             NposPenaltyAction::MarkConsensusEvidenceApplied(action) => {
                 let mut record = tx
@@ -633,40 +432,6 @@ fn max_slash_amount_for_validator_from_state(
     Ok(Some(amount))
 }
 #[cfg(test)]
-fn jail_in_transaction(
-    tx: &mut WorldTransaction<'_, '_>,
-    locator: &ValidatorLocator,
-    reason: &str,
-    #[cfg(feature = "telemetry")] telemetry: Option<&StateTelemetry>,
-    #[cfg(not(feature = "telemetry"))] _telemetry: Option<()>,
-) -> bool {
-    let Some(record) = tx
-        .public_lane_validators
-        .get_mut(&(locator.lane_id, locator.validator.clone()))
-    else {
-        return false;
-    };
-    let should_update = matches!(
-        record.status,
-        PublicLaneValidatorStatus::Active | PublicLaneValidatorStatus::PendingActivation(_)
-    );
-    if !should_update {
-        return false;
-    }
-    #[cfg(feature = "telemetry")]
-    let previous_status = Some(record.status.clone());
-    record.status = PublicLaneValidatorStatus::Jailed(reason.to_string());
-    #[cfg(feature = "telemetry")]
-    if let Some(t) = telemetry {
-        t.record_public_lane_validator_status(
-            locator.lane_id,
-            previous_status.as_ref(),
-            &record.status,
-        );
-    }
-    true
-}
-#[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
@@ -686,10 +451,9 @@ mod tests {
                 BlockSubject, ConsensusMode as V2ConsensusMode, ConsensusRound,
                 DataAvailabilityLayout, DualQuorum, ExecutionCommitment, GlobalPhase,
                 HeightContext, HeightContextId, PayloadEncoding, QuorumCertificate, ValidatorPower,
-                VrfCommit, finality::V2FinalityArtifact,
+                finality::V2FinalityArtifact,
             },
         },
-        consensus::{VrfCommitProof, VrfParticipantRecord},
         metadata::Metadata,
         nexus::{
             LaneCatalog, LaneConfig, LaneId, LaneVisibility, PublicLaneValidatorRecord,
@@ -939,234 +703,6 @@ mod tests {
             .expect("persist canonical v2 finality artifact");
         context
     }
-    fn install_npos_boundary_artifact(
-        state: &State,
-        roster: &[PeerId],
-        boundary_height: u64,
-    ) -> HeightContext {
-        let roster_keys = roster_keys();
-        assert_eq!(
-            roster,
-            roster_keys
-                .iter()
-                .map(|key| PeerId::new(key.public_key().clone()))
-                .collect::<Vec<_>>()
-        );
-        let signing_key = &roster_keys[0];
-        let mut parent = None;
-        let mut tip = None;
-        for height in 1..=boundary_height {
-            let committed =
-                ValidBlock::new_dummy_and_modify_header(signing_key.private_key(), |header| {
-                    header.set_height(NonZeroU64::new(height).expect("non-zero height"));
-                    header.set_prev_block_hash(parent);
-                    header.merkle_root = None;
-                })
-                .commit_unchecked()
-                .unpack(|_| {});
-            let block: Arc<SignedBlock> = Arc::new(committed.into());
-            state
-                .kura()
-                .store_block(Arc::clone(&block))
-                .expect("store canonical NPoS boundary fixture block");
-            parent = Some(block.hash());
-            tip = Some(block);
-        }
-        let block = tip.expect("positive boundary height produces a block");
-        let powers = roster
-            .iter()
-            .cloned()
-            .map(|validator| ValidatorPower {
-                validator,
-                power: 1,
-            })
-            .collect::<Vec<_>>();
-        let parent_round = ConsensusRound {
-            context_id: HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
-                b"penalties parent context",
-            ))),
-            height: boundary_height - 1,
-            view: 0,
-        };
-        let parent_block_hash = block
-            .header()
-            .prev_block_hash()
-            .expect("non-genesis boundary has a parent");
-        let parent_commit_qc = QuorumCertificate {
-            round: parent_round,
-            proposal_round: parent_round,
-            phase: GlobalPhase::Commit,
-            subject: BlockSubject {
-                parent_block_hash: None,
-                block_hash: parent_block_hash,
-                payload_hash: Hash::new(b"penalties parent payload"),
-            },
-            execution_commitment: ExecutionCommitment::without_topups_or_merge_carrier(
-                Hash::new(b"penalties parent state"),
-                Hash::new(b"penalties parent post state"),
-                Hash::new(b"penalties parent ordinary writes"),
-                1,
-                Hash::new(b"penalties parent executed wire"),
-            ),
-            signers: vec![0, 1, 2],
-            aggregate_signature: vec![0x33; 48],
-        };
-        let validator_set_pops = roster_keys
-            .iter()
-            .map(|key| {
-                iroha_crypto::bls_normal_pop_prove(key.private_key())
-                    .expect("fixture validator PoP")
-            })
-            .collect::<Vec<_>>();
-        let mut context = HeightContext {
-            network_id: state.network_id_ref().clone(),
-            protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
-            height: boundary_height,
-            epoch: 0,
-            epoch_end_height: boundary_height,
-            next_epoch_snapshot: None,
-            mode: V2ConsensusMode::Npos,
-            parent_commit_qc: Some(parent_commit_qc),
-            snapshot_bootstrap: None,
-            quorum: DualQuorum::from_roster(&powers).expect("valid fixture quorum"),
-            roster: powers,
-            nexus_amx_context_hash: Hash::new(b"penalties NPoS boundary nexus"),
-            execution_policy_hash: Hash::new(b"penalties NPoS boundary policy"),
-            da_layout: DataAvailabilityLayout {
-                encoding: PayloadEncoding::ReedSolomon16,
-                chunk_size_bytes: 1024,
-                data_shards: 1,
-                parity_shards: 1,
-                max_payload_size_bytes: 4096,
-                max_chunk_count: 8,
-            },
-            leader_seed: [0x42; 32],
-        };
-        context.next_epoch_snapshot = Some(
-            iroha_data_model::block::consensus_v2::finality::FinalizedNextEpochSnapshot {
-                epoch: 1,
-                epoch_end_height: boundary_height + 10,
-                mode: V2ConsensusMode::Npos,
-                roster: context.roster.clone(),
-                validator_set_pops: validator_set_pops.clone(),
-                quorum: context.quorum,
-                leader_seed: [0x43; 32],
-            },
-        );
-        context.validate().expect("valid NPoS boundary context");
-        let subject = BlockSubject {
-            parent_block_hash: block.header().prev_block_hash(),
-            block_hash: block.hash(),
-            payload_hash: block
-                .canonical_proposal_wire_hash()
-                .expect("canonical proposal wire"),
-        };
-        let executed_block_wire = block
-            .encode_wire()
-            .expect("encode canonical executed block wire");
-        let execution_commitment = ExecutionCommitment::without_topups_or_merge_carrier(
-            Hash::new(b"penalties boundary parent state"),
-            Hash::new(b"penalties boundary post state"),
-            Hash::new(b"penalties boundary ordinary writes"),
-            u64::try_from(executed_block_wire.len()).expect("canonical wire length fits u64"),
-            Hash::new(&executed_block_wire),
-        );
-        let round = ConsensusRound {
-            context_id: context.id(),
-            height: boundary_height,
-            view: block.header().view_change_index(),
-        };
-        let mut certificate = QuorumCertificate {
-            round,
-            proposal_round: round,
-            phase: GlobalPhase::Commit,
-            subject,
-            execution_commitment,
-            signers: vec![0, 1, 2],
-            aggregate_signature: vec![0x5A; 48],
-        };
-        let preimage = certificate
-            .signer_preimage(&context, 0)
-            .expect("valid boundary finality signer");
-        let shares = roster_keys[..3]
-            .iter()
-            .map(|key| {
-                Signature::new(key.private_key(), &preimage)
-                    .payload()
-                    .to_vec()
-            })
-            .collect::<Vec<_>>();
-        let share_refs = shares.iter().map(Vec::as_slice).collect::<Vec<_>>();
-        certificate.aggregate_signature =
-            iroha_crypto::bls_normal_aggregate_signatures(&share_refs)
-                .expect("aggregate boundary CommitQC");
-        let _commit_receipt = state
-            .kura()
-            .store_v2_finality_artifact(&V2FinalityArtifact::new(
-                context.clone(),
-                subject,
-                certificate,
-                validator_set_pops,
-            ))
-            .expect("persist canonical NPoS boundary finality artifact");
-        context
-    }
-    fn finalized_non_reveal_record(
-        context: &HeightContext,
-        signer_key: &KeyPair,
-        signer: ValidatorIndex,
-    ) -> VrfEpochRecord {
-        let mut commit = VrfCommit {
-            epoch: context.epoch,
-            commitment: [0xA4; 32],
-            signer,
-            bls_sig: Vec::new(),
-        };
-        commit.bls_sig = Signature::try_new(
-            signer_key.private_key(),
-            &crate::sumeragi::consensus::v2_vrf_commit_preimage(
-                &context.network_id,
-                crate::sumeragi::consensus::NPOS_TAG,
-                &commit,
-            ),
-        )
-        .expect("sign fixture VRF commitment")
-        .payload()
-        .to_vec();
-        VrfEpochRecord {
-            epoch: context.epoch,
-            seed: context.leader_seed,
-            epoch_length: context.epoch_end_height,
-            commit_deadline_offset: 3,
-            reveal_deadline_offset: 6,
-            roster_len: u32::try_from(context.roster.len()).expect("small fixture roster"),
-            finalized: true,
-            updated_at_height: context.height,
-            participants: vec![VrfParticipantRecord {
-                signer,
-                commitment: Some(commit.commitment),
-                reveal: None,
-                commit_proof: Some(VrfCommitProof {
-                    epoch: commit.epoch,
-                    commitment: commit.commitment,
-                    signer,
-                    signature: commit.bls_sig,
-                    observed_at_height: 2,
-                }),
-                reveal_proof: None,
-                last_updated_height: 2,
-            }],
-            late_reveals: Vec::new(),
-            committed_no_reveal: vec![signer],
-            no_participation: (0..u32::try_from(context.roster.len())
-                .expect("small fixture roster"))
-                .filter(|index| *index != signer)
-                .collect(),
-            penalties_applied: false,
-            penalties_applied_at_height: None,
-            validator_election: None,
-        }
-    }
     fn set_commit_topology(state: &State, peers: Vec<PeerId>) {
         let mut topology = state.commit_topology.block();
         topology.clear();
@@ -1262,134 +798,6 @@ mod tests {
         assert_eq!(offender_indices(&evidence, 1, &resolved), vec![1]);
     }
     #[test]
-    fn quorum_certified_signed_non_reveal_jails_only_the_committer() {
-        let state = fresh_state();
-        let frozen_roster = roster();
-        let context = install_npos_boundary_artifact(&state, &frozen_roster, 10);
-        let keys = roster_keys();
-        let offender = &frozen_roster[0];
-        let offender_account = add_validator_record(&state, offender);
-        let merely_absent = &frozen_roster[1];
-        let absent_account = add_validator_record(&state, merely_absent);
-        let record = finalized_non_reveal_record(&context, &keys[0], 0);
-        let mut epochs = state.world.vrf_epochs.block();
-        epochs.insert(record.epoch, record);
-        epochs.commit();
-        let actions = PenaltyApplier::from_parts(
-            &state,
-            #[cfg(feature = "telemetry")]
-            None,
-            #[cfg(not(feature = "telemetry"))]
-            None,
-        )
-        .derive_npos_penalty_actions(11)
-        .expect("verified boundary finality deterministically authorizes the penalty");
-        assert!(actions.iter().any(|action| matches!(
-            action,
-            NposPenaltyAction::VrfJail(jail)
-                if jail.epoch == 0
-                    && jail.signer == 0
-                    && jail.peer_id == *offender
-                    && jail.validator == offender_account
-                    && jail.reason == "vrf_penalty_epoch_1"
-        )));
-        assert!(actions.iter().any(|action| matches!(
-            action,
-            NposPenaltyAction::MarkVrfPenaltiesApplied(mark)
-                if mark.epoch == 0 && mark.height == 11
-        )));
-        assert!(
-            !actions.iter().any(|action| matches!(
-                action,
-                NposPenaltyAction::VrfJail(jail)
-                    if jail.peer_id == *merely_absent || jail.validator == absent_account
-            )),
-            "unsigned network absence must not become attributable jail evidence"
-        );
-    }
-    #[test]
-    fn vrf_penalty_ignores_singleton_non_owner_shared_dataspace_projection() {
-        let mut state = fresh_state();
-        enable_shared_public_staking_lanes(&mut state);
-        let frozen_roster = roster();
-        let context = install_npos_boundary_artifact(&state, &frozen_roster, 10);
-        let keys = roster_keys();
-        let offender = &frozen_roster[0];
-        let offender_account = add_validator_record_on_lane(&state, LaneId::new(1), offender);
-        let record = finalized_non_reveal_record(&context, &keys[0], 0);
-        let mut epochs = state.world.vrf_epochs.block();
-        epochs.insert(record.epoch, record);
-        epochs.commit();
-
-        let actions = PenaltyApplier::from_parts(
-            &state,
-            #[cfg(feature = "telemetry")]
-            None,
-            #[cfg(not(feature = "telemetry"))]
-            None,
-        )
-        .derive_vrf_penalty_actions(11)
-        .expect("verified boundary finality remains processable");
-
-        assert!(
-            !actions.iter().any(|action| matches!(
-                action,
-                NposPenaltyAction::VrfJail(jail)
-                    if jail.peer_id == *offender || jail.validator == offender_account
-            )),
-            "a non-owner compatibility projection must not receive a VRF jail action"
-        );
-        assert!(actions.iter().any(|action| matches!(
-            action,
-            NposPenaltyAction::MarkVrfPenaltiesApplied(mark)
-                if mark.epoch == 0 && mark.height == 11
-        )));
-    }
-
-    #[test]
-    fn finalized_vrf_record_without_canonical_finality_fails_closed() {
-        let state = fresh_state();
-        let frozen_roster = roster();
-        let mut context = height_one_context(
-            state.network_id_ref().clone(),
-            &frozen_roster,
-            test_block_hash(0x91),
-        );
-        context.height = 10;
-        context.epoch_end_height = 10;
-        context.mode = V2ConsensusMode::Npos;
-        let record = VrfEpochRecord {
-            epoch: 0,
-            seed: context.leader_seed,
-            epoch_length: 10,
-            commit_deadline_offset: 3,
-            reveal_deadline_offset: 6,
-            roster_len: 4,
-            finalized: true,
-            updated_at_height: 10,
-            participants: Vec::new(),
-            late_reveals: Vec::new(),
-            committed_no_reveal: Vec::new(),
-            no_participation: vec![0, 1, 2, 3],
-            penalties_applied: false,
-            penalties_applied_at_height: None,
-            validator_election: None,
-        };
-        let mut epochs = state.world.vrf_epochs.block();
-        epochs.insert(record.epoch, record);
-        epochs.commit();
-        let error = PenaltyApplier::from_parts(
-            &state,
-            #[cfg(feature = "telemetry")]
-            None,
-            #[cfg(not(feature = "telemetry"))]
-            None,
-        )
-        .derive_npos_penalty_actions(11)
-        .expect_err("an unauthenticated absence partition must not be marked or punished");
-        assert!(error.to_string().contains("boundary finality artifact"));
-    }
-    #[test]
     fn missing_artifact_fails_closed_without_mutable_topology_fallback() {
         let state = fresh_state();
         install_one_block_delay_npos(&state);
@@ -1409,7 +817,7 @@ mod tests {
                 .contains("missing canonical Sumeragi v2 finality artifact")
         );
         insert_evidence(&state, evidence, 1);
-        let applier = PenaltyApplier::from_parts(
+        let applier = PenaltyApplier::new(
             &state,
             #[cfg(feature = "telemetry")]
             None,
@@ -1417,9 +825,7 @@ mod tests {
             None,
         );
         assert!(
-            applier
-                .derive_npos_consensus_effects(2, std::iter::empty())
-                .is_err(),
+            applier.derive_npos_consensus_effects(2).is_err(),
             "a validator missing canonical evidence provenance must not derive a block"
         );
     }
@@ -1514,14 +920,14 @@ mod tests {
         let validator = add_validator_record(&state, &offender);
         let evidence = phase_vote_evidence(&context, 1, 37);
         let key = insert_evidence(&state, evidence, 1);
-        let actions = PenaltyApplier::from_parts(
+        let actions = PenaltyApplier::new(
             &state,
             #[cfg(feature = "telemetry")]
             None,
             #[cfg(not(feature = "telemetry"))]
             None,
         )
-        .derive_npos_consensus_effects(2, std::iter::empty())
+        .derive_npos_consensus_effects(2)
         .expect("canonical evidence produces deterministic effects")
         .penalty_actions;
         assert!(actions.iter().any(|action| matches!(
@@ -1550,14 +956,14 @@ mod tests {
         let evidence = phase_vote_evidence(&context, 1, 37);
         let key = insert_evidence(&state, evidence, 1);
 
-        let actions = PenaltyApplier::from_parts(
+        let actions = PenaltyApplier::new(
             &state,
             #[cfg(feature = "telemetry")]
             None,
             #[cfg(not(feature = "telemetry"))]
             None,
         )
-        .derive_npos_consensus_effects(2, std::iter::empty())
+        .derive_npos_consensus_effects(2)
         .expect("canonical evidence remains processable")
         .penalty_actions;
 

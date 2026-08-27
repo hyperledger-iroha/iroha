@@ -1,16 +1,11 @@
 //! Simple persistence helpers for storing and loading Izanami configurations.
 //!
-//! The first-release on-disk envelope is capped at 64 KiB and its tracing
-//! filter at 16 KiB. Loads pin one direct regular-file identity, read its exact
-//! metadata length plus a growth sentinel, and decode under explicit Norito
-//! allocation limits before the configuration can influence a chaos run.
-use crate::config::{
-    ChaosConfig, DEFAULT_PROGRESS_INTERVAL, DEFAULT_PROGRESS_TIMEOUT,
-    DEFAULT_SHUTDOWN_DRAIN_TIMEOUT, DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-    DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER, FaultArgs, FaultToggles, IzanamiArgs,
-    WorkloadProfile,
-};
-use crate::faults::DEFAULT_NETWORK_PACKET_LOSS_PERCENT;
+//! The first-release on-disk envelope starts with one required V1 layout byte,
+//! is capped at 64 KiB, and caps its tracing filter at 16 KiB. Loads pin one
+//! direct regular-file identity, read its exact metadata length plus a growth
+//! sentinel, and decode under explicit Norito allocation limits before the
+//! configuration can influence a chaos run.
+use crate::config::{ChaosConfig, FaultArgs, FaultToggles, IzanamiArgs, WorkloadProfile};
 use color_eyre::{Result, eyre::eyre};
 use dirs::config_dir;
 use norito::{
@@ -26,6 +21,8 @@ use std::{
 use tracing::warn;
 const APP_DIR: &str = "izanami";
 const CONFIG_FILE: &str = "config.bin";
+/// Exact first-release persisted configuration layout.
+const CONFIG_WIRE_VERSION_V1: u8 = 1;
 /// First-release ceiling for one persisted Izanami configuration frame.
 const CONFIG_FILE_MAX_BYTES_V1: usize = 64 * 1024;
 /// First-release ceiling for the only variable-width persisted field.
@@ -71,11 +68,8 @@ struct StoredArgs {
     seed: Option<u64>,
     tps: f64,
     max_inflight: u32,
-    #[norito(default = "default_submitters")]
     submitters: u32,
-    #[norito(default)]
     workload_profile: u8,
-    #[norito(default)]
     allow_contract_deploy_in_stable: bool,
     log_filter: String,
     fault_min_ms: u64,
@@ -83,31 +77,17 @@ struct StoredArgs {
     fault_flags: u8,
     nexus: bool,
     allow_net: bool,
-    #[norito(default)]
     pipeline_time_ms: Option<u64>,
-    #[norito(default)]
     target_blocks: Option<u64>,
-    #[norito(default = "default_progress_interval_ms")]
     progress_interval_ms: u64,
-    #[norito(default = "default_progress_timeout_ms")]
     progress_timeout_ms: u64,
-    #[norito(default = "default_shutdown_drain_timeout_ms")]
     shutdown_drain_timeout_ms: u64,
-    #[norito(default)]
     latency_p95_threshold_ms: Option<u64>,
-    #[norito(default)]
     fault_window_start_ms: Option<u64>,
-    #[norito(default)]
     fault_window_end_ms: Option<u64>,
-    #[norito(default = "default_packet_loss_percent")]
-    packet_loss_percent: u8,
-    #[norito(default)]
     prebuild_tx_buffer: u32,
-    #[norito(default)]
     prebuild_tx_workers: u32,
-    #[norito(default = "default_sumeragi_block_max_transactions")]
     sumeragi_block_max_transactions: u64,
-    #[norito(default = "default_sumeragi_proposal_queue_scan_multiplier")]
     sumeragi_proposal_queue_scan_multiplier: u64,
 }
 fn workload_profile_to_u8(profile: WorkloadProfile) -> u8 {
@@ -116,10 +96,13 @@ fn workload_profile_to_u8(profile: WorkloadProfile) -> u8 {
         WorkloadProfile::Chaos => 1,
     }
 }
-fn workload_profile_from_u8(value: u8) -> WorkloadProfile {
+fn workload_profile_from_u8(value: u8) -> Result<WorkloadProfile> {
     match value {
-        1 => WorkloadProfile::Chaos,
-        _ => WorkloadProfile::Stable,
+        0 => Ok(WorkloadProfile::Stable),
+        1 => Ok(WorkloadProfile::Chaos),
+        _ => Err(eyre!(
+            "persisted workload profile {value} is not part of the first-release layout"
+        )),
     }
 }
 fn duration_to_ms(duration: Duration, label: &str) -> Result<u64> {
@@ -130,30 +113,6 @@ fn maybe_duration_to_ms(duration: Option<Duration>, label: &str) -> Result<Optio
     duration
         .map(|value| duration_to_ms(value, label))
         .transpose()
-}
-fn default_progress_interval_ms() -> u64 {
-    u64::try_from(DEFAULT_PROGRESS_INTERVAL.as_millis())
-        .expect("default progress interval should fit into u64")
-}
-fn default_progress_timeout_ms() -> u64 {
-    u64::try_from(DEFAULT_PROGRESS_TIMEOUT.as_millis())
-        .expect("default progress timeout should fit into u64")
-}
-fn default_shutdown_drain_timeout_ms() -> u64 {
-    u64::try_from(DEFAULT_SHUTDOWN_DRAIN_TIMEOUT.as_millis())
-        .expect("default shutdown drain timeout should fit into u64")
-}
-fn default_submitters() -> u32 {
-    1
-}
-fn default_packet_loss_percent() -> u8 {
-    DEFAULT_NETWORK_PACKET_LOSS_PERCENT
-}
-fn default_sumeragi_block_max_transactions() -> u64 {
-    DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS
-}
-fn default_sumeragi_proposal_queue_scan_multiplier() -> u64 {
-    DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER
 }
 impl StoredArgs {
     fn from_args(args: &IzanamiArgs) -> Result<Self> {
@@ -228,7 +187,6 @@ impl StoredArgs {
             latency_p95_threshold_ms,
             fault_window_start_ms,
             fault_window_end_ms,
-            packet_loss_percent: args.packet_loss_percent,
         };
         stored.validate_persistence_limits()?;
         Ok(stored)
@@ -244,7 +202,12 @@ impl StoredArgs {
     }
     fn into_args(self) -> Result<IzanamiArgs> {
         let to_duration = |ms: u64| -> Result<Duration> { Ok(Duration::from_millis(ms)) };
-        let fault_toggles = FaultToggles::from_bits(self.fault_flags);
+        let fault_toggles = FaultToggles::try_from_bits(self.fault_flags).ok_or_else(|| {
+            eyre!(
+                "persisted fault bitset contains unsupported first-release bits: {:#010b}",
+                self.fault_flags
+            )
+        })?;
         Ok(IzanamiArgs {
             tui: false,
             allow_net: self.allow_net,
@@ -267,13 +230,12 @@ impl StoredArgs {
             prebuild_tx_workers: self.prebuild_tx_workers as usize,
             sumeragi_block_max_transactions: self.sumeragi_block_max_transactions,
             sumeragi_proposal_queue_scan_multiplier: self.sumeragi_proposal_queue_scan_multiplier,
-            workload_profile: workload_profile_from_u8(self.workload_profile),
+            workload_profile: workload_profile_from_u8(self.workload_profile)?,
             allow_contract_deploy_in_stable: self.allow_contract_deploy_in_stable,
             log_filter: self.log_filter,
             fault_interval_min: to_duration(self.fault_min_ms)?,
             fault_interval_max: to_duration(self.fault_max_ms)?,
             faults: FaultArgs::from(fault_toggles),
-            packet_loss_percent: self.packet_loss_percent.min(100),
             nexus: self.nexus,
             diagnostic_dir: None,
         })
@@ -386,8 +348,16 @@ fn read_config_file_bounded(path: &Path) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 fn decode_stored_args_bounded(bytes: &[u8]) -> Result<StoredArgs> {
+    let (&version, payload) = bytes
+        .split_first()
+        .ok_or_else(|| eyre!("persisted Izanami configuration is empty"))?;
+    if version != CONFIG_WIRE_VERSION_V1 {
+        return Err(eyre!(
+            "unsupported persisted Izanami configuration version {version}; expected {CONFIG_WIRE_VERSION_V1}"
+        ));
+    }
     let stored = norito::codec::decode_exact_from_slice_with_limits::<StoredArgs>(
-        bytes,
+        payload,
         STORED_ARGS_DECODE_LIMITS_V1,
     )
     .map_err(|error| eyre!("decode failed: {error}"))?;
@@ -432,18 +402,22 @@ impl io::Write for FixedCapacityWriter {
     }
 }
 fn encode_stored_args_bounded(stored: &StoredArgs) -> Result<Vec<u8>> {
-    let encoded_bytes = norito::codec::encode_adaptive_into(stored, &mut io::sink())
+    let payload_bytes = norito::codec::encode_adaptive_into(stored, &mut io::sink())
         .map_err(|error| eyre!("failed to count persisted Izanami configuration: {error}"))?;
+    let encoded_bytes = payload_bytes
+        .checked_add(1)
+        .ok_or_else(|| eyre!("persisted Izanami configuration length overflow"))?;
     if encoded_bytes > CONFIG_FILE_MAX_BYTES_V1 {
         return Err(eyre!(
             "persisted Izanami configuration is {encoded_bytes} bytes, exceeding the {CONFIG_FILE_MAX_BYTES_V1}-byte limit"
         ));
     }
     let mut writer = FixedCapacityWriter::new(encoded_bytes)?;
+    io::Write::write_all(&mut writer, &[CONFIG_WIRE_VERSION_V1])?;
     let written = norito::codec::encode_adaptive_into(stored, &mut writer)
         .map_err(|error| eyre!("failed to encode persisted Izanami configuration: {error}"))?;
     let bytes = writer.finish();
-    if written != encoded_bytes || bytes.len() != encoded_bytes {
+    if written != payload_bytes || bytes.len() != encoded_bytes {
         return Err(eyre!(
             "persisted Izanami configuration changed length between encoding passes"
         ));
@@ -550,20 +524,74 @@ mod portable_tests {
     fn bounded_decoder_rejects_oversized_persisted_filter() -> Result<()> {
         let mut stored = StoredArgs::from_args(&IzanamiArgs::defaults())?;
         stored.log_filter = "x".repeat(LOG_FILTER_MAX_BYTES_V1 + 1);
-        let encoded = stored.encode();
+        let encoded = encode_stored_args_bounded(&stored)?;
         let error = decode_stored_args_bounded(&encoded)
             .expect_err("decoder field budget must reject oversized filter");
         assert!(error.to_string().contains("decode failed"));
         Ok(())
     }
     #[test]
-    fn bounded_codec_preserves_legacy_bare_wire_bytes() -> Result<()> {
+    fn bounded_codec_uses_canonical_wire_bytes() -> Result<()> {
         let stored = StoredArgs::from_args(&IzanamiArgs::defaults())?;
-        let legacy = stored.encode();
+        let canonical = stored.encode();
         let bounded = encode_stored_args_bounded(&stored)?;
-        assert_eq!(bounded, legacy);
+        assert_eq!(bounded.first(), Some(&CONFIG_WIRE_VERSION_V1));
+        assert_eq!(&bounded[1..], canonical);
         let decoded = decode_stored_args_bounded(&bounded)?;
         assert_eq!(decoded.log_filter, stored.log_filter);
+        Ok(())
+    }
+    #[test]
+    fn bounded_decoder_rejects_incomplete_current_schema() -> Result<()> {
+        let stored = StoredArgs::from_args(&IzanamiArgs::defaults())?;
+        let mut encoded = encode_stored_args_bounded(&stored)?;
+        encoded
+            .pop()
+            .expect("current persisted schema is non-empty");
+        let error = decode_stored_args_bounded(&encoded)
+            .expect_err("truncated first-release configuration must fail closed");
+        assert!(error.to_string().contains("decode failed"));
+        Ok(())
+    }
+    #[test]
+    fn bounded_decoder_rejects_missing_or_unknown_version() -> Result<()> {
+        let stored = StoredArgs::from_args(&IzanamiArgs::defaults())?;
+        let bare = stored.encode();
+        decode_stored_args_bounded(&bare)
+            .expect_err("bare pre-release configuration must not be guessed");
+
+        let error = decode_stored_args_bounded(&[])
+            .expect_err("missing persisted version must fail closed");
+        assert!(error.to_string().contains("empty"));
+
+        let mut unknown = encode_stored_args_bounded(&stored)?;
+        unknown[0] = CONFIG_WIRE_VERSION_V1 + 1;
+        let error = decode_stored_args_bounded(&unknown)
+            .expect_err("unknown persisted version must fail closed");
+        assert!(error.to_string().contains("unsupported"));
+        Ok(())
+    }
+    #[test]
+    fn current_version_rejects_retired_fault_bits() -> Result<()> {
+        let mut stored = StoredArgs::from_args(&IzanamiArgs::defaults())?;
+        stored.fault_flags |= 1 << 7;
+        let encoded = encode_stored_args_bounded(&stored)?;
+        let error = decode_stored_args_bounded(&encoded)?
+            .into_args()
+            .expect_err("unknown fault bits must not be silently masked");
+        assert!(error.to_string().contains("unsupported first-release bits"));
+        Ok(())
+    }
+
+    #[test]
+    fn current_version_rejects_unknown_workload_profiles() -> Result<()> {
+        let mut stored = StoredArgs::from_args(&IzanamiArgs::defaults())?;
+        stored.workload_profile = 2;
+        let encoded = encode_stored_args_bounded(&stored)?;
+        let error = decode_stored_args_bounded(&encoded)?
+            .into_args()
+            .expect_err("unknown workload profiles must not default to stable");
+        assert!(error.to_string().contains("workload profile"));
         Ok(())
     }
 }
@@ -681,23 +709,6 @@ mod tests {
         fs::remove_dir_all(root)?;
         Ok(())
     }
-    #[derive(Clone, Encode, Decode)]
-    struct StoredArgsLegacy {
-        peers: u32,
-        faulty: u32,
-        duration_ms: u64,
-        seed: Option<u64>,
-        tps: f64,
-        max_inflight: u32,
-        #[norito(default)]
-        workload_profile: u8,
-        log_filter: String,
-        fault_min_ms: u64,
-        fault_max_ms: u64,
-        fault_flags: u8,
-        nexus: bool,
-        allow_net: bool,
-    }
     #[test]
     fn store_args_skips_permission_denied() -> Result<()> {
         let _env_lock = env_lock().lock().expect("env lock");
@@ -767,11 +778,9 @@ mod tests {
                 spam_invalid_transactions: true,
                 network_latency: false,
                 network_partition: true,
-                network_packet_loss: true,
                 cpu_stress: false,
                 disk_saturation: true,
             },
-            packet_loss_percent: 50,
             nexus: true,
             diagnostic_dir: None,
         };
@@ -815,78 +824,7 @@ mod tests {
             loaded.faults.to_toggles().bits(),
             args.faults.to_toggles().bits()
         );
-        assert_eq!(loaded.packet_loss_percent, args.packet_loss_percent);
         assert_eq!(loaded.nexus, args.nexus);
-        let _ = fs::remove_dir_all(&dir);
-        Ok(())
-    }
-    #[test]
-    fn load_args_defaults_missing_progress_fields() -> Result<()> {
-        let _env_lock = env_lock().lock().expect("env lock");
-        let dir = temp_config_dir("legacy")?;
-        let _guard = EnvGuard::set("XDG_CONFIG_HOME", dir.to_string_lossy().as_ref());
-        let legacy = StoredArgsLegacy {
-            peers: 4,
-            faulty: 1,
-            duration_ms: 30_000,
-            seed: Some(9),
-            tps: 8.5,
-            max_inflight: 12,
-            workload_profile: workload_profile_to_u8(WorkloadProfile::Stable),
-            log_filter: "info".to_string(),
-            fault_min_ms: 1_000,
-            fault_max_ms: 5_000,
-            fault_flags: FaultToggles::from_enabled_flags([
-                true, true, true, true, false, false, true, false,
-            ])
-            .bits(),
-            nexus: false,
-            allow_net: true,
-        };
-        let Some(path) = config_path() else {
-            return Ok(());
-        };
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::write(&path, legacy.encode())?;
-        let loaded = load_args()?.expect("legacy args should load");
-        assert_eq!(loaded.peers, legacy.peers as usize);
-        assert_eq!(loaded.faulty, legacy.faulty as usize);
-        assert_eq!(loaded.duration, Duration::from_millis(legacy.duration_ms));
-        assert_eq!(loaded.seed, legacy.seed);
-        assert_eq!(loaded.tps, legacy.tps);
-        assert_eq!(loaded.max_inflight, legacy.max_inflight as usize);
-        assert_eq!(loaded.submitters, 1);
-        assert_eq!(loaded.prebuild_tx_buffer, 0);
-        assert_eq!(loaded.prebuild_tx_workers, 0);
-        assert_eq!(
-            loaded.sumeragi_block_max_transactions,
-            DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS
-        );
-        assert_eq!(
-            loaded.sumeragi_proposal_queue_scan_multiplier,
-            DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER
-        );
-        assert_eq!(loaded.workload_profile, WorkloadProfile::Stable);
-        assert!(!loaded.allow_contract_deploy_in_stable);
-        assert_eq!(loaded.log_filter, legacy.log_filter);
-        assert_eq!(loaded.faults.to_toggles().bits(), legacy.fault_flags);
-        assert_eq!(loaded.nexus, legacy.nexus);
-        assert_eq!(loaded.allow_net, legacy.allow_net);
-        assert_eq!(loaded.pipeline_time, None);
-        assert_eq!(loaded.target_blocks, None);
-        assert_eq!(loaded.progress_interval, DEFAULT_PROGRESS_INTERVAL);
-        assert_eq!(loaded.progress_timeout, DEFAULT_PROGRESS_TIMEOUT);
-        assert_eq!(
-            loaded.shutdown_drain_timeout,
-            DEFAULT_SHUTDOWN_DRAIN_TIMEOUT
-        );
-        assert_eq!(loaded.latency_p95_threshold, None);
-        assert_eq!(
-            loaded.packet_loss_percent,
-            DEFAULT_NETWORK_PACKET_LOSS_PERCENT
-        );
         let _ = fs::remove_dir_all(&dir);
         Ok(())
     }

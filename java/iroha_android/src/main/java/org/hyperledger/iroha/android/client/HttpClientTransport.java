@@ -2214,6 +2214,16 @@ public final class HttpClientTransport implements IrohaClient {
     return buildCanonicalJsonRequest(method, path, body, canonicalAuth, null);
   }
 
+  private TransportRequest buildVpnRequest(
+      final String method,
+      final String path,
+      final byte[] body,
+      final ToriiCanonicalRequestAuth canonicalAuth,
+      final long maximumResponseBytes) {
+    return buildCanonicalJsonRequest(
+        method, path, body, canonicalAuth, Long.valueOf(maximumResponseBytes));
+  }
+
   private TransportRequest buildExactCanonicalJsonPostRequest(
       final String path,
       final byte[] body,

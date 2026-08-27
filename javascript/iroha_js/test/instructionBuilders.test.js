@@ -3812,6 +3812,7 @@ test("buildSubmitBallotInstruction encodes ciphertext and proof", () => {
       backend: "halo2/ipa",
       proof: Buffer.from("proof"),
       verifyingKeyRef: { backend: "halo2/ipa", name: "vk_ballot" },
+      verifyingKeyCommitment: Buffer.alloc(32, 0x44),
     },
     nullifier: Buffer.alloc(32, 0x33),
   });
@@ -3895,6 +3896,7 @@ test("buildFinalizeElectionInstruction serializes tally entries", () => {
       backend: "halo2/ipa",
       proof: Buffer.from("proof"),
       verifyingKeyRef: { backend: "halo2/ipa", name: "vk_tally" },
+      verifyingKeyCommitment: Buffer.alloc(32, 0x55),
     },
   });
   const payload = encodeAndDecode(instruction).zk.FinalizeElection;

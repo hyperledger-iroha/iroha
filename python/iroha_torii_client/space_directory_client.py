@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hmac
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Dict, Mapping, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, Mapping, Optional, cast
 
 if TYPE_CHECKING:
     from .client import AppApiTransactionDraft, ToriiCanonicalRequestAuth
@@ -33,16 +33,31 @@ def create_space_directory_client_mixin(
     globals()["AppApiTransactionDraft"] = transaction_draft_type
     _local_signing_context_type = local_signing_context_type
     _normalize_network_id = normalize_network_id
-    _transaction_draft_type = transaction_draft_type
+    transaction_draft_from_payload = getattr(transaction_draft_type, "from_payload", None)
+    if not callable(transaction_draft_from_payload):
+        raise TypeError("transaction_draft_type must expose callable from_payload")
+    _transaction_draft_from_payload = cast(Callable[..., Any], transaction_draft_from_payload)
 
     class SpaceDirectoryClientMixin:
+        _account_request_json: Callable[..., Any]
+        _clone_json_payload: Callable[..., Any]
+        _coerce_unsigned: Callable[..., int]
+        _ensure_mapping: Callable[..., Mapping[str, Any]]
+        _local_signing_context: Optional[ToriiLocalSigningContext]
+        _normalize_uaid_literal: Callable[..., str]
+        _require_canonical_auth: Callable[..., Any]
+        _require_exact_i105_account_id: Callable[..., str]
+        _require_string: Callable[..., str]
+
         def _require_space_directory_signing_context(
             self,
             canonical_auth: ToriiCanonicalRequestAuth,
             context: str,
         ) -> None:
             signing_context = self._local_signing_context
-            if not isinstance(signing_context, _local_signing_context_type):
+            if signing_context is None or not isinstance(
+                signing_context, _local_signing_context_type
+            ):
                 raise ValueError(f"{context} requires an immutable local_signing_context")
             local_network = _normalize_network_id(
                 signing_context.network_id,
@@ -107,7 +122,7 @@ def create_space_directory_client_mixin(
             )
             if ack is None:
                 raise RuntimeError("space directory manifest publish endpoint returned no payload")
-            return _transaction_draft_type.from_payload(
+            return _transaction_draft_from_payload(
                 self._ensure_mapping(ack, "space directory manifest publish response"),
                 context="space directory manifest publish response",
             )
@@ -171,7 +186,7 @@ def create_space_directory_client_mixin(
             )
             if ack is None:
                 raise RuntimeError("space directory manifest revoke endpoint returned no payload")
-            return _transaction_draft_type.from_payload(
+            return _transaction_draft_from_payload(
                 self._ensure_mapping(ack, "space directory manifest revoke response"),
                 context="space directory manifest revoke response",
             )

@@ -94,8 +94,14 @@ const TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES: i64 = 1024 * 1024 * 1024;
 const SUBMISSION_TIMEOUT: Duration = Duration::from_secs(120);
 const PEER_CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(90);
 const RESTART_TIMEOUT: Duration = Duration::from_secs(90);
-const ACTIVATION_ADVANCE_TIMEOUT: Duration = Duration::from_secs(180);
-const TEST_BLOCK_CADENCE: Duration = Duration::from_millis(100);
+// The signed cadence below advances roughly 300 sequential activation blocks;
+// leave deterministic headroom for healthy one-second production and view churn.
+const ACTIVATION_ADVANCE_TIMEOUT: Duration = Duration::from_secs(900);
+// This release-evidence fixture exercises instrumented four-validator body
+// reconstruction, validation, replay, and restart rather than throughput. Use
+// the released one-second signed cadence so the deterministic Sumeragi view
+// backoff can cover that work without changing the production timer policy.
+const TEST_BLOCK_CADENCE: Duration = Duration::from_secs(1);
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
 const ACTION_TTL: Duration = Duration::from_secs(7_200);
 struct DeterministicCryptoRng {

@@ -506,11 +506,13 @@ fn fast_init_does_not_create_a_missing_store_root() {
 fn fast_init_skips_disabled_writer_capacity_validation() {
     let temp_dir = TempDir::new().unwrap();
     let strict_config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let lane_config = RuntimeLaneConfig::default();
     let (strict_kura, _) = open_configured_kura_with_pending_limits(
         &strict_config,
         &SumeragiV2RuntimeLimits::default(),
     )
     .expect("Strict initializes the store");
+    establish_configured_lane_markers_for_test(&strict_kura, &lane_config);
     drop(strict_kura);
 
     let mut fast_config = strict_config;
@@ -538,15 +540,25 @@ fn fast_init_skips_disabled_writer_capacity_validation() {
 #[test]
 fn fast_init_defers_body_validation_without_rewriting_hashes() {
     let temp_dir = TempDir::new().unwrap();
-    populate_store(&temp_dir, 3);
+    populate_strict_kura_store(&temp_dir, 3);
     let merge_path = RuntimeLaneConfig::default()
         .primary()
         .merge_log_path(temp_dir.path());
-    let invalid_merge_tail = [0xFF, 0xFF, 0xFF];
-    std::fs::write(&merge_path, invalid_merge_tail).expect("forge partial merge-log tail");
+    std::fs::remove_file(&merge_path).expect("remove deferred merge log");
     let geometry_path = temp_dir.path().join("lane_geometry_journal.norito");
     let invalid_geometry = [0xA5; 1024];
     std::fs::write(&geometry_path, invalid_geometry).expect("forge opaque geometry journal");
+    let deferred_geometry_artifacts = [
+        temp_dir.path().join("lane_geometry_journal.norito.tmp"),
+        temp_dir
+            .path()
+            .join("lane_geometry_journal.norito.restore.tmp"),
+        primary_blocks_dir(&temp_dir).join(".lane-incarnation.norito.tmp"),
+    ];
+    for path in &deferred_geometry_artifacts {
+        std::fs::write(path, b"Strict recovery required")
+            .expect("forge deferred geometry artifact");
+    }
     let hash_path = primary_blocks_dir(&temp_dir).join(HASHES_FILE_NAME);
     let forged =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAA; Hash::LENGTH]));
@@ -591,16 +603,22 @@ fn fast_init_defers_body_validation_without_rewriting_hashes() {
             subsystem: "merge ledger"
         })
     ));
-    assert_eq!(
-        std::fs::read(&merge_path).expect("reread deferred merge log"),
-        invalid_merge_tail,
-        "Fast startup must not decode or repair the merge log"
+    assert!(
+        !merge_path.exists(),
+        "Fast startup must neither require nor recreate the deferred merge log"
     );
     assert_eq!(
         std::fs::read(&geometry_path).expect("reread deferred geometry journal"),
         invalid_geometry,
         "Fast startup must not decode or repair lane geometry"
     );
+    for path in deferred_geometry_artifacts {
+        assert_eq!(
+            std::fs::read(path).expect("reread deferred geometry artifact"),
+            b"Strict recovery required",
+            "Fast startup must ignore auxiliary geometry recovery artifacts",
+        );
+    }
     assert!(matches!(
         kura.latest_autonomous_lane_block_artifacts_snapshot(
             test_network_id(b"fast-startup"),
@@ -647,7 +665,7 @@ fn fast_init_defers_body_validation_without_rewriting_hashes() {
 #[test]
 fn fast_init_rejects_an_unmarked_tip_hash_without_mutation() {
     let temp_dir = TempDir::new().unwrap();
-    populate_store(&temp_dir, 1);
+    populate_strict_kura_store(&temp_dir, 1);
     let blocks_dir = primary_blocks_dir(&temp_dir);
     let hash_path = blocks_dir.join(HASHES_FILE_NAME);
     let mut hash_bytes = std::fs::read(&hash_path).expect("read committed hash journal");
@@ -700,7 +718,7 @@ fn hash_journal_reader_rejects_an_unmarked_entry() {
 #[test]
 fn fast_init_keeps_history_sparse_and_rejects_canonical_mutation() {
     let temp_dir = TempDir::new().unwrap();
-    populate_store(&temp_dir, 3);
+    populate_strict_kura_store(&temp_dir, 3);
     let mut config = kura_config_for_dir(&temp_dir, nonzero!(1_usize));
     config.init_mode = InitMode::Fast;
     let (kura, BlockCount(count)) =
@@ -741,11 +759,70 @@ fn fast_init_keeps_history_sparse_and_rejects_canonical_mutation() {
             subsystem: "canonical mutation"
         })
     ));
+    let benchmark_block = DummyBlocks::new().next();
+    assert!(matches!(
+        kura.persist_block_immediate_for_bench(&benchmark_block),
+        Err(Error::EmergencyFastAuxiliaryUnavailable {
+            subsystem: "canonical mutation"
+        })
+    ));
+    kura.append_pending_block_for_bench(benchmark_block);
+    assert_eq!(kura.blocks_count(), 3);
+    assert!(matches!(
+        kura.checkpoint_lane_geometry_after_durable_snapshot_with_lineage_root(
+            &RuntimeLaneConfig::default(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            Hash::new(b"Fast must not checkpoint lane geometry"),
+            3,
+            Some(tip.hash()),
+            Hash::new(b"Fast must not publish snapshot geometry"),
+            &BTreeMap::new(),
+        ),
+        Err(Error::EmergencyFastAuxiliaryUnavailable {
+            subsystem: "canonical mutation"
+        })
+    ));
+    assert!(matches!(
+        Kura::start(Arc::clone(&kura), ShutdownSignal::new()),
+        Err(Error::EmergencyFastAuxiliaryUnavailable {
+            subsystem: "canonical mutation"
+        })
+    ));
+    assert!(
+        kura.block_notify_rx.lock().is_some(),
+        "Fast rejection must not consume or start the writer"
+    );
+
+    let pipeline_sidecar = PipelineRecoverySidecar::new(
+        3,
+        tip.hash(),
+        PipelineDagSnapshot {
+            fingerprint: [0; 32],
+            key_count: 0,
+        },
+        Vec::new(),
+    );
+    kura.write_pipeline_metadata(&pipeline_sidecar);
+    let pipeline_dir = primary_blocks_dir(&temp_dir).join(PIPELINE_DIR_NAME);
+    assert!(!pipeline_dir.join(PIPELINE_SIDECARS_DATA_FILE).exists());
+    assert!(!pipeline_dir.join(PIPELINE_SIDECARS_INDEX_FILE).exists());
+    assert_eq!(
+        kura.enqueue_pipeline_metadata(pipeline_sidecar),
+        PipelineSidecarEnqueueResult::RejectedEmergencyFast
+    );
+    assert_eq!(
+        kura.enqueue_fastpq_proof_snapshot(sample_fastpq_snapshot(3, tip.hash(), 8)),
+        FastpqProofEnqueueResult::RejectedEmergencyFast
+    );
+    assert!(kura.pipeline_sidecar_queue.lock().is_empty());
+    assert!(kura.fastpq_proof_queue.lock().is_empty());
+    assert_eq!(kura.flush_pipeline_sidecars(), 0);
 }
 #[test]
 fn fast_init_rejects_truncated_committed_body_without_mutation() {
     let temp_dir = TempDir::new().unwrap();
-    populate_store(&temp_dir, 3);
+    populate_strict_kura_store(&temp_dir, 3);
     let blocks_dir = primary_blocks_dir(&temp_dir);
     let data_path = blocks_dir.join(DATA_FILE_NAME);
     let file = std::fs::OpenOptions::new()
@@ -786,7 +863,7 @@ fn fast_init_rejects_truncated_committed_body_without_mutation() {
 #[test]
 fn fast_init_leaves_unpublished_journal_suffix_for_strict_recovery() {
     let temp_dir = TempDir::new().unwrap();
-    populate_store(&temp_dir, 3);
+    populate_strict_kura_store(&temp_dir, 3);
     let blocks_dir = primary_blocks_dir(&temp_dir);
     let index_path = blocks_dir.join(INDEX_FILE_NAME);
     let hashes_path = blocks_dir.join(HASHES_FILE_NAME);
@@ -838,47 +915,70 @@ fn fast_init_leaves_unpublished_journal_suffix_for_strict_recovery() {
     );
 }
 #[test]
-fn fast_init_rejects_canonical_association_recovery_without_mutation() {
+fn fast_init_ignores_auxiliary_storage_recovery_without_mutation() {
     let temp_dir = TempDir::new().unwrap();
-    populate_store(&temp_dir, 3);
-    let stage_path = primary_blocks_dir(&temp_dir).join(CANONICAL_ASSOCIATION_STAGE_FILE_NAME);
+    populate_strict_kura_store(&temp_dir, 3);
+    let blocks_dir = primary_blocks_dir(&temp_dir);
     let staged_bytes = b"Strict recovery required";
-    std::fs::write(&stage_path, staged_bytes).expect("forge pending association stage");
+    let stage_paths = [
+        blocks_dir
+            .join(COUNT_FILE_NAME)
+            .with_extension("norito.tmp"),
+        blocks_dir.join(DA_BLOCK_REWRITE_STAGE_FILE_NAME),
+        blocks_dir.join(EVICTION_COMPACTION_STAGE_FILE_NAME),
+        blocks_dir.join(CANONICAL_ASSOCIATION_STAGE_FILE_NAME),
+    ];
+    for path in &stage_paths {
+        std::fs::write(path, staged_bytes).expect("forge pending storage stage");
+    }
+    let retained_stage = blocks_dir.join(RETAINED_BLOCK_REWRITE_STAGING_DIR_NAME);
+    std::fs::create_dir(&retained_stage).expect("create retained rewrite stage");
+    std::fs::write(retained_stage.join("opaque"), staged_bytes)
+        .expect("forge retained rewrite stage payload");
+    let before = snapshot_regular_test_tree(&blocks_dir);
 
     let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     config.init_mode = InitMode::Fast;
-    Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
-        .expect_err("Fast must not decode or recover a canonical association stage");
+    let (kura, BlockCount(count)) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("Fast must ignore a canonical association stage");
+    assert_eq!(count, 3);
+    drop(kura);
 
     assert_eq!(
-        std::fs::read(&stage_path).expect("pending stage remains"),
-        staged_bytes,
-        "Fast rejection must leave the recovery artifact untouched"
+        snapshot_regular_test_tree(&blocks_dir),
+        before,
+        "Fast startup must leave every auxiliary recovery artifact untouched"
     );
 }
 #[test]
-fn fast_init_rejects_prune_recovery_without_root_inventory() {
+fn fast_init_ignores_prune_recovery_without_root_inventory() {
     let temp_dir = TempDir::new().unwrap();
-    populate_store(&temp_dir, 3);
-    let intent_path = temp_dir.path().join(PRUNE_INTENT_FILE_NAME);
+    populate_strict_kura_store(&temp_dir, 3);
     let intent_bytes = b"Strict recovery required";
-    std::fs::write(&intent_path, intent_bytes).expect("forge pending prune intent");
+    let intent_paths = [
+        temp_dir.path().join(PRUNE_INTENT_FILE_NAME),
+        temp_dir.path().join(PRUNE_INTENT_TEMP_FILE_NAME),
+    ];
+    for path in &intent_paths {
+        std::fs::write(path, intent_bytes).expect("forge pending prune intent");
+    }
+    let before = snapshot_regular_test_tree(temp_dir.path());
 
     let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     config.init_mode = InitMode::Fast;
-    Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
-        .expect_err("Fast must not inventory or recover prune artifacts");
+    let (kura, BlockCount(count)) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("Fast must ignore prune artifacts");
+    assert_eq!(count, 3);
+    drop(kura);
 
-    assert_eq!(
-        std::fs::read(&intent_path).expect("pending intent remains"),
-        intent_bytes,
-        "Fast rejection must leave the recovery artifact untouched"
-    );
+    assert_eq!(snapshot_regular_test_tree(temp_dir.path()), before);
 }
 #[test]
 fn fast_init_poisoned_oversized_interior_index_before_body_read() {
     let temp_dir = TempDir::new().unwrap();
-    populate_store(&temp_dir, 3);
+    populate_strict_kura_store(&temp_dir, 3);
     let index_path = primary_blocks_dir(&temp_dir).join(INDEX_FILE_NAME);
     let oversized = BlockIndex {
         start: 0,

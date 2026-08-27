@@ -139,9 +139,7 @@
               "min_nomination_bond": "1",
               "min_self_bond": "1000",
               "seat_band_pct": 5,
-              "slashing_delay_blocks": 259200,
-              "vrf_commit_window_blocks": 100,
-              "vrf_reveal_window_blocks": 40
+              "slashing_delay_blocks": 259200
             }
           }
         },

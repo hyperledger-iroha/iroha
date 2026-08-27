@@ -132,8 +132,7 @@ impl ValidatorSetCheckpoint {
 /// Deterministic `NPoS` state effects embedded in a signed block.
 ///
 /// These effects are applied as part of the committed block transition so every
-/// peer replays the same threshold-beacon pulse, legacy VRF audit records, and
-/// penalty state.
+/// peer replays the same threshold-beacon pulse, evidence, and penalty state.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct NposConsensusEffects {
@@ -145,13 +144,6 @@ pub struct NposConsensusEffects {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub finalized_global_beacon_pulse: Option<FinalizedGlobalThresholdBeaconPulseV1>,
-    /// Retired commit/reveal records retained only for historical test fixtures.
-    ///
-    /// Production candidate validation and application reject a non-empty
-    /// value; this field is not an entropy source or a live mutation corridor.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Vec::is_empty")]
-    pub vrf_epoch_seals: Vec<VrfEpochRecord>,
     /// Fully validated Sumeragi v2 equivocation evidence admitted by this
     /// signed block in canonical evidence-key order.
     #[norito(default)]
@@ -167,7 +159,6 @@ impl NposConsensusEffects {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.finalized_global_beacon_pulse.is_none()
-            && self.vrf_epoch_seals.is_empty()
             && self.v2_evidence_admissions.is_empty()
             && self.penalty_actions.is_empty()
     }
@@ -181,23 +172,6 @@ impl PartialOrd for NposConsensusEffects {
     fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
         Some(self.cmp(other))
     }
-}
-/// A deterministic VRF jail action.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-pub struct NposVrfJailAction {
-    /// Epoch that produced the penalty.
-    pub epoch: u64,
-    /// Signer index in the epoch roster.
-    pub signer: u32,
-    /// Peer identity resolved from the epoch/commit roster.
-    pub peer_id: crate::peer::PeerId,
-    /// Public lane containing the validator registration.
-    pub lane_id: crate::nexus::LaneId,
-    /// Validator account to update.
-    pub validator: crate::account::AccountId,
-    /// Stable jail reason.
-    pub reason: String,
 }
 /// A deterministic consensus-evidence slash action.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
@@ -218,15 +192,6 @@ pub struct NposConsensusSlashAction {
     /// Amount to slash.
     pub amount: Quantity,
 }
-/// Marker that a VRF epoch's penalties were applied.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-pub struct NposMarkVrfPenaltiesAppliedAction {
-    /// Epoch to mark.
-    pub epoch: u64,
-    /// Block height that applied the marker.
-    pub height: u64,
-}
 /// Marker that a consensus evidence record's penalty was applied.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -241,12 +206,8 @@ pub struct NposMarkConsensusEvidenceAppliedAction {
 #[norito(tag = "kind", content = "value", rename_all = "snake_case")]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub enum NposPenaltyAction {
-    /// Jail a validator for missing VRF participation requirements.
-    VrfJail(NposVrfJailAction),
     /// Slash a validator from consensus evidence.
     ConsensusSlash(NposConsensusSlashAction),
-    /// Mark a VRF epoch's penalties as applied.
-    MarkVrfPenaltiesApplied(NposMarkVrfPenaltiesAppliedAction),
     /// Mark a consensus evidence record's penalty as applied.
     MarkConsensusEvidenceApplied(NposMarkConsensusEvidenceAppliedAction),
 }
@@ -779,136 +740,6 @@ pub struct FinalizedGlobalThresholdBeaconPulseV1 {
     pub pulse_id: [u8; 32],
 }
 
-/// Canonical authenticated VRF commitment retained in an epoch record.
-///
-/// The signature is over the versioned Sumeragi `VrfCommit` preimage. Keeping the complete signed
-/// fields makes a persisted observation independently verifiable against the frozen chain id and
-/// validator roster. The observation height is unsigned admission metadata: validators must compare
-/// it with committed pre-state and the block which first introduces the proof.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-pub struct VrfCommitProof {
-    /// Epoch index authenticated by the signature.
-    pub epoch: u64,
-    /// Hiding commitment authenticated by the signature.
-    pub commitment: [u8; 32],
-    /// Validator index in the frozen epoch roster.
-    pub signer: u32,
-    /// Exact canonical signature bytes received on the wire.
-    pub signature: Vec<u8>,
-    /// Unsigned height at which this exact signed message was first admitted.
-    pub observed_at_height: u64,
-}
-/// Canonical authenticated VRF reveal retained in an epoch record.
-///
-/// The signature is over the versioned Sumeragi `VrfReveal` preimage, including the canonical VRF
-/// proof. The complete signed fields are deliberately retained instead of reconstructing evidence
-/// from unauthenticated participant summaries.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-pub struct VrfRevealProof {
-    /// Epoch index authenticated by the signature.
-    pub epoch: u64,
-    /// Revealed preimage authenticated by the signature.
-    pub reveal: [u8; 32],
-    /// Validator index in the frozen epoch roster.
-    pub signer: u32,
-    /// Canonical Norito-encoded VRF proof whose verified output equals `reveal`.
-    pub vrf_proof: Vec<u8>,
-    /// Exact canonical signature bytes received on the wire.
-    pub signature: Vec<u8>,
-    /// Unsigned height at which this exact signed message was first admitted.
-    pub observed_at_height: u64,
-}
-/// Participation record for a validator within a VRF epoch.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-pub struct VrfParticipantRecord {
-    /// Validator index in the topology snapshot for the epoch.
-    pub signer: u32,
-    /// Optional commitment emitted during the commit window.
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub commitment: Option<[u8; 32]>,
-    /// Optional reveal emitted during the reveal window.
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub reveal: Option<[u8; 32]>,
-    /// Authenticated commit message matching `signer` and `commitment`.
-    ///
-    /// Older non-v2 records may omit this field; authoritative v2 validation
-    /// requires it whenever `commitment` is present.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub commit_proof: Option<VrfCommitProof>,
-    /// Authenticated reveal message matching `signer` and `reveal`.
-    ///
-    /// Older non-v2 records may omit this field; authoritative v2 validation
-    /// requires it whenever `reveal` is present.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub reveal_proof: Option<VrfRevealProof>,
-    /// Last block height at which this participant record was updated.
-    pub last_updated_height: u64,
-}
-/// Late reveal emitted after the epoch reveal window.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-pub struct VrfLateRevealRecord {
-    /// Validator index in the topology snapshot for the epoch.
-    pub signer: u32,
-    /// Reveal accepted after the window closed.
-    pub reveal: [u8; 32],
-    /// Exact authenticated reveal matching `signer` and `reveal`.
-    ///
-    /// Older non-v2 records may omit this field; authoritative v2 validation
-    /// requires it for every late reveal.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub reveal_proof: Option<VrfRevealProof>,
-    /// Block height at which the late reveal was recorded.
-    pub noted_at_height: u64,
-}
-/// Snapshot of VRF randomness state for a particular epoch.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-pub struct VrfEpochRecord {
-    /// Epoch index.
-    pub epoch: u64,
-    /// Deterministic seed driving PRF-based collector/leader selection for this epoch.
-    /// The seed is fixed at epoch start; reveals are mixed to derive the next epoch seed.
-    pub seed: [u8; 32],
-    /// Length of an epoch in blocks (configuration snapshot).
-    pub epoch_length: u64,
-    /// Commit window deadline offset (blocks from epoch start, inclusive).
-    pub commit_deadline_offset: u64,
-    /// Reveal window deadline offset (blocks from epoch start, inclusive).
-    pub reveal_deadline_offset: u64,
-    /// Total validators in the roster snapshot for the epoch.
-    pub roster_len: u32,
-    /// Whether the epoch has completed (all penalties computed and seed finalized for the next epoch).
-    pub finalized: bool,
-    /// Block height at which this record was last updated.
-    pub updated_at_height: u64,
-    /// Participation entries for validators observed so far.
-    pub participants: Vec<VrfParticipantRecord>,
-    /// Late reveals accepted after the reveal window (do not affect entropy).
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Vec::is_empty")]
-    pub late_reveals: Vec<VrfLateRevealRecord>,
-    /// Validators that committed without revealing within the epoch (finalized epochs only).
-    pub committed_no_reveal: Vec<u32>,
-    /// Validators that neither committed nor revealed within the epoch (finalized epochs only).
-    pub no_participation: Vec<u32>,
-    /// Whether penalties associated with this epoch have already been applied.
-    #[norito(default)]
-    pub penalties_applied: bool,
-    /// Block height at which penalties were applied, if any.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub penalties_applied_at_height: Option<u64>,
-    /// Election outcome for the next epoch (when available).
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub validator_election: Option<ValidatorElectionOutcome>,
-}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1083,78 +914,6 @@ mod tests {
             NposConsensusSlashAction::decode(&mut encoded.as_slice()).is_err(),
             "a negative signed payload must not decode as a consensus slash amount"
         );
-    }
-    #[test]
-    fn vrf_epoch_record_roundtrip() {
-        let participant = VrfParticipantRecord {
-            signer: 5,
-            commitment: Some([0xAA; 32]),
-            reveal: Some([0xBB; 32]),
-            commit_proof: None,
-            reveal_proof: None,
-            last_updated_height: 42,
-        };
-        let late = VrfLateRevealRecord {
-            signer: 6,
-            reveal: [0xCC; 32],
-            reveal_proof: None,
-            noted_at_height: 360,
-        };
-        let record = VrfEpochRecord {
-            epoch: 3,
-            seed: [0x11; 32],
-            epoch_length: 120,
-            commit_deadline_offset: 40,
-            reveal_deadline_offset: 80,
-            roster_len: 7,
-            finalized: true,
-            updated_at_height: 360,
-            participants: vec![participant],
-            late_reveals: vec![late],
-            committed_no_reveal: vec![2, 4],
-            no_participation: vec![6],
-            penalties_applied: false,
-            penalties_applied_at_height: None,
-            validator_election: None,
-        };
-        let buf = record.encode();
-        let decoded = VrfEpochRecord::decode(&mut &buf[..]).expect("decode vrf epoch");
-        assert_eq!(decoded.epoch, record.epoch);
-        assert_eq!(decoded.seed, record.seed);
-        assert_eq!(decoded.participants.len(), 1);
-        assert_eq!(decoded.late_reveals.len(), 1);
-        assert!(decoded.finalized);
-        assert_eq!(decoded.committed_no_reveal, vec![2, 4]);
-        assert_eq!(decoded.no_participation, vec![6]);
-    }
-    #[test]
-    fn vrf_epoch_record_accepts_missing_late_reveals() {
-        let record = VrfEpochRecord {
-            epoch: 7,
-            seed: [0x22; 32],
-            epoch_length: 120,
-            commit_deadline_offset: 40,
-            reveal_deadline_offset: 80,
-            roster_len: 4,
-            finalized: false,
-            updated_at_height: 120,
-            participants: Vec::new(),
-            late_reveals: Vec::new(),
-            committed_no_reveal: Vec::new(),
-            no_participation: Vec::new(),
-            penalties_applied: false,
-            penalties_applied_at_height: None,
-            validator_election: None,
-        };
-        let mut value = norito::json::to_value(&record).expect("serialize vrf epoch record");
-        if let norito::json::Value::Object(map) = &mut value {
-            map.remove("late_reveals");
-        }
-        let decoded: VrfEpochRecord =
-            norito::json::from_value(value).expect("decode without late_reveals");
-        assert!(decoded.late_reveals.is_empty());
-        assert_eq!(decoded.epoch, record.epoch);
-        assert_eq!(decoded.seed, record.seed);
     }
     #[test]
     fn validator_set_checkpoint_roundtrip_and_hash() {

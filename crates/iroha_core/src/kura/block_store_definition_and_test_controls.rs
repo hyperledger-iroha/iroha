@@ -50,6 +50,7 @@ impl Kura {
     /// Returns an error if the block cannot be appended or the tracked block-store byte usage
     /// cannot be measured.
     pub fn persist_block_immediate_for_bench(&self, block: &Arc<SignedBlock>) -> Result<()> {
+        self.durable_mutation_authorized()?;
         let _write_guard = self.block_store_write_lock.lock();
         self.ensure_no_retired_rollback_intents()?;
         let mut store = self.block_store.lock();
@@ -65,6 +66,9 @@ impl Kura {
     }
     /// Append an in-memory pending block for storage-budget benchmark scenarios.
     pub fn append_pending_block_for_bench(&self, block: Arc<SignedBlock>) {
+        if self.durable_mutation_authorized().is_err() {
+            return;
+        }
         let hash = block.hash();
         self.block_data.lock().push((hash, Some(block)));
         self.invalidate_pending_budget_cache();
@@ -638,8 +642,11 @@ impl Kura {
 /// Loaded block count
 #[derive(Clone, Copy, Debug)]
 pub struct BlockCount(pub usize);
-/// An implementation of a block store for `Kura`
-/// that uses `std::fs`, the default IO file in Rust.
+/// Low-level filesystem block store used internally by [`Kura`].
+///
+/// Its public mutation surface is intentionally limited to initializing and appending an offline
+/// store for tooling such as Kagami. A running node must mutate canonical storage through [`Kura`]
+/// so authentication, poisoning, recovery, and lock-order checks remain enforced.
 pub struct BlockStore {
     path_to_blockchain: PathBuf,
     da_blocks_dir: PathBuf,

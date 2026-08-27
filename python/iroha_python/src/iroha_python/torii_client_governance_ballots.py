@@ -40,7 +40,7 @@ def create_torii_client_governance_ballot_mixin(
     normalize_plain_ballot: Callable[..., Dict[str, Any]],
     normalize_zk_ballot_v1: Callable[..., Dict[str, Any]],
     normalize_zk_ballot_proof_v1: Callable[..., Dict[str, Any]],
-) -> type:
+) -> Any:
     """Bind client-local validation hooks to exact-network ballot methods."""
 
     globals()["NetworkId"] = network_id_type
@@ -53,6 +53,11 @@ def create_torii_client_governance_ballot_mixin(
     _normalize_zk_ballot_proof_v1 = normalize_zk_ballot_proof_v1
 
     class ToriiClientGovernanceBallotMixin:
+        _require_local_signing_context: Callable[..., Any]
+        _normalize_canonical_account_id: Callable[..., str]
+        _chain_discriminant: int
+        _post_network_governance_ballot_json: Callable[..., Any]
+
         def _governance_ballot_identity(
             self,
             payload: Mapping[str, Any],

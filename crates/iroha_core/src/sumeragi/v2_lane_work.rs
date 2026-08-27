@@ -24691,34 +24691,6 @@ pub(super) mod tests {
             commit_qc: certificate.commit_qc.clone(),
         }
     }
-    fn install_finalized_vrf_epoch(
-        adapter: &V2LaneWorkAdapter,
-        epoch: u64,
-        updated_at_height: u64,
-    ) {
-        let mut world = adapter.state.world.block();
-        world.vrf_epochs_mut_for_testing().insert(
-            epoch,
-            iroha_data_model::consensus::VrfEpochRecord {
-                epoch,
-                seed: adapter.context.leader_seed,
-                epoch_length: 2,
-                commit_deadline_offset: 0,
-                reveal_deadline_offset: 0,
-                roster_len: 0,
-                finalized: true,
-                updated_at_height,
-                participants: Vec::new(),
-                late_reveals: Vec::new(),
-                committed_no_reveal: Vec::new(),
-                no_participation: Vec::new(),
-                penalties_applied: false,
-                penalties_applied_at_height: None,
-                validator_election: None,
-            },
-        );
-        world.commit();
-    }
     fn posted_sidecar_chunk(effect: &V2LaneWorkEffect) -> Option<&CertifiedMergeSidecarChunkV1> {
         match effect {
             V2LaneWorkEffect::PostCertifiedMergeSidecar { message, .. } => match message.as_ref() {

@@ -60,6 +60,15 @@ data class ParliamentBodyStateProjectionV1(
     val publicFindingDeadlineHeight: String?,
     val noResultKind: String?,
     val noResultHeight: String?,
+    val timedOvnProgress: ParliamentTimedOvnProgressProjectionV1?,
+)
+
+/** Aggregate-only active-ballot state and next contiguous corpus offset. */
+data class ParliamentTimedOvnProgressProjectionV1(
+    val ballotAttemptId: String,
+    val status: String,
+    val frozenSurvivorCount: Int?,
+    val acceptedBallotPrefixCount: Int?,
 )
 
 /** Exact canonical public-finding supporter list carried by a certificate. */
@@ -232,6 +241,9 @@ object ParliamentApiV1 {
     const val MAX_TIMED_OVN_CASTING_ARCHIVE_BYTES: Int = 4 * 1024 * 1024
     const val MAX_TIMED_OVN_CASTING_PROOF_RESPONSE_BYTES: Int = 8 * 1024 * 1024
     const val TIMED_OVN_REGISTRATION_RECORD_BYTES: Int = 3_624
+    const val TIMED_OVN_BALLOT_RECORD_BYTES: Int = 2_858
+    /** Maximum records appended by one transition; the complete corpus may contain 1,000. */
+    const val TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS: Int = 32
     const val MAX_TIMED_OVN_CORPUS_ENTRIES: Int = 1_000
     const val PUBLIC_TRANSITION_DIGEST_DOMAIN: String =
         "iroha.governance.parliament.lifecycle_transition.digest.v1"
@@ -322,6 +334,7 @@ object ParliamentApiV1 {
         "public_finding_deadline_height",
         "no_result_kind",
         "no_result_height",
+        "timed_ovn_progress",
     )
 
     @JvmField
@@ -417,11 +430,12 @@ object ParliamentApiV1 {
     private val ATTEMPT_FIELDS = setOf(
         "id", "proposal_content_id", "sequence", "risk_tier", "stage", "status",
     )
-    private val BODIES = setOf(
+    private val BODY_ORDER = listOf(
         "rules-committee", "agenda-council", "interest-panel", "review-panel",
         "coordination-council", "mpc-committee", "fma-committee", "oversight-committee",
         "policy-jury", "confirmation-jury",
     )
+    private val BODIES = BODY_ORDER.toSet()
     private val PRIVATE_BODIES = setOf("policy-jury", "confirmation-jury")
     private val BODY_STATUSES = setOf(
         "AwaitingSortition", "AcceptingInvitations", "RosterSealed", "Deliberating",
@@ -505,6 +519,12 @@ object ParliamentApiV1 {
                 "unit Parliament transition must not carry a payload"
             }
         }
+        if (layout.jsonPayloadRequired) {
+            validateTransitionPayload(
+                tag,
+                objectValue(transition["payload"], "$tag payload"),
+            )
+        }
         return encode(
             linkedMapOf(
                 "version" to VERSION,
@@ -512,6 +532,29 @@ object ParliamentApiV1 {
                 "transition" to transition,
             ),
         )
+    }
+
+    private fun validateTransitionPayload(tag: String, payload: Map<String, Any?>) {
+        if (tag != "FreezeTimedOvnCorpus") return
+        require(payload.keys == setOf("ballot_attempt_id", "ballot_records")) {
+            "$tag payload contains unknown, aliased, or missing fields"
+        }
+        val ballotAttemptId = payload["ballot_attempt_id"] as? String
+            ?: throw IllegalArgumentException("$tag.ballot_attempt_id must be text")
+        canonicalId(ballotAttemptId)
+        val records = payload["ballot_records"] as? List<*>
+            ?: throw IllegalArgumentException("$tag.ballot_records must be an array")
+        require(records.size in 1..TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS) {
+            "$tag.ballot_records must contain one through $TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS records"
+        }
+        records.forEachIndexed { index, record ->
+            fixedBytes(
+                record,
+                TIMED_OVN_BALLOT_RECORD_BYTES,
+                "$tag.ballot_records[$index]",
+                false,
+            )
+        }
     }
 
     /** Strictly admit one attempt draft and bind it to caller-derived identifiers. */
@@ -588,9 +631,9 @@ object ParliamentApiV1 {
         require(attemptId == canonicalId(expectedGovernanceAttemptId)) {
             "attempt.id differs from the requested canonical id"
         }
-        id(attempt, "proposal_content_id")
-        u32(attempt["sequence"], "attempt.sequence")
-        taggedUnitIn(
+        val proposalContentId = id(attempt, "proposal_content_id")
+        val attemptSequence = u32(attempt["sequence"], "attempt.sequence")
+        val riskTier = taggedUnitIn(
             attempt["risk_tier"],
             "tier",
             setOf("Routine", "Standard", "Constitutional", "Emergency"),
@@ -613,12 +656,22 @@ object ParliamentApiV1 {
             "attempt.status",
         )
         val height = unsignedInteger(root["current_height"], "current_height")
-        unsignedInteger(root["policy_version"], "policy_version")
+        val policyVersion = unsignedInteger(root["policy_version"], "policy_version")
+        require(BigInteger(policyVersion).signum() > 0) { "policy_version must be positive" }
         optionalUnsignedInteger(root["terminal_height"], "terminal_height")
         optionalByteArray32(root["execution_failure_root"], "execution_failure_root")
         val requiredBodies = validateRequiredBodies(root["required_bodies"])
         val bodyStates = validateBodyStates(root["body_states"], requiredBodies)
-        val publicFindingBindings = validateCertificate(root["certificate"], attemptId)
+        val publicFindingBindings = validateCertificate(
+            root["certificate"],
+            attemptId,
+            proposalContentId,
+            attemptSequence,
+            riskTier,
+            policyVersion,
+            requiredBodies,
+            bodyStates,
+        )
         val stateHex = canonicalHex(root["state_payload_hex"], "state_payload_hex", false)
         require(stateHex.length / 2 <= MAX_STATE_BYTES) { "state_payload_hex exceeds its bound" }
         validateStateFrame(decodeHex(stateHex))
@@ -1015,12 +1068,18 @@ object ParliamentApiV1 {
             ?: throw IllegalArgumentException("required_bodies must be an array")
         require(entries.size in 1..10) { "required_bodies must contain one through ten entries" }
         val bodies = ArrayList<String>(entries.size)
+        var previousBodyIndex = -1
         entries.forEachIndexed { index, raw ->
             val context = "required_bodies[$index]"
             val entry = exactObject(raw, setOf("body", "decision_mode"), context)
             val body = entry["body"] as? String
                 ?: throw IllegalArgumentException("$context.body must be text")
             require(body in BODIES && body !in bodies) { "$context.body is unknown or duplicated" }
+            val bodyIndex = BODY_ORDER.indexOf(body)
+            require(bodyIndex > previousBodyIndex) {
+                "required_bodies must use strict canonical body order"
+            }
+            previousBodyIndex = bodyIndex
             val mode = taggedUnitIn(
                 entry["decision_mode"],
                 "mode",
@@ -1116,6 +1175,12 @@ object ParliamentApiV1 {
                     "$context no-result facts do not match its lifecycle and decision protocol"
                 }
             }
+            val timedOvnProgress = entry["timed_ovn_progress"]?.let {
+                validateTimedOvnProgress(it, "$context.timed_ovn_progress")
+            }
+            require(timedOvnProgress == null || (body in PRIVATE_BODIES && bodyInstanceId != null)) {
+                "$context.timed_ovn_progress requires an active private body"
+            }
             ParliamentBodyStateProjectionV1(
                 body,
                 bodyInstanceId,
@@ -1126,13 +1191,84 @@ object ParliamentApiV1 {
                 deadline,
                 noResultKind,
                 noResultHeight,
+                timedOvnProgress,
             )
         }
+    }
+
+    private fun validateTimedOvnProgress(
+        value: Any?,
+        context: String,
+    ): ParliamentTimedOvnProgressProjectionV1 {
+        val progress = exactObject(
+            value,
+            setOf(
+                "ballot_attempt_id", "status", "frozen_survivor_count",
+                "accepted_ballot_prefix_count",
+            ),
+            context,
+        )
+        val ballotAttemptId = id(progress, "ballot_attempt_id")
+        val status = taggedUnitIn(
+            progress["status"],
+            "status",
+            setOf(
+                "Registration", "SurvivorFreeze", "TimedCommitment", "AwaitingRelease",
+                "Opening", "Finalized", "NoResult", "Superseded",
+            ),
+            "$context.status",
+        )
+        val survivorsValue = progress["frozen_survivor_count"]
+        val prefixValue = progress["accepted_ballot_prefix_count"]
+        require((survivorsValue == null) == (prefixValue == null)) {
+            "$context survivor and prefix counts must appear together"
+        }
+        var survivors: Int? = null
+        var prefix: Int? = null
+        if (survivorsValue == null) {
+            require(status in setOf("Registration", "SurvivorFreeze", "NoResult", "Superseded")) {
+                "$context must expose counts after survivor freeze"
+            }
+        } else {
+            survivors = u32Int(
+                survivorsValue,
+                "$context.frozen_survivor_count",
+                1,
+                MAX_TIMED_OVN_CORPUS_ENTRIES,
+            )
+            prefix = u32Int(
+                prefixValue,
+                "$context.accepted_ballot_prefix_count",
+                0,
+                survivors,
+            )
+            require(status != "TimedCommitment" || prefix < survivors) {
+                "$context TimedCommitment prefix must remain incomplete"
+            }
+            require(status !in setOf("AwaitingRelease", "Opening", "Finalized") || prefix == survivors) {
+                "$context sealed/released prefix must equal frozen survivors"
+            }
+            require(status !in setOf("Registration", "SurvivorFreeze")) {
+                "$context exposes counts before survivor freeze"
+            }
+        }
+        return ParliamentTimedOvnProgressProjectionV1(
+            ballotAttemptId,
+            status,
+            survivors,
+            prefix,
+        )
     }
 
     private fun validateCertificate(
         value: Any?,
         expectedAttemptId: String,
+        expectedProposalContentId: String,
+        expectedAttemptSequence: String,
+        expectedRiskTier: String,
+        expectedPolicyVersion: String,
+        requiredBodies: List<String>,
+        bodyStates: List<ParliamentBodyStateProjectionV1>,
     ): List<ParliamentPublicFindingCertificateBindingV1> {
         if (value == null) return emptyList()
         val certificate = exactObject(
@@ -1144,48 +1280,335 @@ object ParliamentApiV1 {
             ),
             "certificate",
         )
-        id(certificate, "proposal_content_id")
+        require(id(certificate, "proposal_content_id") == expectedProposalContentId) {
+            "certificate.proposal_content_id differs from attempt.proposal_content_id"
+        }
         require(id(certificate, "governance_attempt_id") == expectedAttemptId) {
             "certificate.governance_attempt_id differs from attempt.id"
         }
-        u32(certificate["governance_attempt_sequence"], "certificate.governance_attempt_sequence")
+        require(
+            u32(
+                certificate["governance_attempt_sequence"],
+                "certificate.governance_attempt_sequence",
+            ) == expectedAttemptSequence,
+        ) { "certificate.governance_attempt_sequence differs from attempt.sequence" }
+        require(
+            taggedUnitIn(
+                certificate["risk_tier"],
+                "tier",
+                setOf("Routine", "Standard", "Constitutional", "Emergency"),
+                "certificate.risk_tier",
+            ) == expectedRiskTier,
+        ) { "certificate.risk_tier differs from attempt.risk_tier" }
         byteArray32(certificate["effect_preimage_hash"], "certificate.effect_preimage_hash")
-        unsignedInteger(certificate["policy_version"], "certificate.policy_version")
-        unsignedInteger(certificate["certified_at_height"], "certificate.certified_at_height")
-        unsignedInteger(certificate["enact_at_height"], "certificate.enact_at_height")
+        val policyVersion = unsignedInteger(
+            certificate["policy_version"],
+            "certificate.policy_version",
+        )
+        require(BigInteger(policyVersion).signum() > 0 && policyVersion == expectedPolicyVersion) {
+            "certificate.policy_version differs from the attempt projection"
+        }
+        validateExpectedHead(certificate["expected_head"], "certificate.expected_head")
+        val certifiedAtHeight = BigInteger(
+            unsignedInteger(certificate["certified_at_height"], "certificate.certified_at_height"),
+        )
+        val enactAtHeight = BigInteger(
+            unsignedInteger(certificate["enact_at_height"], "certificate.enact_at_height"),
+        )
+        require(certifiedAtHeight.signum() > 0 && enactAtHeight > certifiedAtHeight) {
+            "certificate enact_at_height must follow certified_at_height"
+        }
         val bindings = certificate["body_bindings"] as? List<*>
             ?: throw IllegalArgumentException("certificate.body_bindings must be an array")
-        require(bindings.size in 1..10) {
-            "certificate.body_bindings must contain one through ten entries"
+        require(bindings.size == requiredBodies.size && bindings.size in 1..10) {
+            "certificate.body_bindings must exactly match required_bodies"
         }
+        val seenBodyInstanceIds = HashSet<String>()
+        val seenElectionAttemptIds = HashSet<String>()
+        val seenSortitionRequestIds = HashSet<String>()
+        val seenBallotAttemptIds = HashSet<String>()
+        val seenTleSessionIds = HashSet<String>()
+        val seenReleasePulseIds = HashSet<String>()
+        val seenReleaseSlots = HashSet<String>()
+        val sortitionPulseIds = HashSet<String>()
         val findings = ArrayList<ParliamentPublicFindingCertificateBindingV1>()
         bindings.forEachIndexed { index, raw ->
             val context = "certificate.body_bindings[$index]"
             val binding = exactObject(raw, CERTIFICATE_BODY_BINDING_NORITO_FIELDS.toSet(), context)
             val body = binding["body"] as? String
                 ?: throw IllegalArgumentException("$context.body must be text")
-            require(body in BODIES) { "$context.body is unknown" }
-            val seats = u32Int(binding["original_seats"], "$context.original_seats", 1, 1_000)
-            for (field in listOf(
-                "body_instance_id", "election_attempt_id", "sortition_request_id",
-                "beacon_session_id", "beacon_pulse_id",
-            )) id(binding, field)
+            require(body == requiredBodies[index]) {
+                "$context.body differs from required_bodies order"
+            }
+            val seats = u32Int(
+                binding["original_seats"],
+                "$context.original_seats",
+                1,
+                MAX_TIMED_OVN_CORPUS_ENTRIES,
+            )
+            val bodyInstanceId = id(binding, "body_instance_id")
+            require(bodyInstanceId == bodyStates[index].bodyInstanceId) {
+                "$context.body_instance_id differs from body_states"
+            }
+            val electionAttemptId = id(binding, "election_attempt_id")
+            val sortitionRequestId = id(binding, "sortition_request_id")
+            val beaconSessionId = id(binding, "beacon_session_id")
+            val beaconPulseId = id(binding, "beacon_pulse_id")
+            require(seenBodyInstanceIds.add(bodyInstanceId)) {
+                "certificate.body_bindings reuses body_instance_id"
+            }
+            require(seenElectionAttemptIds.add(electionAttemptId)) {
+                "certificate.body_bindings reuses election_attempt_id"
+            }
+            require(seenSortitionRequestIds.add(sortitionRequestId)) {
+                "certificate.body_bindings reuses sortition_request_id"
+            }
+            sortitionPulseIds.add(beaconPulseId)
             for (field in listOf("roster_root", "assignment_root", "result_root")) {
                 byteArray32(binding[field], "$context.$field")
             }
-            unsignedInteger(binding["result_height"], "$context.result_height")
+            u32(binding["election_attempt_sequence"], "$context.election_attempt_sequence")
+            val resultHeight = BigInteger(
+                unsignedInteger(binding["result_height"], "$context.result_height"),
+            )
+            validateCertificateSortitionRequest(
+                binding["sortition_request"],
+                expectedAttemptId,
+                body,
+                electionAttemptId,
+                sortitionRequestId,
+                beaconSessionId,
+                resultHeight,
+                certifiedAtHeight,
+                "$context.sortition_request",
+            )
             if (body in PRIVATE_BODIES) {
                 require(binding["public_finding"] == null && binding["ballot"] != null) {
                     "$context private jury must carry ballot only"
                 }
+                val ballot = validateCertificateBallot(
+                    binding["ballot"],
+                    seats,
+                    resultHeight,
+                    "$context.ballot",
+                )
+                val progress = bodyStates[index].timedOvnProgress
+                require(progress != null && progress.status == "Finalized" &&
+                    progress.ballotAttemptId == ballot.ballotAttemptId &&
+                    progress.frozenSurvivorCount == ballot.acceptedBallots &&
+                    progress.acceptedBallotPrefixCount == ballot.acceptedBallots) {
+                    "$context.ballot differs from timed_ovn_progress"
+                }
+                require(seenBallotAttemptIds.add(ballot.ballotAttemptId)) {
+                    "certificate.body_bindings reuses ballot_attempt_id"
+                }
+                require(seenTleSessionIds.add(ballot.tleSessionId)) {
+                    "certificate.body_bindings reuses tle_session_id"
+                }
+                require(seenReleasePulseIds.add(ballot.releasePulseId)) {
+                    "certificate.body_bindings reuses release_pulse_id"
+                }
+                require(seenReleaseSlots.add(ballot.releaseSlot)) {
+                    "certificate.body_bindings reuses a TLE release slot"
+                }
             } else {
+                require(bodyStates[index].timedOvnProgress == null) {
+                    "$context public body exposes timed_ovn_progress"
+                }
                 require(binding["public_finding"] != null && binding["ballot"] == null) {
                     "$context public body must carry public_finding only"
                 }
                 findings.add(validatePublicFinding(binding["public_finding"], seats, "$context.public_finding"))
             }
         }
+        require(sortitionPulseIds.intersect(seenReleasePulseIds).isEmpty()) {
+            "certificate reuses a sortition pulse for ballot release"
+        }
         return findings
+    }
+
+    /** Direct bindings are checked here; Norito-derived content identifiers and roots stay opaque. */
+    private fun validateCertificateSortitionRequest(
+        value: Any?,
+        governanceAttemptId: String,
+        body: String,
+        electionAttemptId: String,
+        sortitionRequestId: String,
+        beaconSessionId: String,
+        resultHeight: BigInteger,
+        certifiedAtHeight: BigInteger,
+        context: String,
+    ) {
+        val request = exactObject(
+            value,
+            setOf(
+                "id", "governance_attempt_id", "body_election_attempt_id", "body",
+                "candidate_root", "candidate_count", "target_seats", "request_height",
+                "pulse_height", "beacon_session_id",
+            ),
+            context,
+        )
+        require(id(request, "id") == sortitionRequestId &&
+            id(request, "governance_attempt_id") == governanceAttemptId &&
+            id(request, "body_election_attempt_id") == electionAttemptId &&
+            request["body"] == body &&
+            id(request, "beacon_session_id") == beaconSessionId) {
+            "$context differs from its repeated certificate bindings"
+        }
+        byteArray32(request["candidate_root"], "$context.candidate_root")
+        u32Int(request["candidate_count"], "$context.candidate_count", 1, MAX_TIMED_OVN_CORPUS_ENTRIES)
+        u32Int(request["target_seats"], "$context.target_seats", 1, MAX_TIMED_OVN_CORPUS_ENTRIES)
+        val requestHeight = BigInteger(unsignedInteger(request["request_height"], "$context.request_height"))
+        val pulseHeight = BigInteger(unsignedInteger(request["pulse_height"], "$context.pulse_height"))
+        require(requestHeight.signum() > 0 && pulseHeight > requestHeight &&
+            resultHeight > pulseHeight && resultHeight <= certifiedAtHeight) {
+            "$context violates the sortition/result lifecycle"
+        }
+    }
+
+    private data class CertificateBallotFacts(
+        val ballotAttemptId: String,
+        val tleSessionId: String,
+        val releasePulseId: String,
+        val releaseSlot: String,
+        val acceptedBallots: Int,
+    )
+
+    private fun validateCertificateBallot(
+        value: Any?,
+        originalSeats: Int,
+        resultHeight: BigInteger,
+        context: String,
+    ): CertificateBallotFacts {
+        val ballot = exactObject(
+            value,
+            setOf(
+                "ballot_attempt_id", "ballot_attempt_sequence", "tle_session_id",
+                "tle_key_session_id", "registration_root", "dropout_root", "survivor_root",
+                "corpus_root", "no_recovery_root", "timed_commitment_root",
+                "release_beacon_session_id", "registered_at_height", "registration_close_height",
+                "survivor_freeze_height", "commitment_close_height",
+                "registration_closed_at_height", "survivors_frozen_at_height",
+                "commitment_closed_at_height", "max_ballot_retries", "max_corpus_entries",
+                "release_height", "opening_deadline_height", "release_pulse_id",
+                "opening_height", "opening_root", "tally", "outcome",
+            ),
+            context,
+        )
+        val ballotAttemptId = id(ballot, "ballot_attempt_id")
+        val tleSessionId = id(ballot, "tle_session_id")
+        id(ballot, "tle_key_session_id")
+        val releaseBeaconSessionId = id(ballot, "release_beacon_session_id")
+        val releasePulseId = id(ballot, "release_pulse_id")
+        for (field in listOf(
+            "registration_root", "dropout_root", "survivor_root", "corpus_root",
+            "no_recovery_root", "timed_commitment_root", "opening_root",
+        )) byteArray32(ballot[field], "$context.$field")
+        val sequence = u32Int(ballot["ballot_attempt_sequence"], "$context.ballot_attempt_sequence", 0, 16)
+        val maxRetries = u32Int(ballot["max_ballot_retries"], "$context.max_ballot_retries", 0, 16)
+        require(sequence <= maxRetries) { "$context.ballot_attempt_sequence exceeds max_ballot_retries" }
+        val maxCorpusEntries = u32Int(
+            ballot["max_corpus_entries"],
+            "$context.max_corpus_entries",
+            1,
+            MAX_TIMED_OVN_CORPUS_ENTRIES,
+        )
+        fun height(field: String) = BigInteger(unsignedInteger(ballot[field], "$context.$field"))
+        val registered = height("registered_at_height")
+        val registrationClose = height("registration_close_height")
+        val survivorFreeze = height("survivor_freeze_height")
+        val commitmentClose = height("commitment_close_height")
+        val registrationClosed = height("registration_closed_at_height")
+        val survivorsFrozen = height("survivors_frozen_at_height")
+        val commitmentClosed = height("commitment_closed_at_height")
+        val release = height("release_height")
+        val openingDeadline = height("opening_deadline_height")
+        val opening = height("opening_height")
+        val maxCorpus = BigInteger.valueOf(maxCorpusEntries.toLong())
+        val requiredCommitmentBlocks = BigInteger.valueOf(
+            ((maxCorpusEntries + TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS - 1) /
+                TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS).toLong(),
+        )
+        require(registered.signum() > 0 && registrationClose > registered &&
+            maxCorpusEntries >= originalSeats &&
+            registrationClose - registered >= maxCorpus + BigInteger.ONE &&
+            survivorFreeze > registrationClose && commitmentClose > survivorFreeze &&
+            survivorFreeze - registrationClose >= maxCorpus &&
+            commitmentClose - survivorFreeze >= requiredCommitmentBlocks &&
+            release > commitmentClose && openingDeadline > release &&
+            registrationClosed == registrationClose && survivorsFrozen == survivorFreeze &&
+            commitmentClosed > survivorFreeze && commitmentClosed <= commitmentClose &&
+            opening >= release && opening <= openingDeadline &&
+            resultHeight >= opening && resultHeight <= openingDeadline) {
+            "$context violates the frozen ballot lifecycle"
+        }
+        val tally = exactObject(
+            ballot["tally"],
+            setOf("original_seats", "accepted_ballots", "aye", "nay", "abstain"),
+            "$context.tally",
+        )
+        val tallySeats = u32Int(
+            tally["original_seats"],
+            "$context.tally.original_seats",
+            1,
+            MAX_TIMED_OVN_CORPUS_ENTRIES,
+        )
+        val accepted = u32Int(
+            tally["accepted_ballots"],
+            "$context.tally.accepted_ballots",
+            0,
+            MAX_TIMED_OVN_CORPUS_ENTRIES,
+        )
+        val aye = BigInteger(u32(tally["aye"], "$context.tally.aye"))
+        val nay = BigInteger(u32(tally["nay"], "$context.tally.nay"))
+        val abstain = BigInteger(u32(tally["abstain"], "$context.tally.abstain"))
+        require(tallySeats == originalSeats && accepted <= maxCorpusEntries && accepted <= originalSeats &&
+            aye + nay + abstain == BigInteger.valueOf(accepted.toLong())) {
+            "$context.tally violates immutable bounds or count conservation"
+        }
+        val quorum = (2 * originalSeats + 2) / 3
+        val outcome = taggedUnitIn(
+            ballot["outcome"],
+            "outcome",
+            setOf("Approved", "Rejected", "NoQuorum", "NoResult"),
+            "$context.outcome",
+        )
+        val expectedOutcome = when {
+            accepted < quorum -> "NoQuorum"
+            aye > nay -> "Approved"
+            else -> "Rejected"
+        }
+        require(outcome == expectedOutcome && outcome == "Approved") {
+            "$context must contain the deterministic approving aggregate outcome"
+        }
+        return CertificateBallotFacts(
+            ballotAttemptId,
+            tleSessionId,
+            releasePulseId,
+            "$releaseBeaconSessionId:$release",
+            accepted,
+        )
+    }
+
+    private fun validateExpectedHead(value: Any?, context: String) {
+        val root = exactObject(value, setOf("state", "head"), context)
+        when (root["state"]) {
+            "Absent" -> {
+                val head = exactObject(root["head"], setOf("subject_id"), "$context.head")
+                byteArray32(head["subject_id"], "$context.head.subject_id")
+            }
+            "Present" -> {
+                val head = exactObject(
+                    root["head"],
+                    setOf("subject_id", "version", "head_root"),
+                    "$context.head",
+                )
+                byteArray32(head["subject_id"], "$context.head.subject_id")
+                unsignedInteger(head["version"], "$context.head.version")
+                byteArray32(head["head_root"], "$context.head.head_root")
+            }
+            else -> throw IllegalArgumentException("$context.state is unknown")
+        }
     }
 
     private fun validatePublicFinding(
@@ -1198,11 +1621,22 @@ object ParliamentApiV1 {
         val assignments = (finding["endorsing_assignments"] as? List<*>)?.map {
             canonicalId(it as? String ?: throw IllegalArgumentException("$context.endorsing_assignments must be text"))
         } ?: throw IllegalArgumentException("$context.endorsing_assignments must be an array")
-        require(assignments.size in 1..1_000 && assignments.zipWithNext().all { (left, right) -> left < right }) {
+        require(assignments.size in 1..MAX_TIMED_OVN_CORPUS_ENTRIES &&
+            assignments.zipWithNext().all { (left, right) -> left < right }) {
             "$context.endorsing_assignments must be strictly increasing and distinct"
         }
-        val endorsements = u32Int(finding["endorsements"], "$context.endorsements", 1, 1_000)
-        val quorum = u32Int(finding["quorum"], "$context.quorum", 1, 1_000)
+        val endorsements = u32Int(
+            finding["endorsements"],
+            "$context.endorsements",
+            1,
+            MAX_TIMED_OVN_CORPUS_ENTRIES,
+        )
+        val quorum = u32Int(
+            finding["quorum"],
+            "$context.quorum",
+            1,
+            MAX_TIMED_OVN_CORPUS_ENTRIES,
+        )
         val expectedQuorum = (2 * originalSeats + 2) / 3
         require(assignments.size == endorsements && endorsements == quorum && quorum == expectedQuorum) {
             "$context must contain the exact canonical two-thirds supporter list"

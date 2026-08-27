@@ -5,15 +5,15 @@ This directory contains the canonical RS parity fixture referenced by the
 It is generated via the ignored test
 
 ```
-cargo test -p sorafs_car --features da_harness regenerate_da_reconstruct_fixture_assets -- --ignored --nocapture
+cargo test -p sorafs_car --features 'dev-tools,da_harness' --bin da_reconstruct regenerate_da_reconstruct_fixture_assets -- --ignored --nocapture
 ```
 
 Artifacts:
 
 - `manifest.norito.hex` / `manifest.json` — canonical `DaManifestV1` encoding and
   Norito JSON view.
-- `chunk_matrix.json` — ordered commitment metadata (index, offset, length,
-  digest, parity flag).
+- `chunk_matrix.json` — producer-ordered commitment metadata (each stripe's
+  data followed by global parity; index, offset, length, digest, parity flag).
 - `chunks/` — `chunk_{index:05}.bin` payload slices (data + parity).
 - `payload.bin` — contiguous reconstructed payload used by round-trip tests.
 - `commitment_bundle.{json,norito.hex}` — sample V1 Merkle commitment bundle

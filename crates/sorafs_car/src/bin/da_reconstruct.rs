@@ -629,6 +629,8 @@ mod tests {
             .join("fixtures/da/reconstruct/rs_parity_v1");
         let manifest_path = fixture_root.join("manifest.norito.hex");
         let manifest = load_manifest(&manifest_path).expect("fixture manifest");
+        build_plan_from_da_manifest(&manifest)
+            .expect("fixture manifest must produce a valid DA plan");
         let chunks_src = fixture_root.join("chunks");
         let (_temp_dir, temp_path) = canonical_tempdir();
         for entry in fs::read_dir(&chunks_src).expect("chunks dir") {
@@ -723,12 +725,13 @@ mod tests {
         let plan = CarBuildPlan::single_file_with_profile(&payload, chunk_profile)
             .expect("plan derivation succeeds");
         let mut chunk_store = ChunkStore::with_profile(chunk_profile);
-        let chunk_dir = tempdir().expect("chunk dir");
+        let (_chunk_temp_root, chunk_temp_path) = canonical_tempdir();
+        let chunk_dir = chunk_temp_path.join("chunks");
         let mut reader: &[u8] = payload.as_slice();
         let chunk_output = chunk_store
-            .ingest_plan_stream_to_directory(&plan, &mut reader, chunk_dir.path())
+            .ingest_plan_stream_to_directory(&plan, &mut reader, &chunk_dir)
             .expect("persist chunk files");
-        let (manifest, parity_payloads) = build_fixture_manifest(
+        let (manifest, data_chunk_indexes, parity_payloads) = build_fixture_manifest(
             &payload,
             &chunk_store,
             CHUNK_SIZE,
@@ -741,9 +744,10 @@ mod tests {
         }
         let chunks_dir = fixture_root.join("chunks");
         fs::create_dir_all(&chunks_dir).expect("create chunks directory");
-        for record in &chunk_output.records {
-            let src = chunk_dir.path().join(&record.file_name);
-            let dst = chunks_dir.join(&record.file_name);
+        assert_eq!(chunk_output.records.len(), data_chunk_indexes.len());
+        for (record, manifest_index) in chunk_output.records.iter().zip(data_chunk_indexes) {
+            let src = chunk_dir.join(&record.file_name);
+            let dst = chunks_dir.join(format!("chunk_{manifest_index:05}.bin"));
             fs::copy(&src, &dst).expect("copy chunk file");
         }
         for (index, payload_bytes) in parity_payloads {
@@ -811,41 +815,53 @@ mod tests {
         chunk_size: u32,
         data_shards: u16,
         parity_shards: u16,
-    ) -> (DaManifestV1, Vec<(u32, Vec<u8>)>) {
+    ) -> (DaManifestV1, Vec<u32>, Vec<(u32, Vec<u8>)>) {
         let stored = chunk_store.chunks();
-        let mut chunk_commitments = Vec::with_capacity(stored.len());
-        let mut stripe_symbols = Vec::new();
+        let data_shards_usize = usize::from(data_shards);
+        let parity_shards_usize = usize::from(parity_shards);
+        let stripe_count = stored.len().div_ceil(data_shards_usize);
+        let commitment_count = stored
+            .len()
+            .checked_add(
+                stripe_count
+                    .checked_mul(parity_shards_usize)
+                    .expect("fixture parity count"),
+            )
+            .expect("fixture commitment count");
+        let mut chunk_commitments = Vec::with_capacity(commitment_count);
+        let mut data_chunk_indexes = Vec::with_capacity(stored.len());
+        let mut parity_payloads = Vec::with_capacity(
+            stripe_count
+                .checked_mul(parity_shards_usize)
+                .expect("fixture parity count"),
+        );
         let symbol_count = (chunk_size as usize / 2).max(1);
-        for (index, chunk) in stored.iter().enumerate() {
-            let start = chunk.offset as usize;
-            let end = start + chunk.length as usize;
-            let slice = &payload[start..end];
-            let symbols = rs16::symbols_from_chunk(symbol_count, slice);
-            stripe_symbols.push(symbols);
-            let stripe_id = u32::try_from(index / usize::from(data_shards)).unwrap_or(u32::MAX);
-            chunk_commitments.push(ChunkCommitment::new_with_role(
-                index as u32,
-                chunk.offset,
-                chunk.length,
-                ChunkDigest::new(chunk.blake3),
-                ChunkRole::Data,
-                stripe_id,
-            ));
-        }
-        let mut stripes = Vec::new();
-        for chunk_group in stripe_symbols.chunks(data_shards as usize) {
-            let mut padded = chunk_group.to_vec();
-            while padded.len() < data_shards as usize {
-                padded.push(vec![0u16; symbol_count]);
+        let mut next_index = 0u32;
+        for (stripe_idx, chunk_group) in stored.chunks(data_shards_usize).enumerate() {
+            let stripe_id = u32::try_from(stripe_idx).expect("fixture stripe id");
+            let mut stripe_symbols = Vec::with_capacity(data_shards_usize);
+            for chunk in chunk_group {
+                let start = usize::try_from(chunk.offset).expect("fixture chunk offset");
+                let length = usize::try_from(chunk.length).expect("fixture chunk length");
+                let end = start.checked_add(length).expect("fixture chunk range");
+                let symbols = rs16::symbols_from_chunk(symbol_count, &payload[start..end]);
+                stripe_symbols.push(symbols);
+                let index = next_index;
+                next_index = next_index.checked_add(1).expect("chunk index overflow");
+                data_chunk_indexes.push(index);
+                chunk_commitments.push(ChunkCommitment::new_with_role(
+                    index,
+                    chunk.offset,
+                    chunk.length,
+                    ChunkDigest::new(chunk.blake3),
+                    ChunkRole::Data,
+                    stripe_id,
+                ));
             }
-            stripes.push(padded);
-        }
-        let total_stripes = u32::try_from(stripes.len()).unwrap_or(u32::MAX);
-        let shards_per_stripe = u32::from(data_shards.saturating_add(parity_shards));
-        let mut parity_payloads = Vec::new();
-        let mut next_index = chunk_commitments.len() as u32;
-        for (stripe_idx, stripe) in stripes.into_iter().enumerate() {
-            let parity_vectors = rs16::encode_parity(&stripe, parity_shards as usize)
+            while stripe_symbols.len() < data_shards_usize {
+                stripe_symbols.push(vec![0u16; symbol_count]);
+            }
+            let parity_vectors = rs16::encode_parity(&stripe_symbols, parity_shards_usize)
                 .expect("encode parity vectors");
             for (parity_idx, symbols) in parity_vectors.into_iter().enumerate() {
                 let mut bytes = Vec::with_capacity(chunk_size as usize);
@@ -857,29 +873,31 @@ mod tests {
                     payload.len() as u64,
                     stripe_idx,
                     parity_idx,
-                    parity_shards as usize,
+                    parity_shards_usize,
                     chunk_size,
                 )
                 .expect("parity offset");
-                let stripe_id = u32::try_from(stripe_idx).unwrap_or(u32::MAX);
+                let index = next_index;
+                next_index = next_index.checked_add(1).expect("chunk index overflow");
                 chunk_commitments.push(ChunkCommitment::new_with_role(
-                    next_index,
+                    index,
                     offset,
                     chunk_size,
                     ChunkDigest::new(*digest.as_bytes()),
                     ChunkRole::GlobalParity,
                     stripe_id,
                 ));
-                parity_payloads.push((next_index, bytes));
-                next_index = next_index.checked_add(1).expect("chunk index overflow");
+                parity_payloads.push((index, bytes));
             }
         }
+        let total_stripes = u32::try_from(stripe_count).expect("fixture stripe count");
+        let shards_per_stripe = u32::from(data_shards.saturating_add(parity_shards));
         let manifest = DaManifestV1 {
             version: DaManifestV1::VERSION,
             client_blob_id: BlobDigest::from_hash(blake3::hash(b"fixture-client")),
             lane_id: LaneId::new(9),
             epoch: 7,
-            blob_class: BlobClass::TaikaiSegment,
+            blob_class: BlobClass::NexusLaneSidecar,
             codec: BlobCodec::new("fixture.binary"),
             blob_hash: BlobDigest::from_hash(blake3::hash(payload)),
             chunk_root: BlobDigest::new(*chunk_store.por_tree().root()),
@@ -902,7 +920,7 @@ mod tests {
             metadata: ExtraMetadata::default(),
             issued_at_unix: 1_701_111_111,
         };
-        (manifest, parity_payloads)
+        (manifest, data_chunk_indexes, parity_payloads)
     }
     fn fixture_root_path() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))

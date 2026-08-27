@@ -318,25 +318,10 @@ remain expected values until authentic generation confirms them. Candidate
 promotion must bind the exact generated bounds rather than the larger
 defensive wire ceilings.
 
-The newer non-shipping serialized-advice V7 lab is a separate candidate and
-does not reinterpret those V4 projections. Its source-pinned k17 graph uses a
-70-cell public column and currently expects 8,388,676-byte parameters,
-20,394-byte verifier keys, 5,356,151,726-byte proving keys, and 93,184-byte
-proofs per role (186,368 raw proof bytes per pair). Canonical carriers use a
-compact Norito schema: live carriers retain both public columns, both proofs,
-and both post-proof folds, while the authenticated reader derives and decides
-the output lineages instead of serializing them twice. The all-zero NullParent
-derives its fixed instance columns and succinct-verifier outputs but retains
-four separately generated, non-equal post-proof/branch-fold transcripts. Cheap
-layout tests pin 188,844-byte base, 191,532-byte recursive, and 191,828-byte
-NullParent carriers, each within the unchanged 191,862-byte release maximum.
-The complete four-node topology accounts for 30 terminal IPA decisions,
-including the compact NullParent carrier's four separately generated, non-equal
-post-proof and branch-merge fold transcripts. The V7 reviewed admission
-estimate is 53,126,388,928 bytes. These are still
-source-derived expectations, not production evidence: the guarded genuine
-four-node proof remains ignored and the V7 release-review gate remains false
-until the measured artifacts and independent review complete.
+The former non-shipping serialized-advice V7 lab has been removed from the
+source tree and is not a candidate or release-review path. The sole retained
+V4 backend still requires independent shipping review and release-device
+qualification.
 
 The reciprocal scalar loader removes only the identity tail of one assigned
 product with coefficient one and constant zero: its direct `FpChip::mul`

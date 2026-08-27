@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import copy
 
-import iroha_python
-import iroha_python.client as client_module
 import pytest
 
+import iroha_python
+import iroha_python.client as client_module
 from iroha_python.client import (
     OperatorSigningContext,
     SumeragiDiagnosticsSnapshot,
@@ -21,7 +21,6 @@ from iroha_python.client import (
     ToriiClient,
 )
 from iroha_python.crypto import Ed25519KeyPair, NetworkId
-
 
 _OPERATOR_CONTEXT = OperatorSigningContext(
     NetworkId.from_bytes(bytes([0xA5]) * 32),

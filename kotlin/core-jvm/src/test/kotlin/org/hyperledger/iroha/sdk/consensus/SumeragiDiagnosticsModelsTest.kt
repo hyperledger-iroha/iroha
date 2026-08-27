@@ -462,6 +462,35 @@ class SumeragiDiagnosticsModelsTest {
     }
 
     @Test
+    fun `NPoS diagnostics accept only the first release beacon context`() {
+        val root = Json.parseToJsonElement(Json.encodeToString(diagnostics())).jsonObject
+        val npos = JsonObject(
+            mapOf(
+                "epoch_length_blocks" to JsonPrimitive(3_600),
+                "epoch_seed" to JsonArray(List(32) { JsonPrimitive(it + 1) }),
+                "prf_height" to JsonPrimitive(7),
+                "prf_view" to JsonPrimitive(2),
+            ),
+        )
+        val current = JsonObject(root + ("npos" to npos))
+
+        assertEquals(
+            BigInteger.valueOf(3_600),
+            SumeragiDiagnosticsStatus.parseJson(current.toString()).npos?.epochLengthBlocks,
+        )
+        for (retired in listOf("vrf_commit_deadline_offset", "vrf_reveal_deadline_offset")) {
+            assertFails(retired) {
+                SumeragiDiagnosticsStatus.parseJson(
+                    JsonObject(
+                        root +
+                            ("npos" to JsonObject(npos + (retired to JsonPrimitive(1)))),
+                    ).toString(),
+                )
+            }
+        }
+    }
+
+    @Test
     fun `complete diagnostics parser enforces queue bounds and canonical vector order`() {
         val root = Json.parseToJsonElement(Json.encodeToString(diagnostics())).jsonObject
         assertFails {

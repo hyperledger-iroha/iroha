@@ -2,9 +2,11 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 use iroha_config::kura::FsyncMode;
 use iroha_core::kura::BlockStore;
-use iroha_crypto::{Hash, HashOf};
-use iroha_data_model::block::BlockHeader;
-use std::time::{Duration, Instant};
+use std::{
+    fs::OpenOptions,
+    io::{Seek, SeekFrom, Write},
+    time::{Duration, Instant},
+};
 use tempfile::tempdir;
 #[test]
 #[cfg_attr(
@@ -21,18 +23,14 @@ fn block_bytes_sparse_file_reads_requested_slice() {
         .expect("initialize block store");
     let payload = b"block-bytes-regression";
     let offset = FILE_LEN - payload.len() as u64;
-    store
-        .write_block_data(offset, payload)
-        .expect("write sparse payload");
-    store
-        .write_block_index(0, offset, payload.len() as u64)
-        .expect("write sparse index");
-    store
-        .write_block_hash(
-            0,
-            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x5A; Hash::LENGTH])),
-        )
-        .expect("write sparse hash");
+    let mut data = OpenOptions::new()
+        .write(true)
+        .open(temp_dir.path().join("blocks.data"))
+        .expect("open sparse block payload file");
+    data.seek(SeekFrom::Start(offset))
+        .expect("seek to sparse payload offset");
+    data.write_all(payload).expect("write sparse payload");
+    drop(data);
     let start = Instant::now();
     let slice = store
         .block_bytes(offset, payload.len() as u64)

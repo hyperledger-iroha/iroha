@@ -74,7 +74,6 @@ use super::{
         AutonomousLifecycleDeferredTerminalRecoveryHandoff, reconcile_autonomous_lifecycle_startup,
         reconcile_pending_autonomous_lifecycle_terminal_outcomes,
     },
-    v2_npos::V2NposVrfLifecycle,
     v2_recovery::{
         DurableSuccessorActivationAuthority, DurableV2PredecessorIdentity,
         RecoveredSuccessorActivationAuthority, SnapshotSuccessorActivationAuthority,
@@ -1187,7 +1186,6 @@ fn schedule_local_proposal(
     executor: &mut V2EffectExecutor,
     services: &mut ProductionV2Services,
     lane_work: &mut V2LaneWorkAdapter,
-    npos_vrf: &V2NposVrfLifecycle,
     npos_beacon: &V2GlobalBeaconLifecycle,
     candidate_work_wait_bound: Duration,
 ) -> Result<(), V2RunnerError> {
@@ -1408,7 +1406,6 @@ fn schedule_local_proposal(
             parent,
             directive.tag().view(),
             &carrier_context_header,
-            npos_vrf,
             npos_beacon,
             queue_plan_admissions,
         )?;
@@ -1622,7 +1619,7 @@ fn drive_block_sync(
     *next_attempt = next;
     Ok(())
 }
-fn broadcast_npos_vrf_messages(
+fn broadcast_npos_beacon_messages(
     messages: impl IntoIterator<Item = wire::ConsensusMessageV2>,
     output_guard: &ConsensusOutputGuard,
     services: &ProductionV2Services,
@@ -2311,7 +2308,6 @@ fn candidate_attachments(
     parent: CandidateParent<'_>,
     view: wire::View,
     round_header: &BlockHeader,
-    npos_vrf: &V2NposVrfLifecycle,
     npos_beacon: &V2GlobalBeaconLifecycle,
     queue_plan_admissions: Vec<Vec<u8>>,
 ) -> Result<CandidateAttachments, V2RunnerError> {
@@ -2326,14 +2322,14 @@ fn candidate_attachments(
         ));
     }
     let mut effects = if context.mode == wire::ConsensusMode::Npos {
-        super::penalties::PenaltyApplier::from_parts(
+        super::penalties::PenaltyApplier::new(
             state,
             #[cfg(feature = "telemetry")]
             Some(state.metrics()),
             #[cfg(not(feature = "telemetry"))]
             None,
         )
-        .derive_npos_consensus_effects(context.height, npos_vrf.pending_records())
+        .derive_npos_consensus_effects(context.height)
         .map_err(|error| V2RunnerError::Candidate(error.to_string()))?
     } else {
         Default::default()
@@ -2342,7 +2338,7 @@ fn candidate_attachments(
         .attach_candidate_effects(view, &mut effects)
         .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
     let npos_consensus_effects = (!effects.is_empty()).then_some(effects);
-    super::v2_npos::validate_candidate_records(context, state, npos_consensus_effects.as_ref())
+    super::v2_npos::validate_candidate_context(context)
         .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
     let merge_selection = certified_merge_selection_for_npos(npos_consensus_effects.is_some());
     if merge_selection == PendingCertifiedMergeSelection::ControlOnly {
@@ -2925,9 +2921,6 @@ pub(super) enum V2RunnerError {
     /// Bounded lane-local/merge/Native-AMX adapter failed closed.
     #[error(transparent)]
     LaneWork(#[from] super::v2_lane_work::V2LaneWorkError),
-    /// Authenticated NPoS VRF lifecycle failed closed.
-    #[error(transparent)]
-    NposVrf(#[from] super::v2_npos::V2NposError),
     /// Durable lane reservation ownership could not be reconciled exactly.
     #[error(transparent)]
     Reservation(#[from] V2ReservationLifecycleError),

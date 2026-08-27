@@ -5172,6 +5172,7 @@ export const PARLIAMENT_TRANSITION_SUBMIT_WIRE_ID_V1: "iroha.governance.parliame
 export const PARLIAMENT_ATTEMPT_STATE_MAX_BYTES_V1: 16777216;
 export const PARLIAMENT_TIMED_OVN_REGISTRATION_RECORD_BYTES_V1: 3624;
 export const PARLIAMENT_TIMED_OVN_BALLOT_RECORD_BYTES_V1: 2858;
+export const PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1: 32;
 export const PARLIAMENT_TIMED_OVN_CORPUS_ENTRIES_V1: 1000;
 export const PARLIAMENT_TLE_MAX_COMMITTEE_SIZE_V1: 31;
 export const PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_ARCHIVE_MAX_BYTES_V1: 4194304;
@@ -5251,6 +5252,7 @@ export const PARLIAMENT_BODY_STATE_FIELDS_V1: ReadonlyArray<
   | "public_finding_deadline_height"
   | "no_result_kind"
   | "no_result_height"
+  | "timed_ovn_progress"
 >;
 export const PARLIAMENT_CERTIFICATE_BODY_BINDING_FIELDS_V1: ReadonlyArray<string>;
 export const PARLIAMENT_PUBLIC_FINDING_CERTIFICATE_FIELDS_V1: ReadonlyArray<
@@ -5423,6 +5425,25 @@ export interface ParliamentBodyStateProjectionV1 {
   public_finding_deadline_height: number | bigint | null;
   no_result_kind: { reason: ParliamentNoResultKindTagV1 } | null;
   no_result_height: number | bigint | null;
+  timed_ovn_progress: ParliamentTimedOvnProgressProjectionV1 | null;
+}
+
+export type ParliamentBallotAttemptStatusTagV1 =
+  | "Registration"
+  | "SurvivorFreeze"
+  | "TimedCommitment"
+  | "AwaitingRelease"
+  | "Opening"
+  | "Finalized"
+  | "NoResult"
+  | "Superseded";
+
+/** Aggregate-only next-offset projection; contains no ballot or participant evidence. */
+export interface ParliamentTimedOvnProgressProjectionV1 {
+  ballot_attempt_id: string;
+  status: { status: ParliamentBallotAttemptStatusTagV1 };
+  frozen_survivor_count: number | null;
+  accepted_ballot_prefix_count: number | null;
 }
 
 export interface ParliamentTleAdaptiveDealerCommitmentV1 {
@@ -6535,8 +6556,6 @@ export interface ToriiSumeragiPipelineExecutionStatus {
 
 export interface ToriiSumeragiNposDiagnostics {
   epoch_length_blocks: ToriiU64;
-  vrf_commit_deadline_offset: ToriiU64;
-  vrf_reveal_deadline_offset: ToriiU64;
   epoch_seed: string;
   prf_height: ToriiU64;
   prf_view: ToriiU64;
@@ -7797,6 +7816,8 @@ interface RegisterAssetDefinitionAndMintInputBase {
   authority: string;
   assetDefinition: {
     assetDefinitionId: string;
+    /** Canonical on-chain Name for the asset definition. */
+    name: string;
     /** Immutable ownership intent; null means intentionally unowned global. */
     owningDomain: string | null;
     metadata?: object;
@@ -7807,6 +7828,7 @@ interface RegisterAssetDefinitionAndMintInputBase {
   };
   metadata?: MetadataLike;
   creationTimeMs?: number | null;
+  /** Non-zero lifetime in milliseconds; defaults to the protocol's 100 seconds. */
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
@@ -13306,7 +13328,7 @@ export function buildRegisterAssetDefinitionInstruction(options: {
   assetDefinitionId?: string;
   asset_definition_id?: string;
   id?: string;
-  name?: string;
+  name: string;
   description?: string | null;
   alias?: string | null;
   logo?: string | null;

@@ -774,11 +774,13 @@ pub(crate) fn finalized_next_epoch_snapshot(
         .ok_or(V2ContextBuildError::EpochOverflow)?;
     let npos_params = if election.mode == wire::ConsensusMode::Npos {
         Some(
-            super::v2_npos::committed_epoch_params(state.world()).map_err(|error| match error {
-                super::v2_npos::V2NposError::MissingCommittedParameters => {
-                    V2ContextBuildError::MissingNposParameters
+            super::v2_npos::committed_epoch_length_blocks(state.world()).map_err(|error| {
+                match error {
+                    super::v2_npos::V2NposError::MissingCommittedParameters => {
+                        V2ContextBuildError::MissingNposParameters
+                    }
+                    _ => V2ContextBuildError::InvalidNposParameters,
                 }
-                _ => V2ContextBuildError::InvalidNposParameters,
             })?,
         )
     } else {
@@ -826,9 +828,9 @@ pub(crate) fn finalized_next_epoch_snapshot(
     let epoch_end_height = match election.mode {
         wire::ConsensusMode::Permissioned => u64::MAX,
         wire::ConsensusMode::Npos => {
-            let epoch_length = npos_params
-                .expect("NPoS branch validates the committed schedule before snapshot construction")
-                .epoch_length_blocks;
+            let epoch_length = npos_params.expect(
+                "NPoS branch validates the committed schedule before snapshot construction",
+            );
             height
                 .checked_add(epoch_length)
                 .ok_or(V2ContextBuildError::HeightOverflow)?
@@ -1584,8 +1586,6 @@ mod tests {
             let mut block = world.block();
             let mut params = SumeragiNposParameters::default();
             params.epoch_length_blocks = NonZeroU64::new(7).expect("non-zero epoch");
-            params.vrf_commit_window_blocks = 2;
-            params.vrf_reveal_window_blocks = 2;
             block.parameters.get_mut().custom.insert(
                 SumeragiNposParameters::parameter_id(),
                 params.into_custom_parameter(),

@@ -370,8 +370,8 @@ def _validate_public_key(curve: int, payload: bytes) -> None:
         distid_length = int.from_bytes(payload[:2], byteorder="big")
         if distid_length > _SM2_MAX_DISTID_BYTES:
             raise ValueError("invalid SM2 public-key envelope")
-        expected_length = 2 + distid_length + _SM2_SEC1_PUBLIC_KEY_LENGTH
-        if len(payload) != expected_length:
+        sm2_expected_length = 2 + distid_length + _SM2_SEC1_PUBLIC_KEY_LENGTH
+        if len(payload) != sm2_expected_length:
             raise ValueError("invalid SM2 public-key envelope")
         try:
             payload[2 : 2 + distid_length].decode("utf-8")

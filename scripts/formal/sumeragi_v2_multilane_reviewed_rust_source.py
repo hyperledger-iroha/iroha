@@ -316,8 +316,8 @@ WIRE_RELEASE_INVARIANT_SOURCE_CHECKS = (
         "scripts/write_sumeragi_v2_release_receipt.py",
         (
             '("swift", 34)',
-            '("kotlin", 43)',
-            '("java", 42)',
+            '("kotlin", 44)',
+            '("java", 43)',
         ),
     ),
     (
@@ -328,7 +328,7 @@ WIRE_RELEASE_INVARIANT_SOURCE_CHECKS = (
             "native-amx-rust-fixture-check command 0",
             "regenerate Native AMX Rust fixture authority twice into disjoint "
             "private roots and byte-authenticate both outputs",
-            "for sdk_diagnostics_test_count in 129 88 34 43 42; do",
+            "for sdk_diagnostics_test_count in 129 88 34 44 43; do",
             "SumeragiV2WireFixtureTest",
         ),
     ),

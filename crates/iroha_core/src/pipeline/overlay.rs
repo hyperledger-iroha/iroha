@@ -5977,7 +5977,7 @@ pub(crate) fn validate_header_policy(meta: &ivm::ProgramMetadata) -> Result<(), 
         ));
     }
     // Mode feature bits
-    let known = ivm::ivm_mode::ZK | ivm::ivm_mode::VECTOR | ivm::ivm_mode::HTM;
+    let known = ivm::ivm_mode::ZK | ivm::ivm_mode::VECTOR;
     if meta.mode & !known != 0 {
         return Err(IvmAdmissionError::UnsupportedFeatureBits(
             meta.mode & !known,
@@ -9506,9 +9506,8 @@ seiyaku AliasBoundArguments {
             _ => unreachable!("expected IVM executable"),
         };
         let parsed = ivm::ProgramMetadata::parse(&bytes).expect("metadata parses");
-        let decoded =
-            ivm::ivm_cache::global_get_with_meta(&bytes[parsed.code_offset..], &parsed.metadata)
-                .expect("bytecode decodes before execution");
+        let decoded = ivm::ivm_cache::global_get(&bytes[parsed.code_offset..])
+            .expect("bytecode decodes before execution");
         let mut vm = ivm::IVM::new(TEST_GAS_LIMIT);
         let host = crate::smartcontracts::ivm::host::CoreHost::with_accounts(
             tx.authority().clone(),

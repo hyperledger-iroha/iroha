@@ -10,6 +10,12 @@ mod handle_update_tests {
         sync::{Barrier, atomic::AtomicUsize},
     };
     use tokio::sync::{mpsc, watch};
+    fn random_node_key_pair() -> KeyPair {
+        KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+    }
+    fn random_node_peer_id() -> PeerId {
+        PeerId::from(random_node_key_pair().public_key().clone())
+    }
     #[derive(Clone, Debug, Decode, Encode)]
     struct Dummy;
     impl message::ClassifyTopic for Dummy {}
@@ -319,11 +325,11 @@ mod handle_update_tests {
         )
         .expect("checked production-derived waiter geometry");
         let source_a = ActorProgressSource {
-            target: Some(PeerId::from(KeyPair::random().public_key().clone())),
+            target: Some(random_node_peer_id()),
             class: ActorProgressClass::Lane,
         };
         let source_b = ActorProgressSource {
-            target: Some(PeerId::from(KeyPair::random().public_key().clone())),
+            target: Some(random_node_peer_id()),
             class: ActorProgressClass::Lane,
         };
         let shape = |tag| ProgressTicketShape {
@@ -404,7 +410,7 @@ mod handle_update_tests {
             3,
         )
         .expect("one target per class must fit");
-        let target = PeerId::from(KeyPair::random().public_key().clone());
+        let target = random_node_peer_id();
         let source = ActorProgressSource {
             target: Some(target.clone()),
             class: ActorProgressClass::Lane,
@@ -480,7 +486,7 @@ mod handle_update_tests {
     }
     #[test]
     fn removed_membership_cancellation_is_race_safe_across_ticket_id_reuse() {
-        let target = PeerId::from(KeyPair::random().public_key().clone());
+        let target = random_node_peer_id();
         let source = ActorProgressSource {
             target: Some(target.clone()),
             class: ActorProgressClass::Lane,
@@ -647,8 +653,8 @@ mod handle_update_tests {
             3,
         )
         .expect("single-target class geometry must fit");
-        let first_target = PeerId::from(KeyPair::random().public_key().clone());
-        let second_target = PeerId::from(KeyPair::random().public_key().clone());
+        let first_target = random_node_peer_id();
+        let second_target = random_node_peer_id();
         let lane_shape = ProgressTicketShape {
             topic: message::Topic::Consensus,
             stream_wire_bytes: 1,
@@ -856,8 +862,6 @@ mod handle_update_tests {
         let (update_acl_tx, update_acl_rx) = control_update_channel();
         let (update_handshake_tx, update_handshake_rx) = control_update_channel();
         let (update_consensus_caps_tx, update_consensus_caps_rx) = consensus_caps_update_channel();
-        let (service_message_tx, _service_message_rx) =
-            mpsc::channel::<ServiceMessage<WireMessage<Dummy>>>(1);
         let (network_message_high_sender, _network_message_high_rx) =
             net_channel::channel_with_capacity(1);
         let (network_message_safety_sender, _network_message_safety_rx) =
@@ -889,7 +893,6 @@ mod handle_update_tests {
                 update_acl_sender: update_acl_tx,
                 update_handshake_sender: update_handshake_tx,
                 update_consensus_caps_sender: update_consensus_caps_tx,
-                service_message_sender: service_message_tx,
                 network_message_high_sender,
                 network_message_safety_sender,
                 network_message_progress_sender,
@@ -900,7 +903,7 @@ mod handle_update_tests {
                 network_actor_byte_budget: test_network_actor_byte_budget(),
                 network_actor_progress_budget: test_network_actor_progress_budget(),
                 network_actor_low_byte_budget: test_network_actor_byte_budget(),
-                self_id: PeerId::from(KeyPair::random().public_key().clone()),
+                self_id: random_node_peer_id(),
                 relay_ttl: 0,
                 topic_frame_caps: test_topic_frame_caps(),
                 subscriber_queue_cap: core::num::NonZeroUsize::new(1).expect("nonzero"),
@@ -957,8 +960,6 @@ mod handle_update_tests {
         let (update_acl_tx, update_acl_rx) = control_update_channel();
         let (update_handshake_tx, update_handshake_rx) = control_update_channel();
         let (update_consensus_caps_tx, update_consensus_caps_rx) = consensus_caps_update_channel();
-        let (service_message_tx, _service_message_rx) =
-            mpsc::channel::<ServiceMessage<WireMessage<T>>>(1);
         let (network_message_high_sender, network_message_high_rx) =
             net_channel::channel_with_capacity(1);
         let (network_message_safety_sender, network_message_safety_rx) =
@@ -995,7 +996,6 @@ mod handle_update_tests {
             update_acl_sender: update_acl_tx,
             update_handshake_sender: update_handshake_tx,
             update_consensus_caps_sender: update_consensus_caps_tx,
-            service_message_sender: service_message_tx,
             network_message_high_sender,
             network_message_safety_sender,
             network_message_progress_sender,
@@ -1006,7 +1006,7 @@ mod handle_update_tests {
             network_actor_byte_budget: test_network_actor_byte_budget(),
             network_actor_progress_budget: test_network_actor_progress_budget(),
             network_actor_low_byte_budget: test_network_actor_byte_budget(),
-            self_id: PeerId::from(KeyPair::random().public_key().clone()),
+            self_id: random_node_peer_id(),
             relay_ttl: 0,
             topic_frame_caps: test_topic_frame_caps(),
             subscriber_queue_cap: core::num::NonZeroUsize::new(1).expect("nonzero"),
@@ -1044,8 +1044,6 @@ mod handle_update_tests {
         let (update_acl_tx, update_acl_rx) = control_update_channel();
         let (update_handshake_tx, update_handshake_rx) = control_update_channel();
         let (update_consensus_caps_tx, update_consensus_caps_rx) = consensus_caps_update_channel();
-        let (service_message_tx, _service_message_rx) =
-            mpsc::channel::<ServiceMessage<WireMessage<Dummy>>>(1);
         let (network_message_high_sender, _network_message_high_rx) =
             net_channel::channel_with_capacity(1);
         let (network_message_low_sender, _network_message_low_rx) =
@@ -1081,7 +1079,6 @@ mod handle_update_tests {
                 update_acl_sender: update_acl_tx,
                 update_handshake_sender: update_handshake_tx,
                 update_consensus_caps_sender: update_consensus_caps_tx,
-                service_message_sender: service_message_tx,
                 network_message_high_sender,
                 network_message_safety_sender: net_channel::channel_with_capacity(1).0,
                 network_message_progress_sender: net_channel::channel_with_capacity(1).0,
@@ -1092,7 +1089,7 @@ mod handle_update_tests {
                 network_actor_byte_budget: test_network_actor_byte_budget(),
                 network_actor_progress_budget: test_network_actor_progress_budget(),
                 network_actor_low_byte_budget: test_network_actor_byte_budget(),
-                self_id: PeerId::from(KeyPair::random().public_key().clone()),
+                self_id: random_node_peer_id(),
                 relay_ttl: 0,
                 topic_frame_caps: test_topic_frame_caps(),
                 subscriber_queue_cap: core::num::NonZeroUsize::new(1).expect("nonzero"),
@@ -1287,9 +1284,9 @@ mod handle_update_tests {
         for _ in 0..64 {
             handle.update_topology(message::UpdateTopology(HashSet::new()));
         }
-        let superseded_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let superseded_peer = random_node_peer_id();
         handle.update_topology(message::UpdateTopology(HashSet::from([superseded_peer])));
-        let newest_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let newest_peer = random_node_peer_id();
         let expected = HashSet::from([newest_peer]);
         handle.update_topology(message::UpdateTopology(expected.clone()));
         let message::UpdateTopology(actual) = receive_control_update(&mut update_topology_rx)
@@ -1306,7 +1303,7 @@ mod handle_update_tests {
     async fn validator_membership_and_dial_roster_share_one_retained_snapshot() {
         let (handle, mut receivers) = handle_with_control_update_receivers();
         let self_id = handle.self_id.clone();
-        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let peer_id = random_node_peer_id();
         let topology = HashSet::from([self_id.clone(), peer_id.clone()]);
         let validator_dial_roster = topology.clone();
         handle.update_validator_topology(message::UpdateValidatorTopology {
@@ -1336,8 +1333,8 @@ mod handle_update_tests {
     async fn all_control_update_methods_keep_newest_category_snapshot() {
         let (handle, mut receivers) = handle_with_control_update_receivers();
         let newest_handle = handle.clone();
-        let stale_peer = PeerId::from(KeyPair::random().public_key().clone());
-        let newest_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let stale_peer = random_node_peer_id();
+        let newest_peer = random_node_peer_id();
         let stale_addr = socket_addr!(127.0.0.1:11_001);
         let newest_addr = socket_addr!(127.0.0.1:11_002);
         handle.update_topology(message::UpdateTopology(HashSet::from([stale_peer.clone()])));
@@ -1589,7 +1586,7 @@ mod handle_update_tests {
     async fn high_priority_post_waits_for_actor_queue_capacity() {
         let (handle, _safety_rx, _progress_rx, mut high_rx, _low_rx) =
             handle_with_network_receivers::<Dummy>();
-        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let peer_id = random_node_peer_id();
         handle.post(Post {
             data: Dummy,
             peer_id: peer_id.clone(),
@@ -1623,7 +1620,7 @@ mod handle_update_tests {
     async fn high_priority_actor_overflow_waiters_are_bounded() {
         let (handle, _safety_rx, _progress_rx, mut high_rx, _low_rx) =
             handle_with_network_receivers::<Dummy>();
-        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let peer_id = random_node_peer_id();
         let post = || Post {
             data: Dummy,
             peer_id: peer_id.clone(),
@@ -1666,8 +1663,8 @@ mod handle_update_tests {
     }
     #[test]
     fn outbound_actor_sizing_does_not_clone_large_payloads() {
-        let origin = PeerId::from(KeyPair::random().public_key().clone());
-        let target = PeerId::from(KeyPair::random().public_key().clone());
+        let origin = random_node_peer_id();
+        let target = random_node_peer_id();
         let payload = CloneCountingPayload(vec![0xA5; 4 * 1024 * 1024]);
         let payload_len = ncore::encoded_payload_len(&payload)
             .expect("large test payload must have a representable encoded length");
@@ -1691,8 +1688,8 @@ mod handle_update_tests {
     }
     #[test]
     fn outbound_actor_sizing_ignores_understated_exact_length_hints() {
-        let origin = PeerId::from(KeyPair::random().public_key().clone());
-        let target = PeerId::from(KeyPair::random().public_key().clone());
+        let origin = random_node_peer_id();
+        let target = random_node_peer_id();
         let message = NetworkMessage::Post(Post {
             data: BadLengthHintPayload,
             peer_id: target.clone(),
@@ -1707,8 +1704,8 @@ mod handle_update_tests {
     }
     #[test]
     fn outbound_actor_sizing_propagates_serializer_failure_without_panicking() {
-        let origin = PeerId::from(KeyPair::random().public_key().clone());
-        let target = PeerId::from(KeyPair::random().public_key().clone());
+        let origin = random_node_peer_id();
+        let target = random_node_peer_id();
         let message = NetworkMessage::Post(Post {
             data: FailingSerializerPayload,
             peer_id: target,
@@ -1720,7 +1717,7 @@ mod handle_update_tests {
     async fn deferred_actor_message_retains_and_releases_exact_byte_ownership() {
         let (mut handle, _safety_rx, _progress_rx, mut high_rx, _low_rx) =
             handle_with_network_receivers::<Dummy>();
-        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let peer_id = random_node_peer_id();
         let fixture = NetworkMessage::Post(Post {
             data: Dummy,
             peer_id: peer_id.clone(),
@@ -1826,7 +1823,7 @@ mod handle_update_tests {
     async fn recoverable_best_effort_post_reports_queue_cap_and_closed_without_losing_source() {
         let (handle, _safety_rx, _progress_rx, mut high_rx, _low_rx) =
             handle_with_network_receivers::<RoutedActorDummy>();
-        let target = PeerId::from(KeyPair::random().public_key().clone());
+        let target = random_node_peer_id();
         let post = || Post {
             data: RoutedActorDummy::Control,
             peer_id: target.clone(),
@@ -1910,7 +1907,7 @@ mod handle_update_tests {
     fn ordinary_high_saturation_does_not_consume_progress_or_safety_capacity() {
         let (handle, mut safety_rx, mut progress_rx, mut high_rx, mut low_rx) =
             handle_with_network_receivers::<RoutedActorDummy>();
-        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let peer_id = random_node_peer_id();
         accept_direct_targets(&handle, HashSet::from([peer_id.clone()]));
         handle.post(Post {
             data: RoutedActorDummy::Control,
@@ -1973,7 +1970,7 @@ mod handle_update_tests {
     fn consensus_lane_and_block_sync_use_progress_and_canonical_high() {
         let (handle, _safety_rx, mut progress_rx, mut high_rx, mut low_rx) =
             handle_with_network_receivers::<RoutedActorDummy>();
-        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let peer_id = random_node_peer_id();
         accept_direct_targets(&handle, HashSet::from([peer_id.clone()]));
         for data in [RoutedActorDummy::Lane, RoutedActorDummy::BlockSync] {
             handle
@@ -2013,7 +2010,7 @@ mod handle_update_tests {
             handle_with_network_receivers::<RoutedActorDummy>();
         handle.post(Post {
             data: RoutedActorDummy::Lane,
-            peer_id: PeerId::from(KeyPair::random().public_key().clone()),
+            peer_id: random_node_peer_id(),
             priority: Priority::High,
         });
     }
@@ -2031,7 +2028,7 @@ mod handle_update_tests {
     fn recoverable_progress_admission_preserves_fifo_and_exact_original() {
         let (mut handle, _safety_rx, mut progress_rx, _high_rx, _low_rx) =
             handle_with_network_receivers::<RoutedActorDummy>();
-        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let peer_id = random_node_peer_id();
         accept_direct_targets(&handle, HashSet::from([peer_id.clone()]));
         let post = || Post {
             data: RoutedActorDummy::Lane,
@@ -2138,7 +2135,7 @@ mod handle_update_tests {
     fn progress_ticket_rejects_a_different_same_length_payload() {
         let (mut handle, _safety_rx, mut progress_rx, _high_rx, _low_rx) =
             handle_with_network_receivers::<RoutedActorDummy>();
-        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let peer_id = random_node_peer_id();
         accept_direct_targets(&handle, HashSet::from([peer_id.clone()]));
         let post = |data| Post {
             data,
@@ -2198,7 +2195,7 @@ mod handle_update_tests {
     fn distinct_direct_posts_to_the_same_target_remain_exactly_backpressured() {
         let (mut handle, _safety_rx, mut progress_rx, _high_rx, _low_rx) =
             handle_with_network_receivers::<RoutedActorDummy>();
-        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let peer_id = random_node_peer_id();
         accept_direct_targets(&handle, HashSet::from([peer_id.clone()]));
         let post = |data| Post {
             data,
@@ -2270,8 +2267,8 @@ mod handle_update_tests {
     fn recoverable_progress_budget_isolates_targets_at_one_frame_per_source() {
         let (mut handle, _safety_rx, mut progress_rx, _high_rx, _low_rx) =
             handle_with_network_receivers::<RoutedActorDummy>();
-        let blocked_peer = PeerId::from(KeyPair::random().public_key().clone());
-        let responsive_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let blocked_peer = random_node_peer_id();
+        let responsive_peer = random_node_peer_id();
         accept_direct_targets(
             &handle,
             HashSet::from([blocked_peer.clone(), responsive_peer.clone()]),
@@ -2322,7 +2319,7 @@ mod handle_update_tests {
     fn recoverable_progress_rejects_one_over_cap_and_releases_on_close() {
         let (mut handle, _safety_rx, progress_rx, _high_rx, _low_rx) =
             handle_with_network_receivers::<RoutedActorDummy>();
-        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let peer_id = random_node_peer_id();
         let post = || Post {
             data: RoutedActorDummy::Lane,
             peer_id: peer_id.clone(),
@@ -2373,7 +2370,7 @@ mod handle_update_tests {
     async fn ordinary_control_overflow_cannot_consume_source_isolated_safety_capacity() {
         let (handle, mut safety_rx, mut progress_rx, mut high_rx, _low_rx) =
             handle_with_network_receivers::<RoutedActorDummy>();
-        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let peer_id = random_node_peer_id();
         accept_direct_targets(&handle, HashSet::from([peer_id.clone()]));
         let post = |data| Post {
             data,
@@ -2442,7 +2439,7 @@ mod handle_update_tests {
     async fn low_priority_post_still_drops_when_actor_queue_is_full() {
         let (handle, _safety_rx, _progress_rx, _high_rx, mut low_rx) =
             handle_with_network_receivers::<Dummy>();
-        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let peer_id = random_node_peer_id();
         handle.post(Post {
             data: Dummy,
             peer_id: peer_id.clone(),

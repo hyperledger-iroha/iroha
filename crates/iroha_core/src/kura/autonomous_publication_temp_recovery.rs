@@ -710,26 +710,40 @@ impl Kura {
                 ));
             }
         }
-        if !Self::sync_bound_progress_mutation_directories(namespace, kind) {
-            return Err(Self::invalid_lane_artifact_error(
-                parent.to_path_buf(),
-                format!("{kind} parent identity changed during durable quarantine"),
-            ));
-        }
-        if current_name_text == quarantine_name {
-            if Self::regular_sidecar_metadata_for(store_root, &quarantine_path, parent)?.is_none() {
+        #[cfg(any(
+            target_os = "android",
+            target_os = "linux",
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "tvos",
+            target_os = "visionos",
+            target_os = "watchos",
+            target_os = "redox",
+        ))]
+        {
+            if !Self::sync_bound_progress_mutation_directories(namespace, kind) {
                 return Err(Self::invalid_lane_artifact_error(
-                    quarantine_path,
-                    format!("{kind} disappeared after exact-object quarantine verification"),
+                    parent.to_path_buf(),
+                    format!("{kind} parent identity changed during durable quarantine"),
                 ));
             }
-        } else if Self::regular_sidecar_metadata_for(store_root, path, parent)?.is_some() {
-            return Err(Self::invalid_lane_artifact_error(
-                path.to_path_buf(),
-                format!("{kind} reappeared after exact-object quarantine"),
-            ));
+            if current_name_text == quarantine_name {
+                if Self::regular_sidecar_metadata_for(store_root, &quarantine_path, parent)?
+                    .is_none()
+                {
+                    return Err(Self::invalid_lane_artifact_error(
+                        quarantine_path,
+                        format!("{kind} disappeared after exact-object quarantine verification"),
+                    ));
+                }
+            } else if Self::regular_sidecar_metadata_for(store_root, path, parent)?.is_some() {
+                return Err(Self::invalid_lane_artifact_error(
+                    path.to_path_buf(),
+                    format!("{kind} reappeared after exact-object quarantine"),
+                ));
+            }
+            Ok(())
         }
-        Ok(())
     }
     /// Bind an initial durable claim to every authenticated retained generation-one residue.
     fn validate_retained_initial_process_generation_claim(

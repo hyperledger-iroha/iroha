@@ -175,6 +175,7 @@ pub(in crate::sumeragi) struct RecoveredDurableValidateRetryOwnerV1 {
     durable_receipt: DurableBodyReceipt,
     binding: RecoveredDurableValidateRetryBindingV1,
     lifecycle_ordinal: u128,
+    owner_class: ColdValidateRetryOwnerClassV1,
 }
 
 impl RecoveredDurableValidateRetryOwnerV1 {
@@ -186,7 +187,7 @@ impl RecoveredDurableValidateRetryOwnerV1 {
     pub(in crate::sumeragi) fn for_test(
         effect: AdapterEffect,
         durable_receipt: DurableBodyReceipt,
-        pending: PendingRuntimeEffectBinding,
+        pending: &PendingRuntimeEffectBinding,
         lifecycle_ordinal: u128,
         expected_decision: Option<(
             wire::ConsensusRound,
@@ -206,6 +207,7 @@ impl RecoveredDurableValidateRetryOwnerV1 {
             durable_receipt,
             binding,
             lifecycle_ordinal,
+            owner_class: ColdValidateRetryOwnerClassV1::AdmissionCensus,
         })
     }
 
@@ -317,6 +319,21 @@ impl RecoveredDurableValidateRetryCensusV1 {
         self.owners.len()
     }
 
+    /// Report the deterministic seal/marker partition without exposing owners.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn owner_class_counts_for_test(&self) -> (usize, usize) {
+        self.owners
+            .values()
+            .fold((0, 0), |(admission, published), owner| {
+                match owner.owner_class {
+                    ColdValidateRetryOwnerClassV1::AdmissionCensus => (admission + 1, published),
+                    ColdValidateRetryOwnerClassV1::PublishedStoreSuccessor => {
+                        (admission, published + 1)
+                    }
+                }
+            })
+    }
+
     /// Corrupt only the last member's durable receipt for atomic-install tests.
     #[cfg(test)]
     pub(in crate::sumeragi) fn corrupt_last_durable_receipt_for_test(
@@ -366,7 +383,14 @@ impl RecoveredDurableValidateRetryCensusV1 {
     ) -> Result<(), crate::sumeragi::v2_effects::EffectExecutorError> {
         let mut installation = executor.prepare_recovered_durable_validate_retry_install()?;
         for owner in self.owners.into_values() {
-            installation.absorb(owner)?;
+            match owner.owner_class {
+                ColdValidateRetryOwnerClassV1::AdmissionCensus => installation.absorb(owner)?,
+                ColdValidateRetryOwnerClassV1::PublishedStoreSuccessor => {
+                    // Its validated marker was already classified above. The
+                    // launch marker pass installs the mutually exclusive
+                    // direct Store-successor owner before clocks are armed.
+                }
+            }
         }
         installation.commit()
     }
@@ -377,6 +401,18 @@ impl RecoveredDurableValidateRetryCensusV1 {
     pub(in crate::sumeragi) fn empty_for_test() -> Self {
         Self {
             owners: BTreeMap::new(),
+        }
+    }
+
+    /// Carry one exact admission owner across a synthetic volatile completion.
+    #[cfg(test)]
+    fn from_admission_owner_for_test(owner: RecoveredDurableValidateRetryOwnerV1) -> Self {
+        assert_eq!(
+            owner.owner_class,
+            ColdValidateRetryOwnerClassV1::AdmissionCensus
+        );
+        Self {
+            owners: BTreeMap::from([(owner.key(), owner)]),
         }
     }
 }

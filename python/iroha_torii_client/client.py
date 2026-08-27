@@ -35,14 +35,62 @@ from blake3 import blake3
 
 from . import (
     _account_id as _account_id_codec,
+)
+from . import (
     connect_session as _connect_session,
+)
+from . import (
     identifier_receipts as _identifier_receipts,
 )
 from .attachment_client import authenticated_attachment_request
+from .canonical_request_v1 import (
+    CANONICAL_REQUEST_MAX_ACCOUNT_LITERAL_BYTES_V1,
+    CANONICAL_REQUEST_MAX_METHOD_BYTES_V1,
+    CANONICAL_REQUEST_MAX_PATH_BYTES_V1,
+    CANONICAL_REQUEST_MAX_QUERY_PAIRS_V1,
+    CANONICAL_REQUEST_MAX_RAW_QUERY_BYTES_V1,
+    canonical_query_string,
+)
+from .canonical_request_v1 import (
+    account_header_value as _canonical_account_header_value,
+)
+from .canonical_request_v1 import (
+    require_account_literal as _require_canonical_account_literal,
+)
+from .canonical_request_v1 import (
+    require_nonce as _require_canonical_nonce,
+)
+from .canonical_request_v1 import (
+    require_signature_bytes as _require_canonical_signature_bytes,
+)
+from .canonical_request_v1 import (
+    split_path_query as _split_path_query,
+)
+from .canonical_request_v1 import (
+    validate_forwarded_witness_header as _validate_forwarded_witness_header,
+)
+from .canonical_request_v1 import (
+    validate_target as _validate_canonical_request_target,
+)
+from .canonical_transport import (
+    OPERATOR_FORBIDDEN_AUTH_HEADERS as _OPERATOR_FORBIDDEN_AUTH_HEADERS,
+)
+from .canonical_transport import (
+    CanonicalRequestHeaderPlan as _CanonicalRequestHeaderPlan,
+)
+from .canonical_transport import (
+    OperatorRequestHeaderPlan as _OperatorRequestHeaderPlan,
+)
+from .canonical_transport import (
+    send_request as _send_request,
+)
 from .client_status_models import (
+    _KAIGI_HEALTH_STATUSES,
     SUMERAGI_EVIDENCE_EQUIVOCATION_CLASSES,
     SUMERAGI_EVIDENCE_KIND_FILTERS,
     SUMERAGI_EVIDENCE_PHASES,
+    ConfidentialGasSchedule,
+    ConfigurationSnapshot,
     ConnectAdmissionManifest,
     ConnectAdmissionManifestEntry,
     ConnectAppPolicyControls,
@@ -52,8 +100,6 @@ from .client_status_models import (
     ConnectSessionInfo,
     ConnectStatusPolicy,
     ConnectStatusSnapshot,
-    ConfigurationSnapshot,
-    ConfidentialGasSchedule,
     KaigiRelayDetail,
     KaigiRelayDomainMetrics,
     KaigiRelayHealthSnapshot,
@@ -87,39 +133,15 @@ from .client_status_models import (
     SumeragiV2QcResponse,
     SumeragiV2Round,
     SumeragiV2TimeoutReference,
-    StreamingSoranetConfig,
-    StreamingTransportConfig,
-    TransportConfig,
-    TransportNoritoRpcConfig,
-    _KAIGI_HEALTH_STATUSES,
     parse_sumeragi_json_object,
-)
-from .canonical_request_v1 import (
-    CANONICAL_REQUEST_MAX_ACCOUNT_LITERAL_BYTES_V1,
-    CANONICAL_REQUEST_MAX_METHOD_BYTES_V1,
-    CANONICAL_REQUEST_MAX_PATH_BYTES_V1,
-    CANONICAL_REQUEST_MAX_QUERY_PAIRS_V1,
-    CANONICAL_REQUEST_MAX_RAW_QUERY_BYTES_V1,
-    account_header_value as _canonical_account_header_value,
-    canonical_query_string,
-    require_account_literal as _require_canonical_account_literal,
-    require_nonce as _require_canonical_nonce,
-    require_signature_bytes as _require_canonical_signature_bytes,
-    split_path_query as _split_path_query,
-    validate_forwarded_witness_header as _validate_forwarded_witness_header,
-    validate_target as _validate_canonical_request_target,
-)
-from .canonical_transport import (
-    CanonicalRequestHeaderPlan as _CanonicalRequestHeaderPlan,
-    OPERATOR_FORBIDDEN_AUTH_HEADERS as _OPERATOR_FORBIDDEN_AUTH_HEADERS,
-    OperatorRequestHeaderPlan as _OperatorRequestHeaderPlan,
-    send_request as _send_request,
 )
 from .governance_ballot_client import create_governance_ballot_client_mixin
 from .governance_proposals import GovernanceProposalResult
 from .kaigi_relay_client import create_kaigi_relay_client_mixin
 from .native_amx import (
     _hash_bytes as _iroha_hash_bytes,
+)
+from .native_amx import (
     compute_native_amx_descriptor_hash,
     compute_native_amx_participant_settlement_hash,
     compute_native_amx_proposal_hash,
@@ -127,14 +149,6 @@ from .native_amx import (
     validate_bls_normal_validator_set,
 )
 from .norito_frame import validate_norito_frame
-from .orderbook_submission import (
-    SorafsOrderbookSubmissionAmbiguousError,
-    SorafsOrderbookSubmissionIdentity,
-    SorafsOrderbookSubmissionMixin,
-    SorafsOrderbookSubmissionReceipt,
-    SorafsOrderbookSubmissionReceiptPayload,
-    require_orderbook_chain_discriminant,
-)
 from .offline_models import (
     KagemushaArtifactBindingV4Json,
     OfflineAssetScale,
@@ -159,8 +173,8 @@ from .offline_models import (
     OfflineRedemptionChangeTransitionVariantJson,
     OfflineRedemptionIntentJson,
     OfflineScaledAmountJson,
-    OfflineSpendBranchJson,
     OfflineSpendableNoteJson,
+    OfflineSpendBranchJson,
     OfflineTopUpAnchorReferenceJson,
     OfflineTopUpShieldEvidenceJson,
     OfflineUnshieldPublicInputsJson,
@@ -173,6 +187,15 @@ from .offline_models import (
     OfflineVerifyingKeyJson,
     OfflineVerifyingKeyRecordJson,
 )
+from .orderbook_submission import (
+    SorafsOrderbookSubmissionAmbiguousError,
+    SorafsOrderbookSubmissionIdentity,
+    SorafsOrderbookSubmissionMixin,
+    SorafsOrderbookSubmissionReceipt,
+    SorafsOrderbookSubmissionReceiptPayload,
+    require_orderbook_chain_discriminant,
+)
+from .parliament_api import ParliamentApiV1Mixin
 from .runtime_governance_auth import RuntimeGovernanceAuthMixin
 from .sccp import (
     SccpBridgeSubmitResponse,
@@ -198,10 +221,20 @@ from .subscription_auth import normalize_subscription_status, signed_subscriptio
 from .subscription_models import SubscriptionActionResult, SubscriptionCreateResult
 from .vpn_validation import (
     normalize_vpn_canonical_hex_input as _vpn_normalize_canonical_hex_input,
+)
+from .vpn_validation import (
     parse_vpn_trust_fields as _vpn_parse_trust_fields,
+)
+from .vpn_validation import (
     require_vpn_relay_endpoint as _vpn_require_relay_endpoint,
+)
+from .vpn_validation import (
     require_vpn_relay_id as _vpn_require_relay_id,
+)
+from .vpn_validation import (
     require_vpn_tls_server_name as _vpn_require_tls_server_name,
+)
+from .vpn_validation import (
     require_vpn_trust_digest as _vpn_require_trust_digest,
 )
 
@@ -4068,17 +4101,22 @@ class SubscriptionPlanCreateResult(AppApiTransactionDraft):
     plan_id: str
 
     @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SubscriptionPlanCreateResult":
+    def from_payload(
+        cls,
+        payload: Mapping[str, Any],
+        *,
+        context: str = "subscription plan create response",
+    ) -> "SubscriptionPlanCreateResult":
         submitted, transaction_payload_b64, signing_message_b64 = (
             _parse_app_api_transaction_draft_fields(
                 payload,
-                context="subscription plan create response",
+                context=context,
                 additional_fields=("plan_id",),
             )
         )
         plan_id = payload.get("plan_id")
         if not isinstance(plan_id, str) or not plan_id:
-            raise RuntimeError("subscription plan create response missing `plan_id`")
+            raise RuntimeError(f"{context} missing `plan_id`")
         return cls(
             submitted=submitted,
             transaction_payload_b64=transaction_payload_b64,
@@ -4200,17 +4238,22 @@ class SubscriptionUsageDraft(AppApiTransactionDraft):
     subscription_id: str
 
     @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SubscriptionUsageDraft":
+    def from_payload(
+        cls,
+        payload: Mapping[str, Any],
+        *,
+        context: str = "subscription usage response",
+    ) -> "SubscriptionUsageDraft":
         submitted, transaction_payload_b64, signing_message_b64 = (
             _parse_app_api_transaction_draft_fields(
                 payload,
-                context="subscription usage response",
+                context=context,
                 additional_fields=("subscription_id",),
             )
         )
         subscription_id = payload.get("subscription_id")
         if not isinstance(subscription_id, str) or not subscription_id:
-            raise RuntimeError("subscription usage response missing `subscription_id`")
+            raise RuntimeError(f"{context} missing `subscription_id`")
         return cls(
             submitted=submitted,
             transaction_payload_b64=transaction_payload_b64,
@@ -5377,8 +5420,6 @@ class SumeragiNposDiagnostics:
     """Validated current NPoS schedule and PRF context."""
 
     epoch_length_blocks: int
-    vrf_commit_deadline_offset: int
-    vrf_reveal_deadline_offset: int
     epoch_seed: Tuple[int, ...]
     prf_height: int
     prf_view: int
@@ -8198,8 +8239,6 @@ class _SumeragiDiagnosticsParser:
     )
     NPOS_FIELDS = (
         "epoch_length_blocks",
-        "vrf_commit_deadline_offset",
-        "vrf_reveal_deadline_offset",
         "epoch_seed",
         "prf_height",
         "prf_view",
@@ -8361,17 +8400,6 @@ class _SumeragiDiagnosticsParser:
         epoch_length = cls._unsigned(
             record, "epoch_length_blocks", positive=True, prefix="npos"
         )
-        commit = cls._unsigned(
-            record, "vrf_commit_deadline_offset", positive=True, prefix="npos"
-        )
-        reveal = cls._unsigned(
-            record, "vrf_reveal_deadline_offset", positive=True, prefix="npos"
-        )
-        if not commit < reveal <= epoch_length:
-            raise RuntimeError(
-                "sumeragi diagnostics NPoS windows must be strictly ordered "
-                "within the epoch"
-            )
         seed = tuple(
             _SumeragiV2StatusParser._byte_vector(
                 record.get("epoch_seed"),
@@ -8385,8 +8413,6 @@ class _SumeragiDiagnosticsParser:
             )
         return SumeragiNposDiagnostics(
             epoch_length_blocks=epoch_length,
-            vrf_commit_deadline_offset=commit,
-            vrf_reveal_deadline_offset=reveal,
             epoch_seed=seed,
             prf_height=cls._unsigned(record, "prf_height", prefix="npos"),
             prf_view=cls._unsigned(record, "prf_view", prefix="npos"),
@@ -9036,21 +9062,17 @@ class _SumeragiDiagnosticsParser:
         ]
 
 
-_ToriiClientGovernanceBallotMixin = create_governance_ballot_client_mixin(
+_ToriiClientGovernanceBallotMixin: type[Any] = create_governance_ballot_client_mixin(
     canonical_auth_type=ToriiCanonicalRequestAuth,
     ballot_submit_result_type=BallotSubmitResult,
     offline_hash_literal=_offline_hash_literal,
     canonical_quantity=_canonical_quantity,
 )
-_ToriiClientSpaceDirectoryMixin = create_space_directory_client_mixin(
+_ToriiClientSpaceDirectoryMixin: type[Any] = create_space_directory_client_mixin(
     canonical_auth_type=ToriiCanonicalRequestAuth, local_signing_context_type=ToriiLocalSigningContext,
     normalize_network_id=_offline_hash_literal, transaction_draft_type=AppApiTransactionDraft,
 )
-_ToriiClientKaigiRelayMixin = create_kaigi_relay_client_mixin(
-    relay_summary_list_type=KaigiRelaySummaryList,
-    relay_detail_type=KaigiRelayDetail,
-    relay_health_type=KaigiRelayHealthSnapshot,
-)
+_ToriiClientKaigiRelayMixin: type[Any] = create_kaigi_relay_client_mixin()
 
 
 class ToriiClient(
@@ -9058,6 +9080,7 @@ class ToriiClient(
     _ToriiClientKaigiRelayMixin,
     _ToriiClientSpaceDirectoryMixin,
     _ToriiClientGovernanceBallotMixin,
+    ParliamentApiV1Mixin,
     RuntimeGovernanceAuthMixin,
 ):
     """HTTP helper for Torii attachments, prover, and governance endpoints."""
@@ -9944,6 +9967,8 @@ class ToriiClient(
             "/v1/vpn/profile",
             context="vpn profile",
         )
+        if payload is None:
+            raise RuntimeError("vpn profile endpoint returned no payload")
         return self._parse_vpn_profile(payload, context="vpn profile")
 
     def create_vpn_quote(
@@ -9966,6 +9991,8 @@ class ToriiClient(
             context="vpn quote",
             expected_status=(201,),
         )
+        if response is None:
+            raise RuntimeError("vpn quote endpoint returned no payload")
         return self._parse_vpn_quote(response, context="vpn quote")
 
     def create_vpn_session(
@@ -9988,6 +10015,8 @@ class ToriiClient(
             context="vpn session",
             expected_status=(201,),
         )
+        if response is None:
+            raise RuntimeError("vpn session endpoint returned no payload")
         return self._parse_vpn_session(response, context="vpn session")
 
     def get_vpn_session(
@@ -10038,6 +10067,8 @@ class ToriiClient(
             context="vpn receipt",
             expected_status=(201,),
         )
+        if response is None:
+            raise RuntimeError("vpn receipt endpoint returned no payload")
         return self._parse_vpn_receipt(response, context="vpn receipt")
 
     def list_vpn_receipts(
@@ -16116,7 +16147,7 @@ class ToriiClient(
             if admitted_value is None
             else json_unsigned("consensus_admitted_height")
         )
-        common = {
+        common: Dict[str, Any] = {
             "kind": kind,
             "recorded_height": json_unsigned("recorded_height"),
             "recorded_view": json_unsigned("recorded_view"),
@@ -16893,6 +16924,15 @@ class ToriiClient(
         return normalized
 
     @staticmethod
+    def _require_hex_input(
+        value: Any,
+        context: str,
+    ) -> Union[str, bytes, bytearray, memoryview]:
+        if not isinstance(value, (str, bytes, bytearray, memoryview)):
+            raise RuntimeError(f"{context} must be bytes or hexadecimal text")
+        return value
+
+    @staticmethod
     def _require_exact_lower_hex_string(
         value: Any,
         *,
@@ -17406,12 +17446,16 @@ class ToriiClient(
                 f"{context}.dataspace",
             ),
             code_hash_hex=ToriiClient._normalize_hex_string(
-                record.get("code_hash_hex"),
+                ToriiClient._require_hex_input(
+                    record.get("code_hash_hex"), f"{context}.code_hash_hex"
+                ),
                 context=f"{context}.code_hash_hex",
                 expected_length=64,
             ),
             abi_hash_hex=ToriiClient._normalize_hex_string(
-                record.get("abi_hash_hex"),
+                ToriiClient._require_hex_input(
+                    record.get("abi_hash_hex"), f"{context}.abi_hash_hex"
+                ),
                 context=f"{context}.abi_hash_hex",
                 expected_length=64,
             ),
@@ -17578,7 +17622,10 @@ class ToriiClient(
                 else None
             ),
             payload_digest_hex=ToriiClient._normalize_hex_string(
-                record.get("payload_digest_hex"),
+                ToriiClient._require_hex_input(
+                    record.get("payload_digest_hex"),
+                    f"{context}.payload_digest_hex",
+                ),
                 context=f"{context}.payload_digest_hex",
                 expected_length=64,
             ),

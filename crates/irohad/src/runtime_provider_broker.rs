@@ -4,12 +4,22 @@
 //! a service-UID-owned local Unix socket. Broker and clients must run under the
 //! same effective service UID; the UID is pinned independently in each process
 //! before endpoint access, so supplementary-group membership never authorizes
-//! a peer. It never discovers endpoints or credentials. V1 uses a bounded
+//! a peer. Rejecting one peer is connection-local and does not stop the broker
+//! from accepting later authorized clients. It never discovers endpoints or
+//! credentials. V1 uses a bounded
 //! canonical Norito exchange framed by a four-byte big-endian body length, with
 //! an exact-network, client-selected subset-catalog handshake and monotonically
 //! ordered, session-bound requests. Every requested binding must be present
 //! byte-for-byte in the server's qualified catalog, and each session may use
 //! only the subset it authenticated during that handshake.
+//!
+//! Consensus threshold-signer credentials bind their policy digest to a
+//! canonical, domain-separated digest of the complete public session and seat
+//! inventory. Reordering is canonicalized, while substituting a transcript or
+//! seat changes the digest and is rejected during both encoding and decoding.
+//! Resolved threshold-signer proxies reconnect and retry once after transport
+//! unavailability; protocol, binding, freshness, rejection, conflict, and
+//! ambiguity failures are never replayed.
 //!
 //! The stock registry enumerates every current V1 provider slot explicitly;
 //! unknown future role identifiers fail closed.

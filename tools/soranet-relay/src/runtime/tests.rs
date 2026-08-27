@@ -2283,19 +2283,27 @@ mod tests {
         let delay = RelayRuntime::norito_padding_delay(&channel_id, period, now);
         assert_eq!(delay.as_millis(), 0);
     }
-    fn load_config(json: &str) -> RelayConfig {
+    struct LoadedTestConfig {
+        config: RelayConfig,
+        _replay_directory: TempDir,
+    }
+    fn load_config(json: &str) -> LoadedTestConfig {
         let file = secure_test_tempfile();
         std::fs::write(file.path(), json).expect("write config");
         let mut config = RelayConfig::load(file.path()).expect("load config");
+        let replay_directory = secure_test_tempdir();
         let default_replay_path = config::PowConfig::default().revocation_store_path;
         if config.pow_config().revocation_store_path == default_replay_path {
             config
                 .pow
                 .as_mut()
                 .expect("PoW defaults applied")
-                .revocation_store_path = file.path().with_extension("ticket-replays.norito");
+                .revocation_store_path = replay_directory.path().join("ticket-replays.norito");
         }
-        config
+        LoadedTestConfig {
+            config,
+            _replay_directory: replay_directory,
+        }
     }
     fn sample_account(seed: u8) -> AccountId {
         let (public_key, _) = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -2634,7 +2642,7 @@ mod tests {
     #[test]
     fn production_transport_requires_tls_bundle_directory_and_exact_leaf_pin() {
         let missing_tls = load_config(r#"{"mode":"Entry","listen":"127.0.0.1:0"}"#);
-        let error = RelayRuntime::prepare_server_transport(&missing_tls, None, None, false)
+        let error = RelayRuntime::prepare_server_transport(&missing_tls.config, None, None, false)
             .expect_err("production transport must not synthesize a self-signed leaf");
         assert!(error.to_string().contains("tls.certificate_path"));
 
@@ -2674,7 +2682,7 @@ mod tests {
         ));
         let matching = CertificateTestFixture::with_spki(leaf_spki);
         let (_, trust) = RelayRuntime::prepare_server_transport(
-            &config,
+            &config.config,
             Some(&matching.bundle),
             Some(2_000_000_000),
             false,
@@ -2687,9 +2695,13 @@ mod tests {
             leaf_spki
         );
 
-        let missing_bundle =
-            RelayRuntime::prepare_server_transport(&config, None, Some(2_000_000_000), false)
-                .expect_err("TLS files without an authenticated relay certificate must fail");
+        let missing_bundle = RelayRuntime::prepare_server_transport(
+            &config.config,
+            None,
+            Some(2_000_000_000),
+            false,
+        )
+        .expect_err("TLS files without an authenticated relay certificate must fail");
         assert!(
             missing_bundle
                 .to_string()
@@ -2697,7 +2709,7 @@ mod tests {
         );
         let mismatched = CertificateTestFixture::new();
         let mismatch = RelayRuntime::prepare_server_transport(
-            &config,
+            &config.config,
             Some(&mismatched.bundle),
             Some(2_000_000_000),
             false,
@@ -2708,9 +2720,13 @@ mod tests {
                 .to_string()
                 .contains("selected signed relay endpoint pin")
         );
-        let missing_directory =
-            RelayRuntime::prepare_server_transport(&config, Some(&matching.bundle), None, false)
-                .expect_err("authenticated directory validity is mandatory");
+        let missing_directory = RelayRuntime::prepare_server_transport(
+            &config.config,
+            Some(&matching.bundle),
+            None,
+            false,
+        )
+        .expect_err("authenticated directory validity is mandatory");
         assert!(missing_directory.to_string().contains("directory validity"));
     }
     #[cfg(unix)]
@@ -3049,7 +3065,7 @@ mod tests {
             fixture.certificate_config_json(),
         );
         let config = load_config(&json);
-        match RelayRuntime::new_for_test(config) {
+        match RelayRuntime::new_for_test(config.config) {
             Err(RelayError::Config(ConfigError::Handshake(message))) => {
                 assert!(message.contains("handshake.descriptor_manifest_path"));
             }
@@ -3079,7 +3095,7 @@ mod tests {
             issuer_mldsa = fixture.issuer_mldsa_hex,
         );
         let config = load_config(&json);
-        let runtime = RelayRuntime::new_for_test(config).expect("runtime");
+        let runtime = RelayRuntime::new_for_test(config.config).expect("runtime");
         assert_eq!(runtime.descriptor_commit(), fixture.descriptor_commit);
         let stored_bundle = runtime.certificate_bundle();
         assert_eq!(
@@ -3109,7 +3125,7 @@ mod tests {
             issuer_mldsa = fixture.issuer_mldsa_hex,
         );
         let config = load_config(&json);
-        let err = match RelayRuntime::new_for_test(config) {
+        let err = match RelayRuntime::new_for_test(config.config) {
             Ok(_) => panic!("expired certificate must fail at startup"),
             Err(err) => err,
         };
@@ -3143,7 +3159,7 @@ mod tests {
             mismatch = mismatch_hex,
         );
         let config = load_config(&json);
-        match RelayRuntime::new_for_test(config) {
+        match RelayRuntime::new_for_test(config.config) {
             Err(RelayError::Config(ConfigError::Handshake(message))) => {
                 assert!(
                     message.contains("descriptor_commit_hex"),
@@ -3311,7 +3327,7 @@ mod tests {
             fixture.handshake_config_json(fixture.manifest_file.path()),
         );
         let config = load_config(&json);
-        let runtime = RelayRuntime::new_for_test(config).expect("runtime");
+        let runtime = RelayRuntime::new_for_test(config.config).expect("runtime");
         let context = runtime.circuit_context();
         let expected_private =
             PrivateKey::from_bytes(Algorithm::Ed25519, &seed).expect("configured key parse");
@@ -3370,7 +3386,7 @@ mod tests {
             replay_path.display()
         );
         let config = load_config(&json);
-        let runtime = RelayRuntime::new_for_test(config).expect("runtime");
+        let runtime = RelayRuntime::new_for_test(config.config).expect("runtime");
         let context = runtime.circuit_context();
         assert!(context.dos.is_pow_required());
         assert_eq!(context.dos.current_pow_parameters().difficulty(), 6);
@@ -3405,7 +3421,7 @@ mod tests {
             replay_path.display()
         );
         let config = load_config(&json);
-        match RelayRuntime::new_for_test(config) {
+        match RelayRuntime::new_for_test(config.config) {
             Err(RelayError::Config(ConfigError::TicketReplayStore(message))) => {
                 assert!(
                     message.contains("parse"),
@@ -3433,7 +3449,7 @@ mod tests {
             fixture.handshake_config_json(fixture.manifest_file.path()),
         );
         let config = load_config(&json);
-        let runtime = RelayRuntime::new_for_test(config).expect("runtime");
+        let runtime = RelayRuntime::new_for_test(config.config).expect("runtime");
         let context = runtime.circuit_context();
         let expected_private =
             PrivateKey::from_bytes(Algorithm::Ed25519, &seed).expect("manifest key parse");
@@ -3469,7 +3485,7 @@ mod tests {
             fixture.handshake_config_json(fixture.manifest_file.path()),
         );
         let config = load_config(&json);
-        match RelayRuntime::new_for_test(config) {
+        match RelayRuntime::new_for_test(config.config) {
             Err(RelayError::Config(ConfigError::DescriptorManifest { message, .. })) => {
                 assert!(
                     message.contains("missing"),

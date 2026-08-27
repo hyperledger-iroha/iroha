@@ -10,7 +10,7 @@
 //! follow the layout of the specification:
 //!
 //! * [`instruction`] – opcode constants and bit-field helpers
-//! * [`decoder`] – 16/32‑bit instruction decoder
+//! * [`decoder`] – fixed-width 32-bit instruction decoder
 //! * [`memory`] – region based memory with permission checks
 //! * [`gas`] – gas accounting utilities
 //! * [`host`] – syscall trait and default implementation
@@ -18,10 +18,9 @@
 //! * [`zk`] – zero‑knowledge mode support
 //!
 //! Run `cargo doc --open` to build the API reference locally. Documentation for
-//! the latest release is also hosted on <https://docs.rs/ivm>. You can use
-//! `cargo doc --no-deps --features "parallel"` to see docs for optional
-//! features or set `RUSTDOCFLAGS="--document-private-items"` for a
-//! more exhaustive view. The generated `instruction` module provides detailed
+//! the latest release is also hosted on <https://docs.rs/ivm>. Set
+//! `RUSTDOCFLAGS="--document-private-items"` for a more exhaustive view. The
+//! generated `instruction` module provides detailed
 //! commentary on every opcode constant and is summarised in
 //! [`docs/opcodes.md`](../docs/opcodes.md).
 mod aes;
@@ -29,7 +28,6 @@ pub mod analysis;
 mod argument_record;
 pub mod axt;
 pub mod bn254_vec;
-mod branch_predictor;
 mod byte_merkle_tree;
 pub mod contract_artifact;
 mod core_host;
@@ -73,14 +71,11 @@ pub mod pointer_abi;
 mod poseidon;
 mod prepared;
 pub mod private_input;
-pub mod register_file;
 mod registers;
 pub mod runtime;
 pub mod schema_registry;
-pub mod segmented_memory;
 mod sha3;
 pub mod signature;
-pub mod simple_instruction;
 pub mod stack_policy;
 mod state_overlay;
 #[path = "state_value.rs"]
@@ -98,7 +93,6 @@ use std::sync::{Mutex, OnceLock};
 pub mod parallel;
 /// Canonical host-independent builders for generated executor fixtures.
 pub mod prebuilt_fixtures;
-pub mod tx_parallel;
 // Test/fixture helpers (public for tests and dev tools)
 pub mod predecoder_fixtures;
 // Re-export AES helpers used by benches and downstream users.
@@ -114,7 +108,7 @@ pub use crate::argument_record::{
     encode_argument_record_from_json, prepare_argument_record_with_gas_limit,
     reset_argument_record_decode_count, validate_argument_record,
 };
-pub use crate::gas::{cost_of, cost_of_with_params};
+pub use crate::gas::{cost_of, cost_of_with_vector_len};
 #[cfg(feature = "cuda")]
 pub use crate::gpu_manager::GpuManager;
 #[cfg(not(feature = "cuda"))]
@@ -140,7 +134,6 @@ pub use crate::{
         aes128_decrypt_many, aes128_encrypt_many, aes128_expand_key, aesdec, aesdec_impl,
         aesdec_n_rounds_many, aesenc, aesenc_impl, aesenc_n_rounds_many, sbox,
     },
-    branch_predictor::BranchPredictor,
     byte_merkle_tree::ByteMerkleTree,
     cuda::{
         aesdec_batch_cuda, aesdec_cuda, aesdec_rounds_batch_cuda, aesenc_batch_cuda, aesenc_cuda,
@@ -166,8 +159,7 @@ pub use crate::{
     iso20022::*,
     ivm::{IVM, RuntimeTemplate, RuntimeTemplateResetError, TraceMode, set_banner_enabled},
     ivm_cache::{
-        CacheStats, DecodedOp, IvmCache, global_cache, global_counters, global_get_with_meta,
-        global_stats,
+        CacheStats, DecodedOp, IvmCache, global_cache, global_counters, global_get, global_stats,
     },
     kotodama::compiler::Compiler as KotodamaCompiler,
     memory::{AccessRange, Memory, WriteLogEntry},
@@ -187,11 +179,8 @@ pub use crate::{
         AccountId, AssetDefinitionId, DomainId, MockWorldStateView, PermissionToken, WsvHost,
     },
     registers::Registers,
-    segmented_memory::{Memory as SegmentedMemory, Segment},
     signature::{SignatureScheme, verify_signature},
-    simple_instruction::Instruction,
     state_overlay::{DurableStateOverlay, DurableStateSnapshot},
-    tx_parallel::{PostRunPhase, Transaction, execute_transactions_parallel},
     vector::{
         SimdChoice, bit_pipe_compile_count, clear_forced_simd, clear_thread_forced_simd,
         forced_simd_test_lock, metal_available, metal_disabled, release_metal_state,

@@ -315,7 +315,7 @@ final class TxBuilderTests: XCTestCase {
             line: line
         )
         XCTAssertEqual(domain.remaining(), 0, file: file, line: line)
-        for _ in 0..<8 {
+        for _ in 0..<9 {
             _ = try transaction.readCompactField()
         }
         XCTAssertEqual(transaction.remaining(), 0, file: file, line: line)
@@ -660,7 +660,7 @@ final class TxBuilderTests: XCTestCase {
                 networkId: Self.fixtureNetworkId,
                 anchor: try AliasPlanAnchorV1(
                     blockHeight: 9,
-                    blockHash: String(repeating: "01", count: 32)
+                    blockHash: NetworkId(bytes: Data(repeating: 0x01, count: 32)).literal
                 ),
                 resources: [
                     AliasPlanResourceV1(
@@ -767,7 +767,7 @@ final class TxBuilderTests: XCTestCase {
                 networkId: Self.fixtureNetworkId,
                 anchor: try AliasPlanAnchorV1(
                     blockHeight: 9,
-                    blockHash: String(repeating: "01", count: 32)
+                    blockHash: NetworkId(bytes: Data(repeating: 0x01, count: 32)).literal
                 ),
                 operation: .renewLease(renewal),
                 disposition: .apply,
@@ -1785,8 +1785,8 @@ final class TxBuilderTests: XCTestCase {
         let codeHash = Data(repeating: 0x11, count: 32)
         let abiHash = Data(repeating: 0x22, count: 32)
         let provenance = ToriiContractManifestProvenance(
-            signer: "ed25519:public",
-            signature: "ed25519:signature"
+            signer: Self.fixtureClaimAccountMultihash,
+            signature: Self.fixtureClaimSignatureHex
         )
         let request = try ProposeDeployContractRequest(networkId: Self.fixtureNetworkId,
                                                        authority: authority,
@@ -2234,10 +2234,13 @@ final class TxBuilderTests: XCTestCase {
             XCTFail("Expected pipeline failure")
         } catch let error as PipelineStatusError {
             switch error {
-            case .failure:
+            case .failure(let hash, let status, _):
+                XCTAssertEqual(status, "Rejected")
+                XCTAssertEqual(Data(hexString: hash)?.count, 32)
+                XCTAssertNotEqual(hash, Self.pipelineHash)
                 XCTAssertEqual(
                     error.localizedDescription,
-                    "Pipeline transaction \(Self.pipelineHash) failed with status Rejected."
+                    "Pipeline transaction \(hash) failed with status Rejected."
                 )
             default:
                 XCTFail("Unexpected error: \(error)")
@@ -2537,6 +2540,19 @@ final class TxBuilderTests: XCTestCase {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [PipelineURLProtocol.self]
         let session = URLSession(configuration: config)
-        return IrohaSDK(baseURL: URL(string: "https://example.test")!, session: session)
+        let keypair = try makeFixtureKeypair()
+        return IrohaSDK(
+            baseURL: URL(string: "https://example.test")!,
+            session: session,
+            localSigningContext: ToriiLocalSigningContext(
+                networkId: Self.fixtureNetworkId
+            ),
+            canonicalRequestAuth: ToriiCanonicalRequestAuth(
+                accountId: AccountId.make(publicKey: keypair.publicKey),
+                privateKey: keypair.privateKeyBytes,
+                timestampMs: Self.fixtureCreationTimeMs,
+                nonce: "tx-builder-pipeline"
+            )
+        )
     }
 }

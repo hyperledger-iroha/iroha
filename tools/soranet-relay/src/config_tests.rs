@@ -20,11 +20,11 @@ macro_rules! config_fixture {
         )
     };
 }
-fn write_config(json: &str) -> PathBuf {
+fn write_config(json: &str) -> NamedTempFile {
     let file = NamedTempFile::new_in(std::env::current_dir().expect("current directory"))
         .expect("create temp file");
     std::fs::write(file.path(), json).expect("write config");
-    file.into_temp_path().keep().expect("persist temp file")
+    file
 }
 fn write_manifest(json: &str) -> NamedTempFile {
     let file = NamedTempFile::new_in(std::env::current_dir().expect("current directory"))
@@ -1963,7 +1963,9 @@ fn compliance_salt_rejects_permissions_symlinks_and_noncanonical_encoding() {
     std::fs::set_permissions(salt_file.path(), std::fs::Permissions::from_mode(0o600))
         .expect("restore private salt permissions");
 
-    let link_path = salt_file.path().with_extension("link");
+    let link_directory = tempfile::tempdir_in(std::env::current_dir().expect("current directory"))
+        .expect("create salt symlink directory");
+    let link_path = link_directory.path().join("salt-link");
     symlink(salt_file.path(), &link_path).expect("create salt symlink");
     config.hash_salt_path = Some(link_path);
     assert!(config.hash_salt_bytes().is_err());

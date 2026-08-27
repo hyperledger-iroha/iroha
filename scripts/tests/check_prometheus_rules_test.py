@@ -29,6 +29,22 @@ def checker_env(bin_dir: Path, **extra: str) -> dict[str, str]:
     }
 
 
+def test_requires_at_least_one_rule_file(tmp_path: Path) -> None:
+    """The generic wrapper must not silently select a retired default pack."""
+
+    result = subprocess.run(
+        [str(CHECKER)],
+        cwd=REPO_ROOT,
+        env=checker_env(tmp_path),
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 2
+    assert "Usage:" in result.stderr
+
+
 def test_checks_every_supplied_rule_file(tmp_path: Path) -> None:
     """Every wildcard-expanded rule path must reach one promtool invocation."""
 

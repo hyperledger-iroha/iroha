@@ -94,12 +94,6 @@ data class SumeragiNposDiagnostics(
     @Serializable(with = SumeragiU64Serializer::class)
     @SerialName("epoch_length_blocks")
     val epochLengthBlocks: BigInteger,
-    @Serializable(with = SumeragiU64Serializer::class)
-    @SerialName("vrf_commit_deadline_offset")
-    val vrfCommitDeadlineOffset: BigInteger,
-    @Serializable(with = SumeragiU64Serializer::class)
-    @SerialName("vrf_reveal_deadline_offset")
-    val vrfRevealDeadlineOffset: BigInteger,
     @SerialName("epoch_seed") val epochSeed: List<Int>,
     @Serializable(with = SumeragiU64Serializer::class)
     @SerialName("prf_height")
@@ -110,15 +104,7 @@ data class SumeragiNposDiagnostics(
 ) {
     init {
         requireU64(epochLengthBlocks, "epochLengthBlocks")
-        requireU64(vrfCommitDeadlineOffset, "vrfCommitDeadlineOffset")
-        requireU64(vrfRevealDeadlineOffset, "vrfRevealDeadlineOffset")
-        require(
-            epochLengthBlocks.signum() > 0 &&
-                vrfCommitDeadlineOffset.signum() > 0 &&
-                vrfRevealDeadlineOffset.signum() > 0 &&
-                vrfCommitDeadlineOffset < vrfRevealDeadlineOffset &&
-                vrfRevealDeadlineOffset <= epochLengthBlocks
-        ) { "NPoS diagnostics windows must be strictly ordered within the epoch" }
+        require(epochLengthBlocks.signum() > 0) { "NPoS diagnostics epoch length must be positive" }
         require(epochSeed.size == 32 && epochSeed.all { it in 0..255 } && epochSeed.any { it != 0 }) {
             "NPoS diagnostics epoch seed must be an exact non-zero 32-byte vector"
         }

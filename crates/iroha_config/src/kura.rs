@@ -21,10 +21,13 @@ pub enum InitMode {
     /// hash, then checks the exact durable Kura boundary. The full snapshot payload and Merkle
     /// sidecar are required and metadata-bound but are not read, hashed, or decoded. Fast constructs
     /// only a minimal World/Nexus, maps the exact Kura hash prefix read-only, and leaves every
-    /// derived index and durable recovery journal unopened. Torii exposes only bounded operational
-    /// probes and diagnostics. Local transaction/lane/merge production stays quarantined;
-    /// canonical mutation, repair, import, streaming persistence, Torii proxy control, and
-    /// consensus-topic subscription are rejected or omitted. Optional durable application
+    /// derived index and durable recovery journal unopened. Missing or malformed deferred merge
+    /// state and pending auxiliary recovery artifacts are ignored and left untouched for Strict.
+    /// Torii exposes only bounded operational probes and diagnostics. Local
+    /// transaction/lane/merge production stays quarantined;
+    /// canonical mutation, writer startup, sidecar queueing, repair, import, streaming
+    /// persistence, Torii proxy control, and consensus-topic subscription are rejected or
+    /// omitted. Optional durable application
     /// services, background state workers, Sumeragi, and transaction gossip remain offline.
     /// Operators should return to [`Self::Strict`] after service is restored so the complete chain,
     /// payload, Merkle tree, indexes, and auxiliary histories are audited before production

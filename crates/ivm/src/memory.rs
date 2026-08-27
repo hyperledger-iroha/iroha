@@ -547,34 +547,6 @@ impl Memory {
         self.record_read_range(addr, 1);
         Ok(self.data[addr as usize])
     }
-    /// Load a 16-bit value (little-endian) from memory.
-    #[inline]
-    pub fn load_u16(&self, addr: u64) -> Result<u16, VMError> {
-        // Ensure 2 bytes and alignment (must be 2-byte aligned)
-        if unlikely(!addr.is_multiple_of(2)) {
-            return Err(VMError::MisalignedAccess { addr: addr as u32 });
-        }
-        self.check_perm(addr, 2, Perm::READ)?;
-        let bytes: [u8; 2] = self.data[addr as usize..addr as usize + 2]
-            .try_into()
-            .unwrap();
-        self.record_read_range(addr, 2);
-        Ok(u16::from_le_bytes(bytes))
-    }
-    /// Fetch a 16-bit value intended for instruction decoding. Requires execute
-    /// permission in addition to read.
-    #[inline]
-    pub fn fetch_u16(&self, addr: u64) -> Result<u16, VMError> {
-        if unlikely(!addr.is_multiple_of(2)) {
-            return Err(VMError::MisalignedAccess { addr: addr as u32 });
-        }
-        self.check_perm(addr, 2, Perm::READ | Perm::EXECUTE)?;
-        let bytes: [u8; 2] = self.data[addr as usize..addr as usize + 2]
-            .try_into()
-            .unwrap();
-        self.record_read_range(addr, 2);
-        Ok(u16::from_le_bytes(bytes))
-    }
     /// Load a 32-bit value (little-endian) from memory.
     #[inline]
     pub fn load_u32(&self, addr: u64) -> Result<u32, VMError> {
@@ -705,19 +677,6 @@ impl Memory {
         self.data[addr as usize] = value;
         self.update_merkle(addr as usize, 1);
         self.record_write(addr, &[value]);
-        Ok(())
-    }
-    /// Store a 16-bit value (little-endian) into memory.
-    #[inline]
-    pub fn store_u16(&mut self, addr: u64, value: u16) -> Result<(), VMError> {
-        if unlikely(!addr.is_multiple_of(2)) {
-            return Err(VMError::MisalignedAccess { addr: addr as u32 });
-        }
-        self.check_perm(addr, 2, Perm::WRITE)?;
-        self.check_output_append_only(addr, 2)?;
-        self.data[addr as usize..addr as usize + 2].copy_from_slice(&value.to_le_bytes());
-        self.update_merkle(addr as usize, 2);
-        self.record_write(addr, &value.to_le_bytes());
         Ok(())
     }
     /// Store a 32-bit value (little-endian) into memory.

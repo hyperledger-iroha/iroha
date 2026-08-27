@@ -583,18 +583,60 @@ mod unix_main {
             .and_then(Path::file_name)
             .is_some_and(|name| name == "iroha-runtime-provider-broker-v1")
     }
+    #[cfg(any(test, target_os = "macos"))]
+    fn launchd_threshold_bundle_fifo_metadata_is_exact_v1(
+        file_type: rustix::fs::FileType,
+        owner_uid: u32,
+        link_count: u64,
+        mode: u32,
+    ) -> bool {
+        file_type == rustix::fs::FileType::Fifo
+            && owner_uid == 0
+            && link_count == 1
+            && mode & 0o7777 == 0o600
+    }
+    #[cfg(target_os = "macos")]
+    fn validate_launchd_threshold_bundle_stdin_v1(stdin: &std::io::Stdin) -> Result<(), CliError> {
+        use std::os::fd::AsFd as _;
+
+        let metadata = rustix::fs::fstat(stdin.as_fd()).map_err(|_| CliError::Credential)?;
+        let owner_uid = u32::try_from(metadata.st_uid).map_err(|_| CliError::Credential)?;
+        let link_count = u64::try_from(metadata.st_nlink).map_err(|_| CliError::Credential)?;
+        if !launchd_threshold_bundle_fifo_metadata_is_exact_v1(
+            rustix::fs::FileType::from_raw_mode(metadata.st_mode),
+            owner_uid,
+            link_count,
+            u32::from(metadata.st_mode),
+        ) {
+            return Err(CliError::Credential);
+        }
+        Ok(())
+    }
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn run_standard_runtime_provider_broker() -> Result<(), CliError> {
         let args = RuntimeProviderBrokerExecutableArgsV1::parse();
         let catalog = load_runtime_provider_broker_catalog_file_v1(args.catalog_path())
             .map_err(|_| CliError::Binding)?;
-        let credential_directory = env::var_os("CREDENTIALS_DIRECTORY").map(PathBuf::from);
-        let threshold_signers =
+        #[cfg(target_os = "linux")]
+        let threshold_signers = {
+            let credential_directory = env::var_os("CREDENTIALS_DIRECTORY").map(PathBuf::from);
             RuntimeConsensusThresholdSignerBackendsV1::load_from_credential_directory_v1(
                 &catalog,
                 credential_directory.as_deref(),
             )
-            .map_err(|_| CliError::Credential)?;
+            .map_err(|_| CliError::Credential)?
+        };
+        #[cfg(target_os = "macos")]
+        let threshold_signers = {
+            let stdin = std::io::stdin();
+            validate_launchd_threshold_bundle_stdin_v1(&stdin)?;
+            let mut credential_bundle = stdin.lock();
+            RuntimeConsensusThresholdSignerBackendsV1::load_from_launchd_credential_bundle_v1(
+                &catalog,
+                &mut credential_bundle,
+            )
+            .map_err(|_| CliError::Credential)?
+        };
         let mut signers =
             ExternalSoftwareSignerBackendsV1::new().with_base_registry(Arc::new(threshold_signers));
         for configured in catalog.iter() {
@@ -1492,6 +1534,27 @@ mod unix_main {
                     .to_string()
                     .contains("broker-native-signers")
             );
+        }
+        #[test]
+        fn launchd_threshold_bundle_requires_exact_root_fifo_custody() {
+            let fifo = rustix::fs::FileType::Fifo;
+            assert!(launchd_threshold_bundle_fifo_metadata_is_exact_v1(
+                fifo, 0, 1, 0o600
+            ));
+            for (file_type, owner_uid, link_count, mode) in [
+                (rustix::fs::FileType::RegularFile, 0, 1, 0o600),
+                (fifo, 501, 1, 0o600),
+                (fifo, 0, 2, 0o600),
+                (fifo, 0, 1, 0o640),
+                (fifo, 0, 1, 0o4600),
+            ] {
+                assert!(
+                    !launchd_threshold_bundle_fifo_metadata_is_exact_v1(
+                        file_type, owner_uid, link_count, mode,
+                    ),
+                    "unsafe launchd credential metadata must fail closed"
+                );
+            }
         }
         #[test]
         fn artifact_io_rejects_ancestor_symlinks_and_hardlinks() {

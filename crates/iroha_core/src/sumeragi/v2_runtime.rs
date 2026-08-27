@@ -75,8 +75,8 @@ use super::{
         AuthenticatedRecoveredWalValidateLedgerParent, AuthenticatedRecoveredWalVoteProjection,
         DurableCertifiedFetchPendingMintPermit, DurableLifecycleOutputPendingMintPermit,
         DurableStandaloneValidatePendingMintPermit, DurableValidateReplayEvidenceV1,
-        LifecycleDecisionApplyLineageV1, PreparedReadyDurableValidateAdapterPreview,
-        PreparedReadyDurableValidateExecution, ReadyDurableValidateAdapterPreviewError,
+        PreparedReadyDurableValidateAdapterPreview, PreparedReadyDurableValidateExecution,
+        ReadyDurableValidateAdapterPreviewError,
         RecoveredLifecycleNextWalVoteCandidateProjectionV1, RecoveredLifecycleNextWalVoteSealV1,
         RecoveredWalVoteReplayEvidenceV1, RuntimeLifecycleOrdinalAuthority,
         runtime_lifecycle_ordinal_authority_after_high_watermark,
@@ -1516,7 +1516,7 @@ impl PreTimeoutLockedPrepareQcTargetV1 {
     }
 }
 
-/// Move-only authority for one fixed-cut pre-timeout PrepareQC scan.
+/// Move-only authority for one fixed-cut pre-timeout locked-Prepare scan.
 ///
 /// The cut never owns a future ingress occurrence. It is valid only while the
 /// same frozen timeout owner, current reducer tag, and unchanged-lock target
@@ -9362,17 +9362,19 @@ pub(crate) trait RuntimeDriver {
     fn pre_timeout_locked_prepare_qc_target(&self) -> Option<PreTimeoutLockedPrepareQcTargetV1> {
         None
     }
-    /// Deep-preview one wire PrepareQC without mutating live adapter state.
-    /// Production accepts only an immediate exact `LockAndCommit` append.
+    /// Deep-preview one fixed-cut locked-body Prepare carrier without
+    /// mutating live adapter state. Production accepts either a productive
+    /// exact Prepare vote or an immediate exact PrepareQC-to-`LockAndCommit`
+    /// transition.
     fn wire_previews_pre_timeout_locked_prepare_qc(
         &self,
-        _certificate: &wire::QuorumCertificate,
+        _payload: &wire::ConsensusMessageV2Payload,
         _target: PreTimeoutLockedPrepareQcTargetV1,
     ) -> bool {
         false
     }
-    /// Return whether an already-authenticated runtime command is the exact
-    /// PrepareQC admitted by the same deep preview.
+    /// Return whether an already-authenticated runtime command is exact
+    /// locked-body Prepare progress admitted by the same deep preview.
     fn command_previews_pre_timeout_locked_prepare_qc(
         &self,
         _command: &Self::Command,
@@ -9690,10 +9692,10 @@ impl RuntimeDriver for SumeragiV2Adapter {
     }
     fn wire_previews_pre_timeout_locked_prepare_qc(
         &self,
-        certificate: &wire::QuorumCertificate,
+        payload: &wire::ConsensusMessageV2Payload,
         target: PreTimeoutLockedPrepareQcTargetV1,
     ) -> bool {
-        self.pre_timeout_locked_prepare_qc_stages_lock_and_commit(certificate, target)
+        self.pre_timeout_locked_prepare_progress_is_exact(payload, target)
     }
     fn command_previews_pre_timeout_locked_prepare_qc(
         &self,
@@ -9703,13 +9705,9 @@ impl RuntimeDriver for SumeragiV2Adapter {
         matches!(
             command,
             AdapterCommand::Authenticated(authenticated)
-                if matches!(
+                if self.pre_timeout_locked_prepare_progress_is_exact(
                     authenticated.payload(),
-                    wire::ConsensusMessageV2Payload::QuorumCertificate(certificate)
-                        if self.pre_timeout_locked_prepare_qc_stages_lock_and_commit(
-                            certificate,
-                            target,
-                        )
+                    target,
                 )
         )
     }
@@ -11181,7 +11179,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         Ok(())
     }
     /// Freeze the already-due timeout owner and mint one fixed-cut
-    /// unchanged-lock PrepareQC scan authority.
+    /// unchanged-lock Prepare-progress scan authority.
     ///
     /// `None` does not defer the timeout: it means either the deadline is not
     /// due or the reducer has no exact current validated unchanged-lock target
@@ -11264,14 +11262,9 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         payload: &wire::ConsensusMessageV2Payload,
     ) -> bool {
         self.pre_timeout_locked_prepare_qc_cut_is_current(cut)
-            && matches!(
-                payload,
-                wire::ConsensusMessageV2Payload::QuorumCertificate(certificate)
-                    if self.driver.wire_previews_pre_timeout_locked_prepare_qc(
-                        certificate,
-                        cut.target,
-                    )
-            )
+            && self
+                .driver
+                .wire_previews_pre_timeout_locked_prepare_qc(payload, cut.target)
     }
     fn validate_clock_owner_physical_cuts(&self) -> Result<(), EnqueueError> {
         let timeout_is_paired =
@@ -13722,14 +13715,15 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         Ok(RuntimeStep::Advanced(effects))
     }
-    /// Dispatch at most one already-admitted exact unchanged-lock PrepareQC
-    /// ahead of its frozen, already-due timeout occurrence.
+    /// Dispatch at most one already-admitted exact unchanged-lock Prepare
+    /// carrier ahead of its frozen, already-due timeout occurrence.
     ///
     /// Absence consumes no scheduler owner. A selected command must be direct
     /// authenticated Progress ingress, physically older than the cut, and
-    /// must still deep-preview as one immediate `LockAndCommit` append in the
-    /// current adapter state. Retry, Busy-deferred retention, or a post-cut
-    /// carrier is a contract violation rather than additional grace.
+    /// must still deep-preview as a productive exact Prepare vote or one
+    /// immediate `LockAndCommit` append in the current adapter state. Retry,
+    /// Busy-deferred retention, or a post-cut carrier is a contract violation
+    /// rather than additional grace.
     pub(crate) fn try_step_pre_timeout_locked_prepare_qc(
         &mut self,
         now: Instant,
@@ -15359,6 +15353,7 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
     /// Return whether a typed lifecycle Decision Apply may freeze reducer mutation.
     pub(in crate::sumeragi) fn lifecycle_decision_apply_dispatch_available(&self) -> bool {
         !self.fail_closed
+            && self.ingress.len() == 0
             && self.pending_effect_ownership.is_none()
             && self.last_scheduler_ownership.is_none()
             && self.pending_leader_wire_terminals.is_empty()
@@ -15368,10 +15363,8 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         &mut self,
         authority: LifecycleDecisionApplyAdapterCompletionAuthorityV1,
     ) -> Result<PreparedLifecycleDecisionApplyAdapterCompletionV1<'_>, AdapterError> {
-        let recovered_requires_empty_ingress =
-            authority.lineage() == LifecycleDecisionApplyLineageV1::Recovered;
         if self.fail_closed
-            || (recovered_requires_empty_ingress && self.ingress.len() != 0)
+            || self.ingress.len() != 0
             || self.pending_effect_ownership.is_some()
             || self.last_scheduler_ownership.is_some()
             || !self.pending_leader_wire_terminals.is_empty()

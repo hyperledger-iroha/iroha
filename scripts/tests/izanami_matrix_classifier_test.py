@@ -73,6 +73,35 @@ def test_matrix_classifier_keeps_final_liveness_failure_markers() -> None:
         assert marker in pattern
 
 
+def test_matrix_rejects_retired_packet_loss_execution_surface(tmp_path: Path) -> None:
+    source = SCRIPT.read_text(encoding="utf-8")
+    assert "--fault-enable-network-packet-loss" not in source
+    assert "--fault-network-packet-loss-percent" not in source
+    assert "--packet-loss-sweep" not in source
+    assert "faults_network_partition=(" in source
+    assert "--fault-enable-network-partition=true" in source
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(SCRIPT),
+            "--out",
+            str(tmp_path / "matrix"),
+            "--only",
+            "packet-loss",
+            "--izanami-cmd",
+            "true",
+        ],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "unsupported scenario: packet-loss" in result.stderr
+
+
 def test_matrix_classifier_does_not_match_tolerated_fault_metadata(tmp_path: Path) -> None:
     pattern = _classifier_degraded_pattern()
 

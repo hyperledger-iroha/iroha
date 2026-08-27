@@ -89,8 +89,6 @@ enum MessageKind {
     CertifiedBodyResponse,
     CommitCertificateRequest,
     CommitCertificateResponse,
-    VrfCommit,
-    VrfReveal,
     GlobalBeaconPartialSignature,
 }
 impl MessageKind {
@@ -115,8 +113,6 @@ impl MessageKind {
             "certified_body_response" => Ok(Self::CertifiedBodyResponse),
             "commit_certificate_request" => Ok(Self::CommitCertificateRequest),
             "commit_certificate_response" => Ok(Self::CommitCertificateResponse),
-            "vrf_commit" => Ok(Self::VrfCommit),
-            "vrf_reveal" => Ok(Self::VrfReveal),
             "global_beacon_partial_signature" => Ok(Self::GlobalBeaconPartialSignature),
             _ => Err(ControlError::InvalidField("kind")),
         }
@@ -136,8 +132,6 @@ impl MessageKind {
             Self::CertifiedBodyResponse => "certified_body_response",
             Self::CommitCertificateRequest => "commit_certificate_request",
             Self::CommitCertificateResponse => "commit_certificate_response",
-            Self::VrfCommit => "vrf_commit",
-            Self::VrfReveal => "vrf_reveal",
             Self::GlobalBeaconPartialSignature => "global_beacon_partial_signature",
         }
     }
@@ -1189,10 +1183,7 @@ fn parse_rule(value: &Value) -> Result<Rule, ControlError> {
             && proposal_height.is_none()
             && proposal_view.is_none()
     };
-    if matches!(
-        kind,
-        MessageKind::CommitCertificateRequest | MessageKind::VrfCommit | MessageKind::VrfReveal
-    ) {
+    if kind == MessageKind::CommitCertificateRequest {
         return Err(ControlError::KindHasNoExactRound);
     }
     if !valid_coordinates {
@@ -1579,22 +1570,6 @@ fn message_meta(
                 None,
                 value.certificate.signers.clone(),
             ),
-            ConsensusMessageV2Payload::VrfCommit(value) => (
-                MessageKind::VrfCommit,
-                None,
-                None,
-                None,
-                Some(value.signer),
-                Vec::new(),
-            ),
-            ConsensusMessageV2Payload::VrfReveal(value) => (
-                MessageKind::VrfReveal,
-                None,
-                None,
-                None,
-                Some(value.signer),
-                Vec::new(),
-            ),
             ConsensusMessageV2Payload::GlobalBeaconPartialSignature(value) => (
                 MessageKind::GlobalBeaconPartialSignature,
                 Some(value.round),
@@ -1723,15 +1698,6 @@ fn validate_message_meta(meta: &MessageMeta) -> Result<(), ControlError> {
                 && !has_certificate_signers
                 && has_manifest_hash
                 && has_chunk_index
-        }
-        MessageKind::VrfCommit | MessageKind::VrfReveal => {
-            meta.height.is_none()
-                && meta.view.is_none()
-                && has_no_subject_or_execution
-                && has_single_signer
-                && !has_certificate_signers
-                && !has_manifest_hash
-                && !has_chunk_index
         }
         MessageKind::GlobalBeaconPartialSignature => {
             has_round
@@ -2165,9 +2131,7 @@ mod tests {
                 None,
                 Vec::new(),
             ),
-            MessageKind::PayloadChunk | MessageKind::VrfCommit | MessageKind::VrfReveal => {
-                (None, None, None, None, Some(0), None, Vec::new())
-            }
+            MessageKind::PayloadChunk => (None, None, None, None, Some(0), None, Vec::new()),
             MessageKind::GlobalBeaconPartialSignature => {
                 (Some(9), Some(2), None, None, Some(0), None, Vec::new())
             }
@@ -2765,8 +2729,6 @@ mod tests {
             MessageKind::CertifiedBodyResponse,
             MessageKind::CommitCertificateRequest,
             MessageKind::CommitCertificateResponse,
-            MessageKind::VrfCommit,
-            MessageKind::VrfReveal,
             MessageKind::GlobalBeaconPartialSignature,
         ] {
             let meta = valid_meta(kind);
@@ -2921,12 +2883,6 @@ mod tests {
             parse_command(&command(vec![uppercase_hash])),
             Err(ControlError::NonCanonicalField("block_hash"))
         ));
-        for kind in [MessageKind::VrfCommit, MessageKind::VrfReveal] {
-            assert!(matches!(
-                parse_command(&command(vec![rule_value(&rule(peer(5), kind, 9, 0))])),
-                Err(ControlError::KindHasNoExactRound)
-            ));
-        }
     }
     #[test]
     fn payload_chunk_rule_roundtrips_and_rejects_incompatible_coordinates() {

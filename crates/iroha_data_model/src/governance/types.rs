@@ -14,7 +14,10 @@ use crate::{
     NetworkId,
     account::AccountId,
     asset::AssetId,
-    isi::sorafs::SorafsProviderGovernanceActionV1,
+    isi::{
+        governance::parliament_timed_ovn_required_chunk_blocks_v1,
+        sorafs::SorafsProviderGovernanceActionV1,
+    },
     musubi::MusubiParliamentActionV1,
     runtime::RuntimeUpgradeManifest,
     smart_contract::{ContractAddress, manifest::ManifestProvenance},
@@ -2214,7 +2217,7 @@ pub struct ParliamentBallotCertificateBindingV1 {
     pub registration_closed_at_height: u64,
     /// Height at which consensus froze the exact survivor roster.
     pub survivors_frozen_at_height: u64,
-    /// Height at which consensus froze the exact timed-OVN ballot corpus.
+    /// Height within the commitment window at which consensus completed the exact corpus.
     pub commitment_closed_at_height: u64,
     /// Configured retry limit frozen for this ballot lifecycle.
     pub max_ballot_retries: u32,
@@ -2615,11 +2618,25 @@ impl GovernanceCertificateV1 {
                     || ballot.opening_deadline_height <= ballot.release_height
                     || ballot.registration_closed_at_height != ballot.registration_close_height
                     || ballot.survivors_frozen_at_height != ballot.survivor_freeze_height
-                    || ballot.commitment_closed_at_height != ballot.commitment_close_height
+                    || ballot.commitment_closed_at_height <= ballot.survivor_freeze_height
+                    || ballot.commitment_closed_at_height > ballot.commitment_close_height
+                    || ballot
+                        .registration_close_height
+                        .saturating_sub(ballot.registered_at_height)
+                        < u64::from(ballot.max_corpus_entries).saturating_add(1)
+                    || ballot
+                        .survivor_freeze_height
+                        .saturating_sub(ballot.registration_close_height)
+                        < u64::from(ballot.max_corpus_entries)
+                    || ballot
+                        .commitment_close_height
+                        .saturating_sub(ballot.survivor_freeze_height)
+                        < parliament_timed_ovn_required_chunk_blocks_v1(ballot.max_corpus_entries)
                     || ballot.max_ballot_retries > MAX_PARLIAMENT_BALLOT_RETRIES_V1
                     || ballot.ballot_attempt_sequence > ballot.max_ballot_retries
                     || !(1..=MAX_PARLIAMENT_BALLOT_CORPUS_ENTRIES_V1)
                         .contains(&ballot.max_corpus_entries)
+                    || ballot.max_corpus_entries < binding.original_seats
                     || ballot.tally.accepted_ballots > ballot.max_corpus_entries
                     || ballot.tally.original_seats != binding.original_seats
                     || ballot.opening_height < ballot.release_height
@@ -3815,14 +3832,14 @@ mod tests {
             BallotAttemptId::derive_v1(body_instance_id, ballot_attempt_sequence);
         let release_beacon_session_id = BeaconSessionId::new([0x85; 32]);
         let tle_key_session_id = TleKeySessionId::new([0x8E; 32]);
-        let release_height = 150;
+        let release_height = 1_757;
         let tle_session_id = TleSessionId::derive_v1(
             ballot_attempt_id,
             tle_key_session_id,
             release_beacon_session_id,
             release_height,
         );
-        let result_height = 200;
+        let result_height = 1_800;
         let opening_root = [0x7E; 32];
         let outcome = ParliamentAggregateOutcomeV1::Approved;
         let result_root = parliament_ballot_result_root_v1(
@@ -3867,18 +3884,18 @@ mod tests {
                     timed_commitment_root: [0x84; 32],
                     release_beacon_session_id,
                     registered_at_height: 140,
-                    registration_close_height: 142,
-                    survivor_freeze_height: 144,
-                    commitment_close_height: 146,
-                    registration_closed_at_height: 142,
-                    survivors_frozen_at_height: 144,
-                    commitment_closed_at_height: 146,
+                    registration_close_height: 641,
+                    survivor_freeze_height: 1_141,
+                    commitment_close_height: 1_157,
+                    registration_closed_at_height: 641,
+                    survivors_frozen_at_height: 1_141,
+                    commitment_closed_at_height: 1_157,
                     max_ballot_retries: 3,
-                    max_corpus_entries: 1_000,
+                    max_corpus_entries: 500,
                     release_height,
-                    opening_deadline_height: result_height,
+                    opening_deadline_height: 2_357,
                     release_pulse_id: BeaconPulseId::new([0x7D; 32]),
-                    opening_height: 150,
+                    opening_height: release_height,
                     opening_root,
                     tally,
                     outcome,
@@ -3903,6 +3920,47 @@ mod tests {
         certificate
             .validate()
             .expect("wide Policy Jury approval is a complete structural certificate");
+
+        let mut underprovisioned_commitment_window = certificate.clone();
+        underprovisioned_commitment_window.body_bindings[0]
+            .ballot
+            .as_mut()
+            .expect("fixture ballot")
+            .max_corpus_entries = 513;
+        assert_eq!(
+            underprovisioned_commitment_window.validate(),
+            Err(GovernanceCertificateErrorV1::InvalidLifecycle)
+        );
+
+        let mut early_completion = certificate.clone();
+        early_completion.body_bindings[0]
+            .ballot
+            .as_mut()
+            .expect("fixture ballot")
+            .commitment_closed_at_height = 1_156;
+        early_completion
+            .validate()
+            .expect("corpus completion may occur before the scheduled window close");
+        let mut completion_at_freeze = early_completion.clone();
+        completion_at_freeze.body_bindings[0]
+            .ballot
+            .as_mut()
+            .expect("fixture ballot")
+            .commitment_closed_at_height = 1_141;
+        assert_eq!(
+            completion_at_freeze.validate(),
+            Err(GovernanceCertificateErrorV1::InvalidLifecycle)
+        );
+        let mut completion_after_close = early_completion;
+        completion_after_close.body_bindings[0]
+            .ballot
+            .as_mut()
+            .expect("fixture ballot")
+            .commitment_closed_at_height = 1_158;
+        assert_eq!(
+            completion_after_close.validate(),
+            Err(GovernanceCertificateErrorV1::InvalidLifecycle)
+        );
 
         let mut with_public_finding = certificate.clone();
         let public_election_attempt_sequence = 0;
@@ -4060,8 +4118,8 @@ mod tests {
             [0x86; 32],
             500,
             500,
-            201,
-            202,
+            1_801,
+            1_802,
             BeaconSessionId::new([0x66; 32]),
             None,
         )
@@ -4073,7 +4131,7 @@ mod tests {
             BodyInstanceId::derive_v1(confirmation.election_attempt_id, confirmation.roster_root);
         confirmation.assignment_root = [0x77; 32];
         confirmation.result_root = [0x78; 32];
-        confirmation.result_height = 300;
+        confirmation.result_height = 3_500;
         let confirmation_ballot_attempt_sequence = 0;
         let confirmation_ballot_attempt_id = BallotAttemptId::derive_v1(
             confirmation.body_instance_id,
@@ -4081,7 +4139,7 @@ mod tests {
         );
         let confirmation_release_beacon_session_id = BeaconSessionId::new([0x8B; 32]);
         let confirmation_tle_key_session_id = TleKeySessionId::new([0x8F; 32]);
-        let confirmation_release_height = 250;
+        let confirmation_release_height = 3_457;
         confirmation.ballot = Some(ParliamentBallotCertificateBindingV1 {
             ballot_attempt_id: confirmation_ballot_attempt_id,
             ballot_attempt_sequence: confirmation_ballot_attempt_sequence,
@@ -4099,19 +4157,19 @@ mod tests {
             no_recovery_root: [0x7C; 32],
             timed_commitment_root: [0x8A; 32],
             release_beacon_session_id: confirmation_release_beacon_session_id,
-            registered_at_height: 240,
-            registration_close_height: 242,
-            survivor_freeze_height: 244,
-            commitment_close_height: 246,
-            registration_closed_at_height: 242,
-            survivors_frozen_at_height: 244,
-            commitment_closed_at_height: 246,
+            registered_at_height: 1_840,
+            registration_close_height: 2_341,
+            survivor_freeze_height: 2_841,
+            commitment_close_height: 2_857,
+            registration_closed_at_height: 2_341,
+            survivors_frozen_at_height: 2_841,
+            commitment_closed_at_height: 2_857,
             max_ballot_retries: 3,
-            max_corpus_entries: 1_000,
+            max_corpus_entries: 500,
             release_height: confirmation_release_height,
-            opening_deadline_height: confirmation.result_height,
+            opening_deadline_height: 4_057,
             release_pulse_id: BeaconPulseId::new([0x8C; 32]),
-            opening_height: 250,
+            opening_height: confirmation_release_height,
             opening_root: [0x8D; 32],
             tally: ParliamentAggregateTallyV1 {
                 original_seats: 500,

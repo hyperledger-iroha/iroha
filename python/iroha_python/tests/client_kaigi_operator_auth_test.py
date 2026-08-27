@@ -24,7 +24,6 @@ from iroha_python import (
 )
 from iroha_python.crypto import Ed25519KeyPair
 
-
 NETWORK_BYTES = bytes([0xB6]) * 32
 NETWORK_ID = NetworkId.from_bytes(NETWORK_BYTES)
 FOREIGN_NETWORK_BYTES = bytes([0xB7]) * 32
@@ -452,7 +451,7 @@ def test_kaigi_diagnostics_sign_exact_network_targets_once() -> None:
         "/v1/kaigi/relays/health",
     )
     assert len(session.calls) == len(targets)
-    for call, target in zip(session.calls, targets):
+    for call, target in zip(session.calls, targets, strict=True):
         assert call["method"] == "GET"
         assert call["url"] == f"https://torii.example{target}"
         assert call["data"] == b""

@@ -42,6 +42,7 @@ const REQUIRED_OUTPUTS = [
   "sumeragiTyped.js",
   "toriiBrowserClient.js",
   "toriiClient.js",
+  "toriiOptional.js",
   "kotodamaCompiler/index.js",
   "kotodamaCompiler/browser.js",
   "kotodamaCompiler/client.js",

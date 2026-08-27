@@ -1,6 +1,6 @@
 //! Predecoder golden vectors for the wide 32-bit encoding. These assertions ensure the cached
 //! decode stream preserves instruction words and lengths across metadata variations.
-use ivm::{ProgramMetadata, VMError, encoding, instruction, ivm_cache::IvmCache};
+use ivm::{ProgramMetadata, VMError, encoding, instruction, ivm_cache::IvmCache, ivm_mode};
 fn push_word(buf: &mut Vec<u8>, word: u32) {
     buf.extend_from_slice(&word.to_le_bytes());
 }
@@ -45,7 +45,7 @@ fn decode_stream_matches_expected_words_and_lengths() {
         encoding::wide::encode_halt(),
     ];
     for (idx, op) in decoded.iter().enumerate() {
-        assert_eq!(op.len, 4, "opcode {idx} should be 4 bytes");
+        assert_eq!(op.pc, (idx * 4) as u64);
         assert_eq!(op.inst, expected[idx], "opcode {idx} word mismatch");
     }
 }
@@ -65,7 +65,6 @@ fn decode_stream_preserves_indexed_literal_and_compact_transfer_words() {
     assert_eq!(decoded.len(), expected.len());
     for (index, op) in decoded.iter().enumerate() {
         assert_eq!(op.pc, (index * 4) as u64);
-        assert_eq!(op.len, 4);
         assert_eq!(op.inst, expected[index]);
     }
 }
@@ -90,7 +89,12 @@ fn decode_artifact_invariant_across_metadata_fields() {
         d
     };
     let golden = decode(&base);
-    for mode in 0u8..=0x07 {
+    for mode in [
+        0,
+        ivm_mode::ZK,
+        ivm_mode::VECTOR,
+        ivm_mode::ZK | ivm_mode::VECTOR,
+    ] {
         let mut m = base.clone();
         m.mode = mode;
         assert_eq!(&*golden, &*decode(&m), "mode 0x{mode:02x}");

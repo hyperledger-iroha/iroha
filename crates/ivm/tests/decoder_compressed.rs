@@ -1,5 +1,5 @@
 use ivm::{Memory, Perm, VMError, decode};
-fn decode_from_bytes(bytes: &[u8]) -> Result<(u32, u32), VMError> {
+fn decode_from_bytes(bytes: &[u8]) -> Result<u32, VMError> {
     let mut mem = Memory::new(bytes.len() as u64);
     mem.load_code(bytes);
     decode(&mem, 0)

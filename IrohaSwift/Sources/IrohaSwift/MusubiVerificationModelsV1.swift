@@ -168,6 +168,18 @@ public struct MusubiProviderIngestCompletionSignerPolicyV1: Codable, Hashable, S
         )
     }
 
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(policyID, forKey: .policyID)
+        try container.encode(revision, forKey: .revision)
+        if let predecessorDigest {
+            try container.encode(predecessorDigest, forKey: .predecessorDigest)
+        } else {
+            try container.encodeNil(forKey: .predecessorDigest)
+        }
+        try container.encode(policyDigest, forKey: .policyDigest)
+    }
+
     private enum CodingKeys: String, CodingKey {
         case policyID = "policy_id"
         case revision

@@ -3,7 +3,7 @@ use crate::{
     config::{ChaosConfig, WorkloadProfile},
     faults::{
         self, CpuStressConfig, DiskSaturationConfig, FaultConfig, NetworkLatencyConfig,
-        NetworkPacketLossConfig, NetworkPartitionConfig,
+        NetworkPartitionConfig,
     },
     instructions::{
         self, AccountRecord, PlanUpdate, PreparedChaos, TransactionPlan, WorkloadEngine,
@@ -2825,15 +2825,12 @@ fn select_fault_targets(peers_len: usize, faulty_peers: usize, rng: &mut StdRng)
     indices.into_iter().take(target_count).collect()
 }
 fn uses_sumeragi_leader_fault_targeting(config: &ChaosConfig) -> bool {
-    let leader_network_fault = (config.faults.network_partition()
-        && !config.faults.network_packet_loss())
-        || (config.faults.network_packet_loss() && !config.faults.network_partition());
     config.faulty_peers == 1
         && !config.faults.crash_restart()
         && !config.faults.wipe_storage()
         && !config.faults.spam_invalid_transactions()
         && !config.faults.network_latency()
-        && leader_network_fault
+        && config.faults.network_partition()
         && !config.faults.cpu_stress()
         && !config.faults.disk_saturation()
 }
@@ -2850,12 +2847,6 @@ fn fault_config_for(config: &ChaosConfig) -> FaultConfig {
         network_partition: toggles
             .network_partition()
             .then_some(NetworkPartitionConfig::default()),
-        network_packet_loss: toggles
-            .network_packet_loss()
-            .then(|| NetworkPacketLossConfig {
-                percent: config.packet_loss_percent..=config.packet_loss_percent,
-                ..NetworkPacketLossConfig::default()
-            }),
         cpu_stress: toggles.cpu_stress().then_some(CpuStressConfig::default()),
         disk_saturation: toggles
             .disk_saturation()
@@ -7553,7 +7544,6 @@ mod tests {
         DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS, DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
         FaultArgs, FaultToggles, IzanamiArgs, NexusProfile, WorkloadProfile,
     };
-    use crate::faults::DEFAULT_NETWORK_PACKET_LOSS_PERCENT;
     use color_eyre::eyre::{WrapErr, eyre};
     use iroha_crypto::Hash;
     use iroha_data_model::isi::SetParameter;
@@ -7602,10 +7592,9 @@ mod tests {
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_enabled_flags([
-                true, true, true, false, false, false, false, false,
+                true, true, true, false, false, false, false,
             ]),
             nexus: None,
             diagnostic_dir: None,
@@ -7921,9 +7910,7 @@ mod tests {
             duration: Duration::from_secs(2),
             seed: Some(42),
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(5),
-            faults: FaultToggles::from_enabled_flags([
-                true, true, true, true, true, false, true, true,
-            ]),
+            faults: FaultToggles::from_enabled_flags([true, true, true, true, true, true, true]),
             nexus: Some(nexus),
             ..test_chaos_config()
         };
@@ -8179,9 +8166,7 @@ mod tests {
             progress_timeout: Duration::from_secs(300),
             tps: 5.0,
             max_inflight: 8,
-            faults: FaultToggles::from_enabled_flags([
-                true, true, true, true, true, false, true, true,
-            ]),
+            faults: FaultToggles::from_enabled_flags([true, true, true, true, true, true, true]),
             nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
             ..test_chaos_config()
         };
@@ -8224,9 +8209,7 @@ mod tests {
             seed: Some(21),
             tps: 7.0,
             max_inflight: 13,
-            faults: FaultToggles::from_enabled_flags([
-                true, true, true, true, true, false, true, true,
-            ]),
+            faults: FaultToggles::from_enabled_flags([true, true, true, true, true, true, true]),
             ..test_chaos_config()
         };
         assert!(is_shared_host_stable_soak(&config));
@@ -8261,9 +8244,7 @@ mod tests {
             seed: Some(17),
             tps: 3.0,
             max_inflight: 6,
-            faults: FaultToggles::from_enabled_flags([
-                true, true, true, true, true, false, true, true,
-            ]),
+            faults: FaultToggles::from_enabled_flags([true, true, true, true, true, true, true]),
             nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
             ..test_chaos_config()
         };
@@ -8287,9 +8268,7 @@ mod tests {
             seed: Some(9),
             tps: 5.0,
             max_inflight: 8,
-            faults: FaultToggles::from_enabled_flags([
-                true, true, true, true, true, false, true, true,
-            ]),
+            faults: FaultToggles::from_enabled_flags([true, true, true, true, true, true, true]),
             nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
             ..test_chaos_config()
         };
@@ -8310,9 +8289,7 @@ mod tests {
             seed: Some(29),
             tps: 4.0,
             max_inflight: 6,
-            faults: FaultToggles::from_enabled_flags([
-                true, true, true, true, true, false, true, true,
-            ]),
+            faults: FaultToggles::from_enabled_flags([true, true, true, true, true, true, true]),
             nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
             ..test_chaos_config()
         };
@@ -8344,9 +8321,7 @@ mod tests {
             seed: Some(5),
             tps: 5.0,
             max_inflight: 8,
-            faults: FaultToggles::from_enabled_flags([
-                true, true, true, true, true, false, true, true,
-            ]),
+            faults: FaultToggles::from_enabled_flags([true, true, true, true, true, true, true]),
             ..test_chaos_config()
         };
         assert_eq!(
@@ -8364,9 +8339,7 @@ mod tests {
             seed: Some(5),
             tps: 5.0,
             max_inflight: 8,
-            faults: FaultToggles::from_enabled_flags([
-                true, true, true, true, true, false, true, true,
-            ]),
+            faults: FaultToggles::from_enabled_flags([true, true, true, true, true, true, true]),
             ..test_chaos_config()
         };
         assert_eq!(
@@ -8389,9 +8362,7 @@ mod tests {
             seed: Some(5),
             tps: 5.0,
             max_inflight: IZANAMI_STABLE_INGRESS_MAX_INFLIGHT_CAP * 8,
-            faults: FaultToggles::from_enabled_flags([
-                true, true, true, true, true, false, true, true,
-            ]),
+            faults: FaultToggles::from_enabled_flags([true, true, true, true, true, true, true]),
             ..test_chaos_config()
         };
         assert_eq!(
@@ -8417,7 +8388,7 @@ mod tests {
             max_inflight: 512,
             submitters: 20,
             faults: FaultToggles::from_enabled_flags([
-                true, false, false, false, false, false, false, false,
+                true, false, false, false, false, false, false,
             ]),
             ..test_chaos_config()
         };
@@ -8446,7 +8417,7 @@ mod tests {
             max_inflight: 512,
             submitters: 20,
             faults: FaultToggles::from_enabled_flags([
-                false, false, false, true, true, false, false, false,
+                false, false, false, true, true, false, false,
             ]),
             ..test_chaos_config()
         };
@@ -8544,9 +8515,7 @@ mod tests {
             tps: 5.0,
             max_inflight: IZANAMI_STABLE_INGRESS_MAX_INFLIGHT_CAP * 8,
             workload_profile: WorkloadProfile::Chaos,
-            faults: FaultToggles::from_enabled_flags([
-                true, true, true, true, true, false, true, true,
-            ]),
+            faults: FaultToggles::from_enabled_flags([true, true, true, true, true, true, true]),
             ..test_chaos_config()
         };
         assert_eq!(
@@ -8670,7 +8639,6 @@ mod tests {
             max_inflight: 1,
             submitters: 7,
             prebuild_tx_buffer: 128,
-            packet_loss_percent: 0,
             log_filter: "info".to_string(),
             faults: FaultToggles::default(),
             ..test_chaos_config()
@@ -8796,9 +8764,7 @@ mod tests {
             seed: Some(11),
             tps: 5.0,
             max_inflight: 8,
-            faults: FaultToggles::from_enabled_flags([
-                true, true, true, true, true, false, true, true,
-            ]),
+            faults: FaultToggles::from_enabled_flags([true, true, true, true, true, true, true]),
             nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
             ..test_chaos_config()
         };
@@ -8818,9 +8784,7 @@ mod tests {
         let config = ChaosConfig {
             duration: Duration::from_secs(2),
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(5),
-            faults: FaultToggles::from_enabled_flags([
-                true, true, true, true, true, false, true, true,
-            ]),
+            faults: FaultToggles::from_enabled_flags([true, true, true, true, true, true, true]),
             nexus: Some(nexus.clone()),
             ..test_chaos_config()
         };
@@ -10295,7 +10259,6 @@ mod tests {
             spam_invalid_transactions: false,
             network_latency: false,
             network_partition: true,
-            network_packet_loss: false,
             cpu_stress: false,
             disk_saturation: false,
         };
@@ -10303,75 +10266,6 @@ mod tests {
         assert!(
             uses_sumeragi_leader_fault_targeting(&config),
             "single-peer partition-only faults should follow Sumeragi leader telemetry"
-        );
-    }
-    #[test]
-    fn sumeragi_leader_targeting_does_not_capture_packet_loss_profile() {
-        let mut args = IzanamiArgs::defaults();
-        args.allow_net = true;
-        args.peers = 7;
-        args.faulty = 2;
-        args.faults = FaultArgs {
-            crash_restart: false,
-            wipe_storage: false,
-            spam_invalid_transactions: false,
-            network_latency: false,
-            network_partition: false,
-            network_packet_loss: true,
-            cpu_stress: false,
-            disk_saturation: false,
-        };
-        let config = ChaosConfig::try_from(args).expect("packet-loss profile should parse");
-        assert!(
-            !uses_sumeragi_leader_fault_targeting(&config),
-            "multi-peer packet-loss runs must keep their configured fault target set"
-        );
-    }
-    #[test]
-    fn sumeragi_leader_targeting_detects_packet_loss_leader_profile() {
-        let mut args = IzanamiArgs::defaults();
-        args.allow_net = true;
-        args.faulty = 1;
-        args.faults = FaultArgs {
-            crash_restart: false,
-            wipe_storage: false,
-            spam_invalid_transactions: false,
-            network_latency: false,
-            network_partition: false,
-            network_packet_loss: true,
-            cpu_stress: false,
-            disk_saturation: false,
-        };
-        let config = ChaosConfig::try_from(args).expect("leader packet-loss profile should parse");
-        assert!(
-            uses_sumeragi_leader_fault_targeting(&config),
-            "single-peer packet-loss faults should follow Sumeragi leader telemetry"
-        );
-    }
-    #[test]
-    fn fault_config_uses_configured_packet_loss_percent() {
-        let mut args = IzanamiArgs::defaults();
-        args.allow_net = true;
-        args.faulty = 1;
-        args.faults = FaultArgs {
-            crash_restart: false,
-            wipe_storage: false,
-            spam_invalid_transactions: false,
-            network_latency: false,
-            network_partition: false,
-            network_packet_loss: true,
-            cpu_stress: false,
-            disk_saturation: false,
-        };
-        args.packet_loss_percent = 25;
-        let config = ChaosConfig::try_from(args).expect("packet-loss profile should parse");
-        let fault_config = fault_config_for(&config);
-        assert_eq!(
-            fault_config
-                .network_packet_loss
-                .expect("packet loss fault should be enabled")
-                .percent,
-            25..=25
         );
     }
     #[test]
@@ -10723,7 +10617,6 @@ mod tests {
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(20),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             log_filter: "info".to_string(),
             faults,
             nexus: nexus.then(|| NexusProfile::sora_defaults().expect("nexus profile")),
@@ -10775,9 +10668,7 @@ mod tests {
         let config = chaos_config_for_audit_window(
             true,
             1,
-            FaultToggles::from_enabled_flags([
-                true, false, false, false, false, false, false, false,
-            ]),
+            FaultToggles::from_enabled_flags([true, false, false, false, false, false, false]),
         );
         let options = throughput_confirmation_wait_options_for(&config);
         assert!(npos_extended_confirmation_window_needed(&config));
@@ -10795,25 +10686,7 @@ mod tests {
         let config = chaos_config_for_audit_window(
             true,
             0,
-            FaultToggles::from_enabled_flags([
-                false, false, false, false, false, false, false, false,
-            ]),
-        );
-        let options = throughput_confirmation_wait_options_for(&config);
-        assert!(npos_extended_confirmation_window_needed(&config));
-        assert_eq!(
-            options.timeout,
-            Duration::from_millis(IZANAMI_NPOS_RECOVERY_CONFIRMATION_TIMEOUT_MS)
-        );
-    }
-    #[test]
-    fn npos_packet_loss_uses_extended_confirmation_window() {
-        let config = chaos_config_for_audit_window(
-            true,
-            1,
-            FaultToggles::from_enabled_flags([
-                false, false, false, false, false, true, false, false,
-            ]),
+            FaultToggles::from_enabled_flags([false, false, false, false, false, false, false]),
         );
         let options = throughput_confirmation_wait_options_for(&config);
         assert!(npos_extended_confirmation_window_needed(&config));
@@ -10827,9 +10700,7 @@ mod tests {
         let config = chaos_config_for_audit_window(
             false,
             1,
-            FaultToggles::from_enabled_flags([
-                true, false, false, false, false, false, false, false,
-            ]),
+            FaultToggles::from_enabled_flags([true, false, false, false, false, false, false]),
         );
         let options = throughput_confirmation_wait_options_for(&config);
         assert!(!npos_extended_confirmation_window_needed(&config));

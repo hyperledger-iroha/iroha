@@ -72,7 +72,10 @@ use iroha_data_model::{
     },
     executor::ExecutorDataModel,
     fastpq::{TransferDeltaTranscript, TransferTranscript, TransferTranscriptBundle},
-    governance::types::{BallotAttemptId, ProposalKind, TleKeySessionId},
+    governance::types::{
+        BallotAttemptId, BallotAttemptStatusV1, BodyInstanceStatusV1, GovernanceAttemptId,
+        GovernanceAttemptStatusV1, ProposalKind, TleKeySessionId,
+    },
     identifier::{IdentifierClaimRecord, IdentifierPolicy, IdentifierPolicyId},
     isi::{
         error::{
@@ -875,8 +878,9 @@ impl<T: MvValue> CellVecExt<T> for CellTransaction<'_, '_, Vec<T>> {
     }
 }
 // Keep the overlay field inventory centralized: constructors for block, transaction, and
-// read-only scopes must evolve together. Privacy ledger fields are available to mutable scopes;
-// the read-only view exposes only the commitment registry used by typed, validated lookups.
+// read-only scopes must evolve together. Privacy ledger and mutable-only derived fields are
+// available to mutable scopes; the read-only view exposes only the privacy commitment registry
+// from that inventory.
 macro_rules! with_world_overlay_fields {
     ($callback:ident $(, $arg:tt)*) => {
         $callback!(
@@ -994,6 +998,7 @@ macro_rules! with_world_overlay_fields {
             privacy_root_heads,
             confidential_policy_transition_index,
             confidential_policy_transition_counts,
+            parliament_timed_ovn_resource_reservations,
             ]
             [
             proofs,
@@ -1123,7 +1128,6 @@ macro_rules! with_world_overlay_fields {
             global_beacon_active_session,
             global_beacon_latest_pulse,
             global_beacon_pulses,
-            vrf_epochs,
             merge_hint_roots,
             merge_global_state_root,
             ]
@@ -3881,6 +3885,14 @@ impl mv::json::JsonKeyCodec for MusubiResolverIndexRevisionV1 {
         Self::new(revision).map_err(|error| json::Error::Message(error.to_string()))
     }
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ParliamentTimedOvnResourceReservationV1 {
+    governance_attempt_id: GovernanceAttemptId,
+    resource_windows: [(u64, u64); 2],
+    cast_capable: bool,
+}
+
 /// The global entity consisting of `domains`, `triggers` and etc.
 /// For example registration of domain, will have this as an ISI target.
 #[derive(Default, JsonSerialize)]
@@ -4495,6 +4507,10 @@ pub struct World {
     /// Canonical attempt-local Parliament reducer state keyed by governance attempt id.
     pub(crate) parliament_attempts:
         Storage<iroha_data_model::governance::types::GovernanceAttemptId, ParliamentAttemptStateV1>,
+    /// Active timed-OVN resource reservations derived from Parliament attempts.
+    #[norito(skip)]
+    parliament_timed_ovn_resource_reservations:
+        Storage<BallotAttemptId, ParliamentTimedOvnResourceReservationV1>,
     /// Finalized public-only adaptive TLE key sessions.
     pub(crate) tle_key_sessions: Storage<TleKeySessionId, TleKeySessionPublicStateV1>,
     /// Singleton pointer to the TLE key session eligible for new ballots.
@@ -4513,8 +4529,6 @@ pub struct World {
     /// Append-only finalized beacon pulse history keyed by canonical pulse id.
     pub(crate) global_beacon_pulses:
         Storage<[u8; 32], iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1>,
-    /// VRF epoch randomness and participation records keyed by epoch index.
-    pub(crate) vrf_epochs: Storage<u64, iroha_data_model::consensus::VrfEpochRecord>,
     /// Placeholder buffer of events pending publication to external subscribers.
     /// Included for formal correctness, although used only below the block level.
     external_event_buf: Cell<Vec<EventBox>>,
@@ -5209,6 +5223,10 @@ pub struct WorldBlock<'world> {
         iroha_data_model::governance::types::GovernanceAttemptId,
         ParliamentAttemptStateV1,
     >,
+    /// Active timed-OVN resource reservations derived from Parliament attempts.
+    #[norito(skip)]
+    parliament_timed_ovn_resource_reservations:
+        StorageBlock<'world, BallotAttemptId, ParliamentTimedOvnResourceReservationV1>,
     /// Finalized public-only adaptive TLE key sessions.
     pub(crate) tle_key_sessions: StorageBlock<'world, TleKeySessionId, TleKeySessionPublicStateV1>,
     /// Singleton TLE key session eligible for new ballots.
@@ -5232,8 +5250,6 @@ pub struct WorldBlock<'world> {
         [u8; 32],
         iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1,
     >,
-    /// VRF epoch randomness and participation records keyed by epoch index.
-    pub(crate) vrf_epochs: StorageBlock<'world, u64, iroha_data_model::consensus::VrfEpochRecord>,
     /// Latest lane merge-hint roots observed via the merge ledger during this block.
     pub(crate) merge_hint_roots: CellBlock<'world, Vec<Hash>>,
     /// Latest reduced global state root observed via the merge ledger during this block.
@@ -5242,16 +5258,6 @@ pub struct WorldBlock<'world> {
     #[norito(skip)]
     external_event_buf: Vec<EventBox>,
 }
-#[cfg(test)]
-impl<'world> WorldBlock<'world> {
-    /// Mutable access to VRF epoch randomness and participation records.
-    pub fn vrf_epochs_mut(
-        &mut self,
-    ) -> &mut StorageBlock<'world, u64, iroha_data_model::consensus::VrfEpochRecord> {
-        &mut self.vrf_epochs
-    }
-}
-
 impl WorldBlock<'_> {
     #[cfg(test)]
     fn put_governance_locks(&mut self, referendum_id: String, locks: GovernanceLocksForReferendum) {
@@ -5761,7 +5767,6 @@ impl WorldBlock<'_> {
             global_beacon_active_session,
             global_beacon_latest_pulse,
             global_beacon_pulses,
-            vrf_epochs,
         );
         out
     }
@@ -6515,6 +6520,13 @@ pub struct WorldTransaction<'block, 'world> {
         iroha_data_model::governance::types::GovernanceAttemptId,
         ParliamentAttemptStateV1,
     >,
+    /// Active timed-OVN resource reservations derived from Parliament attempts.
+    parliament_timed_ovn_resource_reservations: StorageTransaction<
+        'block,
+        'world,
+        BallotAttemptId,
+        ParliamentTimedOvnResourceReservationV1,
+    >,
     /// Finalized public-only adaptive TLE key sessions.
     pub(crate) tle_key_sessions:
         StorageTransaction<'block, 'world, TleKeySessionId, TleKeySessionPublicStateV1>,
@@ -6540,8 +6552,6 @@ pub struct WorldTransaction<'block, 'world> {
         [u8; 32],
         iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1,
     >,
-    pub(crate) vrf_epochs:
-        StorageTransaction<'block, 'world, u64, iroha_data_model::consensus::VrfEpochRecord>,
     /// Buffer of events pending publication to external subscribers.
     pub(crate) merge_hint_roots: CellTransaction<'block, 'world, Vec<Hash>>,
     /// Latest reduced global state root observed in this transaction scope.
@@ -8595,8 +8605,6 @@ pub struct WorldView<'world> {
         [u8; 32],
         iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1,
     >,
-    /// VRF epoch randomness and participation records keyed by epoch index.
-    pub(crate) vrf_epochs: StorageView<'world, u64, iroha_data_model::consensus::VrfEpochRecord>,
 }
 /// Verifying-key binding enforced for a ZK asset operation.
 #[derive(
@@ -11834,51 +11842,6 @@ impl<'state> StateBlock<'state> {
             self.world.public_lane_validators.insert(key, record);
         }
     }
-    fn clear_expired_vrf_public_lane_jails(&mut self, current_epoch: u64) {
-        let block_height = self._curr_block.height().get();
-        let to_restore: Vec<_> = self
-            .world
-            .public_lane_validators
-            .iter()
-            .filter_map(|(key, record)| {
-                if !public_lane_validator_record_matches_key(key, record) {
-                    return None;
-                }
-                let PublicLaneValidatorStatus::Jailed(reason) = &record.status else {
-                    return None;
-                };
-                let penalty_epoch = vrf_penalty_jail_epoch(reason)?;
-                (penalty_epoch < current_epoch).then(|| (key.clone(), record.status.clone()))
-            })
-            .collect();
-        for (key, previous_status) in to_restore {
-            if nexus_staking_authority_lane_at_height(key.0, &self.nexus, block_height)
-                != Some(key.0)
-            {
-                iroha_logger::error!(
-                    lane_id = %key.0,
-                    validator = %key.1,
-                    current_epoch,
-                    block_height,
-                    "jailed validator belongs to a non-owner staking lane; skipping restoration"
-                );
-                continue;
-            }
-            let Some(mut record) = self.world.public_lane_validators.get(&key).cloned() else {
-                continue;
-            };
-            record.status = PublicLaneValidatorStatus::Active;
-            #[cfg(feature = "telemetry")]
-            self.telemetry.record_public_lane_validator_status(
-                key.0,
-                Some(&previous_status),
-                &record.status,
-            );
-            #[cfg(not(feature = "telemetry"))]
-            let _ = previous_status;
-            self.world.public_lane_validators.insert(key, record);
-        }
-    }
     fn record_replayed_axt_envelope(&mut self, envelope: &AxtEnvelopeRecord, current_slot: u64) {
         // The permanent per-dataspace ratchet is independent of the replaceable
         // policy projection. Exact replay keys make both the counter advance
@@ -12962,11 +12925,6 @@ pub(crate) fn public_lane_validator_record_matches_key(
 ) -> bool {
     key.0 == record.lane_id && key.1 == record.validator
 }
-fn vrf_penalty_jail_epoch(reason: &str) -> Option<u64> {
-    reason
-        .strip_prefix("vrf_penalty_epoch_")
-        .and_then(|epoch| epoch.parse().ok())
-}
 pub(crate) fn public_lane_stake_share_matches_key(
     key: &(LaneId, AccountId, AccountId),
     share: &PublicLaneStakeShare,
@@ -13379,17 +13337,6 @@ fn bounded_global_committee_size(
     iroha_data_model::block::consensus_v2::is_valid_committee_size(committee_size)
         .then_some(committee_size)
 }
-#[cfg(test)]
-fn npos_epoch_selection_seed(world: &impl WorldReadOnly, epoch: u64) -> [u8; 32] {
-    world.vrf_epochs().get(&epoch).map_or_else(
-        || {
-            world
-                .sumeragi_npos_parameters()
-                .map_or([0; 32], |params| params.epoch_seed)
-        },
-        |record| record.seed,
-    )
-}
 fn npos_peer_prf_score(seed: [u8; 32], epoch: u64, peer: &PeerId) -> Hash {
     let epoch_bytes = epoch.to_le_bytes();
     let peer_bytes = peer.encode();
@@ -13434,7 +13381,9 @@ pub(crate) fn epoch_validator_peer_ids_from_world<I>(
 where
     I: IntoIterator<Item = PeerId>,
 {
-    let selection_seed = npos_epoch_selection_seed(world, epoch);
+    let selection_seed = world
+        .sumeragi_npos_parameters()
+        .map_or([0; 32], |params| params.epoch_seed);
     epoch_validator_peer_ids_from_world_with_seed(
         world,
         commit_topology,
@@ -14249,118 +14198,6 @@ mod stake_snapshot_tests {
         assert_eq!(mismatched.activation_height, None);
     }
     include!("state/restored_staking_owner_tests.rs");
-    #[test]
-    fn state_block_clears_only_expired_vrf_public_lane_jails() {
-        let world = World::default();
-        let expired_kp = crate::state::checked_keypair();
-        let current_kp = crate::state::checked_keypair();
-        let generic_kp = crate::state::checked_keypair();
-        let mismatched_kp = crate::state::checked_keypair();
-        let expired_validator = DMAccountId::of(expired_kp.public_key().clone());
-        let current_validator = DMAccountId::of(current_kp.public_key().clone());
-        let generic_validator = DMAccountId::of(generic_kp.public_key().clone());
-        let mismatched_validator = DMAccountId::of(mismatched_kp.public_key().clone());
-        let record =
-            |lane_id, validator: DMAccountId, peer_key, status| PublicLaneValidatorRecord {
-                lane_id,
-                validator: validator.clone(),
-                peer_id: PeerId::from(peer_key),
-                stake_account: validator,
-                total_stake: iroha_primitives::numeric::Quantity::from(10_u32),
-                self_stake: iroha_primitives::numeric::Quantity::from(10_u32),
-                metadata: Metadata::default(),
-                status,
-                activation_epoch: Some(1),
-                activation_height: Some(1),
-                last_reward_epoch: None,
-            };
-        {
-            let mut block = world.public_lane_validators.block();
-            block.insert(
-                (LaneId::new(21), expired_validator.clone()),
-                record(
-                    LaneId::new(21),
-                    expired_validator.clone(),
-                    expired_kp.public_key().clone(),
-                    PublicLaneValidatorStatus::Jailed("vrf_penalty_epoch_2".to_string()),
-                ),
-            );
-            block.insert(
-                (LaneId::new(22), current_validator.clone()),
-                record(
-                    LaneId::new(22),
-                    current_validator.clone(),
-                    current_kp.public_key().clone(),
-                    PublicLaneValidatorStatus::Jailed("vrf_penalty_epoch_3".to_string()),
-                ),
-            );
-            block.insert(
-                (LaneId::new(23), generic_validator.clone()),
-                record(
-                    LaneId::new(23),
-                    generic_validator.clone(),
-                    generic_kp.public_key().clone(),
-                    PublicLaneValidatorStatus::Jailed("downtime".to_string()),
-                ),
-            );
-            block.insert(
-                (LaneId::new(24), mismatched_validator.clone()),
-                record(
-                    LaneId::new(25),
-                    mismatched_validator.clone(),
-                    mismatched_kp.public_key().clone(),
-                    PublicLaneValidatorStatus::Jailed("vrf_penalty_epoch_2".to_string()),
-                ),
-            );
-            block.commit();
-        }
-        let kura = crate::kura::Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new_for_testing(world, std::sync::Arc::clone(&kura), query);
-        let header = BlockHeader::new(
-            core::num::NonZeroU64::new(13).expect("non-zero height"),
-            None,
-            None,
-            None,
-            0,
-            0,
-        );
-        let mut state_block = state.block(header);
-        state_block.clear_expired_vrf_public_lane_jails(3);
-        let expired = state_block
-            .world
-            .public_lane_validators
-            .get(&(LaneId::new(21), expired_validator))
-            .expect("expired VRF-jailed validator remains present");
-        assert!(matches!(expired.status, PublicLaneValidatorStatus::Active));
-        let current = state_block
-            .world
-            .public_lane_validators
-            .get(&(LaneId::new(22), current_validator))
-            .expect("current VRF-jailed validator remains present");
-        assert!(matches!(
-            current.status,
-            PublicLaneValidatorStatus::Jailed(ref reason) if reason == "vrf_penalty_epoch_3"
-        ));
-        let generic = state_block
-            .world
-            .public_lane_validators
-            .get(&(LaneId::new(23), generic_validator))
-            .expect("generic-jailed validator remains present");
-        assert!(matches!(
-            generic.status,
-            PublicLaneValidatorStatus::Jailed(ref reason) if reason == "downtime"
-        ));
-        let mismatched = state_block
-            .world
-            .public_lane_validators
-            .get(&(LaneId::new(24), mismatched_validator))
-            .expect("mismatched VRF-jailed validator remains present");
-        assert!(matches!(
-            mismatched.status,
-            PublicLaneValidatorStatus::Jailed(ref reason) if reason == "vrf_penalty_epoch_2"
-        ));
-    }
     #[test]
     fn public_lane_snapshot_ignores_stale_geometry_for_removed_catalog_lane() {
         let kura = crate::kura::Kura::blank_kura_for_testing();
@@ -16128,8 +15965,6 @@ mod custom_parameter_tests {
             .as_object_mut()
             .expect("npos parameters should serialize as object");
         for key in [
-            "vrf_commit_window_blocks",
-            "vrf_reveal_window_blocks",
             "max_validators",
             "max_nominator_concentration_pct",
             "seat_band_pct",
@@ -16235,7 +16070,7 @@ mod custom_parameter_tests {
         params.set_parameter(Parameter::Custom(custom));
         assert!(
             sumeragi_npos_parameters_from_parameters(&params).is_none(),
-            "retired collector fields and an all-zero seed must fail closed"
+            "retired NPoS fields and an all-zero seed must fail closed"
         );
     }
 }
@@ -17628,6 +17463,23 @@ impl World {
             })
             .map(|(proposal_id, proposal)| ((proposal.created_height, *proposal_id), ()))
             .collect();
+        let timed_ovn_resource_reservations = self
+            .parliament_attempts
+            .view()
+            .iter()
+            .flat_map(|(governance_attempt_id, attempt)| {
+                attempt
+                    .ballot_attempts()
+                    .filter_map(move |(ballot_attempt_id, _)| {
+                        parliament_timed_ovn_resource_reservation_v1(
+                            *governance_attempt_id,
+                            attempt,
+                            *ballot_attempt_id,
+                        )
+                    })
+            })
+            .collect();
+        self.parliament_timed_ovn_resource_reservations = timed_ovn_resource_reservations;
     }
     fn rebuild_confidential_policy_transition_index(&mut self) -> core::result::Result<(), String> {
         let mut transitions = BTreeMap::<(u64, AssetDefinitionId), ()>::new();
@@ -18905,8 +18757,6 @@ macro_rules! world_ro_accessors {
             /// Append-only finalized beacon pulse history by pulse id.
             storage global_beacon_pulses:
                 [u8; 32] => iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1;
-            /// VRF epoch randomness and participation records (read-only) keyed by epoch index.
-            storage vrf_epochs: u64 => iroha_data_model::consensus::VrfEpochRecord;
         );
     };
 }
@@ -19971,6 +19821,65 @@ mod bootle_lantern_policy_world_read_tests {
     }
 }
 impl<'world> WorldBlock<'world> {
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Install one fully verified global-beacon fixture for dependent-crate tests.
+    pub fn install_global_beacon_fixture_for_testing(
+        &mut self,
+        key_record: crate::beacon::FinalizedGlobalThresholdBeaconKeySessionRecordV1,
+        pulse: iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1,
+    ) -> Result<(), crate::beacon::GlobalThresholdBeaconError> {
+        key_record.validate()?;
+        if key_record.session.session_id != pulse.session_id
+            || !key_record.is_active_at(pulse.height)
+            || key_record.retired_at_height.is_some()
+            || pulse.finalized_chain_anchor.height.checked_add(1) != Some(pulse.height)
+            || self.global_beacon_key_sessions.iter().next().is_some()
+            || self.global_beacon_active_session.iter().next().is_some()
+            || self.global_beacon_pulses.iter().next().is_some()
+            || self.global_beacon_latest_pulse.iter().next().is_some()
+        {
+            return Err(crate::beacon::GlobalThresholdBeaconError::PersistenceConflict);
+        }
+        let binding = crate::beacon::GlobalThresholdBeaconSessionBindingV1 {
+            network_id: pulse.network_id,
+            session_id: pulse.session_id,
+            roster_hash: pulse.roster_hash,
+            transcript_hash: pulse.transcript_hash,
+        };
+        let session = crate::beacon::validate_global_threshold_beacon_session_v1(
+            key_record.session.clone(),
+            &binding,
+        )?;
+        let link = crate::beacon::verify_finalized_global_threshold_beacon_pulse_v1(
+            &session,
+            &pulse,
+            pulse.finalized_chain_anchor,
+        )?;
+        if crate::beacon::validate_persisted_global_threshold_beacon_pulse_v1(&pulse)? != link {
+            return Err(crate::beacon::GlobalThresholdBeaconError::InvalidPulseHistory);
+        }
+        self.global_beacon_key_sessions
+            .insert(pulse.session_id, key_record);
+        self.global_beacon_active_session
+            .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, pulse.session_id);
+        self.global_beacon_pulses.insert(pulse.pulse_id, pulse);
+        self.global_beacon_latest_pulse
+            .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, link);
+        Ok(())
+    }
+
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Mutable finalized global threshold-beacon pulse storage for tests.
+    pub fn global_beacon_pulses_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageBlock<
+        'world,
+        [u8; 32],
+        iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1,
+    > {
+        &mut self.global_beacon_pulses
+    }
+
     #[cfg(any(test, feature = "app_api"))]
     /// Mutable peer storage accessor used exclusively by tests and API scaffolding.
     pub fn peers_mut_for_testing(&mut self) -> &mut CellBlock<'world, Peers> {
@@ -19980,13 +19889,6 @@ impl<'world> WorldBlock<'world> {
     /// Mutable asset storage accessor used exclusively by tests and API scaffolding.
     pub fn assets_mut_for_testing(&mut self) -> &mut StorageBlock<'world, AssetId, AssetValue> {
         &mut self.assets
-    }
-    #[cfg(any(test, feature = "iroha-core-tests"))]
-    /// Mutable VRF epoch storage accessor used only by historical fixtures.
-    pub fn vrf_epochs_mut_for_testing(
-        &mut self,
-    ) -> &mut StorageBlock<'world, u64, iroha_data_model::consensus::VrfEpochRecord> {
-        &mut self.vrf_epochs
     }
     #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Mutable pin-manifest registry accessor used by tests that need committed SoraFS state.
@@ -20313,6 +20215,7 @@ impl<'world> WorldBlock<'world> {
             council,
             parliament_bodies,
             parliament_attempts,
+            parliament_timed_ovn_resource_reservations,
             tle_key_sessions,
             tle_active_key_session,
             timed_ovn_evidence,
@@ -20321,7 +20224,6 @@ impl<'world> WorldBlock<'world> {
             global_beacon_active_session,
             global_beacon_latest_pulse,
             global_beacon_pulses,
-            vrf_epochs,
             merge_hint_roots,
             merge_global_state_root,
             // Always drop at the block level.
@@ -20471,6 +20373,7 @@ impl<'world> WorldBlock<'world> {
         council.commit();
         parliament_bodies.commit();
         parliament_attempts.commit();
+        parliament_timed_ovn_resource_reservations.commit();
         tle_key_sessions.commit();
         tle_active_key_session.commit();
         timed_ovn_evidence.commit();
@@ -20481,7 +20384,6 @@ impl<'world> WorldBlock<'world> {
         global_beacon_pulses.commit();
         merge_global_state_root.commit();
         merge_hint_roots.commit();
-        vrf_epochs.commit();
         oracle_provider_stats.commit();
         oracle_disputes.commit();
         oracle_changes.commit();
@@ -20570,6 +20472,71 @@ impl<'world> WorldBlock<'world> {
         parameters.commit();
     }
 }
+
+/// Derive one active timed-OVN resource reservation from canonical Parliament state.
+fn parliament_timed_ovn_resource_reservation_v1(
+    governance_attempt_id: GovernanceAttemptId,
+    attempt: &ParliamentAttemptStateV1,
+    ballot_attempt_id: BallotAttemptId,
+) -> Option<(BallotAttemptId, ParliamentTimedOvnResourceReservationV1)> {
+    if attempt.attempt().id != governance_attempt_id
+        || attempt.attempt().status != GovernanceAttemptStatusV1::Active
+    {
+        return None;
+    }
+    let ballot = attempt.ballot(&ballot_attempt_id)?;
+    if matches!(
+        ballot.attempt().status,
+        BallotAttemptStatusV1::Finalized
+            | BallotAttemptStatusV1::NoResult
+            | BallotAttemptStatusV1::Superseded
+    ) || attempt
+        .active_ballot_for_body(&ballot.attempt().body_instance_id)
+        .is_none_or(|active| active.attempt().id != ballot_attempt_id)
+        || attempt
+            .body(&ballot.attempt().body_instance_id)
+            .is_none_or(|body| body.instance().status != BodyInstanceStatusV1::Balloting)
+    {
+        return None;
+    }
+    let release_height = ballot.release_height()?;
+    Some((
+        ballot_attempt_id,
+        ParliamentTimedOvnResourceReservationV1 {
+            governance_attempt_id,
+            resource_windows: [
+                (
+                    ballot.registered_at_height(),
+                    ballot.commitment_close_height(),
+                ),
+                (release_height, ballot.opening_deadline_height()),
+            ],
+            cast_capable: matches!(
+                ballot.attempt().status,
+                BallotAttemptStatusV1::Registration
+                    | BallotAttemptStatusV1::SurvivorFreeze
+                    | BallotAttemptStatusV1::TimedCommitment
+            ),
+        },
+    ))
+}
+
+/// Return whether either closed resource window of two timed-OVN schedules intersects.
+///
+/// Each schedule carries its registration-through-commitment window and its release-through-
+/// opening window. Admission reserves both because every V1 registration, maximum ballot chunk,
+/// and aggregate opening can consume most of the standard per-block gas budget.
+fn parliament_timed_ovn_resource_windows_overlap_v1(
+    left: [(u64, u64); 2],
+    right: [(u64, u64); 2],
+) -> bool {
+    left.into_iter().any(|(left_start, left_end)| {
+        right
+            .into_iter()
+            .any(|(right_start, right_end)| left_start <= right_end && right_start <= left_end)
+    })
+}
+
 impl<'block, 'world> WorldTransaction<'block, 'world> {
     /// Update the executor data model, purge permissions it no longer declares, and synchronize
     /// derived parameter defaults.
@@ -21501,7 +21468,28 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     ) -> Result<(), crate::governance::parliament::ParliamentReducerErrorV1> {
         attempt.validate()?;
         let id = attempt.attempt().id;
+        let stale_reservations = self
+            .parliament_timed_ovn_resource_reservations
+            .iter()
+            .filter_map(|(ballot_attempt_id, reservation)| {
+                (reservation.governance_attempt_id == id).then_some(*ballot_attempt_id)
+            })
+            .collect::<Vec<_>>();
+        let active_reservations = attempt
+            .ballot_attempts()
+            .filter_map(|(ballot_attempt_id, _)| {
+                parliament_timed_ovn_resource_reservation_v1(id, &attempt, *ballot_attempt_id)
+            })
+            .collect::<Vec<_>>();
+        for ballot_attempt_id in stale_reservations {
+            self.parliament_timed_ovn_resource_reservations
+                .remove(ballot_attempt_id);
+        }
         self.parliament_attempts.insert(id, attempt);
+        for (ballot_attempt_id, reservation) in active_reservations {
+            self.parliament_timed_ovn_resource_reservations
+                .insert(ballot_attempt_id, reservation);
+        }
         Ok(())
     }
     /// Validate and persist one immutable public-only adaptive TLE key session.
@@ -21566,47 +21554,59 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         if self.timed_ovn_evidence.get(&ballot_attempt_id).is_none()
             && matches!(&state, TimedOvnLifecycleStateV1::Registered(_))
         {
-            let concurrent_casting_contexts = self
-                .timed_ovn_evidence
-                .iter()
-                .filter(|(existing_ballot_id, lifecycle)| {
-                    let expected_status = match lifecycle {
-                        TimedOvnLifecycleStateV1::Registered(_) => {
-                            iroha_data_model::governance::types::BallotAttemptStatusV1::Registration
-                        }
-                        TimedOvnLifecycleStateV1::RegistrationClosed(_) => {
-                            iroha_data_model::governance::types::BallotAttemptStatusV1::SurvivorFreeze
-                        }
-                        TimedOvnLifecycleStateV1::SurvivorsFrozen(_) => {
-                            iroha_data_model::governance::types::BallotAttemptStatusV1::TimedCommitment
-                        }
-                        TimedOvnLifecycleStateV1::Sealed(_)
-                        | TimedOvnLifecycleStateV1::Released(_) => return false,
-                    };
-                    let governance_attempt_id =
-                        iroha_data_model::governance::types::GovernanceAttemptId::new(
-                            lifecycle.session().governance_attempt_id,
-                        );
-                    let Some(attempt) = self.parliament_attempts.get(&governance_attempt_id) else {
-                        return false;
-                    };
-                    if attempt.attempt().status
-                        != iroha_data_model::governance::types::GovernanceAttemptStatusV1::Active
-                    {
-                        return false;
-                    }
-                    let Some(ballot) = attempt.ballot(existing_ballot_id) else {
-                        return false;
-                    };
-                    let Some(body) = attempt.body(&ballot.attempt().body_instance_id) else {
-                        return false;
-                    };
-                    ballot.attempt().status == expected_status
-                        && body.instance().status
-                            == iroha_data_model::governance::types::BodyInstanceStatusV1::Balloting
-                        && attempt
+            let governance_attempt_id =
+                iroha_data_model::governance::types::GovernanceAttemptId::new(
+                    state.session().governance_attempt_id,
+                );
+            let candidate_attempt = self
+                .parliament_attempts
+                .get(&governance_attempt_id)
+                .filter(|attempt| {
+                    attempt.attempt().status
+                        == iroha_data_model::governance::types::GovernanceAttemptStatusV1::Active
+                })
+                .ok_or(TimedOvnEvidenceError::InvalidLifecycleTransition)?;
+            candidate_attempt
+                .ballot(&ballot_attempt_id)
+                .filter(|ballot| {
+                    ballot.attempt().status
+                        == iroha_data_model::governance::types::BallotAttemptStatusV1::Registration
+                        && candidate_attempt
                             .active_ballot_for_body(&ballot.attempt().body_instance_id)
-                            .is_some_and(|active| active.attempt().id == **existing_ballot_id)
+                            .is_some_and(|active| active.attempt().id == ballot_attempt_id)
+                        && candidate_attempt
+                            .body(&ballot.attempt().body_instance_id)
+                            .is_some_and(|body| {
+                                body.instance().status
+                                    == iroha_data_model::governance::types::BodyInstanceStatusV1::Balloting
+                            })
+                })
+                .ok_or(TimedOvnEvidenceError::InvalidLifecycleTransition)?;
+            let (_, candidate_reservation) = parliament_timed_ovn_resource_reservation_v1(
+                governance_attempt_id,
+                candidate_attempt,
+                ballot_attempt_id,
+            )
+            .filter(|(_, reservation)| reservation.cast_capable)
+            .ok_or(TimedOvnEvidenceError::InvalidLifecycleTransition)?;
+            for (existing_ballot_id, existing_reservation) in
+                self.parliament_timed_ovn_resource_reservations.iter()
+            {
+                if *existing_ballot_id == ballot_attempt_id {
+                    continue;
+                }
+                if parliament_timed_ovn_resource_windows_overlap_v1(
+                    candidate_reservation.resource_windows,
+                    existing_reservation.resource_windows,
+                ) {
+                    return Err(TimedOvnEvidenceError::ResourceScheduleConflict);
+                }
+            }
+            let concurrent_casting_contexts = self
+                .parliament_timed_ovn_resource_reservations
+                .iter()
+                .filter(|(existing_ballot_id, reservation)| {
+                    **existing_ballot_id != ballot_attempt_id && reservation.cast_capable
                 })
                 .count();
             let concurrent_casting_contexts = u32::try_from(concurrent_casting_contexts)
@@ -21624,7 +21624,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             .cloned()
             .ok_or(TimedOvnEvidenceError::TleKeySessionMismatch)?
             .validate()?;
-        state.validate(&key_session)?;
+        state.validate_committed_cache(&key_session)?;
         match self.timed_ovn_evidence.get(&ballot_attempt_id) {
             Some(previous) if previous == &state => return Ok(()),
             Some(previous) if state.is_direct_successor_of(previous) => {}
@@ -21836,6 +21836,17 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self,
         id: &iroha_data_model::governance::types::GovernanceAttemptId,
     ) -> Option<ParliamentAttemptStateV1> {
+        let stale_reservations = self
+            .parliament_timed_ovn_resource_reservations
+            .iter()
+            .filter_map(|(ballot_attempt_id, reservation)| {
+                (reservation.governance_attempt_id == *id).then_some(*ballot_attempt_id)
+            })
+            .collect::<Vec<_>>();
+        for ballot_attempt_id in stale_reservations {
+            self.parliament_timed_ovn_resource_reservations
+                .remove(ballot_attempt_id);
+        }
         self.parliament_attempts.remove(*id)
     }
     /// Test helper: get mutable access to citizenship storage for direct seeding.
@@ -22173,6 +22184,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             council,
             parliament_bodies,
             parliament_attempts,
+            parliament_timed_ovn_resource_reservations,
             tle_key_sessions,
             tle_active_key_session,
             timed_ovn_evidence,
@@ -22181,7 +22193,6 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             global_beacon_active_session,
             global_beacon_latest_pulse,
             global_beacon_pulses,
-            vrf_epochs,
             consensus_evidence,
             external_event_sink,
             mut external_event_buf,
@@ -22381,6 +22392,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         council.apply();
         parliament_bodies.apply();
         parliament_attempts.apply();
+        parliament_timed_ovn_resource_reservations.apply();
         tle_key_sessions.apply();
         tle_active_key_session.apply();
         timed_ovn_evidence.apply();
@@ -22389,7 +22401,6 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         global_beacon_active_session.apply();
         global_beacon_latest_pulse.apply();
         global_beacon_pulses.apply();
-        vrf_epochs.apply();
         tx_sequences.apply();
         oracle_disputes.apply();
         oracle_changes.apply();
@@ -26319,7 +26330,6 @@ impl State {
             .max(1);
         let current_epoch = sb._curr_block.height().get().saturating_sub(1) / epoch_length;
         sb.activate_due_public_lane_validators(current_epoch);
-        sb.clear_expired_vrf_public_lane_jails(current_epoch);
         // Height-trigger: open/close referenda at scheduled heights
         let now_h = sb._curr_block.height().get();
         let mut due_parliament_certificates = Vec::new();
@@ -48611,12 +48621,7 @@ impl<'state> StateBlock<'state> {
                     "committed v2 authority differs from the exact context at height {height}"
                 )));
             }
-            crate::sumeragi::v2_npos::validate_candidate_records(
-                &context,
-                self.state_ref,
-                block.as_ref().npos_consensus_effects(),
-            )
-            .map_err(|error| {
+            crate::sumeragi::v2_npos::validate_candidate_context(&context).map_err(|error| {
                 MergeLedgerCommitError::ExecutionBatchInvalid(format!(
                     "committed v2 block carries invalid NPoS consensus effects: {error}"
                 ))
@@ -57989,6 +57994,7 @@ impl StateTransaction<'_, '_> {
                         context,
                         summary.prepared_contract().artifact(),
                         &event,
+                        id,
                     )
                 });
                 let validation_outcome =
@@ -58255,6 +58261,7 @@ impl StateTransaction<'_, '_> {
                                     context,
                                     prepared_contract.artifact(),
                                     &event,
+                                    id,
                                 )
                             });
                             let validation_outcome =

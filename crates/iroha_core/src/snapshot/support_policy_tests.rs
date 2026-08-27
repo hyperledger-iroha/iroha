@@ -10,9 +10,12 @@ use iroha_config::{
     kura::FsyncMode,
     parameters::{
         actual::{Kura as KuraConfig, LaneConfig},
-        defaults::kura::{
-            FSYNC_INTERVAL, MAX_DISK_USAGE_BYTES, MERGE_LEDGER_CACHE_CAPACITY,
-            REPLICA_ADVERT_POLICY,
+        defaults::{
+            self,
+            kura::{
+                FSYNC_INTERVAL, MAX_DISK_USAGE_BYTES, MERGE_LEDGER_CACHE_CAPACITY,
+                REPLICA_ADVERT_POLICY,
+            },
         },
     },
 };
@@ -360,6 +363,48 @@ fn assert_snapshot_bundle_absent(store_dir: &Path) {
                 .is_none(),
         "rejected snapshot must not leave a selectable immutable generation"
     );
+}
+#[test]
+fn emergency_fast_manifest_decode_requires_canonical_v1_boundary() {
+    let path = Path::new(SNAPSHOT_FAST_MANIFEST_FILE_NAME);
+    let valid = EmergencyFastSnapshotManifestV1 {
+        version: SNAPSHOT_FAST_MANIFEST_VERSION,
+        payload_len: 4096,
+        chain_id: ChainId::from(TEST_CHAIN_ID),
+        network_id: snapshot_test_network_id(),
+        committed_height: 1,
+        tip_hash: Some(dummy_block_hash(0xA5)),
+        sccp_policy_hash: [0x5A; 32],
+        has_snapshot_bootstrap_lineage: false,
+    };
+    let bytes = valid.encode();
+    assert!(
+        u64::try_from(bytes.len()).expect("manifest length fits u64")
+            <= SNAPSHOT_FAST_MANIFEST_MAX_BYTES
+    );
+    assert_eq!(
+        decode_emergency_fast_manifest(&bytes, path).expect("canonical V1 manifest"),
+        valid
+    );
+
+    let mut trailing = bytes;
+    trailing.push(0);
+    assert!(
+        decode_emergency_fast_manifest(&trailing, path).is_err(),
+        "trailing Norito bytes must fail exact decode"
+    );
+
+    let mut unsupported = valid.clone();
+    unsupported.version = SNAPSHOT_FAST_MANIFEST_VERSION.saturating_add(1);
+    assert!(decode_emergency_fast_manifest(&unsupported.encode(), path).is_err());
+
+    let mut missing_tip = valid.clone();
+    missing_tip.tip_hash = None;
+    assert!(decode_emergency_fast_manifest(&missing_tip.encode(), path).is_err());
+
+    let mut unexpected_tip = valid;
+    unexpected_tip.committed_height = 0;
+    assert!(decode_emergency_fast_manifest(&unexpected_tip.encode(), path).is_err());
 }
 #[tokio::test]
 async fn bounded_snapshot_reader_rejects_oversized_regular_file() {
@@ -839,7 +884,9 @@ fn state_with_exact_pending_sccp_snapshot_fixture(
     (state, key, record)
 }
 fn kura_config_for_snapshot_test(store_dir: &Path, blocks_in_memory: NonZeroUsize) -> KuraConfig {
-    KuraConfig { init_mode: iroha_config::kura::InitMode::Strict, store_dir: WithOrigin::inline(store_dir.to_path_buf()),
+    KuraConfig {
+        init_mode: iroha_config::kura::InitMode::Strict,
+        store_dir: WithOrigin::inline(store_dir.to_path_buf()),
         max_disk_usage_bytes: MAX_DISK_USAGE_BYTES,
         blocks_in_memory,
         lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
@@ -1037,54 +1084,6 @@ async fn canonical_wsv_hash_uses_current_mv_cell_values() {
         "canonical WSV checkpoint surface should serialize current cell values"
     );
 }
-fn test_vrf_epoch_record(epoch: u64) -> iroha_data_model::consensus::VrfEpochRecord {
-    iroha_data_model::consensus::VrfEpochRecord {
-        epoch,
-        seed: [0_u8; 32],
-        epoch_length: 1,
-        commit_deadline_offset: 0,
-        reveal_deadline_offset: 0,
-        roster_len: 0,
-        finalized: false,
-        updated_at_height: 0,
-        participants: Vec::new(),
-        late_reveals: Vec::new(),
-        committed_no_reveal: Vec::new(),
-        no_participation: Vec::new(),
-        penalties_applied: false,
-        penalties_applied_at_height: None,
-        validator_election: None,
-    }
-}
-#[tokio::test]
-async fn canonical_wsv_hash_ignores_vrf_epoch_sidecars() {
-    let state = state_factory();
-    let before = canonical_state_snapshot_bytes_for_tests(&state);
-    {
-        let mut world = state.world.block();
-        world.vrf_epochs.insert(0, test_vrf_epoch_record(0));
-        world.commit();
-    }
-    let after = canonical_state_snapshot_bytes_for_tests(&state);
-    assert_eq!(
-        before, after,
-        "VRF epoch sidecars must not affect replay WSV checkpoints"
-    );
-    assert_eq!(
-        canonical_snapshot_wsv_hash(&exact_snapshot_payload_bytes(&state))
-            .expect("borrowed WSV hashing must redact VRF sidecars"),
-        Hash::new(&after),
-    );
-    let value = canonical_state_snapshot_value(&state);
-    let world = value
-        .get("world")
-        .and_then(json::Value::as_object)
-        .expect("canonical snapshot should contain world as an object");
-    assert!(
-        !world.contains_key("vrf_epochs"),
-        "canonical WSV checkpoint surface should omit VRF epoch sidecars"
-    );
-}
 #[tokio::test]
 async fn canonical_wsv_hash_sorts_sumeragi_key_policy_sets() {
     let state = state_factory();
@@ -1149,35 +1148,11 @@ async fn canonical_wsv_hash_sorts_sumeragi_key_policy_sets() {
     assert_eq!(providers, ["pkcs11", "softkey", "yubihsm"]);
 }
 #[tokio::test]
-async fn canonical_state_snapshot_ignores_consensus_evidence_caches() {
+async fn canonical_state_snapshot_ignores_consensus_topology_caches() {
     let state = state_factory();
     let expected = canonical_state_snapshot_bytes_for_tests(&state);
     let keypair = checked_random_snapshot_bls_keypair();
     let peer = PeerId::new(keypair.public_key().clone());
-    let vrf_epoch = iroha_data_model::consensus::VrfEpochRecord {
-        epoch: 0,
-        seed: [0x42; 32],
-        epoch_length: 10,
-        commit_deadline_offset: 2,
-        reveal_deadline_offset: 4,
-        roster_len: 1,
-        finalized: false,
-        updated_at_height: 2,
-        participants: Vec::new(),
-        late_reveals: Vec::new(),
-        committed_no_reveal: Vec::new(),
-        no_participation: Vec::new(),
-        penalties_applied: false,
-        penalties_applied_at_height: None,
-        validator_election: None,
-    };
-    {
-        let mut world = state.world.block();
-        world
-            .vrf_epochs_mut_for_testing()
-            .insert(vrf_epoch.epoch, vrf_epoch);
-        world.commit();
-    }
     {
         let mut commit_topology = state.commit_topology.block();
         commit_topology.push(peer.clone());
@@ -1191,7 +1166,7 @@ async fn canonical_state_snapshot_ignores_consensus_evidence_caches() {
     assert_eq!(
         canonical_state_snapshot_bytes_for_tests(&state),
         expected,
-        "consensus evidence caches must not perturb canonical replay checkpoints"
+        "consensus topology caches must not perturb canonical replay checkpoints"
     );
 }
 fn sample_space_directory_manifest() -> AssetPermissionManifest {
@@ -1256,15 +1231,22 @@ fn signed_block_after_transaction(
             .into(),
     )
 }
-fn legacy_snapshot_bytes_without_space_directory_section(state: &State) -> Vec<u8> {
-    let mut payload = String::new();
-    serialize_state_snapshot(state, &mut payload, false);
-    payload.into_bytes()
-}
 fn exact_snapshot_payload_bytes(state: &State) -> Vec<u8> {
     let mut payload = String::new();
-    serialize_state_snapshot(state, &mut payload, true);
+    serialize_state_snapshot(state, &mut payload);
     payload.into_bytes()
+}
+fn snapshot_payload_without_space_directory_manifest_section(state: &State) -> Vec<u8> {
+    let mut snapshot: json::Value = json::from_slice(&exact_snapshot_payload_bytes(state))
+        .expect("first-release snapshot must be canonical JSON");
+    snapshot
+        .as_object_mut()
+        .expect("first-release snapshot must be an object")
+        .remove("space_directory_manifests")
+        .expect("first-release snapshot must carry Space Directory manifests");
+    json::to_json(&snapshot)
+        .expect("missing-section rejection fixture must remain valid JSON")
+        .into_bytes()
 }
 fn publish_test_snapshot_generation(
     store_dir: &std::path::Path,

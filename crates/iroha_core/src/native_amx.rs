@@ -17,14 +17,14 @@ use norito::codec::{Decode, Encode};
 use parking_lot::Mutex;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs::{self, File, OpenOptions},
-    io::{Read, Write},
+    fs::{self, File},
     num::NonZeroUsize,
     path::{Path, PathBuf},
 };
 #[cfg(unix)]
 use std::{
-    fs::DirBuilder,
+    fs::{DirBuilder, OpenOptions},
+    io::{Read, Write},
     os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
 };
 use thiserror::Error;
@@ -41,6 +41,7 @@ const NATIVE_AMX_UNSUPPORTED_SIGNING_GUARD_DIRECTORIES: &[&str] = &[
 ];
 const NATIVE_AMX_SIGNING_GUARD_RECORD_EXTENSION: &str = "norito";
 const NATIVE_AMX_SIGNING_GUARD_TEMP_EXTENSION: &str = "norito.tmp";
+#[cfg(any(unix, test))]
 const NATIVE_AMX_SIGNING_GUARD_LOCK_FILE: &str = "owner.lock";
 const NATIVE_AMX_SIGNING_GUARD_ANCHOR_FILE: &str = "chain-anchor.norito";
 const NATIVE_AMX_SIGNING_GUARD_ANCHOR_TEMP: &str = "chain-anchor.norito.tmp";
@@ -428,6 +429,7 @@ struct NativeAmxSigningAnchorV2 {
     last_prepare_view: Option<u64>,
 }
 impl NativeAmxSigningAnchorV2 {
+    #[cfg(any(unix, test))]
     fn empty(binding: NativeAmxHeightBindingV2) -> Result<Self, NativeAmxSigningGuardError> {
         let head_hash = binding.genesis_head()?;
         Ok(Self {
@@ -464,6 +466,7 @@ struct NativeAmxSigningGuardInner {
     poisoned: Option<String>,
 }
 #[derive(Debug)]
+#[cfg(any(unix, test))]
 struct LoadedNativeAmxJournal {
     records: BTreeMap<NativeAmxSigningKeyV2, NativeAmxSigningRecordV2>,
     source_claims: BTreeMap<[u8; Hash::LENGTH], NativeAmxDurableSourceClaimV4>,
@@ -487,6 +490,7 @@ pub(crate) enum NativeAmxSigningGuardError {
     #[error(
         "native AMX signing height regressed from durable height {durable_height} to {supplied_height}"
     )]
+    #[cfg(any(unix, test))]
     HeightRegression {
         /// Height supplied by canonical state on this open.
         supplied_height: u64,
@@ -497,6 +501,7 @@ pub(crate) enum NativeAmxSigningGuardError {
     #[error(
         "native AMX signing height jumped from durable height {durable_height} to {supplied_height}"
     )]
+    #[cfg(any(unix, test))]
     HeightJump {
         /// Height supplied by canonical state on this open.
         supplied_height: u64,
@@ -565,11 +570,11 @@ impl NativeAmxSigningGuardError {
         match self {
             Self::UnsafeJournal(_)
             | Self::Poisoned(_)
-            | Self::HeightRegression { .. }
-            | Self::HeightJump { .. }
             | Self::ContextMismatch
             | Self::FutureHeight { .. }
             | Self::StaleHeight { .. } => true,
+            #[cfg(any(unix, test))]
+            Self::HeightRegression { .. } | Self::HeightJump { .. } => true,
             #[cfg(not(unix))]
             Self::UnsupportedPlatform => true,
             _ => false,
@@ -939,6 +944,7 @@ impl NativeAmxSigningGuard {
         }
         Ok(record)
     }
+    #[cfg(any(unix, test))]
     fn validate_record_binding(
         path: &Path,
         record: &NativeAmxSigningRecordV2,
@@ -959,6 +965,7 @@ impl NativeAmxSigningGuard {
         }
         Ok(())
     }
+    #[cfg(any(unix, test))]
     fn load_validated_journal(
         directory: &Path,
         directory_handle: &File,
@@ -1184,6 +1191,7 @@ impl NativeAmxSigningGuard {
             anchored_paths,
         })
     }
+    #[cfg(any(unix, test))]
     fn ensure_empty_uninitialized_directory(
         directory: &Path,
     ) -> Result<(), NativeAmxSigningGuardError> {
@@ -1879,6 +1887,7 @@ impl NativeAmxSigningGuard {
         std::fs::remove_file(path).expect("remove one retained signing record for test");
     }
 }
+#[cfg(any(unix, test))]
 fn native_amx_ensure_signer_directory(
     store_root: &Path,
     signer: &PeerId,
@@ -2193,6 +2202,7 @@ fn native_amx_verify_owned_directory(
 ) -> Result<(), NativeAmxSigningGuardError> {
     Err(NativeAmxSigningGuardError::UnsupportedPlatform)
 }
+#[cfg(unix)]
 fn native_amx_reconcile_guard_temps(
     directory: &Path,
     directory_handle: &File,
@@ -2431,6 +2441,7 @@ fn native_amx_effective_user_id(path: &Path) -> Result<u32, NativeAmxSigningGuar
     })?;
     Ok(metadata.uid())
 }
+#[cfg(any(unix, test))]
 fn native_amx_valid_record_filename(name: &str) -> bool {
     let suffix = format!(".{NATIVE_AMX_SIGNING_GUARD_RECORD_EXTENSION}");
     let Some(stem) = name.strip_suffix(&suffix) else {
@@ -2449,6 +2460,7 @@ fn native_amx_valid_record_filename(name: &str) -> bool {
         && hash.len() == Hash::LENGTH * 2
         && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
+#[cfg(any(unix, test))]
 fn native_amx_valid_record_temp_filename(name: &str) -> bool {
     let suffix = format!(".{NATIVE_AMX_SIGNING_GUARD_TEMP_EXTENSION}");
     let Some(final_name) = name.strip_suffix(&suffix) else {

@@ -27,16 +27,15 @@ fn block_payload_detects_da_commitment_blocks() {
 #[test]
 fn block_payload_detects_npos_consensus_effect_blocks() {
     use iroha_data_model::consensus::{
-        NposConsensusEffects, NposMarkVrfPenaltiesAppliedAction, NposPenaltyAction,
+        NposConsensusEffects, NposMarkConsensusEvidenceAppliedAction, NposPenaltyAction,
     };
     let mut block = empty_block(2);
     block.set_npos_consensus_effects(Some(NposConsensusEffects {
         finalized_global_beacon_pulse: None,
-        vrf_epoch_seals: Vec::new(),
         v2_evidence_admissions: Vec::new(),
-        penalty_actions: vec![NposPenaltyAction::MarkVrfPenaltiesApplied(
-            NposMarkVrfPenaltiesAppliedAction {
-                epoch: 0,
+        penalty_actions: vec![NposPenaltyAction::MarkConsensusEvidenceApplied(
+            NposMarkConsensusEvidenceAppliedAction {
+                evidence_key: b"telemetry-fixture".to_vec(),
                 height: 2,
             },
         )],
@@ -87,8 +86,8 @@ fn block_payload_detects_autonomous_lane_payload_carriers() {
     );
 }
 fn empty_block(height: u64) -> iroha_data_model::block::SignedBlock {
-    use std::num::NonZeroU64;
     use iroha_data_model::block::{BlockHeader, BlockSignature};
+    use std::num::NonZeroU64;
     let header = BlockHeader::new(
         NonZeroU64::new(height).expect("height must be > 0"),
         None,
@@ -102,7 +101,6 @@ fn empty_block(height: u64) -> iroha_data_model::block::SignedBlock {
     iroha_data_model::block::SignedBlock::presigned(signature, header, Vec::new())
 }
 fn block_with_da_commitments(height: u64) -> iroha_data_model::block::SignedBlock {
-    use std::num::NonZeroU64;
     use iroha_crypto::{Hash, Signature};
     use iroha_data_model::{
         block::{BlockHeader, BlockSignature},
@@ -113,6 +111,7 @@ fn block_with_da_commitments(height: u64) -> iroha_data_model::block::SignedBloc
         nexus::LaneId,
         sorafs::pin_registry::ManifestDigest,
     };
+    use std::num::NonZeroU64;
     let header = BlockHeader::new(
         NonZeroU64::new(height).expect("height must be > 0"),
         None,
@@ -143,11 +142,11 @@ fn block_with_da_commitments(height: u64) -> iroha_data_model::block::SignedBloc
     block
 }
 fn block_with_transactions(height: u64) -> iroha_data_model::block::SignedBlock {
-    use std::num::NonZeroU64;
     use iroha_data_model::{
         block::{BlockHeader, BlockSignature},
         transaction::signed::SignedTransaction,
     };
+    use std::num::NonZeroU64;
     fn dummy_transaction() -> SignedTransaction {
         let key_pair = checked_keypair();
         let authority = AccountId::new(key_pair.public_key().clone());

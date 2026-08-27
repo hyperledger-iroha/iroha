@@ -4,7 +4,7 @@ use ivm::{
     instruction,
     parallel::{
         Block, DependencyGraph, ExecutionContext, Scheduler, State, StateAccessSet, Transaction,
-        TxResult, execute_block_predicted,
+        TxResult,
     },
     syscalls,
 };
@@ -20,7 +20,7 @@ use common::{assemble, assemble_syscalls};
 #[test]
 fn test_state_apply() {
     let state = State::new();
-    state.apply(&[
+    state.apply(vec![
         ivm::parallel::StateUpdate {
             key: "a".to_string(),
             value: 1,
@@ -30,8 +30,8 @@ fn test_state_apply() {
             value: 2,
         },
     ]);
-    assert_eq!(state.get(&"a".to_string()), Some(1));
-    assert_eq!(state.get(&"b".to_string()), Some(2));
+    assert_eq!(state.get("a"), Some(1));
+    assert_eq!(state.get("b"), Some(2));
 }
 #[test]
 fn test_execution_context_init() {
@@ -43,14 +43,14 @@ fn test_execution_context_init() {
         access,
     };
     let state = State::new();
-    state.apply(&[ivm::parallel::StateUpdate {
+    state.apply(vec![ivm::parallel::StateUpdate {
         key: "k1".to_string(),
         value: 42,
     }]);
     let mut ctx = ExecutionContext::new();
     ctx.init_for_transaction(&tx, &state);
     assert_eq!(ctx.gas_limit, 100);
-    assert_eq!(ctx.read(&"k1".to_string()), Some(42));
+    assert_eq!(ctx.read("k1"), Some(42));
     assert_eq!(ctx.gas_used, 0);
 }
 #[test]
@@ -127,44 +127,8 @@ fn test_execution_context_write_updates() {
     ctx.write("x".to_string(), 10);
     ctx.write("y".to_string(), 20);
     assert_eq!(ctx.write_set.len(), 2);
-    assert_eq!(ctx.read(&"x".to_string()), Some(10));
-    assert_eq!(ctx.read(&"y".to_string()), Some(20));
-}
-#[test]
-fn test_result_buffer_ordering() {
-    use ivm::parallel::ResultBuffer;
-    let buf = ResultBuffer::new(3);
-    buf.store(
-        2,
-        TxResult {
-            success: true,
-            gas_used: 3,
-        },
-    );
-    buf.store(
-        0,
-        TxResult {
-            success: true,
-            gas_used: 1,
-        },
-    );
-    buf.store(
-        1,
-        TxResult {
-            success: false,
-            gas_used: 2,
-        },
-    );
-    let mut out = Vec::new();
-    while let Some(res) = buf.take_ready() {
-        out.push(res);
-    }
-    out.sort_by_key(|&(i, _)| i);
-    assert_eq!(out.len(), 3);
-    assert_eq!(out[0].0, 0);
-    assert_eq!(out[1].0, 1);
-    assert_eq!(out[2].0, 2);
-    assert!(buf.take_ready().is_none());
+    assert_eq!(ctx.read("x"), Some(10));
+    assert_eq!(ctx.read("y"), Some(20));
 }
 #[test]
 fn test_dependency_graph_write_conflict() {
@@ -194,7 +158,7 @@ fn test_dependency_graph_write_conflict() {
 fn test_ivm_execute_block_commits() {
     use ivm::{IVM, parallel::StateUpdate};
     let state = State::new();
-    state.apply(&[StateUpdate {
+    state.apply(vec![StateUpdate {
         key: "a".to_string(),
         value: 0,
     }]);
@@ -265,8 +229,7 @@ fn test_scheduler_parallelism() {
             gas_used: 0,
         }
     });
-    // The scheduler may fall back to a mutex when HTM is unavailable but still
-    // executes tasks in parallel. Accept any level of observed parallelism.
+    // Independent tasks may execute in parallel. Accept any observed level.
     assert!(max.load(Ordering::SeqCst) >= 1);
 }
 #[test]
@@ -294,73 +257,13 @@ fn test_deterministic_results() {
     // Run twice and compare state
     let run_once = || {
         let state = State::new();
-        state.apply(&[StateUpdate {
+        state.apply(vec![StateUpdate {
             key: "x".to_string(),
             value: 0,
         }]);
         let mut ivm = IVM::new_with_options(Some(2), state.clone(), u64::MAX);
         ivm.execute_block(block.clone());
-        (state.get(&"x".to_string()), state.get(&"y".to_string()))
-    };
-    let first = run_once();
-    let second = run_once();
-    assert_eq!(first, second);
-}
-#[cfg(target_arch = "x86_64")]
-#[test]
-fn test_deterministic_results_htm() {
-    use ivm::{IVM, parallel::StateUpdate};
-    let scheduler = Scheduler::new(2);
-    if !scheduler.htm_available() {
-        return; // skip if hardware lacks HTM
-    }
-    let mut access = StateAccessSet::new();
-    access.write_keys.insert("z".to_string());
-    let tx = Transaction {
-        code: vec![],
-        gas_limit: 0,
-        access,
-    };
-    let block = Block {
-        transactions: vec![tx.clone()],
-    };
-    let run_once = || {
-        let state = State::new();
-        state.apply(&[StateUpdate {
-            key: "z".to_string(),
-            value: 0,
-        }]);
-        let mut ivm = IVM::new_with_options(Some(2), state.clone(), u64::MAX);
-        ivm.execute_block(block.clone());
-        state.get(&"z".to_string())
-    };
-    let first = run_once();
-    let second = run_once();
-    assert_eq!(first, second);
-}
-#[cfg(not(target_arch = "x86_64"))]
-#[test]
-fn test_deterministic_results_fallback() {
-    use ivm::{IVM, parallel::StateUpdate};
-    let mut access = StateAccessSet::new();
-    access.write_keys.insert("z".to_string());
-    let tx = Transaction {
-        code: vec![],
-        gas_limit: 0,
-        access,
-    };
-    let block = Block {
-        transactions: vec![tx.clone()],
-    };
-    let run_once = || {
-        let state = State::new();
-        state.apply(&[StateUpdate {
-            key: "z".to_string(),
-            value: 0,
-        }]);
-        let mut ivm = IVM::new_with_options(Some(2), state.clone(), u64::MAX);
-        ivm.execute_block(block.clone());
-        state.get(&"z".to_string())
+        (state.get("x"), state.get("y"))
     };
     let first = run_once();
     let second = run_once();
@@ -622,80 +525,8 @@ fn block_succeeds_with_logged_state_writes_committed() {
     assert_eq!(result.tx_results.len(), 1);
     assert!(result.tx_results[0].success);
 }
-#[cfg(target_arch = "x86_64")]
 #[test]
-fn test_htm_vs_mutex_consistency() {
-    let scheduler_htm = Scheduler::new(2);
-    if !scheduler_htm.htm_available() {
-        return;
-    }
-    let scheduler_stm = Scheduler::new_with_htm_flag(2, false);
-    let mk_tx = |k: &str| {
-        let mut access = StateAccessSet::new();
-        access.write_keys.insert(k.to_string());
-        Transaction {
-            code: vec![],
-            gas_limit: 0,
-            access,
-        }
-    };
-    let block = Block {
-        transactions: vec![mk_tx("a"), mk_tx("b"), mk_tx("c")],
-    };
-    let res_htm = scheduler_htm.schedule_block(block.clone(), |_tx| TxResult {
-        success: true,
-        gas_used: 1,
-    });
-    let res_stm = scheduler_stm.schedule_block(block, |_tx| TxResult {
-        success: true,
-        gas_used: 1,
-    });
-    assert_eq!(res_htm.tx_results.len(), res_stm.tx_results.len());
-    for (a, b) in res_htm.tx_results.iter().zip(res_stm.tx_results.iter()) {
-        assert_eq!(a.success, b.success);
-        assert_eq!(a.gas_used, b.gas_used);
-    }
-}
-#[cfg(target_arch = "x86_64")]
-#[test]
-fn test_conflict_order_consistency_htm() {
-    use std::sync::Mutex;
-    let scheduler_htm = Scheduler::new_with_htm_flag(2, true);
-    let scheduler_stm = Scheduler::new_with_htm_flag(2, false);
-    let mk_tx = |id: u8| {
-        let mut access = StateAccessSet::new();
-        access.write_keys.insert("a".to_string());
-        Transaction {
-            code: vec![id],
-            gas_limit: 0,
-            access,
-        }
-    };
-    let block = Block {
-        transactions: vec![mk_tx(0), mk_tx(1)],
-    };
-    let run = |sched: &Scheduler| {
-        let order = Arc::new(Mutex::new(Vec::new()));
-        {
-            let order_ref = &order;
-            sched.schedule_block(block.clone(), |tx| {
-                order_ref.lock().unwrap().push(tx.code[0]);
-                TxResult {
-                    success: true,
-                    gas_used: 0,
-                }
-            });
-        }
-        Arc::try_unwrap(order).unwrap().into_inner().unwrap()
-    };
-    let o_htm = run(&scheduler_htm);
-    let o_stm = run(&scheduler_stm);
-    assert_eq!(o_htm, vec![0, 1]);
-    assert_eq!(o_htm, o_stm);
-}
-#[cfg(not(target_arch = "x86_64"))]
-#[test]
-fn test_conflict_order_consistency_no_htm() {
+fn test_conflict_order_consistency() {
     use std::sync::Mutex;
     let mk_tx = |id: u8| {
         let mut access = StateAccessSet::new();
@@ -713,7 +544,7 @@ fn test_conflict_order_consistency_no_htm() {
         let order = Arc::new(Mutex::new(Vec::new()));
         {
             let order_ref = &order;
-            Scheduler::new_with_htm_flag(2, false).schedule_block(block.clone(), |tx| {
+            Scheduler::new(2).schedule_block(block.clone(), |tx| {
                 order_ref.lock().unwrap().push(tx.code[0]);
                 TxResult {
                     success: true,
@@ -729,7 +560,7 @@ fn test_conflict_order_consistency_no_htm() {
     assert_eq!(first, second);
 }
 #[test]
-fn test_conflict_prediction_groups() {
+fn test_declared_conflicts_preserve_independent_parallelism() {
     use std::time::Duration;
     let mut set1 = StateAccessSet::new();
     set1.write_keys.insert("a".to_string());
@@ -767,7 +598,7 @@ fn test_conflict_prediction_groups() {
     let max = Arc::new(AtomicUsize::new(0));
     let counter_c = &counter;
     let max_c = &max;
-    execute_block_predicted(&scheduler, block, |_tx| {
+    scheduler.schedule_block(block, |_tx| {
         let cur = counter_c.fetch_add(1, Ordering::SeqCst) + 1;
         loop {
             let m = max_c.load(Ordering::SeqCst);
@@ -789,63 +620,8 @@ fn test_conflict_prediction_groups() {
             gas_used: 0,
         }
     });
-    // When HTM is disabled the scheduler still allows parallel execution under
-    // a mutex. Accept any level of parallelism.
-    assert!(max.load(Ordering::SeqCst) >= 1);
-}
-#[test]
-fn test_execute_block_parallel_ops() {
-    use ivm::{IVM, Instruction};
-    let mut vm = IVM::new(u64::MAX);
-    vm.set_register(1, 0b1010);
-    vm.set_register(2, 0b1100);
-    let block = [
-        Instruction::And {
-            rd: 3,
-            rs: 1,
-            rt: 2,
-        },
-        Instruction::Or {
-            rd: 4,
-            rs: 1,
-            rt: 2,
-        },
-        Instruction::AddImm {
-            rd: 5,
-            rs: 1,
-            imm: 5,
-        },
-        Instruction::SubImm {
-            rd: 6,
-            rs: 2,
-            imm: 4,
-        },
-    ];
-    vm.execute_block_parallel(&block).unwrap();
-    assert_eq!(vm.register(3), 0b1000);
-    assert_eq!(vm.register(4), 0b1110);
-    assert_eq!(vm.register(5), 0b1010u64.wrapping_add(5));
-    assert_eq!(vm.register(6), 0b1100u64.wrapping_sub(4));
-}
-#[test]
-fn parallel_instruction_batch_reserves_gas_before_work() {
-    use ivm::{IVM, Instruction};
-    let block: [Instruction; 16] = std::array::from_fn(|index| Instruction::AddImm {
-        rd: (index + 1) as u16,
-        rs: 0,
-        imm: 1,
-    });
-    let mut underfunded = IVM::new(15);
-    assert_eq!(
-        underfunded.execute_block_parallel(&block),
-        Err(VMError::OutOfGas)
-    );
-    assert_eq!(underfunded.gas_remaining, 15);
-    assert!((1..=16).all(|register| underfunded.register(register) == 0));
-    let mut funded = IVM::new(16);
-    funded.execute_block_parallel(&block).unwrap();
-    assert_eq!(funded.gas_remaining, 0);
-    assert!((1..=16).all(|register| funded.register(register) == 1));
+    // The scheduler allows parallel execution for independent transactions.
+    assert!(max.load(Ordering::SeqCst) >= 2);
 }
 #[test]
 fn test_scheduler_dynamic_scaling() {
@@ -857,7 +633,7 @@ fn test_scheduler_dynamic_scaling() {
     let block = Block {
         transactions: vec![make_tx(); 64],
     };
-    let scheduler = Scheduler::new_dynamic_with_htm_flag(1, 4, false);
+    let scheduler = Scheduler::new_dynamic(1, 4);
     assert_eq!(scheduler.thread_count(), 1);
     scheduler.schedule_block(block.clone(), |_| TxResult::default());
     scheduler.schedule_block(block, |_| TxResult::default());

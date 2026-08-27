@@ -1178,8 +1178,6 @@ fn with_consensus_meta_uses_npos_custom_parameter() {
             mode: ConsensusGenesisModeParams::Npos(NposGenesisParams {
                 epoch_length_blocks: npos.epoch_length_blocks(),
                 epoch_seed: npos.epoch_seed(),
-                vrf_commit_window_blocks: npos.vrf_commit_window_blocks(),
-                vrf_reveal_window_blocks: npos.vrf_reveal_window_blocks(),
                 max_validators: npos.max_validators(),
                 min_self_bond: npos.min_self_bond().clone(),
                 min_nomination_bond: npos.min_nomination_bond().clone(),

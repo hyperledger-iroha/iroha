@@ -2268,18 +2268,14 @@ canonical Norito artifacts. Set `SKIP_LINT=1`, `SKIP_TESTS=1`, or
 Run the Rust unit tests for the bindings with:
 
 ```bash
-./python/iroha_python/scripts/test_rs.sh
+PYO3_PYTHON=/absolute/path/to/python3 cargo test -p iroha_python_rs
 ```
 
-The helper script wraps `cargo test -p iroha_python_rs`, automatically loading a
-local CPython runtime when needed.
-
-The script first looks for an explicit path in
-`python/iroha_python/iroha_python_rs/python-runtime-path`. If that file is
-absent, it tries to auto-detect the shared library by querying `${PYTHON_BIN:-python3}`
-via `sysconfig`. Set `PYTHON_BIN` to point at a specific interpreter (for
-example, a virtualenv) before running the script if you need to override the
-default.
+The build reads `PYO3_PYTHON` to select the interpreter and discovers its shared
+library through `sysconfig`. If discovery is unavailable, set
+`IROHA_PYTHON_RUNTIME_PATH` to the exact CPython shared library or record that
+path in the ignored
+`python/iroha_python/iroha_python_rs/python-runtime-path` file.
 
 ### macOS runtime configuration
 
@@ -2287,9 +2283,9 @@ When running tests on macOS the binary embeds CPython directly. If your system
 Python does not expose the shared library globally (for example, the
 Xcode-provided interpreter), create a `python-runtime-path` file alongside
 `python/iroha_python/iroha_python_rs/Cargo.toml` containing the absolute path to
-the CPython dynamic library. The `test_rs.sh` wrapper reads this file and sets
-the necessary dynamic loader environment variables for you. Lines starting with
-`#` are treated as comments, so the file can also include short notes.
+the CPython dynamic library. The Rust build reads this file directly. Lines
+starting with `#` are treated as comments, so the file can also include short
+notes.
 
 Example `python-runtime-path`:
 
@@ -2429,13 +2425,12 @@ no environment variables need to be exported.
   34.10-2012 parameter sets, BLS normal/small, and SM2. The helpers cover
   random and seeded key generation, private-key import, signing, verification,
   and bare or algorithm-prefixed multihash import/export.
-- Keep compatibility-specific Ed25519 account-id helpers and raw SM2 helpers
+- Provide algorithm-specific Ed25519 account-id helpers and raw SM2 helpers
   (`generate_sm2_keypair`, `derive_sm2_keypair_from_seed`, `load_sm2_keypair`,
   `sign_sm2`, `verify_sm2`, `sm2_public_key_multihash`) alongside the generic
-  payload-based API. `sm2_fixture_from_seed` still surfaces the canonical
-  deterministic fixture so SDK parity tests can assert the shared
-  seed/distid/ZA/signature bytes even when the native module is unavailable
-  (falls back to the bundled vector).
+  payload-based API. `sm2_fixture_from_seed` exercises the required native
+  implementation so SDK parity tests assert the shared
+  seed/distid/ZA/signature bytes without a bundled-vector fallback.
 - Provide confidential key-derivation helpers (`derive_confidential_keyset`,
   hex variants, and a `ConfidentialKeyset` wrapper) so wallets can obtain
   `nk`/`ivk`/`ovk`/`fvk` alongside the spend key locally.

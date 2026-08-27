@@ -182,9 +182,9 @@ pow_max_anchor_age_blocks = 256
 pow_adaptive_lookback_blocks = 64
 pow_adaptive_claims_per_extra_bit = 0
 pow_adaptive_max_extra_bits = 0
-# Fresh testnet generations have no finalized VRF epoch yet; keep the
-# anchor-hash+scrypt faucet usable from genesis.
-pow_vrf_seed_enabled = false
+# Fresh testnet generations have no finalized global threshold-beacon pulse
+# yet; keep the anchor-hash+scrypt faucet usable from genesis.
+pow_beacon_seed_enabled = false
 
 [sorafs.storage]
 # Taira does not run the embedded SoraFS provider. The capacity is still an

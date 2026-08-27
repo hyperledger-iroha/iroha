@@ -5,11 +5,9 @@ from __future__ import annotations
 import json
 from typing import Any, get_type_hints
 
+import iroha_torii_client.orderbook_submission as orderbook_submission
 import pytest
 import requests
-from requests.structures import CaseInsensitiveDict
-import iroha_torii_client.orderbook_submission as orderbook_submission
-
 from iroha_torii_client import (
     SorafsOrderbookSubmissionAmbiguousError,
     SorafsOrderbookSubmissionIdentity,
@@ -17,7 +15,7 @@ from iroha_torii_client import (
     SorafsOrderbookSubmissionReceiptPayload,
     ToriiClient,
 )
-
+from requests.structures import CaseInsensitiveDict
 
 IDENTITY = {
     "entrypoint_hash": "aa" * 32,
@@ -177,9 +175,11 @@ def test_public_submit_receipt_types_are_precise_and_exported() -> None:
 
 
 def submit(
-    response: Response | BaseException = Response(), *, verifier: Verifier | None = None,
+    response: Response | BaseException | None = None, *, verifier: Verifier | None = None,
     body: Any = b"\x01", session_headers: dict[str, str] | None = None,
 ):
+    if response is None:
+        response = Response()
     session, transport = stock_session(response)
     if session_headers:
         session.headers.update(session_headers)

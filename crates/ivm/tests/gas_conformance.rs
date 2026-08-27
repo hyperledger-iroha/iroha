@@ -1,4 +1,4 @@
-use ivm::{IVM, ProgramMetadata, cost_of_with_params, encoding, instruction};
+use ivm::{IVM, ProgramMetadata, cost_of_with_vector_len, encoding, instruction};
 fn header_with_mode(mode: u8) -> Vec<u8> {
     let meta = ProgramMetadata {
         mode,
@@ -21,9 +21,9 @@ fn gas_scales_with_setvl_for_vector_op() {
     // Sum expected with vector_len equal to the accepted SETVL value for VADD32.
     let vl = vm.vector_length();
     let used = 10_000 - vm.remaining_gas();
-    let expected = cost_of_with_params(setvl, 1, 0).expect("valid opcode must have gas cost")
-        + cost_of_with_params(vadd, vl, 0).expect("valid opcode must have gas cost")
-        + cost_of_with_params(encoding::wide::encode_halt(), 4, 0)
+    let expected = cost_of_with_vector_len(setvl, 1).expect("valid opcode must have gas cost")
+        + cost_of_with_vector_len(vadd, vl).expect("valid opcode must have gas cost")
+        + cost_of_with_vector_len(encoding::wide::encode_halt(), 4)
             .expect("valid opcode must have gas cost");
     assert_eq!(vl, vm.vector_length());
     assert_eq!(used, expected, "vl={vl} used={used} expected={expected}");
@@ -48,7 +48,7 @@ fn branch_executed_set_gas_matches() {
     let executed = [a1, a2, beq, jmp, halt];
     let expected: u64 = executed
         .iter()
-        .map(|&w| cost_of_with_params(w, 1, 0).expect("valid opcode must have gas cost"))
+        .map(|&w| cost_of_with_vector_len(w, 1).expect("valid opcode must have gas cost"))
         .sum();
     assert_eq!(10_000 - vm.remaining_gas(), expected);
 }
@@ -83,10 +83,10 @@ fn vector_op_gas_table_matches_under_various_setvl() {
             // Expected gas: SETVL (vector_len ignored for SETVL) + op (scaled by vm.vector_length()) + HALT
             let vl = vm.vector_length();
             let used = 100_000 - vm.remaining_gas();
-            let expected = cost_of_with_params(setvl, 1, 0)
+            let expected = cost_of_with_vector_len(setvl, 1)
                 .expect("valid opcode must have gas cost")
-                + cost_of_with_params(word, vl, 0).expect("valid opcode must have gas cost")
-                + cost_of_with_params(encoding::wide::encode_halt(), 4, 0)
+                + cost_of_with_vector_len(word, vl).expect("valid opcode must have gas cost")
+                + cost_of_with_vector_len(encoding::wide::encode_halt(), 4)
                     .expect("valid opcode must have gas cost");
             assert_eq!(used, expected, "vl={vl} used={used} expected={expected}");
         }
@@ -103,9 +103,9 @@ fn vector_op_gas_table_matches_under_various_setvl() {
         vm.run().unwrap();
         let vl = vm.vector_length();
         let used = 100_000 - vm.remaining_gas();
-        let expected = cost_of_with_params(setvl, 1, 0).expect("valid opcode must have gas cost")
-            + cost_of_with_params(word, vl, 0).expect("valid opcode must have gas cost")
-            + cost_of_with_params(encoding::wide::encode_halt(), 4, 0)
+        let expected = cost_of_with_vector_len(setvl, 1).expect("valid opcode must have gas cost")
+            + cost_of_with_vector_len(word, vl).expect("valid opcode must have gas cost")
+            + cost_of_with_vector_len(encoding::wide::encode_halt(), 4)
                 .expect("valid opcode must have gas cost");
         assert_eq!(used, expected, "vl={vl} used={used} expected={expected}");
     }

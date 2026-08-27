@@ -86,7 +86,6 @@ import XCTest
       hash: String? = nil,
       statusKinds: [String]? = nil,
       repeatLast: Bool? = nil,
-      accepted: Bool? = nil,
       submitStatus: Int? = nil
     ) async throws {
       var payload: [String: Any] = [:]
@@ -96,7 +95,6 @@ import XCTest
         payload["statuses"] = statusKinds.map { ["kind": $0] }
       }
       if let repeatLast { payload["repeat_last"] = repeatLast }
-      if let accepted { payload["accepted"] = accepted }
       if let submitStatus { payload["submit_status"] = submitStatus }
       var request = URLRequest(url: baseURL.appendingPathComponent("__mock__/pipeline/config"))
       request.httpMethod = "POST"

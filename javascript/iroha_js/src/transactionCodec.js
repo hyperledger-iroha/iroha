@@ -101,6 +101,7 @@ const INSTRUCTION_BOX_SCHEMA_HASH = Buffer.from(
 const MAX_BROWSER_INSTRUCTIONS = 64;
 const MAX_CONTRACT_ARGUMENT_RECORD_BYTES = 1024 * 1024;
 const MAX_CONTRACT_ENTRYPOINT_BYTES = 1024;
+const DEFAULT_TRANSACTION_TTL_MS = 100_000;
 const TRANSACTION_ADMISSION_QUEUE_PLAN_SYNCED_TAG = 1;
 const SMART_CONTRACT_DEPLOYMENT_WIRE_IDS = new Set([
   "iroha.instruction.v1::smart_contract_code::UploadSmartContractCodeChunk",
@@ -897,18 +898,16 @@ function rustPlainJsonString(value) {
       case "\\":
         output += "\\\\";
         break;
+      case "\b":
+      case "\f":
       case "\n":
-        output += "\\n";
-        break;
       case "\r":
-        output += "\\r";
-        break;
       case "\t":
-        output += "\\t";
+        output += `\\${"bfnrt"["\b\f\n\r\t".indexOf(character)]}`;
         break;
       default:
         if (codePoint < 0x20) {
-          output += `\\u00${codePoint.toString(16).toUpperCase().padStart(2, "0")}`;
+          output += `\\u00${codePoint.toString(16).padStart(2, "0")}`;
         } else {
           output += character;
         }
@@ -1174,8 +1173,12 @@ function normalizeTransactionInputTail(
     UINT64_MAX,
     "creationTimeMs",
   );
-  let ttlMs = normalizeOptionalUnsigned(input.ttlMs, UINT64_MAX, "ttlMs");
-  if (ttlMs === 0n) ttlMs = 1n;
+  const ttlMs = normalizeOptionalUnsigned(
+    input.ttlMs ?? DEFAULT_TRANSACTION_TTL_MS,
+    UINT64_MAX,
+    "ttlMs",
+    { nonZero: true },
+  );
   const nonce = normalizeOptionalUnsigned(input.nonce, UINT32_MAX, "nonce", {
     nonZero: true,
   });
@@ -2089,6 +2092,12 @@ function validateOption(payload, expectedLength, context, { nonZero = false } = 
   return numeric;
 }
 
+function validateRequiredTtlOption(payload, context) {
+  if (validateOption(payload, 8, context, { nonZero: true }) === null) {
+    fail(MALFORMED_PAYLOAD, `${context} is required`);
+  }
+}
+
 function validateMetadataArchive(payload, context) {
   const reader = new Reader(payload, context);
   const count = reader.readU64("count");
@@ -2259,9 +2268,10 @@ function validateTransactionPayloadEnvelope(
     reader.readField("executable"),
     authorityPublicKey,
   );
-  validateOption(reader.readField("ttlMs"), 8, "transaction payload.ttlMs", {
-    nonZero: true,
-  });
+  validateRequiredTtlOption(
+    reader.readField("ttlMs"),
+    "transaction payload.ttlMs",
+  );
   validateOption(reader.readField("nonce"), 4, "transaction payload.nonce", {
     nonZero: true,
   });
@@ -2417,11 +2427,9 @@ export function decodeCanonicalVerifyingKeyTransactionPayload(
     );
   }
 
-  validateOption(
+  validateRequiredTtlOption(
     reader.readField("ttlMs"),
-    8,
     "verifying-key transaction payload.ttlMs",
-    { nonZero: true },
   );
   validateOption(
     reader.readField("nonce"),

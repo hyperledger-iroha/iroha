@@ -3407,6 +3407,7 @@ impl Kura {
         if self.store_root.as_os_str().is_empty() {
             return Ok(LaneGeometryGcSummary::default());
         }
+        self.durable_mutation_authorized()?;
         self.ensure_nonzero_lineage_root(lineage_root)?;
         if snapshot_height == 0
             || snapshot_block_hash.is_none()
@@ -12290,30 +12291,14 @@ impl Kura {
     /// Select the configured primary lane for emergency Fast startup without
     /// decoding or reconciling the lane-geometry journal.
     ///
-    /// Fast is only valid for an already initialized current-layout store. Any
-    /// temporary geometry publication requires a Strict restart; otherwise the
-    /// configured primary paths and their fixed set of canonical files are
+    /// Fast is only valid for an already initialized current-layout store. It
+    /// ignores geometry publications and the deferred merge log entirely; the
+    /// configured primary block directory and its fixed canonical files are
     /// checked by metadata only.
     pub(super) fn emergency_fast_configured_primary_paths(
         store_root: &Path,
         configured: &LaneConfigEntry,
     ) -> Result<(PathBuf, PathBuf, bool)> {
-        let reject_existing = |path: PathBuf, label: &'static str| -> Result<()> {
-            match fs::symlink_metadata(&path) {
-                Ok(_) => Err(Error::EmergencyFastAuxiliaryUnavailable { subsystem: label }),
-                Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
-                Err(error) => Err(Error::IO(error, path)),
-            }
-        };
-        reject_existing(
-            store_root.join(JOURNAL_TEMP_FILE_NAME),
-            "pending lane-geometry publication",
-        )?;
-        reject_existing(
-            store_root.join(JOURNAL_RESTORE_TEMP_FILE_NAME),
-            "pending lane-geometry restoration",
-        )?;
-
         let blocks_path = configured.blocks_dir(store_root);
         let merge_path = configured.merge_log_path(store_root);
         let require_directory = |path: &Path| -> Result<()> {
@@ -12345,10 +12330,6 @@ impl Kura {
             Ok(())
         };
         require_directory(&blocks_path)?;
-        reject_existing(
-            blocks_path.join(MARKER_TEMP_FILE_NAME),
-            "pending primary-lane marker publication",
-        )?;
         for name in [
             INDEX_FILE_NAME,
             DATA_FILE_NAME,
@@ -12358,7 +12339,6 @@ impl Kura {
         ] {
             require_regular(&blocks_path.join(name))?;
         }
-        require_regular(&merge_path)?;
         Ok((blocks_path, merge_path, true))
     }
     /// Resolve any interrupted primary-lane relabel before opening canonical files.

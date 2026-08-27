@@ -6,9 +6,9 @@
 //! supported and `MAXCYCLES` is enforced when a cycle limit is set.
 //!
 //! This implementation incorporates the updated architecture with 256 tagged
-//! registers, optional hardware transactional memory and basic hardware feature
-//! detection. Vector operations use a deterministic logical lane count capped by
-//! the ABI, with hardware helpers kept behind byte-identical fallbacks.
+//! registers and basic hardware feature detection. Vector operations use a
+//! deterministic logical lane count capped by the ABI, with hardware helpers
+//! kept behind byte-identical fallbacks.
 use crate::{
     SyscallPolicy, decoder,
     error::{
@@ -25,12 +25,11 @@ use crate::{
         decode_literal_descriptor,
     },
     parallel::{
-        self, Block, BlockResult, ExecutionContext, Scheduler, State, Transaction, TxResult,
+        Block, BlockResult, ExecutionContext, Scheduler, State, StateUpdate, Transaction, TxResult,
     },
     pointer_abi::PointerPolicyGuard,
     prepared::PreparedContract,
     registers::Registers,
-    simple_instruction::Instruction as SimpleInstruction,
     stack_policy::IvmStackPolicy,
     syscall_metering::{
         STAGED_SYSCALL_ENTRY_GAS, StagedSyscallContext, SyscallCompletion, SyscallMetering,
@@ -40,7 +39,7 @@ use crate::{
     vector::SimdChoice,
     zk::{self, Constraint, DeltaTraceLog, MemEvent, MemLog, RegisterState},
 };
-use likely_stable::{likely, unlikely};
+use likely_stable::unlikely;
 #[cfg(feature = "beep")]
 use rodio::{
     OutputStream, OutputStreamBuilder, Sink, Source, StreamError, mixer::Mixer, source::SineWave,
@@ -50,7 +49,7 @@ use sha2::{Digest, Sha256};
 use std::time::Duration;
 use std::{
     cell::RefCell,
-    collections::{BTreeMap, HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, HashMap, VecDeque},
     panic::AssertUnwindSafe,
     sync::{
         Arc, Mutex, OnceLock,
@@ -66,8 +65,6 @@ const LOGICAL_VECTOR_MAX: usize = crate::metadata::VECTOR_LENGTH_MAX as usize;
 const DEFAULT_VECTOR_LENGTH: usize = 4;
 /// Canonical instruction width for first-release IVM bytecode.
 const WIDE_INSTRUCTION_LEN: u64 = 4;
-/// Avoid Rayon scheduling overhead for tiny straight-line simple blocks.
-const ILP_MIN_PARALLEL_BLOCK_LEN: usize = 16;
 /// Number of prepared instruction streams retained outside the decode cache.
 const PREPARED_PROGRAM_CACHE_CAPACITY: usize = 128;
 /// Approximate byte budget for cached prepared instruction streams.
@@ -490,7 +487,7 @@ impl WorkerResources {
             template_input_bump,
         }
     }
-    fn execute(&mut self, tx: Transaction) -> TxResult {
+    fn execute(&mut self, tx: Transaction) -> (TxResult, Vec<StateUpdate>) {
         self.vm.private_memory_bytes.clear();
         self.vm
             .memory
@@ -502,10 +499,8 @@ impl WorkerResources {
         self.vm.input_bump_next = self.template_input_bump;
         self.ctx.init_for_transaction(&tx, &self.vm.state);
         let result = self.vm.execute_transaction(&tx, &mut self.ctx);
-        if result.success {
-            self.vm.commit_transaction(&self.ctx, &tx.access.reg_tags);
-        }
-        result
+        let writes = std::mem::take(&mut self.ctx.write_set);
+        (result, writes)
     }
 }
 /// Control whether the VM prints the ASCII banner and hardware feature summary
@@ -513,38 +508,6 @@ impl WorkerResources {
 #[allow(dead_code)]
 pub fn set_banner_enabled(enabled: bool) {
     SUPPRESS_BANNER.store(!enabled, Ordering::Relaxed);
-}
-pub(crate) fn rtm_available() -> bool {
-    #[cfg(all(feature = "htm", target_arch = "x86_64"))]
-    {
-        use std::arch::x86_64::{__cpuid_count, __get_cpuid_max};
-        const RTM_FLAG: u32 = 1 << 11;
-        // RTM detection is not available on stable via `is_x86_feature_detected!`, so use CPUID
-        // leaf 7 (EBX bit 11) which is supported on all processors implementing RTM.
-        unsafe {
-            let (max_leaf, _) = __get_cpuid_max(0);
-            if max_leaf < 7 {
-                return false;
-            }
-            (__cpuid_count(0x7, 0).ebx & RTM_FLAG) != 0
-        }
-    }
-    #[cfg(all(feature = "htm", target_arch = "x86"))]
-    {
-        use std::arch::x86::{__cpuid_count, __get_cpuid_max};
-        const RTM_FLAG: u32 = 1 << 11;
-        unsafe {
-            let (max_leaf, _) = __get_cpuid_max(0);
-            if max_leaf < 7 {
-                return false;
-            }
-            (__cpuid_count(0x7, 0).ebx & RTM_FLAG) != 0
-        }
-    }
-    #[cfg(not(all(feature = "htm", any(target_arch = "x86", target_arch = "x86_64"))))]
-    {
-        false
-    }
 }
 fn hardware_capabilities_snapshot() -> &'static HardwareCapabilities {
     HARDWARE_CAPABILITIES.get_or_init(|| {
@@ -978,12 +941,10 @@ impl IvmBuilder {
         if let Some(config) = self.host_config {
             config(&mut vm);
         }
-        let scheduler_threads = vm.scheduler.thread_count();
-        vm.core_count = scheduler_threads;
+        let scheduler_threads = vm.scheduler_limits.0;
         IVM::startup_banner(
             scheduler_threads,
             vm.max_vector_lanes,
-            vm.htm_supported,
             vm.hardware_capabilities(),
             vm.use_metal,
             vm.use_cuda,
@@ -1014,14 +975,12 @@ impl From<IvmConfigBuilder> for IvmBuilder {
 #[derive(Clone)]
 struct PreparedOp {
     inst: u32,
-    len: u32,
     wide_op: u8,
     base_gas: Option<u64>,
-    simple: Option<SimpleInstruction>,
 }
 impl PreparedOp {
     fn from_decoded(op: &crate::ivm_cache::DecodedOp) -> Result<Self, VMError> {
-        if op.len as u64 != WIDE_INSTRUCTION_LEN || !op.pc.is_multiple_of(WIDE_INSTRUCTION_LEN) {
+        if !op.pc.is_multiple_of(WIDE_INSTRUCTION_LEN) {
             return Err(VMError::DecodeError);
         }
         let wide_op = instruction::wide::opcode(op.inst);
@@ -1030,19 +989,15 @@ impl PreparedOp {
         }
         Ok(Self {
             inst: op.inst,
-            len: op.len,
             wide_op,
             base_gas: gas::cost_of(op.inst),
-            simple: to_simple(op.inst),
         })
     }
     fn fetched(&self) -> FetchedOp {
         FetchedOp {
             inst: self.inst,
-            len: self.len,
             wide_op: self.wide_op,
             base_gas: self.base_gas,
-            simple: self.simple,
         }
     }
 }
@@ -1103,15 +1058,9 @@ impl PreparedProgram {
         self.op_at(pc).is_some()
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-struct PreparedProgramCacheKey {
-    hash: [u8; 32],
-    version_major: u8,
-    version_minor: u8,
-}
+type PreparedProgramCacheKey = [u8; 32];
 struct PreparedProgramCache {
     map: HashMap<PreparedProgramCacheKey, Arc<[PreparedOp]>>,
-    sizes: HashMap<PreparedProgramCacheKey, usize>,
     order: VecDeque<PreparedProgramCacheKey>,
     bytes: usize,
 }
@@ -1119,30 +1068,24 @@ impl PreparedProgramCache {
     fn new() -> Self {
         Self {
             map: HashMap::new(),
-            sizes: HashMap::new(),
             order: VecDeque::new(),
             bytes: 0,
         }
     }
-    fn key_for(code: &[u8], metadata: &ProgramMetadata) -> PreparedProgramCacheKey {
+    fn key_for(code: &[u8]) -> PreparedProgramCacheKey {
         let mut hasher = Sha256::new();
         hasher.update(code);
         let hash = hasher.finalize();
         let mut out = [0u8; 32];
         out.copy_from_slice(&hash);
-        PreparedProgramCacheKey {
-            hash: out,
-            version_major: metadata.version_major,
-            version_minor: metadata.version_minor,
-        }
+        out
     }
     fn get_or_prepare(
         &mut self,
         code: &[u8],
-        metadata: &ProgramMetadata,
         decoded: &[crate::ivm_cache::DecodedOp],
     ) -> Result<Arc<[PreparedOp]>, VMError> {
-        let key = Self::key_for(code, metadata);
+        let key = Self::key_for(code);
         if let Some(hit) = self.map.get(&key).cloned() {
             self.touch(key);
             return Ok(hit);
@@ -1152,7 +1095,6 @@ impl PreparedProgramCache {
         if size <= PREPARED_PROGRAM_CACHE_MAX_BYTES {
             self.bytes = self.bytes.saturating_add(size);
             self.map.insert(key, Arc::clone(&prepared));
-            self.sizes.insert(key, size);
             self.touch(key);
             self.enforce_capacity();
         }
@@ -1179,9 +1121,8 @@ impl PreparedProgramCache {
         }
     }
     fn remove_entry(&mut self, key: PreparedProgramCacheKey) {
-        if self.map.remove(&key).is_some() {
-            let size = self.sizes.remove(&key).unwrap_or(0);
-            self.bytes = self.bytes.saturating_sub(size);
+        if let Some(prepared) = self.map.remove(&key) {
+            self.bytes = self.bytes.saturating_sub(Self::entry_size(&prepared));
         }
     }
 }
@@ -1231,7 +1172,6 @@ fn validate_generic_program_syscalls(
 }
 pub(crate) fn prepare_instruction_stream(
     code: &[u8],
-    metadata: &ProgramMetadata,
     decoded: &[crate::ivm_cache::DecodedOp],
     first_pc: u64,
     literals: &[DecodedLiteral],
@@ -1241,7 +1181,7 @@ pub(crate) fn prepare_instruction_stream(
         let mut guard = prepared_program_cache()
             .lock()
             .unwrap_or_else(|err| err.into_inner());
-        guard.get_or_prepare(code, metadata, decoded)?
+        guard.get_or_prepare(code, decoded)?
     };
     PreparedProgram::from_prepared_ops(prepared_ops, first_pc, code.len())
 }
@@ -1261,10 +1201,8 @@ struct ProgramLoadImage<'a> {
 #[derive(Clone, Copy)]
 struct FetchedOp {
     inst: u32,
-    len: u32,
     wide_op: u8,
     base_gas: Option<u64>,
-    simple: Option<SimpleInstruction>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TraceMode {
@@ -1404,9 +1342,6 @@ pub struct IVM {
     contract_return_stack: Vec<u64>,
     /// Aligned outer-return sentinel captured from r1 at invocation start.
     contract_outer_return_pc: Option<u64>,
-    branch_predictor: crate::branch_predictor::BranchPredictor,
-    branch_predictions: u64,
-    branch_correct: u64,
     #[cfg(test)]
     #[allow(dead_code)]
     /// When true (tests only), prints PC and instruction words as they execute.
@@ -1419,12 +1354,10 @@ pub struct IVM {
     prepared_loads: u64,
     // Shared world state used for block execution.
     state: State,
-    // Parallel scheduler reused across blocks.
-    scheduler: std::sync::Arc<Scheduler>,
-    // Execution contexts allocated per worker thread.
-    _contexts: Vec<ExecutionContext>,
-    // Number of threads used for scheduling.
-    core_count: usize,
+    // The block scheduler is expensive and most VM instances never execute a
+    // block, so construct it only on first use and share it across VM clones.
+    scheduler: Arc<OnceLock<Scheduler>>,
+    scheduler_limits: (usize, usize),
     /// Is Metal GPU acceleration available?
     use_metal: bool,
     /// Is CUDA GPU acceleration available?
@@ -1438,8 +1371,6 @@ pub struct IVM {
     last_diagnostic: Option<VmExecutionDiagnostic>,
     /// Low-bit alignment shared by all valid instruction PCs in the loaded program.
     pc_alignment: u64,
-    /// Does the host CPU support hardware transactional memory?
-    htm_supported: bool,
     /// Next free offset (relative to `Memory::INPUT_START`) used by the
     /// simple INPUT TLV bump allocator for host-returned pointers.
     input_bump_next: u64,
@@ -1490,9 +1421,6 @@ impl Clone for IVM {
             strict_return_integrity: self.strict_return_integrity,
             contract_return_stack: self.contract_return_stack.clone(),
             contract_outer_return_pc: self.contract_outer_return_pc,
-            branch_predictor: self.branch_predictor.clone(),
-            branch_predictions: 0,
-            branch_correct: 0,
             #[cfg(test)]
             decode_trace: false,
             #[cfg(test)]
@@ -1502,9 +1430,8 @@ impl Clone for IVM {
             #[cfg(test)]
             prepared_loads: 0,
             state: self.state.clone(),
-            scheduler: std::sync::Arc::clone(&self.scheduler),
-            _contexts: Vec::new(),
-            core_count: self.core_count,
+            scheduler: Arc::clone(&self.scheduler),
+            scheduler_limits: self.scheduler_limits,
             use_metal: self.use_metal,
             use_cuda: self.use_cuda,
             zk_mode: self.zk_mode,
@@ -1513,7 +1440,6 @@ impl Clone for IVM {
             program_prefix_len: self.program_prefix_len,
             last_diagnostic: self.last_diagnostic.clone(),
             pc_alignment: self.pc_alignment,
-            htm_supported: self.htm_supported,
             input_bump_next: self.input_bump_next,
             acceleration_policy: self.acceleration_policy,
             hardware_capabilities: self.hardware_capabilities,
@@ -1554,15 +1480,6 @@ impl IVM {
     }
     /// First general register index used to hold vector register data.
     const VECTOR_BASE: usize = 32;
-    /// Gas costs for the simple interpreter.
-    const GAS_ALU: u64 = 1;
-    const GAS_MEM: u64 = 3;
-    const GAS_JUMP: u64 = 1;
-    const GAS_SHA256_BASE: u64 = 10;
-    const GAS_SHA256_PER_BYTE: u64 = 1;
-    const GAS_ED25519_VERIFY: u64 = 1000;
-    #[allow(dead_code)]
-    const GAS_DILITHIUM_VERIFY: u64 = 5000;
     /// Play a short tune on the default audio device.
     ///
     /// This function is only available when built with the `beep` feature.
@@ -1670,7 +1587,6 @@ impl IVM {
     fn startup_banner(
         core_count: usize,
         max_vector: usize,
-        htm: bool,
         capabilities: HardwareCapabilities,
         metal: bool,
         cuda: bool,
@@ -1702,7 +1618,7 @@ impl IVM {
             std::env::consts::OS,
             std::env::consts::ARCH
         );
-        let accel = if max_vector > 1 || htm || metal || cuda {
+        let accel = if max_vector > 1 || metal || cuda {
             "yes"
         } else {
             "no"
@@ -1758,7 +1674,7 @@ impl IVM {
         // Global Rayon pool initialization is handled by the host (e.g., irohad)
         // based on configuration. Avoid initializing a large global pool here to
         // reduce oversubscription when multiple thread pools coexist.
-        let htm_supported = cfg!(all(feature = "htm", target_arch = "x86_64")) && rtm_available();
+        let scheduler_limits = crate::parallel::default_scheduler_limits();
         let mut vm = IVM {
             registers: Registers::new(),
             memory: mem,
@@ -1801,9 +1717,6 @@ impl IVM {
             strict_return_integrity: false,
             contract_return_stack: Vec::new(),
             contract_outer_return_pc: None,
-            branch_predictor: crate::branch_predictor::BranchPredictor::new(1024),
-            branch_predictions: 0,
-            branch_correct: 0,
             #[cfg(test)]
             decode_trace: false,
             #[cfg(test)]
@@ -1813,15 +1726,8 @@ impl IVM {
             #[cfg(test)]
             prepared_loads: 0,
             state: State::new(),
-            core_count: {
-                let (min, _max) = crate::parallel::default_scheduler_limits();
-                min
-            },
-            scheduler: {
-                let (min, max) = crate::parallel::default_scheduler_limits();
-                std::sync::Arc::new(Scheduler::new_dynamic(min, max))
-            },
-            _contexts: Vec::new(),
+            scheduler: Arc::new(OnceLock::new()),
+            scheduler_limits,
             use_metal: false,
             use_cuda: false,
             zk_mode: false,
@@ -1830,595 +1736,32 @@ impl IVM {
             program_prefix_len: 0,
             last_diagnostic: None,
             pc_alignment: 0,
-            htm_supported,
             input_bump_next: 0,
             acceleration_policy: AccelerationPolicy::deterministic(),
             hardware_capabilities: config.capabilities(),
         };
-        vm.scheduler
-            .set_forced_simd(config.acceleration().forced_simd());
         vm.set_hardware_capabilities(config.capabilities());
         vm.set_acceleration_policy(config.acceleration());
-        vm.core_count = vm.scheduler.thread_count();
         vm
     }
     fn apply_acceleration_policy(&mut self, policy: AccelerationPolicy) {
         let caps = self.hardware_capabilities;
         self.acceleration_policy = policy;
         vector::set_thread_forced_simd(policy.forced_simd());
-        self.scheduler.set_forced_simd(policy.forced_simd());
+        if let Some(scheduler) = self.scheduler.get() {
+            scheduler.set_forced_simd(policy.forced_simd());
+        }
         self.use_metal = policy.allow_metal() && caps.metal_available();
         self.use_cuda = policy.allow_cuda() && caps.cuda_available();
     }
-    /// Decode the next instruction from code memory and advance the program counter.
-    ///
-    /// The simple decoder understands a compact 16-bit encoding for basic arithmetic, memory and
-    /// branch operations as well as a 32-bit form for absolute jumps. Unknown opcodes or invalid
-    /// fetches yield `VMError::DecodeError`.
-    pub fn decode_next(&self) -> Result<(crate::simple_instruction::Instruction, u8), VMError> {
-        use crate::simple_instruction::Instruction;
-        let half = self
-            .memory
-            .fetch_u16(self.pc)
-            .map_err(|_| VMError::DecodeError)?;
-        // Check for 32-bit jump prefix 0b11111xxxx_xxxxxxxx
-        if (half >> 11) == 0x1F {
-            let next = self
-                .memory
-                .fetch_u16(self.pc + 2)
-                .map_err(|_| VMError::DecodeError)?;
-            let hi = (half & 0x07FF) as u32;
-            let target = ((hi << 16) | next as u32) as u64;
-            return Ok((Instruction::Jump { target }, 4));
-        }
-        let op = (half >> 12) & 0xF;
-        let f1 = (half >> 8) & 0xF;
-        let f2 = (half >> 4) & 0xF;
-        let f3 = half & 0xF;
-        let instr = match op {
-            0x0 => Instruction::Halt,
-            0x1 => Instruction::Add {
-                rd: f1,
-                rs: f2,
-                rt: f3,
-            },
-            0x2 => Instruction::Sub {
-                rd: f1,
-                rs: f2,
-                rt: f3,
-            },
-            0x3 => {
-                let offset = ((f3 as i8) << 4) >> 4;
-                Instruction::Load {
-                    rd: f1,
-                    addr_reg: f2,
-                    offset,
-                }
-            }
-            0x4 => {
-                let offset = ((f3 as i8) << 4) >> 4;
-                Instruction::Store {
-                    rs: f1,
-                    addr_reg: f2,
-                    offset,
-                }
-            }
-            0x6 => Instruction::Xor {
-                rd: f1,
-                rs: f2,
-                rt: f3,
-            },
-            0x5 => {
-                let offset = ((f3 as i8) << 4) >> 4;
-                Instruction::Beq {
-                    rs: f1,
-                    rt: f2,
-                    offset: offset as i16,
-                }
-            }
-            _ => return Err(VMError::DecodeError),
-        };
-        Ok((instr, 2))
-    }
-    /// Execute a single simple instruction.
-    pub fn execute_instruction(&mut self, instr: SimpleInstruction) -> Result<(), VMError> {
-        // Determine gas cost for this instruction
-        let cost = match instr {
-            SimpleInstruction::Add { .. }
-            | SimpleInstruction::Sub { .. }
-            | SimpleInstruction::And { .. }
-            | SimpleInstruction::Or { .. }
-            | SimpleInstruction::AddImm { .. }
-            | SimpleInstruction::SubImm { .. }
-            | SimpleInstruction::Xor { .. }
-            | SimpleInstruction::Sll { .. }
-            | SimpleInstruction::Srl { .. }
-            | SimpleInstruction::Sra { .. }
-            | SimpleInstruction::SetVL { .. } => Self::GAS_ALU,
-            SimpleInstruction::Vadd32 { .. } => {
-                gas::scaled_vector_cost(Self::GAS_ALU * 2, self.vector_length)
-            }
-            SimpleInstruction::Load { .. } | SimpleInstruction::Store { .. } => Self::GAS_MEM,
-            SimpleInstruction::Jump { .. } | SimpleInstruction::Beq { .. } => Self::GAS_JUMP,
-            SimpleInstruction::Sha256 { len, .. } => {
-                Self::GAS_SHA256_BASE + Self::GAS_SHA256_PER_BYTE * len
-            }
-            SimpleInstruction::Ed25519Verify { .. } => Self::GAS_ED25519_VERIFY,
-            SimpleInstruction::DilithiumVerify { .. } => Self::GAS_DILITHIUM_VERIFY,
-            SimpleInstruction::Halt => 0,
-        };
-        if self.gas_remaining < cost {
-            return Err(VMError::OutOfGas);
-        }
-        self.gas_remaining -= cost;
-        match instr {
-            SimpleInstruction::Add { rd, rs, rt } => {
-                let a = self.registers.get(rs as usize);
-                let b = self.registers.get(rt as usize);
-                if self.zk_mode {
-                    let tag_a = self.registers.tag(rs as usize);
-                    let tag_b = self.registers.tag(rt as usize);
-                    if tag_a != tag_b {
-                        return Err(VMError::PrivacyViolation);
-                    }
-                    self.registers.set_tag(rd as usize, tag_a);
-                }
-                let sum = a.wrapping_add(b);
-                self.registers.set(rd as usize, sum);
-            }
-            SimpleInstruction::Sub { rd, rs, rt } => {
-                let a = self.registers.get(rs as usize);
-                let b = self.registers.get(rt as usize);
-                if self.zk_mode {
-                    let tag_a = self.registers.tag(rs as usize);
-                    let tag_b = self.registers.tag(rt as usize);
-                    if tag_a != tag_b {
-                        return Err(VMError::PrivacyViolation);
-                    }
-                    self.registers.set_tag(rd as usize, tag_a);
-                }
-                let diff = a.wrapping_sub(b);
-                self.registers.set(rd as usize, diff);
-            }
-            SimpleInstruction::And { rd, rs, rt } => {
-                let a = self.registers.get(rs as usize);
-                let b = self.registers.get(rt as usize);
-                if self.zk_mode {
-                    let tag_a = self.registers.tag(rs as usize);
-                    let tag_b = self.registers.tag(rt as usize);
-                    if tag_a != tag_b {
-                        return Err(VMError::PrivacyViolation);
-                    }
-                    self.registers.set_tag(rd as usize, tag_a);
-                }
-                self.registers.set(rd as usize, a & b);
-            }
-            SimpleInstruction::Or { rd, rs, rt } => {
-                let a = self.registers.get(rs as usize);
-                let b = self.registers.get(rt as usize);
-                if self.zk_mode {
-                    let tag_a = self.registers.tag(rs as usize);
-                    let tag_b = self.registers.tag(rt as usize);
-                    if tag_a != tag_b {
-                        return Err(VMError::PrivacyViolation);
-                    }
-                    self.registers.set_tag(rd as usize, tag_a);
-                }
-                self.registers.set(rd as usize, a | b);
-            }
-            SimpleInstruction::AddImm { rd, rs, imm } => {
-                let a = self.registers.get(rs as usize);
-                let tag = self.zk_unary_tag(rs as usize);
-                self.zk_apply_tag(rd as usize, tag);
-                self.registers
-                    .set(rd as usize, a.wrapping_add(imm as i64 as u64));
-            }
-            SimpleInstruction::SubImm { rd, rs, imm } => {
-                let a = self.registers.get(rs as usize);
-                let tag = self.zk_unary_tag(rs as usize);
-                self.zk_apply_tag(rd as usize, tag);
-                self.registers
-                    .set(rd as usize, a.wrapping_sub(imm as i64 as u64));
-            }
-            SimpleInstruction::Xor { rd, rs, rt } => {
-                let a = self.registers.get(rs as usize);
-                let b = self.registers.get(rt as usize);
-                if self.zk_mode {
-                    let tag_a = self.registers.tag(rs as usize);
-                    let tag_b = self.registers.tag(rt as usize);
-                    if tag_a != tag_b {
-                        return Err(VMError::PrivacyViolation);
-                    }
-                    self.registers.set_tag(rd as usize, tag_a);
-                }
-                self.registers.set(rd as usize, a ^ b);
-            }
-            SimpleInstruction::Sll { rd, rs, rt } => {
-                let tag = self.zk_match_tags(rs as usize, rt as usize)?;
-                self.zk_apply_tag(rd as usize, tag);
-                let a = self.registers.get(rs as usize);
-                let b = self.registers.get(rt as usize) & 0x3F;
-                self.registers.set(rd as usize, a << b);
-            }
-            SimpleInstruction::Srl { rd, rs, rt } => {
-                let tag = self.zk_match_tags(rs as usize, rt as usize)?;
-                self.zk_apply_tag(rd as usize, tag);
-                let a = self.registers.get(rs as usize);
-                let b = self.registers.get(rt as usize) & 0x3F;
-                self.registers.set(rd as usize, a >> b);
-            }
-            SimpleInstruction::Sra { rd, rs, rt } => {
-                let tag = self.zk_match_tags(rs as usize, rt as usize)?;
-                self.zk_apply_tag(rd as usize, tag);
-                let a = self.registers.get(rs as usize) as i64;
-                let b = (self.registers.get(rt as usize) & 0x3F) as u32;
-                self.registers.set(rd as usize, (a >> b) as u64);
-            }
-            SimpleInstruction::SetVL { new_vl } => {
-                if !self.vector_enabled {
-                    return Err(VMError::VectorExtensionDisabled);
-                }
-                self.vector_length = setvl_length(new_vl as usize)?;
-            }
-            SimpleInstruction::Vadd32 { rd, rs, rt } => {
-                if !self.vector_enabled {
-                    return Err(VMError::VectorExtensionDisabled);
-                }
-                let n = self.vector_length;
-                let stride = n;
-                let rd = Self::VECTOR_BASE + rd as usize * stride;
-                let rs = Self::VECTOR_BASE + rs as usize * stride;
-                let rt = Self::VECTOR_BASE + rt as usize * stride;
-                if rd + n > 256 || rs + n > 256 || rt + n > 256 {
-                    return Err(VMError::RegisterOutOfBounds);
-                }
-                for i in 0..n {
-                    let a = self.registers.get(rs + i) as u32;
-                    let b = self.registers.get(rt + i) as u32;
-                    if self.zk_mode {
-                        let tag_a = self.registers.tag(rs + i);
-                        let tag_b = self.registers.tag(rt + i);
-                        if tag_a != tag_b {
-                            return Err(VMError::PrivacyViolation);
-                        }
-                        self.registers.set_tag(rd + i, tag_a);
-                    }
-                    let sum = a.wrapping_add(b);
-                    self.registers.set(rd + i, u64::from(sum));
-                }
-            }
-            SimpleInstruction::Load {
-                rd,
-                addr_reg,
-                offset,
-            } => {
-                if self.zk_mode && self.registers.tag(addr_reg as usize) {
-                    // Disallow secret-dependent memory access in ZK mode.
-                    return Err(VMError::PrivacyViolation);
-                }
-                let base = self.registers.get(addr_reg as usize) as i64;
-                let addr = base.wrapping_add(offset as i64) as u64;
-                let value = self.memory.load_u64(addr)?;
-                let tag = self.memory_load_privacy_tag(addr, 8)?;
-                self.registers.set(rd as usize, value);
-                if self.zk_mode {
-                    self.registers.set_tag(rd as usize, tag);
-                }
-            }
-            SimpleInstruction::Store {
-                rs,
-                addr_reg,
-                offset,
-            } => {
-                if self.zk_mode && self.registers.tag(addr_reg as usize) {
-                    return Err(VMError::PrivacyViolation);
-                }
-                let base = self.registers.get(addr_reg as usize) as i64;
-                let addr = base.wrapping_add(offset as i64) as u64;
-                let value = self.registers.get(rs as usize);
-                let tag = self.zk_mode && self.registers.tag(rs as usize);
-                self.validate_memory_store_privacy(addr, 8, tag)?;
-                self.memory.store_u64(addr, value)?;
-                self.record_memory_store_privacy(addr, 8, tag);
-            }
-            SimpleInstruction::Jump { target } => {
-                self.pc = target;
-            }
-            SimpleInstruction::Beq { rs, rt, offset } => {
-                if self.zk_mode {
-                    let cond_left_private = self.registers.tag(rs as usize);
-                    let cond_right_private = self.registers.tag(rt as usize);
-                    if cond_left_private || cond_right_private {
-                        // Branching on private data would leak information.
-                        return Err(VMError::PrivacyViolation);
-                    }
-                }
-                let a = self.registers.get(rs as usize);
-                let b = self.registers.get(rt as usize);
-                let predicted = self.branch_predictor.predict(self.pc);
-                let taken = a == b;
-                self.branch_predictions += 1;
-                if likely(predicted == taken) {
-                    self.branch_correct += 1;
-                } else {
-                    self.cycles += 1;
-                }
-                self.branch_predictor.update(self.pc, taken);
-                if likely(taken) {
-                    // Offset is in units of instructions (2 bytes each)
-                    let offs = offset as i64 * 2;
-                    self.pc = ((self.pc as i64) + offs) as u64;
-                }
-            }
-            SimpleInstruction::Sha256 {
-                dest,
-                src_addr,
-                len,
-            } => {
-                self.ensure_public_memory(src_addr, len)?;
-                let data = self.memory.load_region(src_addr, len)?;
-                use sha2::{Digest, Sha256};
-                let digest = Sha256::digest(data);
-                for i in 0..4 {
-                    let mut chunk = [0u8; 8];
-                    chunk.copy_from_slice(&digest[i * 8..(i + 1) * 8]);
-                    let val = u64::from_le_bytes(chunk);
-                    self.registers.set(dest as usize + i, val);
-                    if self.zk_mode {
-                        self.registers.set_tag(dest as usize + i, false);
-                    }
-                }
-            }
-            SimpleInstruction::Ed25519Verify {
-                pubkey_addr,
-                sig_addr,
-                msg_addr,
-                msg_len,
-                result_reg,
-            } => {
-                use ed25519_dalek::Signature;
-                self.ensure_public_memory(pubkey_addr, 32)?;
-                self.ensure_public_memory(sig_addr, 64)?;
-                self.ensure_public_memory(msg_addr, msg_len)?;
-                let pk_slice = self.memory.load_region(pubkey_addr, 32)?;
-                let sig_slice = self.memory.load_region(sig_addr, 64)?;
-                let msg = self.memory.load_region(msg_addr, msg_len)?;
-                let pk_bytes: [u8; 32] = match pk_slice.try_into() {
-                    Ok(b) => b,
-                    Err(_) => {
-                        self.registers.set(result_reg as usize, 0);
-                        return Ok(());
-                    }
-                };
-                let sig_bytes_arr: [u8; 64] = match sig_slice.try_into() {
-                    Ok(b) => b,
-                    Err(_) => {
-                        self.registers.set(result_reg as usize, 0);
-                        return Ok(());
-                    }
-                };
-                if crate::signature::signature_bytes_are_all_zero(&sig_bytes_arr) {
-                    self.registers.set(result_reg as usize, 0);
-                    return Ok(());
-                }
-                if crate::signature::signature_has_invalid_ed25519_r(&sig_bytes_arr) {
-                    self.registers.set(result_reg as usize, 0);
-                    return Ok(());
-                }
-                let Some(pk) =
-                    crate::signature::parse_ed25519_public_key_for_verification(&pk_bytes)
-                else {
-                    self.registers.set(result_reg as usize, 0);
-                    return Ok(());
-                };
-                #[cfg(feature = "cuda")]
-                if self.use_cuda
-                    && let Some(res) =
-                        crate::cuda::ed25519_verify_cuda(msg, &sig_bytes_arr, &pk_bytes)
-                {
-                    let value = if res { 1 } else { 0 };
-                    self.registers.set(result_reg as usize, value);
-                    if self.zk_mode {
-                        self.registers.set_tag(result_reg as usize, false);
-                    }
-                    return Ok(());
-                }
-                let sig = match Signature::from_slice(&sig_bytes_arr) {
-                    Ok(s) => s,
-                    Err(_) => {
-                        self.registers.set(result_reg as usize, 0);
-                        return Ok(());
-                    }
-                };
-                let valid = pk.verify_strict(msg, &sig).is_ok();
-                let value = if valid { 1 } else { 0 };
-                self.registers.set(result_reg as usize, value);
-                if self.zk_mode {
-                    self.registers.set_tag(result_reg as usize, false);
-                }
-            }
-            SimpleInstruction::DilithiumVerify {
-                level,
-                pubkey_addr,
-                sig_addr,
-                msg_addr,
-                msg_len,
-                result_reg,
-            } => {
-                use pqcrypto_mldsa::{
-                    mldsa44 as dilithium2, mldsa65 as dilithium3, mldsa87 as dilithium5,
-                };
-                use pqcrypto_traits::sign::{DetachedSignature as _, PublicKey as _};
-                self.ensure_public_memory(msg_addr, msg_len)?;
-                let msg = self.memory.load_region(msg_addr, msg_len)?;
-                let valid = match level {
-                    2 => {
-                        self.ensure_public_memory(
-                            pubkey_addr,
-                            dilithium2::public_key_bytes() as u64,
-                        )?;
-                        self.ensure_public_memory(sig_addr, dilithium2::signature_bytes() as u64)?;
-                        let pk_slice = self
-                            .memory
-                            .load_region(pubkey_addr, dilithium2::public_key_bytes() as u64)?;
-                        let sig_slice = self
-                            .memory
-                            .load_region(sig_addr, dilithium2::signature_bytes() as u64)?;
-                        if crate::signature::material_bytes_are_all_zero(pk_slice)
-                            || crate::signature::signature_bytes_are_all_zero(sig_slice)
-                        {
-                            self.registers.set(result_reg as usize, 0);
-                            return Ok(());
-                        }
-                        let pk = match dilithium2::PublicKey::from_bytes(pk_slice) {
-                            Ok(p) => p,
-                            Err(_) => {
-                                self.registers.set(result_reg as usize, 0);
-                                return Ok(());
-                            }
-                        };
-                        let sig = match dilithium2::DetachedSignature::from_bytes(sig_slice) {
-                            Ok(s) => s,
-                            Err(_) => {
-                                self.registers.set(result_reg as usize, 0);
-                                return Ok(());
-                            }
-                        };
-                        dilithium2::verify_detached_signature(&sig, msg, &pk).is_ok()
-                    }
-                    3 => {
-                        self.ensure_public_memory(
-                            pubkey_addr,
-                            dilithium3::public_key_bytes() as u64,
-                        )?;
-                        self.ensure_public_memory(sig_addr, dilithium3::signature_bytes() as u64)?;
-                        let pk_slice = self
-                            .memory
-                            .load_region(pubkey_addr, dilithium3::public_key_bytes() as u64)?;
-                        let sig_slice = self
-                            .memory
-                            .load_region(sig_addr, dilithium3::signature_bytes() as u64)?;
-                        if crate::signature::material_bytes_are_all_zero(pk_slice)
-                            || crate::signature::signature_bytes_are_all_zero(sig_slice)
-                        {
-                            self.registers.set(result_reg as usize, 0);
-                            return Ok(());
-                        }
-                        let pk = match dilithium3::PublicKey::from_bytes(pk_slice) {
-                            Ok(p) => p,
-                            Err(_) => {
-                                self.registers.set(result_reg as usize, 0);
-                                return Ok(());
-                            }
-                        };
-                        let sig = match dilithium3::DetachedSignature::from_bytes(sig_slice) {
-                            Ok(s) => s,
-                            Err(_) => {
-                                self.registers.set(result_reg as usize, 0);
-                                return Ok(());
-                            }
-                        };
-                        dilithium3::verify_detached_signature(&sig, msg, &pk).is_ok()
-                    }
-                    5 => {
-                        self.ensure_public_memory(
-                            pubkey_addr,
-                            dilithium5::public_key_bytes() as u64,
-                        )?;
-                        self.ensure_public_memory(sig_addr, dilithium5::signature_bytes() as u64)?;
-                        let pk_slice = self
-                            .memory
-                            .load_region(pubkey_addr, dilithium5::public_key_bytes() as u64)?;
-                        let sig_slice = self
-                            .memory
-                            .load_region(sig_addr, dilithium5::signature_bytes() as u64)?;
-                        if crate::signature::material_bytes_are_all_zero(pk_slice)
-                            || crate::signature::signature_bytes_are_all_zero(sig_slice)
-                        {
-                            self.registers.set(result_reg as usize, 0);
-                            return Ok(());
-                        }
-                        let pk = match dilithium5::PublicKey::from_bytes(pk_slice) {
-                            Ok(p) => p,
-                            Err(_) => {
-                                self.registers.set(result_reg as usize, 0);
-                                return Ok(());
-                            }
-                        };
-                        let sig = match dilithium5::DetachedSignature::from_bytes(sig_slice) {
-                            Ok(s) => s,
-                            Err(_) => {
-                                self.registers.set(result_reg as usize, 0);
-                                return Ok(());
-                            }
-                        };
-                        dilithium5::verify_detached_signature(&sig, msg, &pk).is_ok()
-                    }
-                    _ => false,
-                };
-                let value = if valid { 1 } else { 0 };
-                self.registers.set(result_reg as usize, value);
-                if self.zk_mode {
-                    self.registers.set_tag(result_reg as usize, false);
-                }
-            }
-            SimpleInstruction::Halt => {}
-        }
-        Ok(())
-    }
-    /// Execute a program made of `SimpleInstruction`s.
-    pub fn run_simple(&mut self) -> Result<(), VMError> {
-        const MAX_STEPS: u64 = 1_000_000;
-        let mut steps = 0u64;
-        let _pointer_policy_guard =
-            PointerPolicyGuard::install(self.syscall_policy(), self.abi_version());
-        loop {
-            if steps >= MAX_STEPS {
-                return Err(VMError::ExceededMaxCycles);
-            }
-            let mut block = Vec::new();
-            let mut terminal = None;
-            loop {
-                let (instr, len) = self.decode_next()?;
-                self.pc = self.pc.wrapping_add(len as u64);
-                if matches!(
-                    instr,
-                    SimpleInstruction::Jump { .. }
-                        | SimpleInstruction::Beq { .. }
-                        | SimpleInstruction::Halt
-                ) {
-                    terminal = Some(instr);
-                    break;
-                } else {
-                    block.push(instr);
-                    steps += 1;
-                    if steps >= MAX_STEPS {
-                        break;
-                    }
-                }
-            }
-            if !block.is_empty() {
-                self.execute_block_parallel(&block)?;
-            }
-            if let Some(term) = terminal {
-                if matches!(term, SimpleInstruction::Halt) {
-                    // In the simple pipeline, require at least one unit of gas to
-                    // complete the final step so that programs with N instructions
-                    // need >= N gas. This matches edge-case expectations in tests.
-                    if self.gas_remaining == 0 {
-                        return Err(VMError::OutOfGas);
-                    }
-                    // HALT itself has zero cost; the gas check above enforces step budget.
-                    break;
-                }
-                self.execute_instruction(term)?;
-                steps += 1;
-            } else {
-                break;
-            }
-        }
-        self.commit_memory_after_run_if_needed();
-        Ok(())
+    fn scheduler(&self) -> &Scheduler {
+        let (min_threads, max_threads) = self.scheduler_limits;
+        let forced_simd = self.acceleration_policy.forced_simd();
+        self.scheduler.get_or_init(|| {
+            let scheduler = Scheduler::new_dynamic(min_threads, max_threads);
+            scheduler.set_forced_simd(forced_simd);
+            scheduler
+        })
     }
     /// Create a new IVM with custom state and optional core count.
     pub fn new_with_options(core_count: Option<usize>, state: State, gas_limit: u64) -> Self {
@@ -2436,16 +1779,12 @@ impl IVM {
             Some(n) => (n.max(1), n.max(1)),
             None => crate::parallel::default_scheduler_limits(),
         };
-        vm.core_count = min;
-        vm.scheduler = std::sync::Arc::new(Scheduler::new_dynamic(min, max));
+        vm.scheduler_limits = (min, max);
+        vm.scheduler = Arc::new(OnceLock::new());
         vm.state = state;
-        vm.htm_supported = cfg!(all(feature = "htm", target_arch = "x86_64")) && rtm_available();
-        let scheduler_threads = vm.scheduler.thread_count();
-        vm.core_count = scheduler_threads;
         IVM::startup_banner(
-            scheduler_threads,
+            min,
             vm.max_vector_lanes,
-            vm.htm_supported,
             vm.hardware_capabilities(),
             vm.use_metal,
             vm.use_cuda,
@@ -2574,11 +1913,10 @@ impl IVM {
         let (predecoded, prepared) = if instruction_region.is_empty() {
             (None, None)
         } else {
-            let decoded = crate::ivm_cache::global_get_with_meta(instruction_region, &meta)?;
+            let decoded = crate::ivm_cache::global_get(instruction_region)?;
             validate_generic_program_syscalls(decoded.as_ref())?;
             let prepared = prepare_instruction_stream(
                 instruction_region,
-                &meta,
                 decoded.as_ref(),
                 entry_pc,
                 literal_table.entries(),
@@ -2798,14 +2136,12 @@ impl IVM {
                 perm: Perm::EXECUTE,
             });
         }
-        let (inst, len) = decoder::decode(&self.memory, self.pc)?;
+        let inst = decoder::decode(&self.memory, self.pc)?;
         let wide_op = instruction::wide::opcode(inst);
         Ok(FetchedOp {
             inst,
-            len,
             wide_op,
             base_gas: gas::cost_of(inst),
-            simple: to_simple(inst),
         })
     }
     fn classify_trap(err: &VMError) -> VmTrapKind {
@@ -2814,9 +2150,7 @@ impl IVM {
             VMError::OutOfMemory => VmTrapKind::OutOfMemory,
             VMError::MemoryAccessViolation { .. }
             | VMError::MisalignedAccess { .. }
-            | VMError::MemoryOutOfBounds
-            | VMError::UnalignedAccess
-            | VMError::MemoryPermissionDenied => VmTrapKind::MemoryFault,
+            | VMError::MemoryOutOfBounds => VmTrapKind::MemoryFault,
             VMError::DecodeError => VmTrapKind::DecodeError,
             VMError::InvalidOpcode(_) => VmTrapKind::InvalidOpcode,
             VMError::UnknownSyscall(_) => VmTrapKind::UnknownSyscall,
@@ -2848,7 +2182,6 @@ impl IVM {
             | VMError::PermissionDenied => VmTrapKind::PermissionDenied,
             VMError::PrivacyViolation => VmTrapKind::PrivacyViolation,
             VMError::RegisterOutOfBounds => VmTrapKind::RegisterOutOfBounds,
-            VMError::HTMAbort => VmTrapKind::HTMAbort,
             VMError::NoritoInvalid => VmTrapKind::NoritoInvalid,
             VMError::AbiTypeNotAllowed { .. } => VmTrapKind::AbiTypeNotAllowed,
             VMError::HostOutputBudgetExceeded { .. } => VmTrapKind::HostOutputBudgetExceeded,
@@ -2923,18 +2256,6 @@ impl IVM {
     #[inline]
     pub fn zk_mode_enabled(&self) -> bool {
         self.zk_mode
-    }
-    /// Return whether this VM carries state that must not cross a public-only
-    /// execution boundary.
-    ///
-    /// This deliberately checks the mode, register tags, and tracked private
-    /// memory independently so a stale or externally assembled VM fails
-    /// closed even when those fields are inconsistent.
-    #[must_use]
-    pub(crate) fn carries_private_execution_state(&self) -> bool {
-        self.zk_mode
-            || !self.private_memory_bytes.is_empty()
-            || self.registers.snapshot_tags().contains(&true)
     }
     #[inline]
     fn zk_trace_collection_enabled(&self) -> bool {
@@ -3586,10 +2907,8 @@ impl IVM {
     /// Execute a full block of transactions using the parallel scheduler.
     ///
     /// Each transaction is run on a cloned instance of the VM so worker threads never share mutable
-    /// state. When hardware transactional memory is available the scheduler wraps the entire
-    /// execution in an RTM region which eliminates the global mutex normally used for committing
-    /// updates. The shared [`State`] uses a `DashMap` internally for thread-safe access so applying
-    /// the write sets is safe from multiple threads.
+    /// state. Successful transactions publish their ordered write sets through
+    /// the shared [`State`] lock.
     pub fn execute_block(&mut self, block: Block) -> BlockResult {
         let allow_parallel = self
             .host
@@ -3598,6 +2917,8 @@ impl IVM {
         if !allow_parallel {
             return self.execute_block_sequential(block);
         }
+        self.scheduler();
+        let scheduler = Arc::clone(&self.scheduler);
         // Capture the current host (if any) so worker clones can access it via
         // a thread-safe wrapper. The original host is restored before returning
         // to preserve downcast behaviour for the caller.
@@ -3612,23 +2933,33 @@ impl IVM {
         let template = Arc::new(Mutex::new(self.clone()));
         let template_ref = &template;
         let host_for_workers_ref = &host_for_workers;
+        let state = self.state.clone();
         let cache_id = WORKER_CACHE_ID.fetch_add(1, Ordering::Relaxed);
         let scheduled = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            parallel::execute_block_predicted(&self.scheduler, block, |tx| {
-                WORKER_CACHE.with(|slot| {
-                    let mut slot = slot.borrow_mut();
-                    if slot.as_ref().map(|cache| cache.id) != Some(cache_id) {
-                        let resources =
-                            WorkerResources::new(template_ref, host_for_workers_ref.0.as_ref());
-                        *slot = Some(WorkerCache {
-                            id: cache_id,
-                            resources,
-                        });
-                    }
-                    let cache = slot.as_mut().expect("worker cache must be initialized");
-                    cache.resources.execute(tx)
-                })
-            })
+            scheduler
+                .get()
+                .expect("scheduler was initialized")
+                .schedule_block_with_ordered_commit(
+                    block,
+                    |tx| {
+                        WORKER_CACHE.with(|slot| {
+                            let mut slot = slot.borrow_mut();
+                            if slot.as_ref().map(|cache| cache.id) != Some(cache_id) {
+                                let resources = WorkerResources::new(
+                                    template_ref,
+                                    host_for_workers_ref.0.as_ref(),
+                                );
+                                *slot = Some(WorkerCache {
+                                    id: cache_id,
+                                    resources,
+                                });
+                            }
+                            let cache = slot.as_mut().expect("worker cache must be initialized");
+                            cache.resources.execute(tx)
+                        })
+                    },
+                    move |_, _, writes| state.apply(writes),
+                )
         }));
         if let Some(shared_host) = shared_host {
             let mut guard = shared_host.lock().unwrap_or_else(|err| err.into_inner());
@@ -3658,7 +2989,7 @@ impl IVM {
             let snapshot = self.host.as_ref().and_then(|h| h.checkpoint());
             let result = self.execute_transaction(&tx, &mut ctx);
             if result.success {
-                self.commit_transaction(&ctx, &tx.access.reg_tags);
+                self.commit_transaction(&mut ctx);
             } else if let (Some(snap), Some(host)) = (snapshot, self.host.as_deref_mut()) {
                 let _ = host.restore(snap.as_ref());
             }
@@ -3740,9 +3071,8 @@ impl IVM {
         ctx.reset();
     }
     /// Commit a transaction's state updates to the shared state.
-    fn commit_transaction(&mut self, ctx: &ExecutionContext, tags: &HashSet<usize>) {
-        self.state
-            .apply_atomic(&ctx.write_set, tags, self.htm_supported);
+    fn commit_transaction(&mut self, ctx: &mut ExecutionContext) {
+        self.state.apply(std::mem::take(&mut ctx.write_set));
     }
     /// Reset the VM state (registers, PC, cycles) but preserve loaded program and host.
     pub fn reset(&mut self) {
@@ -3778,10 +3108,6 @@ impl IVM {
         } else {
             usize::from(self.metadata.vector_length)
         };
-        self.branch_predictions = 0;
-        self.branch_correct = 0;
-        let sz = self.branch_predictor.size();
-        self.branch_predictor = crate::branch_predictor::BranchPredictor::new(sz);
     }
     /// Capture the current post-load state as a reusable execution baseline.
     ///
@@ -4234,14 +3560,6 @@ impl IVM {
     pub fn register_root(&self) -> [u8; 32] {
         *self.registers.merkle_root().as_ref()
     }
-    /// Fraction of correctly predicted branches during last run.
-    pub fn branch_prediction_accuracy(&self) -> f64 {
-        if self.branch_predictions == 0 {
-            1.0
-        } else {
-            self.branch_correct as f64 / self.branch_predictions as f64
-        }
-    }
     pub fn trace_mode(&self) -> TraceMode {
         self.trace_mode
     }
@@ -4548,8 +3866,8 @@ impl IVM {
     /// Execute the loaded program starting at the current `pc`.
     ///
     /// This is the heart of the VM: a classic fetch‑decode‑execute loop. For each instruction we
-    /// deduct gas, perform the operation and then advance the program counter by the actual length
-    /// of the instruction (16 or 32 bits). When zero-knowledge trace collection is active the
+    /// deduct gas, perform the operation and then advance the program counter by one 32-bit word.
+    /// When zero-knowledge trace collection is active the
     /// register state is logged on every cycle so that a prover can later reconstruct a trace. The
     /// loop terminates on `HALT` or when an error is encountered.
     pub fn run(&mut self) -> Result<(), VMError> {
@@ -4591,16 +3909,14 @@ impl IVM {
             let _pointer_policy_guard =
                 PointerPolicyGuard::install(self.syscall_policy(), self.abi_version());
             let _reg_logger_guard = if self.zk_trace_collection_enabled() {
-                Some(zk::RegLoggerGuard::install(&mut self.reg_log))
+                // SAFETY: `run_with_host_ref` exclusively borrows the VM and neither moves nor
+                // replaces `reg_log` before this guard is dropped.
+                Some(unsafe {
+                    zk::RegLoggerGuard::install(std::ptr::NonNull::from(&mut self.reg_log))
+                })
             } else {
                 None
             };
-            // Basic instruction-level parallelism: build blocks of simple
-            // arithmetic instructions that have no side effects and execute them
-            // using the parallel scheduler. Complex instructions are still executed
-            // sequentially.
-            let enable_ilp = false;
-            let mut ilp_block: Vec<SimpleInstruction> = Vec::new();
             if self.zk_trace_collection_enabled() {
                 self.trace_log = DeltaTraceLog::default();
                 self.step_log = zk::StepLog::default();
@@ -4626,29 +3942,15 @@ impl IVM {
                 self.record_runtime_trace();
                 let fetched = self.fetch_instruction()?;
                 let instr = fetched.inst;
-                let length = fetched.len;
+                let length = WIDE_INSTRUCTION_LEN;
                 let wide_op = fetched.wide_op;
                 if crate::dev_env::decode_trace_enabled() {
                     eprintln!(
                         "pc=0x{pc:08x} instr=0x{w:08x} len={len}",
                         pc = self.pc,
                         w = instr,
-                        len = length
+                        len = WIDE_INSTRUCTION_LEN
                     );
-                }
-                // Keep contract execution sequential until the ILP path is covered by
-                // canonical ordering/gas proofs for all host-observable effects.
-                if enable_ilp && self.max_cycles == 0 {
-                    if let Some(simple) = fetched.simple {
-                        // Part of a parallelisable block – defer execution.
-                        self.pc = self.pc.wrapping_add(length as u64);
-                        ilp_block.push(simple);
-                        continue;
-                    } else if !ilp_block.is_empty() {
-                        self.execute_block_parallel(&ilp_block)?;
-                        self.cycles += ilp_block.len() as u64;
-                        ilp_block.clear();
-                    }
                 }
                 let opcode_hi = (instr >> 24) as u8;
                 if !instruction::wide::is_valid_opcode(wide_op) {
@@ -4656,8 +3958,7 @@ impl IVM {
                 }
                 // Determine the gas cost for this operation and deduct it.
                 // Scale vector op costs by the current logical vector length.
-                // Future: include HTM retry penalties if enabled.
-                let cost = gas::cost_from_parts(fetched.base_gas, wide_op, self.vector_length, 0)
+                let cost = gas::cost_from_parts(fetched.base_gas, wide_op, self.vector_length)
                     .ok_or(VMError::InvalidOpcode((instr & 0xFFFF) as u16))?;
                 if unlikely(self.gas_remaining < cost) {
                     return Err(VMError::OutOfGas);
@@ -4677,7 +3978,7 @@ impl IVM {
                         if self.zk_mode {
                             self.registers.set_tag(rd, false);
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4687,7 +3988,7 @@ impl IVM {
                             return Err(VMError::UnknownSyscall(imm8));
                         }
                         self.execute_syscall(host, imm8)?;
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4697,7 +3998,7 @@ impl IVM {
                             return Err(VMError::UnknownSyscall(number));
                         }
                         self.execute_syscall(host, number)?;
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4712,7 +4013,7 @@ impl IVM {
                             .wrapping_add(self.registers.get(rs2));
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4727,7 +4028,7 @@ impl IVM {
                             .wrapping_sub(self.registers.get(rs2));
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4739,7 +4040,7 @@ impl IVM {
                         let val = self.registers.get(rs1) & self.registers.get(rs2);
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4751,7 +4052,7 @@ impl IVM {
                         let val = self.registers.get(rs1) | self.registers.get(rs2);
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4763,7 +4064,7 @@ impl IVM {
                         let val = self.registers.get(rs1) ^ self.registers.get(rs2);
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4775,7 +4076,7 @@ impl IVM {
                         let val = self.registers.get(rs1) << (self.registers.get(rs2) & 0x3f);
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4787,7 +4088,7 @@ impl IVM {
                         let val = self.registers.get(rs1) >> (self.registers.get(rs2) & 0x3f);
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4801,7 +4102,7 @@ impl IVM {
                             as u64;
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4816,7 +4117,7 @@ impl IVM {
                             .wrapping_mul(self.registers.get(rs2));
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4830,7 +4131,7 @@ impl IVM {
                         let val = ((a * b) >> 64) as u64;
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4844,7 +4145,7 @@ impl IVM {
                         let val = (prod >> 64) as u64;
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4858,7 +4159,7 @@ impl IVM {
                         let val = ((a * b) >> 64) as u64;
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4873,7 +4174,7 @@ impl IVM {
                         let val = checked_div_i64(num, denom)?;
                         self.registers.set(rd, val as u64);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4890,7 +4191,7 @@ impl IVM {
                         let val = self.registers.get(rs1) / denom;
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4905,7 +4206,7 @@ impl IVM {
                         let val = checked_rem_i64(num, denom)?;
                         self.registers.set(rd, val as u64);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4922,7 +4223,7 @@ impl IVM {
                         let val = self.registers.get(rs1) % denom;
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4935,7 +4236,7 @@ impl IVM {
                         let rhs = self.registers.get(rs2) as i64;
                         self.registers.set(rd, u64::from(lhs < rhs));
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4948,7 +4249,7 @@ impl IVM {
                         let rhs = self.registers.get(rs2);
                         self.registers.set(rd, u64::from(lhs < rhs));
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4961,7 +4262,7 @@ impl IVM {
                         let rhs = self.registers.get(rs2);
                         self.registers.set(rd, u64::from(lhs == rhs));
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4974,7 +4275,7 @@ impl IVM {
                         let rhs = self.registers.get(rs2);
                         self.registers.set(rd, u64::from(lhs != rhs));
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -4991,7 +4292,7 @@ impl IVM {
                             let tag = self.zk_unary_tag(src);
                             self.zk_apply_tag(rd, tag);
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -5002,7 +4303,7 @@ impl IVM {
                         let val = self.registers.get(src).wrapping_neg();
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -5013,7 +4314,7 @@ impl IVM {
                         let val = !self.registers.get(src);
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -5026,7 +4327,7 @@ impl IVM {
                         let val = self.registers.get(src).rotate_left(sh);
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -5039,7 +4340,7 @@ impl IVM {
                         let val = self.registers.get(src).rotate_right(sh);
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -5051,7 +4352,7 @@ impl IVM {
                         let val = self.registers.get(src).rotate_left(sh);
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
                         self.cycles += 1;
                         continue;
                     }
@@ -5063,7 +4364,7 @@ impl IVM {
                         let val = self.registers.get(src).rotate_right(sh);
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -5074,7 +4375,7 @@ impl IVM {
                         let val = self.registers.get(src).count_ones() as u64;
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -5085,7 +4386,7 @@ impl IVM {
                         let val = self.registers.get(src).leading_zeros() as u64;
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -5096,7 +4397,7 @@ impl IVM {
                         let val = self.registers.get(src).trailing_zeros() as u64;
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -5108,7 +4409,7 @@ impl IVM {
                         let root = isqrt_u64(val);
                         self.registers.set(rd, root);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 6;
                         continue;
                     }
@@ -5122,7 +4423,7 @@ impl IVM {
                         self.registers
                             .set(rd, if a < b { a as u64 } else { b as u64 });
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -5136,7 +4437,7 @@ impl IVM {
                         self.registers
                             .set(rd, if a > b { a as u64 } else { b as u64 });
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -5149,7 +4450,7 @@ impl IVM {
                         let abs = checked_abs_i64(v)?;
                         self.registers.set(rd, abs as u64);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -5164,7 +4465,7 @@ impl IVM {
                         let val = div_ceil_i64(num, denom)?;
                         self.registers.set(rd, val as u64);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 12;
                         continue;
                     }
@@ -5178,7 +4479,7 @@ impl IVM {
                         let g = gcd_i64(a, b);
                         self.registers.set(rd, g);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 12;
                         continue;
                     }
@@ -5193,7 +4494,7 @@ impl IVM {
                         let avg = (sum / 2) as i64;
                         self.registers.set(rd, avg as u64);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 3;
                         continue;
                     }
@@ -5205,7 +4506,7 @@ impl IVM {
                         let val = (self.registers.get(rs1) as i64).wrapping_add(imm) as u64;
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -5217,7 +4518,7 @@ impl IVM {
                         let val = self.registers.get(rs1) & imm;
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -5229,7 +4530,7 @@ impl IVM {
                         let val = self.registers.get(rs1) | imm;
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -5241,7 +4542,7 @@ impl IVM {
                         let val = self.registers.get(rs1) ^ imm;
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -5258,7 +4559,7 @@ impl IVM {
                                 self.registers.set_tag(rd, false);
                             }
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -5278,7 +4579,7 @@ impl IVM {
                         if self.zk_mode {
                             self.registers.set_tag(rd, false);
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -5298,7 +4599,7 @@ impl IVM {
                         if self.zk_mode {
                             self.registers.set_tag(rd, false);
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -5316,7 +4617,7 @@ impl IVM {
                         if self.zk_mode {
                             self.registers.set_tag(rd, tag);
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -5345,7 +4646,7 @@ impl IVM {
                             self.registers.set_tag(rd_lo, tag);
                             self.registers.set_tag(rd_hi, tag);
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -5362,7 +4663,7 @@ impl IVM {
                         self.validate_memory_store_privacy(addr, 8, tag)?;
                         self.memory.store_u64(addr, value)?;
                         self.record_memory_store_privacy(addr, 8, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -5390,14 +4691,14 @@ impl IVM {
                         let value = ((hi as u128) << 64) | lo as u128;
                         self.memory.store_u128(addr, value)?;
                         self.record_memory_store_privacy(addr, 16, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
                     instruction::wide::control::HALT => {
                         self.halted = true;
                         self.cycles += 1;
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.flush_cycle_logs(&mut last_logged_cycle);
                         break;
                     }
@@ -5406,7 +4707,7 @@ impl IVM {
                             return Err(VMError::VectorExtensionDisabled);
                         }
                         self.vector_length = setvl_length(instruction::wide::rs2(instr))?;
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -5529,7 +4830,7 @@ impl IVM {
                                 self.registers.set(rd + idx, u64::from(a.wrapping_add(b)));
                             }
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -5542,20 +4843,12 @@ impl IVM {
                         }
                         let a = self.registers.get(rs);
                         let b = self.registers.get(rt);
-                        let predicted = self.branch_predictor.predict(self.pc);
                         let taken = a == b;
-                        self.branch_predictions += 1;
-                        if likely(predicted == taken) {
-                            self.branch_correct += 1;
-                        } else {
-                            self.cycles += 1;
-                        }
-                        self.branch_predictor.update(self.pc, taken);
                         if taken {
                             let byte_off = offset as i64 * 4;
                             self.pc = ((self.pc as i64) + byte_off) as u64;
                         } else {
-                            self.pc = self.pc.wrapping_add(length as u64);
+                            self.pc = self.pc.wrapping_add(length);
                         }
                         self.cycles += 1;
                         continue;
@@ -5569,20 +4862,12 @@ impl IVM {
                         }
                         let a = self.registers.get(rs);
                         let b = self.registers.get(rt);
-                        let predicted = self.branch_predictor.predict(self.pc);
                         let taken = a != b;
-                        self.branch_predictions += 1;
-                        if likely(predicted == taken) {
-                            self.branch_correct += 1;
-                        } else {
-                            self.cycles += 1;
-                        }
-                        self.branch_predictor.update(self.pc, taken);
                         if taken {
                             let byte_off = offset as i64 * 4;
                             self.pc = ((self.pc as i64) + byte_off) as u64;
                         } else {
-                            self.pc = self.pc.wrapping_add(length as u64);
+                            self.pc = self.pc.wrapping_add(length);
                         }
                         self.cycles += 1;
                         continue;
@@ -5596,20 +4881,12 @@ impl IVM {
                         }
                         let a = self.registers.get(rs) as i64;
                         let b = self.registers.get(rt) as i64;
-                        let predicted = self.branch_predictor.predict(self.pc);
                         let taken = a < b;
-                        self.branch_predictions += 1;
-                        if likely(predicted == taken) {
-                            self.branch_correct += 1;
-                        } else {
-                            self.cycles += 1;
-                        }
-                        self.branch_predictor.update(self.pc, taken);
                         if taken {
                             let byte_off = offset as i64 * 4;
                             self.pc = ((self.pc as i64) + byte_off) as u64;
                         } else {
-                            self.pc = self.pc.wrapping_add(length as u64);
+                            self.pc = self.pc.wrapping_add(length);
                         }
                         self.cycles += 1;
                         continue;
@@ -5623,20 +4900,12 @@ impl IVM {
                         }
                         let a = self.registers.get(rs) as i64;
                         let b = self.registers.get(rt) as i64;
-                        let predicted = self.branch_predictor.predict(self.pc);
                         let taken = a >= b;
-                        self.branch_predictions += 1;
-                        if likely(predicted == taken) {
-                            self.branch_correct += 1;
-                        } else {
-                            self.cycles += 1;
-                        }
-                        self.branch_predictor.update(self.pc, taken);
                         if taken {
                             let byte_off = offset as i64 * 4;
                             self.pc = ((self.pc as i64) + byte_off) as u64;
                         } else {
-                            self.pc = self.pc.wrapping_add(length as u64);
+                            self.pc = self.pc.wrapping_add(length);
                         }
                         self.cycles += 1;
                         continue;
@@ -5650,20 +4919,12 @@ impl IVM {
                         }
                         let a = self.registers.get(rs);
                         let b = self.registers.get(rt);
-                        let predicted = self.branch_predictor.predict(self.pc);
                         let taken = a < b;
-                        self.branch_predictions += 1;
-                        if likely(predicted == taken) {
-                            self.branch_correct += 1;
-                        } else {
-                            self.cycles += 1;
-                        }
-                        self.branch_predictor.update(self.pc, taken);
                         if taken {
                             let byte_off = offset as i64 * 4;
                             self.pc = ((self.pc as i64) + byte_off) as u64;
                         } else {
-                            self.pc = self.pc.wrapping_add(length as u64);
+                            self.pc = self.pc.wrapping_add(length);
                         }
                         self.cycles += 1;
                         continue;
@@ -5677,20 +4938,12 @@ impl IVM {
                         }
                         let a = self.registers.get(rs);
                         let b = self.registers.get(rt);
-                        let predicted = self.branch_predictor.predict(self.pc);
                         let taken = a >= b;
-                        self.branch_predictions += 1;
-                        if likely(predicted == taken) {
-                            self.branch_correct += 1;
-                        } else {
-                            self.cycles += 1;
-                        }
-                        self.branch_predictor.update(self.pc, taken);
                         if taken {
                             let byte_off = offset as i64 * 4;
                             self.pc = ((self.pc as i64) + byte_off) as u64;
                         } else {
-                            self.pc = self.pc.wrapping_add(length as u64);
+                            self.pc = self.pc.wrapping_add(length);
                         }
                         self.cycles += 1;
                         continue;
@@ -5744,7 +4997,7 @@ impl IVM {
                                 self.halted = true;
                             }
                         }
-                        let return_pc = self.pc.wrapping_add(length as u64);
+                        let return_pc = self.pc.wrapping_add(length);
                         self.registers.set(rd, return_pc);
                         if self.zk_mode {
                             self.registers.set_tag(rd, false);
@@ -5756,7 +5009,7 @@ impl IVM {
                     instruction::wide::control::JAL => {
                         let rd = instruction::wide::rd(instr);
                         let imm = instruction::wide::imm16(instr) as i64;
-                        let return_pc = self.pc.wrapping_add(length as u64);
+                        let return_pc = self.pc.wrapping_add(length);
                         if self.strict_return_integrity {
                             if rd != 0 && rd != 1 {
                                 return Err(VMError::AssertionFailed);
@@ -5781,7 +5034,7 @@ impl IVM {
                     }
                     instruction::wide::control::JALS => {
                         let imm = i64::from(instruction::wide::imm24(instr));
-                        let return_pc = self.pc.wrapping_add(length as u64);
+                        let return_pc = self.pc.wrapping_add(length);
                         self.push_contract_return(return_pc)?;
                         self.registers.set(1, return_pc);
                         if self.zk_mode {
@@ -5840,7 +5093,7 @@ impl IVM {
                             let b = self.registers.get(rt + idx) as u32;
                             self.registers.set(rd + idx, u64::from(a & b));
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -5893,7 +5146,7 @@ impl IVM {
                             let b = self.registers.get(rt + idx) as u32;
                             self.registers.set(rd + idx, u64::from(a ^ b));
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -5946,7 +5199,7 @@ impl IVM {
                             let b = self.registers.get(rt + idx) as u32;
                             self.registers.set(rd + idx, u64::from(a | b));
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -5989,7 +5242,7 @@ impl IVM {
                             let rotated = value.rotate_left(shift) as u64;
                             self.registers.set(rd + idx, rotated);
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6057,7 +5310,7 @@ impl IVM {
                                 self.registers.set_tag(second + lane, false);
                             }
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6097,7 +5350,7 @@ impl IVM {
                         }
                         self.memory.store_bytes(out_ptr, &out_bytes)?;
                         self.record_memory_store_privacy(out_ptr, out_bytes.len() as u64, false);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6140,7 +5393,7 @@ impl IVM {
                         let hi = u64::from_le_bytes(out[8..].try_into().unwrap());
                         self.registers.set(rd, lo);
                         self.registers.set(rd + 1, hi);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6183,7 +5436,7 @@ impl IVM {
                         let hi = u64::from_le_bytes(out[8..].try_into().unwrap());
                         self.registers.set(rd, lo);
                         self.registers.set(rd + 1, hi);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6214,7 +5467,7 @@ impl IVM {
                             self.registers.set_tag(rd, false);
                             self.registers.set_tag(rd + 1, false);
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6234,7 +5487,7 @@ impl IVM {
                         if self.zk_mode {
                             self.registers.set_tag(rd, false);
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6263,7 +5516,7 @@ impl IVM {
                         if self.zk_mode {
                             self.registers.set_tag(rd, false);
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6281,7 +5534,7 @@ impl IVM {
                         if self.zk_mode {
                             self.registers.set_tag(rd, false);
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6302,7 +5555,7 @@ impl IVM {
                         if self.zk_mode {
                             self.registers.set_tag(rd, false);
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6316,7 +5569,7 @@ impl IVM {
                         let res = crate::ec::ec_add_truncated(p, q);
                         self.registers.set(rd, res);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6330,7 +5583,7 @@ impl IVM {
                         let res = crate::ec::ec_mul_truncated(point, scalar);
                         self.registers.set(rd, res);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6344,7 +5597,7 @@ impl IVM {
                         let res = crate::ec::pairing_check_truncated(a, b);
                         self.registers.set(rd, res);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6445,7 +5698,7 @@ impl IVM {
                             self.registers.set_tag(rd, false);
                             self.registers.set_tag(rs2, false);
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6491,7 +5744,7 @@ impl IVM {
                         if self.zk_mode {
                             self.registers.set_tag(rd, false);
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6537,7 +5790,7 @@ impl IVM {
                         if self.zk_mode {
                             self.registers.set_tag(rd, false);
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6583,7 +5836,7 @@ impl IVM {
                         if self.zk_mode {
                             self.registers.set_tag(rd, false);
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6603,7 +5856,7 @@ impl IVM {
                         if value != 0 {
                             self.constraint_failed = true;
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6626,7 +5879,7 @@ impl IVM {
                         if v1 != v2 {
                             self.constraint_failed = true;
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6643,7 +5896,7 @@ impl IVM {
                         let res = crate::field::add(v1, v2);
                         self.registers.set(rd, res);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6660,7 +5913,7 @@ impl IVM {
                         let res = crate::field::sub(v1, v2);
                         self.registers.set(rd, res);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6677,7 +5930,7 @@ impl IVM {
                         let res = crate::field::mul(v1, v2);
                         self.registers.set(rd, res);
                         self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6699,7 +5952,7 @@ impl IVM {
                                 self.constraint_failed = true;
                             }
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6730,13 +5983,13 @@ impl IVM {
                         } else {
                             self.constraint_failed = true;
                         }
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
                     instruction::wide::crypto::PARBEGIN | instruction::wide::crypto::PAREND => {
                         // Parallel sections are markers; no state change required.
-                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.pc = self.pc.wrapping_add(length);
                         self.cycles += 1;
                         continue;
                     }
@@ -6753,10 +6006,6 @@ impl IVM {
                         return Err(VMError::InvalidOpcode((instr & 0xFFFF) as u16));
                     }
                 }
-            }
-            if !ilp_block.is_empty() {
-                self.execute_block_parallel(&ilp_block)?;
-                self.cycles += ilp_block.len() as u64;
             }
             // If we exit the loop early, pad the trace so that prover and verifier
             // observe exactly `max_cycles` steps when zero‑knowledge mode is enabled.
@@ -6983,811 +6232,16 @@ impl IVM {
 mod ivm_sched_tests {
     use super::*;
     #[test]
-    fn respects_global_scheduler_limits() {
-        // Set a small scheduler size and verify IVM::new picks it up.
+    fn scheduler_is_lazy_and_respects_global_limits() {
+        // Ordinary VM construction must not allocate worker threads.
         crate::parallel::set_default_scheduler_limits(Some(2), Some(2));
         let vm = IVM::new(0);
-        assert_eq!(vm.scheduler.thread_count(), 2);
-        assert_eq!(vm.core_count, 2);
+        assert!(vm.scheduler.get().is_none());
+        assert_eq!(vm.scheduler_limits, (2, 2));
+        assert_eq!(vm.scheduler().thread_count(), 2);
+        assert!(vm.scheduler.get().is_some());
         // Reset to auto for other tests
         crate::parallel::set_default_scheduler_limits(None, None);
-    }
-}
-/// Try to translate a full 32-bit instruction into a [`SimpleInstruction`].
-///
-/// Only a subset of arithmetic operations are supported for use with the
-/// parallel instruction scheduler. Unsupported instructions return `None` so
-/// that the interpreter falls back to sequential execution.
-fn to_simple(instr: u32) -> Option<SimpleInstruction> {
-    // Prefer the wide encoding when the high byte matches a known opcode.
-    {
-        use instruction::wide;
-        let op = wide::opcode(instr);
-        let rd = wide::rd(instr) as u16;
-        let rs1 = wide::rs1(instr) as u16;
-        let rs2 = wide::rs2(instr) as u16;
-        match op {
-            wide::arithmetic::ADD => {
-                return Some(SimpleInstruction::Add {
-                    rd,
-                    rs: rs1,
-                    rt: rs2,
-                });
-            }
-            wide::arithmetic::SUB => {
-                return Some(SimpleInstruction::Sub {
-                    rd,
-                    rs: rs1,
-                    rt: rs2,
-                });
-            }
-            wide::arithmetic::AND => {
-                return Some(SimpleInstruction::And {
-                    rd,
-                    rs: rs1,
-                    rt: rs2,
-                });
-            }
-            wide::arithmetic::OR => {
-                return Some(SimpleInstruction::Or {
-                    rd,
-                    rs: rs1,
-                    rt: rs2,
-                });
-            }
-            wide::arithmetic::XOR => {
-                return Some(SimpleInstruction::Xor {
-                    rd,
-                    rs: rs1,
-                    rt: rs2,
-                });
-            }
-            wide::arithmetic::SLL => {
-                return Some(SimpleInstruction::Sll {
-                    rd,
-                    rs: rs1,
-                    rt: rs2,
-                });
-            }
-            wide::arithmetic::SRL => {
-                return Some(SimpleInstruction::Srl {
-                    rd,
-                    rs: rs1,
-                    rt: rs2,
-                });
-            }
-            wide::arithmetic::SRA => {
-                return Some(SimpleInstruction::Sra {
-                    rd,
-                    rs: rs1,
-                    rt: rs2,
-                });
-            }
-            wide::arithmetic::ADDI => {
-                let imm = wide::imm8(instr) as i16;
-                if imm >= 0 {
-                    return Some(SimpleInstruction::AddImm { rd, rs: rs1, imm });
-                } else {
-                    return Some(SimpleInstruction::SubImm {
-                        rd,
-                        rs: rs1,
-                        imm: -imm,
-                    });
-                }
-            }
-            wide::memory::LOAD64 => {
-                let offset = instruction::wide::imm8(instr);
-                return Some(SimpleInstruction::Load {
-                    rd,
-                    addr_reg: rs1,
-                    offset,
-                });
-            }
-            wide::memory::STORE64 => {
-                let offset = instruction::wide::imm8(instr);
-                return Some(SimpleInstruction::Store {
-                    rs: rs1,
-                    addr_reg: rd,
-                    offset,
-                });
-            }
-            wide::crypto::SETVL => {
-                return Some(SimpleInstruction::SetVL { new_vl: rs2 });
-            }
-            wide::crypto::VADD32 => {
-                return Some(SimpleInstruction::Vadd32 {
-                    rd,
-                    rs: rs1,
-                    rt: rs2,
-                });
-            }
-            wide::control::HALT => {
-                return None;
-            }
-            _ => {}
-        }
-    }
-    None
-}
-/// Metadata describing register and memory accesses of an instruction
-#[derive(Default, Clone)]
-struct InstrMeta {
-    reads: HashSet<u16>,
-    writes: HashSet<u16>,
-    mem_read: bool,
-    mem_write: bool,
-}
-/// Result of executing a single instruction in parallel
-#[derive(Clone, Debug)]
-enum ResultUpdate {
-    Reg { index: u16, value: u64, tag: bool },
-    Mem { addr: u64, value: u64 },
-    Vl { value: usize },
-}
-fn analyse_instruction(
-    instr: &SimpleInstruction,
-    vl: usize,
-    max_vector_lanes: usize,
-) -> (InstrMeta, usize) {
-    use SimpleInstruction::*;
-    let mut meta = InstrMeta::default();
-    let mut next_vl = vl;
-    match *instr {
-        Add { rd, rs, rt }
-        | Sub { rd, rs, rt }
-        | And { rd, rs, rt }
-        | Or { rd, rs, rt }
-        | Xor { rd, rs, rt } => {
-            meta.reads.insert(rs);
-            meta.reads.insert(rt);
-            meta.writes.insert(rd);
-        }
-        Sll { rd, rs, rt } | Srl { rd, rs, rt } | Sra { rd, rs, rt } => {
-            meta.reads.insert(rs);
-            meta.reads.insert(rt);
-            meta.writes.insert(rd);
-        }
-        AddImm { rd, rs, .. } | SubImm { rd, rs, .. } => {
-            meta.reads.insert(rs);
-            meta.writes.insert(rd);
-        }
-        Load {
-            rd,
-            addr_reg,
-            offset: _,
-        } => {
-            meta.reads.insert(addr_reg);
-            meta.writes.insert(rd);
-            meta.mem_read = true;
-        }
-        Store {
-            rs,
-            addr_reg,
-            offset: _,
-        } => {
-            meta.reads.insert(addr_reg);
-            meta.reads.insert(rs);
-            meta.mem_write = true;
-        }
-        Beq { rs, rt, .. } => {
-            meta.reads.insert(rs);
-            meta.reads.insert(rt);
-        }
-        Sha256 { dest, .. } => {
-            meta.writes.extend([dest, dest + 1, dest + 2, dest + 3]);
-            meta.mem_read = true;
-        }
-        Ed25519Verify { result_reg, .. } => {
-            meta.writes.insert(result_reg);
-            meta.mem_read = true;
-        }
-        DilithiumVerify { result_reg, .. } => {
-            meta.writes.insert(result_reg);
-            meta.mem_read = true;
-        }
-        SetVL { new_vl } => {
-            meta.mem_write = true; // force ordering
-            next_vl = setvl_length(new_vl as usize).unwrap_or(max_vector_lanes + 1);
-        }
-        Vadd32 { rd, rs, rt } => {
-            let stride = vl as u16;
-            let base = crate::IVM::VECTOR_BASE as u16;
-            for i in 0..vl as u16 {
-                let offset = base + i;
-                meta.reads.insert(rs * stride + offset);
-                meta.reads.insert(rt * stride + offset);
-                meta.writes.insert(rd * stride + offset);
-            }
-        }
-        Jump { .. } | Halt => {}
-    }
-    (meta, next_vl)
-}
-fn cost_of(instr: &SimpleInstruction, vl: usize) -> u64 {
-    match instr {
-        SimpleInstruction::Add { .. }
-        | SimpleInstruction::Sub { .. }
-        | SimpleInstruction::And { .. }
-        | SimpleInstruction::Or { .. }
-        | SimpleInstruction::AddImm { .. }
-        | SimpleInstruction::SubImm { .. }
-        | SimpleInstruction::Xor { .. }
-        | SimpleInstruction::Sll { .. }
-        | SimpleInstruction::Srl { .. }
-        | SimpleInstruction::Sra { .. } => IVM::GAS_ALU,
-        SimpleInstruction::Load { .. } | SimpleInstruction::Store { .. } => IVM::GAS_MEM,
-        SimpleInstruction::Jump { .. } | SimpleInstruction::Beq { .. } => IVM::GAS_JUMP,
-        SimpleInstruction::Sha256 { len, .. } => {
-            IVM::GAS_SHA256_BASE + IVM::GAS_SHA256_PER_BYTE * len
-        }
-        SimpleInstruction::SetVL { .. } => IVM::GAS_ALU,
-        SimpleInstruction::Vadd32 { .. } => gas::scaled_vector_cost(IVM::GAS_ALU * 2, vl),
-        SimpleInstruction::Ed25519Verify { .. } => IVM::GAS_ED25519_VERIFY,
-        SimpleInstruction::DilithiumVerify { .. } => IVM::GAS_DILITHIUM_VERIFY,
-        SimpleInstruction::Halt => 0,
-    }
-}
-fn compute_instruction(
-    instr: SimpleInstruction,
-    regs: &[u64; 256],
-    tags: &[bool; 256],
-    mem: &Memory,
-    zk: bool,
-    vl: usize,
-    vector_enabled: bool,
-) -> Result<Vec<ResultUpdate>, VMError> {
-    use SimpleInstruction::*;
-    let mut res = Vec::with_capacity(2);
-    match instr {
-        Add { rd, rs, rt } => {
-            if zk && tags[rs as usize] != tags[rt as usize] {
-                return Err(VMError::PrivacyViolation);
-            }
-            let sum = regs[rs as usize].wrapping_add(regs[rt as usize]);
-            let tag = if zk { tags[rs as usize] } else { false };
-            res.push(ResultUpdate::Reg {
-                index: rd,
-                value: sum,
-                tag,
-            });
-        }
-        Sub { rd, rs, rt } => {
-            if zk && tags[rs as usize] != tags[rt as usize] {
-                return Err(VMError::PrivacyViolation);
-            }
-            let diff = regs[rs as usize].wrapping_sub(regs[rt as usize]);
-            let tag = if zk { tags[rs as usize] } else { false };
-            res.push(ResultUpdate::Reg {
-                index: rd,
-                value: diff,
-                tag,
-            });
-        }
-        And { rd, rs, rt } => {
-            if zk && tags[rs as usize] != tags[rt as usize] {
-                return Err(VMError::PrivacyViolation);
-            }
-            let val = regs[rs as usize] & regs[rt as usize];
-            let tag = if zk { tags[rs as usize] } else { false };
-            res.push(ResultUpdate::Reg {
-                index: rd,
-                value: val,
-                tag,
-            });
-        }
-        Or { rd, rs, rt } => {
-            if zk && tags[rs as usize] != tags[rt as usize] {
-                return Err(VMError::PrivacyViolation);
-            }
-            let val = regs[rs as usize] | regs[rt as usize];
-            let tag = if zk { tags[rs as usize] } else { false };
-            res.push(ResultUpdate::Reg {
-                index: rd,
-                value: val,
-                tag,
-            });
-        }
-        AddImm { rd, rs, imm } => {
-            let val = regs[rs as usize].wrapping_add(imm as i64 as u64);
-            let tag = if zk { tags[rs as usize] } else { false };
-            res.push(ResultUpdate::Reg {
-                index: rd,
-                value: val,
-                tag,
-            });
-        }
-        SubImm { rd, rs, imm } => {
-            let val = regs[rs as usize].wrapping_sub(imm as i64 as u64);
-            let tag = if zk { tags[rs as usize] } else { false };
-            res.push(ResultUpdate::Reg {
-                index: rd,
-                value: val,
-                tag,
-            });
-        }
-        Xor { rd, rs, rt } => {
-            if zk && tags[rs as usize] != tags[rt as usize] {
-                return Err(VMError::PrivacyViolation);
-            }
-            let val = regs[rs as usize] ^ regs[rt as usize];
-            let tag = if zk { tags[rs as usize] } else { false };
-            res.push(ResultUpdate::Reg {
-                index: rd,
-                value: val,
-                tag,
-            });
-        }
-        Sll { rd, rs, rt } => {
-            let sh = regs[rt as usize] & 0x3F;
-            let val = regs[rs as usize] << sh;
-            if zk && tags[rs as usize] != tags[rt as usize] {
-                return Err(VMError::PrivacyViolation);
-            }
-            let tag = if zk { tags[rs as usize] } else { false };
-            res.push(ResultUpdate::Reg {
-                index: rd,
-                value: val,
-                tag,
-            });
-        }
-        Srl { rd, rs, rt } => {
-            let sh = regs[rt as usize] & 0x3F;
-            let val = regs[rs as usize] >> sh;
-            if zk && tags[rs as usize] != tags[rt as usize] {
-                return Err(VMError::PrivacyViolation);
-            }
-            let tag = if zk { tags[rs as usize] } else { false };
-            res.push(ResultUpdate::Reg {
-                index: rd,
-                value: val,
-                tag,
-            });
-        }
-        Sra { rd, rs, rt } => {
-            let sh = (regs[rt as usize] & 0x3F) as u32;
-            let val = ((regs[rs as usize] as i64) >> sh) as u64;
-            if zk && tags[rs as usize] != tags[rt as usize] {
-                return Err(VMError::PrivacyViolation);
-            }
-            let tag = if zk { tags[rs as usize] } else { false };
-            res.push(ResultUpdate::Reg {
-                index: rd,
-                value: val,
-                tag,
-            });
-        }
-        Load {
-            rd,
-            addr_reg,
-            offset,
-        } => {
-            if zk && tags[addr_reg as usize] {
-                return Err(VMError::PrivacyViolation);
-            }
-            let base = regs[addr_reg as usize] as i64;
-            let addr = base.wrapping_add(offset as i64) as u64;
-            let value = mem.load_u64(addr)?;
-            res.push(ResultUpdate::Reg {
-                index: rd,
-                value,
-                tag: false,
-            });
-        }
-        Store {
-            rs,
-            addr_reg,
-            offset,
-        } => {
-            if zk && tags[addr_reg as usize] {
-                return Err(VMError::PrivacyViolation);
-            }
-            let base = regs[addr_reg as usize] as i64;
-            let addr = base.wrapping_add(offset as i64) as u64;
-            let value = regs[rs as usize];
-            res.push(ResultUpdate::Mem { addr, value });
-        }
-        Sha256 {
-            dest,
-            src_addr,
-            len,
-        } => {
-            let data = mem.load_region(src_addr, len)?;
-            use sha2::{Digest, Sha256};
-            let digest = Sha256::digest(data);
-            for i in 0..4u16 {
-                let mut chunk = [0u8; 8];
-                chunk.copy_from_slice(&digest[i as usize * 8..(i as usize + 1) * 8]);
-                let val = u64::from_le_bytes(chunk);
-                res.push(ResultUpdate::Reg {
-                    index: dest + i,
-                    value: val,
-                    tag: false,
-                });
-            }
-        }
-        Ed25519Verify {
-            pubkey_addr,
-            sig_addr,
-            msg_addr,
-            msg_len,
-            result_reg,
-        } => {
-            use ed25519_dalek::Signature;
-            let pk_slice = mem.load_region(pubkey_addr, 32)?;
-            let sig_slice = mem.load_region(sig_addr, 64)?;
-            let msg = mem.load_region(msg_addr, msg_len)?;
-            let pk_bytes: [u8; 32] = match pk_slice.try_into() {
-                Ok(b) => b,
-                Err(_) => {
-                    res.push(ResultUpdate::Reg {
-                        index: result_reg,
-                        value: 0,
-                        tag: false,
-                    });
-                    return Ok(res);
-                }
-            };
-            let sig_bytes_arr: [u8; 64] = match sig_slice.try_into() {
-                Ok(b) => b,
-                Err(_) => {
-                    res.push(ResultUpdate::Reg {
-                        index: result_reg,
-                        value: 0,
-                        tag: false,
-                    });
-                    return Ok(res);
-                }
-            };
-            if crate::signature::signature_bytes_are_all_zero(&sig_bytes_arr) {
-                res.push(ResultUpdate::Reg {
-                    index: result_reg,
-                    value: 0,
-                    tag: false,
-                });
-                return Ok(res);
-            }
-            if crate::signature::signature_has_invalid_ed25519_r(&sig_bytes_arr) {
-                res.push(ResultUpdate::Reg {
-                    index: result_reg,
-                    value: 0,
-                    tag: false,
-                });
-                return Ok(res);
-            }
-            let Some(pk) = crate::signature::parse_ed25519_public_key_for_verification(&pk_bytes)
-            else {
-                res.push(ResultUpdate::Reg {
-                    index: result_reg,
-                    value: 0,
-                    tag: false,
-                });
-                return Ok(res);
-            };
-            let sig = match Signature::from_slice(&sig_bytes_arr) {
-                Ok(s) => s,
-                Err(_) => {
-                    res.push(ResultUpdate::Reg {
-                        index: result_reg,
-                        value: 0,
-                        tag: false,
-                    });
-                    return Ok(res);
-                }
-            };
-            let valid = pk.verify_strict(msg, &sig).is_ok();
-            res.push(ResultUpdate::Reg {
-                index: result_reg,
-                value: if valid { 1 } else { 0 },
-                tag: false,
-            });
-        }
-        DilithiumVerify {
-            level,
-            pubkey_addr,
-            sig_addr,
-            msg_addr,
-            msg_len,
-            result_reg,
-        } => {
-            use pqcrypto_mldsa::{
-                mldsa44 as dilithium2, mldsa65 as dilithium3, mldsa87 as dilithium5,
-            };
-            use pqcrypto_traits::sign::{DetachedSignature as _, PublicKey as _};
-            let msg = mem.load_region(msg_addr, msg_len)?;
-            let valid = match level {
-                2 => {
-                    let pk_slice =
-                        mem.load_region(pubkey_addr, dilithium2::public_key_bytes() as u64)?;
-                    let sig_slice =
-                        mem.load_region(sig_addr, dilithium2::signature_bytes() as u64)?;
-                    if crate::signature::material_bytes_are_all_zero(pk_slice)
-                        || crate::signature::signature_bytes_are_all_zero(sig_slice)
-                    {
-                        res.push(ResultUpdate::Reg {
-                            index: result_reg,
-                            value: 0,
-                            tag: false,
-                        });
-                        return Ok(res);
-                    }
-                    let pk = match dilithium2::PublicKey::from_bytes(pk_slice) {
-                        Ok(p) => p,
-                        Err(_) => {
-                            res.push(ResultUpdate::Reg {
-                                index: result_reg,
-                                value: 0,
-                                tag: false,
-                            });
-                            return Ok(res);
-                        }
-                    };
-                    let sig = match dilithium2::DetachedSignature::from_bytes(sig_slice) {
-                        Ok(s) => s,
-                        Err(_) => {
-                            res.push(ResultUpdate::Reg {
-                                index: result_reg,
-                                value: 0,
-                                tag: false,
-                            });
-                            return Ok(res);
-                        }
-                    };
-                    dilithium2::verify_detached_signature(&sig, msg, &pk).is_ok()
-                }
-                3 => {
-                    let pk_slice =
-                        mem.load_region(pubkey_addr, dilithium3::public_key_bytes() as u64)?;
-                    let sig_slice =
-                        mem.load_region(sig_addr, dilithium3::signature_bytes() as u64)?;
-                    if crate::signature::material_bytes_are_all_zero(pk_slice)
-                        || crate::signature::signature_bytes_are_all_zero(sig_slice)
-                    {
-                        res.push(ResultUpdate::Reg {
-                            index: result_reg,
-                            value: 0,
-                            tag: false,
-                        });
-                        return Ok(res);
-                    }
-                    let pk = match dilithium3::PublicKey::from_bytes(pk_slice) {
-                        Ok(p) => p,
-                        Err(_) => {
-                            res.push(ResultUpdate::Reg {
-                                index: result_reg,
-                                value: 0,
-                                tag: false,
-                            });
-                            return Ok(res);
-                        }
-                    };
-                    let sig = match dilithium3::DetachedSignature::from_bytes(sig_slice) {
-                        Ok(s) => s,
-                        Err(_) => {
-                            res.push(ResultUpdate::Reg {
-                                index: result_reg,
-                                value: 0,
-                                tag: false,
-                            });
-                            return Ok(res);
-                        }
-                    };
-                    dilithium3::verify_detached_signature(&sig, msg, &pk).is_ok()
-                }
-                5 => {
-                    let pk_slice =
-                        mem.load_region(pubkey_addr, dilithium5::public_key_bytes() as u64)?;
-                    let sig_slice =
-                        mem.load_region(sig_addr, dilithium5::signature_bytes() as u64)?;
-                    if crate::signature::material_bytes_are_all_zero(pk_slice)
-                        || crate::signature::signature_bytes_are_all_zero(sig_slice)
-                    {
-                        res.push(ResultUpdate::Reg {
-                            index: result_reg,
-                            value: 0,
-                            tag: false,
-                        });
-                        return Ok(res);
-                    }
-                    let pk = match dilithium5::PublicKey::from_bytes(pk_slice) {
-                        Ok(p) => p,
-                        Err(_) => {
-                            res.push(ResultUpdate::Reg {
-                                index: result_reg,
-                                value: 0,
-                                tag: false,
-                            });
-                            return Ok(res);
-                        }
-                    };
-                    let sig = match dilithium5::DetachedSignature::from_bytes(sig_slice) {
-                        Ok(s) => s,
-                        Err(_) => {
-                            res.push(ResultUpdate::Reg {
-                                index: result_reg,
-                                value: 0,
-                                tag: false,
-                            });
-                            return Ok(res);
-                        }
-                    };
-                    dilithium5::verify_detached_signature(&sig, msg, &pk).is_ok()
-                }
-                _ => {
-                    res.push(ResultUpdate::Reg {
-                        index: result_reg,
-                        value: 0,
-                        tag: false,
-                    });
-                    return Ok(res);
-                }
-            };
-            res.push(ResultUpdate::Reg {
-                index: result_reg,
-                value: if valid { 1 } else { 0 },
-                tag: false,
-            });
-        }
-        SetVL { new_vl } => {
-            if !vector_enabled {
-                return Err(VMError::VectorExtensionDisabled);
-            }
-            res.push(ResultUpdate::Vl {
-                value: setvl_length(new_vl as usize)?,
-            });
-        }
-        Vadd32 { rd, rs, rt } => {
-            if !vector_enabled {
-                return Err(VMError::VectorExtensionDisabled);
-            }
-            let stride = vl;
-            let rd = crate::IVM::VECTOR_BASE + rd as usize * stride;
-            let rs = crate::IVM::VECTOR_BASE + rs as usize * stride;
-            let rt = crate::IVM::VECTOR_BASE + rt as usize * stride;
-            if rd + vl > 256 || rs + vl > 256 || rt + vl > 256 {
-                return Err(VMError::RegisterOutOfBounds);
-            }
-            for i in 0..vl {
-                let a = regs[rs + i] as u32;
-                let b = regs[rt + i] as u32;
-                if zk && tags[rs + i] != tags[rt + i] {
-                    return Err(VMError::PrivacyViolation);
-                }
-                let tag = if zk { tags[rs + i] } else { false };
-                let sum = a.wrapping_add(b);
-                res.push(ResultUpdate::Reg {
-                    index: (rd + i) as u16,
-                    value: u64::from(sum),
-                    tag,
-                });
-            }
-        }
-        Beq { .. } | Jump { .. } | Halt => {}
-    }
-    Ok(res)
-}
-fn conflict(a: &InstrMeta, b: &InstrMeta) -> bool {
-    if !a.writes.is_disjoint(&b.reads) {
-        return true;
-    }
-    if !a.writes.is_disjoint(&b.writes) {
-        return true;
-    }
-    if !b.writes.is_disjoint(&a.reads) {
-        return true;
-    }
-    if (a.mem_write && (b.mem_write || b.mem_read)) || (b.mem_write && (a.mem_write || a.mem_read))
-    {
-        return true;
-    }
-    false
-}
-fn schedule_batches(metas: &[InstrMeta]) -> Vec<Vec<usize>> {
-    let mut batches: Vec<Vec<usize>> = Vec::new();
-    for (idx, meta) in metas.iter().enumerate() {
-        if batches.is_empty() {
-            batches.push(Vec::new());
-        }
-        let cur = batches.last_mut().unwrap();
-        let has_conflict = cur.iter().any(|j| conflict(meta, &metas[*j]));
-        if has_conflict {
-            batches.push(vec![idx]);
-        } else {
-            cur.push(idx);
-        }
-    }
-    batches
-}
-impl IVM {
-    /// Execute a slice of instructions using simple ILP scheduling.
-    ///
-    /// Gas for each independent batch is reserved before any worker starts. Once work begins, the
-    /// full reservation remains charged even if an instruction in that batch faults.
-    pub fn execute_block_parallel(&mut self, block: &[SimpleInstruction]) -> Result<(), VMError> {
-        let zk_memory_access = self.zk_mode
-            && block.iter().any(|instruction| {
-                matches!(
-                    instruction,
-                    SimpleInstruction::Load { .. }
-                        | SimpleInstruction::Store { .. }
-                        | SimpleInstruction::Sha256 { .. }
-                        | SimpleInstruction::Ed25519Verify { .. }
-                        | SimpleInstruction::DilithiumVerify { .. }
-                )
-            });
-        if block.len() < ILP_MIN_PARALLEL_BLOCK_LEN || zk_memory_access {
-            for instr in block {
-                self.execute_instruction(*instr)?;
-            }
-            return Ok(());
-        }
-        let mut vl = self.vector_length;
-        let mut metas = Vec::with_capacity(block.len());
-        let mut vls = Vec::with_capacity(block.len());
-        for instr in block {
-            vls.push(vl);
-            let (m, next_vl) = analyse_instruction(instr, vl, LOGICAL_VECTOR_MAX);
-            metas.push(m);
-            vl = next_vl;
-        }
-        let batches = schedule_batches(&metas);
-        for batch in batches {
-            let batch_gas = batch.iter().try_fold(0_u64, |total, &idx| {
-                total
-                    .checked_add(cost_of(&block[idx], vls[idx]))
-                    .ok_or(VMError::OutOfGas)
-            })?;
-            if self.gas_remaining < batch_gas {
-                return Err(VMError::OutOfGas);
-            }
-            self.gas_remaining -= batch_gas;
-            let regs_snapshot = self.registers.snapshot();
-            let tags_snapshot = self.registers.snapshot_tags();
-            let vector_enabled = self.vector_enabled;
-            let results_lock = Mutex::new(Vec::new());
-            rayon::scope(|s| {
-                for &idx in &batch {
-                    let instr = block[idx];
-                    let regs = &regs_snapshot;
-                    let tags = &tags_snapshot;
-                    let mem = &self.memory;
-                    let zk = self.zk_mode;
-                    let vl = vls[idx];
-                    let results = &results_lock;
-                    s.spawn(move |_| {
-                        let result =
-                            compute_instruction(instr, regs, tags, mem, zk, vl, vector_enabled);
-                        results
-                            .lock()
-                            .expect("results mutex poisoned")
-                            .push((idx, result));
-                    });
-                }
-            });
-            let mut results = results_lock.into_inner().expect("results mutex poisoned");
-            results.sort_by_key(|(i, _)| *i);
-            for (_, result) in results {
-                let updates = result?;
-                for upd in updates {
-                    match upd {
-                        ResultUpdate::Reg { index, value, tag } => {
-                            if index != 0 {
-                                self.registers.set(index as usize, value);
-                                if self.zk_mode {
-                                    self.registers.set_tag(index as usize, tag);
-                                }
-                            }
-                        }
-                        ResultUpdate::Mem { addr, value } => {
-                            self.memory.store_u64(addr, value)?;
-                        }
-                        ResultUpdate::Vl { value } => {
-                            self.vector_length = value;
-                        }
-                    }
-                }
-            }
-        }
-        Ok(())
     }
 }
 #[cfg(test)]
@@ -8245,10 +6699,6 @@ mod tests {
             vm.acceleration_policy(),
             AccelerationPolicy::deterministic()
         );
-    }
-    #[test]
-    fn rtm_detection_does_not_panic() {
-        let _ = std::panic::catch_unwind(rtm_available);
     }
     #[test]
     fn deterministic_policy_disables_acceleration() {

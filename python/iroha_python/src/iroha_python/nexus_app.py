@@ -1097,7 +1097,11 @@ class DefaultNexusConnectTransport:
                 "connect_approval_required",
                 "await_approval must complete before requesting a wallet signature",
             )
-        from .connect import ConnectSignRequestTxPayload, ConnectSignResultErrPayload, ConnectSignResultOkPayload
+        from .connect import (
+            ConnectSignRequestTxPayload,
+            ConnectSignResultErrPayload,
+            ConnectSignResultOkPayload,
+        )
 
         ws = self._websocket(session, state)
         request = state.connect_session.encrypt_app_to_wallet(
@@ -1537,15 +1541,6 @@ class NexusAppClient:
             wait=wait,
             wait_options=wait_options,
         )
-
-    # CamelCase aliases for parity with JS/Swift/Kotlin naming in samples.
-    startConnect: Callable[[Optional[NexusConnectOptions]], NexusConnectSession] = start_connect
-    awaitApproval: Callable[[NexusConnectSession], NexusApprovedAccount] = await_approval
-    buildTransferDraft: Callable[[NexusTransferInput], NexusTransferDraft] = build_transfer_draft
-    requestSignature: Callable[[NexusConnectSession, NexusSignableTransaction], NexusWalletSignature] = request_signature
-    finalizeAndSubmit = finalize_and_submit
-    transferWithWallet = transfer_with_wallet
-
 
 __all__ = [
     "NexusAppClient",

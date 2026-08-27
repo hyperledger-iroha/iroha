@@ -7,13 +7,30 @@ final class AliasSetupV1Tests: XCTestCase {
         try Keypair(privateKeyBytes: Data(repeating: seed, count: 32)).publicKey
     }
 
+    func testAliasPlanAnchorRequiresExactChecksummedHashLiteral() throws {
+        let literal = try NetworkId(bytes: Data(repeating: 0x01, count: 32)).literal
+        XCTAssertNoThrow(try AliasPlanAnchorV1(blockHeight: 1, blockHash: literal))
+        XCTAssertThrowsError(
+            try AliasPlanAnchorV1(
+                blockHeight: 1,
+                blockHash: String(repeating: "01", count: 32)
+            )
+        )
+        XCTAssertThrowsError(
+            try AliasPlanAnchorV1(
+                blockHeight: 1,
+                blockHash: "0x" + String(repeating: "01", count: 32)
+            )
+        )
+    }
+
     func testAliasPlanBodiesRejectRetiredChainAliasesAndNonCanonicalNetworkIds() throws {
         let authority = try AccountAddress
             .fromAccount(publicKey: validEd25519PublicKey(seed: 0x18))
             .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
         let anchor = try AliasPlanAnchorV1(
             blockHeight: 1,
-            blockHash: String(repeating: "01", count: 32)
+            blockHash: NetworkId(bytes: Data(repeating: 0x01, count: 32)).literal
         )
         let setup = try AliasTransactionPlanBodyV1(
             authority: authority,
@@ -241,7 +258,7 @@ final class AliasSetupV1Tests: XCTestCase {
                 networkId: TestNetworkIds.canonical,
                 anchor: try AliasPlanAnchorV1(
                     blockHeight: 9,
-                    blockHash: String(repeating: "01", count: 32)
+                    blockHash: NetworkId(bytes: Data(repeating: 0x01, count: 32)).literal
                 ),
                 resources: [
                     AliasPlanResourceV1(intent: intent, disposition: .repair, quote: nil, instructionIndex: 0)
@@ -570,7 +587,7 @@ final class AliasSetupV1Tests: XCTestCase {
                 networkId: TestNetworkIds.canonical,
                 anchor: try AliasPlanAnchorV1(
                     blockHeight: 9,
-                    blockHash: String(repeating: "01", count: 32)
+                    blockHash: NetworkId(bytes: Data(repeating: 0x01, count: 32)).literal
                 ),
                 operation: .renewLease(renewal),
                 disposition: .apply,

@@ -16,7 +16,7 @@ use iroha_data_model::prelude::*;
 use iroha_data_model::transaction::signed::TransactionSignatureError;
 use iroha_primitives::numeric::Numeric;
 use iroha_test_samples::gen_account_in;
-use ivm::{ProgramMetadata, encoding, instruction, kotodama::wide as kwide, syscalls as ivm_sys};
+use ivm::{ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 use std::{borrow::Cow, num::NonZeroU64, sync::Arc};
@@ -66,7 +66,7 @@ fn provision_fee_sponsor_program(
     let previous_call_hash = state_transaction.tx_call_hash.replace(setup_call_hash);
     let selector = FeeSponsorRuleSelector::NativeInstruction(
         iroha_data_model::nexus::FeeSponsorNativeInstructionSelector {
-wire_id: iroha.instruction.v1::instruction_wire_id(instruction)
+            wire_id: iroha_data_model::isi::instruction_wire_id(instruction)
                 .expect("native instruction must have a registered wire id")
                 .to_owned(),
             asset_definition_id: None,
@@ -1089,7 +1089,9 @@ fn ivm_gas_fees_record_settlement_receipt() {
     state.set_pipeline(pipeline);
     // 3) Build a minimal IVM program that consumes gas
     let mut code = Vec::new();
-    code.extend_from_slice(&kwide::encode_add(1, 0, 0).to_le_bytes());
+    code.extend_from_slice(
+        &encoding::wide::encode_rr(instruction::wide::arithmetic::ADD, 1, 0, 0).to_le_bytes(),
+    );
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let meta = ProgramMetadata {
         version_major: 1,

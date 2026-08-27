@@ -5569,7 +5569,9 @@ fn persisted_timed_ovn_phase_v1(lifecycle: &TimedOvnLifecycleStateV1) -> Persist
         TimedOvnLifecycleStateV1::RegistrationClosed(_) => {
             PersistedTimedOvnPhaseV1::RegistrationClosed
         }
-        TimedOvnLifecycleStateV1::SurvivorsFrozen(_) => PersistedTimedOvnPhaseV1::SurvivorsFrozen,
+        TimedOvnLifecycleStateV1::SurvivorsFrozen(_) | TimedOvnLifecycleStateV1::CorpusOpen(_) => {
+            PersistedTimedOvnPhaseV1::SurvivorsFrozen
+        }
         TimedOvnLifecycleStateV1::Sealed(_) => PersistedTimedOvnPhaseV1::Sealed,
         TimedOvnLifecycleStateV1::Released(_) => PersistedTimedOvnPhaseV1::Released,
     }
@@ -5668,12 +5670,14 @@ fn validate_tle_ovn_persistence(world: &World) -> Result<(), json::Error> {
                     "timed-OVN lifecycle references a missing TLE key session",
                 )
             })?;
-        lifecycle.validate(key_session).map_err(|error| {
-            invalid_tle_ovn_persistence(
-                "timed_ovn_evidence",
-                format!("invalid persisted timed-OVN lifecycle {ballot_attempt_id}: {error}"),
-            )
-        })?;
+        let (lifecycle_binding, registered_participant_hashes) = lifecycle
+            .validated_parliament_reducer_binding(key_session)
+            .map_err(|error| {
+                invalid_tle_ovn_persistence(
+                    "timed_ovn_evidence",
+                    format!("invalid persisted timed-OVN lifecycle {ballot_attempt_id}: {error}"),
+                )
+            })?;
 
         let session = lifecycle.session();
         if session.parameter_hash != crate::governance::timed_ovn::timed_ovn_parameter_hash_v1() {
@@ -5694,12 +5698,6 @@ fn validate_tle_ovn_persistence(world: &World) -> Result<(), json::Error> {
                         "timed-OVN lifecycle references a missing Parliament attempt",
                     )
                 })?;
-        if governance_attempt.proposal_content_id().as_bytes() != &session.proposal_content_id {
-            return Err(invalid_tle_ovn_persistence(
-                "timed_ovn_evidence",
-                "timed-OVN proposal binding differs from its Parliament attempt",
-            ));
-        }
         let ballot = governance_attempt
             .ballot(ballot_attempt_id)
             .ok_or_else(|| {
@@ -5708,12 +5706,12 @@ fn validate_tle_ovn_persistence(world: &World) -> Result<(), json::Error> {
                     "timed-OVN lifecycle references a missing Parliament ballot attempt",
                 )
             })?;
-        if ballot.attempt().body_instance_id.as_bytes() != &session.body_instance_id
-            || ballot.release_height() != Some(lifecycle.target_finalized_height())
+        if !governance_attempt
+            .timed_ovn_reducer_binding_matches(ballot_attempt_id, &lifecycle_binding)
         {
             return Err(invalid_tle_ovn_persistence(
                 "timed_ovn_evidence",
-                "timed-OVN body or release-height binding differs from Parliament state",
+                "timed-OVN lifecycle bindings differ from the Parliament reducer",
             ));
         }
         let body = governance_attempt
@@ -5739,32 +5737,76 @@ fn validate_tle_ovn_persistence(world: &World) -> Result<(), json::Error> {
                 )
             })
             .collect::<BTreeSet<_>>();
-        let registered_participant_hashes = lifecycle
-            .validated_registration_participant_hashes(key_session)
-            .map_err(|error| {
-                invalid_tle_ovn_persistence(
-                    "timed_ovn_evidence",
-                    format!(
-                        "could not rebuild authenticated Parliament participant roster: {error}"
-                    ),
-                )
-            })?;
-        let expected_registered_voters = u32::try_from(registered_participant_hashes.len()).ok();
-        let registration_count_matches =
-            if persisted_timed_ovn_phase_v1(lifecycle) == PersistedTimedOvnPhaseV1::Registered {
-                ballot.registered_voters().is_none()
-            } else {
-                ballot.registered_voters() == expected_registered_voters
-            };
         if registered_participant_hashes
             .iter()
             .any(|participant_hash| !eligible_participant_hashes.contains(participant_hash))
-            || !registration_count_matches
         {
             return Err(invalid_tle_ovn_persistence(
                 "timed_ovn_evidence",
                 "timed-OVN registration corpus is not the authenticated nonexcluded body-member subset",
             ));
+        }
+    }
+
+    let mut active_resource_reservations = Vec::new();
+    for (governance_attempt_id, governance_attempt) in parliament_attempts.iter() {
+        if governance_attempt.attempt().status
+            != iroha_data_model::governance::types::GovernanceAttemptStatusV1::Active
+        {
+            continue;
+        }
+        for (ballot_attempt_id, ballot) in governance_attempt.ballot_attempts() {
+            if matches!(
+                ballot.attempt().status,
+                iroha_data_model::governance::types::BallotAttemptStatusV1::Finalized
+                    | iroha_data_model::governance::types::BallotAttemptStatusV1::NoResult
+                    | iroha_data_model::governance::types::BallotAttemptStatusV1::Superseded
+            ) || governance_attempt
+                .active_ballot_for_body(&ballot.attempt().body_instance_id)
+                .is_none_or(|active| active.attempt().id != *ballot_attempt_id)
+                || governance_attempt
+                    .body(&ballot.attempt().body_instance_id)
+                    .is_none_or(|body| {
+                        body.instance().status
+                            != iroha_data_model::governance::types::BodyInstanceStatusV1::Balloting
+                    })
+            {
+                continue;
+            }
+            let release_height = ballot.release_height().ok_or_else(|| {
+                invalid_tle_ovn_persistence(
+                    "parliament_attempts",
+                    "active timed-OVN ballot is missing its release height",
+                )
+            })?;
+            active_resource_reservations.push((
+                *governance_attempt_id,
+                *ballot_attempt_id,
+                [
+                    (
+                        ballot.registered_at_height(),
+                        ballot.commitment_close_height(),
+                    ),
+                    (release_height, ballot.opening_deadline_height()),
+                ],
+            ));
+        }
+    }
+    for left_index in 0..active_resource_reservations.len() {
+        for right_index in left_index + 1..active_resource_reservations.len() {
+            let (left_attempt, left_ballot, left_windows) =
+                active_resource_reservations[left_index];
+            let (right_attempt, right_ballot, right_windows) =
+                active_resource_reservations[right_index];
+            if super::parliament_timed_ovn_resource_windows_overlap_v1(left_windows, right_windows)
+            {
+                return Err(invalid_tle_ovn_persistence(
+                    "parliament_attempts",
+                    format!(
+                        "active timed-OVN resource reservations overlap between {left_attempt:?}/{left_ballot:?} and {right_attempt:?}/{right_ballot:?}"
+                    ),
+                ));
+            }
         }
     }
 
@@ -5874,9 +5916,37 @@ fn validate_tle_ovn_persistence(world: &World) -> Result<(), json::Error> {
     Ok(())
 }
 
+fn validate_tle_ovn_snapshot_network_v1(
+    world: &World,
+    expected_network_id: &iroha_data_model::NetworkId,
+) -> Result<(), String> {
+    let expected_network_binding = *expected_network_id.as_bytes();
+    for (key_session_id, key_session) in world.tle_key_sessions.view().iter() {
+        if key_session.network_id != expected_network_binding {
+            return Err(format!(
+                "restored TLE key session {key_session_id:?} belongs to a different exact NetworkId"
+            ));
+        }
+    }
+    for (ballot_attempt_id, lifecycle) in world.timed_ovn_evidence.view().iter() {
+        if lifecycle.session().network_id != expected_network_binding {
+            return Err(format!(
+                "restored timed-OVN lifecycle {ballot_attempt_id:?} belongs to a different exact NetworkId"
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod timed_ovn_persistence_phase_tests {
     use super::*;
+    use crate::{
+        governance::timed_ovn::{
+            TimedOvnLifecycleStateV1, TimedOvnSessionPublicV1, timed_ovn_parameter_hash_v1,
+        },
+        tle_release::tests::public_key_session_fixture_for_context_v1,
+    };
     use iroha_data_model::governance::types::{
         BallotAttemptStatusV1 as BallotStatus, ParliamentBallotFailureKindV1 as FailureKind,
     };
@@ -5959,13 +6029,66 @@ mod timed_ovn_persistence_phase_tests {
             }
         }
     }
+
+    #[test]
+    fn restored_tle_ovn_state_must_match_the_authoritative_network() {
+        let authoritative_network = iroha_data_model::NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA1; 32])),
+        );
+        let foreign_network = iroha_data_model::NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB1; 32])),
+        );
+        let foreign_key_state = public_key_session_fixture_for_context_v1(
+            *foreign_network.as_bytes(),
+            0xB2,
+            [0xB3; 32],
+        );
+        let foreign_key_session_id = foreign_key_state.key_session_id;
+        let foreign_key = foreign_key_state
+            .clone()
+            .validate()
+            .expect("foreign-network TLE fixture is internally valid");
+        let ballot_attempt_id = BallotAttemptId::new([0xB4; 32]);
+        let lifecycle = TimedOvnLifecycleStateV1::open_registration(
+            TimedOvnSessionPublicV1 {
+                network_id: *foreign_network.as_bytes(),
+                proposal_content_id: [0xB5; 32],
+                governance_attempt_id: [0xB6; 32],
+                body_instance_id: [0xB7; 32],
+                ballot_attempt_id: *ballot_attempt_id.as_bytes(),
+                parameter_hash: timed_ovn_parameter_hash_v1(),
+                tle_key_session_id: foreign_key_session_id,
+                tle_key_transcript_hash: foreign_key.public_state().transcript_hash,
+                tle_master_public_key: *foreign_key.master_public_key().as_bytes(),
+            },
+            10,
+            20,
+            &foreign_key,
+        )
+        .expect("foreign-network lifecycle is self-consistent with its TLE session");
+        let mut world = World::default();
+        world
+            .tle_key_sessions
+            .insert(foreign_key_session_id, foreign_key_state);
+        world
+            .timed_ovn_evidence
+            .insert(ballot_attempt_id, lifecycle);
+
+        validate_tle_ovn_snapshot_network_v1(&world, &foreign_network)
+            .expect("same-network restored TLE/OVN state is admitted");
+        let error = validate_tle_ovn_snapshot_network_v1(&world, &authoritative_network)
+            .expect_err("self-consistent foreign-network TLE/OVN state must fail closed");
+        assert!(
+            error.contains("different exact NetworkId"),
+            "rejection identifies the cross-network restore: {error}"
+        );
+    }
 }
 
 #[allow(clippy::too_many_lines)]
 fn parse_world(
     mut map: SnapshotJsonMap<'_>,
     ivm_seed: &IvmSeed<'_, World>,
-    emergency_fast: bool,
 ) -> Result<World, json::Error> {
     if let Some(actual) = map.source_order.as_ref() {
         let expected = canonical_world_field_order();
@@ -5990,47 +6113,43 @@ fn parse_world(
     let domain_endorsements = take_required(&mut map, "domain_endorsements")?;
     let domains: Storage<DomainId, Domain> = take_required(&mut map, "domains")?;
     let accounts: Storage<AccountId, AccountValue> = take_required(&mut map, "accounts")?;
-    let account_aliases = take_optional_default(&mut map, "account_aliases")?;
-    let account_aliases_by_account = take_optional_default(&mut map, "account_aliases_by_account")?;
-    let account_scope_directory = take_optional_default(&mut map, "account_scope_directory")?;
+    let account_aliases = take_required(&mut map, "account_aliases")?;
+    let account_aliases_by_account = take_required(&mut map, "account_aliases_by_account")?;
+    let account_scope_directory = take_required(&mut map, "account_scope_directory")?;
     let ram_lfe_program_policies = take_ram_lfe_program_policies(&mut map)?;
-    if !emergency_fast {
-        validate_ram_lfe_program_policies(&ram_lfe_program_policies)?;
-    }
-    let identifier_policies = take_optional_default(&mut map, "identifier_policies")?;
-    let fee_sponsor_programs = take_optional_default(&mut map, "fee_sponsor_programs")?;
-    let fee_sponsor_program_revisions =
-        take_optional_default(&mut map, "fee_sponsor_program_revisions")?;
-    let fee_sponsor_enrollments = take_optional_default(&mut map, "fee_sponsor_enrollments")?;
-    let fee_sponsor_vaults = take_optional_default(&mut map, "fee_sponsor_vaults")?;
-    let fee_sponsor_budget_counters =
-        take_optional_default(&mut map, "fee_sponsor_budget_counters")?;
-    let identifier_claims = take_optional_default(&mut map, "identifier_claims")?;
-    let account_recovery_policies = take_optional_default(&mut map, "account_recovery_policies")?;
-    let account_recovery_requests = take_optional_default(&mut map, "account_recovery_requests")?;
+    validate_ram_lfe_program_policies(&ram_lfe_program_policies)?;
+    let identifier_policies = take_required(&mut map, "identifier_policies")?;
+    let fee_sponsor_programs = take_required(&mut map, "fee_sponsor_programs")?;
+    let fee_sponsor_program_revisions = take_required(&mut map, "fee_sponsor_program_revisions")?;
+    let fee_sponsor_enrollments = take_required(&mut map, "fee_sponsor_enrollments")?;
+    let fee_sponsor_vaults = take_required(&mut map, "fee_sponsor_vaults")?;
+    let fee_sponsor_budget_counters = take_required(&mut map, "fee_sponsor_budget_counters")?;
+    let identifier_claims = take_required(&mut map, "identifier_claims")?;
+    let account_recovery_policies = take_required(&mut map, "account_recovery_policies")?;
+    let account_recovery_requests = take_required(&mut map, "account_recovery_requests")?;
     let asset_definitions: Storage<AssetDefinitionId, AssetDefinition> =
         take_required(&mut map, "asset_definitions")?;
     let asset_definition_alias_bindings =
-        take_optional_default(&mut map, "asset_definition_alias_bindings")?;
-    let contract_alias_bindings = take_optional_default(&mut map, "contract_alias_bindings")?;
+        take_required(&mut map, "asset_definition_alias_bindings")?;
+    let contract_alias_bindings = take_required(&mut map, "contract_alias_bindings")?;
     let assets: Storage<AssetId, AssetValue> = take_required(&mut map, "assets")?;
-    let account_rekey_records = take_optional_default(&mut map, "account_rekey_records")?;
-    let asset_metadata = take_optional_default(&mut map, "asset_metadata")?;
+    let account_rekey_records = take_required(&mut map, "account_rekey_records")?;
+    let asset_metadata = take_required(&mut map, "asset_metadata")?;
     let nfts: Storage<NftId, NftValue> = take_required(&mut map, "nfts")?;
-    let rwas: Storage<RwaId, RwaValue> = take_optional_default(&mut map, "rwas")?;
+    let rwas: Storage<RwaId, RwaValue> = take_required(&mut map, "rwas")?;
     let roles: Storage<RoleId, Role> = take_required(&mut map, "roles")?;
     let account_permissions: Storage<AccountId, Permissions> =
         take_required(&mut map, "account_permissions")?;
     let account_roles: Storage<RoleIdWithOwner, ()> = take_required(&mut map, "account_roles")?;
-    let oracle_feeds = take_optional_default(&mut map, "oracle_feeds")?;
-    let oracle_observations = take_optional_default(&mut map, "oracle_observations")?;
-    let oracle_history = take_optional_default(&mut map, "oracle_history")?;
-    let oracle_provider_stats = take_optional_default(&mut map, "oracle_provider_stats")?;
-    let oracle_disputes = take_optional_default(&mut map, "oracle_disputes")?;
-    let oracle_changes = take_optional_default(&mut map, "oracle_changes")?;
-    let defi_oracle_attestations = take_optional_default(&mut map, "defi_oracle_attestations")?;
-    let twitter_bindings = take_optional_default(&mut map, "twitter_bindings")?;
-    let twitter_bindings_by_uaid = take_optional_default(&mut map, "twitter_bindings_by_uaid")?;
+    let oracle_feeds = take_required(&mut map, "oracle_feeds")?;
+    let oracle_observations = take_required(&mut map, "oracle_observations")?;
+    let oracle_history = take_required(&mut map, "oracle_history")?;
+    let oracle_provider_stats = take_required(&mut map, "oracle_provider_stats")?;
+    let oracle_disputes = take_required(&mut map, "oracle_disputes")?;
+    let oracle_changes = take_required(&mut map, "oracle_changes")?;
+    let defi_oracle_attestations = take_required(&mut map, "defi_oracle_attestations")?;
+    let twitter_bindings = take_required(&mut map, "twitter_bindings")?;
+    let twitter_bindings_by_uaid = take_required(&mut map, "twitter_bindings_by_uaid")?;
     let viral_reward_budget = take_required(&mut map, "viral_reward_budget")?;
     let viral_campaign_budget = take_required(&mut map, "viral_campaign_budget")?;
     let viral_daily_counters = take_required(&mut map, "viral_daily_counters")?;
@@ -6041,54 +6160,50 @@ fn parse_world(
         take_required(&mut map, "axt_policies")?;
     let axt_handle_counters: Storage<DataSpaceId, AxtHandleCounterRecord> =
         take_required(&mut map, "axt_handle_counters")?;
-    if !emergency_fast {
-        let counters = axt_handle_counters.view();
-        for (_, record) in counters.iter() {
-            record
-                .validate()
-                .map_err(|error| json::Error::InvalidField {
-                    field: "world.axt_handle_counters".to_owned(),
-                    message: error.to_string(),
-                })?;
-        }
+    let counters = axt_handle_counters.view();
+    for (_, record) in counters.iter() {
+        record
+            .validate()
+            .map_err(|error| json::Error::InvalidField {
+                field: "world.axt_handle_counters".to_owned(),
+                message: error.to_string(),
+            })?;
     }
     let axt_asset_incarnations: Storage<AssetDefinitionId, AxtAssetIncarnationV1> =
         take_required(&mut map, "axt_asset_incarnations")?;
-    if !emergency_fast {
-        let definitions = asset_definitions.view();
-        let incarnations = axt_asset_incarnations.view();
-        for (asset_definition_id, incarnation) in incarnations.iter() {
-            incarnation
-                .validate()
-                .map_err(|error| json::Error::InvalidField {
-                    field: "world.axt_asset_incarnations".to_owned(),
-                    message: error.to_string(),
-                })?;
-            if definitions.get(asset_definition_id).is_none() {
-                return Err(json::Error::InvalidField {
-                    field: "world.axt_asset_incarnations".to_owned(),
-                    message: format!(
-                        "AXT incarnation references unregistered asset definition {asset_definition_id}"
-                    ),
-                });
-            }
+    let definitions = asset_definitions.view();
+    let incarnations = axt_asset_incarnations.view();
+    for (asset_definition_id, incarnation) in incarnations.iter() {
+        incarnation
+            .validate()
+            .map_err(|error| json::Error::InvalidField {
+                field: "world.axt_asset_incarnations".to_owned(),
+                message: error.to_string(),
+            })?;
+        if definitions.get(asset_definition_id).is_none() {
+            return Err(json::Error::InvalidField {
+                field: "world.axt_asset_incarnations".to_owned(),
+                message: format!(
+                    "AXT incarnation references unregistered asset definition {asset_definition_id}"
+                ),
+            });
         }
-        for (asset_definition_id, _) in definitions.iter() {
-            if incarnations.get(asset_definition_id).is_none() {
-                return Err(json::Error::InvalidField {
-                    field: "world.axt_asset_incarnations".to_owned(),
-                    message: format!(
-                        "registered asset definition {asset_definition_id} has no AXT incarnation"
-                    ),
-                });
-            }
+    }
+    for (asset_definition_id, _) in definitions.iter() {
+        if incarnations.get(asset_definition_id).is_none() {
+            return Err(json::Error::InvalidField {
+                field: "world.axt_asset_incarnations".to_owned(),
+                message: format!(
+                    "registered asset definition {asset_definition_id} has no AXT incarnation"
+                ),
+            });
         }
     }
     let axt_replay_ledger: Storage<AxtHandleReplayKey, AxtReplayRecord> =
         take_required(&mut map, "axt_replay_ledger")?;
     let axt_handle_budget_ledger: Storage<AxtHandleBudgetKey, AxtHandleBudgetRecord> =
         take_required(&mut map, "axt_handle_budget_ledger")?;
-    if !emergency_fast {
+    {
         {
             let ledger = axt_handle_budget_ledger.view();
             for (key, record) in ledger.iter() {
@@ -6233,11 +6348,9 @@ fn parse_world(
             }
         }
     }
-    if !emergency_fast {
-        map.get("sccp_registry")
-            .ok_or_else(|| json::Error::missing_field("sccp_registry"))?
-            .validate_sccp_registry()?;
-    }
+    map.get("sccp_registry")
+        .ok_or_else(|| json::Error::missing_field("sccp_registry"))?
+        .validate_sccp_registry()?;
     let sccp_registry: Cell<iroha_data_model::bridge::SccpRegistryV1> =
         take_required(&mut map, "sccp_registry")?;
     let sccp_outbound_pending_usage = take_required(&mut map, "sccp_outbound_pending_usage")?;
@@ -6248,32 +6361,30 @@ fn parse_world(
     let sccp_inbound_messages = take_required(&mut map, "sccp_inbound_messages")?;
     let sccp_inbound_anchor_high_water: Storage<SccpInboundAnchorHighWaterKeyV1, u64> =
         take_required(&mut map, "sccp_inbound_anchor_high_water")?;
-    if !emergency_fast {
-        validate_sccp_outbound_pending_messages(&sccp_outbound_pending_messages)?;
-        validate_sccp_outbound_pending_usage(
-            &sccp_outbound_pending_messages,
-            &sccp_outbound_pending_usage,
-        )?;
-        validate_sccp_outbound_indexes(
-            &sccp_outbound_pending_messages,
-            &sccp_outbound_proofs,
-            &sccp_outbound_message_locator,
-            &sccp_outbound_message_index,
-        )?;
-        validate_sccp_outbound_proofs(&sccp_outbound_proofs, &sccp_outbound_message_locator)?;
-        validate_sccp_inbound_messages(&sccp_inbound_messages)?;
-        let sccp_inbound_messages_view = sccp_inbound_messages.view();
-        let sccp_inbound_anchor_high_water_view = sccp_inbound_anchor_high_water.view();
-        validate_sccp_inbound_anchor_high_water_index(
-            &sccp_inbound_messages_view,
-            &sccp_inbound_anchor_high_water_view,
-        )
-        .map_err(|message| json::Error::InvalidField {
-            field: "world.sccp_inbound_anchor_high_water".to_owned(),
-            message,
-        })?;
-    }
-    let tx_sequences: Storage<AccountId, u64> = take_optional_default(&mut map, "tx_sequences")?;
+    validate_sccp_outbound_pending_messages(&sccp_outbound_pending_messages)?;
+    validate_sccp_outbound_pending_usage(
+        &sccp_outbound_pending_messages,
+        &sccp_outbound_pending_usage,
+    )?;
+    validate_sccp_outbound_indexes(
+        &sccp_outbound_pending_messages,
+        &sccp_outbound_proofs,
+        &sccp_outbound_message_locator,
+        &sccp_outbound_message_index,
+    )?;
+    validate_sccp_outbound_proofs(&sccp_outbound_proofs, &sccp_outbound_message_locator)?;
+    validate_sccp_inbound_messages(&sccp_inbound_messages)?;
+    let sccp_inbound_messages_view = sccp_inbound_messages.view();
+    let sccp_inbound_anchor_high_water_view = sccp_inbound_anchor_high_water.view();
+    validate_sccp_inbound_anchor_high_water_index(
+        &sccp_inbound_messages_view,
+        &sccp_inbound_anchor_high_water_view,
+    )
+    .map_err(|message| json::Error::InvalidField {
+        field: "world.sccp_inbound_anchor_high_water".to_owned(),
+        message,
+    })?;
+    let tx_sequences: Storage<AccountId, u64> = take_required(&mut map, "tx_sequences")?;
     let triggers_value = map
         .remove("triggers")
         .ok_or_else(|| json::Error::missing_field("triggers"))?;
@@ -6284,13 +6395,13 @@ fn parse_world(
     let executor_data_model: Cell<ExecutorDataModel> =
         take_required(&mut map, "executor_data_model")?;
     let external_event_buf: Cell<Vec<EventBox>> = take_required(&mut map, "external_event_buf")?;
-    let verifying_keys = take_optional_default(&mut map, "verifying_keys")?;
-    let verifying_keys_by_circuit = take_optional_default(&mut map, "verifying_keys_by_circuit")?;
-    let consensus_keys = take_optional_default(&mut map, "consensus_keys")?;
-    let consensus_keys_by_pk = take_optional_default(&mut map, "consensus_keys_by_pk")?;
-    let pedersen_params = take_optional_default(&mut map, "pedersen_params")?;
-    let poseidon_params = take_optional_default(&mut map, "poseidon_params")?;
-    let runtime_upgrades = take_optional_default(&mut map, "runtime_upgrades")?;
+    let verifying_keys = take_required(&mut map, "verifying_keys")?;
+    let verifying_keys_by_circuit = take_required(&mut map, "verifying_keys_by_circuit")?;
+    let consensus_keys = take_required(&mut map, "consensus_keys")?;
+    let consensus_keys_by_pk = take_required(&mut map, "consensus_keys_by_pk")?;
+    let pedersen_params = take_required(&mut map, "pedersen_params")?;
+    let poseidon_params = take_required(&mut map, "poseidon_params")?;
+    let runtime_upgrades = take_required(&mut map, "runtime_upgrades")?;
     let privacy_consensus_policy: Cell<iroha_data_model::privacy::PrivacyConsensusPolicyV1> =
         take_required(&mut map, "privacy_consensus_policy")?;
     let privacy_activations: Storage<
@@ -6321,44 +6432,40 @@ fn parse_world(
         crate::privacy_state::PrivacyRootHeadKeyV1,
         crate::privacy_state::PrivacyRootHeadRecordV1,
     > = take_required(&mut map, "privacy_root_heads")?;
-    if !emergency_fast {
-        crate::privacy_state::validate_privacy_persisted_state_v1(
-            privacy_consensus_policy.view().get(),
-            &privacy_activations.view(),
-            &privacy_pgc_accounts.view(),
-            &privacy_pgc_pool_invariants.view(),
-            &privacy_nullifiers.view(),
-            &privacy_commitments.view(),
-            &privacy_roots.view(),
-            &privacy_root_heads.view(),
-        )
-        .map_err(|message| json::Error::InvalidField {
-            field: "world.privacy_state".to_owned(),
-            message,
-        })?;
-        crate::privacy_state::validate_privacy_orchard_public_dependencies_v1(
-            &privacy_commitments.view(),
-            &accounts.view(),
-            &asset_definitions.view(),
-        )
-        .map_err(|message| json::Error::InvalidField {
-            field: "world.privacy_state".to_owned(),
-            message,
-        })?;
-    }
-    let proofs = take_optional_default(&mut map, "proofs")?;
-    let proof_tags = take_optional_default(&mut map, "proof_tags")?;
-    let proofs_by_tag = take_optional_default(&mut map, "proofs_by_tag")?;
-    let contract_manifests = take_optional_default(&mut map, "contract_manifests")?;
-    let contract_code = take_optional_default(&mut map, "contract_code")?;
+    crate::privacy_state::validate_privacy_persisted_state_v1(
+        privacy_consensus_policy.view().get(),
+        &privacy_activations.view(),
+        &privacy_pgc_accounts.view(),
+        &privacy_pgc_pool_invariants.view(),
+        &privacy_nullifiers.view(),
+        &privacy_commitments.view(),
+        &privacy_roots.view(),
+        &privacy_root_heads.view(),
+    )
+    .map_err(|message| json::Error::InvalidField {
+        field: "world.privacy_state".to_owned(),
+        message,
+    })?;
+    crate::privacy_state::validate_privacy_orchard_public_dependencies_v1(
+        &privacy_commitments.view(),
+        &accounts.view(),
+        &asset_definitions.view(),
+    )
+    .map_err(|message| json::Error::InvalidField {
+        field: "world.privacy_state".to_owned(),
+        message,
+    })?;
+    let proofs = take_required(&mut map, "proofs")?;
+    let proof_tags = take_required(&mut map, "proof_tags")?;
+    let proofs_by_tag = take_required(&mut map, "proofs_by_tag")?;
+    let contract_manifests = take_required(&mut map, "contract_manifests")?;
+    let contract_code = take_required(&mut map, "contract_code")?;
     let contract_code_uploads = take_required(&mut map, "contract_code_uploads")?;
     let contract_code_upload_chunks = take_required(&mut map, "contract_code_upload_chunks")?;
-    let contract_instances = take_optional_default(&mut map, "contract_instances")?;
-    let contract_subject_bindings = take_optional_default(&mut map, "contract_subject_bindings")?;
-    let smart_contract_state = take_optional_default(&mut map, "smart_contract_state")?;
-    if !emergency_fast {
-        reject_legacy_musubi_state(&smart_contract_state)?;
-    }
+    let contract_instances = take_required(&mut map, "contract_instances")?;
+    let contract_subject_bindings = take_required(&mut map, "contract_subject_bindings")?;
+    let smart_contract_state = take_required(&mut map, "smart_contract_state")?;
+    reject_legacy_musubi_state(&smart_contract_state)?;
     let musubi_namespace_bindings = take_musubi_namespace_bindings(&mut map)?;
     let musubi_domain_ownership_generations = take_musubi_domain_ownership_generations(&mut map)?;
     let musubi_packages = take_required(&mut map, "musubi_packages")?;
@@ -6435,50 +6542,46 @@ fn parse_world(
     let capacity_declarations = take_required(&mut map, "capacity_declarations")?;
     let pin_manifests = take_required(&mut map, "pin_manifests")?;
     let replication_orders = take_required(&mut map, "replication_orders")?;
-    if !emergency_fast {
-        SoracloudInrouPersistedStateV1 {
-            sequence_watermark: *soracloud_sequence_watermark.view().get(),
-            service_revisions: &soracloud_service_revisions,
-            service_deployments: &soracloud_service_deployments,
-            app_infra_states: &soracloud_app_infra_states,
-            service_runtime: &soracloud_service_runtime,
-            inrou_replica_runtime: &soracloud_inrou_replica_runtime,
-            service_audit_events: &soracloud_service_audit_events,
-            app_infra_audit_events: &soracloud_app_infra_audit_events,
-            training_job_audit_events: &soracloud_training_job_audit_events,
-            model_weight_audit_events: &soracloud_model_weight_audit_events,
-            model_artifact_audit_events: &soracloud_model_artifact_audit_events,
-            hf_shared_lease_audit_events: &soracloud_hf_shared_lease_audit_events,
-            agent_apartment_audit_events: &soracloud_agent_apartment_audit_events,
-            service_state_entries: &soracloud_service_state_entries,
-            decryption_request_records: &soracloud_decryption_request_records,
-            agent_apartments: &soracloud_agent_apartments,
-            training_jobs: &soracloud_training_jobs,
-            model_registries: &soracloud_model_registries,
-            model_weight_versions: &soracloud_model_weight_versions,
-            model_artifacts: &soracloud_model_artifacts,
-            hf_sources: &soracloud_hf_sources,
-            hf_shared_lease_pools: &soracloud_hf_shared_lease_pools,
-            hf_shared_lease_members: &soracloud_hf_shared_lease_members,
-            inrou_host_capabilities: &soracloud_inrou_host_capabilities,
-            inrou_service_placements: &soracloud_inrou_service_placements,
-            uploaded_model_bundles: &soracloud_uploaded_model_bundles,
-            mailbox_messages: &soracloud_mailbox_messages,
-            runtime_receipts: &soracloud_runtime_receipts,
-        }
-        .validate()?;
+    SoracloudInrouPersistedStateV1 {
+        sequence_watermark: *soracloud_sequence_watermark.view().get(),
+        service_revisions: &soracloud_service_revisions,
+        service_deployments: &soracloud_service_deployments,
+        app_infra_states: &soracloud_app_infra_states,
+        service_runtime: &soracloud_service_runtime,
+        inrou_replica_runtime: &soracloud_inrou_replica_runtime,
+        service_audit_events: &soracloud_service_audit_events,
+        app_infra_audit_events: &soracloud_app_infra_audit_events,
+        training_job_audit_events: &soracloud_training_job_audit_events,
+        model_weight_audit_events: &soracloud_model_weight_audit_events,
+        model_artifact_audit_events: &soracloud_model_artifact_audit_events,
+        hf_shared_lease_audit_events: &soracloud_hf_shared_lease_audit_events,
+        agent_apartment_audit_events: &soracloud_agent_apartment_audit_events,
+        service_state_entries: &soracloud_service_state_entries,
+        decryption_request_records: &soracloud_decryption_request_records,
+        agent_apartments: &soracloud_agent_apartments,
+        training_jobs: &soracloud_training_jobs,
+        model_registries: &soracloud_model_registries,
+        model_weight_versions: &soracloud_model_weight_versions,
+        model_artifacts: &soracloud_model_artifacts,
+        hf_sources: &soracloud_hf_sources,
+        hf_shared_lease_pools: &soracloud_hf_shared_lease_pools,
+        hf_shared_lease_members: &soracloud_hf_shared_lease_members,
+        inrou_host_capabilities: &soracloud_inrou_host_capabilities,
+        inrou_service_placements: &soracloud_inrou_service_placements,
+        uploaded_model_bundles: &soracloud_uploaded_model_bundles,
+        mailbox_messages: &soracloud_mailbox_messages,
+        runtime_receipts: &soracloud_runtime_receipts,
     }
+    .validate()?;
     let provider_owners = take_required(&mut map, "provider_owners")?;
     let provider_ingest_completion_authorities =
         take_required(&mut map, "provider_ingest_completion_authorities")?;
-    if !emergency_fast {
-        validate_provider_ingest_completion_authorities(
-            &provider_owners,
-            &provider_ingest_completion_authorities,
-        )?;
-        validate_capacity_declarations(&capacity_declarations, &provider_owners)?;
-    }
-    let zk_assets = take_optional_default(&mut map, "zk_assets")?;
+    validate_provider_ingest_completion_authorities(
+        &provider_owners,
+        &provider_ingest_completion_authorities,
+    )?;
+    validate_capacity_declarations(&capacity_declarations, &provider_owners)?;
+    let zk_assets = take_required(&mut map, "zk_assets")?;
     let elections = take_required(&mut map, "elections")?;
     let citizens = take_required(&mut map, "citizens")?;
     let ministry_agenda_proposals = take_required(&mut map, "ministry_agenda_proposals")?;
@@ -6494,47 +6597,44 @@ fn parse_world(
     let parliament_bodies = take_required(&mut map, "parliament_bodies")?;
     let parliament_attempts = take_required(&mut map, "parliament_attempts")?;
     let tle_key_sessions = take_required(&mut map, "tle_key_sessions")?;
-    let tle_active_key_session = take_optional_default(&mut map, "tle_active_key_session")?;
+    let tle_active_key_session = take_required(&mut map, "tle_active_key_session")?;
     let timed_ovn_evidence = take_required(&mut map, "timed_ovn_evidence")?;
     let global_beacon_dkg = take_required(&mut map, "global_beacon_dkg")?;
     let global_beacon_key_sessions = take_required(&mut map, "global_beacon_key_sessions")?;
     let global_beacon_active_session = take_required(&mut map, "global_beacon_active_session")?;
     let global_beacon_latest_pulse = take_required(&mut map, "global_beacon_latest_pulse")?;
     let global_beacon_pulses = take_required(&mut map, "global_beacon_pulses")?;
-    let vrf_epochs = take_required(&mut map, "vrf_epochs")?;
-    let repo_agreements = take_optional_default(&mut map, "repo_agreements")?;
-    let settlement_receipts = take_optional_default(&mut map, "settlement_receipts")?;
+    let repo_agreements = take_required(&mut map, "repo_agreements")?;
+    let settlement_receipts = take_required(&mut map, "settlement_receipts")?;
     let kagemusha_replay_keys = take_required(&mut map, "kagemusha_replay_keys")?;
     let direct_lane_block_application_markers =
-        take_optional_default(&mut map, "direct_lane_block_application_markers")?;
+        take_required(&mut map, "direct_lane_block_application_markers")?;
     let lane_relay_emergency_validators =
-        take_optional_default(&mut map, "lane_relay_emergency_validators")?;
-    let manifest_aliases = take_optional_default(&mut map, "manifest_aliases")?;
-    if !emergency_fast {
-        validate_musubi_location_reverse_indices(
-            &musubi_archives,
-            &musubi_archive_locations,
-            &pin_manifests,
-            &replication_orders,
-            &musubi_locations_by_pin,
-            &musubi_locations_by_replication_order,
-            &musubi_locations_by_provider,
-        )?;
-        validate_automatic_replication_capacity_state(
-            &capacity_declarations,
-            &provider_owners,
-            &provider_ingest_completion_authorities,
-            &pin_manifests,
-            &replication_orders,
-        )?;
-    }
-    let content_bundles = take_optional_default(&mut map, "content_bundles")?;
-    let content_chunks = take_optional_default(&mut map, "content_chunks")?;
-    let asset_escrows = take_optional_default(&mut map, "asset_escrows")?;
-    let vpn_leases = take_optional_default(&mut map, "vpn_leases")?;
-    let merge_hint_roots: Cell<Vec<Hash>> = take_optional_default(&mut map, "merge_hint_roots")?;
+        take_required(&mut map, "lane_relay_emergency_validators")?;
+    let manifest_aliases = take_required(&mut map, "manifest_aliases")?;
+    validate_musubi_location_reverse_indices(
+        &musubi_archives,
+        &musubi_archive_locations,
+        &pin_manifests,
+        &replication_orders,
+        &musubi_locations_by_pin,
+        &musubi_locations_by_replication_order,
+        &musubi_locations_by_provider,
+    )?;
+    validate_automatic_replication_capacity_state(
+        &capacity_declarations,
+        &provider_owners,
+        &provider_ingest_completion_authorities,
+        &pin_manifests,
+        &replication_orders,
+    )?;
+    let content_bundles = take_required(&mut map, "content_bundles")?;
+    let content_chunks = take_required(&mut map, "content_chunks")?;
+    let asset_escrows = take_required(&mut map, "asset_escrows")?;
+    let vpn_leases = take_required(&mut map, "vpn_leases")?;
+    let merge_hint_roots: Cell<Vec<Hash>> = take_required(&mut map, "merge_hint_roots")?;
     let merge_global_state_root: Cell<Option<Hash>> =
-        take_optional_default(&mut map, "merge_global_state_root")?;
+        take_required(&mut map, "merge_global_state_root")?;
     reject_unknown(&map, "world")?;
     let mut world = World {
         parameters,
@@ -6765,6 +6865,7 @@ fn parse_world(
         council,
         parliament_bodies,
         parliament_attempts,
+        parliament_timed_ovn_resource_reservations: Storage::default(),
         tle_key_sessions,
         tle_active_key_session,
         timed_ovn_evidence,
@@ -6773,13 +6874,12 @@ fn parse_world(
         global_beacon_active_session,
         global_beacon_latest_pulse,
         global_beacon_pulses,
-        vrf_epochs,
         merge_hint_roots,
         merge_global_state_root,
         consensus_evidence: Storage::default(),
         external_event_buf,
     };
-    if !emergency_fast {
+    {
         let parliament_attempts_view = world.parliament_attempts.view();
         let governance_proposals_view = world.governance_proposals.view();
         for (attempt_id, attempt) in parliament_attempts_view.iter() {
@@ -7006,12 +7106,6 @@ fn parse_world(
                 message,
             })?;
     }
-    if emergency_fast {
-        iroha_logger::warn!(
-            "emergency Fast snapshot restore deferred every derived World index until a Strict restart"
-        );
-        return Ok(world);
-    }
     world.rebuild_domain_owner_index();
     world
         .rebuild_uaid_account_index()
@@ -7146,6 +7240,8 @@ fn build_state(
         ))
     })?;
     if !emergency_fast {
+        validate_tle_ovn_snapshot_network_v1(&world, &network_id)
+            .map_err(MergeLedgerCommitError::ExecutionStatePublication)?;
         for (proposal_id, proposal) in world.governance_proposals.view().iter() {
             if let Some(reason) = proposal.first_release_exact_json_u64_invariant_error() {
                 return Err(MergeLedgerCommitError::ExecutionStatePublication(format!(
@@ -8469,6 +8565,27 @@ mod decode_tests {
         );
     }
     #[test]
+    fn first_release_world_decoder_requires_every_canonical_field() {
+        let encoded = json::to_json(&World::default()).expect("serialize default World");
+        let mut map = SnapshotJsonMap::parse(&encoded, "world").expect("parse default World");
+        map.remove("account_aliases")
+            .expect("canonical World contains account_aliases");
+        let ivm = IVM::new(0);
+        let seed = IvmSeed {
+            ivm: &ivm,
+            _marker: PhantomData,
+        };
+
+        let error = match parse_world(map, &seed) {
+            Ok(_) => panic!("a first-release snapshot cannot default a missing World field"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains("account_aliases"),
+            "unexpected missing-field diagnostic: {error}"
+        );
+    }
+    #[test]
     fn borrowed_snapshot_field_errors_retain_the_schema_field() {
         let error = match (SnapshotJsonField::Borrowed { raw: "[]" })
             .decode_canonical::<Cell<Vec<PeerId>>>("commit_topology")
@@ -8503,7 +8620,7 @@ mod decode_tests {
             encoded_hex: hex::encode(&encoded),
         };
         assert_eq!(
-            decode_snapshot_records::<u64>(vec![record], "fixture", true)
+            decode_snapshot_records::<u64>(vec![record], "fixture")
                 .expect("canonical Norito record"),
             [7]
         );
@@ -8514,24 +8631,10 @@ mod decode_tests {
                 encoded_hex: hex::encode(trailing),
             }],
             "fixture",
-            true,
         )
         .expect_err("trailing or alternate Norito bytes must fail closed");
         assert!(error.to_string().contains("fixture"));
         SNAPSHOT_NORITO_CANONICAL_PASSES.with(|passes| assert_eq!(passes.get(), 1));
-    }
-    #[test]
-    fn emergency_fast_norito_records_skip_canonical_reserialization() {
-        SNAPSHOT_NORITO_CANONICAL_PASSES.with(|passes| passes.set(0));
-        let record = SnapshotNoritoBlob {
-            encoded_hex: hex::encode(7_u64.encode()),
-        };
-        assert_eq!(
-            decode_snapshot_records::<u64>(vec![record], "fixture", false)
-                .expect("Fast keeps exact typed Norito decoding"),
-            [7]
-        );
-        SNAPSHOT_NORITO_CANONICAL_PASSES.with(|passes| assert_eq!(passes.get(), 0));
     }
     #[test]
     fn take_parameters_cell_rejects_legacy_blocks_envelope() {

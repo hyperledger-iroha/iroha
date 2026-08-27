@@ -200,7 +200,7 @@ impl<T: Write> RunArgs<T> for Args {
 # p2p_proxy_required = false
 # p2p_no_proxy = ["localhost", ".example.com"]
 #
-# # If p2p_proxy starts with https://, the proxy hop uses TLS (requires iroha_p2p/p2p_tls):
+# # If p2p_proxy starts with https://, the proxy hop uses pinned TLS:
 # p2p_proxy_tls_verify = true
 # p2p_proxy_tls_pinned_cert_der_base64 = "BASE64_DER"
 #

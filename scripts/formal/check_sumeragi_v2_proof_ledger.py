@@ -30575,7 +30575,7 @@ Self::start_with_crypto_and_initial_trusted_sources(
             """
 let P2pIdentityKeys {
     node: key_pair,
-    soranet_transport: soranet_transport_key_pair,
+    soranet_transport,
 } = identity_keys;
 let topic_frame_caps = TopicFrameCaps {
     consensus: max_frame_bytes_consensus,
@@ -31678,6 +31678,27 @@ Ok(())
         errors,
         count=0,
     )
+    _require_rust_source_token_sequence(
+        p2p_network_path,
+        p2p_network_source,
+        "debug_packet_loss",
+        "the retired executable P2P packet-loss path must remain absent",
+        errors,
+        count=0,
+    )
+    for retired_malformed_frame_token in (
+        "pending_malformed_payload",
+        "MALFORMED_PAYLOAD_FRAME_THRESHOLD",
+        "note_malformed_payload_frame",
+    ):
+        _require_rust_source_token_sequence(
+            p2p_peer_path,
+            p2p_peer_source,
+            retired_malformed_frame_token,
+            "the retired authenticated malformed-frame recovery path must remain absent",
+            errors,
+            count=0,
+        )
     normalized_p2p_text = " ".join(
         re.sub(r"(?m)^\s*//[/!]?\s?", "", p2p_network_source).split()
     )

@@ -59,8 +59,6 @@ fn test_network_config(
         trust_penalty_bad_gossip: network_defaults::TRUST_PENALTY_BAD_GOSSIP,
         trust_penalty_unknown_peer: network_defaults::TRUST_PENALTY_UNKNOWN_PEER,
         trust_min_score: network_defaults::TRUST_MIN_SCORE,
-        debug_packet_loss_inbound_percent: 0,
-        debug_packet_loss_outbound_percent: 0,
         trust_gossip,
         p2p_proxy: None,
         p2p_proxy_required: false,

@@ -1852,8 +1852,8 @@ Arithmetic (immediate)
 
 Control flow
 - BRANCH (`0x63`): BEQ/BNE/BLT/BGE/BLTU/BGEU by `funct3`. PC ← PC + off.
-  - Gas: 1 (mispredict adds 1 cycle; no gas change)
-- JAL (`0x6F`), JALR (`0x67`), and compact `JMP/JAL_SPEC/JR` (0x40..0x42):
+  - Gas: 1. Every executed branch consumes one VM cycle.
+- JAL (`0x6F`), JALR (`0x67`), and direct `JMP`/`JALS` transfers (all canonical 32-bit words):
   - Gas: 2. `HALT` (`0x4C`) Gas: 0
 
 System

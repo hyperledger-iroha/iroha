@@ -36,9 +36,9 @@ fn main() {
     memory.load_code(&code[parsed.header_len..]);
     let mut pc = (parsed.code_offset - parsed.header_len) as u64;
     while pc < memory.code_len() {
-        let (word, len) = ivm::decode(&memory, pc).unwrap();
-        println!("pc=0x{pc:04x} word=0x{word:08x} len={len}");
-        pc += len as u64;
+        let word = ivm::decode(&memory, pc).unwrap();
+        println!("pc=0x{pc:04x} word=0x{word:08x}");
+        pc += 4;
     }
     let entrypoint = parsed
         .contract_interface

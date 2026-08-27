@@ -16,10 +16,7 @@ use crate::{
 use blake2::{Blake2b, digest::consts::U32};
 use hex;
 use iroha_config::{
-    parameters::{
-        actual::{Snapshot as Config, SnapshotBootstrapPolicy, SnapshotResourcePolicy},
-        defaults,
-    },
+    parameters::actual::{Snapshot as Config, SnapshotBootstrapPolicy, SnapshotResourcePolicy},
     snapshot::Mode,
 };
 use iroha_crypto::{
@@ -52,11 +49,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-fn serialize_state_snapshot(
-    state: &State,
-    out: &mut String,
-    include_space_directory_manifests: bool,
-) {
+fn serialize_state_snapshot(state: &State, out: &mut String) {
     let view = state.view();
     let block_hashes: Vec<HashOf<BlockHeader>> = view.block_hashes.iter().copied().collect();
     let nexus_runtime = SnapshotNexusRuntime::from_nexus_with_autoscale_history(
@@ -112,18 +105,15 @@ fn serialize_state_snapshot(
             },
         )
         .collect();
-    let space_directory_manifests: Vec<_> = if include_space_directory_manifests {
-        view.world
-            .space_directory_manifests
-            .iter()
-            .map(|(uaid, value)| SnapshotSpaceDirectoryManifestSet {
-                uaid: *uaid,
-                encoded_hex: hex::encode(NoritoEncode::encode(value)),
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
+    let space_directory_manifests: Vec<_> = view
+        .world
+        .space_directory_manifests
+        .iter()
+        .map(|(uaid, value)| SnapshotSpaceDirectoryManifestSet {
+            uaid: *uaid,
+            encoded_hex: hex::encode(NoritoEncode::encode(value)),
+        })
+        .collect();
     out.push('{');
     json::write_json_string("chain_id", out);
     out.push(':');
@@ -173,12 +163,10 @@ fn serialize_state_snapshot(
     json::write_json_string("public_lane_reward_claims", out);
     out.push(':');
     json::JsonSerialize::json_serialize(&public_lane_reward_claims, out);
-    if include_space_directory_manifests {
-        out.push(',');
-        json::write_json_string("space_directory_manifests", out);
-        out.push(':');
-        json::JsonSerialize::json_serialize(&space_directory_manifests, out);
-    }
+    out.push(',');
+    json::write_json_string("space_directory_manifests", out);
+    out.push(':');
+    json::JsonSerialize::json_serialize(&space_directory_manifests, out);
     out.push(',');
     json::write_json_string("commit_topology", out);
     out.push(':');
@@ -306,7 +294,7 @@ fn serialize_staged_state_snapshot(state: &StateBlock<'_>, out: &mut String) {
 // Serialize State as a minimal snapshot wrapper using Norito JSON writer.
 impl JsonSerializeTrait for State {
     fn json_serialize(&self, out: &mut String) {
-        serialize_state_snapshot(self, out, true);
+        serialize_state_snapshot(self, out);
     }
 }
 /// Name of the [`State`] snapshot file.
@@ -387,8 +375,6 @@ std::thread_local! {
     static SNAPSHOT_BLOCK_HASH_VECTOR_CLONES: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
 }
-/// Default chunk size used to derive snapshot Merkle metadata.
-const _DEFAULT_MERKLE_CHUNK_SIZE: NonZeroUsize = defaults::snapshot::MERKLE_CHUNK_SIZE_BYTES;
 #[derive(thiserror::Error, Debug, displaydoc::Display)]
 enum SnapshotMerkleError {
     /// Snapshot Merkle metadata missing
@@ -2135,7 +2121,7 @@ fn canonical_wsv_member_is_redacted(path: CanonicalWsvPath, key: &str) -> bool {
             key,
             "sumeragi_v2_bootstrap" | "commit_topology" | "prev_commit_topology"
         ),
-        CanonicalWsvPath::World => matches!(key, "consensus_evidence" | "vrf_epochs"),
+        CanonicalWsvPath::World => matches!(key, "consensus_evidence"),
         CanonicalWsvPath::Parameters | CanonicalWsvPath::Sumeragi | CanonicalWsvPath::Other => {
             false
         }
@@ -3806,7 +3792,10 @@ fn publish_immutable_snapshot_generation(
     match std::fs::symlink_metadata(&generations_dir) {
         Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            #[cfg(unix)]
             let mut builder = std::fs::DirBuilder::new();
+            #[cfg(not(unix))]
+            let builder = std::fs::DirBuilder::new();
             #[cfg(unix)]
             {
                 use std::os::unix::fs::DirBuilderExt;
@@ -4170,7 +4159,7 @@ fn try_write_snapshot_with_limit_and_policy(
     // TODO: Add a `Write`-backed Norito JSON sink so production can emit this
     // canonical payload directly into the authenticated staging descriptor.
     let mut snapshot_json = String::new();
-    serialize_state_snapshot(state, &mut snapshot_json, true);
+    serialize_state_snapshot(state, &mut snapshot_json);
     try_write_snapshot_payload_with_limit_locked(
         state,
         store_dir,
@@ -4675,24 +4664,14 @@ fn ensure_state_is_backed_by_kura(state: &State) -> Result<(), TryWriteError> {
 /// Canonical bytes for the committed ledger WSV surface used by replay parity tests.
 #[cfg(any(test, feature = "iroha-core-tests"))]
 pub(crate) fn canonical_state_snapshot_bytes(state: &State) -> Vec<u8> {
-    canonical_state_snapshot_bytes_with_options(state, true)
-}
-#[cfg(any(test, feature = "iroha-core-tests"))]
-fn canonical_state_snapshot_bytes_with_options(
-    state: &State,
-    include_space_directory_manifests: bool,
-) -> Vec<u8> {
-    json::to_json(&canonical_state_snapshot_value_with_options(
-        state,
-        include_space_directory_manifests,
-    ))
-    .expect("state snapshot serialization must succeed")
-    .into_bytes()
+    json::to_json(&canonical_state_snapshot_value(state))
+        .expect("state snapshot serialization must succeed")
+        .into_bytes()
 }
 /// Canonical hash for the committed ledger WSV surface.
 pub(crate) fn canonical_state_snapshot_hash(state: &State) -> iroha_crypto::Hash {
     let mut snapshot_json = String::new();
-    serialize_state_snapshot(state, &mut snapshot_json, true);
+    serialize_state_snapshot(state, &mut snapshot_json);
     canonical_snapshot_wsv_hash(snapshot_json.as_bytes())
         .expect("typed State serialization must form a canonical WSV snapshot")
 }
@@ -4741,17 +4720,10 @@ pub(crate) fn canonical_staged_state_snapshot_hash(
     )
     .expect("typed staged State serialization must form a canonical WSV snapshot")
 }
-#[cfg(test)]
-fn canonical_state_snapshot_value(state: &State) -> json::Value {
-    canonical_state_snapshot_value_with_options(state, true)
-}
 #[cfg(any(test, feature = "iroha-core-tests"))]
-fn canonical_state_snapshot_value_with_options(
-    state: &State,
-    include_space_directory_manifests: bool,
-) -> json::Value {
+fn canonical_state_snapshot_value(state: &State) -> json::Value {
     let mut json = String::new();
-    serialize_state_snapshot(state, &mut json, include_space_directory_manifests);
+    serialize_state_snapshot(state, &mut json);
     let mut value: json::Value =
         json::from_str(&json).expect("state snapshot serialization must produce valid JSON");
     normalize_mv_cell_fields_in_state_value(&mut value);
@@ -4852,16 +4824,6 @@ fn redact_consensus_sidecars_from_world_value(world: &mut json::Value) {
     // Consensus evidence is asynchronously enriched recovery data, not WSV data committed by
     // the block itself. Including it makes historical checkpoints depend on later peer input.
     world.remove("consensus_evidence");
-    // VRF epoch snapshots are maintained by consensus message handling outside
-    // block application. Kura replay verifies block-applied WSV data only.
-    world.remove("vrf_epochs");
-}
-/// Test-only hash for the retired checkpoint surface that omitted Space Directory manifests.
-#[cfg(test)]
-pub(crate) fn retired_state_snapshot_hash_without_space_directory_manifests(
-    state: &State,
-) -> iroha_crypto::Hash {
-    iroha_crypto::Hash::new(canonical_state_snapshot_bytes_with_options(state, false))
 }
 /// Canonical bytes for the committed WSV surface used by replay parity tests.
 #[cfg(any(test, feature = "iroha-core-tests"))]

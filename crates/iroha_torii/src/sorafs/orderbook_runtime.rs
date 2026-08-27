@@ -1807,7 +1807,7 @@ async fn submit_sorafs_orderbook_transaction(
     } else {
         let response = crate::execute_torii_transaction_via_proxy(
             state,
-            transaction.into(),
+            accepted,
             routing_plan,
             durable_retry_claim,
             true,

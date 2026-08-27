@@ -26,15 +26,16 @@ use super::{
     replay_authority::{
         AuthenticatedCertifiedFetchReplayOriginV1, CertifiedFetchReplayEvidenceV1,
         CertifiedServeReplayEvidencePairV1, CertifiedServeTerminalReplayAuthorityPairV1,
-        CertifiedStoreReplayEvidenceV1, DurableCertifiedFetchReplayProjectionV1,
-        DurableValidateReplayEvidenceV1, InvalidBodyReportBoundEffectPermit,
-        LifecycleReplayAuthorityV1, LocalProposalIntentReplayEvidenceV1,
-        LocalValidateReplayEvidenceV1, PreparedDurableCertifiedBodyPipelineStartupV1,
-        PreparedDurableCertifiedBodyPipelineWorkV1, PreparedLifecycleLocalProposalReadyV1,
-        RecoveredLifecycleNextWalVoteCandidateProjectionV1, RemoteProposalFetchReplayEvidenceV1,
-        RemoteProposalStoreReplayEvidenceV1, RemoteProposalStoredReplayEvidenceV1,
-        RemoteProposalValidateReplayEvidenceV1, SealedLiveWalPersistedEffectV1,
-        exact_direct_signed_admission_authority, exact_pending_certified_fetch_admission_authority,
+        CertifiedStoreReplayEvidenceV1, ColdValidateRetryOwnerClassV1,
+        DurableCertifiedFetchReplayProjectionV1, DurableValidateReplayEvidenceV1,
+        InvalidBodyReportBoundEffectPermit, LifecycleReplayAuthorityV1,
+        LocalProposalIntentReplayEvidenceV1, LocalValidateReplayEvidenceV1,
+        PreparedDurableCertifiedBodyPipelineStartupV1, PreparedDurableCertifiedBodyPipelineWorkV1,
+        PreparedLifecycleLocalProposalReadyV1, RecoveredLifecycleNextWalVoteCandidateProjectionV1,
+        RemoteProposalFetchReplayEvidenceV1, RemoteProposalStoreReplayEvidenceV1,
+        RemoteProposalStoredReplayEvidenceV1, RemoteProposalValidateReplayEvidenceV1,
+        SealedLiveWalPersistedEffectV1, exact_direct_signed_admission_authority,
+        exact_pending_certified_fetch_admission_authority,
     },
     schema::{AttestedReadyValidateDemand, DurablePayloadReference, DurableRecordMetadata},
     selector::{CertifiedFetchCompletionAuthority, CertifiedFetchDequeuedResponse},
@@ -2491,6 +2492,29 @@ impl LiveLifecycleDecisionApplyReconciliationAuthorityV1 {
             && pending.exact_effect_identity() == &self.pending_effect_identity
             && pending.candidate_statement() == self.pending_candidate_statement
     }
+
+    /// Recheck the semantic Apply rediscovered by the periodic Decision
+    /// retransmit without substituting its distinct physical occurrence for
+    /// the original Validate-to-Apply carrier.
+    pub(in crate::sumeragi) fn exactly_matches_retransmit_apply(
+        &self,
+        effect: &AdapterEffect,
+    ) -> bool {
+        matches!(
+            effect,
+            AdapterEffect::Apply {
+                tag,
+                subject,
+                certificate,
+            } if *tag == self.tag
+                && *subject == self.subject
+                && *certificate == self.certificate
+                && certificate.phase == wire::GlobalPhase::Commit
+                && certificate.subject == self.subject
+                && certificate.execution_commitment
+                    == self.validated_receipt.execution_commitment()
+        )
+    }
 }
 /// Closed service demand authenticated for one Ready recovered Sign carrier.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3292,8 +3316,8 @@ impl ConcreteLifecycleWorkRegistry {
         })
     }
 
-    /// Borrow every exact durable Validate row whose executable lifecycle
-    /// owner was already published before process restart.
+    /// Borrow every exact durable Validate row whose direct Store-successor
+    /// lifecycle owner was already published before process restart.
     pub(super) fn recovered_published_validate_retry_markers(
         &self,
     ) -> impl Iterator<
@@ -3308,12 +3332,15 @@ impl ConcreteLifecycleWorkRegistry {
             let ConcreteLifecycleWorkKind::DurableValidateBody(validate) = &work.kind else {
                 return None;
             };
-            work.validate_exact().then_some((
-                &validate.effect,
-                &validate.pending,
-                &validate.durable_receipt,
-                address.ordinal,
-            ))
+            (work.validate_exact()
+                && validate.replay_evidence.cold_retry_owner_class()
+                    == ColdValidateRetryOwnerClassV1::PublishedStoreSuccessor)
+                .then_some((
+                    &validate.effect,
+                    &validate.pending,
+                    &validate.durable_receipt,
+                    address.ordinal,
+                ))
         })
     }
 }

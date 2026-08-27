@@ -122,6 +122,8 @@ use sorafs_car::{
 };
 use sorafs_node::store::{StorageBackend, StoredManifest};
 #[cfg(target_os = "linux")]
+use std::io::BufRead as _;
+#[cfg(target_os = "linux")]
 use std::os::fd::{AsRawFd as _, OwnedFd, RawFd};
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt as _;
@@ -10511,8 +10513,6 @@ fn vm_error_label(error: &VMError) -> &'static str {
         VMError::MemoryAccessViolation { .. } => "memory_access_violation",
         VMError::MisalignedAccess { .. } => "misaligned_access",
         VMError::MemoryOutOfBounds => "memory_out_of_bounds",
-        VMError::UnalignedAccess => "unaligned_access",
-        VMError::MemoryPermissionDenied => "memory_permission_denied",
         VMError::DecodeError => "decode_error",
         VMError::InvalidOpcode(_) => "invalid_opcode",
         VMError::UnknownSyscall(_) => "unknown_syscall",
@@ -10542,7 +10542,6 @@ fn vm_error_label(error: &VMError) -> &'static str {
         VMError::PermissionDenied => "permission_denied",
         VMError::PrivacyViolation => "privacy_violation",
         VMError::RegisterOutOfBounds => "register_out_of_bounds",
-        VMError::HTMAbort => "htm_abort",
         VMError::NoritoInvalid => "norito_invalid",
         VMError::AbiTypeNotAllowed { .. } => "abi_type_not_allowed",
         VMError::HostOutputBudgetExceeded { .. } => "host_output_budget_exceeded",

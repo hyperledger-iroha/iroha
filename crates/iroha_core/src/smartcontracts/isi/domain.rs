@@ -750,7 +750,7 @@ pub mod isi {
                 permission,
             )
         {
-            return account_subject_matches(permission.contract.subject_id(), account_id);
+            return account_subject_matches(&permission.contract.subject_id(), account_id);
         }
         if let Ok(permission) =
             iroha_executor_data_model::permission::asset::CanSetAssetTransferAvailability::try_from(

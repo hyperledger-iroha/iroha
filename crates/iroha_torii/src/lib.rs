@@ -49549,28 +49549,6 @@ impl Torii {
     /// Helper function to create router and shared runtime state.
     #[allow(clippy::too_many_lines)]
     fn create_api_router_with_state(&self) -> (axum::Router, SharedAppState) {
-        // Ensure the erased iterable-query registry is initialized before any
-        // request decoding happens (the Norito extractor deserializes queries).
-        #[allow(let_underscore_drop)]
-        {
-            use iroha_data_model as dm;
-            use iroha_data_model::query as dm_query;
-            dm_query::set_query_registry(dm::query_registry![
-                dm_query::ErasedIterQuery<dm::domain::Domain>,
-                dm_query::ErasedIterQuery<dm::account::Account>,
-                dm_query::ErasedIterQuery<dm::asset::value::Asset>,
-                dm_query::ErasedIterQuery<dm::asset::definition::AssetDefinition>,
-                dm_query::ErasedIterQuery<dm::nft::Nft>,
-                dm_query::ErasedIterQuery<dm::role::Role>,
-                dm_query::ErasedIterQuery<dm::role::RoleId>,
-                dm_query::ErasedIterQuery<dm::peer::PeerId>,
-                dm_query::ErasedIterQuery<dm::trigger::TriggerId>,
-                dm_query::ErasedIterQuery<dm::trigger::Trigger>,
-                dm_query::ErasedIterQuery<dm_query::CommittedTransaction>,
-                dm_query::ErasedIterQuery<dm::block::SignedBlock>,
-                dm_query::ErasedIterQuery<dm::block::BlockHeader>,
-            ]);
-        }
         #[cfg(feature = "app_api")]
         let gateway_components = self.sorafs_gateway_security.clone();
         let da_runtime = self.prepare_da_runtime_services();

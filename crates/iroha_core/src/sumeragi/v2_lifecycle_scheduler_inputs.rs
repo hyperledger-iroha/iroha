@@ -12,11 +12,12 @@ use super::{
         RecoveredDecisionFetchBodyPersistencePreparationFailureV1,
     },
     work_registry::{
-        ClaimedCertifiedServeDispatchErrorV1, ClaimedCertifiedServeDispatchV1,
-        ClaimedProducerTurnErrorV1, ClaimedProducerTurnV1, ConcreteLifecycleWorkRegistry,
-        ReadyCertifiedServeAttestationV1, ReadyLifecycleDecisionApplyDemandV1,
-        ReadyProducerTurnCensusAttestationErrorV1, RegistryError,
-        SchedulableLifecycleBroadcastCarrierV1, SchedulableRetainedDirectBroadcastAttestationV1,
+        AttestedLifecycleDecisionApplySuccessorOutputsV1, ClaimedCertifiedServeDispatchErrorV1,
+        ClaimedCertifiedServeDispatchV1, ClaimedProducerTurnErrorV1, ClaimedProducerTurnV1,
+        ConcreteLifecycleWorkRegistry, ReadyCertifiedServeAttestationV1,
+        ReadyLifecycleDecisionApplyDemandV1, ReadyProducerTurnCensusAttestationErrorV1,
+        RegistryError, SchedulableLifecycleBroadcastCarrierV1,
+        SchedulableRetainedDirectBroadcastAttestationV1,
     },
 };
 #[cfg(test)]
@@ -2180,6 +2181,8 @@ impl ProductionLifecycleOwnerV1 {
             })
             .collect::<Vec<_>>();
         let mut protected_live_apply_ordinal = None;
+        let mut live_apply_successor_outputs =
+            BTreeMap::<u128, AttestedLifecycleDecisionApplySuccessorOutputsV1>::new();
         for ordinal in live_apply_ordinals {
             let authority = self
                 .registry
@@ -2194,6 +2197,20 @@ impl ProductionLifecycleOwnerV1 {
                     || !executor.exactly_owns_live_lifecycle_decision_apply(&authority)
                 {
                     return Err(ProductionCompletionDispatchErrorV1::InvalidCarrier);
+                }
+                if executor.has_pending_lifecycle_output_admissions() {
+                    let attestation = self
+                        .attest_lifecycle_decision_apply_successor_outputs(
+                            authority,
+                            executor.pending_lifecycle_output_admission_census(),
+                        )
+                        .ok_or(ProductionCompletionDispatchErrorV1::InvalidCarrier)?;
+                    if live_apply_successor_outputs
+                        .insert(protected_ordinal, attestation)
+                        .is_some()
+                    {
+                        return Err(ProductionCompletionDispatchErrorV1::InvalidCarrier);
+                    }
                 }
             }
         }
@@ -2259,7 +2276,9 @@ impl ProductionLifecycleOwnerV1 {
                     }
                     let key = attestation.dispatch_key();
                     let executor_available = executor
-                        .lifecycle_decision_apply_dispatch_available()
+                        .lifecycle_decision_apply_dispatch_available(
+                            live_apply_successor_outputs.get(ordinal),
+                        )
                         .map_err(ProductionCompletionDispatchErrorV1::LiveApplyReconciliation)?;
                     (
                         AuthenticatedLifecycleCompletionReadyV1::Apply(attestation),
@@ -2590,7 +2609,10 @@ impl ProductionLifecycleOwnerV1 {
                     return Err(ProductionCompletionDispatchErrorV1::ReservedOwnerMismatch);
                 }
                 let executor_dispatch = executor
-                    .prepare_lifecycle_decision_apply_executor_dispatch(&prepared)
+                    .prepare_lifecycle_decision_apply_executor_dispatch(
+                        &prepared,
+                        live_apply_successor_outputs.remove(&ordinal),
+                    )
                     .map_err(ProductionCompletionDispatchErrorV1::LiveApplyReconciliation)?;
                 reservation.commit(prepared, executor_dispatch);
                 Ok(ProductionCompletionDispatchV1::ApplyQueued { ordinal })

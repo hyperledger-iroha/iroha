@@ -151,33 +151,35 @@ final class KagemushaPeerTransportTests: XCTestCase {
 
         XCTAssertEqual(
             projection.request.payload.networkID,
-            TestNetworkIds.canonical
+            try NetworkId(
+                literal: "hash:82531CE8EAE8BFF6BEECA4698BFD13A3BC8BEC5F0EE0D23D428C97FC17AB0F3B#3E94"
+            )
         )
         XCTAssertEqual(
             projection.request.payload.assetDefinitionID,
             "7ZepsJTHCVLKsrFFNZGSRGZgvBhv"
         )
-        XCTAssertEqual(offer.noritoArchive.count, 12_425)
+        XCTAssertEqual(offer.noritoArchive.count, 12_435)
         XCTAssertEqual(
             sha256Hex(offer.noritoArchive),
-            "80a240eb19cabc0853a257b90c4e8a53b0ec0641acc9d7cb0080a4d6de77ec93"
+            "393f8a8827b66069e8fd47d2aa301a497cf800f1ce011a2b468ef22a5f2237c6"
         )
         XCTAssertEqual(projection.request.archive.count, 753)
         XCTAssertEqual(
             sha256Hex(projection.request.archive),
             "d325566b1117fa368703a971367056173f2d8349d2e86101dc06187aaf8fd2b4"
         )
-        XCTAssertEqual(projection.lineageArchive.count, 11_299)
+        XCTAssertEqual(projection.lineageArchive.count, 11_297)
         XCTAssertEqual(
             sha256Hex(projection.lineageArchive),
-            "e9c3ab0cdf2781062dfe5539a5ed4e180cd29530e482eefa7693477e88a20f16"
+            "b61dd641527bfb9e09479906c008b6c061b54009229e6e9ec5f0717572cfb561"
         )
-        XCTAssertEqual(projection.publisherCheckpointEnvelope.count, 393)
+        XCTAssertEqual(projection.publisherCheckpointEnvelope.count, 405)
         XCTAssertEqual(
             sha256Hex(projection.publisherCheckpointEnvelope),
-            "ed6f4796046ee1d35f844cc862586dbe1d7d0f59db51638c33559052f4196bef"
+            "e6f7bbdd91955dc0b1a6f94a3d8ad284ae44c48e34a710484d8753e4e800973c"
         )
-        XCTAssertEqual(message.encoded.count, 12_509)
+        XCTAssertEqual(message.encoded.count, 12_519)
         XCTAssertEqual(
             try IrohaPeerKagemushaAdapterV1.decode(
                 IrohaPeerWireMessageV1.decode(message.encoded),

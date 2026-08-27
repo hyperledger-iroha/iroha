@@ -27,6 +27,7 @@ from .crypto import (
     SignedTransactionEnvelope,
     TransactionBuilder,
     TransactionExecutableEntry,
+    _is_native_crypto_instance,
     _normalize_lane_privacy_attachment,
     _require_network_id,
     build_signed_transaction,
@@ -264,8 +265,11 @@ def _fee_charge_limits(charge_limits: Sequence[Mapping[str, Any]]) -> List[Dict[
             raw.get("asset_definition_id"),
             f"charge_limits[{index}].asset_definition_id",
         )
+        raw_max_amount = raw.get("max_amount")
+        if raw_max_amount is None:
+            raise ValueError(f"charge_limits[{index}].max_amount is required")
         max_amount = _normalize_positive_quantity(
-            raw.get("max_amount"),
+            raw_max_amount,
             f"charge_limits[{index}].max_amount",
         )
         normalized.append(
@@ -541,7 +545,7 @@ class TransactionDraft:
         authenticated transport.
         """
 
-        if not isinstance(manifest, PrivacyExact12CapabilityManifestV1):
+        if not _is_native_crypto_instance(manifest, "PrivacyExact12CapabilityManifestV1"):
             raise TypeError(
                 "manifest must be a native PrivacyExact12CapabilityManifestV1"
             )

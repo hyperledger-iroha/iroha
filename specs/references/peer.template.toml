@@ -84,7 +84,7 @@ expected_hash_file = "genesis.expected_hash"
 # consensus_ingress_bytes_per_sec = 67_108_864
 # consensus_ingress_bytes_burst = 134_217_728
 # Revision-4 Proposal/Vote/QC/timeout, PayloadManifest/PayloadChunk,
-# body/certificate recovery, and VRF traffic use the critical policy;
+# body/certificate recovery, and global threshold-beacon partial signatures use the critical policy;
 # CertifiedBodyResponse and BlockSync traffic use the bulk policy. These local
 # resource caps do not alter the signed full-committee quorum or mandatory RS16 layout.
 # consensus_ingress_critical_rate_per_sec = 300

@@ -290,7 +290,7 @@ fn kura_new_rejects_empty_production_store_root_before_persistence_initializatio
     assert!(matches!(err, Error::EmptyStoreRoot));
 }
 #[test]
-fn kura_startup_rejects_every_retired_roster_artifact() {
+fn strict_startup_rejects_every_retired_kura_artifact_after_fast_defers_the_audit() {
     for (name, in_pipeline, directory) in [
         ("commit-rosters", false, true),
         ("commit-rosters.norito", false, false),
@@ -299,14 +299,12 @@ fn kura_startup_rejects_every_retired_roster_artifact() {
         ("roster_sidecars.index", true, false),
         ("roster_sidecars.norito.tmp", true, false),
         ("roster_sidecars.index.tmp", true, false),
+        ("block_1.json", true, false),
     ] {
         let temp_dir = TempDir::new().expect("retired-artifact tempdir");
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
-            &config,
-            &RuntimeLaneConfig::default(),
-        )
-        .expect("initialize retired-artifact Kura");
+        let lane_config = RuntimeLaneConfig::default();
+        let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
         let store_root = kura.store_root();
         let blocks_root = kura.active_blocks_dir.lock().clone();
         drop(kura);
@@ -322,9 +320,21 @@ fn kura_startup_rejects_every_retired_roster_artifact() {
         } else {
             fs::write(&path, b"retired artifact must remain").expect("write retired artifact");
         }
+        let mut fast_config = config.clone();
+        fast_config.init_mode = InitMode::Fast;
+        let (fast_kura, _) = Kura::open_test_kura_with_configured_lane_config(
+            &fast_config,
+            &lane_config,
+        )
+        .expect("Fast startup must defer retired-artifact audits");
+        drop(fast_kura);
+        assert!(
+            fs::symlink_metadata(&path).is_ok(),
+            "Fast startup must not inspect or mutate retired artifacts",
+        );
         let err = match Kura::open_test_kura_with_configured_lane_config(
             &config,
-            &RuntimeLaneConfig::default(),
+            &lane_config,
         ) {
             Ok(_) => panic!("retired artifact {name} must abort Kura startup"),
             Err(err) => err,
@@ -346,13 +356,12 @@ fn kura_startup_rejects_every_retired_roster_artifact() {
     }
 }
 #[test]
-fn kura_startup_rejects_retired_rollback_intents_without_decoding_or_mutation() {
+fn strict_startup_rejects_retired_rollback_intents_after_fast_defers_the_audit() {
     for temporary in [false, true] {
         let temp_dir = TempDir::new().expect("retired rollback tempdir");
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
         let lane_config = RuntimeLaneConfig::default();
-        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
-            .expect("initialize rollback Kura");
+        let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
         store_dummy_blocks(&kura, 2);
         let blocks_root = kura.active_blocks_dir.lock().clone();
         drop(kura);
@@ -366,6 +375,17 @@ fn kura_startup_rejects_retired_rollback_intents_without_decoding_or_mutation() 
             .expect("write retired rollback intent");
         sync_dir(&blocks_root).expect("sync retired rollback intent");
         let before = snapshot_regular_test_tree(&blocks_root);
+        let mut fast_config = config.clone();
+        fast_config.init_mode = InitMode::Fast;
+        let (fast_kura, _) =
+            Kura::open_test_kura_with_configured_lane_config(&fast_config, &lane_config)
+                .expect("Fast startup must defer retired rollback-intent audits");
+        drop(fast_kura);
+        assert_eq!(
+            snapshot_regular_test_tree(&blocks_root),
+            before,
+            "Fast startup must not inspect or mutate retired rollback evidence",
+        );
         let err = match Kura::open_test_kura_with_configured_lane_config(&config, &lane_config) {
             Ok(_) => panic!("retired rollback intent must abort startup"),
             Err(err) => err,
@@ -1458,6 +1478,24 @@ fn store_root_lock_rejects_a_second_live_kura_and_releases_on_drop() {
     let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("the OS lock must be released when the first Kura is dropped");
     drop(reopened);
+}
+#[test]
+fn emergency_fast_store_root_lock_does_not_create_a_missing_file() {
+    let temp_dir = TempDir::new().expect("create Kura store root");
+    let lock_path = temp_dir.path().join(STORE_ROOT_LOCK_FILE_NAME);
+    let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    config.init_mode = InitMode::Fast;
+
+    assert!(!lock_path.exists());
+    assert!(matches!(
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default()),
+        Err(Error::IO(error, observed_path))
+            if error.kind() == ErrorKind::NotFound && observed_path == lock_path
+    ));
+    assert!(
+        !lock_path.exists(),
+        "emergency Fast startup must not create the store-root lock file"
+    );
 }
 #[cfg(unix)]
 #[test]

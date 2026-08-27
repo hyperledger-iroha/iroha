@@ -89,14 +89,14 @@ fn policy_jury_binding(
             timed_commitment_root: [0x3E; 32],
             release_beacon_session_id,
             registered_at_height: 20,
-            registration_close_height: 22,
-            survivor_freeze_height: 24,
-            commitment_close_height: 26,
-            registration_closed_at_height: 22,
-            survivors_frozen_at_height: 24,
-            commitment_closed_at_height: 26,
+            registration_close_height: 24,
+            survivor_freeze_height: 27,
+            commitment_close_height: 28,
+            registration_closed_at_height: 24,
+            survivors_frozen_at_height: 27,
+            commitment_closed_at_height: 28,
             max_ballot_retries: 3,
-            max_corpus_entries: 1_000,
+            max_corpus_entries: 3,
             release_height,
             opening_deadline_height,
             release_pulse_id: BeaconPulseId::new([0x3F; 32]),
@@ -192,6 +192,41 @@ fn public_finding_certificate_carries_recomputable_exact_quorum() {
         norito::decode_from_bytes::<GovernanceCertificateV1>(&encoded)
             .expect("decode Parliament certificate"),
         certificate
+    );
+
+    let mut undersized_corpus = certificate.clone();
+    undersized_corpus.body_bindings[1]
+        .ballot
+        .as_mut()
+        .expect("policy ballot")
+        .max_corpus_entries = 2;
+    assert_eq!(
+        undersized_corpus.validate(),
+        Err(GovernanceCertificateErrorV1::InvalidLifecycle)
+    );
+
+    let mut short_registration = certificate.clone();
+    let registration = short_registration.body_bindings[1]
+        .ballot
+        .as_mut()
+        .expect("policy ballot");
+    registration.registration_close_height = 23;
+    registration.registration_closed_at_height = 23;
+    assert_eq!(
+        short_registration.validate(),
+        Err(GovernanceCertificateErrorV1::InvalidLifecycle)
+    );
+
+    let mut short_survivor_window = certificate.clone();
+    let ballot = short_survivor_window.body_bindings[1]
+        .ballot
+        .as_mut()
+        .expect("policy ballot");
+    ballot.survivor_freeze_height = 26;
+    ballot.survivors_frozen_at_height = 26;
+    assert_eq!(
+        short_survivor_window.validate(),
+        Err(GovernanceCertificateErrorV1::InvalidLifecycle)
     );
 
     let mut reordered = certificate.clone();

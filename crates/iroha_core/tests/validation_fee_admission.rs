@@ -501,7 +501,7 @@ fn complete_parliament_body_for_authorization(
             let ballot_attempt_id = BallotAttemptId::derive_v1(body_instance_id, 0);
             let release_beacon_session_id = BeaconSessionId::new(parliament_test_root(0xD0));
             let tle_key_session_id = TleKeySessionId::new(parliament_test_root(0xD1));
-            let release_height = 40;
+            let release_height = 42;
             let tle_session_id = TleSessionId::derive_v1(
                 ballot_attempt_id,
                 tle_key_session_id,
@@ -519,13 +519,13 @@ fn complete_parliament_body_for_authorization(
                     release_beacon_session_id,
                     30,
                     ParliamentTimedOvn {
-                        registration_phase_blocks: 2,
-                        survivor_freeze_phase_blocks: 2,
-                        commitment_phase_blocks: 2,
+                        registration_phase_blocks: 4,
+                        survivor_freeze_phase_blocks: 3,
+                        commitment_phase_blocks: 1,
                         release_delay_blocks: 4,
                         opening_phase_blocks: 2,
                         max_ballot_retries: 2,
-                        max_corpus_entries: 1_000,
+                        max_corpus_entries: 3,
                     },
                     release_height,
                 )
@@ -553,7 +553,7 @@ fn complete_parliament_body_for_authorization(
                     survivor_root,
                     3,
                     no_recovery_root,
-                    34,
+                    37,
                 )
                 .expect("freeze deterministic ballot survivors");
             attempt
@@ -564,7 +564,7 @@ fn complete_parliament_body_for_authorization(
                     survivor_root,
                     3,
                     timed_commitment_root,
-                    36,
+                    38,
                 )
                 .expect("freeze deterministic timed-OVN corpus");
             attempt
@@ -593,7 +593,7 @@ fn complete_parliament_body_for_authorization(
                         nay: 1,
                         abstain: 0,
                     },
-                    41,
+                    43,
                 )
                 .expect("finalize deterministic aggregate ballot");
             assert_eq!(outcome, ParliamentAggregateOutcomeV1::Approved);

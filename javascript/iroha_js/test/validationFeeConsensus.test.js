@@ -87,18 +87,18 @@ function completeParliamentProposal(kind, proposalOctet, offset) {
           timed_commitment_root: root(19),
           release_beacon_session_id: id(offset + 20),
           registered_at_height: 1100,
-          registration_close_height: 1200,
-          survivor_freeze_height: 1300,
-          commitment_close_height: 1400,
-          registration_closed_at_height: 1200,
-          survivors_frozen_at_height: 1300,
-          commitment_closed_at_height: 1400,
+          registration_close_height: 2101,
+          survivor_freeze_height: 3101,
+          commitment_close_height: 3133,
+          registration_closed_at_height: 2101,
+          survivors_frozen_at_height: 3101,
+          commitment_closed_at_height: 3133,
           max_ballot_retries: 3,
           max_corpus_entries: 1000,
-          release_height: 1500,
+          release_height: 3200,
           opening_deadline_height: 4599,
           release_pulse_id: id(offset + 21),
-          opening_height: 1500,
+          opening_height: 3200,
           opening_root: root(22),
           tally: {
             original_seats: 3,
@@ -202,7 +202,7 @@ function verifyProjectionFixture(projection) {
   return withNativeBinding(
     {
       connectNoritoBridgeAbiVersion() {
-        return 22;
+        return 23;
       },
       validationFeeCurrentPolicyProofRequestV1() {},
       validationFeeVerifyCurrentPolicyProofV1() {
@@ -253,7 +253,7 @@ test("request encoder delegates only after strict checkpoint validation", () => 
   withNativeBinding(
     {
       connectNoritoBridgeAbiVersion() {
-        return 22;
+        return 23;
       },
       validationFeeCurrentPolicyProofRequestV1(height, context) {
         assert.equal(height, 100n);
@@ -308,7 +308,7 @@ test("native verified projection remains bound to the release checkpoint", () =>
   withNativeBinding(
     {
       connectNoritoBridgeAbiVersion() {
-        return 22;
+        return 23;
       },
       validationFeeCurrentPolicyProofRequestV1() {},
       validationFeeVerifyCurrentPolicyProofV1(
@@ -590,7 +590,7 @@ test("proof catch-up promotes only consecutive locally verified pages", async ()
     });
   };
 
-  const result = await client.catchUpValidationFeeCurrentPolicyProof(binding);
+  const result = await client.catchUpValidationFeeCurrentPolicyProof(binding, {});
   assert.deepEqual(visited, [100n, 127n]);
   assert.equal(result.pagesVerified, 2);
   assert.equal(result.promotedCheckpoint.height, 190n);
@@ -614,7 +614,7 @@ test("proof catch-up fails closed when a non-final page does not advance", async
     });
 
   await assert.rejects(
-    client.catchUpValidationFeeCurrentPolicyProof(binding),
+    client.catchUpValidationFeeCurrentPolicyProof(binding, {}),
     /did not advance/u,
   );
 });

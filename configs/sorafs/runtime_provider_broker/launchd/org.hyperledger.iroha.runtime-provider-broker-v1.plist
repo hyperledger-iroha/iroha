@@ -10,6 +10,8 @@
     <string>--catalog</string>
     <string>/private/etc/iroha/runtime-provider-broker/catalog.norito</string>
   </array>
+  <key>StandardInPath</key>
+  <string>/private/var/run/iroha-runtime-provider-broker-credentials-v1/threshold.bundle</string>
   <key>WorkingDirectory</key>
   <string>/private/var/empty</string>
   <key>RunAtLoad</key>

@@ -15,14 +15,17 @@
 use iroha_crypto::{
     timed_ovn::{
         G2Bytes, GtBytes, TIMED_OVN_CHOICE_COUNT_V1, TIMED_OVN_MAX_PARTICIPANTS_V1,
-        TimedOvnAggregateV1, TimedOvnError, TimedOvnMaskedBallotV1, TimedOvnRegistrationV1,
-        TimedOvnRosterV1, TimedOvnSessionV1, TimedOvnSurvivorRosterV1, TimedOvnTallyV1,
-        aggregate_timed_ovn_ballots_v1,
+        TimedOvnAggregateV1, TimedOvnBallotVerificationCommonV1, TimedOvnCommittedAggregateCacheV1,
+        TimedOvnCommittedRegistrationCacheV1, TimedOvnCommittedRosterCacheV1,
+        TimedOvnCommittedSurvivorRosterCacheV1, TimedOvnError, TimedOvnMaskedBallotV1,
+        TimedOvnRegistrationV1, TimedOvnRosterV1, TimedOvnSessionV1, TimedOvnSurvivorRosterV1,
+        TimedOvnTallyV1, aggregate_timed_ovn_ballots_v1, fold_verified_timed_ovn_ballot_v1,
     },
     tle::{TleError, TleMasterPublicKey, TleReleaseIdentityV1},
 };
 use iroha_data_model::{
     governance::types::TleKeySessionId,
+    isi::governance::PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1,
     parliament_casting::ParliamentTimedOvnRegistrationCorpusCommitmentV1,
 };
 use norito::{
@@ -104,6 +107,7 @@ impl TimedOvnSessionPublicV1 {
     ) -> Result<TimedOvnSessionV1, TimedOvnEvidenceError> {
         if is_zero(self.tle_key_session_id.as_bytes())
             || self.tle_key_session_id != tle_key_session.public_state().key_session_id
+            || self.network_id != tle_key_session.public_state().network_id
             || self.tle_key_transcript_hash != tle_key_session.public_state().transcript_hash
             || self.tle_master_public_key != *tle_key_session.master_public_key().as_bytes()
         {
@@ -214,6 +218,127 @@ pub struct TimedOvnProspectiveRootsV1 {
     pub no_recovery_root: [u8; 32],
 }
 
+/// Complete immutable projection shared by timed-OVN evidence and the
+/// Parliament reducer during snapshot restoration.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TimedOvnParliamentReducerBindingV1 {
+    /// Exact proposal-content binding.
+    pub(crate) proposal_content_id: [u8; 32],
+    /// Exact end-to-end governance-attempt binding.
+    pub(crate) governance_attempt_id: [u8; 32],
+    /// Exact governed-body instance binding.
+    pub(crate) body_instance_id: [u8; 32],
+    /// Exact retryable ballot-attempt binding.
+    pub(crate) ballot_attempt_id: [u8; 32],
+    /// Long-lived adaptive TLE key session.
+    pub(crate) tle_key_session_id: Option<TleKeySessionId>,
+    /// Registration-open height while that field remains in timed-OVN evidence.
+    pub(crate) registration_opened_at_finalized_height: Option<u64>,
+    /// Immutable first height permitting threshold release.
+    pub(crate) release_height: Option<u64>,
+    /// Frozen canonical registration-roster root.
+    pub(crate) registration_root: Option<[u8; 32]>,
+    /// Frozen number of authenticated registrations.
+    pub(crate) registered_voters: Option<u32>,
+    /// Frozen keep/drop decision root.
+    pub(crate) dropout_root: Option<[u8; 32]>,
+    /// Frozen canonical survivor root.
+    pub(crate) survivor_root: Option<[u8; 32]>,
+    /// Frozen number of survivors.
+    pub(crate) survivors: Option<u32>,
+    /// Sentinel proving that post-freeze recovery is absent.
+    pub(crate) no_recovery_root: Option<[u8; 32]>,
+    /// Frozen canonical masked-ballot corpus root.
+    pub(crate) corpus_root: Option<[u8; 32]>,
+    /// Frozen number of accepted masked ballots.
+    pub(crate) accepted_ballots: Option<u32>,
+    /// Frozen aggregate timed-commitment transcript root.
+    pub(crate) timed_commitment_root: Option<[u8; 32]>,
+    /// Replay-derived aggregate opening transcript root.
+    pub(crate) opening_root: Option<[u8; 32]>,
+    /// Replay-derived `[Aye, Nay, Abstain]` counts.
+    pub(crate) tally_counts: Option<[u32; TIMED_OVN_CHOICE_COUNT_V1]>,
+}
+
+impl TimedOvnParliamentReducerBindingV1 {
+    fn before_registration_close(
+        session: &TimedOvnSessionPublicV1,
+        registration_opened_at_finalized_height: Option<u64>,
+        release_height: u64,
+    ) -> Self {
+        Self {
+            proposal_content_id: session.proposal_content_id,
+            governance_attempt_id: session.governance_attempt_id,
+            body_instance_id: session.body_instance_id,
+            ballot_attempt_id: session.ballot_attempt_id,
+            tle_key_session_id: Some(session.tle_key_session_id),
+            registration_opened_at_finalized_height,
+            release_height: Some(release_height),
+            registration_root: None,
+            registered_voters: None,
+            dropout_root: None,
+            survivor_root: None,
+            survivors: None,
+            no_recovery_root: None,
+            corpus_root: None,
+            accepted_ballots: None,
+            timed_commitment_root: None,
+            opening_root: None,
+            tally_counts: None,
+        }
+    }
+
+    fn with_registration(
+        mut self,
+        registration_root: [u8; 32],
+        registered_voters: usize,
+    ) -> Result<Self, TimedOvnEvidenceError> {
+        self.registration_root = Some(registration_root);
+        self.registered_voters = Some(
+            u32::try_from(registered_voters)
+                .map_err(|_| TimedOvnEvidenceError::InvalidEvidenceSize)?,
+        );
+        Ok(self)
+    }
+
+    fn with_survivors(
+        mut self,
+        dropout_root: [u8; 32],
+        survivor_root: [u8; 32],
+        survivors: usize,
+        no_recovery_root: [u8; 32],
+    ) -> Result<Self, TimedOvnEvidenceError> {
+        self.dropout_root = Some(dropout_root);
+        self.survivor_root = Some(survivor_root);
+        self.survivors =
+            Some(u32::try_from(survivors).map_err(|_| TimedOvnEvidenceError::InvalidEvidenceSize)?);
+        self.no_recovery_root = Some(no_recovery_root);
+        Ok(self)
+    }
+
+    fn with_sealed_corpus(
+        mut self,
+        corpus_root: [u8; 32],
+        accepted_ballots: u16,
+        timed_commitment_root: [u8; 32],
+    ) -> Self {
+        self.corpus_root = Some(corpus_root);
+        self.accepted_ballots = Some(u32::from(accepted_ballots));
+        self.timed_commitment_root = Some(timed_commitment_root);
+        self
+    }
+
+    fn with_opening(mut self, opening_root: [u8; 32], tally: TimedOvnPublicTallyV1) -> Self {
+        self.opening_root = Some(opening_root);
+        self.tally_counts = Some([
+            u32::from(tally.aye),
+            u32::from(tally.nay),
+            u32::from(tally.abstain),
+        ]);
+        self
+    }
+}
+
 /// Public registration-open state for one timed-OVN ballot attempt.
 ///
 /// Registrations are accumulated one authenticated seated member at a time.
@@ -293,6 +418,33 @@ impl TimedOvnRegistrationOpenStateV1 {
         }
         Ok(session)
     }
+
+    fn validate_committed_cache(
+        &self,
+        tle_key_session: &ValidatedTleKeySessionV1,
+    ) -> Result<TimedOvnSessionV1, TimedOvnEvidenceError> {
+        if self.version != TIMED_OVN_EVIDENCE_VERSION_V1 {
+            return Err(TimedOvnEvidenceError::UnsupportedVersion);
+        }
+        if self.target_finalized_height <= self.registration_opened_at_finalized_height {
+            return Err(TimedOvnEvidenceError::InvalidReleaseSchedule);
+        }
+        let session = self.session.rebuild(tle_key_session)?;
+        if !self
+            .registration_corpus_commitment
+            .matches_records(&self.registration_records)
+        {
+            return Err(TimedOvnEvidenceError::ReplayMismatch);
+        }
+        if !self.registration_records.is_empty() {
+            rebuild_roster_committed_cache(
+                &self.session,
+                &self.registration_records,
+                tle_key_session,
+            )?;
+        }
+        Ok(session)
+    }
 }
 
 /// Public registration-closed state retaining the exact canonical roster wires.
@@ -342,6 +494,25 @@ impl TimedOvnRegistrationClosedStateV1 {
         validate_dropout_participant_hashes(&rebuilt.1, &self.dropout_participant_hashes)?;
         Ok(rebuilt)
     }
+
+    /// Rebuild the canonical roster from already committed registration records.
+    ///
+    /// Snapshot restoration uses [`Self::validate`] to replay every proof; this
+    /// bounded live path validates canonical cached public material only.
+    pub(crate) fn validate_committed_cache(
+        &self,
+        tle_key_session: &ValidatedTleKeySessionV1,
+    ) -> Result<(TimedOvnSessionV1, TimedOvnCommittedRosterCacheV1), TimedOvnEvidenceError> {
+        self.registration
+            .validate_committed_cache(tle_key_session)?;
+        let rebuilt = rebuild_roster_committed_cache(
+            self.registration.session(),
+            &self.registration.registration_records,
+            tle_key_session,
+        )?;
+        validate_dropout_participant_hashes(&rebuilt.1, &self.dropout_participant_hashes)?;
+        Ok(rebuilt)
+    }
 }
 
 /// Public survivor-frozen state with its replay-derived future release identity.
@@ -357,6 +528,10 @@ pub struct TimedOvnSurvivorsFrozenStateV1 {
     survivor_participant_hashes: Vec<[u8; 32]>,
     dropout_root: [u8; 32],
     release_identity: TimedOvnReleaseIdentityPublicV1,
+    registration_roster_root: [u8; 32],
+    survivor_registration_indices: Vec<u16>,
+    #[norito(with = "timed_ovn_masking_key_rows_json")]
+    survivor_masking_keys: Vec<[GtBytes; TIMED_OVN_CHOICE_COUNT_V1]>,
 }
 
 impl TimedOvnSurvivorsFrozenStateV1 {
@@ -382,6 +557,12 @@ impl TimedOvnSurvivorsFrozenStateV1 {
     #[must_use]
     pub const fn release_identity(&self) -> &TimedOvnReleaseIdentityPublicV1 {
         &self.release_identity
+    }
+
+    /// Return the exact replay-derived registration-roster root.
+    #[must_use]
+    pub const fn registration_roster_root(&self) -> &[u8; 32] {
+        &self.registration_roster_root
     }
 
     /// Rebuild the roster, survivor subsequence, and future release identity.
@@ -424,7 +605,164 @@ impl TimedOvnSurvivorsFrozenStateV1 {
         {
             return Err(TimedOvnEvidenceError::ReplayMismatch);
         }
+        self.validate_cache_against_prepared(&prepared.roster, &prepared.survivors)?;
         Ok(prepared)
+    }
+
+    fn validate_committed_cache(
+        &self,
+        tle_key_session: &ValidatedTleKeySessionV1,
+    ) -> Result<PreparedTimedOvnCommittedAttemptV1, TimedOvnEvidenceError> {
+        let (session, roster) = self
+            .registration
+            .validate_committed_cache(tle_key_session)?;
+        let expected_survivors = roster
+            .registrations()
+            .iter()
+            .filter_map(|record| {
+                self.registration
+                    .dropout_participant_hashes
+                    .binary_search(record.participant_hash())
+                    .is_err()
+                    .then_some(*record.participant_hash())
+            })
+            .collect::<Vec<_>>();
+        if expected_survivors != self.survivor_participant_hashes {
+            return Err(TimedOvnEvidenceError::ReplayMismatch);
+        }
+        validate_survivor_count(
+            &self.survivor_participant_hashes,
+            self.registration.registration.registration_records.len(),
+        )?;
+        let survivor_root = roster.prospective_survivor_root(&self.survivor_participant_hashes)?;
+        let expected_no_recovery_root =
+            no_recovery_root(&session, roster.roster_root(), &survivor_root);
+        let release_identity = self.release_identity.rebuild(
+            self.registration.registration.session(),
+            &survivor_root,
+            &expected_no_recovery_root,
+            tle_key_session,
+        )?;
+        let survivors = TimedOvnCommittedSurvivorRosterCacheV1::from_committed_roster(
+            &roster,
+            &self.survivor_participant_hashes,
+            release_identity,
+        )?;
+        let prepared = PreparedTimedOvnCommittedAttemptV1 {
+            session,
+            roster,
+            survivors,
+        };
+        if dropout_decisions_root(
+            &prepared.session,
+            &prepared.roster,
+            &self.survivor_participant_hashes,
+        ) != self.dropout_root
+        {
+            return Err(TimedOvnEvidenceError::ReplayMismatch);
+        }
+        self.validate_cache_against_prepared(&prepared.roster, &prepared.survivors)?;
+        Ok(prepared)
+    }
+
+    fn validate_cache_against_prepared<Provenance: Clone>(
+        &self,
+        roster: &TimedOvnRosterV1<Provenance>,
+        survivors: &TimedOvnSurvivorRosterV1<Provenance>,
+    ) -> Result<(), TimedOvnEvidenceError> {
+        let expected_indices = survivor_registration_indices_v1(
+            roster.registrations(),
+            &self.survivor_participant_hashes,
+        )?;
+        if self.registration_roster_root != *roster.roster_root()
+            || self.survivor_registration_indices != expected_indices
+            || self.survivor_masking_keys != survivors.masking_key_points()
+        {
+            return Err(TimedOvnEvidenceError::ReplayMismatch);
+        }
+        Ok(())
+    }
+
+    fn verification_common(
+        &self,
+        tle_key_session: &ValidatedTleKeySessionV1,
+    ) -> Result<TimedOvnBallotVerificationCommonV1, TimedOvnEvidenceError> {
+        let session = self
+            .registration
+            .registration
+            .session
+            .rebuild(tle_key_session)?;
+        let identity = self.release_identity.rebuild(
+            self.registration.registration.session(),
+            &self.release_identity.survivor_corpus_root,
+            &self.release_identity.no_recovery_root,
+            tle_key_session,
+        )?;
+        Ok(TimedOvnBallotVerificationCommonV1::new(
+            session,
+            self.registration_roster_root,
+            self.release_identity.survivor_corpus_root,
+            identity,
+        )?)
+    }
+
+    fn verify_ballot_chunk(
+        &self,
+        start_index: usize,
+        ballot_records: &[Vec<u8>],
+        tle_key_session: &ValidatedTleKeySessionV1,
+    ) -> Result<
+        (
+            TimedOvnBallotVerificationCommonV1,
+            Vec<TimedOvnMaskedBallotV1>,
+        ),
+        TimedOvnEvidenceError,
+    > {
+        let end_index = start_index
+            .checked_add(ballot_records.len())
+            .ok_or(TimedOvnEvidenceError::InvalidEvidenceSize)?;
+        if ballot_records.is_empty()
+            || ballot_records.len() > PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1
+            || end_index > self.survivor_participant_hashes.len()
+            || self.survivor_registration_indices.len() != self.survivor_participant_hashes.len()
+            || self.survivor_masking_keys.len() != self.survivor_participant_hashes.len()
+        {
+            return Err(TimedOvnEvidenceError::InvalidEvidenceSize);
+        }
+        let common = self.verification_common(tle_key_session)?;
+        let session = self
+            .registration
+            .registration
+            .session
+            .rebuild(tle_key_session)?;
+        let registrations = &self.registration.registration.registration_records;
+        let mut ballots = Vec::with_capacity(ballot_records.len());
+        for (offset, record) in ballot_records.iter().enumerate() {
+            let survivor_index = start_index + offset;
+            let registration_index =
+                usize::from(self.survivor_registration_indices[survivor_index]);
+            let registration_record = registrations
+                .get(registration_index)
+                .ok_or(TimedOvnEvidenceError::ReplayMismatch)?;
+            let registration = TimedOvnCommittedRegistrationCacheV1::from_committed_record(
+                &session,
+                registration_record,
+            )?;
+            if registration.participant_hash() != &self.survivor_participant_hashes[survivor_index]
+            {
+                return Err(TimedOvnEvidenceError::ReplayMismatch);
+            }
+            let context = common.bind_registration(
+                u16::try_from(survivor_index)
+                    .map_err(|_| TimedOvnEvidenceError::InvalidEvidenceSize)?,
+                &registration,
+                self.survivor_masking_keys[survivor_index],
+            )?;
+            ballots.push(TimedOvnMaskedBallotV1::from_bytes_with_context(
+                &context, record,
+            )?);
+        }
+        Ok((common, ballots))
     }
 }
 
@@ -505,6 +843,36 @@ mod timed_ovn_gt_choice_array_json {
     }
 }
 
+#[cfg(feature = "json")]
+mod timed_ovn_masking_key_rows_json {
+    use super::*;
+    use norito::json::{self, JsonDeserialize as _, JsonSerialize as _, Parser};
+
+    pub fn serialize(value: &Vec<[GtBytes; TIMED_OVN_CHOICE_COUNT_V1]>, out: &mut String) {
+        value
+            .iter()
+            .map(|row| row.to_vec())
+            .collect::<Vec<_>>()
+            .json_serialize(out);
+    }
+
+    pub fn deserialize(
+        parser: &mut Parser<'_>,
+    ) -> Result<Vec<[GtBytes; TIMED_OVN_CHOICE_COUNT_V1]>, json::Error> {
+        Vec::<Vec<GtBytes>>::json_deserialize(parser)?
+            .into_iter()
+            .map(|row| {
+                row.try_into().map_err(|row: Vec<GtBytes>| {
+                    json::Error::Message(format!(
+                        "expected exactly {TIMED_OVN_CHOICE_COUNT_V1} masking keys, got {}",
+                        row.len()
+                    ))
+                })
+            })
+            .collect()
+    }
+}
+
 impl TimedOvnAggregateTranscriptV1 {
     fn replay(
         session: &TimedOvnSessionV1,
@@ -533,6 +901,29 @@ impl TimedOvnAggregateTranscriptV1 {
         Ok(replay)
     }
 
+    fn from_committed_aggregate(
+        common: &TimedOvnBallotVerificationCommonV1,
+        ballots: &[Vec<u8>],
+        aggregate: &TimedOvnCommittedAggregateCacheV1,
+        dropout_root: [u8; 32],
+    ) -> Result<Self, TimedOvnEvidenceError> {
+        let mut transcript = Self {
+            session_digest: common.session_digest(),
+            registration_roster_root: common.roster_root(),
+            dropout_root,
+            survivor_corpus_root: common.survivor_root(),
+            identity_digest: common.identity_digest(),
+            release_term: common.release_term(),
+            ballot_corpus_hash: ballot_corpus_hash(ballots)?,
+            accepted_ballots: aggregate.accepted_ballots(),
+            aggregate_ephemerals: *aggregate.aggregate_ephemerals(),
+            aggregate_commitments: *aggregate.aggregate_commitments(),
+            transcript_hash: [0; 32],
+        };
+        transcript.transcript_hash = transcript.compute_hash();
+        Ok(transcript)
+    }
+
     fn compute_hash(&self) -> [u8; 32] {
         let mut hasher = Sha256::new();
         hasher.update(AGGREGATE_TRANSCRIPT_DOMAIN_V1);
@@ -552,6 +943,205 @@ impl TimedOvnAggregateTranscriptV1 {
             hasher.update(commitment);
         }
         hasher.finalize().into()
+    }
+}
+
+/// Replay-derived rolling public aggregate for one bounded ballot-corpus prefix.
+#[derive(
+    Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
+)]
+pub struct TimedOvnCorpusAccumulatorV1 {
+    session_digest: [u8; 32],
+    registration_roster_root: [u8; 32],
+    survivor_corpus_root: [u8; 32],
+    identity_digest: [u8; 32],
+    accepted_ballots: u16,
+    #[norito(with = "timed_ovn_g2_choice_array_json")]
+    aggregate_ephemerals: [G2Bytes; TIMED_OVN_CHOICE_COUNT_V1],
+    #[norito(with = "timed_ovn_gt_choice_array_json")]
+    aggregate_commitments: [GtBytes; TIMED_OVN_CHOICE_COUNT_V1],
+    seen_ephemerals: Vec<G2Bytes>,
+}
+
+impl TimedOvnCorpusAccumulatorV1 {
+    fn empty(common: &TimedOvnBallotVerificationCommonV1) -> Self {
+        Self {
+            session_digest: common.session_digest(),
+            registration_roster_root: common.roster_root(),
+            survivor_corpus_root: common.survivor_root(),
+            identity_digest: common.identity_digest(),
+            accepted_ballots: 0,
+            aggregate_ephemerals: [[0; 96]; TIMED_OVN_CHOICE_COUNT_V1],
+            aggregate_commitments: [[0; 576]; TIMED_OVN_CHOICE_COUNT_V1],
+            seen_ephemerals: Vec::new(),
+        }
+    }
+
+    fn append_verified(
+        mut self,
+        common: &TimedOvnBallotVerificationCommonV1,
+        ballots: &[TimedOvnMaskedBallotV1],
+    ) -> Result<Self, TimedOvnEvidenceError> {
+        self.validate_bindings(common)?;
+        for ballot in ballots {
+            let expected_index = self.accepted_ballots;
+            if ballot.index() != expected_index
+                || ballot.participant_hash().iter().all(|byte| *byte == 0)
+            {
+                return Err(TimedOvnEvidenceError::ReplayMismatch);
+            }
+            for ephemeral in ballot.ephemerals() {
+                match self.seen_ephemerals.binary_search(ephemeral) {
+                    Ok(_) => return Err(TimedOvnError::DuplicateEphemeral.into()),
+                    Err(position) => self.seen_ephemerals.insert(position, *ephemeral),
+                }
+            }
+            if self.accepted_ballots == 0 {
+                self.aggregate_ephemerals = *ballot.ephemerals();
+                self.aggregate_commitments = *ballot.commitments();
+            } else {
+                (self.aggregate_ephemerals, self.aggregate_commitments) =
+                    fold_verified_timed_ovn_ballot_v1(
+                        &self.aggregate_ephemerals,
+                        &self.aggregate_commitments,
+                        ballot,
+                    )?;
+            }
+            self.accepted_ballots = self
+                .accepted_ballots
+                .checked_add(1)
+                .ok_or(TimedOvnEvidenceError::InvalidEvidenceSize)?;
+            if usize::from(self.accepted_ballots) > TIMED_OVN_MAX_PARTICIPANTS_V1 {
+                return Err(TimedOvnEvidenceError::InvalidEvidenceSize);
+            }
+        }
+        self.validate_shape()?;
+        Ok(self)
+    }
+
+    fn validate_bindings(
+        &self,
+        common: &TimedOvnBallotVerificationCommonV1,
+    ) -> Result<(), TimedOvnEvidenceError> {
+        if self.session_digest != common.session_digest()
+            || self.registration_roster_root != common.roster_root()
+            || self.survivor_corpus_root != common.survivor_root()
+            || self.identity_digest != common.identity_digest()
+        {
+            return Err(TimedOvnEvidenceError::ReplayMismatch);
+        }
+        Ok(())
+    }
+
+    fn validate_shape(&self) -> Result<(), TimedOvnEvidenceError> {
+        if usize::from(self.accepted_ballots) > TIMED_OVN_MAX_PARTICIPANTS_V1
+            || self.seen_ephemerals.len()
+                != usize::from(self.accepted_ballots)
+                    .checked_mul(TIMED_OVN_CHOICE_COUNT_V1)
+                    .ok_or(TimedOvnEvidenceError::InvalidEvidenceSize)?
+            || self
+                .seen_ephemerals
+                .windows(2)
+                .any(|pair| pair[0] >= pair[1])
+        {
+            return Err(TimedOvnEvidenceError::ReplayMismatch);
+        }
+        Ok(())
+    }
+
+    fn finish(
+        &self,
+        common: &TimedOvnBallotVerificationCommonV1,
+        expected_ballots: usize,
+    ) -> Result<TimedOvnCommittedAggregateCacheV1, TimedOvnEvidenceError> {
+        self.validate_bindings(common)?;
+        self.validate_shape()?;
+        if usize::from(self.accepted_ballots) != expected_ballots {
+            return Err(TimedOvnEvidenceError::InvalidEvidenceSize);
+        }
+        Ok(
+            TimedOvnCommittedAggregateCacheV1::from_committed_accumulator(
+                common,
+                self.accepted_ballots,
+                self.aggregate_ephemerals,
+                self.aggregate_commitments,
+            )?,
+        )
+    }
+}
+
+/// Intermediate lifecycle state for a proof-verified contiguous ballot-corpus prefix.
+#[derive(
+    Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
+)]
+pub struct TimedOvnCorpusOpenStateV1 {
+    frozen: TimedOvnSurvivorsFrozenStateV1,
+    ballot_records: Vec<Vec<u8>>,
+    accumulator: TimedOvnCorpusAccumulatorV1,
+}
+
+impl TimedOvnCorpusOpenStateV1 {
+    /// Borrow the immutable survivor-frozen context retained across chunks.
+    #[must_use]
+    pub const fn frozen(&self) -> &TimedOvnSurvivorsFrozenStateV1 {
+        &self.frozen
+    }
+
+    fn validate(
+        &self,
+        tle_key_session: &ValidatedTleKeySessionV1,
+    ) -> Result<(), TimedOvnEvidenceError> {
+        let prepared = self.frozen.validate(tle_key_session)?;
+        if self.ballot_records.is_empty()
+            || self.ballot_records.len() >= self.frozen.survivor_participant_hashes.len()
+            || self.ballot_records.len() > TIMED_OVN_MAX_PARTICIPANTS_V1
+        {
+            return Err(TimedOvnEvidenceError::InvalidEvidenceSize);
+        }
+        let common = TimedOvnBallotVerificationCommonV1::new(
+            prepared.session,
+            *prepared.roster.roster_root(),
+            *prepared.survivors.survivor_root(),
+            prepared.release_identity,
+        )?;
+        let ballots = self
+            .ballot_records
+            .iter()
+            .map(|record| TimedOvnMaskedBallotV1::from_bytes(&prepared.survivors, record))
+            .collect::<Result<Vec<_>, _>>()?;
+        let replayed =
+            TimedOvnCorpusAccumulatorV1::empty(&common).append_verified(&common, &ballots)?;
+        if replayed != self.accumulator {
+            return Err(TimedOvnEvidenceError::ReplayMismatch);
+        }
+        Ok(())
+    }
+
+    fn validate_committed_cache(
+        &self,
+        tle_key_session: &ValidatedTleKeySessionV1,
+    ) -> Result<(), TimedOvnEvidenceError> {
+        // `put_timed_ovn_lifecycle` admits this state only as a byte-for-byte
+        // frozen-context successor of an already validated state. Re-deriving
+        // every survivor mask here would repeat old cryptographic work on each
+        // chunk; snapshot admission still calls `validate` and fully replays it.
+        if self.ballot_records.is_empty()
+            || self.ballot_records.len() >= self.frozen.survivor_participant_hashes.len()
+            || self.ballot_records.len() > TIMED_OVN_MAX_PARTICIPANTS_V1
+            || self
+                .ballot_records
+                .iter()
+                .any(|record| record.len() != TIMED_OVN_BALLOT_RECORD_BYTES_V1)
+        {
+            return Err(TimedOvnEvidenceError::InvalidEvidenceSize);
+        }
+        let common = self.frozen.verification_common(tle_key_session)?;
+        self.accumulator.validate_bindings(&common)?;
+        self.accumulator.validate_shape()?;
+        if usize::from(self.accumulator.accepted_ballots) != self.ballot_records.len() {
+            return Err(TimedOvnEvidenceError::ReplayMismatch);
+        }
+        Ok(())
     }
 }
 
@@ -577,13 +1167,15 @@ pub struct TimedOvnEvidenceStateV1 {
 }
 
 impl TimedOvnEvidenceStateV1 {
-    /// Verify the bounded public release statement before replaying either corpus.
+    /// Verify the bounded public release statement before inspecting either corpus.
     ///
     /// This pregate intentionally reads only fixed-size session, release-identity,
     /// TLE transcript, height, and final-signature fields. It prevents an invalid
     /// permissionless final release from forcing proof verification across the
-    /// registration and masked-ballot corpora. Full replay and a second release
-    /// verification remain mandatory after this check succeeds.
+    /// registration and masked-ballot corpora. Live finalization then checks the
+    /// consensus-committed public aggregate cache and verifies the release again
+    /// while opening it. Snapshot restoration independently performs full raw
+    /// proof replay before any restored state is admitted.
     ///
     /// # Errors
     ///
@@ -634,6 +1226,98 @@ impl TimedOvnEvidenceStateV1 {
             return Err(TimedOvnEvidenceError::ReplayMismatch);
         }
         Ok(replayed)
+    }
+
+    fn validate_committed_cache(
+        &self,
+        tle_key_session: &ValidatedTleKeySessionV1,
+    ) -> Result<
+        (
+            TimedOvnBallotVerificationCommonV1,
+            TleReleaseIdentityV1,
+            TimedOvnCommittedAggregateCacheV1,
+        ),
+        TimedOvnEvidenceError,
+    > {
+        if self.version != TIMED_OVN_EVIDENCE_VERSION_V1 {
+            return Err(TimedOvnEvidenceError::UnsupportedVersion);
+        }
+        let (session, roster) = rebuild_roster_committed_cache(
+            &self.session,
+            &self.registration_records,
+            tle_key_session,
+        )?;
+        validate_survivor_count(
+            &self.survivor_participant_hashes,
+            self.registration_records.len(),
+        )?;
+        validate_ballot_records(&self.ballot_records, self.survivor_participant_hashes.len())?;
+        let survivor_root = roster.prospective_survivor_root(&self.survivor_participant_hashes)?;
+        let expected_no_recovery_root =
+            no_recovery_root(&session, roster.roster_root(), &survivor_root);
+        let release_identity = self.release_identity.rebuild(
+            &self.session,
+            &survivor_root,
+            &expected_no_recovery_root,
+            tle_key_session,
+        )?;
+        let common = TimedOvnBallotVerificationCommonV1::new(
+            session,
+            *roster.roster_root(),
+            survivor_root,
+            release_identity,
+        )?;
+        if usize::from(self.aggregate.accepted_ballots) != self.survivor_participant_hashes.len() {
+            return Err(TimedOvnEvidenceError::ReplayMismatch);
+        }
+        let aggregate = TimedOvnCommittedAggregateCacheV1::from_committed_accumulator(
+            &common,
+            self.aggregate.accepted_ballots,
+            self.aggregate.aggregate_ephemerals,
+            self.aggregate.aggregate_commitments,
+        )?;
+        let dropout_root =
+            dropout_decisions_root(&session, &roster, &self.survivor_participant_hashes);
+        let expected = TimedOvnAggregateTranscriptV1::from_committed_aggregate(
+            &common,
+            &self.ballot_records,
+            &aggregate,
+            dropout_root,
+        )?;
+        if expected != self.aggregate {
+            return Err(TimedOvnEvidenceError::ReplayMismatch);
+        }
+        Ok((common, release_identity, aggregate))
+    }
+
+    fn finalize_release_committed_cache(
+        self,
+        tle_key_session: &ValidatedTleKeySessionV1,
+        finalized_height: u64,
+        final_release: TleFinalReleaseSignatureV1,
+    ) -> Result<TimedOvnReleasedEvidenceV1, TimedOvnEvidenceError> {
+        self.verify_final_release_pregate(tle_key_session, finalized_height, &final_release)?;
+        let (common, release_identity, aggregate) =
+            self.validate_committed_cache(tle_key_session)?;
+        let release_key = tle_key_session.release_key_for_opening(
+            &release_identity,
+            finalized_height,
+            &final_release,
+        )?;
+        let tally = aggregate.open_and_tally_with_common(
+            &common,
+            self.survivor_participant_hashes.len(),
+            &release_key,
+        )?;
+        let tally = TimedOvnPublicTallyV1::from(tally);
+        let opening_root = opening_transcript_root(&self.aggregate, &final_release, tally);
+        Ok(TimedOvnReleasedEvidenceV1 {
+            version: TIMED_OVN_EVIDENCE_VERSION_V1,
+            sealed: self,
+            final_release,
+            tally,
+            opening_root,
+        })
     }
 }
 
@@ -719,6 +1403,24 @@ impl TimedOvnReleasedEvidenceV1 {
         }
         Ok(replayed)
     }
+
+    fn validate_committed_cache(
+        &self,
+        tle_key_session: &ValidatedTleKeySessionV1,
+    ) -> Result<(), TimedOvnEvidenceError> {
+        if self.version != TIMED_OVN_EVIDENCE_VERSION_V1 {
+            return Err(TimedOvnEvidenceError::UnsupportedVersion);
+        }
+        let replayed = self.sealed.clone().finalize_release_committed_cache(
+            tle_key_session,
+            self.sealed.release_identity.target_finalized_height,
+            self.final_release,
+        )?;
+        if replayed != *self {
+            return Err(TimedOvnEvidenceError::ReplayMismatch);
+        }
+        Ok(())
+    }
 }
 
 /// Bounded public phase of one timed-OVN lifecycle.
@@ -756,6 +1458,8 @@ pub enum TimedOvnLifecycleStateV1 {
     RegistrationClosed(TimedOvnRegistrationClosedStateV1),
     /// The exact survivor subsequence and future release identity are frozen.
     SurvivorsFrozen(TimedOvnSurvivorsFrozenStateV1),
+    /// A nonempty proof-verified contiguous ballot prefix awaits later chunks.
+    CorpusOpen(TimedOvnCorpusOpenStateV1),
     /// The complete one-ballot-per-survivor corpus is proof-verified and sealed.
     Sealed(TimedOvnEvidenceStateV1),
     /// A unique threshold release has opened only the aggregate public tally.
@@ -769,7 +1473,9 @@ impl TimedOvnLifecycleStateV1 {
         match self {
             Self::Registered(_) => TimedOvnLifecyclePhaseV1::Registered,
             Self::RegistrationClosed(_) => TimedOvnLifecyclePhaseV1::RegistrationClosed,
-            Self::SurvivorsFrozen(_) => TimedOvnLifecyclePhaseV1::SurvivorsFrozen,
+            Self::SurvivorsFrozen(_) | Self::CorpusOpen(_) => {
+                TimedOvnLifecyclePhaseV1::SurvivorsFrozen
+            }
             Self::Sealed(_) => TimedOvnLifecyclePhaseV1::Sealed,
             Self::Released(_) => TimedOvnLifecyclePhaseV1::Released,
         }
@@ -784,6 +1490,9 @@ impl TimedOvnLifecycleStateV1 {
             Self::RegistrationClosed(state) => &mut state.registration.registration_records,
             Self::SurvivorsFrozen(state) => {
                 &mut state.registration.registration.registration_records
+            }
+            Self::CorpusOpen(state) => {
+                &mut state.frozen.registration.registration.registration_records
             }
             Self::Sealed(state) => &mut state.registration_records,
             Self::Released(state) => &mut state.sealed.registration_records,
@@ -802,6 +1511,7 @@ impl TimedOvnLifecycleStateV1 {
         match self {
             Self::Registered(_) | Self::RegistrationClosed(_) => None,
             Self::SurvivorsFrozen(state) => Some(&state.release_identity),
+            Self::CorpusOpen(state) => Some(&state.frozen.release_identity),
             Self::Sealed(state) => Some(&state.release_identity),
             Self::Released(state) => Some(&state.sealed.release_identity),
         }
@@ -853,7 +1563,7 @@ impl TimedOvnLifecycleStateV1 {
         let Self::Registered(mut registration) = self else {
             return Err(TimedOvnEvidenceError::InvalidLifecycleTransition);
         };
-        let session = registration.validate(tle_key_session)?;
+        let session = registration.validate_committed_cache(tle_key_session)?;
         if registration_record.len() != TIMED_OVN_REGISTRATION_RECORD_BYTES_V1
             || registration.registration_records.len() >= TIMED_OVN_MAX_PARTICIPANTS_V1
         {
@@ -867,7 +1577,7 @@ impl TimedOvnLifecycleStateV1 {
         }
         let mut position = 0;
         while position < registration.registration_records.len() {
-            let existing = TimedOvnRegistrationV1::from_bytes(
+            let existing = TimedOvnCommittedRegistrationCacheV1::from_committed_record(
                 &session,
                 &registration.registration_records[position],
             )?;
@@ -882,7 +1592,7 @@ impl TimedOvnLifecycleStateV1 {
         registration
             .registration_records
             .insert(position, registration_record);
-        rebuild_roster(
+        rebuild_roster_committed_cache(
             registration.session(),
             &registration.registration_records,
             tle_key_session,
@@ -912,7 +1622,7 @@ impl TimedOvnLifecycleStateV1 {
             registration,
             dropout_participant_hashes: Vec::new(),
         };
-        state.validate(tle_key_session)?;
+        state.validate_committed_cache(tle_key_session)?;
         Ok(Self::RegistrationClosed(state))
     }
 
@@ -930,7 +1640,7 @@ impl TimedOvnLifecycleStateV1 {
         let Self::RegistrationClosed(mut registration) = self else {
             return Err(TimedOvnEvidenceError::InvalidLifecycleTransition);
         };
-        let (_, roster) = registration.validate(tle_key_session)?;
+        let (_, roster) = registration.validate_committed_cache(tle_key_session)?;
         if roster
             .registrations()
             .binary_search_by_key(&expected_participant_hash, |record| {
@@ -949,7 +1659,7 @@ impl TimedOvnLifecycleStateV1 {
                 .dropout_participant_hashes
                 .insert(position, expected_participant_hash),
         }
-        registration.validate(tle_key_session)?;
+        registration.validate_committed_cache(tle_key_session)?;
         Ok(Self::RegistrationClosed(registration))
     }
 
@@ -969,7 +1679,7 @@ impl TimedOvnLifecycleStateV1 {
         let Self::RegistrationClosed(registration) = self else {
             return Err(TimedOvnEvidenceError::InvalidLifecycleTransition);
         };
-        let (_, roster) = registration.validate(tle_key_session)?;
+        let (crypto_session, roster) = registration.validate_committed_cache(tle_key_session)?;
         let survivor_participant_hashes = roster
             .registrations()
             .iter()
@@ -981,50 +1691,112 @@ impl TimedOvnLifecycleStateV1 {
                     .then_some(*record.participant_hash())
             })
             .collect::<Vec<_>>();
-        let roots = derive_timed_ovn_roots_v1(
-            registration.registration.session(),
-            &registration.registration.registration_records,
+        validate_survivor_count(
             &survivor_participant_hashes,
-            tle_key_session,
+            registration.registration.registration_records.len(),
         )?;
+        let survivor_corpus_root =
+            roster.prospective_survivor_root(&survivor_participant_hashes)?;
+        let no_recovery_root =
+            no_recovery_root(&crypto_session, roster.roster_root(), &survivor_corpus_root);
+        let dropout_root =
+            dropout_decisions_root(&crypto_session, &roster, &survivor_participant_hashes);
         let session = registration.registration.session;
         let release_identity = TimedOvnReleaseIdentityPublicV1 {
             tle_key_session_id: session.tle_key_session_id,
             governance_attempt_id: session.governance_attempt_id,
             body_instance_id: session.body_instance_id,
             ballot_attempt_id: session.ballot_attempt_id,
-            survivor_corpus_root: roots.survivor_corpus_root,
-            no_recovery_root: roots.no_recovery_root,
+            survivor_corpus_root,
+            no_recovery_root,
             target_finalized_height: registration.registration.target_finalized_height,
             parameter_hash: session.parameter_hash,
         };
+        let typed_release_identity = release_identity.rebuild(
+            &session,
+            &survivor_corpus_root,
+            &no_recovery_root,
+            tle_key_session,
+        )?;
+        let survivors = TimedOvnCommittedSurvivorRosterCacheV1::from_committed_roster(
+            &roster,
+            &survivor_participant_hashes,
+            typed_release_identity,
+        )?;
+        let survivor_registration_indices =
+            survivor_registration_indices_v1(roster.registrations(), &survivor_participant_hashes)?;
         let state = TimedOvnSurvivorsFrozenStateV1 {
             registration,
             survivor_participant_hashes,
-            dropout_root: roots.dropout_root,
+            dropout_root,
             release_identity,
+            registration_roster_root: *roster.roster_root(),
+            survivor_registration_indices,
+            survivor_masking_keys: survivors.masking_key_points(),
         };
-        state.validate(tle_key_session)?;
         Ok(Self::SurvivorsFrozen(state))
     }
 
-    /// Verify and seal exactly one canonical ballot for every frozen survivor.
+    /// Verify and append the next bounded contiguous ballot chunk.
+    ///
+    /// The first nonfinal chunk enters an internal corpus-open state. Later
+    /// chunks must continue at the cached accepted count; the final chunk seals
+    /// the exact one-ballot-per-survivor corpus. Only the newly supplied proofs
+    /// are verified during this live transition.
     ///
     /// # Errors
     ///
-    /// Returns [`TimedOvnEvidenceError`] for an out-of-order phase, malformed
-    /// proof, wrong ballot order/count, duplicate ephemeral, or aggregate failure.
+    /// Returns [`TimedOvnEvidenceError`] for an out-of-order phase, empty or
+    /// oversized chunk, malformed proof, wrong ballot order, duplicate
+    /// ephemeral, or aggregate failure.
     pub fn seal_ballots(
         self,
         ballot_records: Vec<Vec<u8>>,
         tle_key_session: &ValidatedTleKeySessionV1,
     ) -> Result<Self, TimedOvnEvidenceError> {
-        let Self::SurvivorsFrozen(frozen) = self else {
-            return Err(TimedOvnEvidenceError::InvalidLifecycleTransition);
+        let (frozen, mut accepted_records, accumulator) = match self {
+            Self::SurvivorsFrozen(frozen) => (frozen, Vec::new(), None),
+            Self::CorpusOpen(open) => (open.frozen, open.ballot_records, Some(open.accumulator)),
+            _ => return Err(TimedOvnEvidenceError::InvalidLifecycleTransition),
         };
-        let prepared = frozen.validate(tle_key_session)?;
-        let sealed = prepared.admit_ballot_corpus(&ballot_records)?;
-        Ok(Self::Sealed(sealed.public_state().clone()))
+        let start_index = accepted_records.len();
+        let (common, ballots) =
+            frozen.verify_ballot_chunk(start_index, &ballot_records, tle_key_session)?;
+        let accumulator = accumulator
+            .unwrap_or_else(|| TimedOvnCorpusAccumulatorV1::empty(&common))
+            .append_verified(&common, &ballots)?;
+        accepted_records.extend(ballot_records);
+        let expected_ballots = frozen.survivor_participant_hashes.len();
+        if accepted_records.len() < expected_ballots {
+            return Ok(Self::CorpusOpen(TimedOvnCorpusOpenStateV1 {
+                frozen,
+                ballot_records: accepted_records,
+                accumulator,
+            }));
+        }
+        if accepted_records.len() != expected_ballots {
+            return Err(TimedOvnEvidenceError::InvalidEvidenceSize);
+        }
+        let aggregate = accumulator.finish(&common, expected_ballots)?;
+        let aggregate_transcript = TimedOvnAggregateTranscriptV1::from_committed_aggregate(
+            &common,
+            &accepted_records,
+            &aggregate,
+            frozen.dropout_root,
+        )?;
+        Ok(Self::Sealed(TimedOvnEvidenceStateV1 {
+            version: TIMED_OVN_EVIDENCE_VERSION_V1,
+            session: *frozen.registration.registration.session(),
+            registration_records: frozen
+                .registration
+                .registration
+                .registration_records
+                .clone(),
+            survivor_participant_hashes: frozen.survivor_participant_hashes,
+            release_identity: frozen.release_identity,
+            ballot_records: accepted_records,
+            aggregate: aggregate_transcript,
+        }))
     }
 
     /// Verify the unique threshold release and persist the aggregate-only tally.
@@ -1042,10 +1814,12 @@ impl TimedOvnLifecycleStateV1 {
         let Self::Sealed(sealed) = self else {
             return Err(TimedOvnEvidenceError::InvalidLifecycleTransition);
         };
-        sealed.verify_final_release_pregate(tle_key_session, finalized_height, &final_release)?;
-        let sealed = sealed.validate(tle_key_session)?;
-        let released = sealed.finalize_release(tle_key_session, finalized_height, final_release)?;
-        Ok(Self::Released(released.public_state().clone()))
+        let released = sealed.finalize_release_committed_cache(
+            tle_key_session,
+            finalized_height,
+            final_release,
+        )?;
+        Ok(Self::Released(released))
     }
 
     /// Replay and validate all public evidence required by the current phase.
@@ -1071,6 +1845,9 @@ impl TimedOvnLifecycleStateV1 {
             Self::SurvivorsFrozen(state) => {
                 state.validate(tle_key_session)?;
             }
+            Self::CorpusOpen(state) => {
+                state.validate(tle_key_session)?;
+            }
             Self::Sealed(state) => {
                 state.clone().validate(tle_key_session)?;
             }
@@ -1079,6 +1856,140 @@ impl TimedOvnLifecycleStateV1 {
                     tle_key_session,
                     state.sealed.release_identity.target_finalized_height,
                 )?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Fully replay the lifecycle and derive every immutable field duplicated
+    /// by the Parliament reducer during snapshot restoration.
+    ///
+    /// The intermediate corpus-open variant intentionally projects the same
+    /// frozen reducer checkpoint as `SurvivorsFrozen`: its validated prefix is
+    /// not a complete corpus and therefore must not populate terminal corpus
+    /// fields in the reducer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TimedOvnEvidenceError`] for invalid lifecycle evidence or a
+    /// corpus count that cannot fit the reducer's bounded count domain.
+    pub(crate) fn validated_parliament_reducer_binding(
+        &self,
+        tle_key_session: &ValidatedTleKeySessionV1,
+    ) -> Result<(TimedOvnParliamentReducerBindingV1, Vec<[u8; 32]>), TimedOvnEvidenceError> {
+        match self {
+            Self::Registered(state) => {
+                state.validate(tle_key_session)?;
+                let participant_hashes = if state.registration_records.is_empty() {
+                    Vec::new()
+                } else {
+                    let (_, roster) = rebuild_roster_committed_cache(
+                        &state.session,
+                        &state.registration_records,
+                        tle_key_session,
+                    )?;
+                    registration_participant_hashes(&roster)
+                };
+                Ok((
+                    TimedOvnParliamentReducerBindingV1::before_registration_close(
+                        &state.session,
+                        Some(state.registration_opened_at_finalized_height),
+                        state.target_finalized_height,
+                    ),
+                    participant_hashes,
+                ))
+            }
+            Self::RegistrationClosed(state) => {
+                let (_, roster) = state.validate(tle_key_session)?;
+                let binding = TimedOvnParliamentReducerBindingV1::before_registration_close(
+                    &state.registration.session,
+                    Some(state.registration.registration_opened_at_finalized_height),
+                    state.registration.target_finalized_height,
+                )
+                .with_registration(*roster.roster_root(), roster.registrations().len())?;
+                Ok((binding, registration_participant_hashes(&roster)))
+            }
+            Self::SurvivorsFrozen(state) => {
+                let prepared = state.validate(tle_key_session)?;
+                let binding = frozen_parliament_reducer_binding(
+                    state,
+                    &prepared.roster,
+                    &prepared.survivors,
+                )?;
+                Ok((binding, registration_participant_hashes(&prepared.roster)))
+            }
+            Self::CorpusOpen(state) => {
+                state.validate(tle_key_session)?;
+                // Full validation above authenticates the exact immutable
+                // bytes. Rebuilding only their committed cache here avoids a
+                // second proof replay while retaining the derived roster.
+                let prepared = state.frozen.validate_committed_cache(tle_key_session)?;
+                let binding = frozen_parliament_reducer_binding(
+                    &state.frozen,
+                    &prepared.roster,
+                    &prepared.survivors,
+                )?;
+                Ok((binding, registration_participant_hashes(&prepared.roster)))
+            }
+            Self::Sealed(state) => {
+                let validated = state.clone().validate(tle_key_session)?;
+                let binding = sealed_parliament_reducer_binding(validated.public_state())?;
+                Ok((
+                    binding,
+                    registration_participant_hashes(validated.registration_roster()),
+                ))
+            }
+            Self::Released(state) => {
+                let validated = state.clone().validate(
+                    tle_key_session,
+                    state.sealed.release_identity.target_finalized_height,
+                )?;
+                let public = validated.public_state();
+                let binding = sealed_parliament_reducer_binding(&public.sealed)?
+                    .with_opening(public.opening_root, public.tally);
+                Ok((
+                    binding,
+                    registration_participant_hashes(validated.sealed().registration_roster()),
+                ))
+            }
+        }
+    }
+
+    /// Validate consensus-committed caches without replaying previously accepted proofs.
+    ///
+    /// This is the live transition admission path. A corpus-open state's frozen
+    /// cache is protected by the state store's byte-for-byte direct-successor
+    /// check, so later chunks validate only their rolling prefix cache. Snapshot
+    /// deserialization must call [`Self::validate`] so raw registration and
+    /// ballot evidence remain the independently replayable source of consensus
+    /// truth.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TimedOvnEvidenceError`] for malformed, cross-session, or
+    /// cache-inconsistent state.
+    pub(crate) fn validate_committed_cache(
+        &self,
+        tle_key_session: &ValidatedTleKeySessionV1,
+    ) -> Result<(), TimedOvnEvidenceError> {
+        match self {
+            Self::Registered(state) => {
+                state.validate_committed_cache(tle_key_session)?;
+            }
+            Self::RegistrationClosed(state) => {
+                state.validate_committed_cache(tle_key_session)?;
+            }
+            Self::SurvivorsFrozen(state) => {
+                state.validate_committed_cache(tle_key_session)?;
+            }
+            Self::CorpusOpen(state) => {
+                state.validate_committed_cache(tle_key_session)?;
+            }
+            Self::Sealed(state) => {
+                state.validate_committed_cache(tle_key_session)?;
+            }
+            Self::Released(state) => {
+                state.validate_committed_cache(tle_key_session)?;
             }
         }
         Ok(())
@@ -1116,6 +2027,7 @@ impl TimedOvnLifecycleStateV1 {
             Self::Registered(state) => &state.registration_records,
             Self::RegistrationClosed(state) => &state.registration.registration_records,
             Self::SurvivorsFrozen(state) => &state.registration.registration.registration_records,
+            Self::CorpusOpen(state) => &state.frozen.registration.registration.registration_records,
             Self::Sealed(state) => &state.registration_records,
             Self::Released(state) => &state.sealed.registration_records,
         }
@@ -1128,6 +2040,7 @@ impl TimedOvnLifecycleStateV1 {
             Self::Registered(state) => &state.session,
             Self::RegistrationClosed(state) => &state.registration.session,
             Self::SurvivorsFrozen(state) => &state.registration.registration.session,
+            Self::CorpusOpen(state) => &state.frozen.registration.registration.session,
             Self::Sealed(state) => &state.session,
             Self::Released(state) => &state.sealed.session,
         }
@@ -1152,6 +2065,7 @@ impl TimedOvnLifecycleStateV1 {
             Self::Registered(state) => state.target_finalized_height,
             Self::RegistrationClosed(state) => state.registration.target_finalized_height,
             Self::SurvivorsFrozen(state) => state.release_identity.target_finalized_height,
+            Self::CorpusOpen(state) => state.frozen.release_identity.target_finalized_height,
             Self::Sealed(state) => state.release_identity.target_finalized_height,
             Self::Released(state) => state.sealed.release_identity.target_finalized_height,
         }
@@ -1172,7 +2086,31 @@ impl TimedOvnLifecycleStateV1 {
                     .registration
                     .registration_opened_at_finalized_height,
             ),
+            Self::CorpusOpen(state) => Some(
+                state
+                    .frozen
+                    .registration
+                    .registration
+                    .registration_opened_at_finalized_height,
+            ),
             Self::Sealed(_) | Self::Released(_) => None,
+        }
+    }
+
+    /// Return the proof-verified contiguous ballot-prefix count once survivor
+    /// freezing has completed.
+    ///
+    /// `Some(0)` identifies a frozen corpus that has not accepted its first
+    /// chunk. Intermediate corpus-open states expose only the count, never any
+    /// masked ballot record or participant-level data.
+    #[must_use]
+    pub fn accepted_ballot_prefix_count(&self) -> Option<u32> {
+        match self {
+            Self::Registered(_) | Self::RegistrationClosed(_) => None,
+            Self::SurvivorsFrozen(_) => Some(0),
+            Self::CorpusOpen(state) => u32::try_from(state.ballot_records.len()).ok(),
+            Self::Sealed(state) => Some(u32::from(state.aggregate.accepted_ballots)),
+            Self::Released(state) => Some(u32::from(state.sealed.aggregate.accepted_ballots)),
         }
     }
 
@@ -1188,6 +2126,13 @@ impl TimedOvnLifecycleStateV1 {
             }
             Self::SurvivorsFrozen(state) => Some(
                 &state
+                    .registration
+                    .registration
+                    .registration_corpus_commitment,
+            ),
+            Self::CorpusOpen(state) => Some(
+                &state
+                    .frozen
                     .registration
                     .registration
                     .registration_corpus_commitment,
@@ -1230,18 +2175,115 @@ impl TimedOvnLifecycleStateV1 {
             (Self::RegistrationClosed(before), Self::SurvivorsFrozen(after)) => {
                 &after.registration == before
             }
+            (Self::SurvivorsFrozen(before), Self::CorpusOpen(after)) => {
+                &after.frozen == before
+                    && is_bounded_ballot_prefix_extension(
+                        &[],
+                        &after.ballot_records,
+                        before.survivor_participant_hashes.len(),
+                        false,
+                    )
+            }
             (Self::SurvivorsFrozen(before), Self::Sealed(after)) => {
-                after.session == *before.registration.registration.session()
-                    && after.registration_records
-                        == before.registration.registration.registration_records
-                    && after.survivor_participant_hashes == before.survivor_participant_hashes
-                    && after.release_identity == before.release_identity
-                    && after.aggregate.dropout_root == before.dropout_root
+                sealed_matches_frozen(after, before)
+                    && is_bounded_ballot_prefix_extension(
+                        &[],
+                        &after.ballot_records,
+                        before.survivor_participant_hashes.len(),
+                        true,
+                    )
+            }
+            (Self::CorpusOpen(before), Self::CorpusOpen(after)) => {
+                after.frozen == before.frozen
+                    && is_bounded_ballot_prefix_extension(
+                        &before.ballot_records,
+                        &after.ballot_records,
+                        before.frozen.survivor_participant_hashes.len(),
+                        false,
+                    )
+            }
+            (Self::CorpusOpen(before), Self::Sealed(after)) => {
+                sealed_matches_frozen(after, &before.frozen)
+                    && is_bounded_ballot_prefix_extension(
+                        &before.ballot_records,
+                        &after.ballot_records,
+                        before.frozen.survivor_participant_hashes.len(),
+                        true,
+                    )
             }
             (Self::Sealed(before), Self::Released(after)) => &after.sealed == before,
             _ => false,
         }
     }
+}
+
+fn registration_participant_hashes<Provenance>(
+    roster: &TimedOvnRosterV1<Provenance>,
+) -> Vec<[u8; 32]> {
+    roster
+        .registrations()
+        .iter()
+        .map(|registration| *registration.participant_hash())
+        .collect()
+}
+
+fn frozen_parliament_reducer_binding<Provenance: Clone>(
+    state: &TimedOvnSurvivorsFrozenStateV1,
+    roster: &TimedOvnRosterV1<Provenance>,
+    survivors: &TimedOvnSurvivorRosterV1<Provenance>,
+) -> Result<TimedOvnParliamentReducerBindingV1, TimedOvnEvidenceError> {
+    TimedOvnParliamentReducerBindingV1::before_registration_close(
+        state.registration.registration.session(),
+        Some(
+            state
+                .registration
+                .registration
+                .registration_opened_at_finalized_height,
+        ),
+        state.release_identity.target_finalized_height,
+    )
+    .with_registration(*roster.roster_root(), roster.registrations().len())?
+    .with_survivors(
+        state.dropout_root,
+        *survivors.survivor_root(),
+        state.survivor_participant_hashes.len(),
+        state.release_identity.no_recovery_root,
+    )
+}
+
+fn sealed_parliament_reducer_binding(
+    state: &TimedOvnEvidenceStateV1,
+) -> Result<TimedOvnParliamentReducerBindingV1, TimedOvnEvidenceError> {
+    TimedOvnParliamentReducerBindingV1::before_registration_close(
+        &state.session,
+        None,
+        state.release_identity.target_finalized_height,
+    )
+    .with_registration(
+        state.aggregate.registration_roster_root,
+        state.registration_records.len(),
+    )?
+    .with_survivors(
+        state.aggregate.dropout_root,
+        state.aggregate.survivor_corpus_root,
+        state.survivor_participant_hashes.len(),
+        state.release_identity.no_recovery_root,
+    )
+    .map(|binding| {
+        binding.with_sealed_corpus(
+            state.aggregate.ballot_corpus_hash,
+            state.aggregate.accepted_ballots,
+            state.aggregate.transcript_hash,
+        )
+    })
+}
+
+/// Shape-checked public context retained only across committed-cache validation.
+#[derive(Debug, Clone)]
+struct PreparedTimedOvnCommittedAttemptV1 {
+    session: TimedOvnSessionV1,
+    roster: TimedOvnCommittedRosterCacheV1,
+    survivors: TimedOvnCommittedSurvivorRosterCacheV1,
 }
 
 /// Prepared public survivor context used to cast and admit folded ballots.
@@ -1538,6 +2580,9 @@ pub enum TimedOvnEvidenceError {
     /// Opening another cast-capable lifecycle would exceed the protocol maximum.
     #[error("too many concurrent cast-capable timed-OVN contexts")]
     TooManyConcurrentCastingContexts,
+    /// Two admitted lifecycles require the same bounded automatic-transition capacity.
+    #[error("admitted timed-OVN lifecycle resource windows overlap")]
+    ResourceScheduleConflict,
     /// A registration record did not bind the authenticated seated member.
     #[error("timed-OVN registration participant differs from the authenticated member")]
     ParticipantBindingMismatch,
@@ -1582,6 +2627,37 @@ fn is_single_ordered_insertion<T: PartialEq>(before: &[T], after: &[T]) -> bool 
     skipped && before_index == before.len()
 }
 
+fn is_bounded_ballot_prefix_extension(
+    before: &[Vec<u8>],
+    after: &[Vec<u8>],
+    expected_total: usize,
+    seals: bool,
+) -> bool {
+    if !after.starts_with(before) {
+        return false;
+    }
+    let appended = after.len().saturating_sub(before.len());
+    appended != 0
+        && appended <= PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1
+        && if seals {
+            after.len() == expected_total
+        } else {
+            after.len() < expected_total
+        }
+}
+
+fn sealed_matches_frozen(
+    sealed: &TimedOvnEvidenceStateV1,
+    frozen: &TimedOvnSurvivorsFrozenStateV1,
+) -> bool {
+    sealed.session == *frozen.registration.registration.session()
+        && sealed.registration_records == frozen.registration.registration.registration_records
+        && sealed.survivor_participant_hashes == frozen.survivor_participant_hashes
+        && sealed.release_identity == frozen.release_identity
+        && sealed.aggregate.dropout_root == frozen.dropout_root
+        && sealed.aggregate.registration_roster_root == frozen.registration_roster_root
+}
+
 /// Replay the exact public session and optional nonempty registration roster
 /// carried by a wallet casting-context archive.
 ///
@@ -1621,6 +2697,61 @@ fn rebuild_roster(
     Ok((session, roster))
 }
 
+fn rebuild_roster_committed_cache(
+    session_record: &TimedOvnSessionPublicV1,
+    registration_records: &[Vec<u8>],
+    tle_key_session: &ValidatedTleKeySessionV1,
+) -> Result<(TimedOvnSessionV1, TimedOvnCommittedRosterCacheV1), TimedOvnEvidenceError> {
+    validate_registration_records(registration_records)?;
+    let session = session_record.rebuild(tle_key_session)?;
+    let registrations = registration_records
+        .iter()
+        .map(|bytes| {
+            let registration =
+                TimedOvnCommittedRegistrationCacheV1::from_committed_record(&session, bytes)?;
+            if registration.to_bytes() != *bytes {
+                return Err(TimedOvnError::InvalidEncoding);
+            }
+            Ok(registration)
+        })
+        .collect::<Result<Vec<_>, TimedOvnError>>()?;
+    let roster = TimedOvnCommittedRosterCacheV1::from_committed_records(session, registrations)?;
+    Ok((session, roster))
+}
+
+fn survivor_registration_indices_v1<Provenance>(
+    registrations: &[TimedOvnRegistrationV1<Provenance>],
+    survivor_ids: &[[u8; 32]],
+) -> Result<Vec<u16>, TimedOvnEvidenceError> {
+    let mut indices = Vec::with_capacity(survivor_ids.len());
+    let mut registration_index = 0_usize;
+    for survivor in survivor_ids {
+        while registrations
+            .get(registration_index)
+            .is_some_and(|registration| registration.participant_hash() < survivor)
+        {
+            registration_index = registration_index
+                .checked_add(1)
+                .ok_or(TimedOvnEvidenceError::InvalidEvidenceSize)?;
+        }
+        if registrations
+            .get(registration_index)
+            .map(TimedOvnRegistrationV1::participant_hash)
+            != Some(survivor)
+        {
+            return Err(TimedOvnEvidenceError::InvalidParticipantDecision);
+        }
+        indices.push(
+            u16::try_from(registration_index)
+                .map_err(|_| TimedOvnEvidenceError::InvalidEvidenceSize)?,
+        );
+        registration_index = registration_index
+            .checked_add(1)
+            .ok_or(TimedOvnEvidenceError::InvalidEvidenceSize)?;
+    }
+    Ok(indices)
+}
+
 fn validate_registration_records(records: &[Vec<u8>]) -> Result<(), TimedOvnEvidenceError> {
     if records.is_empty()
         || records.len() > TIMED_OVN_MAX_PARTICIPANTS_V1
@@ -1633,8 +2764,8 @@ fn validate_registration_records(records: &[Vec<u8>]) -> Result<(), TimedOvnEvid
     Ok(())
 }
 
-fn validate_dropout_participant_hashes(
-    roster: &TimedOvnRosterV1,
+fn validate_dropout_participant_hashes<Provenance>(
+    roster: &TimedOvnRosterV1<Provenance>,
     dropout_participant_hashes: &[[u8; 32]],
 ) -> Result<(), TimedOvnEvidenceError> {
     let mut previous = None;
@@ -1697,9 +2828,9 @@ fn ballot_corpus_hash(ballots: &[Vec<u8>]) -> Result<[u8; 32], TimedOvnEvidenceE
     Ok(hasher.finalize().into())
 }
 
-fn dropout_decisions_root(
+fn dropout_decisions_root<Provenance>(
     session: &TimedOvnSessionV1,
-    roster: &TimedOvnRosterV1,
+    roster: &TimedOvnRosterV1<Provenance>,
     survivor_ids: &[[u8; 32]],
 ) -> [u8; 32] {
     let mut hasher = Sha256::new();
@@ -1781,6 +2912,58 @@ mod tests {
         [byte; 32]
     }
 
+    #[test]
+    fn ballot_prefix_successors_enforce_nonempty_chunk_and_terminal_boundaries() {
+        let before = vec![vec![1_u8]];
+        let maximum_append = (0..PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1)
+            .map(|index| vec![u8::try_from(index + 2).expect("test chunk byte")])
+            .collect::<Vec<_>>();
+        let mut maximum_open = before.clone();
+        maximum_open.extend(maximum_append.clone());
+        assert!(is_bounded_ballot_prefix_extension(
+            &before,
+            &maximum_open,
+            maximum_open.len() + 1,
+            false,
+        ));
+        assert!(!is_bounded_ballot_prefix_extension(
+            &before,
+            &before,
+            before.len() + 1,
+            false,
+        ));
+
+        let mut oversized = maximum_open.clone();
+        oversized.push(vec![0xFE]);
+        assert!(!is_bounded_ballot_prefix_extension(
+            &before,
+            &oversized,
+            oversized.len() + 1,
+            false,
+        ));
+        assert!(is_bounded_ballot_prefix_extension(
+            &before,
+            &maximum_open,
+            maximum_open.len(),
+            true,
+        ));
+        assert!(!is_bounded_ballot_prefix_extension(
+            &before,
+            &maximum_open,
+            maximum_open.len() + 1,
+            true,
+        ));
+
+        let mut changed_prefix = maximum_open;
+        changed_prefix[0][0] ^= 1;
+        assert!(!is_bounded_ballot_prefix_extension(
+            &before,
+            &changed_prefix,
+            changed_prefix.len() + 1,
+            false,
+        ));
+    }
+
     struct TleFixture {
         session: iroha_crypto::threshold_bls::ThresholdBlsSession<TleReleasePurpose>,
         key: ValidatedTleKeySessionV1,
@@ -1837,6 +3020,12 @@ mod tests {
             tle_key_transcript_hash: tle.key.public_state().transcript_hash,
             tle_master_public_key: *tle.key.master_public_key().as_bytes(),
         };
+        let mut wrong_network = session_record;
+        wrong_network.network_id = binding(99);
+        assert_eq!(
+            wrong_network.rebuild(&tle.key).err(),
+            Some(TimedOvnEvidenceError::TleKeySessionMismatch)
+        );
         let crypto_session = session_record.rebuild(&tle.key).expect("timed session");
         let mut rng = StdRng::from_seed([32; 32]);
         let participant_ids = [binding(20), binding(21), binding(22)];
@@ -2080,6 +3269,7 @@ mod tests {
         let lifecycle = registration_closed
             .freeze_survivors(&tle.key)
             .expect("survivors frozen");
+        assert_eq!(lifecycle.accepted_ballot_prefix_count(), Some(0));
         lifecycle.validate(&tle.key).expect("frozen replay");
         let TimedOvnLifecycleStateV1::SurvivorsFrozen(frozen) = &lifecycle else {
             panic!("expected survivor-frozen state");
@@ -2103,9 +3293,99 @@ mod tests {
                 bytes
             })
             .collect::<Vec<_>>();
-        let lifecycle = lifecycle
-            .seal_ballots(ballot_records.clone(), &tle.key)
-            .expect("sealed lifecycle");
+        assert_eq!(
+            lifecycle.clone().seal_ballots(Vec::new(), &tle.key).err(),
+            Some(TimedOvnEvidenceError::InvalidEvidenceSize)
+        );
+        assert_eq!(
+            lifecycle
+                .clone()
+                .seal_ballots(
+                    vec![
+                        vec![0_u8; TIMED_OVN_BALLOT_RECORD_BYTES_V1];
+                        PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1 + 1
+                    ],
+                    &tle.key,
+                )
+                .err(),
+            Some(TimedOvnEvidenceError::InvalidEvidenceSize)
+        );
+        let frozen_lifecycle = lifecycle;
+        let corpus_open = frozen_lifecycle
+            .clone()
+            .seal_ballots(vec![ballot_records[0].clone()], &tle.key)
+            .expect("first ballot chunk");
+        assert_eq!(
+            corpus_open.phase(),
+            TimedOvnLifecyclePhaseV1::SurvivorsFrozen
+        );
+        assert_eq!(corpus_open.accepted_ballot_prefix_count(), Some(1));
+        assert!(corpus_open.is_direct_successor_of(&frozen_lifecycle));
+        corpus_open
+            .validate(&tle.key)
+            .expect("open corpus fully replays its raw prefix");
+        let (open_binding, _) = corpus_open
+            .validated_parliament_reducer_binding(&tle.key)
+            .expect("open corpus reducer binding");
+        assert_eq!(
+            open_binding.registration_root,
+            Some(roots.registration_roster_root)
+        );
+        assert_eq!(open_binding.registered_voters, Some(3));
+        assert_eq!(open_binding.dropout_root, Some(roots.dropout_root));
+        assert_eq!(open_binding.survivor_root, Some(roots.survivor_corpus_root));
+        assert_eq!(open_binding.survivors, Some(3));
+        assert_eq!(open_binding.no_recovery_root, Some(roots.no_recovery_root));
+        assert_eq!(open_binding.corpus_root, None);
+        assert_eq!(open_binding.accepted_ballots, None);
+        assert_eq!(open_binding.timed_commitment_root, None);
+        assert_eq!(
+            corpus_open
+                .clone()
+                .seal_ballots(
+                    vec![
+                        ballot_records[1].clone(),
+                        ballot_records[2].clone(),
+                        ballot_records[2].clone(),
+                    ],
+                    &tle.key,
+                )
+                .err(),
+            Some(TimedOvnEvidenceError::InvalidEvidenceSize),
+            "a bounded chunk still cannot overrun the frozen survivor corpus"
+        );
+        let encoded_open = corpus_open.encode();
+        let restored_open = TimedOvnLifecycleStateV1::decode_all(&mut encoded_open.as_slice())
+            .expect("decode open corpus lifecycle");
+        restored_open
+            .validate(&tle.key)
+            .expect("snapshot restore replays open corpus caches");
+        assert_eq!(restored_open, corpus_open);
+
+        let mut tampered_accumulator = corpus_open.clone();
+        let TimedOvnLifecycleStateV1::CorpusOpen(open) = &mut tampered_accumulator else {
+            panic!("expected corpus-open state");
+        };
+        open.accumulator.aggregate_commitments[0][0] ^= 1;
+        assert_eq!(
+            tampered_accumulator.validate(&tle.key),
+            Err(TimedOvnEvidenceError::ReplayMismatch)
+        );
+        let mut tampered_mask_cache = corpus_open.clone();
+        let TimedOvnLifecycleStateV1::CorpusOpen(open) = &mut tampered_mask_cache else {
+            panic!("expected corpus-open state");
+        };
+        open.frozen.survivor_masking_keys[0][0][0] ^= 1;
+        assert_eq!(
+            tampered_mask_cache.validate(&tle.key),
+            Err(TimedOvnEvidenceError::ReplayMismatch)
+        );
+
+        let lifecycle = corpus_open
+            .seal_ballots(ballot_records[1..].to_vec(), &tle.key)
+            .expect("final ballot chunk seals lifecycle");
+        assert_eq!(lifecycle.accepted_ballot_prefix_count(), Some(3));
+        assert!(lifecycle.is_direct_successor_of(&restored_open));
         lifecycle
             .validate(&tle.key)
             .expect("sealed lifecycle replay");
@@ -2179,6 +3459,7 @@ mod tests {
         released_lifecycle
             .validate(&tle.key)
             .expect("released lifecycle replay");
+        assert_eq!(released_lifecycle.accepted_ballot_prefix_count(), Some(3));
         assert!(matches!(
             released_lifecycle,
             TimedOvnLifecycleStateV1::Released(_)

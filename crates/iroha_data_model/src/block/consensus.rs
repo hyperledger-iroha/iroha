@@ -1,7 +1,7 @@
 //! Norito-encoded consensus message types shared across Sumeragi implementations.
 //!
 //! These types cover shared consensus parameters and diagnostics, authenticated v2 evidence,
-//! lane-local certificates, and the retained QC/VRF projections. Global consensus messages and
+//! lane-local certificates, and retained QC projections. Global consensus messages and
 //! signed RS16 data availability live in [`super::consensus_v2`]; there is no global-v1 RBC
 //! message family.
 use super::Header as BlockHeader;
@@ -88,10 +88,6 @@ pub struct NposGenesisParams {
     pub epoch_length_blocks: NonZeroU64,
     /// Deterministic epoch seed for PRF-based leader and validator selection.
     pub epoch_seed: [u8; 32],
-    /// VRF commit window length in blocks.
-    pub vrf_commit_window_blocks: u64,
-    /// VRF reveal window length in blocks.
-    pub vrf_reveal_window_blocks: u64,
     /// Exact bounded `3f + 1` ceiling for the next epoch committee.
     pub max_validators: u32,
     /// Minimum self-bond required for validator eligibility.
@@ -117,27 +113,17 @@ impl NposGenesisParams {
     /// Validate signed `NPoS` election and reconfiguration inputs.
     ///
     /// # Errors
-    /// Returns a stable diagnostic when a seed, window, bond, percentage, or
+    /// Returns a stable diagnostic when a seed, bond, percentage, or
     /// reconfiguration bound is invalid.
     pub fn validate(&self) -> Result<(), &'static str> {
         if self.epoch_seed == [0; 32] {
             return Err("epoch_seed must not be all zero");
-        }
-        if self.vrf_commit_window_blocks == 0 || self.vrf_reveal_window_blocks == 0 {
-            return Err("VRF commit and reveal windows must be greater than zero");
         }
         if usize::try_from(self.max_validators)
             .ok()
             .is_none_or(|count| !super::consensus_v2::is_valid_committee_size(count))
         {
             return Err("max_validators must be a bounded 3f + 1 committee size (4..=31)");
-        }
-        if self
-            .vrf_commit_window_blocks
-            .checked_add(self.vrf_reveal_window_blocks)
-            .is_none_or(|total| total >= self.epoch_length_blocks.get())
-        {
-            return Err("VRF reveal window must close before the epoch boundary");
         }
         if self.min_self_bond.is_zero() || self.min_nomination_bond.is_zero() {
             return Err("NPoS minimum bond values must be greater than zero");
@@ -3258,19 +3244,12 @@ pub struct SumeragiProposalGateStatus {
     pub last_successful_proposal_age_ms: u64,
 }
 /// Current `NPoS` schedule and PRF context for operator diagnostics.
-///
-/// Per-epoch penalty membership is exposed separately by the authoritative
-/// VRF epoch-report route rather than duplicated as process-local counters.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct SumeragiNposDiagnostics {
     /// Length of the active epoch in blocks.
     pub epoch_length_blocks: NonZeroU64,
-    /// VRF commit deadline offset from the epoch start.
-    pub vrf_commit_deadline_offset: NonZeroU64,
-    /// VRF reveal deadline offset from the epoch start.
-    pub vrf_reveal_deadline_offset: NonZeroU64,
     /// Non-zero epoch seed used for deterministic leader and validator election.
     pub epoch_seed: [u8; 32],
     /// Height associated with the recorded PRF context.
@@ -3283,19 +3262,10 @@ impl SumeragiNposDiagnostics {
     ///
     /// # Errors
     ///
-    /// Returns a stable reason when the epoch seed is zero or the VRF windows
-    /// do not form a strict, in-epoch commit/reveal schedule.
+    /// Returns a stable reason when the epoch seed is zero.
     pub fn validate(&self) -> Result<(), &'static str> {
         if self.epoch_seed == [0; 32] {
             return Err("NPoS diagnostics epoch seed must be non-zero");
-        }
-        let commit = self.vrf_commit_deadline_offset.get();
-        let reveal = self.vrf_reveal_deadline_offset.get();
-        if commit >= reveal {
-            return Err("NPoS diagnostics reveal deadline must follow commit deadline");
-        }
-        if reveal > self.epoch_length_blocks.get() {
-            return Err("NPoS diagnostics reveal deadline must not exceed epoch length");
         }
         Ok(())
     }
@@ -4103,30 +4073,6 @@ pub struct ExecWitnessMsg {
     /// The execution witness payload.
     pub witness: ExecWitness,
 }
-/// VRF commit used by the Sumeragi epoch-randomness path.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-pub struct VrfCommit {
-    /// Epoch index to which the commit applies.
-    pub epoch: u64,
-    /// Hiding commitment to the reveal.
-    pub commitment: [u8; 32],
-    /// Signer index within the validator set.
-    pub signer: ValidatorIndex,
-    /// BLS signature over the canonical VRF-commit preimage.
-    pub bls_sig: Vec<u8>,
-}
-/// VRF reveal used by the Sumeragi epoch-randomness path.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-pub struct VrfReveal {
-    /// Epoch index to which the reveal applies.
-    pub epoch: u64,
-    /// Revealed preimage value.
-    pub reveal: [u8; 32],
-    /// Signer index within the validator set.
-    pub signer: ValidatorIndex,
-    /// BLS signature over the canonical VRF-reveal preimage.
-    pub bls_sig: Vec<u8>,
-}
 // --- Helpers for Norito slice decoding bridges ---
 fn decode_from_slice_canonical<T>(bytes: &[u8]) -> Result<(T, usize), norito::core::Error>
 where
@@ -4164,8 +4110,6 @@ impl_decode_from_slice_via_codec!(ExecKv);
 impl_decode_from_slice_via_codec!(ExecWitness);
 impl_decode_from_slice_via_codec!(Evidence);
 impl_decode_from_slice_via_codec!(ExecWitnessMsg);
-impl_decode_from_slice_via_codec!(VrfCommit);
-impl_decode_from_slice_via_codec!(VrfReveal);
 impl_decode_from_slice_via_codec!(ConsensusGenesisParams);
 impl_decode_from_slice_via_codec!(NposGenesisParams);
 impl_decode_from_slice_via_codec!(SumeragiMembershipStatus);

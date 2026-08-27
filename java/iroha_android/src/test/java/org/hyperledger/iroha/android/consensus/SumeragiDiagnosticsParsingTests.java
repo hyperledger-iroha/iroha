@@ -12,6 +12,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import org.hyperledger.iroha.android.client.JsonEncoder;
@@ -66,6 +67,27 @@ public final class SumeragiDiagnosticsParsingTests {
     assertRejected(
         payload.replaceFirst(
             "\"tx_queue_depth\":0", "\"tx_queue_depth\":18446744073709551616"));
+  }
+
+  @Test
+  public void nposDiagnosticsAcceptOnlyTheFirstReleaseBeaconContext() {
+    final String npos =
+        "{\"epoch_length_blocks\":3600,\"epoch_seed\":["
+            + String.join(",", Collections.nCopies(32, "1"))
+            + "],\"prf_height\":7,\"prf_view\":2}";
+    final String current =
+        diagnosticsJson("[]", "[]", "[]", "", "")
+            .replaceFirst("\\{", "{\"npos\":" + npos + ",");
+
+    assertEquals(
+        BigInteger.valueOf(3600),
+        SumeragiDiagnosticsModels.parseDiagnostics(current).npos().epochLengthBlocks());
+    for (final String retired :
+        new String[] {"vrf_commit_deadline_offset", "vrf_reveal_deadline_offset"}) {
+      final String hostile =
+          current.replace("\"prf_height\":7", "\"" + retired + "\":1,\"prf_height\":7");
+      assertRejected(hostile);
+    }
   }
 
   @SuppressWarnings("unchecked")

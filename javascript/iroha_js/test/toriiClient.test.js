@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import vm from "node:vm";
 import {
@@ -21,7 +22,12 @@ import {
   isStatusQueueStalled,
 } from "../src/toriiClient.js";
 import { __sumeragiNativeAmxTestHelpers } from "../src/sumeragiTyped.js";
-import { ToriiClient as DistToriiClient } from "../dist/toriiClient.js";
+import {
+  LocalSigningContext as DistLocalSigningContext,
+  OperatorSigningContext as DistOperatorSigningContext,
+  ToriiClient as DistToriiClient,
+} from "../dist/toriiClient.js";
+import { NetworkId as DistNetworkId } from "../dist/networkId.js";
 import {
   resolveToriiClientConfig,
   extractToriiFeatureConfig,
@@ -87,6 +93,9 @@ const SelectedToriiClient =
   sumeragiDiagnosticsFocus?.ToriiClient ?? SourceToriiClient;
 const FocusValidationError =
   sumeragiDiagnosticsFocus?.ValidationError ?? ValidationError;
+const FocusLocalSigningContext =
+  sumeragiDiagnosticsFocus?.LocalSigningContext ?? LocalSigningContext;
+const FocusNetworkId = sumeragiDiagnosticsFocus?.NetworkId ?? NetworkId;
 
 function focusedTestRegistration(baseTest) {
   return (nameOrOptions, optionsOrFn, maybeFn) => {
@@ -110,13 +119,28 @@ if (sumeragiDiagnosticsFocus !== null && typeof nodeTest.only === "function") {
 
 const BASE_URL = "https://localhost:8080";
 const GOVERNANCE_PROPOSAL_ID = "ab".repeat(32);
-const VK_SIGNING_NETWORK_ID = NetworkId.parse(
+const VK_SIGNING_NETWORK_ID = FocusNetworkId.parse(
   "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
 );
-const VK_LOCAL_SIGNING_CONTEXT = new LocalSigningContext(
+const VK_LOCAL_SIGNING_CONTEXT = new FocusLocalSigningContext(
   VK_SIGNING_NETWORK_ID,
 );
-const ISO_OPERATOR_SIGNING_CONTEXT = makeTestOperatorSigningContext(VK_SIGNING_NETWORK_ID);
+const ISO_OPERATOR_SIGNING_CONTEXT =
+  sumeragiDiagnosticsFocus?.operatorSigningContext
+  ?? makeTestOperatorSigningContext(VK_SIGNING_NETWORK_ID);
+const DIST_VK_SIGNING_NETWORK_ID = DistNetworkId.parse(
+  "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+);
+const DIST_LOCAL_SIGNING_CONTEXT = new DistLocalSigningContext(
+  DIST_VK_SIGNING_NETWORK_ID,
+);
+const DIST_OPERATOR_SIGNING_CONTEXT = new DistOperatorSigningContext(
+  DIST_VK_SIGNING_NETWORK_ID,
+  {
+    publicKey: ISO_OPERATOR_SIGNING_CONTEXT.publicKey,
+    sign: (message) => ISO_OPERATOR_SIGNING_CONTEXT.sign(message),
+  },
+);
 class ToriiClient extends SelectedToriiClient {
   constructor(baseUrl, options = {}) {
     super(baseUrl, {
@@ -5663,7 +5687,7 @@ test("getDaManifestToDir writes manifest and plan artefacts", async () => {
     });
 
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const tmpDir = await fs.mkdtemp(path.join(process.cwd(), "tmp-js-da-manifest-"));
+  const tmpDir = await fs.mkdtemp(path.join(tmpdir(), "tmp-js-da-manifest-"));
   try {
     const result = await client.getDaManifestToDir(ticketHex, { outputDir: tmpDir });
     const label = manifestHashHex.toLowerCase();
@@ -6558,7 +6582,7 @@ nativeTest("submitDaBlob writes artefacts when artifactDir is set", async () => 
       },
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const dir = await fs.mkdtemp(path.join(process.cwd(), "tmp-js-da-submit-"));
+  const dir = await fs.mkdtemp(path.join(tmpdir(), "tmp-js-da-submit-"));
   try {
     const result = await client.submitDaBlob({
       networkId: VK_SIGNING_NETWORK_ID,
@@ -6695,7 +6719,7 @@ test("proveDaAvailabilityToDir persists CLI artefacts", async () => {
       },
     ],
   };
-  const tmpDir = await fs.mkdtemp(path.join(process.cwd(), "tmp-js-da-prove-"));
+  const tmpDir = await fs.mkdtemp(path.join(tmpdir(), "tmp-js-da-prove-"));
   const client = new ToriiClient(BASE_URL, {
     fetchImpl,
     sorafsGatewayFetch: async () => gatewayResult,
@@ -8655,7 +8679,7 @@ test("submitTransaction never retries a network failure after dispatch", async (
   assert.equal(attempts, 1);
 });
 
-test("submitTransaction may retry safe capability preflight before one-shot dispatch", async () => {
+test("submitTransaction never retries its authenticated capability preflight", async () => {
   let capabilityAttempts = 0;
   let submissionAttempts = 0;
   const fetchImpl = async (url, init) => {
@@ -8682,12 +8706,12 @@ test("submitTransaction may retry safe capability preflight before one-shot disp
     __nativeBinding: canonicalTransactionCodecNative(),
   });
 
-  assert.deepEqual(
-    await client.submitTransaction(Uint8Array.of(0x01, 0xad)),
-    { ok: true },
+  await assert.rejects(
+    () => client.submitTransaction(Uint8Array.of(0x01, 0xad)),
+    (error) => error instanceof ToriiHttpError && error.status === 503,
   );
-  assert.equal(capabilityAttempts, 2);
-  assert.equal(submissionAttempts, 1);
+  assert.equal(capabilityAttempts, 1);
+  assert.equal(submissionAttempts, 0);
 });
 
 for (const redirectStatus of [307, 308]) {
@@ -10112,30 +10136,20 @@ test("getPipelineRecoveryFastpqProofsTyped rejects malformed payloads", async ()
 });
 
 test("extractPipelineStatusKind returns nested status kind", () => {
-  const payload = {
-    kind: "Transaction",
-    content: { status: { kind: "Committed" } },
-  };
+  const payload = { status: { kind: "Committed" } };
   assert.equal(extractPipelineStatusKind(payload), "Committed");
 });
 
-test("extractPipelineStatusKind makes canonical transaction content authoritative", () => {
-  assert.equal(
-    extractPipelineStatusKind({
-      kind: "Transaction",
-      status: { kind: "Applied" },
-      content: {
-        hash: "ab".repeat(32),
-        status: { kind: "Pending", content: null },
-      },
-    }),
-    "Pending",
-  );
+test("extractPipelineStatusKind ignores retired nested transaction content", () => {
+  assert.equal(extractPipelineStatusKind({
+    kind: "Transaction",
+    content: { status: { kind: "Pending" } },
+  }), null);
 });
 
-test("extractPipelineStatusKind accepts direct status string", () => {
+test("extractPipelineStatusKind rejects the retired direct status string", () => {
   const payload = { status: "Rejected" };
-  assert.equal(extractPipelineStatusKind(payload), "Rejected");
+  assert.equal(extractPipelineStatusKind(payload), null);
 });
 
 test("extractPipelineStatusKind returns null when status missing", () => {
@@ -10842,7 +10856,15 @@ test("typed Sumeragi endpoints reject swapped status and diagnostics payloads", 
 });
 
 function sumeragiClientForPayload(payload, Client = ToriiClient) {
+  const useDistContexts = Client === DistToriiClient;
   return new Client(BASE_URL, {
+    localSigningContext: useDistContexts
+      ? DIST_LOCAL_SIGNING_CONTEXT
+      : VK_LOCAL_SIGNING_CONTEXT,
+    operatorSigningContext: useDistContexts
+      ? DIST_OPERATOR_SIGNING_CONTEXT
+      : ISO_OPERATOR_SIGNING_CONTEXT,
+    canonicalRequestAuth: APPLICATION_CANONICAL_AUTH,
     fetchImpl: async () =>
       createResponse({
         status: 200,
@@ -11245,8 +11267,6 @@ test("getSumeragiDiagnosticsTyped parses bounded native application evidence and
   const payload = createSumeragiDiagnosticsPayload({
     npos: {
       epoch_length_blocks: 100,
-      vrf_commit_deadline_offset: 20,
-      vrf_reveal_deadline_offset: 40,
       epoch_seed: Array(32).fill(1),
       prf_height: 10,
       prf_view: 2,
@@ -11264,13 +11284,19 @@ test("getSumeragiDiagnosticsTyped parses bounded native application evidence and
     diagnostics.native_amx_participant_applications[0].state,
     "durably_applied",
   );
-  await assert.rejects(
-    sumeragiDiagnosticsClientForPayload({
-      ...payload,
-      npos: { ...payload.npos, vrf_penalty_epoch: 1 },
-    }).getSumeragiDiagnosticsTyped(),
-    /contains unknown field vrf_penalty_epoch/,
-  );
+  for (const retired of [
+    "vrf_commit_deadline_offset",
+    "vrf_reveal_deadline_offset",
+    "vrf_penalty_epoch",
+  ]) {
+    await assert.rejects(
+      sumeragiDiagnosticsClientForPayload({
+        ...payload,
+        npos: { ...payload.npos, [retired]: 1 },
+      }).getSumeragiDiagnosticsTyped(),
+      new RegExp(`contains unknown field ${retired}`, "u"),
+    );
+  }
 
   const parseApplication = async (row) => {
     const parsed = await sumeragiDiagnosticsClientForPayload({
@@ -13609,7 +13635,7 @@ test("getNodeCapabilities normalizes runtime advert", async () => {
       headers: { "content-type": "application/json" },
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.getNodeCapabilities();
+  const result = await client.getNodeCapabilities(canonicalReadOptions());
   assert.deepEqual(result, {
     abiVersion: 1,
     dataModelVersion: 4,
@@ -13668,7 +13694,7 @@ test("getNodeCapabilities rejects non-integer ABI version", async () => {
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await assert.rejects(
-    () => client.getNodeCapabilities(),
+    () => client.getNodeCapabilities(canonicalReadOptions()),
     (error) => {
       assert.match(error.message, /abi_version/);
       return true;
@@ -13695,7 +13721,7 @@ test("getRuntimeAbiActive normalizes ABI version", async () => {
       headers: { "content-type": "application/json" },
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.getRuntimeAbiActive();
+  const result = await client.getRuntimeAbiActive(canonicalReadOptions());
   assert.deepEqual(result, {
     abiVersion: 1,
   });
@@ -13755,7 +13781,7 @@ test("getRuntimeMetrics normalizes counters", async () => {
       headers: { "content-type": "application/json" },
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.getRuntimeMetrics();
+  const result = await client.getRuntimeMetrics(canonicalReadOptions());
   assert.deepEqual(result, {
     abiVersion: 1,
     upgradeEventsTotal: { proposed: 3, activated: 1, canceled: 1 },
@@ -26093,8 +26119,11 @@ test("HTTP error diagnostics abort stalled bodies and retry cleanup cancels disc
       });
     },
   });
-  assert.equal((await retryClient.getNodeCapabilities()).abiVersion, 1);
-  assert.equal(requests, 2);
+  await assert.rejects(
+    () => retryClient.getNodeCapabilities(canonicalReadOptions()),
+    (error) => error instanceof ToriiHttpError && error.status === 503,
+  );
+  assert.equal(requests, 1);
   assert.equal(retryBodyCancels, 1);
 });
 

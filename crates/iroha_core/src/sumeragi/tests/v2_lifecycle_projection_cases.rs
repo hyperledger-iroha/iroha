@@ -2599,7 +2599,7 @@ fn broadcast_vote_and_qc_have_collision_free_specialized_keys() {
     );
 }
 #[test]
-fn all_eight_auxiliary_broadcast_payloads_are_explicitly_rejected() {
+fn all_auxiliary_broadcast_payloads_are_explicitly_rejected() {
     let fixture = Fixture::new();
     let certified_request = wire::CertifiedBodyRequest {
         round: fixture.round,
@@ -2642,19 +2642,6 @@ fn all_eight_auxiliary_broadcast_payloads_are_explicitly_rejected() {
                 signature: vec![0x65],
             },
         ),
-        wire::ConsensusMessageV2Payload::VrfCommit(wire::VrfCommit {
-            epoch: fixture.context.epoch,
-            commitment: [0x66; 32],
-            signer: 0,
-            bls_sig: vec![0x66],
-        }),
-        wire::ConsensusMessageV2Payload::VrfReveal(wire::VrfReveal {
-            epoch: fixture.context.epoch,
-            reveal: [0x67; 32],
-            signer: 0,
-            vrf_proof: vec![0x67],
-            bls_sig: vec![0x67],
-        }),
         wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(
             wire::GlobalBeaconPartialSignature {
                 round: fixture.round,
@@ -2674,7 +2661,7 @@ fn all_eight_auxiliary_broadcast_payloads_are_explicitly_rejected() {
             },
         ),
     ];
-    assert_eq!(payloads.len(), 9);
+    assert_eq!(payloads.len(), 7);
     for (ordinal, payload) in (60_u128..).zip(payloads) {
         let effect = AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(payload));
         let ownership = bound_ownership(&effect, fixture.tag, ordinal);

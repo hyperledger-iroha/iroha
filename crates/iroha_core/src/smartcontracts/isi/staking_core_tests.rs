@@ -211,8 +211,6 @@ fn set_epoch_length(state: &mut State, epoch_length_blocks: u64) {
         let params = wb.parameters.get_mut();
         params.set_parameter(Parameter::Custom(
             SumeragiNposParameters {
-                vrf_commit_window_blocks: 1,
-                vrf_reveal_window_blocks: 1,
                 epoch_length_blocks: NonZeroU64::new(epoch_length_blocks)
                     .expect("staking test epoch length must be non-zero"),
                 ..SumeragiNposParameters::default()

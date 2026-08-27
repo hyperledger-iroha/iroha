@@ -1,8 +1,0 @@
-
-            {
-                "mode": "Middle",
-                "listen": "127.0.0.1:0",
-                "pow": { "required": true, "difficulty": 18 },
-                "padding": { "cell_size": 0, "max_idle_millis": 200 }
-            }
-        

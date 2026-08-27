@@ -179,7 +179,6 @@ public final class NexusAppClientTest {
       assertEquals(
           account,
           AccountAddress.parseEncodedIgnoringCurveSupport(account, chainDiscriminant)
-              .address
               .toI105(chainDiscriminant));
     }
     @SuppressWarnings("unchecked")
@@ -246,7 +245,6 @@ public final class NexusAppClientTest {
         hexToBytes(string(approval, "signing_public_key_hex"));
     final String wrongChainDestination =
         AccountAddress.parseEncodedIgnoringCurveSupport(destination, fixtureChain)
-            .address
             .toI105(fixtureChain + 1);
     final NexusAppClient client =
         new NexusAppClient(
@@ -287,7 +285,6 @@ public final class NexusAppClientTest {
 
     final String wrongChainAuthority =
         AccountAddress.parseEncodedIgnoringCurveSupport(authority, fixtureChain)
-            .address
             .toI105(fixtureChain + 1);
     final NexusAppClient approvalClient =
         new NexusAppClient(

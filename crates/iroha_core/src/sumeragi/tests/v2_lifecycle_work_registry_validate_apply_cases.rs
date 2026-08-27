@@ -123,13 +123,14 @@ fn assert_ready_validate_vote_sign_live_transaction(
         assert!(observed.effects().is_empty());
     }
     let mut holder = LifecycleWorkRegistryHolder::empty();
-    let (lease, slot, coordinator_candidate) = holder
+    let (lease, slot, coordinator_candidate, _retry_census) = holder
         .install_remote_proposal_validate_completion_for_test(
             &fixture.verified,
             tag,
             proposal,
             fixture.manifest.clone(),
             validated_receipt,
+            None,
         );
     let registry_before = format!("{:?}", holder.registry_for_test());
     let prepared = holder
@@ -849,13 +850,19 @@ fn ready_validate_apply_actor_global_child_fixture(
     assert!(observed.effects().is_empty());
 
     let mut holder = LifecycleWorkRegistryHolder::empty();
-    let (lease, slot, coordinator_candidate) = holder
+    let (lease, slot, coordinator_candidate, recovered_validate_retry_census) = holder
         .install_remote_proposal_validate_completion_for_test(
             &fixture.verified,
             tag,
             proposal,
             fixture.manifest.clone(),
             validated_receipt,
+            Some((
+                decision.round,
+                decision.proposal_round,
+                decision.subject,
+                decision.execution_commitment,
+            )),
         );
     let active_context = LifecycleContext::new(
         coordinator_candidate.key.context(),
@@ -885,6 +892,11 @@ fn ready_validate_apply_actor_global_child_fixture(
     assert!(!live_validate_attestation.requires_io_dispatch());
     let live_validate_dispatch_key = live_validate_attestation.dispatch_key();
     assert!(live_validate_dispatch_key.matches_consensus_round(&round));
+    assert_eq!(
+        recovered_validate_retry_census.owner_class_counts_for_test(),
+        (1, 0),
+        "the remote-Proposal Validate parent owns one admission retry seal"
+    );
     coordinator.ready_index.remove(&lease.ordinal());
     coordinator
         .records
@@ -1026,6 +1038,7 @@ fn ready_validate_apply_actor_global_child_fixture(
             startup,
             cleanup,
             live_validate_dispatch_key,
+            recovered_validate_retry_census,
             _directory.path(),
         );
         return;
@@ -1117,13 +1130,15 @@ fn ready_validate_apply_actor_global_child_fixture(
     .0;
     let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
     let (mut services, _) = crate::sumeragi::v2_worker::tests::fixture();
-    let (mut executor, mut planner_io) = owner.bind_body_store_to_lifecycle_completion_io_for_test(
-        &mut services,
-        runtime,
-        std::sync::Arc::clone(&output_guard),
-        0,
-        2,
-    );
+    let (mut executor, mut planner_io) = owner
+        .bind_body_store_to_lifecycle_completion_io_with_validate_retry_census_for_test(
+            &mut services,
+            runtime,
+            std::sync::Arc::clone(&output_guard),
+            0,
+            2,
+            recovered_validate_retry_census,
+        );
     let live_started_at = std::time::Instant::now();
     executor
         .arm_live_clocks(
@@ -1561,6 +1576,7 @@ fn assert_lifecycle_decision_apply_live_recovered_substitution_matrix(
     live_startup: Vec<AdapterEffect>,
     live_cleanup: LiveLifecycleDecisionApplyReconciliationAuthorityV1,
     live_validate_dispatch_key: LifecycleValidateDispatchKeyV1,
+    recovered_validate_retry_census: RecoveredDurableValidateRetryCensusV1,
     live_body_root: &std::path::Path,
 ) {
     let live_runtime = crate::sumeragi::v2_runtime::SerializedV2Runtime::new(
@@ -1580,12 +1596,6 @@ fn assert_lifecycle_decision_apply_live_recovered_substitution_matrix(
         })
         .expect("semantically revalidate exact live Apply lineage body marker");
     let live_body_store_identity = live_body_store.instance_identity();
-    let replayed_decision = live_runtime
-        .replayed_decision_key()
-        .expect("read exact live Apply lineage Decision");
-    let recovered_validate_retry_census = live_holder
-        .project_recovered_durable_validate_retry_census(live_coordinator, replayed_decision)
-        .expect("project empty recovered Validate census beside live Apply");
     let live_output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
     let (mut live_executor, live_body_store) =
         crate::sumeragi::v2_effects::V2EffectExecutor::open_with_body_store(

@@ -2802,6 +2802,13 @@ impl Governance {
                 "{name} must be within 1..=1_000"
             );
         }
+        let parliament_timed_ovn = self.parliament_timed_ovn.parse();
+        let maximum_hidden_body_size = self.policy_jury_size.max(self.confirmation_jury_size);
+        assert!(
+            usize::try_from(parliament_timed_ovn.max_corpus_entries)
+                .is_ok_and(|max_corpus_entries| max_corpus_entries >= maximum_hidden_body_size),
+            "governance.parliament_timed_ovn.max_corpus_entries must cover the largest hidden-ballot body (max(policy_jury_size, confirmation_jury_size)={maximum_hidden_body_size})"
+        );
         let viral_incentives = actual::ViralIncentives {
             incentive_pool_account: parse_account_id_literal(
                 &self.viral_incentive_pool_account,
@@ -2933,7 +2940,7 @@ impl Governance {
             parliament_quorum_bps: self.parliament_quorum_bps,
             parliament_invitation_phase_blocks: self.parliament_invitation_phase_blocks,
             parliament_public_finding_phase_blocks: self.parliament_public_finding_phase_blocks,
-            parliament_timed_ovn: self.parliament_timed_ovn.parse(),
+            parliament_timed_ovn,
             parliament_tle_partial_release_signer_provider_handle: self
                 .parliament_tle_partial_release_signer_provider_handle,
             parliament_tle_partial_release_signer_provider_revision: self
@@ -3015,9 +3022,12 @@ mod governance_tests {
     fn parliament_timed_ovn_file_config_parses_deterministic_height_windows() {
         let table: toml::Table = toml::from_str(
             r#"
+policy_jury_size = 16
+confirmation_jury_size = 16
+
 [parliament_timed_ovn]
-registration_phase_blocks = 11
-survivor_freeze_phase_blocks = 12
+registration_phase_blocks = 17
+survivor_freeze_phase_blocks = 16
 commitment_phase_blocks = 13
 release_delay_blocks = 14
 opening_phase_blocks = 15
@@ -3036,8 +3046,8 @@ max_corpus_entries = 16
         assert_eq!(
             parsed,
             actual::ParliamentTimedOvn {
-                registration_phase_blocks: 11,
-                survivor_freeze_phase_blocks: 12,
+                registration_phase_blocks: 17,
+                survivor_freeze_phase_blocks: 16,
                 commitment_phase_blocks: 13,
                 release_delay_blocks: 14,
                 opening_phase_blocks: 15,
@@ -3045,16 +3055,16 @@ max_corpus_entries = 16
                 max_corpus_entries: 16,
             }
         );
-        assert_eq!(parsed.checked_attempt_span_blocks(), Some(65));
-        assert_eq!(parsed.checked_max_lifecycle_span_blocks(), Some(1_040));
+        assert_eq!(parsed.checked_attempt_span_blocks(), Some(75));
+        assert_eq!(parsed.checked_max_lifecycle_span_blocks(), Some(1_200));
     }
 
     #[test]
     fn parliament_timed_ovn_defaults_are_bounded_and_valid() {
         let parsed = ParliamentTimedOvn::default().parse();
 
-        assert_eq!(parsed.checked_attempt_span_blocks(), Some(8_700));
-        assert_eq!(parsed.checked_max_lifecycle_span_blocks(), Some(34_800));
+        assert_eq!(parsed.checked_attempt_span_blocks(), Some(9_400));
+        assert_eq!(parsed.checked_max_lifecycle_span_blocks(), Some(37_600));
         assert_eq!(
             parsed.opening_phase_blocks,
             defaults::governance::parliament_timed_ovn::OPENING_PHASE_BLOCKS
@@ -3089,6 +3099,12 @@ max_corpus_entries = 16
             ..parsed
         };
         maximum_retries.assert_valid();
+        let minimum_maximum_corpus_window = actual::ParliamentTimedOvn {
+            commitment_phase_blocks: 32,
+            max_corpus_entries: 1_000,
+            ..parsed
+        };
+        minimum_maximum_corpus_window.assert_valid();
     }
 
     #[test]
@@ -3105,6 +3121,21 @@ max_corpus_entries = 16
             },
             actual::ParliamentTimedOvn {
                 commitment_phase_blocks: 0,
+                ..valid
+            },
+            actual::ParliamentTimedOvn {
+                commitment_phase_blocks: 31,
+                max_corpus_entries: 1_000,
+                ..valid
+            },
+            actual::ParliamentTimedOvn {
+                registration_phase_blocks: 1_000,
+                max_corpus_entries: 1_000,
+                ..valid
+            },
+            actual::ParliamentTimedOvn {
+                survivor_freeze_phase_blocks: 999,
+                max_corpus_entries: 1_000,
                 ..valid
             },
             actual::ParliamentTimedOvn {
@@ -3147,6 +3178,21 @@ max_corpus_entries = 16
                 "invalid timed-OVN policy must fail closed: {policy:?}"
             );
         }
+    }
+
+    #[test]
+    fn parliament_timed_ovn_corpus_covers_every_hidden_body_seat() {
+        let mut governance = Governance::default();
+        governance.parliament_timed_ovn.max_corpus_entries = 499;
+        governance.parliament_timed_ovn.registration_phase_blocks = 500;
+        governance.parliament_timed_ovn.survivor_freeze_phase_blocks = 499;
+        governance.policy_jury_size = 500;
+        governance.confirmation_jury_size = 499;
+
+        assert!(
+            std::panic::catch_unwind(|| governance.parse()).is_err(),
+            "a hidden body larger than the timed-OVN corpus must fail at startup"
+        );
     }
 
     #[test]
@@ -6876,7 +6922,7 @@ impl SoranetHandshake {
             trust_gossip,
             kem_id: resolved_kem_id,
             sig_id: resolved_sig_id,
-            resume_hash: resume_hash.map(|value| value.map(Into::into)),
+            resume_hash: resume_hash.map(|value| value.map(Vec::<u8>::from)),
             pow: pow.parse(),
         }
     }
@@ -6928,8 +6974,6 @@ pub struct SoranetHandshakePow {
     revocation_store_ttl_secs: u64,
     #[config(default = "Self::default_revocation_store_path()")]
     revocation_store_path: PathBuf,
-    /// ML-DSA-44 public key for verifying signed Argon2 ticket envelopes.
-    signed_ticket_public_key_hex: Option<WithOrigin<HexBytes>>,
     #[config(nested)]
     puzzle: SoranetHandshakePuzzle,
 }
@@ -6978,7 +7022,6 @@ impl SoranetHandshakePow {
             revocation_store_capacity,
             revocation_store_ttl_secs,
             revocation_store_path,
-            signed_ticket_public_key_hex,
             puzzle,
         } = self;
         let min_ticket_ttl = Duration::from_secs(min_ticket_ttl_secs.max(1));
@@ -7008,8 +7051,6 @@ impl SoranetHandshakePow {
             revocation_store_capacity,
             revocation_max_ttl,
             revocation_store_path: revocation_store_path.to_string_lossy().into_owned().into(),
-            signed_ticket_public_key: signed_ticket_public_key_hex
-                .map(|value| value.into_value().into()),
             puzzle: Some(puzzle.parse()),
         }
     }
@@ -7815,12 +7856,6 @@ pub struct Network {
     /// Minimum trust score before gossip is ignored.
     #[config(default = "defaults::network::TRUST_MIN_SCORE")]
     pub trust_min_score: i32,
-    /// Debug-only inbound P2P application-frame loss percentage used by fault harnesses.
-    #[config(default)]
-    pub debug_packet_loss_inbound_percent: u8,
-    /// Debug-only outbound P2P application-frame loss percentage used by fault harnesses.
-    #[config(default)]
-    pub debug_packet_loss_outbound_percent: u8,
     /// Maximum number of transactions sent or accepted per gossip batch (canonical ceiling: 512).
     #[config(default = "defaults::network::TRANSACTION_GOSSIP_SIZE")]
     pub transaction_gossip_size: NonZeroU32,
@@ -7903,7 +7938,7 @@ pub struct Network {
     /// Optional outbound proxy URL for TCP-based dials (e.g., `http://user:pass@host:port`,
     /// `https://host:port`, `socks5://user:pass@host:port`, or `socks5h://host:port`).
     ///
-    /// Note: `https://` proxies require a build with `iroha_p2p/p2p_tls` to wrap the proxy hop in TLS.
+    /// The mandatory P2P TLS stack also wraps `https://` proxy hops in pinned TLS.
     pub p2p_proxy: Option<String>,
     /// Require that outbound TCP-based dials use `p2p_proxy`.
     ///
@@ -8126,8 +8161,6 @@ impl Network {
             trust_penalty_bad_gossip,
             trust_penalty_unknown_peer,
             trust_min_score,
-            debug_packet_loss_inbound_percent,
-            debug_packet_loss_outbound_percent,
             transaction_gossip_size,
             transaction_gossip_period_ms: transaction_gossip_period,
             transaction_gossip_resend_ticks,
@@ -8274,16 +8307,6 @@ impl Network {
         let soranet_privacy = user_soranet_privacy.parse(emitter);
         let soranet_vpn = soranet_vpn.parse();
         let lane_profile = actual::LaneProfile::from_label(&lane_profile);
-        if debug_packet_loss_inbound_percent > 100 {
-            panic!(
-                "network.debug_packet_loss_inbound_percent must be between 0 and 100, got {debug_packet_loss_inbound_percent}"
-            );
-        }
-        if debug_packet_loss_outbound_percent > 100 {
-            panic!(
-                "network.debug_packet_loss_outbound_percent must be between 0 and 100, got {debug_packet_loss_outbound_percent}"
-            );
-        }
         let limits = lane_profile.derived_limits();
         let max_incoming = max_incoming.or(limits.max_incoming);
         let max_total_connections = max_total_connections.or(limits.max_total_connections);
@@ -8371,8 +8394,6 @@ impl Network {
                 trust_penalty_bad_gossip,
                 trust_penalty_unknown_peer,
                 trust_min_score,
-                debug_packet_loss_inbound_percent,
-                debug_packet_loss_outbound_percent,
                 dns_refresh_interval: dns_refresh_interval
                     .map(iroha_config_base::util::DurationMs::get),
                 dns_refresh_ttl: dns_refresh_ttl.map(iroha_config_base::util::DurationMs::get),
@@ -17141,9 +17162,9 @@ pub struct ToriiFaucet {
     /// Maximum number of adaptive difficulty bits added on top of the base difficulty.
     #[config(default = "defaults::torii::faucet::POW_ADAPTIVE_MAX_EXTRA_BITS")]
     pub pow_adaptive_max_extra_bits: u8,
-    /// Whether finalized Sumeragi VRF epoch seeds are mixed into faucet challenges when available.
-    #[config(default = "defaults::torii::faucet::POW_VRF_SEED_ENABLED")]
-    pub pow_vrf_seed_enabled: bool,
+    /// Whether finalized global threshold-beacon seeds are mixed into faucet challenges.
+    #[config(default = "defaults::torii::faucet::POW_BEACON_SEED_ENABLED")]
+    pub pow_beacon_seed_enabled: bool,
 }
 impl ToriiFaucet {
     fn parse_authority(raw: &str, emitter: &mut Emitter<ParseError>) -> Option<AccountId> {
@@ -17333,7 +17354,7 @@ impl ToriiFaucet {
                 pow_adaptive_lookback_blocks: self.pow_adaptive_lookback_blocks,
                 pow_adaptive_claims_per_extra_bit: self.pow_adaptive_claims_per_extra_bit,
                 pow_adaptive_max_extra_bits: self.pow_adaptive_max_extra_bits,
-                pow_vrf_seed_enabled: self.pow_vrf_seed_enabled,
+                pow_beacon_seed_enabled: self.pow_beacon_seed_enabled,
             }),
             _ => None,
         }

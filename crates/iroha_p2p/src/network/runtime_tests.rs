@@ -30,7 +30,7 @@ fn runtime_from_handshake_preserves_puzzle_parameters() {
         .into();
     let runtime = runtime_from_handshake(handshake).expect("runtime");
     assert!(
-        runtime.pow_required(),
+        runtime.inbound_pow_required(),
         "puzzle-enabled handshake must require PoW"
     );
     let pow = runtime.pow_parameters();
@@ -178,6 +178,6 @@ fn disabled_test_admission_uses_only_in_memory_replay_state() {
     handshake.pow.revocation_store_path = path.to_string_lossy().into_owned().into();
     let runtime =
         runtime_from_handshake(handshake).expect("test-local disabled admission is in-memory");
-    assert!(!runtime.pow_required());
+    assert!(!runtime.inbound_pow_required());
     assert_eq!(runtime.active_revocations().expect("active count"), 0);
 }

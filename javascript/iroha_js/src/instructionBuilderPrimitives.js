@@ -137,6 +137,22 @@ export function assertExactNonBlankString(value, name) {
   return raw;
 }
 
+export function normalizeAssetDefinitionName(value, name) {
+  const exact = assertExactNonBlankString(value, name);
+  assertWellFormedUtf16(exact, name);
+  if (
+    Buffer.byteLength(exact) > 128 ||
+    /[#@\p{Cc}]/u.test(exact)
+  ) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must be an exact 1-128-byte asset name without control characters, #, or @`,
+      name,
+    );
+  }
+  return exact;
+}
+
 export function normalizeGovernanceSelectorV1(value, name) {
   const exact = assertString(value, name);
   if (!isCanonicalGovernanceSelectorV1(exact)) {

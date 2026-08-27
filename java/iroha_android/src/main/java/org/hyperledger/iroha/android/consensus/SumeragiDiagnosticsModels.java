@@ -143,29 +143,17 @@ public final class SumeragiDiagnosticsModels {
   /** Current permissionless-election schedule and PRF context while NPoS mode is active. */
   public static final class NposDiagnostics {
     private final BigInteger epochLengthBlocks;
-    private final BigInteger vrfCommitDeadlineOffset;
-    private final BigInteger vrfRevealDeadlineOffset;
     private final List<Integer> epochSeed;
     private final BigInteger prfHeight;
     private final BigInteger prfView;
 
     public NposDiagnostics(
         final BigInteger epochLengthBlocks,
-        final BigInteger vrfCommitDeadlineOffset,
-        final BigInteger vrfRevealDeadlineOffset,
         final List<Integer> epochSeed,
         final BigInteger prfHeight,
         final BigInteger prfView) {
       requireUnsigned64(epochLengthBlocks, "epochLengthBlocks");
-      requireUnsigned64(vrfCommitDeadlineOffset, "vrfCommitDeadlineOffset");
-      requireUnsigned64(vrfRevealDeadlineOffset, "vrfRevealDeadlineOffset");
-      require(
-          epochLengthBlocks.signum() > 0
-              && vrfCommitDeadlineOffset.signum() > 0
-              && vrfRevealDeadlineOffset.signum() > 0
-              && vrfCommitDeadlineOffset.compareTo(vrfRevealDeadlineOffset) < 0
-              && vrfRevealDeadlineOffset.compareTo(epochLengthBlocks) <= 0,
-          "NPoS diagnostics windows must be strictly ordered within the epoch");
+      require(epochLengthBlocks.signum() > 0, "epochLengthBlocks must be positive");
       require(epochSeed != null && epochSeed.size() == 32, "epochSeed must contain 32 bytes");
       boolean seedNonzero = false;
       for (final Integer item : epochSeed) {
@@ -177,16 +165,12 @@ public final class SumeragiDiagnosticsModels {
         requireUnsigned64(value, "NPoS diagnostics PRF context");
       }
       this.epochLengthBlocks = epochLengthBlocks;
-      this.vrfCommitDeadlineOffset = vrfCommitDeadlineOffset;
-      this.vrfRevealDeadlineOffset = vrfRevealDeadlineOffset;
       this.epochSeed = Collections.unmodifiableList(new ArrayList<>(epochSeed));
       this.prfHeight = prfHeight;
       this.prfView = prfView;
     }
 
     public BigInteger epochLengthBlocks() { return epochLengthBlocks; }
-    public BigInteger vrfCommitDeadlineOffset() { return vrfCommitDeadlineOffset; }
-    public BigInteger vrfRevealDeadlineOffset() { return vrfRevealDeadlineOffset; }
     public List<Integer> epochSeed() { return epochSeed; }
     public BigInteger prfHeight() { return prfHeight; }
     public BigInteger prfView() { return prfView; }
@@ -923,8 +907,6 @@ public final class SumeragiDiagnosticsModels {
             value,
             Set.of(
                 "epoch_length_blocks",
-                "vrf_commit_deadline_offset",
-                "vrf_reveal_deadline_offset",
                 "epoch_seed",
                 "prf_height",
                 "prf_view"),
@@ -941,8 +923,6 @@ public final class SumeragiDiagnosticsModels {
     }
     return new NposDiagnostics(
         diagnosticU64(record, "epoch_length_blocks", context),
-        diagnosticU64(record, "vrf_commit_deadline_offset", context),
-        diagnosticU64(record, "vrf_reveal_deadline_offset", context),
         seed,
         diagnosticU64(record, "prf_height", context),
         diagnosticU64(record, "prf_view", context));

@@ -10,6 +10,7 @@ use super::{
     projection::AdapterEffectAdmissionError,
     schema::AttestedReadyValidateDemand,
     work_registry::{
+        AttestedLifecycleDecisionApplySuccessorOutputsV1,
         AuthenticatedRecoveredWalValidateLifecycleRepair, BoundAdapterRegistryPublicationErrorV1,
         ConcreteLifecycleWorkRegistry, ConcreteWorkAddress, DurableValidateCompletionAuthority,
         DurableValidateCompletionPublication, DurableValidateCompletionPublicationError,
@@ -1568,6 +1569,23 @@ impl ProductionLifecycleOwnerV1 {
             .publish_lifecycle_output_terminal_after_fsync(retirement);
         self.coordinator = staged;
         ProductionLifecycleOutputAdmissionSettlementV1::Completed
+    }
+
+    /// Authenticate the sole exact periodic CommitQC Broadcast immediately
+    /// ordered after one Ready live Decision Apply.
+    #[allow(single_use_lifetimes)]
+    pub(in crate::sumeragi) fn attest_lifecycle_decision_apply_successor_outputs<'a>(
+        &self,
+        authority: LiveLifecycleDecisionApplyReconciliationAuthorityV1,
+        pending_outputs: impl ExactSizeIterator<Item = &'a PendingLifecycleOutputAdmissionV1>,
+    ) -> Option<AttestedLifecycleDecisionApplySuccessorOutputsV1> {
+        self.registry
+            .registry()
+            .attest_lifecycle_decision_apply_successor_outputs(
+                &self.coordinator,
+                authority,
+                pending_outputs,
+            )
     }
 
     /// Confirm the already-durable terminal frame, then retire only the stray

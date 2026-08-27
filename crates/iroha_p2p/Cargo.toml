@@ -42,44 +42,23 @@ bytes = { workspace = true }
 tracing = { workspace = true }
 base64 = { workspace = true }
 socket2 = "0.5.10"
-# Authenticated transports
+# Authenticated transports. TLS-over-TCP is mandatory in the first release;
+# QUIC is the only optional transport.
 quinn = { version = "0.11.9", optional = true }
-rcgen = { version = "0.14.5", optional = true }
-rustls = { version = "0.23.35", default-features = false, optional = true }
-tokio-rustls = { version = "0.26.4", default-features = false, optional = true }
+rcgen = "0.14.5"
+rustls = { version = "0.23.35", default-features = false, features = ["ring", "std"] }
+tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring"] }
 
-# Keep the historical package edge only so the protected workspace lockfile
-# remains reproducible until its owning release workflow regenerates it. The
-# target predicate is unconditionally false, so the classical Noise package is
-# neither selectable as a feature nor compiled for any target.
+# Protected-lockfile pin only. The target predicate is impossible, so Snow is
+# neither selectable nor compiled as part of the first-release transport.
 [target.'cfg(any())'.dependencies]
 snow = "0.10"
 
 [features]
-# First-release peer admission requires an authenticated TLS 1.3 or QUIC
-# channel binding. Keep raw TLS in every stock build; builds that explicitly
-# disable default features fail network startup before binding any public
-# listener.
-default = ["p2p_tls"]
-# If enabled, use bounded queues for peer post channel to reduce unbounded growth.
-p2p_bounded_queues = []
 # Expose opaque reply-route minting only to dependent-crate test builds.
 test-fixtures = []
-# Enable GOST public-key support in transport geometry.
-gost = ["iroha_crypto/gost"]
-# Enable Chinese SM public-key support in transport geometry and tests.
-sm = ["iroha_crypto/sm"]
 # Optional QUIC transport; TLS-over-TCP remains the mandatory fallback.
-quic = ["dep:quinn", "dep:rcgen", "dep:rustls", "rustls/ring", "rustls/std"]
-## Mandatory authenticated TLS-over-TCP transport for stock builds.
-p2p_tls = [
-    "dep:tokio-rustls",
-    "tokio-rustls/ring",
-    "dep:rustls",
-    "rustls/ring",
-    "rustls/std",
-    "dep:rcgen",
-]
+quic = ["dep:quinn"]
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "time", "macros"] }
 tempfile = { workspace = true }

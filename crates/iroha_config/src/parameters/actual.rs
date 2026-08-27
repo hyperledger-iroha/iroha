@@ -1300,8 +1300,6 @@ pub struct SoranetPow {
     pub revocation_store_path: Cow<'static, str>,
     /// Optional puzzle parameters for Argon2-based challenges.
     pub puzzle: Option<SoranetPuzzle>,
-    /// ML-DSA-44 public key used to verify signed Argon2 ticket envelopes.
-    pub signed_ticket_public_key: Option<Vec<u8>>,
 }
 /// Argon2 puzzle parameters shared with peers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1368,7 +1366,6 @@ impl SoranetPow {
             revocation_max_ttl,
             revocation_store_path,
             puzzle,
-            signed_ticket_public_key: None,
         }
     }
     /// Default PoW admission policy applied when no override is supplied.
@@ -1385,14 +1382,7 @@ impl SoranetPow {
             revocation_max_ttl: Duration::from_secs(900),
             revocation_store_path: Cow::Borrowed("./storage/soranet/ticket_revocations.norito"),
             puzzle: Some(SoranetPuzzle::default_const()),
-            signed_ticket_public_key: None,
         }
-    }
-    /// Attach the relay's signed-ticket verification key.
-    #[must_use]
-    pub fn with_signed_ticket_public_key(mut self, public_key: Option<Vec<u8>>) -> Self {
-        self.signed_ticket_public_key = public_key;
-        self
     }
 }
 impl_default!(SoranetPow => {
@@ -1588,10 +1578,6 @@ pub struct Network {
     pub trust_penalty_unknown_peer: i32,
     /// Minimum score before trust gossip is ignored.
     pub trust_min_score: i32,
-    /// Debug-only inbound application-frame loss percentage.
-    pub debug_packet_loss_inbound_percent: u8,
-    /// Debug-only outbound application-frame loss percentage.
-    pub debug_packet_loss_outbound_percent: u8,
     /// Optional DNS hostname refresh interval (None disables).
     pub dns_refresh_interval: Option<Duration>,
     /// Optional TTL-based refresh for hostname-based peers.
@@ -1599,7 +1585,7 @@ pub struct Network {
     /// Optional outbound proxy URL for TCP-based dials (e.g., `http://user:pass@host:port`,
     /// `https://host:port`, `socks5://user:pass@host:port`, or `socks5h://host:port`).
     ///
-    /// Note: `https://` proxies require a build with `iroha_p2p/p2p_tls` to wrap the proxy hop in TLS.
+    /// The mandatory P2P TLS stack also wraps `https://` proxy hops in pinned TLS.
     pub p2p_proxy: Option<String>,
     /// Require that outbound TCP-based dials use `p2p_proxy`.
     ///
@@ -2085,6 +2071,29 @@ impl ParliamentTimedOvn {
         assert!(
             (1..=crypto_corpus_limit).contains(&self.max_corpus_entries),
             "governance.parliament_timed_ovn.max_corpus_entries must be within 1..={crypto_corpus_limit}"
+        );
+        let required_single_record_blocks = u64::from(self.max_corpus_entries);
+        let required_registration_blocks = required_single_record_blocks
+            .checked_add(1)
+            .expect("bounded timed-OVN corpus plus admission slack fits u64");
+        assert!(
+            self.registration_phase_blocks >= required_registration_blocks,
+            "governance.parliament_timed_ovn.registration_phase_blocks must be at least {required_registration_blocks} for max_corpus_entries={} and one V1 admission-boundary slack block",
+            self.max_corpus_entries
+        );
+        assert!(
+            self.survivor_freeze_phase_blocks >= required_single_record_blocks,
+            "governance.parliament_timed_ovn.survivor_freeze_phase_blocks must be at least {required_single_record_blocks} for max_corpus_entries={} and the V1 authenticated-dropout transition",
+            self.max_corpus_entries
+        );
+        let required_chunk_blocks =
+            iroha_data_model::isi::governance::parliament_timed_ovn_required_chunk_blocks_v1(
+                self.max_corpus_entries,
+            );
+        assert!(
+            self.commitment_phase_blocks >= required_chunk_blocks,
+            "governance.parliament_timed_ovn.commitment_phase_blocks must be at least {required_chunk_blocks} for max_corpus_entries={} and the V1 ballot chunk bound",
+            self.max_corpus_entries
         );
     }
 }
@@ -8401,8 +8410,8 @@ pub struct ToriiFaucet {
     pub pow_adaptive_claims_per_extra_bit: u64,
     /// Maximum number of adaptive difficulty bits added on top of the base difficulty.
     pub pow_adaptive_max_extra_bits: u8,
-    /// Whether finalized Sumeragi VRF epoch seeds are mixed into faucet challenges when available.
-    pub pow_vrf_seed_enabled: bool,
+    /// Whether finalized global threshold-beacon seeds are mixed into faucet challenges.
+    pub pow_beacon_seed_enabled: bool,
 }
 /// Kagemusha command-submission configuration exposed to Torii.
 #[derive(Debug, Clone)]

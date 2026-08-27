@@ -717,11 +717,12 @@ fn response_outputs_without_exact_routes_fail_stop() {
     let (service, _) = fixture();
     let peer = service.context.roster[1].validator.clone();
     let global_v2 = BlockMessage::V2(wire::ConsensusMessageV2::new(
-        wire::ConsensusMessageV2Payload::VrfCommit(wire::VrfCommit {
-            epoch: 1,
-            commitment: [0xA5; 32],
-            signer: 0,
-            bls_sig: vec![0x5A],
+        wire::ConsensusMessageV2Payload::PayloadChunk(wire::PayloadChunk {
+            manifest_hash: HashOf::from_untyped_unchecked(Hash::new(b"global-v2-manifest")),
+            index: 0,
+            bytes: vec![0xA5],
+            sender: 0,
+            signature: vec![0x5A],
         }),
     ));
     assert!(

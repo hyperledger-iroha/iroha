@@ -3,8 +3,7 @@ use ivm::{Memory, VMError, decode, encoding, instruction};
 fn zero_word_decodes_as_32bit() {
     let mut mem = Memory::new(4);
     mem.load_code(&[0x00, 0x00, 0x00, 0x00]);
-    let (inst, len) = decode(&mem, 0).expect("decode");
-    assert_eq!(len, 4);
+    let inst = decode(&mem, 0).expect("decode");
     assert_eq!(inst, 0);
 }
 #[test]
@@ -12,8 +11,7 @@ fn wide_halt_decodes() {
     let halt = encoding::wide::encode_halt();
     let mut mem = Memory::new(4);
     mem.load_code(&halt.to_le_bytes());
-    let (inst, len) = decode(&mem, 0).expect("decode");
-    assert_eq!(len, 4);
+    let inst = decode(&mem, 0).expect("decode");
     assert_eq!((inst >> 24) as u8, instruction::wide::control::HALT);
 }
 #[test]

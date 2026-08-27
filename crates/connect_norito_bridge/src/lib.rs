@@ -15012,7 +15012,7 @@ mod kagemusha_bridge_tests {
         assert_eq!(one.lineage.selector.network_id, one.request.network_id);
         assert_eq!(one.lineage.selector.asset, one.request.asset);
         let one_bytes = norito::to_bytes(&one).expect("encode one-proof offer");
-        assert_eq!(one_bytes.len(), 12_425);
+        assert_eq!(one_bytes.len(), 12_435);
         assert_eq!(
             one_bytes,
             decode_hex_fixture(include_str!(
@@ -15107,7 +15107,7 @@ mod kagemusha_bridge_tests {
         assert!(one_bytes.len() <= OFFLINE_RECIPIENT_OFFER_MAX_PEER_BYTES);
         assert_eq!(
             one_bytes.len() + OFFLINE_RECIPIENT_OFFER_PEER_WIRE_HEADER_BYTES,
-            12_509
+            12_519
         );
         assert!(
             one_bytes.len() + OFFLINE_RECIPIENT_OFFER_PEER_WIRE_HEADER_BYTES

@@ -166,7 +166,10 @@ def _validate_replication_order_payload(payload: bytes, expected_order_id: str) 
         raise ValueError(
             "ReplicationOrderV1.target_replicas must not exceed assignment count"
         )
-    if any(previous >= current for previous, current in zip(providers, providers[1:])):
+    if any(
+        previous >= current
+        for previous, current in zip(providers, providers[1:], strict=False)
+    ):
         raise ValueError(
             "ReplicationOrderV1 assignments must use unique, strictly increasing providers"
         )

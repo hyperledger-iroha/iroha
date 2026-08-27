@@ -396,7 +396,7 @@ pub(crate) fn epoch_for_height_from_world(
     match frozen_mode {
         ConsensusMode::Permissioned => Ok(0),
         ConsensusMode::Npos => {
-            let epoch_length = v2_npos::committed_epoch_params(world)?.epoch_length_blocks;
+            let epoch_length = v2_npos::committed_epoch_length_blocks(world)?;
             Ok(height.saturating_sub(1) / epoch_length)
         }
     }
@@ -417,8 +417,6 @@ mod epoch_schedule_tests {
         );
         let mut parameters = SumeragiNposParameters::default();
         parameters.epoch_length_blocks = NonZeroU64::new(7).expect("non-zero epoch length");
-        parameters.vrf_commit_window_blocks = 2;
-        parameters.vrf_reveal_window_blocks = 2;
         parameters
             .validate()
             .expect("test NPoS parameters must be internally consistent");
@@ -484,7 +482,6 @@ mod epoch_schedule_tests {
 /// QC-based consensus message types and helpers (single-chain).
 pub mod consensus;
 pub mod da;
-pub mod epoch_report;
 pub(crate) mod evidence;
 pub(crate) mod exec;
 pub(crate) mod lane_planner;
@@ -972,8 +969,6 @@ enum FairV2IngressMessageKind {
     V2CertifiedBodyResponse,
     V2CommitCertificateRequest,
     V2CommitCertificateResponse,
-    V2VrfCommit,
-    V2VrfReveal,
     V2GlobalBeaconPartialSignature,
     KuraReplicaAdvert,
     LaneBlockProposal,
@@ -1021,8 +1016,6 @@ fn fair_v2_ingress_control_kind(message: &BlockMessage) -> Option<FairV2IngressC
         | ConsensusMessageV2Payload::CertifiedBodyResponse(_)
         | ConsensusMessageV2Payload::CommitCertificateRequest(_)
         | ConsensusMessageV2Payload::CommitCertificateResponse(_)
-        | ConsensusMessageV2Payload::VrfCommit(_)
-        | ConsensusMessageV2Payload::VrfReveal(_)
         | ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => return None,
     })
 }
@@ -1047,8 +1040,6 @@ fn fair_v2_ingress_same_control_slot(
             | ConsensusMessageV2Payload::CertifiedBodyResponse(_)
             | ConsensusMessageV2Payload::CommitCertificateRequest(_)
             | ConsensusMessageV2Payload::CommitCertificateResponse(_)
-            | ConsensusMessageV2Payload::VrfCommit(_)
-            | ConsensusMessageV2Payload::VrfReveal(_)
             | ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => return None,
         })
     };
@@ -1344,8 +1335,6 @@ fn fair_v2_ingress_leader_wire_identity(
         | ConsensusMessageV2Payload::CertifiedBodyRequest(_)
         | ConsensusMessageV2Payload::CommitCertificateRequest(_)
         | ConsensusMessageV2Payload::CommitCertificateResponse(_)
-        | ConsensusMessageV2Payload::VrfCommit(_)
-        | ConsensusMessageV2Payload::VrfReveal(_)
         | ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => {
             return FairV2IngressLeaderWireDerivation::NotApplicable;
         }
@@ -1575,19 +1564,17 @@ impl FairV2IngressMessageKind {
             Self::V2CertifiedBodyResponse => 8,
             Self::V2CommitCertificateRequest => 9,
             Self::V2CommitCertificateResponse => 10,
-            Self::V2VrfCommit => 11,
-            Self::V2VrfReveal => 12,
-            Self::KuraReplicaAdvert => 13,
-            Self::LaneBlockProposal => 14,
-            Self::LaneExecutablePayload => 15,
-            Self::LaneBlockNewViewVote => 16,
-            Self::LaneBlockNewViewCertificate => 17,
-            Self::LaneBlockVote => 18,
-            Self::LaneBlockQc => 19,
-            Self::LaneBlockCertificate => 20,
-            Self::LaneHistoricalRecoveryRequest => 21,
-            Self::LaneHistoricalRecoveryResponse => 22,
-            Self::V2GlobalBeaconPartialSignature => 23,
+            Self::KuraReplicaAdvert => 11,
+            Self::LaneBlockProposal => 12,
+            Self::LaneExecutablePayload => 13,
+            Self::LaneBlockNewViewVote => 14,
+            Self::LaneBlockNewViewCertificate => 15,
+            Self::LaneBlockVote => 16,
+            Self::LaneBlockQc => 17,
+            Self::LaneBlockCertificate => 18,
+            Self::LaneHistoricalRecoveryRequest => 19,
+            Self::LaneHistoricalRecoveryResponse => 20,
+            Self::V2GlobalBeaconPartialSignature => 21,
         }
     }
     fn classify(message: &BlockMessage) -> Option<Self> {
@@ -1611,8 +1598,6 @@ impl FairV2IngressMessageKind {
                 ConsensusMessageV2Payload::CommitCertificateResponse(_) => {
                     Self::V2CommitCertificateResponse
                 }
-                ConsensusMessageV2Payload::VrfCommit(_) => Self::V2VrfCommit,
-                ConsensusMessageV2Payload::VrfReveal(_) => Self::V2VrfReveal,
                 ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => {
                     Self::V2GlobalBeaconPartialSignature
                 }
@@ -1647,10 +1632,39 @@ impl FairV2IngressMessageKind {
                 | Self::V2CertifiedBodyResponse
                 | Self::V2CommitCertificateRequest
                 | Self::V2CommitCertificateResponse
-                | Self::V2VrfCommit
-                | Self::V2VrfReveal
                 | Self::V2GlobalBeaconPartialSignature
         )
+    }
+}
+#[cfg(test)]
+#[test]
+fn fair_v2_ingress_projection_codes_are_dense() {
+    let kinds = [
+        FairV2IngressMessageKind::V2Proposal,
+        FairV2IngressMessageKind::V2Vote,
+        FairV2IngressMessageKind::V2QuorumCertificate,
+        FairV2IngressMessageKind::V2TimeoutVote,
+        FairV2IngressMessageKind::V2TimeoutCertificate,
+        FairV2IngressMessageKind::V2PayloadManifest,
+        FairV2IngressMessageKind::V2PayloadChunk,
+        FairV2IngressMessageKind::V2CertifiedBodyRequest,
+        FairV2IngressMessageKind::V2CertifiedBodyResponse,
+        FairV2IngressMessageKind::V2CommitCertificateRequest,
+        FairV2IngressMessageKind::V2CommitCertificateResponse,
+        FairV2IngressMessageKind::KuraReplicaAdvert,
+        FairV2IngressMessageKind::LaneBlockProposal,
+        FairV2IngressMessageKind::LaneExecutablePayload,
+        FairV2IngressMessageKind::LaneBlockNewViewVote,
+        FairV2IngressMessageKind::LaneBlockNewViewCertificate,
+        FairV2IngressMessageKind::LaneBlockVote,
+        FairV2IngressMessageKind::LaneBlockQc,
+        FairV2IngressMessageKind::LaneBlockCertificate,
+        FairV2IngressMessageKind::LaneHistoricalRecoveryRequest,
+        FairV2IngressMessageKind::LaneHistoricalRecoveryResponse,
+        FairV2IngressMessageKind::V2GlobalBeaconPartialSignature,
+    ];
+    for (expected, kind) in (0_u8..).zip(kinds) {
+        assert_eq!(kind.projection_code(), expected);
     }
 }
 fn fair_v2_ingress_consensus_round(
@@ -1674,9 +1688,7 @@ fn fair_v2_ingress_consensus_round(
         }
         ConsensusMessageV2Payload::GlobalBeaconPartialSignature(partial) => Some(partial.round),
         ConsensusMessageV2Payload::PayloadChunk(_)
-        | ConsensusMessageV2Payload::CommitCertificateRequest(_)
-        | ConsensusMessageV2Payload::VrfCommit(_)
-        | ConsensusMessageV2Payload::VrfReveal(_) => None,
+        | ConsensusMessageV2Payload::CommitCertificateRequest(_) => None,
     }
 }
 #[cfg(test)]
@@ -2678,8 +2690,6 @@ impl FairV2IngressClass {
             | ConsensusMessageV2Payload::CertifiedBodyRequest(_)
             | ConsensusMessageV2Payload::CommitCertificateRequest(_)
             | ConsensusMessageV2Payload::CommitCertificateResponse(_)
-            | ConsensusMessageV2Payload::VrfCommit(_)
-            | ConsensusMessageV2Payload::VrfReveal(_)
             | ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => Self::Progress,
             ConsensusMessageV2Payload::PayloadChunk(_)
             | ConsensusMessageV2Payload::CertifiedBodyResponse(_) => Self::TransportCompletion,
@@ -3317,21 +3327,15 @@ fn fair_v2_ingress_network_message_bytes(consensus_envelope_bytes: usize) -> Opt
 }
 /// Exact plaintext P2P data-frame ceiling for one bare v2 envelope.
 ///
-/// The protocol-wide maximum public-key payload is used as both relay origin
-/// and direct target, covering validators, observers, and rotated responders
-/// independently of the active roster or compiled crypto features. The direct
-/// frame dominates broadcast. Arithmetic failures fail closed as `usize::MAX`.
+/// Relay origin and direct target use the exact first-release BLS-normal node
+/// identity geometry. The direct frame dominates broadcast. Arithmetic
+/// failures fail closed as `usize::MAX`.
 fn fair_v2_ingress_required_p2p_frame_bytes(consensus_envelope_bytes: usize) -> usize {
     let required = || -> Option<usize> {
         let network_message_bytes =
             fair_v2_ingress_network_message_bytes(consensus_envelope_bytes)?;
         Some(
-            iroha_p2p::network::data_frame_wire_len_from_payload_len_with_peer_key_bytes::<
-                crate::NetworkMessage,
-            >(
-                iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES,
-                Some(iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES),
-                iroha_p2p::network::MAX_RELAY_ORIGIN_SIGNATURE_BYTES,
+            iroha_p2p::network::direct_data_frame_wire_len_from_payload_len::<crate::NetworkMessage>(
                 network_message_bytes,
             ),
         )
@@ -3344,12 +3348,7 @@ fn fair_v2_ingress_required_lane_p2p_frame_bytes(block_message_bytes: usize) -> 
         let network_message_bytes =
             fair_v2_ingress_network_message_bytes_from_block_message(block_message_bytes)?;
         Some(
-            iroha_p2p::network::data_frame_wire_len_from_payload_len_with_peer_key_bytes::<
-                crate::NetworkMessage,
-            >(
-                iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES,
-                Some(iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES),
-                iroha_p2p::network::MAX_RELAY_ORIGIN_SIGNATURE_BYTES,
+            iroha_p2p::network::direct_data_frame_wire_len_from_payload_len::<crate::NetworkMessage>(
                 network_message_bytes,
             ),
         )
@@ -3416,8 +3415,9 @@ fn fair_v2_ingress_required_merge_sidecar_chunk_network_message_bytes_for_key(
 /// Exact plaintext direct P2P frame required by a maximum sidecar chunk.
 ///
 /// Protocol-maximum public-key payloads cover the embedded requester and
-/// responder as well as the relay origin and target. Arithmetic failures map
-/// to `usize::MAX`, so context activation fails closed.
+/// responder; relay origin and target use the canonical BLS-normal node
+/// geometry. Arithmetic failures map to `usize::MAX`, so context activation
+/// fails closed.
 fn fair_v2_ingress_required_merge_sidecar_chunk_p2p_frame_bytes() -> usize {
     let required = || -> Option<usize> {
         let network_message_bytes =
@@ -3425,12 +3425,7 @@ fn fair_v2_ingress_required_merge_sidecar_chunk_p2p_frame_bytes() -> usize {
                 iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES,
             )?;
         Some(
-            iroha_p2p::network::data_frame_wire_len_from_payload_len_with_peer_key_bytes::<
-                crate::NetworkMessage,
-            >(
-                iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES,
-                Some(iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES),
-                iroha_p2p::network::MAX_RELAY_ORIGIN_SIGNATURE_BYTES,
+            iroha_p2p::network::direct_data_frame_wire_len_from_payload_len::<crate::NetworkMessage>(
                 network_message_bytes,
             ),
         )
@@ -6431,7 +6426,6 @@ pub(crate) fn fair_v2_ingress_admit_with_roster_for_test(
 }
 /// Bounded ingress handle for the serialized Sumeragi v2 runner.
 ///
-/// Global v1 frames are decode-only and are rejected before any queue handoff.
 /// Fixed-small live auxiliary messages share the exact fair-ingress ownership
 /// path but are terminalized before either consensus reducer.
 /// All accepted queues are bounded and non-blocking. Reducer- and lane-owned
@@ -6537,62 +6531,52 @@ impl SumeragiHandle {
             );
             return SumeragiIngressDisposition::Retry(inbound);
         }
-        if matches!(inbound.message(), BlockMessage::V2(_))
-            || inbound.message().is_lane_local()
-            || inbound.message().is_live_auxiliary()
-        {
-            let queue = status::WorkerQueueKind::Blocks;
-            return match self.block.try_push(inbound) {
-                Ok(FairV2IngressPushDisposition::Enqueued) => {
-                    status::record_worker_queue_enqueue(queue);
-                    self.wake();
-                    SumeragiIngressDisposition::Accepted
-                }
-                Ok(FairV2IngressPushDisposition::Coalesced) => {
-                    SumeragiIngressDisposition::Coalesced
-                }
-                Err(FairV2IngressPushError::Full(inbound)) => {
-                    iroha_logger::debug!(
-                        ?queue,
-                        "bounded per-source Sumeragi ingress queue is full; retaining caller ownership"
-                    );
-                    SumeragiIngressDisposition::Retry(inbound)
-                }
-                Err(FairV2IngressPushError::Closed(inbound)) => {
-                    iroha_logger::debug!(
-                        ?queue,
-                        "Sumeragi ingress queue closed during height rollover; retaining caller ownership"
-                    );
-                    SumeragiIngressDisposition::Retry(inbound)
-                }
-                Err(FairV2IngressPushError::FailStop(inbound)) => {
-                    iroha_logger::error!(
-                        ?queue,
-                        "durable Sumeragi ingress lifecycle failed; requiring process restart"
-                    );
-                    self.output_guard
-                        .activate_restart_required_from_permit(permit);
-                    SumeragiIngressDisposition::FailStop(inbound)
-                }
-                Err(FairV2IngressPushError::Rejected(rejection)) => {
-                    let message_kind =
-                        FairV2IngressMessageKind::classify(rejection.inbound.message());
-                    let round = fair_v2_ingress_consensus_round(rejection.inbound.message());
-                    iroha_logger::warn!(
-                        ?queue,
-                        reason = ?rejection.reason,
-                        ?message_kind,
-                        ?round,
-                        semantic_origin = ?rejection.inbound.sender(),
-                        authenticated_via = ?rejection.inbound.via(),
-                        "permanently rejected Sumeragi ingress envelope"
-                    );
-                    SumeragiIngressDisposition::Rejected(rejection.inbound)
-                }
-            };
+        let queue = status::WorkerQueueKind::Blocks;
+        match self.block.try_push(inbound) {
+            Ok(FairV2IngressPushDisposition::Enqueued) => {
+                status::record_worker_queue_enqueue(queue);
+                self.wake();
+                SumeragiIngressDisposition::Accepted
+            }
+            Ok(FairV2IngressPushDisposition::Coalesced) => SumeragiIngressDisposition::Coalesced,
+            Err(FairV2IngressPushError::Full(inbound)) => {
+                iroha_logger::debug!(
+                    ?queue,
+                    "bounded per-source Sumeragi ingress queue is full; retaining caller ownership"
+                );
+                SumeragiIngressDisposition::Retry(inbound)
+            }
+            Err(FairV2IngressPushError::Closed(inbound)) => {
+                iroha_logger::debug!(
+                    ?queue,
+                    "Sumeragi ingress queue closed during height rollover; retaining caller ownership"
+                );
+                SumeragiIngressDisposition::Retry(inbound)
+            }
+            Err(FairV2IngressPushError::FailStop(inbound)) => {
+                iroha_logger::error!(
+                    ?queue,
+                    "durable Sumeragi ingress lifecycle failed; requiring process restart"
+                );
+                self.output_guard
+                    .activate_restart_required_from_permit(permit);
+                SumeragiIngressDisposition::FailStop(inbound)
+            }
+            Err(FairV2IngressPushError::Rejected(rejection)) => {
+                let message_kind = FairV2IngressMessageKind::classify(rejection.inbound.message());
+                let round = fair_v2_ingress_consensus_round(rejection.inbound.message());
+                iroha_logger::warn!(
+                    ?queue,
+                    reason = ?rejection.reason,
+                    ?message_kind,
+                    ?round,
+                    semantic_origin = ?rejection.inbound.sender(),
+                    authenticated_via = ?rejection.inbound.via(),
+                    "permanently rejected Sumeragi ingress envelope"
+                );
+                SumeragiIngressDisposition::Rejected(rejection.inbound)
+            }
         }
-        iroha_logger::debug!("rejecting decode-only Sumeragi v1 frame on the v2 live ingress");
-        SumeragiIngressDisposition::Obsolete
     }
     /// Try to enqueue a canonical message and preserve it on retryable pressure.
     pub fn try_incoming_block_message_from_owned(
@@ -8241,15 +8225,10 @@ mod authoritative_runtime_gate_tests {
         let network_message_bytes = network_message.encoded_len();
         assert_eq!(
             required_control_frame,
-            iroha_p2p::network::data_frame_wire_len_from_payload_len_with_peer_key_bytes::<
-                crate::NetworkMessage,
-            >(
-                iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES,
-                Some(iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES),
-                iroha_p2p::network::MAX_RELAY_ORIGIN_SIGNATURE_BYTES,
-                network_message_bytes,
+            iroha_p2p::network::direct_data_frame_wire_len_from_payload_len::<crate::NetworkMessage>(
+                network_message_bytes
             ),
-            "protocol-maximum identities must use the exact complete direct P2P wire"
+            "canonical node identities must use the exact complete direct P2P wire"
         );
         assert!(required_control_frame >= exact_direct_frame);
         assert!(exact_direct_frame > exact_broadcast_frame);
@@ -8377,15 +8356,10 @@ mod authoritative_runtime_gate_tests {
             super::fair_v2_ingress_required_p2p_frame_bytes(required);
         assert_eq!(
             protocol_maximum_response_frame,
-            iroha_p2p::network::data_frame_wire_len_from_payload_len_with_peer_key_bytes::<
-                crate::NetworkMessage,
-            >(
-                iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES,
-                Some(iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES),
-                iroha_p2p::network::MAX_RELAY_ORIGIN_SIGNATURE_BYTES,
-                network_response.encoded_len(),
+            iroha_p2p::network::direct_data_frame_wire_len_from_payload_len::<crate::NetworkMessage>(
+                network_response.encoded_len()
             ),
-            "maximum completion must retain exact protocol-maximum direct-relay geometry"
+            "maximum completion must retain exact canonical direct-relay geometry"
         );
         assert!(protocol_maximum_response_frame >= actual_direct_response_frame);
         let network_id = crate::sumeragi::synthetic_network_id("fair-v2-ingress-test");

@@ -20,7 +20,7 @@
 //! - `type_id` must be known in the table below.
 //! - Hash must match `iroha_crypto::Hash::new(payload)`.
 use crate::{SyscallPolicy, error::VMError};
-use std::{cell::Cell, collections::HashSet, sync::OnceLock};
+use std::{cell::Cell, collections::HashSet, marker::PhantomData, rc::Rc, sync::OnceLock};
 /// Known pointer-ABI types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PointerType {
@@ -208,13 +208,18 @@ thread_local! {
 /// Guard that enforces a pointer-ABI policy for the current thread during its lifetime.
 pub struct PointerPolicyGuard {
     previous: Option<(SyscallPolicy, u8)>,
+    // A thread-local policy must be restored on the thread that installed it.
+    _not_send_or_sync: PhantomData<Rc<()>>,
 }
 impl PointerPolicyGuard {
     /// Install a guard that enforces `policy` and annotates violations with `abi_version`.
     pub fn install(policy: SyscallPolicy, abi_version: u8) -> Self {
         let previous = ENFORCED_POLICY.with(|cell| cell.get());
         ENFORCED_POLICY.with(|cell| cell.set(Some((policy, abi_version))));
-        Self { previous }
+        Self {
+            previous,
+            _not_send_or_sync: PhantomData,
+        }
     }
 }
 impl Drop for PointerPolicyGuard {

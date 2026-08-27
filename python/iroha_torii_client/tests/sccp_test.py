@@ -44,9 +44,17 @@ from iroha_torii_client import (  # noqa: E402
 )
 from iroha_torii_client.mock import ToriiMockServer  # noqa: E402
 
-HASH = lambda byte: f"{byte:02x}" * 32
-PREFIX_HASH = lambda byte: "0x" + HASH(byte)
-UPPER = lambda byte, length: f"{byte:02x}".upper() * length
+
+def HASH(byte: int) -> str:
+    return f"{byte:02x}" * 32
+
+
+def PREFIX_HASH(byte: int) -> str:
+    return "0x" + HASH(byte)
+
+
+def UPPER(byte: int, length: int) -> str:
+    return f"{byte:02x}".upper() * length
 AUTHORITY = "sorauﾛ1Nヱﾐﾚﾗﾗﾁ9SHyｾｼF2ﾚbヱAｦiﾇｺﾂpﾆWyｿﾛWﾍ7ｾA7ﾋヰｿUJEKNX"
 MESSAGE_ID = HASH(0x11)
 MESSAGE_BUNDLE_NORITO_TYPE = "iroha_sccp::TairaSccpMessageProofV1"

@@ -28,6 +28,18 @@ def create_governance_ballot_client_mixin(
     _canonical_quantity = canonical_quantity
 
     class GovernanceBallotClientMixin:
+        _canonical_request_headers: Callable[..., Mapping[str, str]]
+        _encode_json_body: Callable[..., bytes]
+        _ensure_governance_lock_hints_complete: Callable[..., None]
+        _ensure_governance_owner_canonical: Callable[..., None]
+        _ensure_mapping: Callable[..., Mapping[str, Any]]
+        _expect_status: Callable[..., None]
+        _normalize_governance_public_hex_hint: Callable[..., None]
+        _parse_tx_instructions: Callable[..., Any]
+        _request: Callable[..., Any]
+        _require_exact_i105_account_id: Callable[..., str]
+        _require_governance_selector_v1: Callable[..., str]
+
         def submit_plain_ballot(
             self,
             *,

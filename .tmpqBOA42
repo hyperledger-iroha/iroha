@@ -1,5 +1,0 @@
-{
-                "mode": "Entry",
-                "listen": "127.0.0.1:0",
-                "vpn": { "helper_ticket_secret_hex": "abababababababababababababababababababababababababababababababab" }
-            }

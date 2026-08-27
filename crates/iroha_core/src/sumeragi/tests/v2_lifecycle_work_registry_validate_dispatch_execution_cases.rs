@@ -1385,7 +1385,7 @@ fn cold_ready_validate_logical_coordinator_snapshot(coordinator: &LifecycleCoord
 fn cold_ready_validate_open_stutters_real_periodic_retry_fixture() {
     let marker = 0_u8;
     let (mut fixture, body_directory, mut body_store, durable) =
-        durable_validate_store_fixture_at_view(marker, 0);
+        durable_local_validate_store_fixture_at_view(marker, 0);
     let key = (durable.round(), durable.subject());
     let commitment = ValidatedBodyReceipt::for_test(durable.clone()).execution_commitment();
     let mut setup_callbacks = 0usize;
@@ -1497,7 +1497,7 @@ fn cold_ready_validate_open_stutters_real_periodic_retry_fixture() {
     let initial_seal = executor
         .recovered_durable_validate_retry_snapshot_for_test(key)
         .expect("cold open installs one recovered Validate retry seal");
-    assert_eq!(initial_seal.phase(), Some(wire::GlobalPhase::Prepare));
+    assert_eq!(initial_seal.phase(), None);
     assert_eq!(initial_seal.commitment_ceiling(), Some(commitment));
     assert!(executor.recovered_validate_retry_corridor_is_inert_for_test());
 
@@ -1913,7 +1913,7 @@ fn cold_ready_validate_open_stutters_real_periodic_retry_fixture() {
         .expect("Active retry retains the recovered seal");
     assert!(active_seal.same_owner(&initial_seal));
     assert!(active_seal.effect_tag() >= queued_seal.effect_tag());
-    assert_eq!(active_seal.phase(), initial_seal.phase());
+    assert_eq!(active_seal.phase(), queued_seal.phase());
     assert_eq!(active_seal.commitment_ceiling(), Some(commitment));
     let active_trace_root = active_trace_root
         .expect("second raw periodic Validate retains its authenticated trace root");
@@ -2079,23 +2079,29 @@ fn plural_recovered_ready_validate_store_fixture(
     assert!(views.len() >= 2);
     let mut fixtures = views
         .iter()
-        .map(|&view| durable_validate_fixture_at_view(marker, view))
+        .map(|&view| {
+            let (fixture, _directory, _store, durable) =
+                durable_local_validate_store_fixture_at_view(marker, view);
+            (fixture, durable)
+        })
         .collect::<Vec<_>>();
-    let first_ordinal = fixtures[0].lease.ordinal();
-    for (offset, fixture) in fixtures.iter_mut().enumerate().skip(1) {
+    let first_ordinal = fixtures[0].0.lease.ordinal();
+    for (offset, (fixture, _)) in fixtures.iter_mut().enumerate().skip(1) {
         let ordinal = first_ordinal
             .checked_add(u128::try_from(offset).expect("plural Validate offset fits u128"))
             .expect("plural Validate ordinal fits u128");
         readdress_durable_validate_fixture(fixture, ordinal);
     }
     let directory = TempDir::new().expect("temporary plural Ready Validate body store");
-    let mut store = V2BodyStore::open(directory.path(), fixtures[0].verified.context().clone())
+    let mut store = V2BodyStore::open(directory.path(), fixtures[0].0.verified.context().clone())
         .expect("open plural Ready Validate body store");
     let mut persisted = Vec::with_capacity(fixtures.len());
     let mut durables = Vec::with_capacity(fixtures.len());
-    for fixture in fixtures {
-        let (fixture, durable) =
-            persist_durable_validate_fixture_into_store(fixture, &mut store, None);
+    for (fixture, expected_durable) in fixtures {
+        let durable = store
+            .store(fixture.manifest.clone(), fixture.canonical_wire.clone())
+            .expect("persist admission-owned plural Validate body");
+        assert_eq!(durable, expected_durable);
         persisted.push(fixture);
         durables.push(durable);
     }

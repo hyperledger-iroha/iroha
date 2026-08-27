@@ -56,10 +56,12 @@ Completed history lives in [`status.md`](./status.md).
 - Select one first-release transaction executable carrier in the data model and every SDK. Migrate
   instruction-only transactions and shared fixtures to it, then remove dual `instructions`/`entries`
   parameters and explicit batch-selection switches rather than preserving a legacy carrier.
-- Rebuild and publish the reviewed ABI-23 native bridge and a valid Darwin JavaScript native-binding
-  profile, then run the complete Swift, JavaScript, Python, Kotlin, Java/Android, and C# native
-  parity suites. Add allocation benchmarks for the new exact-size byte-field encoders and retain
-  byte-for-byte parity tests across implementations.
+- Publish one reviewed, source-and-lock-authenticated ABI-23 artifact inventory for every release
+  target. Local source-fingerprint-bound qualification now covers all five Apple slices, the full
+  Swift package, Darwin JavaScript and Python native bindings, and the complete host C# suite; it is
+  not artifact publication or cross-platform release evidence. Re-run every SDK against the signed
+  candidate on its release OS/architecture matrix, add allocation benchmarks for the exact-size
+  byte-field encoders, and retain byte-for-byte parity tests across implementations.
 
 ## Iroha Core first-release closure
 
@@ -82,12 +84,49 @@ Completed history lives in [`status.md`](./status.md).
   and startup indexes. Use the profiles to remove avoidable encoding, cloning, and full-collection
   scans while asserting identical outputs across hardware paths.
 
+## P2P first-release closure
+
+- Carry the already-signed broadcast envelope in reliable-progress retry
+  ownership so retries across actor turns also avoid repeated BLS signing. Add
+  deterministic signing, allocation, and retained-byte benchmarks for direct,
+  hub-fallback, broadcast, and reliable-retry paths.
+- Split the large peer and network actors along their existing transport,
+  handshake, admission, queueing, and relay ownership boundaries after adding a
+  production-source reachability guard. Keep the single TLS/optional-QUIC wire
+  protocol and fail-closed admission behavior byte-for-byte identical.
+
+## Sumeragi first-release closure
+
+- Add four-peer deterministic fault tests and allocation/latency benchmarks for
+  exhaustive ingress dispatch, RS16 manifest/chunk recovery, evidence admission,
+  threshold-beacon attachment, and ordinary execution-root projection. Pin
+  byte-identical results across the scalar and accelerated target matrix.
+
+## IVM first-release closure
+
+- Add a production-source closure check that rejects alternate instruction
+  decoders or interpreters, empty feature switches, and unowned execution
+  facades before they can accumulate in the release surface.
+- Benchmark the canonical fixed-width interpreter, decode/prepared caches,
+  register Merkle commitments, and ordered block scheduler. Add allocation and
+  retained-byte budgets while pinning identical gas, traps, state, and proofs
+  across thread counts and scalar or accelerated hardware paths.
+- Split the remaining large VM and host implementations along their existing
+  loader, execution, pointer-validation, metering, and proof ownership
+  boundaries after tests pin those boundaries. Keep one execution semantics and
+  avoid introducing another dispatch layer during the split.
+
 ## Kura emergency-start closure
 
 - Keep merge and autonomous production unavailable in emergency Fast mode. If operators later need
   those write paths before a Strict restart, first add an atomically published merge-log
   count/length/tip marker and durable latest-route summary; Fast must never recover that authority
-  by decoding every historical frame.
+  by decoding every historical frame. Read-only Fast startup must not require the deferred merge
+  log or inspect auxiliary recovery artifacts; it leaves them untouched for Strict. Preserve the
+  library-level writer-start, durable-mutation, and sidecar-queue rejection tests so a daemon
+  refactor cannot accidentally make Fast producing. Preserve byte-exact recovery-artifact tests
+  for public Fast reads and authorization-transition tests proving queued work is never drained
+  after Kura becomes poisoned or unauthenticated.
 - Add large-history startup benchmarks that separately report marker preflight, hash-journal
   binding, five-artifact metadata binding, bounded-manifest authentication, exact-tip validation,
   minimal-State construction, merge metadata, Sumeragi replay planning, and recursive disk
@@ -2205,7 +2244,7 @@ strict verification and token release. Missing, substituted, stale, drifting,
 revoked, or test-marked providers fail closed. Focused Cargo/workspace
 validation and reviewed reference-HSM deployment evidence remain open.
 
-The mandatory SoraFS ABI-22 Python native reference lane is now pinned to exact
+The mandatory SoraFS ABI-23 Python native reference lane is now pinned to exact
 Python 3.12. The obsolete tracked `_crypto.cpython-39-darwin.so` is removed, and
 the runner rejects any tracked package `.so`, `.so.*`, `.dylib`, `.pyd`, or
 `.dll`, activates its selected virtual environment, covers the
@@ -2217,21 +2256,24 @@ reference inventory currently binds 82 payload artifacts, 32 exact
 appeal-finance `CancelAssetLock` files are mandatory. The current non-native
 hard-cut slice passes 85 focused Python tests, seven static guards, 36
 fixture-workflow trigger tests, and 53 native-artifact contract cases; managed
-Kotlin/JVM, mirrored Java Android, and C# parity is green. No checked-in,
-clean-source, five-target ABI-22 inventory or
-authenticated native replay record exists, so no native-dependent SDK suite is
-qualified. Clean native rebuilds, unskipped fixture replay, and source-bound
-provenance across all five release targets remain open. Kotlin/JVM and mirrored
-Java Android now require both exact bridge ABI 22 and `NativeSignerBridge` JNI
+Kotlin/JVM, mirrored Java Android, and C# parity is green. A settled,
+source-fingerprint-bound integration snapshot now produces all five Apple
+ABI-23 slices and locally qualifies the full Swift, Darwin JavaScript, Python
+ABI3, and host C# suites. Those results are local host evidence only: no
+checked-in or signed five-target inventory, published package set,
+authenticated cross-platform replay record, or release-target attestation
+exists. Rebuild and replay every SDK from one signed candidate across the full
+release matrix before promotion. Kotlin/JVM and mirrored
+Java Android now require both exact bridge ABI 23 and `NativeSignerBridge` JNI
 contract revision 5 before
 making any native signer call; the Android artifact gate requires both
 revision-probe exports, preventing a stale same-ABI JNI descriptor from passing
 package qualification. Swift package admission now requires an embedded
-`NoritoBridge.artifacts.json` declaring exact ABI 22, and its runtime loader
+`NoritoBridge.artifacts.json` declaring exact ABI 23, and its runtime loader
 rejects missing or stale manifest ABI metadata before accepting a matching
-artifact hash. Ignored or locally rebuilt artifacts remain unqualified
-regardless of their reported ABI: no checked-in, clean-source, five-target
-ABI-22 inventory or authenticated execution record exists. The separate
+artifact hash. Ignored or locally rebuilt artifacts can qualify the exact host
+source they bind, but do not constitute a checked-in, published, or
+cross-platform release inventory. The separate
 SoraFS pin-register SDK workflow, runner, and guard are also exact Python 3.12
 and install only the hash-locked, binary-only `requirements-ci.lock`; a fresh
 isolated CPython 3.12.13 venv is green at 3/3, including positive static
@@ -2243,8 +2285,10 @@ compatibility probe. The remaining Kotlin/JVM and Java core failures are
 explicit stale-ABI-22 native failures; rebuild and rerun them before `G-FINAL`.
 Seven focused Rust `EscrowId` hard-cut regressions are green across lowercase
 checksum parsing, canonical JSON/Norito/schema handling, noncanonical query
-rejection, and typed public-selector roundtrip. The clean ABI-22 native rebuild
-and qualification remain required before the wire/SDK cut can be closed.
+rejection, and typed public-selector roundtrip. The source-fingerprint-bound ABI-23 native rebuild
+is locally qualified for Apple, JavaScript, Python, and host C#; Kotlin/JVM and
+Java/Android native replay plus the signed full release matrix remain required
+before the wire/SDK cut can be closed.
 
 The SoraFS monitoring source slice is green under checksum-verified
 `promtool` 3.13.1: all 30 alert files pass rule validation, all 26 alert unit
@@ -2472,11 +2516,12 @@ native bridges and runtimes available.
   bytes, hashes, terminal delivery updates, exact compact-payment/native-ACK
   binding, and final durable checkpoints so optimization cannot mask a wire
   divergence.
-- Re-run the complete Swift package suite with a bridge artifact accepted by
-  the active Swift compiler. Keep Kagemusha native-canonical bytes and bridge
-  ABI 22 unchanged while platform delivery adapters converge on the shared
-  peer-message core. Do not add a backend endpoint or backend reconciliation
-  fallback to close a device-only evidence gap.
+- Replay the already-green complete Swift package suite against the signed
+  final ABI-23 artifact on the physical-device matrix. Keep Kagemusha
+  native-canonical bytes and bridge ABI 23 unchanged while platform delivery
+  adapters converge on the shared peer-message core. Do not add a backend
+  endpoint or backend reconciliation fallback to close a device-only evidence
+  gap.
 
 ## Wallet activity query follow-ups
 
@@ -2493,8 +2538,8 @@ native bridges and runtimes available.
 ## Alias/SNS release evidence
 
 - Run the Kotlin and mirrored-Java suites when a Java runtime is available.
-- Materialize the Swift Norito bridge and run the complete Apple/Swift package
-  suite.
+- Replay the already-green complete Apple/Swift package suite from the signed
+  final Norito bridge artifact on the release machine and device matrix.
 - Finish strict Clippy for the touched crates and run the full workspace suite
   after the Sumeragi proof-ledger and release-receipt gates are stable.
 
@@ -2513,7 +2558,7 @@ Neither extension may be implemented as a sender fallback or an unscoped
 aggregate balance check.
 
 Kagemusha transport and proof admission are fail-closed for the first release.
-It is the only offline-spend protocol. Exact bridge ABI 22 and governed schema
+It is the only offline-spend protocol. Exact bridge ABI 23 and governed schema
 `kagemusha.offline.recursive_spend.artifact_manifest.v4` are the current
 artifact and readiness contract, not a runtime product selector. Runtime,
 wallet, and readiness surfaces remain selector-free. Each authenticated V4
@@ -2523,7 +2568,7 @@ final-key selector-zero bootstrap witness for each parity. Bounded circuit
 parameters are authenticated inline in the two profiles rather than represented
 as additional streamed artifacts.
 The unreleased recursive state boundary carrier remains V2 without changing
-bridge ABI 22 or manifest V4, while its nested compact profile is V5. The
+bridge ABI 23 or manifest V4, while its nested compact profile is V5. The
 boundary is the complete 138-limb canonical state, including the public
 append-only `next_zero_leaf_index`; each fixed Eq/Ep public-input schema is 66
 field elements.
@@ -4302,7 +4347,7 @@ excluded from the first release.
   data-model, bridge, Torii, CLI, SDK, mobile, packaging, and documentation
   surface must expose exact readiness only, with no runtime product, version,
   or compatibility selector. The current artifact/readiness contract is exact
-  bridge ABI 22 and manifest V4 with exactly eight external Eq/Ep artifacts;
+  bridge ABI 23 and manifest V4 with exactly eight external Eq/Ep artifacts;
   bounded circuit parameters remain authenticated inline. Versioned type names
   are internal wire and artifact schemas, not selectable products.
   Proof-gated init, append, verify, top-up, redeem, and change are selected by
@@ -9278,7 +9323,7 @@ excluded from the first release.
   payloads through `validate_hedging_payload_bytes`, and `sorafs-validate
   hedging`/`billing` provides local operator validation for those artifacts.
   The source bridge surface now exposes the same validator through
-	  `sorafs_reference_validate_hedging_json`, Connect C/JNI ABI 22
+	  `sorafs_reference_validate_hedging_json`, Connect C/JNI ABI 23
   `connect_norito_sorafs_reference_validate_hedging_json`, and Kotlin/JVM,
   Java Android, and Swift SDK wrappers. `sorafs_node` now also exports the
   durable `HedgingBillingService`, and standard `irohad` can supervise it under
@@ -18077,7 +18122,7 @@ digest-bound pending-XSD source probe summaries for reviewed
   variables, then available `python3.11`/Homebrew Python 3.11 candidates before
   falling back to `python3` for the existing fail-closed version check, with
   override and resolver drift pinned by negative controls. The mandatory SoraFS
-	  ABI-22 native reference and pin-register SDK lanes are separately pinned to
+	  ABI-23 native reference and pin-register SDK lanes are separately pinned to
   exact Python 3.12; their runners must activate and report their 3.12 venvs
   before any native build or pytest execution. Pin-register dependencies must
   come only from `requirements-ci.lock` under
@@ -20766,7 +20811,7 @@ digest-bound pending-XSD source probe summaries for reviewed
   `zk-trace/mock-proof` artifacts while the real transparent IVM trace prover
   remains future work.
   Kagemusha is the single mode-free offline-cash protocol. Its current artifact
-	  and readiness contract is exact bridge ABI 22 with authenticated manifest V4
+	  and readiness contract is exact bridge ABI 23 with authenticated manifest V4
   artifacts: exactly eight external Eq/Ep roles with circuit parameters inline.
   Versioned type names are internal wire and artifact schema identifiers only.
   Runtime, SDK, CLI,
@@ -25705,6 +25750,10 @@ signed ancestor-linked solid-block header proof,
   rollback persistence failure so callers cannot ignore `IVMHost::restore ==
   false`; the current hardening safely restores in-memory state and avoids a
   panic but cannot promise restart durability after an underlying I/O failure.
+- Keep strict SSA as Kotodama's single optimization authority. The dormant analysis/fuzz
+  interpreter, duplicate transport optimizer, manual-access storage, and wide-encoding facade are
+  removed; do not restore them as compatibility or comparison paths. Remaining compiler
+  performance qualification is the source-and-lock-authenticated benchmark evidence below.
 - Run the candidate and the approved, source-and-lock-authenticated benchmark
   baseline through `.github/workflows/kotodama_perf.yml` on the same quiet,
   pinned runner and retain the workflow evidence for the `<=5%` threshold. The
@@ -25725,14 +25774,16 @@ signed ancestor-linked solid-block header proof,
   11/11; generated syntax freshness covers 18 files. The golden-fixture
   SHA-256 is
   `b5f11fd22856f69165a0c2a6906cea5beeaa46a1aee6c322ed18abc0acefee72`.
-- Swift's direct current-source Numeric harness passes 6/6, but official
-  SwiftPM/native-framework qualification remains blocked by checked-in
-  NoritoBridge ABI21 versus package ABI22. The guarded ABI22 build was rejected
-  after relevant source drift and admitted no artifact.
-- C# cached-current Release runtime checks pass 4/4 and 13/13. Fresh compilation
-  remains blocked because `global.json` pins .NET SDK 8.0.419 while this host
-  provides SDK 8.0.130 and runtime 8.0.30. The earlier pinned 80/80 result is
-  historical and does not qualify the current candidate.
+- Swift's direct current-source Numeric harness passes 6/6. A local
+  source-fingerprint-bound ABI-23 five-slice XCFramework also passes the full
+  SwiftPM suite at 1729/1729; because it was emitted outside the repository and
+  was not signed or published, the checked-in release inventory and
+  cross-machine replay remain open.
+- Fresh C# compilation is now qualified with the pinned .NET SDK 8.0.419:
+  solution restore succeeds, Release builds with zero warnings or errors, and
+  the unit and integration suites pass 5439/5439 and 2/2. Windows-native package
+  production, signing, publication, and replay from the final candidate remain
+  external release evidence.
 
 ## Privacy, ZK, and FHE
 

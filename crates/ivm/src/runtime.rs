@@ -1,10 +1,6 @@
 //! Runtime façade for embedding the IVM safely.
 //!
-//! The goal of this module is to expose a compact interface that callers can depend on instead of
-//! touching the sprawling `IVM` implementation directly. Keeping the entry points narrow makes it
-//! easier to reason about security policies (syscalls, pointer checks) and lets future
-//! optimisations – such as alternate interpreters or JITs – slot in behind the same trait without
-//! compromising determinism.
+//! This module groups the VM construction types used by embedded hosts.
 //!
 //! Typical usage:
 //! ```
@@ -26,74 +22,19 @@ pub use crate::ivm::{
     AccelerationPolicy, HardwareCapabilities, IvmBuilder, IvmConfig, IvmConfigBuilder,
 };
 pub use crate::stack_policy::IvmStackPolicy;
-use crate::{VMError, host::IVMHost, ivm::IVM, metadata::ProgramMetadata, syscalls};
+use crate::{VMError, host::IVMHost, ivm::IVM, syscalls};
 use std::{
     any::Any,
     sync::{Arc, Mutex},
 };
-/// Runtime operations exposed by the VM core.
-pub trait VmEngine {
-    /// Attach a host implementation. Hosts are responsible for syscall handling and should enforce
-    /// any execution policy required by the deployment. The generic parameter ensures strongly
-    /// typed hosts can be attached without forcing callers to allocate trait objects themselves.
-    fn set_host<H: IVMHost + Send + Sync + 'static>(&mut self, host: H);
-    /// Load a compiled program (`.to` bytecode) into the VM. Implementations must preserve the
-    /// existing INPUT buffer so that hosts can preload TLVs deterministically prior to execution.
-    fn load_program(&mut self, program: &[u8]) -> Result<(), VMError>;
-    /// Execute the currently loaded program from the `pc`. Errors must surface
-    /// deterministically and leave the VM in a halted state.
-    fn run(&mut self) -> Result<(), VMError>;
-    /// Access immutable program metadata as parsed from the bytecode header.
-    fn program_metadata(&self) -> &ProgramMetadata;
-    /// Convenience helper that sets a host, loads a program and immediately executes it. Useful for
-    /// embedding scenarios where the host lifecycle is scoped to a single call.
-    fn execute_with_host<H: IVMHost + Send + Sync + 'static>(
-        &mut self,
-        host: H,
-        program: &[u8],
-    ) -> Result<(), VMError> {
-        self.set_host(host);
-        self.load_program(program)?;
-        self.run()
-    }
-}
-impl VmEngine for IVM {
-    fn set_host<H: IVMHost + Send + Sync + 'static>(&mut self, host: H) {
-        IVM::set_host(self, host);
-    }
-    fn load_program(&mut self, program: &[u8]) -> Result<(), VMError> {
-        IVM::load_program(self, program)
-    }
-    fn run(&mut self) -> Result<(), VMError> {
-        IVM::run(self)
-    }
-    fn program_metadata(&self) -> &ProgramMetadata {
-        IVM::metadata(self)
-    }
-}
 /// Wrapper that enforces syscall policy before delegating to the underlying host.
-///
-/// Future iterations will extend this struct with pointer-ABI validation tables
-/// so that hosts no longer need to duplicate TLV checks for well-known syscalls.
-pub struct SyscallDispatcher<H> {
+pub(crate) struct SyscallDispatcher<H> {
     inner: H,
 }
 impl<H> SyscallDispatcher<H> {
     /// Create a dispatcher around `host`.
-    pub fn new(host: H) -> Self {
+    pub(crate) fn new(host: H) -> Self {
         Self { inner: host }
-    }
-    /// Access the wrapped host.
-    pub fn inner(&self) -> &H {
-        &self.inner
-    }
-    /// Access the wrapped host mutably.
-    pub fn inner_mut(&mut self) -> &mut H {
-        &mut self.inner
-    }
-    /// Consume the dispatcher and return the wrapped host.
-    pub fn into_inner(self) -> H {
-        self.inner
     }
 }
 impl<H: IVMHost> IVMHost for SyscallDispatcher<H> {
@@ -210,7 +151,7 @@ impl IVMHost for SharedHost {
 }
 impl SyscallDispatcher<SharedHost> {
     /// Clone-safe dispatcher that forwards calls through a shared host.
-    pub fn shared(host: Arc<Mutex<Option<Box<dyn IVMHost + Send + Sync>>>>) -> Self {
+    pub(crate) fn shared(host: Arc<Mutex<Option<Box<dyn IVMHost + Send + Sync>>>>) -> Self {
         Self::new(SharedHost::new(host))
     }
 }

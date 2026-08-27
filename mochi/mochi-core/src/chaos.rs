@@ -220,7 +220,6 @@ where
                         spam_invalid_transactions: false,
                         network_latency: None,
                         network_partition: None,
-                        network_packet_loss: None,
                         cpu_stress: None,
                         disk_saturation: None,
                     },
@@ -477,7 +476,6 @@ where
             spam_invalid_transactions: false,
             network_latency: None,
             network_partition: None,
-            network_packet_loss: None,
             cpu_stress: Some(CpuStressConfig {
                 duration: half..=half,
                 workers: 1..=2,
@@ -503,7 +501,6 @@ where
             spam_invalid_transactions: false,
             network_latency: None,
             network_partition: None,
-            network_packet_loss: None,
             cpu_stress: None,
             disk_saturation: Some(DiskSaturationConfig {
                 duration: half..=half,
@@ -574,7 +571,6 @@ fn fault_config_for_latency(duration: Duration) -> FaultConfig {
             gossip_delay: Duration::from_millis(1_200)..=Duration::from_millis(1_200),
         }),
         network_partition: None,
-        network_packet_loss: None,
         cpu_stress: None,
         disk_saturation: None,
     }
@@ -589,7 +585,6 @@ fn fault_config_for_partition(duration: Duration) -> FaultConfig {
         network_partition: Some(NetworkPartitionConfig {
             duration: duration..=duration,
         }),
-        network_packet_loss: None,
         cpu_stress: None,
         disk_saturation: None,
     }
@@ -601,7 +596,6 @@ fn scenario_label(scenario: FaultScenarioKind) -> &'static str {
         FaultScenarioKind::SpamInvalidTransactions => "invalid-traffic fault",
         FaultScenarioKind::NetworkLatencySpike => "network latency fault",
         FaultScenarioKind::NetworkPartition => "network partition fault",
-        FaultScenarioKind::NetworkPacketLoss => "network packet-loss fault",
         FaultScenarioKind::CpuStress => "CPU stress fault",
         FaultScenarioKind::DiskSaturation => "disk saturation fault",
     }

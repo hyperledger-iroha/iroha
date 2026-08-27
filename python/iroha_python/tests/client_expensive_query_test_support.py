@@ -7,10 +7,12 @@ from typing import Any
 from iroha_python import LocalSigningContext, NetworkId, ToriiClient
 from iroha_python.address import AccountAddress
 from iroha_python.client import ToriiCanonicalRequestAuth
+from iroha_python.crypto import Ed25519KeyPair
 
 _NETWORK_ID = NetworkId.from_bytes(bytes([0xA5]) * 32)
+_ACCOUNT_PUBLIC_KEY = Ed25519KeyPair.from_private_key(bytes([0x31]) * 32).public_key
 _ACCOUNT_ID = AccountAddress.from_account(
-    public_key=bytes([0x31]) * 32,
+    public_key=_ACCOUNT_PUBLIC_KEY,
 ).to_i105(0x02F1)
 
 
