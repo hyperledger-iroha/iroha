@@ -31683,11 +31683,12 @@ mod offline_cfg_tests {
 #[cfg(test)]
 mod duration_clamp_tests {
     use super::{
-        AssetDefinitionId, BTreeSet, ConfidentialComputeMechanism, DaManifestPolicy, DomainId,
-        Emitter, LaneId, NexusFees, NonZeroU64, RETIRED_LANE_FUNCTIONAL_METADATA_KEYS,
-        SORA_INROU_EPHEMERAL_STORAGE_ALIGNMENT_BYTES_V1, SORA_INROU_MIN_CPU_MILLIS_V1,
-        SORA_INROU_MIN_MEMORY_BYTES_V1, SORA_INROU_VMM_CPU_OVERHEAD_MILLIS_V1,
-        SORA_INROU_VMM_MEMORY_OVERHEAD_BYTES_V1,
+        AssetDefinitionId, BTreeSet, ConfidentialComputeMechanism, ContentAuthMode,
+        DaManifestPolicy, DomainId, Emitter, LaneId, NexusFees, NonZeroU64,
+        RETIRED_LANE_FUNCTIONAL_METADATA_KEYS, SORA_INROU_EPHEMERAL_STORAGE_ALIGNMENT_BYTES_V1,
+        SORA_INROU_MIN_CPU_MILLIS_V1, SORA_INROU_MIN_MEMORY_BYTES_V1,
+        SORA_INROU_VMM_CPU_OVERHEAD_MILLIS_V1, SORA_INROU_VMM_MEMORY_OVERHEAD_BYTES_V1,
+        UniversalAccountId, parse_content_auth_mode,
     };
     use crate::parameters::{
         actual, defaults,
@@ -35328,7 +35329,7 @@ publish_delay_seconds = 17
         if let Some(enabled) = inrou_enabled {
             write!(
                 source,
-                r"
+                r#"
 [inrou]
 enabled = {enabled}
 portable_vm_uid = 70000
@@ -35340,7 +35341,7 @@ max_memory_bytes = 8589934592
 max_storage_bytes = 68719476736
 start_grace_ms = 30000
 stop_grace_ms = 10000
-",
+"#,
             )
             .expect("writing to an owned string cannot fail");
         }
@@ -35561,7 +35562,7 @@ max_storage_bytes = 10737418240
             let identity_fields = format!("portable_vm_uid = {id}\nportable_vm_gid = {id}");
             let result = actual::Root::from_toml_source(TomlSource::inline(
                 table_with_soracloud_runtime(&format!(
-                    r"
+                    r#"
 [inrou]
 enabled = true
 {identity_fields}
@@ -35570,7 +35571,7 @@ trusted_guest_content_cid = "bafyr6ibrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrge
 max_cpu_millis = 1000
 max_memory_bytes = 1073741824
 max_storage_bytes = 10737418240
-",
+"#,
                 )),
             ));
             assert!(
@@ -35633,7 +35634,7 @@ max_storage_bytes = 10737418240
             let field = retired.split_once(' ').expect("retired selector name").0;
             let error = actual::Root::from_toml_source(TomlSource::inline(
                 table_with_soracloud_runtime(&format!(
-                    r"
+                    r#"
 [inrou]
 enabled = true
 portable_vm_uid = 70000
@@ -35644,7 +35645,7 @@ trusted_guest_content_cid = "bafyr6ibrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrge
 max_cpu_millis = 1000
 max_memory_bytes = 1073741824
 max_storage_bytes = 10737418240
-",
+"#,
                 )),
             ))
             .expect_err("retired first-release selector must be unknown");
