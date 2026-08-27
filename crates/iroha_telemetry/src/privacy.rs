@@ -855,10 +855,6 @@ pub enum PrivacyThrottleScope {
     Cooldown,
     /// Adaptive limits throttled a remote origin.
     RemoteQuota,
-    /// Descriptor-level quota triggered the throttle.
-    DescriptorQuota,
-    /// Descriptor replay protection rejected the circuit.
-    DescriptorReplay,
     /// Operator emergency stop throttled the circuit.
     Emergency,
 }
@@ -1607,8 +1603,6 @@ struct BucketStats {
     throttle_cooldown: u64,
     throttle_emergency: u64,
     throttle_remote: u64,
-    throttle_descriptor: u64,
-    throttle_descriptor_replay: u64,
     active: ActiveAccumulator,
     rtt: LatencyHistogram,
     bytes_verified: u128,
@@ -1658,12 +1652,6 @@ impl BucketStats {
             }
             PrivacyThrottleScope::RemoteQuota => {
                 self.throttle_remote = self.throttle_remote.saturating_add(1);
-            }
-            PrivacyThrottleScope::DescriptorQuota => {
-                self.throttle_descriptor = self.throttle_descriptor.saturating_add(1);
-            }
-            PrivacyThrottleScope::DescriptorReplay => {
-                self.throttle_descriptor_replay = self.throttle_descriptor_replay.saturating_add(1);
             }
         }
     }
@@ -1720,8 +1708,6 @@ impl BucketStats {
             throttle_cooldown,
             throttle_emergency,
             throttle_remote,
-            throttle_descriptor,
-            throttle_descriptor_replay,
             active,
             rtt,
             bytes_verified,
@@ -1756,8 +1742,6 @@ impl BucketStats {
             throttle_cooldown_total: throttle_cooldown,
             throttle_emergency_total: throttle_emergency,
             throttle_remote_total: throttle_remote,
-            throttle_descriptor_total: throttle_descriptor,
-            throttle_descriptor_replay_total: throttle_descriptor_replay,
             active_circuits_mean: active_mean,
             active_circuits_max: active_max,
             verified_bytes_total: bytes_verified,
@@ -1857,8 +1841,6 @@ struct CombinedShareTotals {
     throttle_cooldown: i128,
     throttle_emergency: i128,
     throttle_remote: i128,
-    throttle_descriptor: i128,
-    throttle_descriptor_replay: i128,
     active_sum: i128,
     active_samples: i128,
     active_max: Option<u64>,
@@ -1878,8 +1860,6 @@ impl Default for CombinedShareTotals {
             throttle_congestion: 0,
             throttle_cooldown: 0,
             throttle_remote: 0,
-            throttle_descriptor: 0,
-            throttle_descriptor_replay: 0,
             throttle_emergency: 0,
             active_sum: 0,
             active_samples: 0,
@@ -1937,16 +1917,6 @@ impl CombinedShareTotals {
             self.throttle_remote,
             share.throttle_remote_share.into(),
             "throttle_remote",
-        )?;
-        self.throttle_descriptor = checked_add_i128(
-            self.throttle_descriptor,
-            share.throttle_descriptor_share.into(),
-            "throttle_descriptor",
-        )?;
-        self.throttle_descriptor_replay = checked_add_i128(
-            self.throttle_descriptor_replay,
-            share.throttle_descriptor_replay_share.into(),
-            "throttle_descriptor_replay",
         )?;
         self.active_sum = checked_add_i128(
             self.active_sum,
@@ -2010,12 +1980,6 @@ impl CombinedShareTotals {
         let throttle_cooldown =
             ensure_non_negative_u64(self.throttle_cooldown, "throttle_cooldown")?;
         let throttle_remote = ensure_non_negative_u64(self.throttle_remote, "throttle_remote")?;
-        let throttle_descriptor =
-            ensure_non_negative_u64(self.throttle_descriptor, "throttle_descriptor")?;
-        let throttle_descriptor_replay = ensure_non_negative_u64(
-            self.throttle_descriptor_replay,
-            "throttle_descriptor_replay",
-        )?;
         let throttle_emergency =
             ensure_non_negative_u64(self.throttle_emergency, "throttle_emergency")?;
         let active_sum = ensure_non_negative_u128(self.active_sum, "active_circuits_sum")?;
@@ -2069,8 +2033,6 @@ impl CombinedShareTotals {
             throttle_cooldown,
             throttle_emergency,
             throttle_remote,
-            throttle_descriptor,
-            throttle_descriptor_replay,
             active: ActiveAccumulator {
                 total: active_sum,
                 count: active_samples,
@@ -2241,10 +2203,6 @@ impl From<SoranetPrivacyThrottleScopeV1> for PrivacyThrottleScope {
             SoranetPrivacyThrottleScopeV1::Cooldown => PrivacyThrottleScope::Cooldown,
             SoranetPrivacyThrottleScopeV1::Emergency => PrivacyThrottleScope::Emergency,
             SoranetPrivacyThrottleScopeV1::RemoteQuota => PrivacyThrottleScope::RemoteQuota,
-            SoranetPrivacyThrottleScopeV1::DescriptorQuota => PrivacyThrottleScope::DescriptorQuota,
-            SoranetPrivacyThrottleScopeV1::DescriptorReplay => {
-                PrivacyThrottleScope::DescriptorReplay
-            }
         }
     }
 }

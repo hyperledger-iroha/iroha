@@ -580,6 +580,50 @@ impl Kura {
                             source,
                         )?;
                     }
+                    source @ AutonomousLifecycleTerminalOutcomeSourceV1::RetiredReplicaQueueDisposition {
+                        ..
+                    } => {
+                        let record = self
+                            .read_autonomous_lane_block_attempt_record_locked(
+                                &entry,
+                                lane_id,
+                                identity.0,
+                                identity.1,
+                                executable_payload.network_id,
+                                executable_payload.epoch,
+                                None,
+                            )?
+                            .ok_or_else(|| {
+                                Self::invalid_lane_artifact_error(
+                                    path.clone(),
+                                    "autonomous lifecycle replica outcome lost its attempt",
+                                )
+                            })?;
+                        let queue_disposition = self
+                            .autonomous_lifecycle_terminal_source_matches_replica_queue_disposition_locked(
+                                Some(pending_canonical_bytes),
+                                &entry,
+                                &executable_payload,
+                                record.retirement.as_ref(),
+                                source,
+                            )?;
+                        if outcome.is_complete() {
+                            let retirement = record.retirement.as_ref().ok_or_else(|| {
+                                Self::invalid_lane_artifact_error(
+                                    path.clone(),
+                                    "Complete replica Queue disposition lost its exact retirement",
+                                )
+                            })?;
+                            self.complete_autonomous_lane_entrypoint_claims_released_for_replica_locked(
+                                pending_canonical_bytes,
+                                Some(pending_canonical_bytes),
+                                &executable_payload,
+                                retirement,
+                                queue_disposition,
+                                &outcome,
+                            )?;
+                        }
+                    }
                 }
                 if outcome.is_complete() {
                     // Queue ownership has already reached one exact terminal
@@ -1029,6 +1073,133 @@ impl Kura {
             )
         }
     }
+    fn autonomous_lifecycle_terminal_source_matches_replica_queue_disposition_locked(
+        &self,
+        pending_canonical_bytes: Option<u64>,
+        entry: &LaneConfigEntry,
+        payload: &LaneExecutablePayloadV1,
+        retirement: Option<&AutonomousLaneSlotRetirementV1>,
+        source: AutonomousLifecycleTerminalOutcomeSourceV1,
+    ) -> Result<AutonomousLifecycleReplicaQueueDispositionV1> {
+        let AutonomousLifecycleTerminalOutcomeSourceV1::RetiredReplicaQueueDisposition {
+            retirement_hash,
+            queue_disposition,
+        } = source
+        else {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "autonomous lifecycle terminal source is not a replica Queue disposition",
+            ));
+        };
+        let retirement = retirement.ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "autonomous lifecycle replica terminal source lost its durable retirement",
+            )
+        })?;
+        if !retirement.matches_payload(payload) || retirement.digest()? != retirement_hash {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "autonomous lifecycle replica terminal source changed retirement identity",
+            ));
+        }
+        let cursor =
+            self.read_autonomous_lifecycle_cursor_for_terminal_outcome_locked(entry, payload)?;
+        let (_, local_actor) = cursor.binding().local_validator_identity();
+        if local_actor == cursor.binding().producer_actor_projection() {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "producer lifecycle cursor cannot claim a replica Queue disposition",
+            ));
+        }
+        let current = self
+            .read_current_autonomous_lane_block_record_self_context_locked(
+                entry,
+                payload.origin_proposal.descriptor.lane_block_height,
+                pending_canonical_bytes,
+            )?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "autonomous lifecycle replica terminal source has no current lane attempt",
+                )
+            })?;
+        if current.artifact.executable_payload == *payload {
+            self.require_autonomous_lane_entrypoint_claims_released_for_replica_locked(
+                payload,
+                retirement,
+                queue_disposition,
+            )?;
+        } else {
+            self.require_autonomous_lane_replica_release_completed_or_superseded_locked(
+                entry,
+                payload,
+                retirement,
+                queue_disposition,
+            )?;
+        }
+        Ok(queue_disposition)
+    }
+    fn autonomous_lifecycle_replica_terminal_outcome_is_complete_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        payload: &LaneExecutablePayloadV1,
+        retirement: &AutonomousLaneSlotRetirementV1,
+        queue_disposition: AutonomousLifecycleReplicaQueueDispositionV1,
+    ) -> Result<Option<Hash>> {
+        if !retirement.matches_payload(payload) {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "replica Complete outcome retirement differs from its payload",
+            ));
+        }
+        let retirement_hash = retirement.digest()?;
+        let descriptor = &payload.origin_proposal.descriptor;
+        let path = Self::autonomous_lifecycle_terminal_outcome_path_for_entry(
+            entry,
+            &self.store_root,
+            descriptor.lane_block_height,
+            descriptor.proposal_height,
+        );
+        let parent = path.parent().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                path.clone(),
+                "replica Complete outcome path has no parent directory",
+            )
+        })?;
+        let Some(bytes) = self.read_regular_sidecar_bytes(
+            &path,
+            parent,
+            AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_MAX_BYTES,
+        )?
+        else {
+            return Ok(None);
+        };
+        let outcome = Self::decode_autonomous_lifecycle_terminal_outcome(&path, &bytes)?;
+        let expected_source =
+            AutonomousLifecycleTerminalOutcomeSourceV1::RetiredReplicaQueueDisposition {
+                retirement_hash,
+                queue_disposition,
+            };
+        if outcome.source() != expected_source {
+            return Err(Self::invalid_lane_artifact_error(
+                path,
+                "replica Complete outcome changed its Queue disposition",
+            ));
+        }
+        outcome
+            .validate_for_payload(payload)
+            .map_err(|message| Self::invalid_lane_artifact_error(path.clone(), message))?;
+        let cursor =
+            self.read_autonomous_lifecycle_cursor_for_terminal_outcome_locked(entry, payload)?;
+        if cursor.binding() != outcome.binding() {
+            return Err(Self::invalid_lane_artifact_error(
+                path,
+                "replica Complete outcome changed its signed cursor binding",
+            ));
+        }
+        Ok(outcome.is_complete().then_some(outcome.outcome_hash))
+    }
     fn read_autonomous_lifecycle_cursor_for_terminal_outcome_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -1334,6 +1505,191 @@ impl Kura {
             &plan,
         )?;
         Ok(plan.outcome)
+    }
+    /// Publish one replica terminal outcome directly as `Complete` while the
+    /// caller retains Queue's move-only per-hash disposition fence.
+    ///
+    /// A missing file is created atomically in its final state, so no new
+    /// crash-visible Pending observer outcome exists. A matching defensive
+    /// Pending record is completed with the same fixed-length replacement;
+    /// an exact Complete retry is a stutter.
+    fn persist_autonomous_lifecycle_replica_terminal_outcome_complete_locked(
+        &self,
+        pending_canonical_bytes: u64,
+        entry: &LaneConfigEntry,
+        payload: &LaneExecutablePayloadV1,
+        source: AutonomousLifecycleTerminalOutcomeSourceV1,
+        terminal: ProductionInFlightFirstReleaseStateProjection,
+    ) -> Result<AutonomousLifecycleTerminalOutcomeV1> {
+        if !matches!(
+            source,
+            AutonomousLifecycleTerminalOutcomeSourceV1::RetiredReplicaQueueDisposition { .. }
+        ) {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "direct Complete publication requires a replica Queue terminal source",
+            ));
+        }
+        let mut plan = self
+            .prepare_autonomous_lifecycle_terminal_outcome_pending_locked(entry, payload, source)?;
+        if let Some(existing) = plan
+            .outcome
+            .terminal_projection()
+            .map_err(|message| Self::invalid_lane_artifact_error(plan.path.clone(), message))?
+        {
+            if existing == terminal {
+                return Ok(plan.outcome);
+            }
+            return Err(Self::invalid_lane_artifact_error(
+                plan.path,
+                "replica lifecycle terminal outcome conflicts with its existing Complete state",
+            ));
+        }
+        let complete = plan
+            .outcome
+            .complete(terminal)
+            .map_err(|message| Self::invalid_lane_artifact_error(plan.path.clone(), message))?;
+        let next_bytes = complete.encode_framed().map_err(Error::NoritoFrame)?;
+        // Preflight every raw->sealed claim replacement before publishing
+        // Complete. The terminal path retains its own bounded CAS check below;
+        // a missing path is already represented by its admitted terminal-file
+        // reservation, while an existing Pending file is already baseline.
+        // Keeping this projection claim-only also avoids misclassifying the
+        // cumulative group growth as one shared terminal CAS transient.
+        let capacity_path = self.store_root.join("blocks");
+        let mut capacity = AutonomousClaimMutationPeak::default();
+        let AutonomousLifecycleTerminalOutcomeSourceV1::RetiredReplicaQueueDisposition {
+            retirement_hash,
+            queue_disposition,
+        } = source
+        else {
+            unreachable!("replica source was checked above");
+        };
+        for entrypoint_hash in &payload.entrypoint_hashes {
+            let claim_path = Self::autonomous_lane_entrypoint_claim_path(
+                &self.store_root,
+                &payload.network_id,
+                entrypoint_hash,
+            );
+            let existing =
+                Self::decode_autonomous_lane_entrypoint_claim(&claim_path).map_err(|message| {
+                    Self::invalid_lane_artifact_error(claim_path.clone(), message)
+                })?;
+            let released = AutonomousLaneEntrypointClaimV1::replica_released_for_payload(
+                payload,
+                *entrypoint_hash,
+                retirement_hash,
+                queue_disposition,
+            );
+            if existing != released
+                || !self.autonomous_lane_entrypoint_claim_path_matches(&existing, &claim_path)
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    claim_path,
+                    "replica Complete preflight requires the exact raw released claim group",
+                ));
+            }
+            let sealed = AutonomousLaneEntrypointClaimV1::replica_released_complete_for_payload(
+                payload,
+                *entrypoint_hash,
+                retirement_hash,
+                queue_disposition,
+                complete.outcome_hash,
+            );
+            let sealed_bytes = norito::encode_canonical(&sealed).map_err(Error::NoritoFrame)?;
+            if sealed_bytes.is_empty()
+                || sealed_bytes.len() > AUTONOMOUS_LANE_ENTRYPOINT_CLAIM_MAX_BYTES
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    claim_path,
+                    "sealed replica claim exceeds its hard byte limit",
+                ));
+            }
+            capacity
+                .atomic_replace(
+                    Self::file_len_or_zero(&claim_path)?,
+                    u64::try_from(sealed_bytes.len())?,
+                )
+                .map_err(|message| {
+                    Self::invalid_lane_artifact_error(capacity_path.clone(), message)
+                })?;
+        }
+        let additional_peak_bytes = capacity
+            .additional_peak_bytes()
+            .map_err(|message| Self::invalid_lane_artifact_error(capacity_path.clone(), message))?;
+        self.validate_configured_autonomous_mutation_disk_peak_locked(
+            pending_canonical_bytes,
+            additional_peak_bytes,
+            false,
+            false,
+            &capacity_path,
+        )?;
+        if plan.pending_bytes.is_some() {
+            plan.outcome = complete.clone();
+            plan.pending_bytes = Some(next_bytes);
+            self.preflight_autonomous_lifecycle_terminal_outcomes_pending_locked(
+                pending_canonical_bytes,
+                std::slice::from_ref(&plan),
+            )?;
+            self.publish_preflighted_autonomous_lifecycle_terminal_outcome_pending_locked(
+                pending_canonical_bytes,
+                &plan,
+            )?;
+            return Ok(complete);
+        }
+        let parent = plan.path.parent().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                plan.path.clone(),
+                "replica terminal completion path has no parent directory",
+            )
+        })?;
+        let current_bytes = self
+            .read_regular_sidecar_bytes(
+                &plan.path,
+                parent,
+                AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_MAX_BYTES,
+            )?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    plan.path.clone(),
+                    "replica terminal Pending outcome disappeared before completion",
+                )
+            })?;
+        let current =
+            Self::decode_autonomous_lifecycle_terminal_outcome(&plan.path, &current_bytes)?;
+        if current != plan.outcome || next_bytes.len() != current_bytes.len() {
+            return Err(Self::invalid_lane_artifact_error(
+                plan.path,
+                "replica terminal Pending outcome changed before fixed-length completion",
+            ));
+        }
+        let inventory = self.autonomous_lane_attempt_inventory_counts_locked(
+            entry,
+            payload.origin_proposal.descriptor.lane_block_height,
+        )?;
+        let previous_len = u64::try_from(current_bytes.len())?;
+        let next_len = u64::try_from(next_bytes.len())?;
+        Self::validate_autonomous_lifecycle_terminal_outcome_budget(
+            inventory.conceptual_files,
+            inventory.conceptual_bytes,
+            previous_len,
+            next_len,
+            true,
+        )
+        .map_err(|message| Self::invalid_lane_artifact_error(plan.path.clone(), message))?;
+        self.validate_configured_autonomous_mutation_disk_peak_locked(
+            pending_canonical_bytes,
+            next_len,
+            false,
+            true,
+            &plan.path,
+        )?;
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        self.write_atomic_synced_replace(&plan.path, &next_bytes)?;
+        self.update_disk_usage_delta(previous_len, next_len);
+        self.update_total_disk_usage_delta(previous_len, next_len);
+        accounting_mutation.finish();
+        Ok(complete)
     }
     /// Materialize and revalidate the complete source-outcome set for one
     /// canonical merge carrier while all Kura ordering locks are held.
@@ -1928,6 +2284,18 @@ impl Kura {
                     )?;
                     AutonomousLifecycleTerminalOutcomeSourceKind::RetiredRelease
                 }
+                source @ AutonomousLifecycleTerminalOutcomeSourceV1::RetiredReplicaQueueDisposition {
+                    ..
+                } => {
+                    self.autonomous_lifecycle_terminal_source_matches_replica_queue_disposition_locked(
+                        Some(pending_canonical_bytes),
+                        &entry,
+                        payload,
+                        record.retirement.as_ref(),
+                        source,
+                    )?;
+                    AutonomousLifecycleTerminalOutcomeSourceKind::RetiredReplicaQueueDisposition
+                }
             };
             let stage = if outcome.is_complete() {
                 AutonomousLifecycleTerminalOutcomeDurableStage::Complete
@@ -2103,6 +2471,34 @@ impl Kura {
                             source,
                         )?;
                     }
+                    source @ AutonomousLifecycleTerminalOutcomeSourceV1::RetiredReplicaQueueDisposition {
+                        ..
+                    } => {
+                        let queue_disposition = self
+                            .autonomous_lifecycle_terminal_source_matches_replica_queue_disposition_locked(
+                                Some(pending_canonical_bytes),
+                                &entry,
+                                payload,
+                                record.retirement.as_ref(),
+                                source,
+                            )?;
+                        if outcome.is_complete() {
+                            let retirement = record.retirement.as_ref().ok_or_else(|| {
+                                Self::invalid_lane_artifact_error(
+                                    path.clone(),
+                                    "Complete replica Queue disposition lost its exact retirement",
+                                )
+                            })?;
+                            self.complete_autonomous_lane_entrypoint_claims_released_for_replica_locked(
+                                pending_canonical_bytes,
+                                Some(pending_canonical_bytes),
+                                payload,
+                                retirement,
+                                queue_disposition,
+                                &outcome,
+                            )?;
+                        }
+                    }
                 }
                 let group = binding.reservation_group_binding();
                 if observed_groups
@@ -2162,6 +2558,21 @@ impl Kura {
                                     },
                             },
                         );
+                    }
+                    AutonomousLifecycleTerminalOutcomeSourceV1::RetiredReplicaQueueDisposition {
+                        ..
+                    } => {
+                        validated_release_groups.push((group, path.clone()));
+                        if outcome.is_complete() {
+                            continue;
+                        }
+                        return Err(Error::IO(
+                            std::io::Error::new(
+                                ErrorKind::WouldBlock,
+                                "Pending replica Queue disposition requires a freshly reacquired exact Queue fence",
+                            ),
+                            path,
+                        ));
                     }
                 }
             }
@@ -2565,6 +2976,177 @@ impl Kura {
         }
         Ok(true)
     }
+    /// Seal every source-authenticated Complete replica outcome before startup
+    /// performs any unrelated capacity-consuming repair.
+    fn seal_completed_autonomous_lifecycle_replica_claims_on_startup(&self) -> Result<()> {
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        self.durable_mutation_authorized()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let pending_canonical_bytes =
+            self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let entries = self
+            .lane_storage_entries
+            .lock()
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        let _sidecar_guard = self.sidecar_lock.lock();
+        self.seal_completed_autonomous_lifecycle_replica_claims_on_startup_locked(
+            pending_canonical_bytes,
+            &entries,
+        )
+    }
+
+    /// Perform the seal-only startup pass while the Kura mutation locks are held.
+    ///
+    /// The terminal outcome is durable before its entrypoint claims are sealed,
+    /// so a crash can leave `ReplicaReleased` claims behind a Complete outcome.
+    /// Scan every active lane first: otherwise an earlier lane's pointer or view
+    /// repair could consume the capacity needed to make those claims
+    /// archive-independent.
+    fn seal_completed_autonomous_lifecycle_replica_claims_on_startup_locked(
+        &self,
+        pending_canonical_bytes: u64,
+        entries: &[LaneConfigEntry],
+    ) -> Result<()> {
+        let mut outcomes_seen = 0_usize;
+        for entry in entries {
+            let directory = Self::lane_artifact_dir(&entry.blocks_dir(&self.store_root));
+            let directory_entries = match std::fs::read_dir(&directory) {
+                Ok(entries) => entries,
+                Err(error) if error.kind() == ErrorKind::NotFound => continue,
+                Err(error) => return Err(Error::IO(error, directory)),
+            };
+            for directory_entry in directory_entries {
+                let directory_entry =
+                    directory_entry.map_err(|error| Error::IO(error, directory.clone()))?;
+                let path = directory_entry.path();
+                let name = directory_entry.file_name().into_string().map_err(|_| {
+                    Self::invalid_lane_artifact_error(
+                        path.clone(),
+                        "replica Complete startup seal found a non-UTF-8 artifact",
+                    )
+                })?;
+                let Some(identity) = Self::autonomous_lifecycle_terminal_outcome_coordinates(&name)
+                else {
+                    if name.starts_with(AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_PREFIX) {
+                        return Err(Self::invalid_lane_artifact_error(
+                            path,
+                            "replica Complete startup seal found a malformed terminal outcome path",
+                        ));
+                    }
+                    continue;
+                };
+                outcomes_seen = outcomes_seen.checked_add(1).ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        directory.clone(),
+                        "replica Complete startup seal inventory count overflows",
+                    )
+                })?;
+                if outcomes_seen > MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES {
+                    return Err(Self::invalid_lane_artifact_error(
+                        directory,
+                        "replica Complete startup seal inventory exceeds its global bound",
+                    ));
+                }
+                let bytes = self
+                    .read_regular_sidecar_bytes(
+                        &path,
+                        &directory,
+                        AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_MAX_BYTES,
+                    )?
+                    .ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            path.clone(),
+                            "replica Complete terminal outcome disappeared during startup seal",
+                        )
+                    })?;
+                let outcome = Self::decode_autonomous_lifecycle_terminal_outcome(&path, &bytes)?;
+                if !outcome.is_complete()
+                    || !matches!(
+                        outcome.source(),
+                        AutonomousLifecycleTerminalOutcomeSourceV1::RetiredReplicaQueueDisposition {
+                            ..
+                        }
+                    )
+                {
+                    continue;
+                }
+                let binding = outcome.binding();
+                let (active_incarnation, activation_height) =
+                    self.active_lane_incarnation_marker(entry)?;
+                if binding.lane_id != entry.lane_id
+                    || binding.dataspace_id != entry.dataspace_id
+                    || binding.lane_incarnation != active_incarnation
+                    || binding.proposal_height <= activation_height
+                    || binding.lane_block_height != identity.0
+                    || binding.proposal_height != identity.1
+                {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "replica Complete startup seal targets stale lane geometry",
+                    ));
+                }
+                let record = self
+                    .read_autonomous_lane_block_attempt_record_locked(
+                        entry,
+                        binding.lane_id,
+                        binding.lane_block_height,
+                        binding.proposal_height,
+                        binding.network_id,
+                        binding.epoch,
+                        None,
+                    )?
+                    .ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            path.clone(),
+                            "replica Complete startup seal lost its payload attempt",
+                        )
+                    })?;
+                let payload = &record.artifact.executable_payload;
+                outcome
+                    .validate_for_payload(payload)
+                    .map_err(|message| Self::invalid_lane_artifact_error(path.clone(), message))?;
+                let cursor = self
+                    .read_autonomous_lifecycle_cursor_for_terminal_outcome_locked(entry, payload)?;
+                if cursor.binding() != binding {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path.clone(),
+                        "replica Complete startup seal differs from its signed cursor binding",
+                    ));
+                }
+                let queue_disposition = self
+                    .autonomous_lifecycle_terminal_source_matches_replica_queue_disposition_locked(
+                        // This is deliberately a seal-only pre-sweep. A recoverable
+                        // view-state temporary must wait for the ordered startup
+                        // repair corridor; consuming capacity here could strand a
+                        // later Complete replica group's raw claims.
+                        None,
+                        entry,
+                        payload,
+                        record.retirement.as_ref(),
+                        outcome.source(),
+                    )?;
+                let retirement = record.retirement.as_ref().ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        path,
+                        "replica Complete startup seal lost its exact retirement",
+                    )
+                })?;
+                self.complete_autonomous_lane_entrypoint_claims_released_for_replica_locked(
+                    pending_canonical_bytes,
+                    None,
+                    payload,
+                    retirement,
+                    queue_disposition,
+                    &outcome,
+                )?;
+            }
+        }
+        Ok(())
+    }
     /// Revalidate every collected startup outcome against its payload, cursor, and source.
     fn validate_autonomous_lifecycle_terminal_outcomes_on_startup_locked(
         &self,
@@ -2620,6 +3202,34 @@ impl Kura {
                         record.retirement.as_ref(),
                         source,
                     )?;
+                }
+                source @ AutonomousLifecycleTerminalOutcomeSourceV1::RetiredReplicaQueueDisposition {
+                    ..
+                } => {
+                    let queue_disposition = self
+                        .autonomous_lifecycle_terminal_source_matches_replica_queue_disposition_locked(
+                        Some(pending_canonical_bytes),
+                        entry,
+                        payload,
+                        record.retirement.as_ref(),
+                        source,
+                    )?;
+                    if outcome.is_complete() {
+                        let retirement = record.retirement.as_ref().ok_or_else(|| {
+                            Self::invalid_lane_artifact_error(
+                                path.clone(),
+                                "Complete replica Queue disposition lost its exact retirement",
+                            )
+                        })?;
+                        self.complete_autonomous_lane_entrypoint_claims_released_for_replica_locked(
+                            pending_canonical_bytes,
+                            Some(pending_canonical_bytes),
+                            payload,
+                            retirement,
+                            queue_disposition,
+                            outcome,
+                        )?;
+                    }
                 }
             }
         }

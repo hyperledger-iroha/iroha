@@ -1782,6 +1782,157 @@ fn certified_fence_escape_crosses_retained_control_reservation() {
     assert_eq!(ingress.state.lock().len, 0);
 }
 #[test]
+fn certified_fence_escape_crosses_retained_chunk_reservation() {
+    let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);
+    let roster = validator_peers(2);
+    let chunk_origin = roster[0].clone();
+    let response_origin = roster[1].clone();
+    let proposal_message = v2_maximum_structural_proposal_wire(minimal_rs16_layout(), roster.len());
+    let (round, manifest_hash) = match &proposal_message {
+        BlockMessage::V2(wire::ConsensusMessageV2 {
+            payload: wire::ConsensusMessageV2Payload::Proposal(proposal),
+            ..
+        }) => (proposal.round, HashOf::new(&proposal.manifest)),
+        _ => unreachable!("proposal fixture carries a v2 Proposal"),
+    };
+    let _directory = bind_test_leader_wire_gate_with_roster(&ingress, &roster, round, 2);
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            proposal_message,
+            chunk_origin.clone(),
+        )),
+        Ok(super::FairV2IngressPushDisposition::Enqueued)
+    ));
+    let mut proposal = ingress
+        .try_recv_if(|_| true)
+        .expect("the manifest-binding Proposal reaches runtime");
+    let proposal_runtime = proposal
+        .take_ingress_ownership()
+        .and_then(|ownership| ownership.leader_wire_runtime_receipt().cloned())
+        .expect("the Proposal retains its exact runtime receipt");
+    ingress
+        .mark_leader_wire_volatile_terminal(&proposal_runtime)
+        .expect("terminalize the Proposal after binding chunk coordinates");
+
+    let chunk_message = BlockMessage::V2(wire::ConsensusMessageV2::new(
+        wire::ConsensusMessageV2Payload::PayloadChunk(wire::PayloadChunk {
+            manifest_hash,
+            index: 0,
+            bytes: vec![0xA5],
+            sender: 0,
+            signature: vec![0x5A],
+        }),
+    ));
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            chunk_message.clone(),
+            chunk_origin.clone(),
+        )),
+        Ok(super::FairV2IngressPushDisposition::Enqueued)
+    ));
+    let chunk_token = ingress
+        .state
+        .lock()
+        .leader_wire_lifecycles
+        .values()
+        .find(|record| record.token.matches_chunk_manifest(manifest_hash))
+        .expect("the manifest-bound chunk owns its exact barrier")
+        .token
+        .clone();
+
+    let stale_view = round
+        .view
+        .checked_sub(1)
+        .expect("proposal fixture has a predecessor view");
+    let mut stale_timeout = v2_timeout_certificate(stale_view);
+    let BlockMessage::V2(wire::ConsensusMessageV2 {
+        payload: wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate),
+        ..
+    }) = &mut stale_timeout
+    else {
+        unreachable!("timeout fixture carries a v2 TimeoutCertificate");
+    };
+    certificate.round.context_id = round.context_id;
+    certificate.round.height = round.height;
+    let stale_timeout_inbound =
+        InboundBlockMessage::from_authenticated_peer(stale_timeout.clone(), chunk_origin.clone());
+    assert!(super::fair_v2_ingress_is_certified_fence_escape(
+        &stale_timeout_inbound
+    ));
+    assert!(
+        !super::fair_v2_ingress_certified_fence_escape_advances_owner(
+            &chunk_token,
+            &stale_timeout_inbound,
+        )
+    );
+    assert!(matches!(
+        ingress.try_push(stale_timeout_inbound),
+        Ok(super::FairV2IngressPushDisposition::Enqueued)
+    ));
+    assert!(
+        ingress
+            .try_recv_if(super::fair_v2_ingress_is_certified_fence_escape)
+            .is_none(),
+        "a lower-view certificate cannot cross the retained Chunk"
+    );
+
+    let mut commit_response = v2_commit_certificate_response(11, &response_origin);
+    let BlockMessage::V2(wire::ConsensusMessageV2 {
+        payload: wire::ConsensusMessageV2Payload::CommitCertificateResponse(response),
+        ..
+    }) = &mut commit_response
+    else {
+        unreachable!("commit-certificate fixture carries a v2 response");
+    };
+    response.certificate.round = round;
+    response.certificate.proposal_round = round;
+    let commit_response_inbound =
+        InboundBlockMessage::from_authenticated_peer(commit_response.clone(), response_origin);
+    assert!(
+        super::fair_v2_ingress_certified_fence_escape_advances_owner(
+            &chunk_token,
+            &commit_response_inbound,
+        )
+    );
+    assert!(matches!(
+        ingress.try_push(commit_response_inbound),
+        Ok(super::FairV2IngressPushDisposition::Enqueued)
+    ));
+    let escaped = ingress
+        .try_recv_if(super::fair_v2_ingress_is_certified_fence_escape)
+        .expect("same-height CommitQC discovery crosses the retained Chunk");
+    assert_eq!(escaped.message().encode(), commit_response.encode());
+    assert_eq!(ingress.state.lock().len, 2);
+
+    let mut retained_chunk = ingress
+        .try_recv_if(|inbound| payload_chunk_index(inbound) == Some(0))
+        .expect("the certified escape preserves the exact Chunk owner");
+    assert_eq!(retained_chunk.message().encode(), chunk_message.encode());
+    let chunk_runtime = retained_chunk
+        .take_ingress_ownership()
+        .and_then(|ownership| ownership.leader_wire_runtime_receipt().cloned())
+        .expect("the Chunk retains its exact runtime receipt");
+    ingress
+        .mark_leader_wire_volatile_terminal(&chunk_runtime)
+        .expect("terminalize the normally drained Chunk");
+
+    let mut retained_stale_timeout = ingress
+        .try_recv_if(|_| true)
+        .expect("the stale certificate remains queued behind the Chunk");
+    assert_eq!(
+        retained_stale_timeout.message().encode(),
+        stale_timeout.encode()
+    );
+    let stale_runtime = retained_stale_timeout
+        .take_ingress_ownership()
+        .and_then(|ownership| ownership.leader_wire_runtime_receipt().cloned())
+        .expect("the stale TimeoutCertificate retains its runtime receipt");
+    ingress
+        .mark_leader_wire_volatile_terminal(&stale_runtime)
+        .expect("terminalize the drained stale certificate");
+    assert_eq!(ingress.state.lock().len, 0);
+}
+#[test]
 fn retained_vote_does_not_hide_timeout_vote_needed_to_close_its_view() {
     let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);
     let validator = PeerId::new(KeyPair::random().public_key().clone());

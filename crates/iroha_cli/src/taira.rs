@@ -100,12 +100,6 @@ const ROUTE_CHECKS: &[(&str, RouteCheckMethod, &str, &[u16])] = &[
         &[400],
     ),
     (
-        "retired_transaction_status_alias",
-        RouteCheckMethod::Get,
-        "/v1/transactions/status",
-        &[404],
-    ),
-    (
         "sccp_capabilities",
         RouteCheckMethod::Get,
         "/v1/sccp/capabilities",
@@ -402,9 +396,6 @@ pub struct WriteCanary {
     /// Public Torii root URL.
     #[arg(long, default_value = DEFAULT_PUBLIC_ROOT)]
     pub public_root: String,
-    /// Prefix used for the authorization-bound account alias.
-    #[arg(long, default_value = DEFAULT_ALIAS_PREFIX)]
-    pub alias_prefix: String,
     /// Independently trusted faucet authority; required for the faucet child.
     #[arg(long, required_if_eq("operation", "faucet"))]
     pub faucet_authority: Option<String>,
@@ -417,9 +408,6 @@ pub struct WriteCanary {
     /// Owner-only onboarding token; required only while preparing or submitting the envelope.
     #[arg(long, value_name = "PATH")]
     pub onboarding_token_file: Option<PathBuf>,
-    /// Use the signer from the loaded client config; ephemeral canary identities are forbidden.
-    #[arg(long, required = true)]
-    pub use_config_signer: bool,
     /// Exact ordered child operation; each invocation handles one transaction only.
     #[arg(long, value_enum)]
     pub operation: WriteCanaryOperation,
@@ -2722,9 +2710,6 @@ enum PreparedRecoveryClassification {
 }
 
 fn run_write_canary_exact<C: RunContext>(context: &mut C, args: &WriteCanary) -> Result<Value> {
-    if !args.use_config_signer {
-        eyre::bail!("exact prepared write-canary operations require --use-config-signer");
-    }
     ensure_canonical_taira_client_identity(context.config())?;
     let _guard = ChainDiscriminantGuard::enter(DEFAULT_CHAIN_DISCRIMINANT);
     let public_root = normalize_root_url(&args.public_root)?;
@@ -3195,7 +3180,7 @@ fn validate_prepared_operation(
     let transaction = match operation {
         PreparedTransactionOperationV1::OnboardingPrepared(prepared) => {
             let expected_alias = build_alias(
-                &args.alias_prefix,
+                DEFAULT_ALIAS_PREFIX,
                 signer.key_pair.public_key(),
                 TAIRA_CANARY_ALIAS_SCOPE,
             )?;
@@ -3220,7 +3205,7 @@ fn validate_prepared_operation(
         }
         PreparedTransactionOperationV1::OnboardingProofRequired(proof_required) => {
             let expected_alias = build_alias(
-                &args.alias_prefix,
+                DEFAULT_ALIAS_PREFIX,
                 signer.key_pair.public_key(),
                 TAIRA_CANARY_ALIAS_SCOPE,
             )?;
@@ -3942,7 +3927,7 @@ fn prepare_onboarding_operation(
     let canary_config = write_canary_config(config, public_root, &signer)?;
     let client = IrohaClient::new(canary_config.clone());
     let alias = build_alias(
-        &args.alias_prefix,
+        DEFAULT_ALIAS_PREFIX,
         signer.key_pair.public_key(),
         TAIRA_CANARY_ALIAS_SCOPE,
     )?;
@@ -4060,7 +4045,7 @@ fn submit_server_prepared_operation(
             let token = read_onboarding_token_file(args.require_onboarding_token()?)?;
             let request = AccountOnboardingPlanRequestV1::try_new(
                 build_alias(
-                    &args.alias_prefix,
+                    DEFAULT_ALIAS_PREFIX,
                     signer.key_pair.public_key(),
                     TAIRA_CANARY_ALIAS_SCOPE,
                 )?,
@@ -6096,7 +6081,6 @@ mod tests {
             key,
             "--execution-expires-at-unix-ms".to_owned(),
             u64::MAX.to_string(),
-            "--use-config-signer".to_owned(),
             "--prepare-envelope".to_owned(),
             "--prepared-output-fd".to_owned(),
             "3".to_owned(),
@@ -6113,7 +6097,12 @@ mod tests {
             PreparedEnvelopeAction::Prepare(3)
         );
 
-        for retired in ["--recover-only", "--write-config"] {
+        for retired in [
+            "--recover-only",
+            "--write-config",
+            "--alias-prefix",
+            "--use-config-signer",
+        ] {
             let error = TestTairaCli::try_parse_from(["taira-test", "write-canary", retired])
                 .expect_err("retired one-shot flags must fail closed");
             assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
@@ -6505,12 +6494,10 @@ mod tests {
         );
         WriteCanary {
             public_root: DEFAULT_PUBLIC_ROOT.to_owned(),
-            alias_prefix: DEFAULT_ALIAS_PREFIX.to_owned(),
             faucet_authority: Some(faucet_authority.to_string()),
             faucet_asset_id: Some(DEFAULT_GAS_ASSET_ID.to_owned()),
             faucet_amount: Some("25000".to_owned()),
             onboarding_token_file: None,
-            use_config_signer: true,
             operation,
             authorization_sha256: "ab".repeat(32),
             authorization_nonce,
@@ -6816,7 +6803,6 @@ mod tests {
             ("GET", "/v1/pipeline/transactions/status") => {
                 MockResponse::json(400, norito::json!({"error": "missing transaction hash"}))
             }
-            ("GET", "/v1/transactions/status") => MockResponse::text(404, "not found"),
             ("POST", "/v1/musubi/queries/ordered-prefix") => MockResponse::json(
                 401,
                 norito::json!({
@@ -7485,7 +7471,7 @@ mod tests {
     }
     #[test]
     fn doctor_mock_healthy_flow_reports_ok() {
-        let server = spawn_mock_http(15, |request| doctor_mock_response(request, None));
+        let server = spawn_mock_http(14, |request| doctor_mock_response(request, None));
         let report = run_doctor(&server.base_url).expect("doctor report");
         let requests = finish_mock(server);
         assert_eq!(report_status(&report), Some("ok"));
@@ -7502,9 +7488,6 @@ mod tests {
         assert!(requests.iter().any(|request| {
             request.method == "GET"
                 && path_only(&request.path) == "/v1/pipeline/transactions/status"
-        }));
-        assert!(requests.iter().any(|request| {
-            request.method == "GET" && path_only(&request.path) == "/v1/transactions/status"
         }));
         assert!(requests.iter().any(|request| {
             request.method == "GET" && path_only(&request.path) == "/v1/time/now"
@@ -7778,7 +7761,7 @@ mod tests {
     #[test]
     fn doctor_mock_required_tool_missing_reports_failure() {
         let missing_tool = REQUIRED_MCP_TOOLS[0];
-        let server = spawn_mock_http(15, move |request| {
+        let server = spawn_mock_http(14, move |request| {
             doctor_mock_response(request, Some(missing_tool))
         });
         let report = run_doctor(&server.base_url).expect("doctor report");
@@ -7798,7 +7781,7 @@ mod tests {
     }
     #[test]
     fn doctor_rejects_substituted_mcp_protocol_version() {
-        let server = spawn_mock_http(15, |request| {
+        let server = spawn_mock_http(14, |request| {
             if request.method == "GET" && path_only(&request.path) == "/v1/mcp" {
                 MockResponse::json(200, norito::json!({"protocolVersion": "2024-11-05"}))
             } else {
@@ -7825,7 +7808,7 @@ mod tests {
             norito::json!({"description": "missing name"}),
             norito::json!({"name": (REQUIRED_MCP_TOOLS[0]), "description": "duplicate"}),
         ] {
-            let server = spawn_mock_http(15, move |request| {
+            let server = spawn_mock_http(14, move |request| {
                 if request.method == "POST"
                     && path_only(&request.path) == "/v1/mcp"
                     && request.body.contains("tools/list")

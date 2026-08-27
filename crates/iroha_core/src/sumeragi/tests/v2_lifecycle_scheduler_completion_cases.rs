@@ -2031,6 +2031,7 @@ impl ProductionLifecycleOwnerV1 {
         &mut self,
         services: &mut ProductionV2Services,
         output_guard: std::sync::Arc<crate::sumeragi::output_guard::ConsensusOutputGuard>,
+        recovered_validate_retry_census: crate::sumeragi::v2_lifecycle_coordinator::RecoveredDurableValidateRetryCensusV1,
         class_capacity: usize,
     ) -> (
         crate::sumeragi::v2_effects::V2EffectExecutor<
@@ -2047,12 +2048,13 @@ impl ProductionLifecycleOwnerV1 {
                 self.coordinator.high_water(),
             );
         let runtime = startup.into_lifecycle_apply_runtime_for_lineage_test(lifecycle_ordinals);
-        self.bind_body_store_to_lifecycle_completion_io_for_test(
+        self.bind_body_store_to_lifecycle_completion_io_with_validate_retry_census_for_test(
             services,
             runtime,
             output_guard,
             0,
             class_capacity,
+            recovered_validate_retry_census,
         )
     }
 
@@ -2067,6 +2069,19 @@ impl ProductionLifecycleOwnerV1 {
         runner_debt: u64,
     ) -> Result<ProductionCompletionDispatchV1, ProductionCompletionDispatchErrorV1> {
         self.dispatch_completion_with_runner_debt(services, executor, runner_debt)
+    }
+
+    /// Exercise the production synchronous Ready-Validate-successor corridor.
+    pub(in crate::sumeragi) fn dispatch_ready_validate_successor_for_test(
+        &mut self,
+        services: &mut ProductionV2Services,
+        executor: &mut crate::sumeragi::v2_effects::V2EffectExecutor<
+            crate::sumeragi::v2_runtime::SerializedV2Runtime,
+        >,
+        successor: super::ReadyValidateSuccessorV1,
+        runner_debt: u64,
+    ) -> Result<super::ReadyValidateSuccessorDispatchV1, ProductionCompletionDispatchErrorV1> {
+        self.dispatch_ready_validate_successor(services, executor, successor, runner_debt)
     }
 
     /// Recheck the exact finalization-only registry census without exposing it.

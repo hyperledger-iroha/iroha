@@ -855,8 +855,6 @@ fn taira_write_canary_cli_parses_defaults_and_overrides() {
         "iroha",
         "taira",
         "write-canary",
-        "--alias-prefix",
-        "rollout",
         "--faucet-asset-id",
         "asset",
         "--faucet-authority",
@@ -865,7 +863,6 @@ fn taira_write_canary_cli_parses_defaults_and_overrides() {
         "25000",
         "--onboarding-token-file",
         "/tmp/taira-onboarding.token",
-        "--use-config-signer",
         "--operation",
         "faucet",
         "--authorization-sha256",
@@ -887,7 +884,6 @@ fn taira_write_canary_cli_parses_defaults_and_overrides() {
         panic!("expected taira write-canary command");
     };
     assert_eq!(cmd.public_root, "https://taira.sora.org");
-    assert_eq!(cmd.alias_prefix, "rollout");
     assert_eq!(cmd.faucet_authority.as_deref(), Some("authority"));
     assert_eq!(cmd.faucet_asset_id.as_deref(), Some("asset"));
     assert_eq!(cmd.faucet_amount.as_deref(), Some("25000"));
@@ -895,7 +891,6 @@ fn taira_write_canary_cli_parses_defaults_and_overrides() {
         cmd.onboarding_token_file.as_deref(),
         Some(std::path::Path::new("/tmp/taira-onboarding.token"))
     );
-    assert!(cmd.use_config_signer);
     assert_eq!(cmd.recover_prepared_envelope_fd, Some(3));
     assert!(cmd.json);
     assert_eq!(
@@ -903,7 +898,12 @@ fn taira_write_canary_cli_parses_defaults_and_overrides() {
         "abababababababababababababababababababababababababababababababab"
     );
 
-    for retired in ["--write-config", "--recover-only"] {
+    for retired in [
+        "--write-config",
+        "--recover-only",
+        "--alias-prefix",
+        "--use-config-signer",
+    ] {
         let error = Args::try_parse_from(["iroha", "taira", "write-canary", retired])
             .expect_err("retired write-canary flag must fail closed");
         assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);

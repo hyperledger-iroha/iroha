@@ -360,8 +360,17 @@ impl DurableLiveWalSignWork {
     fn predecessor_is_exact_in_ledger(
         &self,
         ledger: &super::ledger::LifecycleLedgerV1,
-        broadcast_is_present: bool,
+        broadcast_ordinal: Option<u128>,
     ) -> bool {
+        // The Broadcast caller separately authenticates the Sign and its exact
+        // continuation target, so count only that closed lineage interval. A
+        // later terminal retry may deliberately reuse the same causal owner and
+        // must not retroactively invalidate the older durable Sign-to-Broadcast
+        // edge. The fresh-Sign caller supplies no bound and retains the stricter
+        // owner-tail census used before a Broadcast child exists.
+        if broadcast_ordinal.is_some_and(|ordinal| ordinal < self.address.ordinal) {
+            return false;
+        }
         match &self.origin {
             DurableLiveWalSignOriginV1::LocalProposal => {
                 ledger
@@ -370,9 +379,11 @@ impl DurableLiveWalSignWork {
                     .filter(|record| {
                         record.owner() == self.address.owner
                             && record.ordinal() >= self.address.ordinal
+                            && broadcast_ordinal
+                                .is_none_or(|ordinal| record.ordinal() <= ordinal)
                     })
                     .count()
-                    == if broadcast_is_present { 2 } else { 1 }
+                    == if broadcast_ordinal.is_some() { 2 } else { 1 }
             }
             DurableLiveWalSignOriginV1::Validate {
                 parent_address,
@@ -432,9 +443,11 @@ impl DurableLiveWalSignWork {
                         .filter(|record| {
                             record.owner() == self.address.owner
                                 && record.ordinal() >= parent_address.ordinal
+                                && broadcast_ordinal
+                                    .is_none_or(|ordinal| record.ordinal() <= ordinal)
                         })
                         .count()
-                        == if broadcast_is_present { 3 } else { 2 }
+                        == if broadcast_ordinal.is_some() { 3 } else { 2 }
             }
         }
     }
@@ -448,7 +461,7 @@ impl DurableLiveWalSignWork {
             return false;
         };
         self.exactly_matches_fresh_record(ledger.context(), sign_record)
-            && self.predecessor_is_exact_in_ledger(ledger, false)
+            && self.predecessor_is_exact_in_ledger(ledger, None)
     }
 
     fn digest(&self) -> LifecycleDigest {

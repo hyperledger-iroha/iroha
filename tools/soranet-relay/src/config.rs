@@ -2075,9 +2075,6 @@ pub const fn vpn_runtime_available() -> bool {
 #[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
 #[norito(deny_unknown_fields)]
 pub struct PowConfig {
-    /// Whether PoW is required for admission tokens (must be `true` in v1).
-    #[norito(default = "PowConfig::default_required")]
-    pub required: bool,
     /// Baseline difficulty (shifted into the PoW challenge).
     #[norito(default = "PowConfig::default_difficulty")]
     pub difficulty: u32,
@@ -2110,16 +2107,10 @@ pub struct PowConfig {
     pub slowloris: SlowlorisConfig,
     /// Argon2 puzzle applied to every inbound connection without a signed admission credential.
     #[norito(default)]
-    pub puzzle: Option<PuzzleConfig>,
+    pub puzzle: PuzzleConfig,
     /// Optional signed token authentication layer.
     #[norito(default)]
     pub token: Option<TokenConfig>,
-    /// Retired descriptor replay-filter settings retained for config compatibility.
-    ///
-    /// Enabling this field is rejected because the only available descriptor is relay-static;
-    /// credential-specific replay protection is enforced by the durable ticket/token stores.
-    #[norito(default)]
-    pub replay_filter: ReplayFilterConfig,
     /// Emergency throttle applied when the relay is degraded.
     #[norito(default)]
     pub emergency: Option<EmergencyThrottleConfig>,
@@ -2127,7 +2118,6 @@ pub struct PowConfig {
 impl Default for PowConfig {
     fn default() -> Self {
         Self {
-            required: true,
             difficulty: u32::from(puzzle::DEFAULT_DIFFICULTY),
             max_future_skew_secs: 300,
             min_ticket_ttl_secs: 30,
@@ -2138,17 +2128,13 @@ impl Default for PowConfig {
             quotas: QuotaConfig::default(),
             quotas_per_mode: None,
             slowloris: SlowlorisConfig::default(),
-            puzzle: Some(PuzzleConfig::default()),
+            puzzle: PuzzleConfig::default(),
             token: None,
-            replay_filter: ReplayFilterConfig::default(),
             emergency: None,
         }
     }
 }
 impl PowConfig {
-    const fn default_required() -> bool {
-        true
-    }
     const fn default_difficulty() -> u32 {
         puzzle::DEFAULT_DIFFICULTY as u32
     }
@@ -2162,11 +2148,6 @@ impl PowConfig {
         PathBuf::from("./storage/soranet/ticket_revocations.norito")
     }
     pub fn apply_defaults(&mut self) -> Result<(), ConfigError> {
-        if !self.required {
-            return Err(ConfigError::Puzzle(
-                "pow.required must be true under the first-release admission policy".to_owned(),
-            ));
-        }
         if self.difficulty == 0 {
             return Err(ConfigError::Puzzle(
                 "pow.difficulty must be greater than zero under the first-release admission policy"
@@ -2210,15 +2191,13 @@ impl PowConfig {
             overrides.validate()?;
         }
         self.slowloris.apply_defaults();
-        let puzzle = self.puzzle.get_or_insert_with(PuzzleConfig::default);
-        puzzle.apply_defaults();
-        puzzle.validate()?;
+        self.puzzle.apply_defaults();
+        self.puzzle.validate()?;
         let _ = self.signed_ticket_public_key()?;
         if let Some(token) = self.token.as_mut() {
             token.apply_defaults();
             token.validate()?;
         }
-        self.replay_filter.apply_defaults()?;
         if let Some(emergency) = self.emergency.as_mut() {
             emergency.apply_defaults()?;
         }
@@ -2262,11 +2241,8 @@ impl PowConfig {
     pub fn puzzle_parameters(
         &self,
         base: &pow::Parameters,
-    ) -> Result<Option<puzzle::Parameters>, ConfigError> {
-        match &self.puzzle {
-            Some(cfg) => cfg.parameters(base),
-            None => Ok(None),
-        }
+    ) -> Result<puzzle::Parameters, ConfigError> {
+        self.puzzle.parameters(base)
     }
     /// Decode and validate the optional ML-DSA-44 signed-puzzle verifier key.
     pub fn signed_ticket_public_key(&self) -> Result<Option<Vec<u8>>, ConfigError> {
@@ -2291,19 +2267,14 @@ impl PowConfig {
             })?;
         Ok(Some(public_key))
     }
-    pub fn replay_filter(&self) -> &ReplayFilterConfig {
-        &self.replay_filter
-    }
     pub fn emergency_throttle(&self) -> Option<&EmergencyThrottleConfig> {
         self.emergency.as_ref()
     }
 }
 /// Argon2 puzzle configuration applied to inbound handshakes.
 #[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
+#[norito(deny_unknown_fields)]
 pub struct PuzzleConfig {
-    /// Whether the Argon2 puzzle is enforced (must be `true` in v1).
-    #[norito(default = "PuzzleConfig::default_enabled")]
-    pub enabled: bool,
     /// Memory cost (KiB) for the Argon2 puzzle.
     #[norito(default = "PuzzleConfig::default_memory_kib")]
     pub memory_kib: u32,
@@ -2317,7 +2288,6 @@ pub struct PuzzleConfig {
 impl Default for PuzzleConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
             memory_kib: Self::default_memory_kib(),
             time_cost: Self::default_time_cost(),
             lanes: Self::default_lanes(),
@@ -2325,9 +2295,6 @@ impl Default for PuzzleConfig {
     }
 }
 impl PuzzleConfig {
-    const fn default_enabled() -> bool {
-        true
-    }
     const fn default_memory_kib() -> u32 {
         64 * 1024
     }
@@ -2349,12 +2316,6 @@ impl PuzzleConfig {
         }
     }
     fn validate(&self) -> Result<(), ConfigError> {
-        if !self.enabled {
-            return Err(ConfigError::Puzzle(
-                "pow.puzzle.enabled must be true under the first-release admission policy"
-                    .to_owned(),
-            ));
-        }
         if self.memory_kib < 4096 {
             return Err(ConfigError::Puzzle(
                 "pow.puzzle.memory_kib must be at least 4096".to_string(),
@@ -2372,13 +2333,7 @@ impl PuzzleConfig {
         }
         Ok(())
     }
-    fn parameters(
-        &self,
-        base: &pow::Parameters,
-    ) -> Result<Option<puzzle::Parameters>, ConfigError> {
-        if !self.enabled {
-            return Ok(None);
-        }
+    fn parameters(&self, base: &pow::Parameters) -> Result<puzzle::Parameters, ConfigError> {
         let memory = NonZeroU32::new(self.memory_kib).ok_or_else(|| {
             ConfigError::Puzzle("pow.puzzle.memory_kib must be non-zero".to_string())
         })?;
@@ -2387,19 +2342,15 @@ impl PuzzleConfig {
         })?;
         let lanes = NonZeroU32::new(self.lanes)
             .ok_or_else(|| ConfigError::Puzzle("pow.puzzle.lanes must be non-zero".to_string()))?;
-        Ok(Some(
-            puzzle::Parameters::try_new(
-                memory,
-                time,
-                lanes,
-                base.difficulty(),
-                base.max_future_skew(),
-                base.min_ticket_ttl(),
-            )
-            .map_err(|err| {
-                ConfigError::Puzzle(format!("invalid pow.puzzle timing parameters: {err}"))
-            })?,
-        ))
+        puzzle::Parameters::try_new(
+            memory,
+            time,
+            lanes,
+            base.difficulty(),
+            base.max_future_skew(),
+            base.min_ticket_ttl(),
+        )
+        .map_err(|err| ConfigError::Puzzle(format!("invalid pow.puzzle timing parameters: {err}")))
     }
 }
 /// Admission token configuration for bypassing puzzles.
@@ -2739,97 +2690,9 @@ impl GuardDirectoryConfig {
         self.pinning_proof_path.as_deref()
     }
 }
-/// Retired configuration for the blinded descriptor replay filter.
-#[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
-pub struct ReplayFilterConfig {
-    /// Whether the replay filter is enforced during handshakes.
-    #[norito(default)]
-    pub enabled: bool,
-    /// Number of counters in the bloom filter (rounded up to the next power of two).
-    #[norito(default = "ReplayFilterConfig::default_bits")]
-    pub bits: u32,
-    /// Number of independent hash probes used when inserting into the filter.
-    #[norito(default = "ReplayFilterConfig::default_hash_functions")]
-    pub hash_functions: u8,
-    /// Time-to-live for entries retained inside the filter, in seconds.
-    #[norito(default = "ReplayFilterConfig::default_ttl_secs")]
-    pub ttl_secs: u64,
-}
-impl Default for ReplayFilterConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            bits: Self::default_bits(),
-            hash_functions: Self::default_hash_functions(),
-            ttl_secs: Self::default_ttl_secs(),
-        }
-    }
-}
-impl ReplayFilterConfig {
-    const fn default_bits() -> u32 {
-        1 << 18 // 262,144 counters
-    }
-    const fn default_hash_functions() -> u8 {
-        4
-    }
-    const fn default_ttl_secs() -> u64 {
-        30
-    }
-    pub fn apply_defaults(&mut self) -> Result<(), ConfigError> {
-        const MAX_BITS: u32 = 1 << 24; // 16,777,216 counters
-        if self.hash_functions == 0 {
-            self.hash_functions = Self::default_hash_functions();
-        }
-        if self.hash_functions > 16 {
-            return Err(ConfigError::ReplayFilter(
-                "replay_filter.hash_functions must be between 1 and 16".to_string(),
-            ));
-        }
-        if self.bits == 0 {
-            self.bits = Self::default_bits();
-        }
-        let clamped = self.bits.max(64);
-        if clamped > MAX_BITS {
-            return Err(ConfigError::ReplayFilter(
-                "replay_filter.bits must not exceed 16,777,216".to_string(),
-            ));
-        }
-        let next_power = clamped.next_power_of_two();
-        self.bits = next_power;
-        if self.ttl_secs == 0 {
-            self.ttl_secs = Self::default_ttl_secs();
-        }
-        self.ensure_disabled()
-    }
-    /// Reject the retired relay-static filter even when a caller bypasses config normalization.
-    pub(crate) fn ensure_disabled(&self) -> Result<(), ConfigError> {
-        if !self.enabled {
-            return Ok(());
-        }
-        Err(ConfigError::ReplayFilter(
-            "pow.replay_filter.enabled is unsupported because the descriptor is relay-static; use the credential-specific durable replay stores"
-                .to_owned(),
-        ))
-    }
-    #[must_use]
-    pub fn is_enabled(&self) -> bool {
-        self.enabled
-    }
-    #[must_use]
-    pub fn ttl(&self) -> Duration {
-        Duration::from_secs(self.ttl_secs.max(1))
-    }
-    #[must_use]
-    pub fn bits_usize(&self) -> usize {
-        self.bits as usize
-    }
-    #[must_use]
-    pub fn hash_count(&self) -> u8 {
-        self.hash_functions
-    }
-}
 /// Admission quotas applied to inbound circuits.
 #[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
+#[norito(deny_unknown_fields)]
 pub struct QuotaConfig {
     /// Burst of circuits permitted from a single remote before throttling.
     #[norito(default = "QuotaConfig::default_per_remote_burst")]
@@ -2837,12 +2700,6 @@ pub struct QuotaConfig {
     /// Window (seconds) over which `per_remote_burst` is measured.
     #[norito(default = "QuotaConfig::default_per_remote_window_secs")]
     pub per_remote_window_secs: u64,
-    /// Retired per-descriptor burst. It must remain zero because the descriptor is relay-static.
-    #[norito(default = "QuotaConfig::default_per_descriptor_burst")]
-    pub per_descriptor_burst: u32,
-    /// Retired per-descriptor window retained only for configuration-schema compatibility.
-    #[norito(default = "QuotaConfig::default_per_descriptor_window_secs")]
-    pub per_descriptor_window_secs: u64,
     /// Cooldown applied after exceeding a quota window.
     #[norito(default = "QuotaConfig::default_cooldown_secs")]
     pub cooldown_secs: u64,
@@ -2855,8 +2712,6 @@ impl Default for QuotaConfig {
         Self {
             per_remote_burst: Self::default_per_remote_burst(),
             per_remote_window_secs: Self::default_per_remote_window_secs(),
-            per_descriptor_burst: Self::default_per_descriptor_burst(),
-            per_descriptor_window_secs: Self::default_per_descriptor_window_secs(),
             cooldown_secs: Self::default_cooldown_secs(),
             max_entries: Self::default_max_entries(),
         }
@@ -2869,12 +2724,6 @@ impl QuotaConfig {
     const fn default_per_remote_window_secs() -> u64 {
         60
     }
-    const fn default_per_descriptor_burst() -> u32 {
-        0
-    }
-    const fn default_per_descriptor_window_secs() -> u64 {
-        60
-    }
     const fn default_cooldown_secs() -> u64 {
         20
     }
@@ -2884,9 +2733,6 @@ impl QuotaConfig {
     pub fn apply_defaults(&mut self) {
         if self.per_remote_window_secs == 0 {
             self.per_remote_window_secs = Self::default_per_remote_window_secs();
-        }
-        if self.per_descriptor_window_secs == 0 {
-            self.per_descriptor_window_secs = Self::default_per_descriptor_window_secs();
         }
         if self.cooldown_secs == 0 {
             self.cooldown_secs = Self::default_cooldown_secs();
@@ -2900,11 +2746,6 @@ impl QuotaConfig {
         self.validate_named("quotas")
     }
     fn validate_named(&self, path: &str) -> Result<(), ConfigError> {
-        if self.per_descriptor_burst != 0 {
-            return Err(ConfigError::Quota(format!(
-                "{path}.per_descriptor_burst must be 0 because the descriptor commitment is relay-static; use per-remote quotas and authenticated credential limits"
-            )));
-        }
         if self
             .per_remote_window_secs
             .checked_add(self.cooldown_secs)
@@ -4375,8 +4216,6 @@ pub enum ConfigError {
     Token(String),
     #[error("exit routing configuration error: {0}")]
     Routing(String),
-    #[error("replay filter configuration error: {0}")]
-    ReplayFilter(String),
     #[error("ticket replay store error: {0}")]
     TicketReplayStore(String),
     #[error("emergency throttle configuration error: {0}")]

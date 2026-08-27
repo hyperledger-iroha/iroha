@@ -926,6 +926,9 @@ const PRE_VERSION: u8 = 5;
 const SORANET_TRANSPORT_DELEGATION_CHALLENGE_BYTES: usize = 32;
 const ML_DSA_65_PUBLIC_KEY_BYTES: usize = 1_952;
 /// Exact first-release allocation ceiling for one complete V5 certificate and proof frame.
+///
+/// The current canonical V5 wire image is exactly 4,459 bytes without a channel binding and
+/// 4,525 bytes with one. The latter is the admitted transport shape and defines the ceiling.
 const MAX_SORANET_TRANSPORT_DELEGATION_FRAME_BYTES: usize = 4_525;
 const SORANET_TRANSPORT_CERTIFICATE_SIGNATURE_DOMAIN: &[u8] =
     b"iroha:p2p:soranet-transport-certificate:v5|";

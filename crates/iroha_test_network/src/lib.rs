@@ -36,6 +36,8 @@ use iroha_crypto::{
     Algorithm, ExposedPrivateKey, Hash as CryptoHash, KeyPair, PrivateKey, PublicKey, sha256,
     sha256_reader_bounded,
 };
+#[cfg(test)]
+use iroha_data_model::da::commitment::DaProofPolicyBundle;
 use iroha_data_model::{
     ChainId,
     account::AccountId,
@@ -49,6 +51,7 @@ use iroha_data_model::{
     isi::{
         InstructionBox, SetParameter,
         alias_setup::EnsureAlias,
+        register::RegisterBox,
         set_instruction_registry,
         staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
     },
@@ -63,8 +66,6 @@ use iroha_data_model::{
     sns::NameStatus,
     transaction::Executable,
 };
-#[cfg(test)]
-use iroha_data_model::{da::commitment::DaProofPolicyBundle, isi::register::RegisterBox};
 use iroha_genesis::{GenesisBlock, GenesisTopologyEntry};
 use iroha_primitives::{
     addr::{SocketAddr, socket_addr},
@@ -452,9 +453,13 @@ const TEST_CONCURRENCY_OVERSUBSCRIPTION: usize = 2;
 const TEST_CONCURRENCY_MIN_THREADS: usize = 4;
 const PERMISSIONED_BLS_DOMAIN: &str = "bls-iroha2:permissioned-sumeragi:v2";
 const NPOS_BLS_DOMAIN: &str = "bls-iroha2:npos-sumeragi:v2";
+#[cfg(test)]
 const PIPELINE_SIDECARS_DATA_FILE: &str = "sidecars.norito";
+#[cfg(test)]
 const PIPELINE_SIDECARS_INDEX_FILE: &str = "sidecars.index";
+#[cfg(test)]
 const PIPELINE_INDEX_ENTRY_SIZE: usize = core::mem::size_of::<u64>() * 2;
+#[cfg(test)]
 const PIPELINE_INDEX_ENTRY_SIZE_U64: u64 = PIPELINE_INDEX_ENTRY_SIZE as u64;
 /// Grace period before we start emitting warning-level status poll failures during startup.
 /// This keeps integration test output quieter while peers are still binding sockets.
@@ -3130,6 +3135,9 @@ impl ConsensusBootstrapProfile {
             .expect("test-network consensus profile must be canonical")
     }
 }
+fn status_reaches_block_height(status: &iroha::client::Status, target_height: u64) -> bool {
+    status.blocks >= target_height
+}
 impl Network {
     /// Path to the temporary directory holding configs and logs for this network.
     pub fn env_dir(&self) -> &Path {
@@ -3506,16 +3514,6 @@ impl Network {
         watchdog.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut elapsed = Duration::ZERO;
         loop {
-            if peer.has_observed_block(1) {
-                info!(
-                    index,
-                    %mnemonic,
-                    role,
-                    waited = ?elapsed,
-                    "observed block 1 via best-effort snapshot before status polling"
-                );
-                return Ok(());
-            }
             if !peer.is_running() {
                 let stdout_log = peer.latest_stdout_log_path();
                 let stderr_log = peer.latest_stderr_log_path();
@@ -3535,7 +3533,7 @@ impl Network {
                 _ = poll.tick() => {
                     match tokio::time::timeout(status_timeout, peer.status()).await {
                         Ok(Ok(status)) => {
-                            if status.blocks >= 1 {
+                            if status_reaches_block_height(&status, 1) {
                                 info!(
                                     index,
                                     %mnemonic,
@@ -3548,16 +3546,6 @@ impl Network {
                                 return Ok(());
                             }
                             latest_status = Some(status);
-                            if peer.has_observed_block(1) {
-                                info!(
-                                    index,
-                                    %mnemonic,
-                                    role,
-                                    waited = ?elapsed,
-                                    "observed block 1 via best-effort snapshot after status poll"
-                                );
-                                return Ok(());
-                            }
                         }
                         Ok(Err(error)) => {
                             latest_status = None;
@@ -3572,16 +3560,6 @@ impl Network {
                                 ?stderr_log,
                                 "status query failed while waiting for block 1"
                             );
-                            if peer.has_observed_block(1) {
-                                info!(
-                                    index,
-                                    %mnemonic,
-                                    role,
-                                    waited = ?elapsed,
-                                    "observed block 1 via best-effort snapshot after status failure"
-                                );
-                                return Ok(());
-                            }
                         }
                         Err(_) => {
                             latest_status = None;
@@ -3596,16 +3574,6 @@ impl Network {
                                 ?stderr_log,
                                 "status query timed out while waiting for block 1"
                             );
-                            if peer.has_observed_block(1) {
-                                info!(
-                                    index,
-                                    %mnemonic,
-                                    role,
-                                    waited = ?elapsed,
-                                    "observed block 1 via best-effort snapshot after status timeout"
-                                );
-                                return Ok(());
-                            }
                         }
                     }
                 }
@@ -3644,15 +3612,6 @@ impl Network {
                             sumeragi_v2 = %sumeragi_v2,
                             "still waiting for block 1 after genesis submission"
                         );
-                    } else if peer.has_observed_block(1) {
-                        info!(
-                            index,
-                            %mnemonic,
-                            role,
-                            waited = ?elapsed,
-                            "observed block 1 via best-effort snapshot while status polling failed"
-                        );
-                        return Ok(());
                     } else {
                         warn!(
                             index,
@@ -5438,6 +5397,13 @@ impl ParliamentTestSignerSelection {
     }
 }
 
+#[derive(Clone)]
+enum PermissionedLaneAuthorityBootstrap {
+    Disabled,
+    Implicit(Quantity),
+    Explicit(Quantity),
+}
+
 /// Builder of [`Network`].
 ///
 /// Cloning copies only the deterministic network recipe. Every call to
@@ -5463,6 +5429,7 @@ pub struct NetworkBuilder {
     consensus_mode: ConsensusMode,
     auto_populate_trusted_peer_pops: bool,
     npos_genesis_bootstrap_stake: Option<Quantity>,
+    permissioned_lane_authority_bootstrap: PermissionedLaneAuthorityBootstrap,
     consensus_message_control: bool,
     parliament_test_signers: Option<ParliamentTestSignerSelection>,
     initial_consensus_message_control: Option<InitialConsensusMessageControl>,
@@ -6436,6 +6403,9 @@ impl NetworkBuilder {
             npos_genesis_bootstrap_stake: Some(
                 SumeragiNposParameters::default().min_self_bond().clone(),
             ),
+            permissioned_lane_authority_bootstrap: PermissionedLaneAuthorityBootstrap::Implicit(
+                iroha_config::parameters::defaults::nexus::staking::min_validator_stake(),
+            ),
             consensus_message_control: false,
             parliament_test_signers: None,
             initial_consensus_message_control: None,
@@ -6774,6 +6744,14 @@ impl NetworkBuilder {
         self
     }
     /// Select permissioned consensus in the signed genesis block.
+    ///
+    /// For an otherwise standard generated genesis with exact committee
+    /// geometry and no caller-owned authority/support state, the harness also
+    /// provisions the trusted validators as active stake-elected authority for
+    /// the default public lane. Global permissioned consensus and lane
+    /// authority remain separate protocol inputs; custom, manifest-backed, or
+    /// explicitly bootstrapped fixtures retain responsibility for their own
+    /// lane authority.
     pub fn with_permissioned_consensus(self) -> Self {
         self.with_consensus_mode(ConsensusMode::Permissioned)
     }
@@ -6806,6 +6784,29 @@ impl NetworkBuilder {
     /// Use this when the caller already provides equivalent validator bootstrap instructions.
     pub fn without_npos_genesis_bootstrap(mut self) -> Self {
         self.npos_genesis_bootstrap_stake = None;
+        self
+    }
+    /// Override the stake used to provision the default public-lane authority
+    /// while keeping global consensus permissioned.
+    ///
+    /// This explicit form requires the standard single-lane, stake-elected,
+    /// manifest-free generated genesis, exact committee geometry, default
+    /// staking resources, and no caller-owned bootstrap support state. Build
+    /// fails with a concrete reason when those requirements are not met.
+    pub fn with_permissioned_lane_authority_bootstrap(mut self, stake_amount: Quantity) -> Self {
+        assert!(!stake_amount.is_zero(), "stake_amount must be non-zero");
+        self.consensus_mode = ConsensusMode::Permissioned;
+        self.permissioned_lane_authority_bootstrap =
+            PermissionedLaneAuthorityBootstrap::Explicit(stake_amount);
+        self
+    }
+    /// Disable the default public-lane authority bootstrap for permissioned
+    /// consensus.
+    ///
+    /// Use this for negative fixtures or when authority is supplied through a
+    /// lane manifest, a custom genesis block, or explicit validator records.
+    pub fn without_permissioned_lane_authority_bootstrap(mut self) -> Self {
+        self.permissioned_lane_authority_bootstrap = PermissionedLaneAuthorityBootstrap::Disabled;
         self
     }
     /// Override the genesis signing key pair used to sign the manifest.
@@ -6963,6 +6964,7 @@ impl NetworkBuilder {
             consensus_mode,
             auto_populate_trusted_peer_pops,
             npos_genesis_bootstrap_stake,
+            permissioned_lane_authority_bootstrap,
             consensus_message_control,
             parliament_test_signers,
             initial_consensus_message_control,
@@ -6989,6 +6991,12 @@ impl NetworkBuilder {
         let genesis_account_literal = ALICE_ID.to_string();
         let has_fee_sink_override = config_layers.iter().any(|layer| {
             get_nested_value(layer, &["nexus", "fees", "fee_sink_account_id"]).is_some()
+        });
+        let has_fee_asset_override = config_layers
+            .iter()
+            .any(|layer| get_nested_value(layer, &["nexus", "fees", "fee_asset_id"]).is_some());
+        let has_stake_asset_override = config_layers.iter().any(|layer| {
+            get_nested_value(layer, &["nexus", "staking", "stake_asset_id"]).is_some()
         });
         let has_stake_escrow_override = config_layers.iter().any(|layer| {
             get_nested_value(layer, &["nexus", "staking", "stake_escrow_account_id"]).is_some()
@@ -7188,32 +7196,170 @@ impl NetworkBuilder {
                 .expect("at least one genesis transaction exists");
             first_tx.splice(0..0, parameter_prefix);
         }
-        let npos_bootstrap =
-            npos_genesis_bootstrap_stake.filter(|_| matches!(consensus_mode, ConsensusMode::Npos));
-        if let Some(stake_amount) = npos_bootstrap.clone() {
-            let stake_amount = resolve_npos_bootstrap_stake(
-                &genesis_isi,
-                &genesis_post_topology_isi,
-                stake_amount,
+        let nexus_domain = DomainId::try_new("nexus", "universal").expect("nexus domain");
+        let ivm_domain = DomainId::try_new("ivm", "universal").expect("ivm domain");
+        let universal_domain =
+            DomainId::try_new("universal", "universal").expect("universal domain");
+        let stake_asset_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                nexus_domain.clone(),
+                "xor".parse().expect("default stake asset name"),
             );
-            let nexus_domain = DomainId::try_new("nexus", "universal").expect("nexus domain");
-            let ivm_domain = DomainId::try_new("ivm", "universal").expect("ivm domain");
-            let universal_domain =
-                DomainId::try_new("universal", "universal").expect("universal domain");
-            let stake_asset_id: AssetDefinitionId =
-                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                    DomainId::try_new("nexus", "universal").unwrap(),
-                    "xor".parse().unwrap(),
-                );
-            let fee_asset_id: AssetDefinitionId =
-                iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
-                    .parse()
-                    .expect("default nexus fee asset id");
-            let bootstrap_gas_keypair = checked_key_pair_from_seed(
-                b"iroha_test_network::npos_bootstrap_gas_account".to_vec(),
-                Algorithm::Ed25519,
+        let fee_asset_id: AssetDefinitionId =
+            iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+                .parse()
+                .expect("default nexus fee asset id");
+        let bootstrap_gas_keypair = checked_key_pair_from_seed(
+            b"iroha_test_network::npos_bootstrap_gas_account".to_vec(),
+            Algorithm::Ed25519,
+        );
+        let gas_account_id = AccountId::new(bootstrap_gas_keypair.public_key().clone());
+        let generated_validator_accounts = peers
+            .iter()
+            .map(NetworkPeer::account_id)
+            .collect::<BTreeSet<_>>();
+        let caller_registered_accounts = genesis_isi
+            .iter()
+            .chain(&genesis_post_topology_isi)
+            .flatten()
+            .filter_map(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<RegisterBox>()
+                    .and_then(|register| match register {
+                        RegisterBox::Account(register) => Some(register.object.id.clone()),
+                        _ => None,
+                    })
+            })
+            .collect::<BTreeSet<_>>();
+        let has_explicit_lane_validator_bootstrap = genesis_isi
+            .iter()
+            .chain(&genesis_post_topology_isi)
+            .flatten()
+            .any(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<RegisterPublicLaneValidator>()
+                    .is_some()
+            });
+        let has_permissioned_bootstrap_support_collision = genesis_isi
+            .iter()
+            .chain(&genesis_post_topology_isi)
+            .flatten()
+            .any(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<RegisterBox>()
+                    .is_some_and(|register| match register {
+                        RegisterBox::Domain(register) => {
+                            register.object.id == nexus_domain
+                                || register.object.id == ivm_domain
+                                || register.object.id == universal_domain
+                        }
+                        RegisterBox::Account(register) => {
+                            register.object.id == gas_account_id
+                                || generated_validator_accounts.contains(&register.object.id)
+                        }
+                        RegisterBox::AssetDefinition(register) => {
+                            register.object.id == stake_asset_id
+                                || register.object.id == fee_asset_id
+                        }
+                        _ => false,
+                    })
+            });
+        let permissioned_lane_bootstrap_ineligibility = {
+            let nexus = &resolved_pre_genesis_config.nexus;
+            let is_default_single_lane = matches!(
+                nexus.lane_catalog.lanes(),
+                [lane]
+                    if lane.id == LaneId::SINGLE
+                        && lane.dataspace_id == DataSpaceId::UNIVERSAL
+                        && lane.visibility
+                            == iroha_data_model::nexus::LaneVisibility::Public
             );
-            let gas_account_id = AccountId::new(bootstrap_gas_keypair.public_key().clone());
+            let is_stake_elected = matches!(
+                nexus
+                    .staking
+                    .validator_mode(LaneId::SINGLE, &nexus.lane_catalog),
+                iroha_config::parameters::actual::LaneValidatorMode::StakeElected
+            );
+            let has_no_manifest_source = nexus.registry.manifest_directory.is_none()
+                && nexus.registry.cache_directory.is_none();
+            let generated_validator_peers =
+                peers.iter().map(NetworkPeer::id).collect::<BTreeSet<_>>();
+            let trusted_peers = resolved_pre_genesis_config.common.trusted_peers.value();
+            let configured_validator_peers = trusted_peers
+                .pops
+                .keys()
+                .cloned()
+                .map(PeerId::new)
+                .collect::<BTreeSet<_>>();
+            let exact_committee_size = nexus
+                .dataspace_catalog
+                .by_id(DataSpaceId::UNIVERSAL)
+                .and_then(|dataspace| dataspace.fault_tolerance.checked_mul(3))
+                .and_then(|size| size.checked_add(1))
+                .and_then(|size| (size <= nexus.staking.max_validators.get()).then_some(size))
+                .and_then(|size| usize::try_from(size).ok())
+                .is_some_and(|size| size == peers.len())
+                && configured_validator_peers == generated_validator_peers;
+            if custom_genesis.is_some() {
+                Some("a custom genesis block owns lane authority")
+            } else if has_explicit_lane_validator_bootstrap {
+                Some("genesis already contains public-lane validator registrations")
+            } else if !is_default_single_lane {
+                Some("the resolved lane catalog is not the single universal public lane")
+            } else if !is_stake_elected {
+                Some("the default public lane is not stake-elected")
+            } else if !has_no_manifest_source {
+                Some("the resolved Nexus registry has a manifest or cache source")
+            } else if !exact_committee_size {
+                Some("3f+1, max_validators, and trusted-peer geometry are not exact")
+            } else if has_fee_asset_override
+                || has_stake_asset_override
+                || has_stake_escrow_override
+                || has_slash_sink_override
+            {
+                Some("the resolved Nexus staking resources were overridden")
+            } else if has_permissioned_bootstrap_support_collision {
+                Some("genesis already registers reserved lane-bootstrap support state")
+            } else {
+                None
+            }
+        };
+        let lane_validator_bootstrap = match consensus_mode {
+            ConsensusMode::Npos => npos_genesis_bootstrap_stake.map(|stake_amount| {
+                resolve_npos_bootstrap_stake(&genesis_isi, &genesis_post_topology_isi, stake_amount)
+            }),
+            ConsensusMode::Permissioned => {
+                let requested = match permissioned_lane_authority_bootstrap {
+                    PermissionedLaneAuthorityBootstrap::Disabled => None,
+                    PermissionedLaneAuthorityBootstrap::Implicit(stake_amount) => {
+                        permissioned_lane_bootstrap_ineligibility
+                            .is_none()
+                            .then_some(stake_amount)
+                    }
+                    PermissionedLaneAuthorityBootstrap::Explicit(stake_amount) => {
+                        if let Some(reason) = permissioned_lane_bootstrap_ineligibility {
+                            panic!(
+                                "explicit permissioned lane-authority bootstrap is unsupported: {reason}"
+                            );
+                        }
+                        Some(stake_amount)
+                    }
+                };
+                requested.map(|stake_amount| {
+                    stake_amount.max(
+                        resolved_pre_genesis_config
+                            .nexus
+                            .staking
+                            .min_validator_stake
+                            .clone(),
+                    )
+                })
+            }
+        };
+        if let Some(stake_amount) = lane_validator_bootstrap.clone() {
             let gas_account_str = gas_account_id.to_string();
             let mut bootstrap_layer = Table::new();
             let mut writer = TomlWriter::new(&mut bootstrap_layer);
@@ -7323,13 +7469,14 @@ impl NetworkBuilder {
                     .expect("soracloud HF shared lease asset definition id");
             let mut soracloud_validator_bootstrap = Vec::new();
             let mut seeded_accounts = BTreeSet::new();
-            let register_validator_accounts = npos_bootstrap.is_none();
+            let register_validator_accounts = lane_validator_bootstrap.is_none();
             for peer in &peers {
                 let account_id = peer.account_id();
                 if !seeded_accounts.insert(account_id.clone()) {
                     continue;
                 }
-                if register_validator_accounts {
+                if register_validator_accounts && !caller_registered_accounts.contains(&account_id)
+                {
                     soracloud_validator_bootstrap
                         .push(Register::account(Account::new(account_id.clone())).into());
                 }
@@ -7387,7 +7534,7 @@ impl NetworkBuilder {
             .write(["torii", "transport", "norito_rpc", "enabled"], true);
         // Resolve the same ordered layers that peers will consume. The provisional
         // genesis commitment must include the exact runtime pipeline and Nexus
-        // projection, including config layers injected for NPoS bootstrap.
+        // projection, including config layers injected for validator bootstrap.
         let mut final_config_layers_for_parse = Vec::with_capacity(config_layers.len() + 2);
         final_config_layers_for_parse.push(trusted_peers_layer_for_parse_with_observer_addresses(
             &peers,
@@ -8612,9 +8759,10 @@ impl NetworkPeer {
     /// Like [`Self::start`], but also ensures that startup progresses far enough for tests.
     ///
     /// By default it waits for a `ServerStarted` lifecycle event (driven by `/status` success).
-    /// During genesis bootstrap, if Torii remains unavailable but the peer has committed block 1
-    /// and keeps running, this method falls back to storage-observed readiness after a grace
-    /// period so slow/contended hosts do not deadlock startup.
+    /// During genesis bootstrap, if Torii remains unavailable but the peer has durably written
+    /// block 1 to Kura and keeps running, this method falls back to storage-observed process
+    /// readiness after a grace period so slow/contended hosts do not deadlock peer launch. This
+    /// low-level fallback does not prove that world state has applied the block.
     ///
     /// Note: This method still does not wait for arbitrary later block commits; use higher-level
     /// helpers (e.g., `Network::start_all` or explicit `once_block`) if you need that.
@@ -8770,78 +8918,15 @@ impl NetworkPeer {
         &self.mnemonic
     }
     fn has_committed_block(&self, height: u64) -> bool {
-        if height == 0 {
-            return false;
-        }
-        let storage_dir = self.kura_store_dir();
-        pipeline_dirs(&storage_dir)
-            .into_iter()
-            .any(|dir| self.has_indexed_pipeline_sidecar(&dir, height))
+        height > 0
+            && detect_block_height_from_storage(&self.kura_store_dir(), 0)
+                .is_some_and(|snapshot| snapshot.total >= height)
     }
     fn has_observed_block(&self, height: u64) -> bool {
         height > 0
             && self
                 .best_effort_block_height()
                 .is_some_and(|snapshot| snapshot.total >= height)
-    }
-    fn has_indexed_pipeline_sidecar(&self, pipeline_dir: &Path, height: u64) -> bool {
-        if height == 0 {
-            return false;
-        }
-        let data_path = pipeline_dir.join(PIPELINE_SIDECARS_DATA_FILE);
-        let index_path = pipeline_dir.join(PIPELINE_SIDECARS_INDEX_FILE);
-        let Ok(index_meta) = std::fs::metadata(&index_path) else {
-            return false;
-        };
-        if !data_path.exists() {
-            return false;
-        }
-        let len = index_meta.len();
-        if len == 0 || len % PIPELINE_INDEX_ENTRY_SIZE_U64 != 0 {
-            return false;
-        }
-        let entries = len / PIPELINE_INDEX_ENTRY_SIZE_U64;
-        if entries < height {
-            return false;
-        }
-        let mut index = match std::fs::File::open(&index_path) {
-            Ok(file) => file,
-            Err(_) => return false,
-        };
-        let mut buf = [0u8; PIPELINE_INDEX_ENTRY_SIZE];
-        let offset = (height - 1) * PIPELINE_INDEX_ENTRY_SIZE_U64;
-        if index
-            .seek(SeekFrom::Start(offset))
-            .and_then(|_| index.read_exact(&mut buf))
-            .is_err()
-        {
-            return false;
-        }
-        let len = u64::from_le_bytes(buf[8..].try_into().expect("len slice"));
-        len != 0
-    }
-    fn pipeline_height_from_index(pipeline_dir: &Path) -> Option<u64> {
-        let index_path = pipeline_dir.join(PIPELINE_SIDECARS_INDEX_FILE);
-        let index_meta = fs::metadata(&index_path).ok()?;
-        let len = index_meta.len();
-        if len < PIPELINE_INDEX_ENTRY_SIZE_U64 || len % PIPELINE_INDEX_ENTRY_SIZE_U64 != 0 {
-            return None;
-        }
-        let mut index = fs::File::open(&index_path).ok()?;
-        let mut buf = [0u8; PIPELINE_INDEX_ENTRY_SIZE];
-        let offset = len.saturating_sub(PIPELINE_INDEX_ENTRY_SIZE_U64);
-        if index
-            .seek(SeekFrom::Start(offset))
-            .and_then(|_| index.read_exact(&mut buf))
-            .is_err()
-        {
-            return None;
-        }
-        let last_len = u64::from_le_bytes(buf[8..].try_into().expect("len slice"));
-        if last_len == 0 {
-            return None;
-        }
-        Some(len / PIPELINE_INDEX_ENTRY_SIZE_U64)
     }
     pub fn public_key(&self) -> &PublicKey {
         self.key_pair.public_key()
@@ -9087,10 +9172,8 @@ impl NetworkPeer {
     fn record_status_failure(&self, error: &Report) {
         Self::record_probe_error(&self.startup_probe, error);
     }
-    /// Best-effort block height based on the latest in-memory observation and disk layout.
-    ///
-    /// Prefer in-memory updates from the block watcher, then committed block hashes on disk.
-    /// Pipeline sidecar indices are only used when no hashes are available.
+    /// Best-effort durable Kura height based on the latest observation and the canonical
+    /// block-hash journal. Callers requiring applied world-state authority must use `/status`.
     pub fn best_effort_block_height(&self) -> Option<BlockHeight> {
         let observed = *self.block_height.borrow();
         let current_total = observed.map(|height| height.total).unwrap_or(0);
@@ -9824,30 +9907,22 @@ impl BlockHeight {
     }
 }
 fn detect_block_height_from_storage(storage_dir: &Path, current_total: u64) -> Option<BlockHeight> {
-    let mut pipeline_height: Option<u64> = None;
-    // Pipeline markers can advance ahead of committed blocks; only trust them if no hashes exist.
-    for pipeline_dir in pipeline_dirs(storage_dir) {
-        if let Some(height) = NetworkPeer::pipeline_height_from_index(&pipeline_dir) {
-            pipeline_height = Some(pipeline_height.map_or(height, |prev| prev.max(height)));
-        }
-    }
     let mut hashes_height: Option<u64> = None;
-    let mut saw_hashes = false;
     if let Ok(entries) = fs::read_dir(storage_dir.join("blocks")) {
         for entry in entries.flatten() {
             let hashes_path = entry.path().join("blocks.hashes");
             if let Ok(meta) = fs::metadata(&hashes_path) {
-                saw_hashes = true;
                 let blocks = meta.len() / 32;
                 hashes_height = Some(hashes_height.map_or(blocks, |prev| prev.max(blocks)));
             }
         }
     }
-    let max_height = if saw_hashes {
-        hashes_height.unwrap_or(0)
-    } else {
-        pipeline_height.unwrap_or(0)
-    };
+    // Pipeline recovery sidecars are written before consensus finality and their compact index
+    // contains a fixed header in addition to entry records.  They are useful diagnostics, but
+    // neither their presence nor their byte length proves that a block was applied. Only Kura's
+    // canonical hash journal proves durable storage height; applied readiness must additionally
+    // pass Torii's authoritative `/status` height barrier.
+    let max_height = hashes_height.unwrap_or(0);
     if max_height > current_total {
         Some(BlockHeight {
             total: max_height,
@@ -10361,16 +10436,9 @@ mod tests {
     #[tokio::test]
     async fn once_block_falls_back_to_storage_snapshot() {
         let dir = tempdir().expect("tempdir");
-        let pipeline_dir = dir.path().join("storage/blocks/lane_000_default/pipeline");
-        fs::create_dir_all(&pipeline_dir).expect("pipeline dir");
-        let mut index =
-            fs::File::create(pipeline_dir.join(PIPELINE_SIDECARS_INDEX_FILE)).expect("index file");
-        for height in 1u64..=2 {
-            index
-                .write_all(&height.to_le_bytes())
-                .expect("height entry");
-            index.write_all(&1u64.to_le_bytes()).expect("len entry");
-        }
+        let lane_dir = dir.path().join("storage/blocks/lane_000_default");
+        fs::create_dir_all(&lane_dir).expect("lane dir");
+        fs::write(lane_dir.join("blocks.hashes"), vec![0u8; 64]).expect("committed block hashes");
         let (events_tx, _events_rx) = tokio::sync::broadcast::channel(4);
         let (block_height, _rx) = tokio::sync::watch::channel(None);
         let storage_root = dir.path().to_path_buf();
@@ -10408,71 +10476,49 @@ mod tests {
             "once_block should observe storage height via fallback"
         );
     }
-    #[tokio::test]
-    async fn wait_for_block_1_with_watchdog_uses_storage_on_status_failure() {
-        let dir = tempdir().expect("tempdir");
-        let pipeline_dir = dir.path().join("storage/blocks/lane_000_default/pipeline");
-        fs::create_dir_all(&pipeline_dir).expect("pipeline dir");
-        write_sidecar_index(&pipeline_dir, 1);
-        let (events_tx, _events_rx) = tokio::sync::broadcast::channel(4);
-        let (block_height, _rx) = tokio::sync::watch::channel(None);
-        let storage_root = dir.path().to_path_buf();
-        let streaming_key_pair = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
-            .expect("generate wait-block watchdog streaming key");
-        let soranet_transport_key_pair =
-            random_soranet_transport_key_pair_distinct_from(&streaming_key_pair);
-        let peer = NetworkPeer {
-            mnemonic: "wait-block-watchdog".to_string(),
-            span: tracing::Span::none(),
-            key_pair: KeyPair::try_random().expect("generate wait-block watchdog peer key"),
-            network_id: Arc::new(OnceLock::new()),
-            streaming_key_pair,
-            soranet_transport_key_pair,
-            bls_key_pair: None,
-            bls_pop: None,
-            dir: storage_root,
-            run: Arc::new(tokio::sync::Mutex::new(None)),
-            runs_count: Arc::new(AtomicUsize::new(0)),
-            is_running: Arc::new(AtomicBool::new(true)),
-            events: events_tx,
-            block_height,
-            stderr_live: Arc::new(StdMutex::new(LiveStderrState::default())),
-            startup_probe: Arc::new(StdMutex::new(PeerStartupProbe::default())),
-            start_context: Arc::new(StdMutex::new(None)),
-            program: Program::Irohad,
-            parliament_beacon_signer_mode: None,
-            consensus_message_control: None,
-            port_p2p: Arc::new(AllocatedPort::new()),
-            port_api: Arc::new(AllocatedPort::new()),
-        };
-        let mnemonic = peer.mnemonic().to_string();
-        let result = tokio::time::timeout(
-            Duration::from_secs(1),
-            Network::wait_for_block_1_with_watchdog(&peer, 0, &mnemonic, "test"),
-        )
-        .await;
+    #[test]
+    fn startup_status_height_is_the_applied_authority_barrier() {
+        let height_zero = Status::default();
         assert!(
-            result.is_ok(),
-            "wait_for_block_1_with_watchdog should return when storage has block 1"
+            !status_reaches_block_height(&height_zero, 1),
+            "a successful height-zero status response cannot release startup"
         );
+        let height_one = Status {
+            blocks: 1,
+            blocks_non_empty: 1,
+            ..Status::default()
+        };
+        assert!(status_reaches_block_height(&height_one, 1));
+        assert!(!status_reaches_block_height(&height_one, 2));
     }
     #[tokio::test]
-    async fn wait_for_block_1_with_watchdog_uses_best_effort_height_without_storage() {
+    async fn wait_for_block_1_with_watchdog_rejects_kura_without_applied_status() {
         let dir = tempdir().expect("tempdir");
+        let lane_dir = dir.path().join("storage/blocks/lane_000_default");
+        fs::create_dir_all(&lane_dir).expect("lane dir");
+        fs::write(lane_dir.join("blocks.hashes"), vec![0u8; 32])
+            .expect("durable Kura hash journal");
         let (events_tx, _events_rx) = tokio::sync::broadcast::channel(4);
-        let (block_height, _rx) = tokio::sync::watch::channel(Some(BlockHeight {
-            total: 1,
-            non_empty: 1,
-        }));
+        let (block_height, _rx) = tokio::sync::watch::channel(None);
         let streaming_key_pair = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
-            .expect("generate wait-block best-effort streaming key");
+            .expect("generate watchdog streaming key");
         let soranet_transport_key_pair =
             random_soranet_transport_key_pair_distinct_from(&streaming_key_pair);
+        let network_id = Arc::new(OnceLock::new());
+        assert!(
+            network_id
+                .set(NetworkId::from_genesis_hash(HashOf::<
+                    iroha_data_model::block::BlockHeader,
+                >::from_untyped_unchecked(
+                    CryptoHash::prehashed([0xA5; CryptoHash::LENGTH],)
+                )))
+                .is_ok()
+        );
         let peer = NetworkPeer {
-            mnemonic: "wait-block-best-effort".to_string(),
+            mnemonic: "wait-block-authority-barrier".to_string(),
             span: tracing::Span::none(),
-            key_pair: KeyPair::try_random().expect("generate wait-block best-effort peer key"),
-            network_id: Arc::new(OnceLock::new()),
+            key_pair: KeyPair::try_random().expect("generate watchdog peer key"),
+            network_id,
             streaming_key_pair,
             soranet_transport_key_pair,
             bls_key_pair: None,
@@ -10492,15 +10538,17 @@ mod tests {
             port_p2p: Arc::new(AllocatedPort::new()),
             port_api: Arc::new(AllocatedPort::new()),
         };
+        assert!(peer.has_committed_block(1));
         let mnemonic = peer.mnemonic().to_string();
         let result = tokio::time::timeout(
-            Duration::from_secs(1),
+            Duration::from_millis(750),
             Network::wait_for_block_1_with_watchdog(&peer, 0, &mnemonic, "test"),
         )
         .await;
+        peer.is_running.store(false, Ordering::Relaxed);
         assert!(
-            result.is_ok(),
-            "wait_for_block_1_with_watchdog should return when best-effort height already reached block 1"
+            result.is_err(),
+            "durable Kura height without authoritative applied status must keep startup pending"
         );
     }
     #[test]
@@ -10949,17 +10997,30 @@ mod tests {
         );
     }
     #[test]
-    fn has_committed_block_detects_indexed_pipeline_layouts() {
+    fn has_committed_block_requires_canonical_hash_journal() {
         let env = Environment::new();
         let modern_peer = NetworkPeer::builder().build(&env);
-        let modern_dir = modern_peer
+        let lane_dir = modern_peer
             .dir
             .join("storage")
             .join("blocks")
-            .join("lane_000_default")
-            .join("pipeline");
-        fs::create_dir_all(&modern_dir).expect("create modern pipeline dir");
-        write_sidecar_index(&modern_dir, 1);
+            .join("lane_000_default");
+        let pipeline_dir = lane_dir.join("pipeline");
+        fs::create_dir_all(&pipeline_dir).expect("create modern pipeline dir");
+        write_sidecar_index(&pipeline_dir, 1);
+        assert_eq!(
+            fs::metadata(pipeline_dir.join(PIPELINE_SIDECARS_INDEX_FILE))
+                .expect("compact sidecar index")
+                .len(),
+            48,
+            "the regression fixture matches one compact-V1 entry plus its header"
+        );
+        assert!(
+            !modern_peer.has_committed_block(1),
+            "a pre-finality pipeline sidecar is not a commit witness"
+        );
+        fs::write(lane_dir.join("blocks.hashes"), vec![0u8; 32])
+            .expect("write canonical hash journal");
         assert!(modern_peer.has_committed_block(1));
         assert!(!modern_peer.has_committed_block(2));
     }
@@ -10968,12 +11029,10 @@ mod tests {
         let env = Environment::new();
         let peer = NetworkPeer::builder().build(&env);
         let custom_storage_dir = peer.dir.join("custom-storage");
-        let pipeline_dir = custom_storage_dir
-            .join("blocks")
-            .join("lane_000_default")
-            .join("pipeline");
-        fs::create_dir_all(&pipeline_dir).expect("create custom pipeline dir");
-        write_sidecar_index(&pipeline_dir, 1);
+        let lane_dir = custom_storage_dir.join("blocks").join("lane_000_default");
+        fs::create_dir_all(&lane_dir).expect("create custom lane dir");
+        fs::write(lane_dir.join("blocks.hashes"), vec![0u8; 32])
+            .expect("write custom canonical hash journal");
         {
             let mut context = peer
                 .start_context
@@ -10994,7 +11053,7 @@ mod tests {
         assert!(!peer.has_committed_block(2));
     }
     #[test]
-    fn detect_block_height_reads_lane_pipeline_index() {
+    fn detect_block_height_ignores_uncommitted_lane_pipeline_index() {
         let env = Environment::new();
         let peer = NetworkPeer::builder().build(&env);
         let pipeline_dir = peer
@@ -11005,10 +11064,10 @@ mod tests {
             .join("pipeline");
         fs::create_dir_all(&pipeline_dir).expect("create lane pipeline dir");
         write_sidecar_index(&pipeline_dir, 3);
-        let height =
-            detect_block_height_from_storage(&peer.dir.join("storage"), 0).expect("detect height");
-        assert_eq!(height.total, 3);
-        assert_eq!(height.non_empty, 3);
+        assert!(
+            detect_block_height_from_storage(&peer.dir.join("storage"), 0).is_none(),
+            "pipeline recovery progress must not satisfy applied-height readiness"
+        );
     }
     #[test]
     fn detect_block_height_prefers_block_hashes_over_pipeline() {
@@ -11032,14 +11091,14 @@ mod tests {
     fn best_effort_block_height_uses_storage_without_status() {
         let env = Environment::new();
         let peer = NetworkPeer::builder().build(&env);
-        let pipeline_dir = peer
+        let lane_dir = peer
             .dir
             .join("storage")
             .join("blocks")
-            .join("lane_000_default")
-            .join("pipeline");
-        fs::create_dir_all(&pipeline_dir).expect("create pipeline dir");
-        write_sidecar_index(&pipeline_dir, 2);
+            .join("lane_000_default");
+        fs::create_dir_all(&lane_dir).expect("create lane dir");
+        fs::write(lane_dir.join("blocks.hashes"), vec![0u8; 64])
+            .expect("write canonical hash journal");
         let height = peer.best_effort_block_height().expect("best-effort height");
         assert_eq!(height.total, 2);
         assert_eq!(height.non_empty, 2);
@@ -11059,13 +11118,25 @@ mod tests {
     }
     #[cfg(test)]
     fn write_sidecar_index(pipeline_dir: &Path, entries: u64) {
+        const COMPACT_V1_INTEGRITY_MASK: u64 = 0x6B75_7261_2D69_6478;
+        let base_height = 1_u64;
         let mut index_bytes = Vec::new();
+        // Compact V1 header: sentinel, followed by base height and its
+        // integrity word. This exact 32-byte prefix was previously mistaken
+        // for two additional block entries by the test-network readiness path.
+        index_bytes.extend_from_slice(&u64::MAX.to_le_bytes());
+        index_bytes.extend_from_slice(&u64::MAX.to_le_bytes());
+        index_bytes.extend_from_slice(&base_height.to_le_bytes());
+        index_bytes.extend_from_slice(&(base_height ^ COMPACT_V1_INTEGRITY_MASK).to_le_bytes());
         for i in 0..entries {
-            index_bytes.extend_from_slice(&0u64.to_le_bytes());
-            index_bytes.extend_from_slice(&(i + 1).to_le_bytes());
+            index_bytes.extend_from_slice(&i.to_le_bytes());
+            index_bytes.extend_from_slice(&1_u64.to_le_bytes());
         }
-        fs::write(pipeline_dir.join(PIPELINE_SIDECARS_DATA_FILE), b"sidecar")
-            .expect("write sidecar data");
+        fs::write(
+            pipeline_dir.join(PIPELINE_SIDECARS_DATA_FILE),
+            vec![0_u8; usize::try_from(entries).expect("fixture entry count fits usize")],
+        )
+        .expect("write sidecar data");
         fs::write(
             pipeline_dir.join(PIPELINE_SIDECARS_INDEX_FILE),
             &index_bytes,
@@ -13343,6 +13414,318 @@ mod tests {
         let _ = NetworkBuilder::new()
             .with_permissioned_consensus()
             .with_genesis_instruction(SetParameter::new(parameter))
+            .build();
+    }
+    fn genesis_has_public_lane_validator_registration(network: &Network) -> bool {
+        network
+            .genesis()
+            .0
+            .external_transactions()
+            .filter_map(|transaction| match transaction.instructions() {
+                Executable::Instructions(instructions) => Some(instructions),
+                _ => None,
+            })
+            .flatten()
+            .any(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<RegisterPublicLaneValidator>()
+                    .is_some()
+            })
+    }
+    fn genesis_account_registration_count(network: &Network, account_id: &AccountId) -> usize {
+        network
+            .genesis()
+            .0
+            .external_transactions()
+            .filter_map(|transaction| match transaction.instructions() {
+                Executable::Instructions(instructions) => Some(instructions),
+                _ => None,
+            })
+            .flatten()
+            .filter(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<RegisterBox>()
+                    .is_some_and(|register| {
+                        matches!(
+                            register,
+                            RegisterBox::Account(register) if &register.object.id == account_id
+                        )
+                    })
+            })
+            .count()
+    }
+    #[test]
+    fn permissioned_builder_bootstraps_default_lane_authority() {
+        init_instruction_registry();
+        let network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_peers(4)
+                .with_auto_populated_trusted_peers()
+                .with_permissioned_consensus(),
+        );
+        assert_eq!(
+            network.consensus_bootstrap_profile().mode_tag,
+            PERMISSIONED_TAG,
+            "lane-authority bootstrap must not switch global consensus to NPoS",
+        );
+        let genesis = network.genesis();
+        let mut registered = BTreeSet::new();
+        let mut activated = BTreeSet::new();
+        for transaction in genesis.0.external_transactions() {
+            let Executable::Instructions(instructions) = transaction.instructions() else {
+                continue;
+            };
+            for instruction in instructions {
+                if let Some(register) = instruction
+                    .as_any()
+                    .downcast_ref::<RegisterPublicLaneValidator>()
+                {
+                    assert_eq!(register.lane_id, LaneId::SINGLE);
+                    assert_eq!(register.validator, register.stake_account);
+                    assert!(!register.initial_stake.is_zero());
+                    registered.insert((register.validator.clone(), register.peer_id.clone()));
+                }
+                if let Some(activate) = instruction
+                    .as_any()
+                    .downcast_ref::<ActivatePublicLaneValidator>()
+                {
+                    assert_eq!(activate.lane_id, LaneId::SINGLE);
+                    activated.insert(activate.validator.clone());
+                }
+            }
+        }
+        let expected = network
+            .peers()
+            .iter()
+            .map(|peer| (peer.account_id(), peer.id()))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(registered, expected);
+        assert_eq!(
+            activated,
+            expected
+                .into_iter()
+                .map(|(validator, _)| validator)
+                .collect(),
+            "every registered default-lane validator must be active in genesis",
+        );
+    }
+    #[test]
+    fn permissioned_lane_authority_bootstrap_can_be_disabled() {
+        init_instruction_registry();
+        let network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_permissioned_consensus()
+                .without_permissioned_lane_authority_bootstrap(),
+        );
+        assert!(
+            !genesis_has_public_lane_validator_registration(&network),
+            "explicit opt-out must preserve empty permissioned lane authority fixtures",
+        );
+    }
+    #[test]
+    fn permissioned_lane_authority_bootstrap_skips_admin_managed_lane() {
+        init_instruction_registry();
+        let network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_permissioned_consensus()
+                .with_config_layer(|layer| {
+                    layer.write(
+                        ["nexus", "staking", "public_validator_mode"],
+                        "admin_managed",
+                    );
+                }),
+        );
+        assert!(
+            !genesis_has_public_lane_validator_registration(&network),
+            "admin-managed lanes require explicit manifest authority, not staking ISIs",
+        );
+    }
+    #[test]
+    fn permissioned_lane_authority_bootstrap_skips_restricted_stake_elected_lane() {
+        init_instruction_registry();
+        let network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_permissioned_consensus()
+                .with_config_layer(|layer| {
+                    let mut lane = Table::new();
+                    lane.insert("index".into(), Value::Integer(0));
+                    lane.insert("alias".into(), Value::String("restricted".to_owned()));
+                    lane.insert("visibility".into(), Value::String("restricted".to_owned()));
+                    lane.insert("metadata".into(), Value::Table(Table::new()));
+                    layer
+                        .write(
+                            ["nexus", "lane_catalog"],
+                            Value::Array(vec![Value::Table(lane)]),
+                        )
+                        .write(
+                            ["nexus", "staking", "restricted_validator_mode"],
+                            "stake_elected",
+                        );
+                }),
+        );
+        assert!(
+            !genesis_has_public_lane_validator_registration(&network),
+            "restricted lanes must retain caller-owned authority even when stake-elected",
+        );
+    }
+    #[test]
+    #[should_panic(
+        expected = "explicit permissioned lane-authority bootstrap is unsupported: the resolved lane catalog is not the single universal public lane"
+    )]
+    fn explicit_permissioned_lane_bootstrap_rejects_restricted_stake_elected_lane() {
+        let _ = NetworkBuilder::new()
+            .with_permissioned_lane_authority_bootstrap(
+                iroha_config::parameters::defaults::nexus::staking::min_validator_stake(),
+            )
+            .with_config_layer(|layer| {
+                let mut lane = Table::new();
+                lane.insert("index".into(), Value::Integer(0));
+                lane.insert("alias".into(), Value::String("restricted".to_owned()));
+                lane.insert("visibility".into(), Value::String("restricted".to_owned()));
+                lane.insert("metadata".into(), Value::Table(Table::new()));
+                layer
+                    .write(
+                        ["nexus", "lane_catalog"],
+                        Value::Array(vec![Value::Table(lane)]),
+                    )
+                    .write(
+                        ["nexus", "staking", "restricted_validator_mode"],
+                        "stake_elected",
+                    );
+            })
+            .build();
+    }
+    #[test]
+    fn implicit_permissioned_lane_bootstrap_skips_invalid_max_validators_geometry() {
+        init_instruction_registry();
+        let network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_permissioned_consensus()
+                .with_config_layer(|layer| {
+                    layer.write(["nexus", "staking", "max_validators"], 3_i64);
+                }),
+        );
+        assert!(
+            !genesis_has_public_lane_validator_registration(&network),
+            "implicit bootstrap must not inject a committee larger than max_validators",
+        );
+    }
+    #[test]
+    fn implicit_permissioned_lane_bootstrap_skips_empty_pop_validator_roster() {
+        init_instruction_registry();
+        let network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_permissioned_consensus()
+                .without_auto_populated_trusted_peers(),
+        );
+        assert!(
+            !genesis_has_public_lane_validator_registration(&network),
+            "an empty trusted-peer PoP map must not authorize lane validators",
+        );
+    }
+    #[test]
+    #[should_panic(
+        expected = "explicit permissioned lane-authority bootstrap is unsupported: 3f+1, max_validators, and trusted-peer geometry are not exact"
+    )]
+    fn explicit_permissioned_lane_bootstrap_rejects_invalid_max_validators_geometry() {
+        let _ = NetworkBuilder::new()
+            .with_permissioned_lane_authority_bootstrap(
+                iroha_config::parameters::defaults::nexus::staking::min_validator_stake(),
+            )
+            .with_config_layer(|layer| {
+                layer.write(["nexus", "staking", "max_validators"], 3_i64);
+            })
+            .build();
+    }
+    #[test]
+    #[should_panic(
+        expected = "explicit permissioned lane-authority bootstrap is unsupported: 3f+1, max_validators, and trusted-peer geometry are not exact"
+    )]
+    fn explicit_permissioned_lane_bootstrap_rejects_empty_pop_validator_roster() {
+        let _ = NetworkBuilder::new()
+            .with_permissioned_lane_authority_bootstrap(
+                iroha_config::parameters::defaults::nexus::staking::min_validator_stake(),
+            )
+            .without_auto_populated_trusted_peers()
+            .build();
+    }
+    #[test]
+    fn implicit_permissioned_lane_bootstrap_skips_caller_owned_support_state() {
+        init_instruction_registry();
+        let nexus_domain = DomainId::try_new("nexus", "universal").expect("nexus domain");
+        let network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_permissioned_consensus()
+                .with_genesis_instruction(Register::domain(Domain::new(nexus_domain))),
+        );
+        assert!(
+            !genesis_has_public_lane_validator_registration(&network),
+            "implicit bootstrap must not merge into caller-owned reserved support state",
+        );
+    }
+    #[test]
+    fn implicit_permissioned_lane_bootstrap_skips_caller_owned_validator_account() {
+        init_instruction_registry();
+        let base_seed =
+            stringify!(implicit_permissioned_lane_bootstrap_skips_caller_owned_validator_account);
+        let peer_zero_seed = format!("{base_seed}-peer-0").into_bytes();
+        let peer_zero_account = AccountId::new(
+            checked_key_pair_from_seed(peer_zero_seed, Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        let network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_base_seed(base_seed)
+                .with_permissioned_consensus()
+                .with_genesis_instruction(Register::account(Account::new(
+                    peer_zero_account.clone(),
+                ))),
+        );
+        assert!(
+            !genesis_has_public_lane_validator_registration(&network),
+            "implicit bootstrap must not merge into a caller-owned validator account",
+        );
+        assert_eq!(
+            genesis_account_registration_count(&network, &peer_zero_account),
+            1,
+            "the SoraCloud fallback must not register the caller-owned validator account again",
+        );
+    }
+    #[test]
+    #[should_panic(
+        expected = "explicit permissioned lane-authority bootstrap is unsupported: genesis already registers reserved lane-bootstrap support state"
+    )]
+    fn explicit_permissioned_lane_bootstrap_rejects_caller_owned_validator_account() {
+        let base_seed =
+            stringify!(explicit_permissioned_lane_bootstrap_rejects_caller_owned_validator_account);
+        let peer_zero_seed = format!("{base_seed}-peer-0").into_bytes();
+        let peer_zero_account = AccountId::new(
+            checked_key_pair_from_seed(peer_zero_seed, Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        let _ = NetworkBuilder::new()
+            .with_base_seed(base_seed)
+            .with_permissioned_lane_authority_bootstrap(
+                iroha_config::parameters::defaults::nexus::staking::min_validator_stake(),
+            )
+            .with_genesis_instruction(Register::account(Account::new(peer_zero_account)))
+            .build();
+    }
+    #[test]
+    #[should_panic(
+        expected = "explicit permissioned lane-authority bootstrap is unsupported: genesis already registers reserved lane-bootstrap support state"
+    )]
+    fn explicit_permissioned_lane_bootstrap_rejects_caller_owned_support_state() {
+        let nexus_domain = DomainId::try_new("nexus", "universal").expect("nexus domain");
+        let _ = NetworkBuilder::new()
+            .with_permissioned_lane_authority_bootstrap(
+                iroha_config::parameters::defaults::nexus::staking::min_validator_stake(),
+            )
+            .with_genesis_instruction(Register::domain(Domain::new(nexus_domain)))
             .build();
     }
     #[test]

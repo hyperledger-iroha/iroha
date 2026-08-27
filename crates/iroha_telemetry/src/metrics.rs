@@ -10556,8 +10556,6 @@ impl Metrics {
             ("cooldown", bucket.throttle_cooldown_total),
             ("emergency", bucket.throttle_emergency_total),
             ("remote_quota", bucket.throttle_remote_total),
-            ("descriptor_quota", bucket.throttle_descriptor_total),
-            ("descriptor_replay", bucket.throttle_descriptor_replay_total),
         ] {
             if value > 0 {
                 self.soranet_privacy_throttles_total

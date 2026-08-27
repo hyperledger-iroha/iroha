@@ -5,7 +5,7 @@
   codec that mirrors the Rust implementation semantics and the Python port.
 - Target JDK 21 with one pinned, direct `zstd-jni` dependency for the release compression codec.
 - Offer composable adapters for encoding/decoding common types (primitives,
-  strings, byte slices, options, results, sequences, packed structs) and expose
+  strings, byte slices, options, sequences, packed structs) and expose
   high-level helpers for typical usage.
 - Maintain deterministic behaviour and identical header/CRC handling to Rust and
   Python implementations.
@@ -26,7 +26,7 @@
 - Varint helpers: 7-bit LEB128 encoding/decoding for compact length prefixes.
 - Type adapters: generic interface `TypeAdapter<T>` with concrete adapters for
   unsigned/signed integers (8–64 bit), booleans, UTF-8 strings, byte arrays
-  (variable and fixed-length), optional values, result values, sequences
+  (variable and fixed-length), optional values, sequences
   (packed/delimited layouts), maps (sequence of key-value tuples), and packed
   structs using the hybrid bitset layout.
 - Struct support: `StructAdapter` encodes exact Map-backed values and supports typed decode
@@ -47,7 +47,7 @@
 - Schema hashing: first 16 bytes of domain-separated SHA-256 over the canonical type name.
 - CLI utility: `NoritoDump` prints header fields for inspection.
 - Tests: standalone harness under `src/test/java` covering header roundtrips,
-  encode/decode for primitives, sequences, options, results, struct adapters,
+  encode/decode for primitives, sequences, options, struct adapters,
   checksum mismatch, packed sequence layout, streaming telemetry, and control
   frame roundtrips.
 
@@ -68,13 +68,13 @@
 - Provide `run_tests.sh` as a small wrapper around the Gradle `runNoritoTests` task so compilation,
   assertions, and the pinned Zstandard runtime use the published dependency graph.
 - Tests assert roundtrips for signed/unsigned ints, strings, sequences (packed
-  offsets are fixed u64 in v1), options, results, and struct adapter behaviours; verify
+  offsets are fixed u64 in v1), options, and struct adapter behaviours; verify
   header validation and CRC mismatch detection.
 - No external testing frameworks to avoid network/build dependencies.
 
 ## Compression Profiles & Packaging
-- `CompressionConfig.zstdProfile(profile, payloadLen)` exposes the `"fast"`,
-  `"balanced"`, and `"compact"` heuristics. The levels mirror the Python
+- `CompressionConfig.zstdProfile(profile, payloadLen)` accepts the typed `FAST`,
+  `BALANCED`, and `COMPACT` profiles. The levels mirror the Python
   binding so tests remain aligned across languages:
 
   | Profile   | Payload buckets (bytes)                                            | Level |
@@ -84,9 +84,7 @@
   | `COMPACT` | `[0, 64 KiB) → 7`, `[64 KiB, 512 KiB) → 11`, `[512 KiB, 4 MiB) → 15`, `≥ 4 MiB → 19` |
 
   The helper clamps the final level to the canonical Zstandard range `[1, 22]`
-  and rejects negative payload lengths or unknown profiles.
-- `CompressionConfig.zstdProfile(String, int)` normalises the profile name via
-  `Locale.ROOT` so configuration files can rely on case-insensitive strings.
+  and rejects negative payload lengths.
 - Publishing: Gradle includes `maven-publish`; use `./gradlew publishToMavenLocal`
   with `-PnoritoJavaVersion=...` to publish the `org.hyperledger.iroha:norito-java`
   artifact for local consumption.

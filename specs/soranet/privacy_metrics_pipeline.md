@@ -181,7 +181,7 @@ timestamps or GAR category labels. The following metric families are emitted:
 |--------|-------------|
 | `soranet_privacy_circuit_events_total{kind}` | Handshake taxonomy with `kind={accepted,pow_rejected,downgrade,timeout,other_failure,capacity_reject}`. |
 | `soranet_privacy_pow_rejects_total{reason}` | PoW validation failures keyed by `reason={invalid_solution,difficulty_mismatch,expired,future_skew_exceeded,ttl_too_short,unsupported_version,signature_invalid,post_quantum_error,clock_error,relay_mismatch,replay,store_error}` to distinguish replay/mismatch issues from policy rejects. |
-| `soranet_privacy_throttles_total{scope}` | Throttle counters with `scope={congestion,cooldown,emergency,remote_quota,descriptor_quota,descriptor_replay}`. |
+| `soranet_privacy_throttles_total{scope}` | Throttle counters with `scope={congestion,cooldown,emergency,remote_quota}`. |
 | `soranet_privacy_throttle_cooldown_millis_{sum,count}` | Aggregated cooldown durations contributed by throttled handshakes. |
 | `soranet_privacy_verified_bytes_total` | Verified bandwidth from blinded measurement proofs. |
 | `soranet_privacy_active_circuits_{avg,max}` | Mean and peak active circuits in the latest emitted bucket for each mode. |

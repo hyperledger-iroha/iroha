@@ -708,6 +708,7 @@ fn production_empty_genesis_complete_tip_adopts_control_repair_and_launches() {
         &mut npos_beacon,
         1,
         super::super::v2_runner::LifecycleProducerClaimDispositionV1::initial(),
+        None,
     )
     .expect("dispatch the first active CompleteTip recovered Sign");
     assert_eq!(
@@ -737,6 +738,7 @@ fn production_empty_genesis_complete_tip_adopts_control_repair_and_launches() {
             &mut npos_beacon,
             1,
             producer_claim,
+            None,
         )
         .expect("settle the active CompleteTip recovered Sign");
         producer_claim = next.producer_claim();
@@ -2196,6 +2198,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 &mut npos_beacon,
                 1,
                 super::super::v2_runner::LifecycleProducerClaimDispositionV1::initial(),
+                None,
             )
             .expect("drain one exact lifecycle-owned ordinary batch");
             assert!(!producer_claim.requires_yield());

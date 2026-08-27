@@ -25,6 +25,68 @@ fn exact_manifest_authority_fixture(
     (state, keypairs)
 }
 
+fn exact_stake_authority_fixture(
+    fault_tolerance: u32,
+    validator_count: u8,
+) -> (State, Vec<KeyPair>) {
+    let state = blank_test_state();
+    let mut nexus = state.nexus_snapshot();
+    nexus.dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
+        id: DataSpaceId::UNIVERSAL,
+        alias: "universal".to_owned(),
+        description: None,
+        fault_tolerance,
+    }])
+    .expect("exact stake-authority dataspace catalog");
+    install_existing_nexus_geometry_for_test(&state, nexus);
+    let keypairs = (1..=validator_count)
+        .map(|seed| {
+            KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                .expect("deterministic exact stake-authority BLS key")
+        })
+        .collect::<Vec<_>>();
+    seed_consensus_keys_with_pops(&state, &keypairs);
+    let minimum_stake = state.nexus_snapshot().staking.min_validator_stake.clone();
+    let mut world = state.world.block();
+    for keypair in &keypairs {
+        let validator = AccountId::new(keypair.public_key().clone());
+        world.public_lane_validators.insert(
+            (LaneId::SINGLE, validator.clone()),
+            PublicLaneValidatorRecord {
+                lane_id: LaneId::SINGLE,
+                validator: validator.clone(),
+                peer_id: PeerId::new(keypair.public_key().clone()),
+                stake_account: validator,
+                total_stake: minimum_stake.clone(),
+                self_stake: minimum_stake.clone(),
+                metadata: Metadata::default(),
+                status: PublicLaneValidatorStatus::Active,
+                activation_epoch: Some(0),
+                activation_height: Some(0),
+                last_reward_epoch: None,
+            },
+        );
+    }
+    world.commit();
+    (state, keypairs)
+}
+
+fn install_malformed_beacon_cursor(state: &State) {
+    // A non-empty cursor disables the unit-fixture entropy fallback, while the
+    // absent backing pulse makes any attempted seed resolution fail closed.
+    let mut world = state.world.block();
+    world.global_beacon_latest_pulse.insert(
+        GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY,
+        crate::beacon::GlobalThresholdBeaconPulseLinkV1 {
+            pulse_id: [0xA1; 32],
+            seed: [0xB2; 32],
+            height: 0,
+            round: 0,
+        },
+    );
+    world.commit();
+}
+
 fn resolve_universal_committee(
     state: &State,
 ) -> Result<LaneAuthorityCommittee, LaneAuthorityError> {
@@ -54,6 +116,7 @@ fn exact_lane_committee_rejects_f1_pools_of_one_and_three() {
 #[test]
 fn exact_lane_committee_accepts_four_and_stably_samples_larger_f1_pool() {
     let (state, four_keys) = exact_manifest_authority_fixture(1, 4);
+    install_malformed_beacon_cursor(&state);
     let four = resolve_universal_committee(&state).expect("exact four-validator committee");
     assert_eq!(four.fault_tolerance(), 1);
     assert_eq!(four.validators().len(), 4);
@@ -97,6 +160,38 @@ fn exact_lane_committee_accepts_four_and_stably_samples_larger_f1_pool() {
         resolve_universal_committee(&larger_state).expect("order-independent sample"),
         first,
         "manifest declaration order must not influence seeded committee membership"
+    );
+
+    let (malformed_larger_state, _) = exact_manifest_authority_fixture(1, 9);
+    install_malformed_beacon_cursor(&malformed_larger_state);
+    assert_eq!(
+        resolve_universal_committee(&malformed_larger_state),
+        Err(LaneAuthorityError::InvalidAuthoritySource {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            authority_height: 1,
+        }),
+        "an oversized pool must still require verified sampling entropy",
+    );
+}
+
+#[test]
+fn exact_stake_elected_committee_does_not_require_sampling_entropy() {
+    let (state, keypairs) = exact_stake_authority_fixture(1, 4);
+    install_malformed_beacon_cursor(&state);
+    let committee = resolve_universal_committee(&state)
+        .expect("exact stake-elected committee must not consult sampling entropy");
+    let expected = keypairs
+        .iter()
+        .map(|keypair| PeerId::new(keypair.public_key().clone()))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        committee
+            .validators()
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>(),
+        expected,
     );
 }
 

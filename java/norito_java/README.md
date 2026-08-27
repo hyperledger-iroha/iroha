@@ -9,15 +9,14 @@ with one explicit Zstandard JNI runtime dependency.
 - Header parsing/serialization (`NRT0`, major 0 with fixed v1 minor `0x00`) with CRC64-XZ validation
 - Flag support: packed sequences, compact lengths, packed structs, field bitset
 - Adapters for signed/unsigned integers, booleans, UTF-8 strings, byte arrays,
-  options (`Optional`), results (`Result.Ok`/`Result.Err`), sequences, maps, and
-  packed structs with hybrid bitset layout
+  options (`Optional`), sequences, maps, and packed structs with hybrid bitset layout
 - Canonical type-name schema hashing
 - Columnar helpers and adaptive AoS layouts for `(u64, String, boolean)`,
   `(u64, Optional<String>, boolean)`, `(u64, Optional<u32>, boolean)`,
   `(u64, bytes)`, `(u64, bytes, boolean)` (including optional bytes), and
   `(u64, enum(Name|Code), boolean)` rows
-- Compression profiles (`CompressionConfig.zstdProfile`) that choose Zstandard levels
-  automatically for `"fast"`, `"balanced"`, or `"compact"` workloads.
+- Typed compression profiles (`FAST`, `BALANCED`, and `COMPACT`) that choose
+  Zstandard levels automatically for the encoded payload size.
 - CLI inspector `NoritoDump` for quick header introspection
 - Streaming resume helpers (`KeyUpdateState`/`ContentKeyState`) plus baseline RLE
   block decoding with explicit end-of-block validation.

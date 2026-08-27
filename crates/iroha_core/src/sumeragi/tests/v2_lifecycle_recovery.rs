@@ -4,8 +4,8 @@ use crate::{
     prelude::World,
     query::store::LiveQueryStore,
     queue::{
-        LaneQueueReservationKeyV1, Queue, RoutingDecision, RoutingPlan,
-        canonical_lane_queue_reservation_group_identity_projection,
+        LaneQueueReservationKeyV1, LaneQueueReservationScopeV1, Queue, RoutingDecision,
+        RoutingPlan, canonical_lane_queue_reservation_group_identity_projection,
         lane_queue_reservation_group_binding_from_ordered_keys,
     },
     state::State,
@@ -22,6 +22,7 @@ use crate::{
             ProductionInFlightFirstReleaseSessionProjection,
         },
     },
+    tx::AcceptedTransaction,
 };
 use iroha_config::{
     base::WithOrigin,
@@ -51,7 +52,11 @@ use iroha_data_model::{
 };
 use iroha_primitives::time::TimeSource;
 use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
-use std::{num::NonZeroU32, sync::Arc};
+use std::{
+    borrow::Cow,
+    num::{NonZeroU32, NonZeroUsize},
+    sync::Arc,
+};
 use tempfile::TempDir;
 fn lifecycle_key_pair(seed: u8) -> KeyPair {
     KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
@@ -397,6 +402,142 @@ fn open_empty_lifecycle_recovery_queue(queue_dir: &TempDir, state: &State) -> Qu
         Default::default(),
     );
     queue
+}
+
+fn lifecycle_payload_with_exact_ordinary_fifo(
+    producer_signer: &KeyPair,
+    context: &wire::HeightContext,
+    state: &State,
+    queue: &Queue,
+) -> crate::lane_consensus::LaneExecutablePayloadV1 {
+    let lane_incarnation = state
+        .lane_incarnations_snapshot()
+        .get(&LaneId::SINGLE)
+        .copied()
+        .expect("State primary-lane incarnation");
+    let validator_set = context
+        .roster
+        .iter()
+        .map(|validator| validator.validator.clone())
+        .collect::<Vec<_>>();
+    let (network_id, epoch, template) = lifecycle_payload_for_validators_with_count(
+        producer_signer,
+        context,
+        validator_set,
+        lane_incarnation,
+        2,
+    );
+    let mut proposal = template.origin_proposal.clone();
+    proposal.descriptor.lane_id = LaneId::SINGLE;
+    proposal.descriptor.lane_incarnation = lane_incarnation;
+    proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
+    proposal.proposal_hash = proposal.computed_proposal_hash();
+    let entrypoints = template.entrypoints.clone();
+    for entrypoint in &entrypoints {
+        let TransactionEntrypoint::External(transaction) = entrypoint else {
+            panic!("lifecycle FIFO fixture uses only external transactions");
+        };
+        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction.clone()));
+        let routing_plan = queue
+            .route_plan_with_state(&accepted, state)
+            .expect("resolve lifecycle FIFO routing plan");
+        assert_eq!(
+            routing_plan.coordinator_route().lane_id,
+            proposal.descriptor.lane_id,
+            "lifecycle FIFO fixture must use the primary Queue route",
+        );
+        let admission_context = queue
+            .plan_admission_context_with_state(state, &routing_plan)
+            .expect("capture lifecycle FIFO admission context");
+        let admission = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+            state.network_id_ref(),
+            accepted.entrypoint(),
+            &routing_plan,
+            admission_context,
+            queue.queue_plan_admission_timestamp_ms(),
+        )
+        .expect("bind lifecycle FIFO QueuePlan admission");
+        queue
+            .push_with_lane_with_state_and_routing_plan_strict_global_admission_claim(
+                accepted,
+                state,
+                routing_plan,
+                &admission,
+            )
+            .expect("durably admit lifecycle FIFO transaction");
+        state
+            .install_queue_plan_pending_binding_for_test(&admission)
+            .expect("install lifecycle FIFO QueuePlan registry value");
+    }
+    let producer = PeerId::new(producer_signer.public_key().clone());
+    let (reservation_owner_hash, proposal_identity_hash) =
+        autonomous_lane_reservation_identity_hashes_for_proposal(
+            network_id,
+            context.id(),
+            epoch,
+            &proposal,
+            &producer,
+        )
+        .expect("derive lifecycle FIFO reservation identities");
+    let scope = LaneQueueReservationScopeV1 {
+        lane_id: proposal.descriptor.lane_id,
+        dataspace_id: proposal.descriptor.dataspace_id,
+        lane_incarnation: proposal.descriptor.lane_incarnation,
+        proposal_height: proposal.descriptor.proposal_height,
+        lane_block_height: proposal.descriptor.lane_block_height,
+        lane_block_view: proposal.descriptor.lane_block_view,
+        reservation_owner_hash,
+        proposal_identity_hash,
+    };
+    let reserved = queue
+        .reserve_transactions_for_lane(
+            state,
+            scope,
+            NonZeroUsize::new(entrypoints.len()).expect("non-empty lifecycle FIFO batch"),
+        )
+        .expect("reserve lifecycle FIFO batch");
+    assert_eq!(reserved.len(), entrypoints.len());
+    let reservation_keys = reserved
+        .iter()
+        .map(|reservation| *reservation.key())
+        .collect::<Vec<_>>();
+    let routing_plans = reserved
+        .iter()
+        .map(|reservation| reservation.routing_plan().clone())
+        .collect::<Vec<_>>();
+    let payload = crate::lane_consensus::LaneExecutablePayloadV1::new_signed_with_reservations(
+        network_id,
+        epoch,
+        proposal,
+        entrypoints,
+        reservation_keys,
+        routing_plans,
+        vec![None; reserved.len()],
+        producer,
+        producer_signer.private_key(),
+    )
+    .expect("sign exact lifecycle FIFO payload");
+    assert_eq!(
+        queue
+            .release_lane_reservations_in_order(&payload.reservation_keys)
+            .expect("restore exact lifecycle ordinary FIFO"),
+        payload.reservation_keys.len(),
+    );
+    assert_eq!(queue.fifo_snapshot_for_test(), payload.entrypoint_hashes);
+    assert!(queue.live_lane_reservations().is_empty());
+    payload
+}
+
+#[derive(Clone, Copy, Debug)]
+enum NonproducerReplicaQueueCut {
+    ExactOrdinaryFifo,
+    StrictQueueAbsent,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum NonproducerRetirementClaimPrefix {
+    ReleasePending,
+    ReplicaReleased,
 }
 #[derive(Clone, Copy, Debug)]
 enum LifecycleRecoveryPostCasBoundary {
@@ -1038,6 +1179,394 @@ fn local_producer_recovery_requires_the_exact_current_queue_owner() {
     require_local_producer_queue_owner(&payload, &cursor, &exact_groups)
         .expect("the byte-exact current Queue group authenticates producer recovery custody");
 }
+
+fn exercise_nonproducer_retired_attempt_startup(
+    queue_cut: NonproducerReplicaQueueCut,
+    claim_prefix: NonproducerRetirementClaimPrefix,
+    exercise_complete_claim_presweep: bool,
+) {
+    let kura_dir = TempDir::new().expect("nonproducer retirement Kura directory");
+    let queue_dir = TempDir::new().expect("nonproducer retirement Queue directory");
+    let kura_config = lifecycle_kura_config(&kura_dir);
+    let lane_config = lifecycle_runtime_lane_config();
+    let local_signer = lifecycle_key_pair(71);
+    let local_peer = PeerId::new(local_signer.public_key().clone());
+    let producer_signer = lifecycle_key_pair(91);
+    let context = lifecycle_context(&local_signer);
+    context
+        .validate()
+        .expect("nonproducer retirement context must be structurally valid");
+    let nexus = Nexus {
+        lane_catalog: lifecycle_lane_catalog(),
+        ..Nexus::default()
+    };
+    let (kura, state) = open_lifecycle_recovery_state(&kura_config, &lane_config, &context, &nexus);
+    let queue = open_empty_lifecycle_recovery_queue(&queue_dir, &state);
+    let payload = match queue_cut {
+        NonproducerReplicaQueueCut::ExactOrdinaryFifo => {
+            lifecycle_payload_with_exact_ordinary_fifo(&producer_signer, &context, &state, &queue)
+        }
+        NonproducerReplicaQueueCut::StrictQueueAbsent => {
+            let lane_incarnation = state
+                .lane_incarnations_snapshot()
+                .get(&LaneId::new(1))
+                .copied()
+                .expect("State lifecycle lane incarnation");
+            let validator_set = context
+                .roster
+                .iter()
+                .map(|validator| validator.validator.clone())
+                .collect();
+            lifecycle_payload_for_validators_with_count(
+                &producer_signer,
+                &context,
+                validator_set,
+                lane_incarnation,
+                2,
+            )
+            .2
+        }
+    };
+    let network_id = payload.network_id;
+    let epoch = payload.epoch;
+    let (binding, live_state) = lifecycle_binding_and_live_state(&payload, &local_peer);
+    let (_, local_actor) = binding.local_validator_identity();
+    assert_ne!(
+        local_actor,
+        binding.producer_actor_projection(),
+        "retirement fixture must use a signed nonproducer cursor",
+    );
+    kura.bind_local_peer_id(local_peer.clone())
+        .expect("bind nonproducer retirement peer");
+    let generation_one = kura
+        .claim_autonomous_lifecycle_process_generation(network_id, &local_peer)
+        .expect("claim first nonproducer retirement generation");
+    kura.persist_lane_executable_payload(&payload, network_id, epoch)
+        .expect("persist nonproducer retirement payload");
+    let initial_live = sign_lifecycle_cursor(
+        &local_signer,
+        &local_peer,
+        &payload.origin_proposal.descriptor.validator_set,
+        1,
+        None,
+        binding.clone(),
+        AutonomousLifecycleCursorPhaseV1::live(generation_one.generation(), live_state)
+            .expect("construct nonproducer retirement Live cursor"),
+    )
+    .expect("sign nonproducer retirement Live cursor");
+    let (_, initial_lease) = kura
+        .read_autonomous_lifecycle_cursor(&payload, &binding, &generation_one)
+        .expect("read absent nonproducer retirement cursor")
+        .into_parts();
+    assert_eq!(
+        kura.compare_and_swap_autonomous_lifecycle_cursor(initial_lease, initial_live.clone())
+            .expect("publish nonproducer retirement Live cursor")
+            .cursor(),
+        Some(&initial_live),
+    );
+    let retirement = crate::kura::AutonomousLaneSlotRetirementV1::from_payload(&payload);
+    kura.persist_autonomous_lane_slot_retirement(&retirement, network_id, epoch)
+        .expect("persist full ReleasePending retirement prefix");
+    if matches!(
+        claim_prefix,
+        NonproducerRetirementClaimPrefix::ReplicaReleased
+    ) {
+        let queue_disposition = match queue_cut {
+            NonproducerReplicaQueueCut::ExactOrdinaryFifo => {
+                crate::kura::AutonomousLifecycleReplicaQueueDispositionV1::ExactOrdinaryFifo
+            }
+            NonproducerReplicaQueueCut::StrictQueueAbsent => {
+                crate::kura::AutonomousLifecycleReplicaQueueDispositionV1::StrictQueueAbsent
+            }
+        };
+        kura.finalize_autonomous_lane_slot_replica_release_for_test(
+            &retirement,
+            network_id,
+            epoch,
+            queue_disposition,
+        )
+        .expect("persist full disposition-bound ReplicaReleased retirement prefix");
+    }
+    let descriptor = &payload.origin_proposal.descriptor;
+    let terminal_path = kura
+        .autonomous_lifecycle_terminal_outcome_path_for_test(
+            descriptor.lane_id,
+            descriptor.lane_block_height,
+            descriptor.proposal_height,
+        )
+        .expect("resolve nonproducer replica terminal path");
+    assert!(
+        !terminal_path.exists(),
+        "{queue_cut:?}/{claim_prefix:?}: crash cut must precede every terminal outcome",
+    );
+    assert!(
+        kura.pending_autonomous_lifecycle_terminal_outcome_inventory()
+            .expect("inventory pre-startup nonproducer outcomes")
+            .is_empty(),
+    );
+    let queue_snapshot_before = queue
+        .lane_reservation_reconciliation_snapshot()
+        .expect("capture nonproducer Queue cut");
+    assert!(queue_snapshot_before.is_empty());
+    let fifo_before = queue.fifo_snapshot_for_test();
+    match queue_cut {
+        NonproducerReplicaQueueCut::ExactOrdinaryFifo => {
+            assert_eq!(fifo_before, payload.entrypoint_hashes)
+        }
+        NonproducerReplicaQueueCut::StrictQueueAbsent => assert!(fifo_before.is_empty()),
+    }
+    let live_before = queue.live_lane_reservations();
+    let commit_barriers_before = queue.lane_reservation_commit_barriers();
+    let release_barriers_before = queue.lane_reservation_release_barriers();
+    let quarantine_before = queue.lane_reservation_startup_reconciliation_pending();
+    assert!(live_before.is_empty());
+    assert!(commit_barriers_before.is_empty());
+    assert!(release_barriers_before.is_empty());
+    assert!(!quarantine_before);
+    drop(generation_one);
+    drop(state);
+    drop(kura);
+
+    let (restarted, restarted_state) =
+        open_lifecycle_recovery_state(&kura_config, &lane_config, &context, &nexus);
+    restarted
+        .bind_local_peer_id(local_peer.clone())
+        .expect("rebind nonproducer retirement peer");
+    let generation_two = restarted
+        .claim_autonomous_lifecycle_process_generation(network_id, &local_peer)
+        .expect("claim restarted nonproducer retirement generation");
+    assert_eq!(generation_two.generation(), 2);
+    let recovered = reconcile_autonomous_lifecycle_startup(
+        &restarted_state,
+        &queue,
+        restarted.as_ref(),
+        &context,
+        LaneReservationSnapshotPlannerEvidence::from_parts_for_test(
+            queue_snapshot_before.clone(),
+            Vec::new(),
+        ),
+        AutonomousLifecycleDeferredTerminalRecoveryHandoff::empty(),
+        Some(&generation_two),
+        &local_peer,
+        &local_signer,
+    )
+    .unwrap_or_else(|error| {
+        panic!("{queue_cut:?}/{claim_prefix:?}: reconcile nonproducer retirement: {error}")
+    });
+    assert_eq!(recovered.completed_bootstraps(), 0);
+    assert_eq!(recovered.recovered_attempts(), 1);
+    let (returned_snapshot, receipt, pending_groups) = recovered.into_queue_handoff();
+    assert_eq!(returned_snapshot, queue_snapshot_before);
+    assert!(pending_groups.is_empty());
+    assert!(
+        queue
+            .revalidate_lane_reservation_startup_reconciliation_receipt(
+                &receipt,
+                &queue_snapshot_before,
+            )
+            .expect("revalidate nonproducer retirement Queue receipt"),
+    );
+    assert_eq!(queue.fifo_snapshot_for_test(), fifo_before);
+    assert_eq!(queue.live_lane_reservations(), live_before);
+    assert_eq!(
+        queue.lane_reservation_commit_barriers(),
+        commit_barriers_before,
+    );
+    assert_eq!(
+        queue.lane_reservation_release_barriers(),
+        release_barriers_before,
+    );
+    assert_eq!(
+        queue.lane_reservation_startup_reconciliation_pending(),
+        quarantine_before,
+    );
+    assert!(terminal_path.is_file());
+    let terminal_bytes = std::fs::read(&terminal_path).expect("read Complete replica outcome");
+    let terminal: crate::kura::AutonomousLifecycleTerminalOutcomeV1 =
+        norito::decode_canonical(&terminal_bytes).expect("decode Complete replica outcome");
+    let terminal_debug = format!("{terminal:?}");
+    assert!(terminal_debug.contains("RetiredReplicaQueueDisposition"));
+    assert!(terminal_debug.contains("Complete"));
+    let expected_disposition = match queue_cut {
+        NonproducerReplicaQueueCut::ExactOrdinaryFifo => "ExactOrdinaryFifo",
+        NonproducerReplicaQueueCut::StrictQueueAbsent => "StrictQueueAbsent",
+    };
+    assert!(terminal_debug.contains(expected_disposition));
+    assert!(
+        restarted
+            .pending_autonomous_lifecycle_terminal_outcome_inventory()
+            .expect("inventory completed nonproducer outcome")
+            .is_empty(),
+        "{queue_cut:?}/{claim_prefix:?}: Complete replica outcome must leave no Pending inventory",
+    );
+    let recovered_cursor = restarted
+        .read_autonomous_lifecycle_cursor(&payload, &binding, &generation_two)
+        .expect("read recovered nonproducer cursor")
+        .cursor()
+        .expect("recovered nonproducer cursor remains signed")
+        .clone();
+    assert_eq!(recovered_cursor.owner_generation(), 2);
+    drop(receipt);
+
+    let repeated_snapshot = queue
+        .lane_reservation_reconciliation_snapshot()
+        .expect("recapture nonproducer Queue cut");
+    let repeated = reconcile_autonomous_lifecycle_startup(
+        &restarted_state,
+        &queue,
+        restarted.as_ref(),
+        &context,
+        LaneReservationSnapshotPlannerEvidence::from_parts_for_test(
+            repeated_snapshot.clone(),
+            Vec::new(),
+        ),
+        AutonomousLifecycleDeferredTerminalRecoveryHandoff::empty(),
+        Some(&generation_two),
+        &local_peer,
+        &local_signer,
+    )
+    .unwrap_or_else(|error| {
+        panic!("{queue_cut:?}/{claim_prefix:?}: repeat nonproducer retirement: {error}")
+    });
+    assert_eq!(repeated.completed_bootstraps(), 0);
+    assert_eq!(repeated.recovered_attempts(), 0);
+    let (repeated_handoff, repeated_receipt, pending_groups) = repeated.into_queue_handoff();
+    assert_eq!(repeated_handoff, repeated_snapshot);
+    assert!(pending_groups.is_empty());
+    assert!(
+        queue
+            .revalidate_lane_reservation_startup_reconciliation_receipt(
+                &repeated_receipt,
+                &repeated_snapshot,
+            )
+            .expect("revalidate repeated nonproducer Queue receipt"),
+    );
+    assert_eq!(queue.fifo_snapshot_for_test(), fifo_before);
+    assert_eq!(queue.live_lane_reservations(), live_before);
+    assert_eq!(
+        queue.lane_reservation_commit_barriers(),
+        commit_barriers_before,
+    );
+    assert_eq!(
+        queue.lane_reservation_release_barriers(),
+        release_barriers_before,
+    );
+    assert_eq!(
+        queue.lane_reservation_startup_reconciliation_pending(),
+        quarantine_before,
+    );
+    assert_eq!(
+        std::fs::read(&terminal_path).expect("reread Complete replica outcome"),
+        terminal_bytes,
+        "retry must preserve the byte-exact Complete replica outcome",
+    );
+    let repeated_cursor = restarted
+        .read_autonomous_lifecycle_cursor(&payload, &binding, &generation_two)
+        .expect("read repeated nonproducer cursor");
+    assert_eq!(
+        repeated_cursor
+            .cursor()
+            .expect("repeated nonproducer cursor remains signed"),
+        &recovered_cursor,
+    );
+    if exercise_complete_claim_presweep {
+        assert!(
+            payload.entrypoint_hashes.len() > 1,
+            "replica Complete crash cut requires a partial claim suffix",
+        );
+        restarted
+            .downgrade_autonomous_lane_replica_complete_claim_suffix_for_test(&payload, 1)
+            .expect("recreate Complete-outcome/partial-raw-claim crash cut");
+        assert_eq!(
+            restarted
+                .autonomous_lane_replica_claim_seal_counts_for_test(&payload)
+                .expect("count partial replica claim seal"),
+            (1, payload.entrypoint_hashes.len() - 1),
+        );
+        assert_eq!(
+            std::fs::read(&terminal_path).expect("preserve Complete replica outcome at crash cut"),
+            terminal_bytes,
+        );
+        drop(repeated_receipt);
+        drop(generation_two);
+        drop(restarted_state);
+        drop(restarted);
+
+        let (sealed_restart, sealed_state) =
+            open_lifecycle_recovery_state(&kura_config, &lane_config, &context, &nexus);
+        assert_eq!(
+            sealed_restart
+                .autonomous_lane_replica_claim_seal_counts_for_test(&payload)
+                .expect("strict startup seals partial replica claim suffix"),
+            (0, payload.entrypoint_hashes.len()),
+        );
+        assert_eq!(
+            std::fs::read(&terminal_path).expect("read presweep Complete replica outcome"),
+            terminal_bytes,
+            "claim pre-sweep must preserve the byte-exact Complete outcome",
+        );
+        drop(sealed_state);
+        drop(sealed_restart);
+
+        let (idempotent_restart, idempotent_state) =
+            open_lifecycle_recovery_state(&kura_config, &lane_config, &context, &nexus);
+        assert_eq!(
+            idempotent_restart
+                .autonomous_lane_replica_claim_seal_counts_for_test(&payload)
+                .expect("repeat strict startup stutters on sealed replica claims"),
+            (0, payload.entrypoint_hashes.len()),
+        );
+        assert_eq!(
+            std::fs::read(&terminal_path).expect("reread idempotent Complete replica outcome"),
+            terminal_bytes,
+        );
+        drop(idempotent_state);
+        drop(idempotent_restart);
+    }
+}
+
+#[test]
+fn nonproducer_release_pending_attempt_startup_completes_replica_for_fifo_and_absent_queue() {
+    for queue_cut in [
+        NonproducerReplicaQueueCut::ExactOrdinaryFifo,
+        NonproducerReplicaQueueCut::StrictQueueAbsent,
+    ] {
+        exercise_nonproducer_retired_attempt_startup(
+            queue_cut,
+            NonproducerRetirementClaimPrefix::ReleasePending,
+            false,
+        );
+    }
+}
+
+#[test]
+fn nonproducer_released_attempt_startup_completes_replica_for_fifo_and_absent_queue() {
+    for queue_cut in [
+        NonproducerReplicaQueueCut::ExactOrdinaryFifo,
+        NonproducerReplicaQueueCut::StrictQueueAbsent,
+    ] {
+        exercise_nonproducer_retired_attempt_startup(
+            queue_cut,
+            NonproducerRetirementClaimPrefix::ReplicaReleased,
+            false,
+        );
+    }
+}
+
+#[test]
+fn strict_kura_startup_seals_complete_replica_outcome_claim_suffix_idempotently() {
+    for queue_cut in [
+        NonproducerReplicaQueueCut::ExactOrdinaryFifo,
+        NonproducerReplicaQueueCut::StrictQueueAbsent,
+    ] {
+        exercise_nonproducer_retired_attempt_startup(
+            queue_cut,
+            NonproducerRetirementClaimPrefix::ReplicaReleased,
+            true,
+        );
+    }
+}
+
 #[test]
 fn prepared_bootstrap_and_crash_boundaries_resolve_only_their_durable_side() {
     let signer = lifecycle_key_pair(41);

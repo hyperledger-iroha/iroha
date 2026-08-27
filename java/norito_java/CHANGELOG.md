@@ -1,10 +1,13 @@
 # Changelog
 
 ## v0.1.0 (unreleased)
-- Removed the unused structural-schema hash and tuple-adapter surfaces. Struct encoding is now
-  explicit and Map-backed instead of discovering object properties through reflection.
+- Removed unused structural-schema hashing, tuple/result adapter factories, identity transparent
+  wrappers, and raw-string compression profiles. Struct encoding is now explicit and Map-backed
+  instead of discovering object properties through reflection. `NoritoCodec.tryDecode` retains its
+  focused `Result` outcome type.
 - Made the pinned `zstd-jni` backend a direct runtime dependency and removed the optional discovery
-  branch and its test double.
+  branch and its test double. Direct `javac`/`jdeps` SDK gates now consume the same Gradle-resolved
+  runtime classpath.
 - Revalidated parity after the Rust Norito accelerator-output hardening now
   rejects malformed Stage-1 structural tapes and invalid GPU zstd output
   lengths before consuming helper results; Java bindings required no

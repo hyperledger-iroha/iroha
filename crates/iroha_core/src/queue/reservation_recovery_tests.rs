@@ -1,6 +1,17 @@
 // Lane-reservation restart, reconciliation, and fee-capacity regression tests.
 //
 // Included by `queue::tests` so source-bound libtest names remain stable.
+use crate::{
+    kura::{
+        AutonomousLifecycleCursorPhaseV1, AutonomousLifecycleCursorRead,
+        AutonomousLifecycleProcessGenerationClaim,
+    },
+    sumeragi::{
+        lane_planner::autonomous_lane_reservation_identity_hashes_for_proposal,
+        v2_lifecycle_recovery::sign_lifecycle_cursor,
+    },
+};
+
 fn live_snapshot_phase_fixture() -> (
     LaneQueueReservationReconciliationSnapshotV1,
     Vec<LaneQueueReservationKeyV1>,
@@ -2835,4 +2846,417 @@ fn relay_spend_lease_reservation_maps_use_aggregate_per_asset_charges() {
     assert_eq!(charges[&distinct_lease], Quantity::from(7_u32));
     assert_eq!(remaining[&shared_lease], Quantity::from(15_u32));
     assert_eq!(remaining[&distinct_lease], Quantity::from(8_u32));
+}
+
+struct StartupReplicaDispositionPayloadFixture {
+    payload: crate::lane_consensus::LaneExecutablePayloadV1,
+    binding: AutonomousLifecycleAttemptBindingV1,
+    live_state: ProductionInFlightFirstReleaseStateProjection,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn startup_replica_disposition_payload_fixture(
+    state: &State,
+    entrypoint: TransactionEntrypoint,
+    routing_plan: RoutingPlan,
+    queue_plan_admission_binding_hash: Hash,
+    proposal_height: u64,
+    lane_block_height: u64,
+    height_context_seed: &[u8],
+    producer_signer: &KeyPair,
+    local_peer: &PeerId,
+) -> StartupReplicaDispositionPayloadFixture {
+    let producer = PeerId::new(producer_signer.public_key().clone());
+    let mut validator_set = vec![producer.clone(), local_peer.clone()];
+    validator_set.sort();
+    validator_set.dedup();
+    assert_eq!(validator_set.len(), 2, "replica fixture validator set");
+    assert_eq!(
+        crate::lane_consensus::deterministic_lane_author(&validator_set, lane_block_height),
+        Some(&producer),
+        "lane height must select the fixture producer"
+    );
+    let validator_count = u32::try_from(validator_set.len()).expect("bounded validator count");
+    let min_quorum = u32::try_from(
+        crate::sumeragi::network_topology::commit_quorum_from_len(validator_set.len()).max(1),
+    )
+    .expect("bounded validator quorum");
+    let lane_incarnation = state
+        .lane_incarnation_at_height(LaneId::SINGLE, proposal_height)
+        .expect("active primary-lane incarnation");
+    let entrypoint_hash = entrypoint.hash();
+    let mut descriptor = iroha_data_model::block::consensus::LaneBlockDescriptorV1 {
+        lane_id: LaneId::SINGLE,
+        dataspace_id: DataSpaceId::UNIVERSAL,
+        lane_incarnation,
+        proposal_height,
+        previous_lane_block_height: lane_block_height.saturating_sub(1),
+        previous_lane_block_descriptor_hash: (lane_block_height > 1).then(|| {
+            Hash::new_from_chunks(&[
+                b"startup-replica-disposition-predecessor\0",
+                &lane_block_height.to_be_bytes(),
+            ])
+        }),
+        lane_block_height,
+        lane_block_view: 0,
+        subject_hash: Hash::new_from_chunks(&[
+            b"startup-replica-disposition-subject\0",
+            &proposal_height.to_be_bytes(),
+        ]),
+        payload_ownership_hash: Hash::new_from_chunks(&[
+            b"startup-replica-disposition-ownership\0",
+            &proposal_height.to_be_bytes(),
+        ]),
+        rbc_instance_hash: Hash::new_from_chunks(&[
+            b"startup-replica-disposition-rbc\0",
+            &proposal_height.to_be_bytes(),
+        ]),
+        accepted_candidate_indices: vec![0],
+        accepted_transaction_hashes: vec![Hash::from(entrypoint_hash)],
+        validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set_hash: HashOf::new(&validator_set),
+        validator_set: validator_set.clone(),
+        validator_count,
+        min_quorum,
+        qc_mode_tag: "permissioned:startup-replica-disposition".to_owned(),
+        descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
+    };
+    descriptor.descriptor_hash = descriptor.computed_descriptor_hash();
+    let mut proposal = iroha_data_model::block::consensus::LaneBlockProposalV1 {
+        descriptor,
+        proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+        payload_block_hint: Some(
+            iroha_data_model::block::consensus::LaneBlockProposalPayloadHintV1 {
+                proposal_height,
+                proposal_view: 0,
+                proposal_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                    b"startup-replica-disposition-global-anchor",
+                )),
+            },
+        ),
+    };
+    proposal.proposal_hash = proposal.computed_proposal_hash();
+    let height_context_id =
+        iroha_data_model::block::consensus_v2::HeightContextId(HashOf::<
+            iroha_data_model::block::consensus_v2::HeightContext,
+        >::from_untyped_unchecked(
+            Hash::new(height_context_seed)
+        ));
+    let (reservation_owner_hash, proposal_identity_hash) =
+        autonomous_lane_reservation_identity_hashes_for_proposal(
+            *state.network_id_ref(),
+            height_context_id,
+            0,
+            &proposal,
+            &producer,
+        )
+        .expect("derive exact replica reservation identities");
+    let reservation_key = LaneQueueReservationKeyV1 {
+        version: LaneQueueReservationKeyV1::VERSION,
+        entrypoint_hash,
+        queue_plan_admission_binding_hash,
+        routing_plan_digest: routing_plan.digest(),
+        coordinator_leg: routing_plan.coordinator_leg(),
+        lane_id: LaneId::SINGLE,
+        dataspace_id: DataSpaceId::UNIVERSAL,
+        lane_incarnation,
+        proposal_height,
+        lane_block_height,
+        lane_block_view: 0,
+        reservation_owner_hash,
+        proposal_identity_hash,
+    };
+    let payload = crate::lane_consensus::LaneExecutablePayloadV1::new_signed_with_reservations(
+        *state.network_id_ref(),
+        0,
+        proposal,
+        vec![entrypoint],
+        vec![reservation_key],
+        vec![routing_plan],
+        vec![None],
+        producer,
+        producer_signer.private_key(),
+    )
+    .expect("sign startup replica disposition payload");
+    let reservation_group =
+        lane_queue_reservation_group_binding_from_ordered_keys(payload.reservation_keys.iter())
+            .expect("bind startup replica disposition group");
+    let binding = AutonomousLifecycleAttemptBindingV1::from_payload(
+        height_context_id,
+        lane_block_height,
+        &payload,
+        reservation_group,
+        local_peer,
+    )
+    .expect("bind startup replica lifecycle attempt");
+    let validator_count =
+        u8::try_from(binding.validator_set_identity().2).expect("validator count fits projection");
+    let validator_mask = (1_u128 << validator_count) - 1;
+    let (_, local_actor) = binding.local_validator_identity();
+    let producer = binding.producer_actor_projection();
+    assert_ne!(local_actor, producer, "fixture must authenticate a replica");
+    let live_state = ProductionInFlightFirstReleaseStateProjection {
+        validator_count,
+        producer,
+        producer_selected_owner: producer,
+        replicated_carrier_owners: validator_mask & !producer,
+        payload_binding_a: producer | local_actor,
+        binding_a: canonical_lane_queue_reservation_group_identity_projection(reservation_group),
+        queue: ProductionInFlightFirstReleaseQueueProjection {
+            plan_state: IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED,
+            selected_count: reservation_group.reservation_count,
+            reservation_state: IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE,
+        },
+        carrier: ProductionInFlightFirstReleaseCarrierProjection {
+            kura_active: local_actor,
+            ..ProductionInFlightFirstReleaseCarrierProjection::default()
+        },
+        session: ProductionInFlightFirstReleaseSessionProjection {
+            bodies: producer | local_actor,
+            producer_alive: true,
+            ..ProductionInFlightFirstReleaseSessionProjection::default()
+        },
+        history: ProductionInFlightFirstReleaseHistoryProjection {
+            ever_queue_plan_v1: true,
+            ever_reservation_v1: true,
+            ..ProductionInFlightFirstReleaseHistoryProjection::default()
+        },
+        decision: ProductionInFlightFirstReleaseDecisionProjection::default(),
+        release: ProductionInFlightFirstReleaseReleaseProjection::default(),
+    };
+    StartupReplicaDispositionPayloadFixture {
+        payload,
+        binding,
+        live_state,
+    }
+}
+
+fn publish_startup_replica_disposition_cursor(
+    kura: &Kura,
+    generation: &AutonomousLifecycleProcessGenerationClaim,
+    fixture: &StartupReplicaDispositionPayloadFixture,
+    local_signer: &KeyPair,
+    local_peer: &PeerId,
+) -> AutonomousLifecycleCursorRead {
+    kura.persist_lane_executable_payload(
+        &fixture.payload,
+        fixture.payload.network_id,
+        fixture.payload.epoch,
+    )
+    .expect("persist startup replica disposition payload");
+    let (_, lease) = kura
+        .read_autonomous_lifecycle_cursor(&fixture.payload, &fixture.binding, generation)
+        .expect("read absent startup replica disposition cursor")
+        .into_parts();
+    let cursor = sign_lifecycle_cursor(
+        local_signer,
+        local_peer,
+        &fixture.payload.origin_proposal.descriptor.validator_set,
+        1,
+        None,
+        fixture.binding.clone(),
+        AutonomousLifecycleCursorPhaseV1::live(generation.generation(), fixture.live_state)
+            .expect("construct startup replica Live cursor"),
+    )
+    .expect("sign startup replica disposition cursor");
+    kura.compare_and_swap_autonomous_lifecycle_cursor(lease, cursor)
+        .expect("publish startup replica disposition cursor")
+}
+
+#[test]
+fn startup_replica_queue_disposition_requires_exact_replay_cut_for_fifo_and_absence() {
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let state = lane_reservation_test_state();
+    let journal_dir = tempdir().expect("startup replica Queue journal directory");
+    let plan_path = test_lane_reservation_plan_path(&journal_dir);
+    let (reservation_path, fifo_payload, fifo_cursor, absent_payload, absent_cursor) = {
+        let writer = Queue::test(config_factory(), &time_source);
+        let reservation_path =
+            install_globally_certified_test_reservation_journals(&writer, &journal_dir);
+        push_globally_bound_lane_reservation_candidate(
+            &writer,
+            &state,
+            &journal_dir,
+            accepted_queue_plan_tx_by_someone(&time_source),
+        );
+        let fifo_transaction = accepted_queue_plan_tx_by_someone(&time_source);
+        let fifo_entrypoint = fifo_transaction.entrypoint().clone();
+        let fifo_binding = push_globally_bound_lane_reservation_candidate(
+            &writer,
+            &state,
+            &journal_dir,
+            fifo_transaction,
+        );
+
+        let signer_a = KeyPair::from_seed(vec![0x31; 32], Algorithm::BlsNormal);
+        let signer_b = KeyPair::from_seed(vec![0x72; 32], Algorithm::BlsNormal);
+        let peer_a = PeerId::new(signer_a.public_key().clone());
+        let peer_b = PeerId::new(signer_b.public_key().clone());
+        let (producer_signer, local_signer, local_peer) = if peer_a < peer_b {
+            (&signer_a, &signer_b, peer_b)
+        } else {
+            (&signer_b, &signer_a, peer_a)
+        };
+        let fifo_payload = startup_replica_disposition_payload_fixture(
+            &state,
+            fifo_entrypoint,
+            fifo_binding
+                .routing_plan()
+                .expect("rebuild FIFO admission routing plan"),
+            fifo_binding.canonical_hash(),
+            1,
+            1,
+            b"startup-replica-fifo-height-context",
+            producer_signer,
+            &local_peer,
+        );
+        let fifo_hash = fifo_payload.payload.reservation_keys[0].entrypoint_hash;
+        let quarantined = writer
+            .reserve_transactions_for_lane(
+                &state,
+                lane_reservation_scope(
+                    &state,
+                    b"startup-replica-unrelated-owner",
+                    b"startup-replica-unrelated-proposal",
+                ),
+                nonzero!(1_usize),
+            )
+            .expect("reserve unrelated owner for real startup quarantine");
+        assert_eq!(quarantined.len(), 1);
+        assert_ne!(quarantined[0].key().entrypoint_hash, fifo_hash);
+        assert_eq!(writer.fifo_snapshot_for_test(), vec![fifo_hash]);
+
+        let absent_transaction = accepted_queue_plan_tx_by_someone(&time_source);
+        let absent_payload = startup_replica_disposition_payload_fixture(
+            &state,
+            absent_transaction.entrypoint().clone(),
+            RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)),
+            Hash::new(b"startup-replica-absent-admission-binding"),
+            3,
+            3,
+            b"startup-replica-absent-height-context",
+            producer_signer,
+            &local_peer,
+        );
+        assert_ne!(
+            absent_payload.payload.reservation_keys[0].entrypoint_hash,
+            fifo_hash
+        );
+
+        let kura = state.kura_handle();
+        kura.bind_local_peer_id(local_peer.clone())
+            .expect("bind startup replica local peer");
+        let generation = kura
+            .claim_autonomous_lifecycle_process_generation(
+                fifo_payload.payload.network_id,
+                &local_peer,
+            )
+            .expect("claim startup replica process generation");
+        let fifo_cursor = publish_startup_replica_disposition_cursor(
+            &kura,
+            &generation,
+            &fifo_payload,
+            local_signer,
+            &local_peer,
+        );
+        let absent_cursor = publish_startup_replica_disposition_cursor(
+            &kura,
+            &generation,
+            &absent_payload,
+            local_signer,
+            &local_peer,
+        );
+        (
+            reservation_path,
+            fifo_payload,
+            fifo_cursor,
+            absent_payload,
+            absent_cursor,
+        )
+    };
+
+    let queue = Queue::test(config_factory(), &time_source);
+    let replayed_reservations = queue
+        .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
+        .expect("replay unrelated reservation owner");
+    assert_eq!(replayed_reservations.restored, 1);
+    assert_eq!(
+        queue
+            .install_plan_journal(&plan_path, 1024 * 1024, true)
+            .expect("install startup replica QueuePlan journal"),
+        2
+    );
+    assert_eq!(
+        queue
+            .replay_plan_journal(&state)
+            .expect("replay startup replica QueuePlan claims")
+            .replayed,
+        2
+    );
+    let snapshot = queue
+        .lane_reservation_reconciliation_snapshot()
+        .expect("capture startup replica reconciliation snapshot");
+    assert!(!snapshot.is_empty());
+    assert!(queue.lane_reservation_startup_reconciliation_pending());
+    assert_eq!(queue.live_lane_reservations().len(), 1);
+    let receipt = queue
+        .bind_lane_reservation_startup_reconciliation_receipt(&snapshot)
+        .expect("bind startup replica reconciliation receipt")
+        .expect("startup replica snapshot remains exact");
+    let fifo_keys = &fifo_payload.payload.reservation_keys;
+    assert_eq!(
+        queue.fifo_snapshot_for_test(),
+        vec![fifo_keys[0].entrypoint_hash]
+    );
+
+    let mut mismatched_snapshot = snapshot.clone();
+    mismatched_snapshot.ordered_owner_phases.clear();
+    assert!(matches!(
+        queue.authorize_autonomous_lane_replica_queue_disposition_during_startup(
+            &fifo_cursor,
+            fifo_keys,
+            &receipt,
+            &mismatched_snapshot,
+        ),
+        Err(LaneQueueReservationError::InvalidIdentity(ref reason))
+            if reason.contains("stale startup reconciliation receipt or snapshot")
+    ));
+
+    let fifo_disposition = queue
+        .authorize_autonomous_lane_replica_queue_disposition_during_startup(
+            &fifo_cursor,
+            fifo_keys,
+            &receipt,
+            &snapshot,
+        )
+        .expect("authorize exact replay-authenticated ordinary FIFO cut")
+        .consume_for_kura(&fifo_cursor, fifo_keys)
+        .expect("consume exact FIFO authorization against the same cursor and keys");
+    assert!(matches!(
+        fifo_disposition,
+        AutonomousLaneReplicaQueueDisposition::ExactOrdinaryFifo(_)
+    ));
+
+    let absent_keys = &absent_payload.payload.reservation_keys;
+    let absent_disposition = queue
+        .authorize_autonomous_lane_replica_queue_disposition_during_startup(
+            &absent_cursor,
+            absent_keys,
+            &receipt,
+            &snapshot,
+        )
+        .expect("authorize exact replay-authenticated strict Queue absence")
+        .consume_for_kura(&absent_cursor, absent_keys)
+        .expect("consume exact absence authorization against the same cursor and keys");
+    assert!(matches!(
+        absent_disposition,
+        AutonomousLaneReplicaQueueDisposition::StrictQueueAbsent(_)
+    ));
+    assert!(queue.lane_reservation_startup_reconciliation_pending());
+    assert_eq!(
+        queue
+            .lane_reservation_reconciliation_snapshot()
+            .expect("recapture startup replica reconciliation snapshot"),
+        snapshot
+    );
 }

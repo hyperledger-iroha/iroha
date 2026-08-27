@@ -85,7 +85,6 @@ handshake counters and quota-aware telemetry:
 - `soranet_handshake_throttled_total`
 - `soranet_handshake_capacity_reject_total`
 - `soranet_handshake_throttled_remote_quota_total`
-- `soranet_handshake_throttled_descriptor_quota_total`
 - `soranet_handshake_throttled_cooldown_total`
 - `soranet_handshake_pow_difficulty`
 - `soranet_abuse_remote_cooldowns`

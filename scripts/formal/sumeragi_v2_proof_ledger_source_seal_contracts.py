@@ -660,7 +660,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'kura/tests/01_prune_capacity_support.rs',
         'kura/tests/01a_retained_eviction_and_rewrite_tail.rs',
         'kura/tests/02_replacement_and_preflight.rs',
-        'kura/tests/02a_unauthenticated_preflight.rs',
+        'kura/tests/02a_fresh_single_lane_preflight.rs',
         'kura/tests/03_preflight_and_merge_entry.rs',
         'kura/tests/03a_preflight_and_merge_entry_tail.rs',
         'kura/tests/04_merge_log_and_associations.rs',

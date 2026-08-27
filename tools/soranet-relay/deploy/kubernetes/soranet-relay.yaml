@@ -20,7 +20,6 @@ data:
         "private_key_path": "/etc/soranet/relay/secrets/server.key"
       },
       "pow": {
-        "required": true,
         "difficulty": 6,
         "max_future_skew_secs": 600,
         "min_ticket_ttl_secs": 45,

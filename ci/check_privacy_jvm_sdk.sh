@@ -204,15 +204,26 @@ if [[ ! -f "${PRIVACY_CORE_JVM_JAR}" ]]; then
   echo "core-jvm dependency was not built at ${PRIVACY_CORE_JVM_JAR}." >&2
   exit 1
 fi
+NORITO_PROJECT_DIR="${ROOT_DIR}/java/norito_java"
+NORITO_RUNTIME_CLASSPATH_FILE="${NORITO_PROJECT_DIR}/build/runtime-classpath.txt"
+"${ROOT_DIR}/java/iroha_android/gradlew" --no-daemon -q \
+  -p "${NORITO_PROJECT_DIR}" writeRuntimeClasspath
+[[ -s "${NORITO_RUNTIME_CLASSPATH_FILE}" ]] \
+  || fail "Norito runtime classpath was not written"
+NORITO_RUNTIME_CLASSPATH="$(<"${NORITO_RUNTIME_CLASSPATH_FILE}")"
+[[ -n "${NORITO_RUNTIME_CLASSPATH}" ]] \
+  || fail "Norito runtime classpath is empty"
 javac \
-  -cp "${PRIVACY_CORE_JVM_JAR}" \
+  -cp "${PRIVACY_CORE_JVM_JAR}:${NORITO_RUNTIME_CLASSPATH}" \
   -sourcepath "java/iroha_android/src/main/java:java/iroha_android/src/test/java:java/norito_java/src/main/java" \
   -d "${JAVA_OUT}" \
   java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridgeTest.java \
   java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/VerifyingKeyInstructionUtilsTests.java
-java -ea -Djava.library.path="${NATIVE_LIBRARY_DIR}" -cp "${JAVA_OUT}:${PRIVACY_CORE_JVM_JAR}" \
+java -ea -Djava.library.path="${NATIVE_LIBRARY_DIR}" \
+  -cp "${JAVA_OUT}:${PRIVACY_CORE_JVM_JAR}:${NORITO_RUNTIME_CLASSPATH}" \
   org.hyperledger.iroha.android.privacy.PrivacyNativeBridgeTest
-java -ea -Djava.library.path="${NATIVE_LIBRARY_DIR}" -cp "${JAVA_OUT}:${PRIVACY_CORE_JVM_JAR}" \
+java -ea -Djava.library.path="${NATIVE_LIBRARY_DIR}" \
+  -cp "${JAVA_OUT}:${PRIVACY_CORE_JVM_JAR}:${NORITO_RUNTIME_CLASSPATH}" \
   org.hyperledger.iroha.android.model.instructions.VerifyingKeyInstructionUtilsTests
 
 "${PYTHON_BIN}" -I -S "${ABI22_CHECKER}" verify \

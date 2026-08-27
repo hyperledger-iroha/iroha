@@ -60,21 +60,10 @@ public final class NoritoAdapters {
   }
 
   /**
-   * Adapter for Rust {@code #[norito(transparent)]} newtypes.
+   * Adapter for Rust {@code #[norito(transparent)]} newtypes with a Java wrapper type.
    *
    * <p>Transparent wrappers encode exactly like their inner value. They do not add a struct field
    * frame or any additional length prefix.
-   */
-  public static <T> TypeAdapter<T> transparent(TypeAdapter<T> inner) {
-    return transparent(inner, Function.identity(), Function.identity());
-  }
-
-  /**
-   * Adapter for Rust {@code #[norito(transparent)]} newtypes with a distinct Java wrapper type.
-   *
-   * <p>Use this for Java models that wrap an inner Norito value. It delegates directly to the inner
-   * adapter, so callers still add the usual outer field delimiter when this transparent type appears
-   * as a field of a struct or variant.
    */
   public static <T, U> TypeAdapter<T> transparent(
       TypeAdapter<U> inner,
@@ -85,10 +74,6 @@ public final class NoritoAdapters {
 
   public static <T> TypeAdapter<Optional<T>> option(TypeAdapter<T> inner) {
     return new OptionAdapter<>(inner);
-  }
-
-  public static <T, E> TypeAdapter<Result<T, E>> result(TypeAdapter<T> ok, TypeAdapter<E> err) {
-    return new ResultAdapter<>(ok, err);
   }
 
   public static <T> TypeAdapter<List<T>> sequence(TypeAdapter<T> element) {
@@ -484,70 +469,6 @@ public final class NoritoAdapters {
         throw new IllegalArgumentException("Trailing bytes after Option payload");
       }
       return Optional.of(value);
-    }
-
-    @Override
-    public boolean isSelfDelimiting() {
-      return true;
-    }
-  }
-
-  private static final class ResultAdapter<T, E> implements TypeAdapter<Result<T, E>> {
-    private final TypeAdapter<T> ok;
-    private final TypeAdapter<E> err;
-
-    private ResultAdapter(TypeAdapter<T> ok, TypeAdapter<E> err) {
-      this.ok = ok;
-      this.err = err;
-    }
-
-    @Override
-    public void encode(NoritoEncoder encoder, Result<T, E> value) {
-      if (value instanceof Result.Ok<T, E> okValue) {
-        encoder.writeByte(0);
-        NoritoEncoder child = encoder.childEncoder();
-        ok.encode(child, okValue.value());
-        byte[] payload = child.toByteArray();
-        boolean compact = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
-        encoder.writeLength(payload.length, compact);
-        encoder.writeBytes(payload);
-      } else if (value instanceof Result.Err<T, E> errValue) {
-        encoder.writeByte(1);
-        NoritoEncoder child = encoder.childEncoder();
-        err.encode(child, errValue.error());
-        byte[] payload = child.toByteArray();
-        boolean compact = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
-        encoder.writeLength(payload.length, compact);
-        encoder.writeBytes(payload);
-      } else {
-        throw new IllegalArgumentException("Unknown Result variant");
-      }
-    }
-
-    @Override
-    public Result<T, E> decode(NoritoDecoder decoder) {
-      int tag = decoder.readByte();
-      if (tag != 0 && tag != 1) {
-        throw new IllegalArgumentException("Invalid Result tag: " + tag);
-      }
-      long length = decoder.readLength(decoder.compactLenActive());
-      if (length > Integer.MAX_VALUE) {
-        throw new IllegalArgumentException("Result payload too large");
-      }
-      byte[] payload = decoder.readBytes((int) length);
-      NoritoDecoder child = new NoritoDecoder(payload, decoder.flags());
-      Object value = tag == 0 ? ok.decode(child) : err.decode(child);
-      if (child.remaining() != 0) {
-        throw new IllegalArgumentException("Trailing bytes after Result payload");
-      }
-      if (tag == 0) {
-        @SuppressWarnings("unchecked")
-        T okValue = (T) value;
-        return new Result.Ok<>(okValue);
-      }
-      @SuppressWarnings("unchecked")
-      E errValue = (E) value;
-      return new Result.Err<>(errValue);
     }
 
     @Override

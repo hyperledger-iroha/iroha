@@ -323,23 +323,30 @@ pub(in crate::sumeragi) fn certified_serve_inbound(
 struct SaturatedCompletionRuntime {
     queued: usize,
     capacity: usize,
+    admits_network_ingress: bool,
     next_lifecycle_ordinal: u128,
     effect_owners: BTreeMap<Hash, crate::sumeragi::v2_runtime::RuntimeEffectOwnerAssignment>,
+    exact_effect_ownership: Option<(AdapterEffect, RuntimeEffectOwnership)>,
     external_lifecycle_owners: Vec<RuntimeLifecycleOwner>,
     external_lifecycle_owner_capacity: Option<usize>,
-    exact_effect_ownership: Option<(AdapterEffect, RuntimeEffectOwnership)>,
 }
 impl SaturatedCompletionRuntime {
     fn new(queued: usize, capacity: usize) -> Self {
         Self {
             queued,
             capacity,
+            admits_network_ingress: false,
             next_lifecycle_ordinal: 1,
             effect_owners: BTreeMap::new(),
+            exact_effect_ownership: None,
             external_lifecycle_owners: Vec::new(),
             external_lifecycle_owner_capacity: None,
-            exact_effect_ownership: None,
         }
+    }
+    fn admitting_network_ingress(queued: usize, capacity: usize) -> Self {
+        let mut runtime = Self::new(queued, capacity);
+        runtime.admits_network_ingress = true;
+        runtime
     }
     fn reject_completion() -> Result<(), EnqueueError> {
         Err(EnqueueError::Full)
@@ -427,12 +434,15 @@ impl EffectRuntime for SaturatedCompletionRuntime {
     fn can_admit_network_message_with_ingress_ownership(
         &self,
         message: &wire::ConsensusMessageV2,
-        _ingress_ownership: &FairV2IngressOwnershipEvidence,
+        ingress_ownership: &FairV2IngressOwnershipEvidence,
     ) -> bool {
-        matches!(
-            &message.payload,
-            wire::ConsensusMessageV2Payload::PayloadChunk(_)
-        )
+        self.admits_network_ingress
+            && matches!(
+                &message.payload,
+                wire::ConsensusMessageV2Payload::PayloadChunk(_)
+            )
+            && ingress_ownership.validate_exact()
+            && ingress_ownership.matches_message(&BlockMessage::V2(message.clone()))
     }
 
     fn step_effects(&mut self, _now: Instant) -> Result<RuntimeStep<AdapterEffect>, String> {
@@ -454,7 +464,9 @@ impl EffectRuntime for SaturatedCompletionRuntime {
             {
                 return Ok(vec![ownership]);
             }
-            return Err("saturated exact effect ownership changed before transfer".to_owned());
+            return Err(
+                "saturated runtime exact effect ownership changed before transfer".to_owned(),
+            );
         }
         let ownership = effects
             .iter()

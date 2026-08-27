@@ -203,12 +203,11 @@ Relay admission layers bounded defenses on top of the mandatory PoW check:
   requirement via the `soranet_handshake_pow_difficulty{mode=…}` Prometheus gauge.
 - **Per-hop quotas.** Handshake bursts per remote IP are capped (`pow.quotas`), with optional
   hop-specific overrides exposed via `pow.quotas_per_mode` so entry, middle, and exit relays
-  can enforce independent ceilings. `per_descriptor_burst` is retired and must be zero: the
-  descriptor commitment is relay-static and therefore cannot isolate clients before
-  authentication. The descriptor counter/gauge names remain for telemetry compatibility but
-  stay zero. Exhausting a remote quota increments its Prometheus counter, updates the live
-  cooldown gauge, and records a compliance log entry including a structured `throttle`
-  payload that captures the enforced scope, cooldown, burst limit, and observation window.
+  can enforce independent ceilings. The relay-static descriptor cannot isolate unauthenticated
+  clients, so the schema has no descriptor quota. Exhausting a remote quota increments its
+  Prometheus counter, updates the live cooldown gauge, and records a compliance log entry
+  including a structured `throttle` payload that captures the enforced scope, cooldown, burst
+  limit, and observation window.
 - **Emergency throttles.** Directory consensus can ship an emergency throttle list via
   `pow.emergency`. The relay periodically reloads the file (or inline `descriptor_commit_hex`
   list) and rejects handshakes whose descriptor commitments appear in the set. These events
@@ -226,9 +225,8 @@ Relay admission layers bounded defenses on top of the mandatory PoW check:
   fast first-time outcomes never allocate detector state.
 - **Credential replay.** Replay consumption is keyed only by the verified PoW ticket,
   signed puzzle ticket, admission-token, or VPN helper-ticket identity and uses the
-  corresponding bounded durable store. The retired `pow.replay_filter` field remains in the
-  schema only so old configuration fails clearly: `enabled = true` is rejected because the
-  descriptor commitment is relay-static rather than a per-client nonce.
+  corresponding bounded durable store. The schema has no descriptor replay filter; stale
+  `pow.replay_filter` input is rejected as an unknown field.
 
 The bounded thresholds are configurable in the relay JSON (`pow.quotas`,
 `pow.quotas_per_mode`, `pow.slowloris`) so deployments can tune the policy to
@@ -236,17 +234,14 @@ their client population without changing ticket difficulty at runtime.
 
 ### Argon2 Puzzle Service (SNNet-6a)
 
-SNNet-16D the Argon2 path ships as mandatory first-release admission policy:
-`pow.required` is always true, the puzzle gate remains enabled, and the
-first-release default difficulty is `6`. Difficulty zero is rejected because
+SNNet-16D ships one mandatory first-release admission policy: the Argon2 puzzle
+gate is always present and the default difficulty is `6`. The schema has no
+admission or puzzle enable toggle. Difficulty zero is rejected because
 it would make the relay pay the Argon2 verification cost without requiring
-client work. Startup
-configuration normalizes to that policy, and live `/v1/config` updates reject
-attempts to disable PoW or clear the puzzle gate. The relay verifies the incoming
+client work. The relay verifies the incoming
 ticket by hashing the client solution against the descriptor commitment with
 Argon2id. Tickets retain the exact same on-wire layout
-(version/difficulty/expiry/nonces) so clients can submit a single frame regardless
-of which policy a relay enforces.
+(version/difficulty/expiry/nonces), whether carried directly or inside a signed-ticket envelope.
 
 - **Parameters.** Operators control the Argon2 cost factors via
   `pow.puzzle.memory_kib` (RAM in KiB), `pow.puzzle.time_cost` (iterations), and
@@ -1060,7 +1055,7 @@ from configured spool roots; the software intentionally does not delete them.
 ### Torii CLI helpers
 
 - `iroha app sorafs handshake show` fetches `/v1/config` and prints the live descriptor commit, capability vectors, negotiated suite identifiers, resume hash, and PoW admission window. Operators can diff this output against the directory bundle before rotating relays.
-- `iroha app sorafs handshake update --descriptor-commit <hex> --client-capabilities <hex> --relay-capabilities <hex> --resume-hash <hex> --pow-required --pow-difficulty <u8> ...` submits a partial update via `/v1/config`. The command can rotate descriptors, capabilities, resume hashes, PoW timing/cost parameters, and SM matching back to the mandatory strict policy; it does not expose flags that make PoW optional, disable the Argon2 puzzle, or allow SM/OpenSSL preview mismatches. Argon2 updates are accepted only within the fixed first-release corridor (`memory_kib` 4096–131072, `time_cost` 1–8, `lanes` 1–16, difficulty 1–32). `--clear-resume-hash` removes the advertisement entirely. The command reuses the existing logger settings so the update remains idempotent with other config knobs. These settings remain local to the node: Iroha does not accept or gossip runtime handshake-policy updates over P2P.
+- `iroha app sorafs handshake update --descriptor-commit <hex> --client-capabilities <hex> --relay-capabilities <hex> --resume-hash <hex> --pow-difficulty <u8> ...` submits a partial update via `/v1/config`. The command can rotate descriptors, capabilities, resume hashes, PoW timing/cost parameters, and SM matching; it exposes no admission, puzzle, or SM relaxation toggle. Argon2 updates are accepted only within the fixed first-release corridor (`memory_kib` 4096–131072, `time_cost` 1–8, `lanes` 1–16, difficulty 1–32). `--clear-resume-hash` removes the advertisement entirely. The command reuses the existing logger settings so the update remains idempotent with other config knobs. These settings remain local to the node: Iroha does not accept or gossip runtime handshake-policy updates over P2P.
 
 ## Open Design Items
 

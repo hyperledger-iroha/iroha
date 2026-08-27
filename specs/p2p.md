@@ -293,6 +293,9 @@ relay_hub_addresses = ["hub1.example.com:1337", "hub2.example.com:1337"]
 - Address preference (default): hostname first, then IPv6, then IPv4.
 - Stagger interval: configurable via `[network]` as `happy_eyeballs_stagger_ms` (default 100ms). Increase if you have very large peer lists and want to further reduce burst dials; decrease for faster failover on slow networks.
 - Per-address backoff: failed attempts back off independently per address with exponential jitter (up to 5s), avoiding stampedes.
+- A failed configured-peer dial retains exactly one pending retry at its backoff deadline. Reconnection therefore does not depend on a later topology update, gossip tick, or outbound application frame.
+- Replacing the peer-address snapshot revokes pending retries and backoff state for superseded endpoints; every due retry revalidates its exact `(PeerId, address)` before dialing.
+- A later termination from a superseded or differently advertised endpoint cannot restore that endpoint's authority. If the same configured identity still has a current endpoint, the actor schedules that replacement immediately through the normal topology, ACL, validator-roster, hub, and capacity gates.
 
 ### SCION Capability Dialing
 
