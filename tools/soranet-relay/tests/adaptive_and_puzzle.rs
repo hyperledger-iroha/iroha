@@ -165,9 +165,8 @@ fn static_difficulty_outcome_replay_is_deterministic() {
     pow_cfg.apply_defaults().expect("pow defaults");
     let metrics_primary = Arc::new(Metrics::new());
     let metrics_replay = Arc::new(Metrics::new());
-    let controls_primary =
-        DoSControls::new(&pow_cfg, None, metrics_primary, RelayMode::Entry)
-            .expect("primary dos controls");
+    let controls_primary = DoSControls::new(&pow_cfg, None, metrics_primary, RelayMode::Entry)
+        .expect("primary dos controls");
     let controls_replay = DoSControls::new(&pow_cfg, None, metrics_replay, RelayMode::Entry)
         .expect("replay dos controls");
     let remote: SocketAddr = "192.0.2.200:7555".parse().expect("valid socket addr");

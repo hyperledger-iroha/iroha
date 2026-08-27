@@ -747,8 +747,7 @@ where
             if self.entries.len() >= self.params.max_entries {
                 self.cleanup(now);
             }
-            if self.entries.len() >= self.params.max_entries
-                || self.entries.try_reserve(1).is_err()
+            if self.entries.len() >= self.params.max_entries || self.entries.try_reserve(1).is_err()
             {
                 return Err(self.params.cooldown);
             }
@@ -785,8 +784,7 @@ where
             if self.entries.len() >= self.params.max_entries {
                 self.cleanup(now);
             }
-            if self.entries.len() >= self.params.max_entries
-                || self.entries.try_reserve(1).is_err()
+            if self.entries.len() >= self.params.max_entries || self.entries.try_reserve(1).is_err()
             {
                 return;
             }
@@ -799,7 +797,10 @@ where
         entry.window_start = now;
         entry.count = 0;
         let had_cached_cooldown = entry.cooldown.is_some();
-        if entry.cooldown.is_none_or(|current| current.remaining(now) < cooldown) {
+        if entry
+            .cooldown
+            .is_none_or(|current| current.remaining(now) < cooldown)
+        {
             entry.cooldown = Some(RateCooldown::new(now, cooldown));
             if !had_cached_cooldown {
                 self.active_cooldowns = self.active_cooldowns.saturating_add(1);
@@ -1006,12 +1007,7 @@ mod tests {
     }
     #[test]
     fn rate_limiter_batches_cleanup_between_admissions() {
-        let params = RateLimitParams::new(
-            Duration::from_secs(60),
-            4,
-            Duration::from_secs(20),
-            16,
-        );
+        let params = RateLimitParams::new(Duration::from_secs(60), 4, Duration::from_secs(20), 16);
         let mut limiter = RateLimiter::new(params);
         let now = Instant::now();
         limiter
@@ -1030,12 +1026,7 @@ mod tests {
     }
     #[test]
     fn rate_limiter_forces_cleanup_before_capacity_rejection() {
-        let params = RateLimitParams::new(
-            Duration::from_secs(1),
-            1,
-            Duration::from_secs(1),
-            1,
-        );
+        let params = RateLimitParams::new(Duration::from_secs(1), 1, Duration::from_secs(1), 1);
         let mut limiter = RateLimiter::new(params);
         let now = Instant::now();
         let stale = IpAddr::from([127, 0, 0, 1]);
@@ -1082,9 +1073,8 @@ mod tests {
             ..PowConfig::default()
         };
         pow_cfg.apply_defaults().expect("pow defaults");
-        let controls =
-            DoSControls::new(&pow_cfg, None, Arc::clone(&metrics), RelayMode::Entry)
-                .expect("dos controls");
+        let controls = DoSControls::new(&pow_cfg, None, Arc::clone(&metrics), RelayMode::Entry)
+            .expect("dos controls");
         let remote: SocketAddr = "127.0.0.1:2000".parse().expect("remote addr");
         controls.begin(remote, None).expect("first attempt allowed");
         let throttle = controls
@@ -1114,9 +1104,8 @@ mod tests {
             ..PowConfig::default()
         };
         pow_cfg.apply_defaults().expect("pow defaults");
-        let controls =
-            DoSControls::new(&pow_cfg, None, Arc::clone(&metrics), RelayMode::Entry)
-                .expect("dos controls");
+        let controls = DoSControls::new(&pow_cfg, None, Arc::clone(&metrics), RelayMode::Entry)
+            .expect("dos controls");
         let remote: SocketAddr = "127.0.0.20:2000".parse().expect("remote addr");
         let other: SocketAddr = "127.0.0.21:2000".parse().expect("remote addr");
         let now = Instant::now();
@@ -1158,8 +1147,8 @@ mod tests {
             ..PowConfig::default()
         };
         pow_cfg.apply_defaults().expect("pow defaults");
-        let controls = DoSControls::new(&pow_cfg, None, metrics, RelayMode::Entry)
-            .expect("dos controls");
+        let controls =
+            DoSControls::new(&pow_cfg, None, metrics, RelayMode::Entry).expect("dos controls");
         let remote: SocketAddr = "127.0.0.22:2000".parse().expect("remote addr");
         let now = Instant::now();
         let attempt = controls
@@ -1195,8 +1184,8 @@ mod tests {
             ..PowConfig::default()
         };
         pow_cfg.apply_defaults().expect("pow defaults");
-        let controls = DoSControls::new(&pow_cfg, None, metrics, RelayMode::Entry)
-            .expect("dos controls");
+        let controls =
+            DoSControls::new(&pow_cfg, None, metrics, RelayMode::Entry).expect("dos controls");
         let remote: SocketAddr = "127.0.0.23:2000".parse().expect("remote addr");
         let other: SocketAddr = "127.0.0.24:2000".parse().expect("remote addr");
         let now = Instant::now();
@@ -1225,8 +1214,8 @@ mod tests {
             ..PowConfig::default()
         };
         pow_cfg.apply_defaults().expect("pow defaults");
-        let controls = DoSControls::new(&pow_cfg, None, metrics, RelayMode::Entry)
-            .expect("dos controls");
+        let controls =
+            DoSControls::new(&pow_cfg, None, metrics, RelayMode::Entry).expect("dos controls");
         let address = std::net::Ipv4Addr::new(192, 0, 2, 9);
         let ipv4 = SocketAddr::new(IpAddr::V4(address), 2_000);
         let mapped = SocketAddr::new(IpAddr::V6(address.to_ipv6_mapped()), 2_001);
@@ -1250,8 +1239,7 @@ mod tests {
         };
         pow_cfg.apply_defaults().expect("pow defaults");
         let controls = Arc::new(
-            DoSControls::new(&pow_cfg, None, metrics, RelayMode::Entry)
-            .expect("dos controls"),
+            DoSControls::new(&pow_cfg, None, metrics, RelayMode::Entry).expect("dos controls"),
         );
         let poison_target = Arc::clone(&controls);
         let poisoned = std::thread::spawn(move || {
@@ -1288,8 +1276,7 @@ mod tests {
         };
         pow_cfg.apply_defaults().expect("pow defaults");
         let controls = Arc::new(
-            DoSControls::new(&pow_cfg, None, metrics, RelayMode::Entry)
-            .expect("dos controls"),
+            DoSControls::new(&pow_cfg, None, metrics, RelayMode::Entry).expect("dos controls"),
         );
         let first_remote: SocketAddr = "127.0.0.11:2000".parse().expect("remote addr");
         let attempt = controls
@@ -1405,9 +1392,8 @@ mod tests {
             ..PowConfig::default()
         };
         pow_cfg.apply_defaults().expect("pow defaults");
-        let controls =
-            DoSControls::new(&pow_cfg, None, Arc::clone(&metrics), RelayMode::Entry)
-                .expect("dos controls");
+        let controls = DoSControls::new(&pow_cfg, None, Arc::clone(&metrics), RelayMode::Entry)
+            .expect("dos controls");
         let remote: SocketAddr = "127.0.0.3:3030".parse().expect("remote addr");
         let throttle = controls
             .begin(remote, Some(&descriptor))
@@ -1435,7 +1421,7 @@ mod tests {
         pow_cfg.apply_defaults().expect("pow defaults");
         let controls = Arc::new(
             DoSControls::new(&pow_cfg, None, Arc::clone(&metrics), RelayMode::Entry)
-            .expect("dos controls"),
+                .expect("dos controls"),
         );
         let poison_target = Arc::clone(&controls);
         let poisoned = std::thread::spawn(move || {
@@ -1472,15 +1458,11 @@ mod tests {
         };
         pow_cfg.apply_defaults().expect("pow defaults");
 
-        let error = match DoSControls::new(
-            &pow_cfg,
-            None,
-            Arc::new(Metrics::new()),
-            RelayMode::Entry,
-        ) {
-            Ok(_) => panic!("missing configured emergency document must prevent startup"),
-            Err(error) => error,
-        };
+        let error =
+            match DoSControls::new(&pow_cfg, None, Arc::new(Metrics::new()), RelayMode::Entry) {
+                Ok(_) => panic!("missing configured emergency document must prevent startup"),
+                Err(error) => error,
+            };
         assert!(
             matches!(
                 &error,
@@ -1548,8 +1530,8 @@ mod tests {
         pow_cfg.apply_defaults().expect("defaults");
         let quotas = pow_cfg.quotas_for_mode(RelayMode::Entry);
         assert_eq!(quotas.per_remote_burst, pow_cfg.quotas.per_remote_burst);
-        let controls = DoSControls::new(&pow_cfg, None, metrics, RelayMode::Entry)
-            .expect("dos controls");
+        let controls =
+            DoSControls::new(&pow_cfg, None, metrics, RelayMode::Entry).expect("dos controls");
         let params = controls.current_puzzle_parameters();
         assert_eq!(params.difficulty(), 6);
         assert_eq!(params.memory_kib().get(), 4096);

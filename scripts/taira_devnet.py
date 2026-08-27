@@ -421,7 +421,6 @@ INROU_CANARY_CLI_SURFACES: tuple[
         "iroha",
         ("taira", "write-canary"),
         (
-            "--use-config-signer",
             "--operation",
             "--public-root",
             "--onboarding-token-file",
@@ -5599,7 +5598,6 @@ def _base_write_canary_command(
         "write-canary",
         "--public-root",
         public_root,
-        "--use-config-signer",
         "--operation",
         operation_cli,
         "--authorization-sha256",

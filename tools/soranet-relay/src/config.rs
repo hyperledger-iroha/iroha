@@ -2333,10 +2333,7 @@ impl PuzzleConfig {
         }
         Ok(())
     }
-    fn parameters(
-        &self,
-        base: &pow::Parameters,
-    ) -> Result<puzzle::Parameters, ConfigError> {
+    fn parameters(&self, base: &pow::Parameters) -> Result<puzzle::Parameters, ConfigError> {
         let memory = NonZeroU32::new(self.memory_kib).ok_or_else(|| {
             ConfigError::Puzzle("pow.puzzle.memory_kib must be non-zero".to_string())
         })?;
@@ -2353,9 +2350,7 @@ impl PuzzleConfig {
             base.max_future_skew(),
             base.min_ticket_ttl(),
         )
-        .map_err(|err| {
-            ConfigError::Puzzle(format!("invalid pow.puzzle timing parameters: {err}"))
-        })
+        .map_err(|err| ConfigError::Puzzle(format!("invalid pow.puzzle timing parameters: {err}")))
     }
 }
 /// Admission token configuration for bypassing puzzles.

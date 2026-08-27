@@ -6863,7 +6863,6 @@ impl SoranetHandshakePow {
             usize::try_from(revocation_store_capacity.max(1)).unwrap_or(usize::MAX);
         let revocation_max_ttl = Duration::from_secs(revocation_store_ttl_secs.max(1));
         actual::SoranetPow {
-            required: true,
             difficulty,
             max_future_skew,
             min_ticket_ttl,
@@ -6873,7 +6872,7 @@ impl SoranetHandshakePow {
             revocation_store_capacity,
             revocation_max_ttl,
             revocation_store_path: revocation_store_path.to_string_lossy().into_owned().into(),
-            puzzle: Some(puzzle.parse()),
+            puzzle: puzzle.parse(),
         }
     }
 }

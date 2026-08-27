@@ -630,8 +630,7 @@ impl PuzzleService {
         transcript_hash: [u8; 32],
         rng: &mut R,
     ) -> Result<PowTicket, ChallengeMintError> {
-        let binding =
-            PuzzleBinding::new(&self.descriptor_commit, &self.relay_id, &transcript_hash);
+        let binding = PuzzleBinding::new(&self.descriptor_commit, &self.relay_id, &transcript_hash);
         puzzle::mint_ticket(&self.puzzle_params, &binding, ttl, rng)
             .map_err(ChallengeMintError::Puzzle)
     }
@@ -2646,13 +2645,8 @@ mod tests {
             &service.relay_id,
             &transcript_hash,
         );
-        puzzle::verify_signed_ticket(
-            &signed,
-            &public,
-            &binding,
-            &service.puzzle_params,
-        )
-        .expect("signed ticket should verify");
+        puzzle::verify_signed_ticket(&signed, &public, &binding, &service.puzzle_params)
+            .expect("signed ticket should verify");
     }
     #[tokio::test]
     async fn http_mint_signed_ticket_returns_signed_payload() {
@@ -2683,13 +2677,8 @@ mod tests {
         let signed_bytes = STANDARD.decode(signed_b64).expect("decode signed ticket");
         let signed = SignedTicket::decode(&signed_bytes).expect("decode signed ticket");
         let binding = PuzzleBinding::new(&state.descriptor_commit, &state.relay_id, &[0x11; 32]);
-        puzzle::verify_signed_ticket(
-            &signed,
-            &public,
-            &binding,
-            &state.puzzle_params,
-        )
-        .expect("signed ticket verifies");
+        puzzle::verify_signed_ticket(&signed, &public, &binding, &state.puzzle_params)
+            .expect("signed ticket verifies");
         assert_eq!(
             fingerprint,
             hex::encode(signed.revocation_fingerprint()),

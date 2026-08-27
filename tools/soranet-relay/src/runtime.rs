@@ -1,6 +1,8 @@
 //! Runtime orchestration for the relay daemon.
 #![allow(unexpected_cfgs)]
 use bytes::Bytes;
+#[cfg(test)]
+use iroha_crypto::soranet::pow::Parameters as PowParameters;
 use iroha_crypto::{
     Algorithm, KeyPair, PrivateKey, PublicKey,
     soranet::{
@@ -23,8 +25,6 @@ use iroha_crypto::{
         token::{self, AdmissionToken, DecodeError as TokenDecodeError},
     },
 };
-#[cfg(test)]
-use iroha_crypto::soranet::pow::Parameters as PowParameters;
 #[cfg(unix)]
 use std::os::unix::fs::{FileTypeExt as _, MetadataExt as _, PermissionsExt as _};
 use std::{
@@ -5973,9 +5973,8 @@ impl RelayRuntime {
             vpn_helper_ticket = Some(helper_ticket);
             vpn_helper_ticket_frame = Some(first_frame);
         } else if has_token_policy && token::frame_looks_like_token(&first_frame) {
-            admission_token = Some(
-                AdmissionToken::decode(&first_frame).map_err(HandshakeError::TokenDecode)?,
-            );
+            admission_token =
+                Some(AdmissionToken::decode(&first_frame).map_err(HandshakeError::TokenDecode)?);
         } else if context.dos.signed_ticket_public_key().is_some() {
             pending_signed_puzzle_ticket =
                 Some(SignedTicket::decode(&first_frame).map_err(HandshakeError::Pow)?);

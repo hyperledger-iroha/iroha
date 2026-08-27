@@ -1272,8 +1272,6 @@ impl_default!(SoranetVpn => {
 /// PoW admission parameters shared with peers.
 #[derive(Debug, Clone)]
 pub struct SoranetPow {
-    /// Indicates whether PoW tickets are required for inbound circuits.
-    pub required: bool,
     /// Required number of leading zero bits in the ticket digest.
     pub difficulty: u8,
     /// Maximum allowed ticket expiry skew relative to the relay clock.
@@ -1295,8 +1293,8 @@ pub struct SoranetPow {
     pub revocation_max_ttl: Duration,
     /// Filesystem path for the revocation snapshot.
     pub revocation_store_path: Cow<'static, str>,
-    /// Optional puzzle parameters for Argon2-based challenges.
-    pub puzzle: Option<SoranetPuzzle>,
+    /// Puzzle parameters for mandatory Argon2-based challenges.
+    pub puzzle: SoranetPuzzle,
 }
 /// Argon2 puzzle parameters shared with peers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1341,7 +1339,6 @@ impl SoranetPow {
     /// Construct a PoW policy with explicit parameters.
     #[allow(clippy::too_many_arguments)]
     pub const fn new(
-        required: bool,
         difficulty: u8,
         max_future_skew: Duration,
         min_ticket_ttl: Duration,
@@ -1349,10 +1346,9 @@ impl SoranetPow {
         revocation_store_capacity: usize,
         revocation_max_ttl: Duration,
         revocation_store_path: Cow<'static, str>,
-        puzzle: Option<SoranetPuzzle>,
+        puzzle: SoranetPuzzle,
     ) -> Self {
         Self {
-            required,
             difficulty,
             max_future_skew,
             min_ticket_ttl,
@@ -1368,7 +1364,6 @@ impl SoranetPow {
     /// Default PoW admission policy applied when no override is supplied.
     pub const fn default_const() -> Self {
         Self {
-            required: true,
             difficulty: iroha_crypto::soranet::puzzle::DEFAULT_DIFFICULTY,
             max_future_skew: Duration::from_secs(300),
             min_ticket_ttl: Duration::from_secs(30),
@@ -1378,7 +1373,7 @@ impl SoranetPow {
             revocation_store_capacity: 8_192,
             revocation_max_ttl: Duration::from_secs(900),
             revocation_store_path: Cow::Borrowed("./storage/soranet/ticket_revocations.norito"),
-            puzzle: Some(SoranetPuzzle::default_const()),
+            puzzle: SoranetPuzzle::default_const(),
         }
     }
 }

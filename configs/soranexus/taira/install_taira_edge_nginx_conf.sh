@@ -206,13 +206,9 @@ http {
 }
 EOF
 
+  require_unchanged_nginx_binary
   "$NGINX_BIN" -t -c "$test_conf" -p "${test_dir}/"
-}
-
-target_needs_sudo_write() {
-  local dir
-  dir="$(dirname -- "$1")"
-  [[ ! -w "$dir" ]]
+  require_unchanged_nginx_binary
 }
 
 file_link_count() {
@@ -221,6 +217,7 @@ file_link_count() {
 }
 
 require_safe_target_directory() {
+  local group
   local owner
   local permissions
 
@@ -229,10 +226,11 @@ require_safe_target_directory() {
     return 1
   fi
   owner="$(stat -c '%u' "$target_dir" 2>/dev/null || stat -f '%u' "$target_dir")" || return 1
+  group="$(stat -c '%g' "$target_dir" 2>/dev/null || stat -f '%g' "$target_dir")" || return 1
   permissions="$(stat -c '%a' "$target_dir" 2>/dev/null || stat -f '%Lp' "$target_dir")" || return 1
-  if [[ "$owner" != 0 && "$owner" != "$EUID" ]] || \
+  if [[ "$owner" != "$SYSTEM_OWNER_UID" || "$group" != "$SYSTEM_OWNER_GID" ]] || \
      (( (8#$permissions & 8#022) != 0 )); then
-    echo "target nginx include directory must be root/operator-owned and non-writable by group/other: $target_dir" >&2
+    echo "target nginx include directory must be root-owned and non-writable by group/other: $target_dir" >&2
     return 1
   fi
 }
@@ -262,64 +260,231 @@ require_safe_target_leaf() {
   fi
 }
 
-copy_to_target_conf() {
-  local source_path="$1"
-  local candidate=""
-  local use_sudo=0
+stable_file_fingerprint() {
+  local path="$1"
 
-  require_safe_regular_file "$source_path" "nginx config source" || return 1
-  require_safe_target_leaf || return 1
-  if [[ ! -r "$source_path" ]] || target_needs_sudo_write "$TARGET_CONF"; then
-    use_sudo=1
-    candidate="$(sudo mktemp "${target_dir}/.taira-edge-install.XXXXXX")" || return 1
-    sudo chmod 0600 "$candidate" || return 1
-    sudo cp -pP "$source_path" "$candidate" || {
-      sudo rm -f "$candidate" || true
-      return 1
-    }
-  else
-    candidate="$(mktemp "${target_dir}/.taira-edge-install.XXXXXX")" || return 1
-    chmod 0600 "$candidate" || return 1
-    cp -pP "$source_path" "$candidate" || {
-      rm -f "$candidate" || true
-      return 1
-    }
-  fi
+  python3 - "$path" <<'PY'
+import hashlib
+import os
+import stat
+import sys
 
-  if ! require_safe_regular_file "$candidate" "nginx config candidate" || \
-     ! require_safe_target_leaf; then
-    if [[ $use_sudo -eq 1 ]]; then
-      sudo rm -f "$candidate" || true
-    else
-      rm -f "$candidate" || true
-    fi
+path = sys.argv[1]
+flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+try:
+    before = os.lstat(path)
+    if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+        raise OSError("not one direct regular file")
+    descriptor = os.open(path, flags)
+    try:
+        opened_before = os.fstat(descriptor)
+        digest = hashlib.sha256()
+        while chunk := os.read(descriptor, 1024 * 1024):
+            digest.update(chunk)
+        opened_after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    after = os.lstat(path)
+except OSError as error:
+    raise SystemExit(f"cannot read stable direct file {path}: {error}") from error
+
+def identity(value):
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+        value.st_uid,
+        value.st_gid,
+        stat.S_IMODE(value.st_mode),
+        value.st_nlink,
+    )
+
+snapshot = identity(before)
+if snapshot != identity(opened_before) or snapshot != identity(opened_after) or snapshot != identity(after):
+    raise SystemExit(f"direct file changed while it was read: {path}")
+
+print(":".join(str(value) for value in (*snapshot, digest.hexdigest())))
+PY
+}
+
+fingerprint_sha256() {
+  local fingerprint="$1"
+  printf '%s\n' "${fingerprint##*:}"
+}
+
+require_exact_file_metadata() {
+  local path="$1"
+  local label="$2"
+  local expected_mode="$3"
+  local group
+  local owner
+  local permissions
+
+  require_safe_regular_file "$path" "$label" || return 1
+  owner="$(stat -c '%u' "$path" 2>/dev/null || stat -f '%u' "$path")" || return 1
+  group="$(stat -c '%g' "$path" 2>/dev/null || stat -f '%g' "$path")" || return 1
+  permissions="$(stat -c '%a' "$path" 2>/dev/null || stat -f '%Lp' "$path")" || return 1
+  if [[ "$owner" != "$SYSTEM_OWNER_UID" || "$group" != "$SYSTEM_OWNER_GID" ]] || \
+     (( 8#$permissions != 8#$expected_mode )); then
+    echo "${label} must be root-owned with mode ${expected_mode}: $path" >&2
     return 1
   fi
-  if [[ $use_sudo -eq 1 ]]; then
-    if ! sudo mv -f "$candidate" "$TARGET_CONF"; then
-      sudo rm -f "$candidate" || true
-      return 1
-    fi
-  else
-    if ! mv -f "$candidate" "$TARGET_CONF"; then
-      rm -f "$candidate" || true
-      return 1
-    fi
+}
+
+fsync_path() {
+  local path="$1"
+  local expected_type="$2"
+
+  python3 - "$path" "$expected_type" <<'PY'
+import os
+import stat
+import sys
+
+path, expected_type = sys.argv[1:]
+flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+if expected_type == "directory":
+    flags |= getattr(os, "O_DIRECTORY", 0)
+try:
+    descriptor = os.open(path, flags)
+    try:
+        metadata = os.fstat(descriptor)
+        expected = stat.S_ISDIR(metadata.st_mode) if expected_type == "directory" else stat.S_ISREG(metadata.st_mode)
+        if not expected:
+            raise OSError(f"not a direct {expected_type}")
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+except OSError as error:
+    raise SystemExit(f"cannot durably sync {expected_type} {path}: {error}") from error
+PY
+}
+
+NGINX_BIN_FINGERPRINT=""
+
+require_safe_nginx_binary() {
+  local group
+  local owner
+  local permissions
+
+  require_safe_regular_file "$NGINX_BIN" "nginx executable" || return 1
+  if [[ ! -x "$NGINX_BIN" ]]; then
+    echo "nginx executable is not executable: $NGINX_BIN" >&2
+    return 1
   fi
+  owner="$(stat -c '%u' "$NGINX_BIN" 2>/dev/null || stat -f '%u' "$NGINX_BIN")" || return 1
+  group="$(stat -c '%g' "$NGINX_BIN" 2>/dev/null || stat -f '%g' "$NGINX_BIN")" || return 1
+  permissions="$(stat -c '%a' "$NGINX_BIN" 2>/dev/null || stat -f '%Lp' "$NGINX_BIN")" || return 1
+  if [[ "$owner" != "$SYSTEM_OWNER_UID" || "$group" != "$SYSTEM_OWNER_GID" ]] || \
+     (( (8#$permissions & 8#022) != 0 )); then
+    echo "nginx executable must be root-owned and non-writable by group/other: $NGINX_BIN" >&2
+    return 1
+  fi
+  NGINX_BIN_FINGERPRINT="$(stable_file_fingerprint "$NGINX_BIN")"
+}
+
+require_unchanged_nginx_binary() {
+  local current
+
+  current="$(stable_file_fingerprint "$NGINX_BIN")" || return 1
+  if [[ "$current" != "$NGINX_BIN_FINGERPRINT" ]]; then
+    echo "nginx executable changed during deployment: $NGINX_BIN" >&2
+    return 1
+  fi
+}
+
+require_expected_target_state() {
+  local expected="$1"
+  local current
+
+  if [[ "$expected" == "absent" ]]; then
+    if [[ -e "$TARGET_CONF" || -L "$TARGET_CONF" ]]; then
+      echo "target nginx config appeared before atomic publication: $TARGET_CONF" >&2
+      return 1
+    fi
+    return 0
+  fi
+  if [[ -z "$expected" ]]; then
+    require_safe_target_leaf
+    return
+  fi
+  current="$(stable_file_fingerprint "$TARGET_CONF")" || return 1
+  if [[ "$current" != "$expected" ]]; then
+    echo "target nginx config changed before atomic publication: $TARGET_CONF" >&2
+    return 1
+  fi
+}
+
+copy_to_target_conf() {
+  local source_path="$1"
+  local expected_target="${2:-}"
+  local candidate=""
+  local candidate_fingerprint
+  local source_after
+  local source_before
+  local target_fingerprint
+
+  require_safe_regular_file "$source_path" "nginx config source" || return 1
+  source_before="$(stable_file_fingerprint "$source_path")" || return 1
+  require_expected_target_state "$expected_target" || return 1
+
+  candidate="$(mktemp "${target_dir}/.taira-edge-install.XXXXXX")" || return 1
+  if ! cp "$source_path" "$candidate" || \
+     ! chown "${SYSTEM_OWNER_UID}:${SYSTEM_OWNER_GID}" "$candidate" || \
+     ! chmod 0644 "$candidate" || \
+     ! require_exact_file_metadata "$candidate" "nginx config candidate" 0644; then
+    rm -f "$candidate" || true
+    return 1
+  fi
+
+  source_after="$(stable_file_fingerprint "$source_path")" || {
+    rm -f "$candidate" || true
+    return 1
+  }
+  candidate_fingerprint="$(stable_file_fingerprint "$candidate")" || {
+    rm -f "$candidate" || true
+    return 1
+  }
+  if [[ "$source_before" != "$source_after" ]] || \
+     [[ "$(fingerprint_sha256 "$source_after")" != "$(fingerprint_sha256 "$candidate_fingerprint")" ]]; then
+    echo "nginx config source changed or was copied inconsistently: $source_path" >&2
+    rm -f "$candidate" || true
+    return 1
+  fi
+  if ! fsync_path "$candidate" file || ! require_expected_target_state "$expected_target"; then
+    rm -f "$candidate" || true
+    return 1
+  fi
+  if ! mv -f "$candidate" "$TARGET_CONF"; then
+    rm -f "$candidate" || true
+    return 1
+  fi
+  fsync_path "$target_dir" directory || return 1
+
+  require_exact_file_metadata "$TARGET_CONF" "installed nginx config" 0644 || return 1
+  target_fingerprint="$(stable_file_fingerprint "$TARGET_CONF")" || return 1
+  if [[ "$(fingerprint_sha256 "$target_fingerprint")" != "$(fingerprint_sha256 "$candidate_fingerprint")" ]]; then
+    echo "installed nginx config content differs from the durable candidate: $TARGET_CONF" >&2
+    return 1
+  fi
+  INSTALLED_CONF_FINGERPRINT="$target_fingerprint"
 }
 
 remove_target_conf() {
   require_safe_target_leaf || return 1
-  if [[ ! -w "$target_dir" ]]; then
-    sudo rm -f "$TARGET_CONF"
-  else
-    rm -f "$TARGET_CONF"
-  fi
+  rm -f "$TARGET_CONF"
+  fsync_path "$target_dir" directory
 }
 
 backup_target_conf() {
+  local backup_fingerprint
+  local target_after
+  local target_before
+
   TARGET_CONF_EXISTED=0
   INSTALL_BACKUP_CONF=""
+  BACKED_UP_TARGET_FINGERPRINT="absent"
 
   if [[ ! -e "$TARGET_CONF" && ! -L "$TARGET_CONF" ]]; then
     return 0
@@ -327,19 +492,37 @@ backup_target_conf() {
 
   require_safe_target_leaf
   TARGET_CONF_EXISTED=1
+  target_before="$(stable_file_fingerprint "$TARGET_CONF")"
   INSTALL_BACKUP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/taira-edge-nginx-install.XXXXXX")"
   INSTALL_BACKUP_CONF="${INSTALL_BACKUP_DIR}/previous.conf"
-  if [[ ! -r "$TARGET_CONF" ]]; then
-    sudo cp -pP "$TARGET_CONF" "$INSTALL_BACKUP_CONF"
-  else
-    cp -pP "$TARGET_CONF" "$INSTALL_BACKUP_CONF"
-  fi
+  cp "$TARGET_CONF" "$INSTALL_BACKUP_CONF"
+  chmod 0600 "$INSTALL_BACKUP_CONF"
   require_safe_regular_file "$INSTALL_BACKUP_CONF" "nginx config rollback copy"
+  target_after="$(stable_file_fingerprint "$TARGET_CONF")"
+  backup_fingerprint="$(stable_file_fingerprint "$INSTALL_BACKUP_CONF")"
+  if [[ "$target_before" != "$target_after" ]] || \
+     [[ "$(fingerprint_sha256 "$target_after")" != "$(fingerprint_sha256 "$backup_fingerprint")" ]]; then
+    echo "target nginx config changed or was copied inconsistently while making the rollback copy: $TARGET_CONF" >&2
+    return 1
+  fi
+  BACKED_UP_TARGET_FINGERPRINT="$target_after"
 }
 
 restore_target_conf() {
   require_safe_regular_file "$INSTALL_BACKUP_CONF" "nginx config rollback copy" || return 1
   copy_to_target_conf "$INSTALL_BACKUP_CONF"
+}
+
+require_unchanged_installed_conf() {
+  local phase="$1"
+  local current
+
+  require_exact_file_metadata "$TARGET_CONF" "installed nginx config" 0644 || return 1
+  current="$(stable_file_fingerprint "$TARGET_CONF")" || return 1
+  if [[ "$current" != "$INSTALLED_CONF_FINGERPRINT" ]]; then
+    echo "installed nginx config changed during ${phase}: $TARGET_CONF" >&2
+    return 1
+  fi
 }
 
 rollback_installed_conf() {
@@ -404,6 +587,10 @@ if [[ $INSTALL -eq 1 && ! -d "$target_dir" ]]; then
   exit 1
 fi
 if [[ $INSTALL -eq 1 ]]; then
+  if [[ $EUID -ne $SYSTEM_OWNER_UID ]]; then
+    echo "nginx config installation must run as root" >&2
+    exit 1
+  fi
   target_dir_logical="$(cd -L -- "$target_dir" && pwd -L)"
   target_dir_physical="$(cd -P -- "$target_dir" && pwd -P)"
   if [[ -L "$target_dir" || "$target_dir_logical" != "$target_dir_physical" ]]; then
@@ -414,24 +601,33 @@ if [[ $INSTALL -eq 1 ]]; then
   require_safe_target_leaf
 fi
 
+require_safe_nginx_binary
 validate_rendered_nginx_conf
 
 if [[ $INSTALL -eq 1 ]]; then
   backup_target_conf
   INSTALL_ROLLBACK_NEEDED=1
-  if ! copy_to_target_conf "$OUTPUT"; then
+  if ! copy_to_target_conf "$OUTPUT" "$BACKED_UP_TARGET_FINGERPRINT"; then
     echo "failed to install nginx config candidate: $TARGET_CONF" >&2
     exit 1
   fi
+  require_unchanged_nginx_binary
+  require_unchanged_installed_conf "pre-validation checks"
   if ! "$NGINX_BIN" -t; then
     echo "live nginx validation failed after installing candidate; rolling back: $TARGET_CONF" >&2
     exit 1
   fi
+  require_unchanged_nginx_binary
+  require_unchanged_installed_conf "live nginx validation"
   if [[ $RELOAD -eq 1 ]]; then
+    require_unchanged_nginx_binary
+    require_unchanged_installed_conf "pre-reload checks"
     if ! "$NGINX_BIN" -s reload; then
       echo "nginx reload failed after installing candidate; rolling back: $TARGET_CONF" >&2
       exit 1
     fi
+    require_unchanged_nginx_binary
+    require_unchanged_installed_conf "nginx reload"
     INSTALL_ROLLBACK_NEEDED=0
     echo "installed nginx config: $TARGET_CONF"
     echo "nginx reloaded"

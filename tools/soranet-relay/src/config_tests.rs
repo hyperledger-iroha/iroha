@@ -1619,7 +1619,10 @@ fn relay_config_rejects_retired_descriptor_replay_filter() {
     let json = config_fixture!("replay_filter.json");
     let path = write_config(json);
     let error = RelayConfig::load(path).expect_err("unsafe static-descriptor filter must fail");
-    assert!(matches!(error, ConfigError::Json(_)), "unexpected error: {error:?}");
+    assert!(
+        matches!(error, ConfigError::Json(_)),
+        "unexpected error: {error:?}"
+    );
     let message = error.to_string();
     assert!(message.contains("unknown field") && message.contains("replay_filter"));
 }

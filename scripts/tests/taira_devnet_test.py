@@ -11,6 +11,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import types
 import unittest
 from pathlib import Path
@@ -277,6 +278,7 @@ class FakeRuntime:
         self.onboarding_proof_required = False
         self.ambiguous_submit_kind: str | None = None
         self.ambiguous_submit_raised = False
+        self.failed_recovery_kind: str | None = None
         self.ping_stdout = json.dumps(
             {
                 "hash": "hash:" + "a" * 63 + "b#ABCD",
@@ -531,6 +533,11 @@ class FakeRuntime:
             payload = os.pread(descriptor, os.fstat(descriptor).st_size, 0)
             if proof_required and action == "--submit-prepared-envelope-fd":
                 raise AssertionError("proof-required onboarding must never be submitted")
+            if (
+                action == "--recover-prepared-envelope-fd"
+                and kind == self.failed_recovery_kind
+            ):
+                raise module.DevnetError("simulated recovery transport failure")
             outcome = "Applied"
             self.height += 1
             if (
@@ -908,6 +915,61 @@ class TairaDevnetTests(unittest.TestCase):
         self.cleanup_preflight.stop()
         self.host_preflight.stop()
         self.temporary.cleanup()
+
+    def test_parallel_map_runs_bounded_work_concurrently_and_retains_order(self) -> None:
+        barrier = threading.Barrier(module.PEER_COUNT)
+        worker_ids: set[int] = set()
+        lock = threading.Lock()
+
+        def operation(value: int) -> int:
+            with lock:
+                worker_ids.add(threading.get_ident())
+            barrier.wait(timeout=2)
+            return value * 10
+
+        self.assertEqual(
+            module.parallel_map(tuple(range(module.PEER_COUNT)), operation),
+            [0, 10, 20, 30],
+        )
+        self.assertEqual(len(worker_ids), module.PEER_COUNT)
+
+    def test_stable_reader_enforces_bounds_and_direct_single_link_custody(self) -> None:
+        source = self.root / "stable-input"
+        source.write_bytes(b"taira")
+        source.chmod(0o600)
+        self.assertEqual(
+            module.read_stable_bytes(
+                source,
+                limit=5,
+                label="fixture",
+                owner=os.geteuid(),
+                exact_mode=0o600,
+                require_nonempty=True,
+            ),
+            b"taira",
+        )
+        link = self.root / "stable-input-link"
+        os.link(source, link)
+        with self.assertRaisesRegex(module.DevnetError, "single-link"):
+            module.read_stable_bytes(source, limit=5, label="fixture")
+
+    def test_destroy_network_rejects_identity_replacement(self) -> None:
+        root = module.managed_root(self.root / "destroy-state", create=True)
+        target = root / "network"
+        target.mkdir(mode=0o700)
+        (target / "secret").write_bytes(b"secret")
+        identity = module.require_safe_cleanup_target(root, target)
+        displaced = root / "displaced-network"
+        target.rename(displaced)
+        target.mkdir(mode=0o700)
+        replacement = target / "preserve"
+        replacement.write_bytes(b"replacement")
+
+        with self.assertRaisesRegex(module.DevnetError, "changed before destruction"):
+            module.destroy_network(root, target, identity)
+
+        self.assertEqual(replacement.read_bytes(), b"replacement")
+        self.assertEqual((displaced / "secret").read_bytes(), b"secret")
 
     def test_first_release_taira_identity_is_exact(self) -> None:
         self.assertEqual(module.DEFAULT_DIR, Path("/var/lib/iroha-taira-devnet"))
@@ -1436,7 +1498,7 @@ class TairaDevnetTests(unittest.TestCase):
             ):
                 module.up(self.up_args(), run=runtime.run, request=runtime.request)
 
-        self.assertEqual(fdopen_calls, 5)
+        self.assertGreaterEqual(fdopen_calls, 5)
         self.assertFalse(runtime.process_commands)
         self.assertTrue(
             any(

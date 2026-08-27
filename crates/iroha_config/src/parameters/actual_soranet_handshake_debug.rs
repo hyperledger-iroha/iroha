@@ -34,8 +34,7 @@ impl fmt::Debug for SoranetHandshake {
             .field(
                 "pow",
                 &format_args!(
-                    "SoranetPow {{ required: {}, difficulty: {}, max_future_skew_secs: {}, min_ticket_ttl_secs: {}, ticket_ttl_secs: {}, outbound_mint_capacity: {}, inbound_verify_capacity: {}, revocation_store_capacity: {}, revocation_max_ttl_secs: {}, revocation_store_path: {}, puzzle: {} }}",
-                    self.pow.required,
+                    "SoranetPow {{ difficulty: {}, max_future_skew_secs: {}, min_ticket_ttl_secs: {}, ticket_ttl_secs: {}, outbound_mint_capacity: {}, inbound_verify_capacity: {}, revocation_store_capacity: {}, revocation_max_ttl_secs: {}, revocation_store_path: {}, puzzle: {{ memory_kib: {}, time_cost: {}, lanes: {} }} }}",
                     self.pow.difficulty,
                     self.pow.max_future_skew.as_secs(),
                     self.pow.min_ticket_ttl.as_secs(),
@@ -45,15 +44,9 @@ impl fmt::Debug for SoranetHandshake {
                     self.pow.revocation_store_capacity,
                     self.pow.revocation_max_ttl.as_secs(),
                     self.pow.revocation_store_path,
-                    self.pow.puzzle.as_ref().map_or_else(
-                        || "None".to_string(),
-                        |puzzle| format!(
-                            "Some {{ memory_kib: {}, time_cost: {}, lanes: {} }}",
-                            puzzle.memory_kib.get(),
-                            puzzle.time_cost.get(),
-                            puzzle.lanes.get()
-                        ),
-                    ),
+                    self.pow.puzzle.memory_kib.get(),
+                    self.pow.puzzle.time_cost.get(),
+                    self.pow.puzzle.lanes.get(),
                 ),
             )
             .finish()
