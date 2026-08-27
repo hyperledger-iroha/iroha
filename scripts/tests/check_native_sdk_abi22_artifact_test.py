@@ -194,6 +194,49 @@ def native_artifact(tmp_path: Path) -> Path:
     return artifact
 
 
+def test_raw_artifact_and_evidence_descriptors_request_binary_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Windows CRT descriptors preserve every artifact and evidence byte."""
+
+    payload = b"native\x1aartifact\r\nbytes"
+    artifact = tmp_path / "native.bin"
+    artifact.write_bytes(payload)
+    manifest = tmp_path / "manifest.json"
+    binary_flag = 1 << 29
+    real_open = os.open
+    opened_flags: list[int] = []
+
+    def record_open(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        opened_flags.append(flags)
+        return real_open(path, flags & ~binary_flag, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(checker, "_BINARY_OPEN_FLAG", binary_flag)
+    monkeypatch.setattr(checker.os, "open", record_open)
+
+    assert checker.stable_artifact_identity(artifact) == (
+        hashlib.sha256(payload).hexdigest(),
+        len(payload),
+    )
+    assert checker.stable_bounded_file_bytes(
+        artifact,
+        label="native artifact manifest",
+        maximum_bytes=len(payload),
+    ) == payload
+    checker._exclusive_write(manifest, payload)
+
+    assert manifest.read_bytes() == payload
+    assert len(opened_flags) == 3
+    assert all(flags & binary_flag for flags in opened_flags)
+
+
 def test_checker_cli_loads_manifest_helper_under_python_isolation(
     tmp_path: Path,
 ) -> None:

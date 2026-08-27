@@ -64,6 +64,7 @@ COMMIT_RE = re.compile(r"[0-9a-f]{40}")
 TARGET_RE = re.compile(r"[a-z0-9][a-z0-9._+-]{0,127}")
 SDK_VALUES = frozenset({"c-jni", "csharp", "node", "python"})
 EXACT_PRIVACY_C_EXPORT_SDKS = frozenset({"c-jni", "csharp"})
+_BINARY_OPEN_FLAG = getattr(os, "O_BINARY", 0)
 
 APPROVED_PRIVACY_C_EXPORTS = (
     "iroha_privacy_compiled_profile_catalog_v1",
@@ -205,7 +206,12 @@ def stable_artifact_identity(path: Path) -> tuple[str, int]:
     ):
         fail("native artifact must be one non-empty regular file with one hard link")
 
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    flags = (
+        os.O_RDONLY
+        | _BINARY_OPEN_FLAG
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
     try:
         descriptor = os.open(path, flags)
     except OSError as error:
@@ -267,7 +273,12 @@ def stable_bounded_file_bytes(
     ):
         fail(f"{label} must be one bounded regular file with one hard link")
 
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    flags = (
+        os.O_RDONLY
+        | _BINARY_OPEN_FLAG
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
     try:
         descriptor = os.open(path, flags)
     except OSError as error:
@@ -824,6 +835,7 @@ def _exclusive_write(path: Path, payload: bytes) -> None:
         os.O_CREAT
         | os.O_EXCL
         | os.O_WRONLY
+        | _BINARY_OPEN_FLAG
         | getattr(os, "O_CLOEXEC", 0)
         | getattr(os, "O_NOFOLLOW", 0)
     )
@@ -958,6 +970,7 @@ def stage_unique_artifact(
 
     read_flags = (
         os.O_RDONLY
+        | _BINARY_OPEN_FLAG
         | getattr(os, "O_CLOEXEC", 0)
         | os.O_NOFOLLOW
     )
@@ -965,6 +978,7 @@ def stage_unique_artifact(
         os.O_CREAT
         | os.O_EXCL
         | os.O_WRONLY
+        | _BINARY_OPEN_FLAG
         | getattr(os, "O_CLOEXEC", 0)
         | os.O_NOFOLLOW
     )
@@ -1108,6 +1122,7 @@ def _exclusive_write_at(directory: int, name: str, payload: bytes) -> None:
         os.O_CREAT
         | os.O_EXCL
         | os.O_WRONLY
+        | _BINARY_OPEN_FLAG
         | getattr(os, "O_CLOEXEC", 0)
         | getattr(os, "O_NOFOLLOW", 0)
     )
