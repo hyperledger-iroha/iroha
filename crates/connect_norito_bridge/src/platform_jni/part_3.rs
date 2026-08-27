@@ -1474,7 +1474,11 @@ fn read_parliament_jni_trust_anchor(
 }
 
 fn parliament_jni_checkpoint_height(value: jni::sys::jlong) -> Option<u64> {
-    u64::try_from(value).ok().filter(|height| *height != 0)
+    // JNI has no unsigned 64-bit scalar. JVM callers pass the exact u64 bit
+    // pattern through `long`; reinterpret it rather than rejecting the upper
+    // half of the protocol's height domain.
+    let height = u64::from_ne_bytes(value.to_ne_bytes());
+    (height != 0).then_some(height)
 }
 
 fn read_parliament_jni_authority(
@@ -1562,6 +1566,45 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_governance_Parliame
         clear_parliament_jni_exception(&mut env);
         jni::sys::JNI_FALSE
     }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeVerifyCastingProofPageV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    proof_response: jni::objects::JByteArray<'_>,
+    network_id: jni::objects::JByteArray<'_>,
+    trusted_checkpoint_height: jni::sys::jlong,
+    trusted_checkpoint_context_id: jni::objects::JByteArray<'_>,
+    expected_ballot_attempt_id: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    parliament_jni_result(
+        &mut env,
+        CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_RESULT_BYTES_V1,
+        |env| {
+            let proof_response = read_parliament_jni_bytes(
+                env,
+                &proof_response,
+                CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_BYTES_V1,
+            )?;
+            let network_id = read_parliament_jni_trust_anchor(env, &network_id)?;
+            let trusted_checkpoint_height =
+                parliament_jni_checkpoint_height(trusted_checkpoint_height)?;
+            let trusted_checkpoint_context_id =
+                read_parliament_jni_trust_anchor(env, &trusted_checkpoint_context_id)?;
+            let expected_ballot_attempt_id =
+                read_parliament_jni_trust_anchor(env, &expected_ballot_attempt_id)?;
+            super::parliament_timed_ovn_ffi::verified_casting_proof_page_v1(
+                &proof_response,
+                network_id,
+                trusted_checkpoint_height,
+                trusted_checkpoint_context_id,
+                expected_ballot_attempt_id,
+            )
+            .ok()
+            .map(|page| page.canonical_result_bytes_v1().to_vec())
+        },
+    )
 }
 
 #[unsafe(no_mangle)]
@@ -1685,4 +1728,24 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_governance_Parliame
             .ok()
         },
     )
+}
+
+#[cfg(test)]
+mod parliament_timed_ovn_jni_height_tests {
+    use super::parliament_jni_checkpoint_height;
+
+    #[test]
+    fn signed_jlong_is_an_exact_nonzero_u64_bit_carrier() {
+        assert_eq!(parliament_jni_checkpoint_height(0), None);
+        assert_eq!(parliament_jni_checkpoint_height(1), Some(1));
+        assert_eq!(
+            parliament_jni_checkpoint_height(i64::MAX),
+            Some(i64::MAX as u64)
+        );
+        assert_eq!(
+            parliament_jni_checkpoint_height(i64::MIN),
+            Some(1_u64 << 63)
+        );
+        assert_eq!(parliament_jni_checkpoint_height(-1), Some(u64::MAX));
+    }
 }

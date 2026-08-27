@@ -203,10 +203,8 @@ mod tests {
             .run(&mut BufWriter::new(Vec::<u8>::new()))
             .expect_err("non-canonical protocol list must fail validation");
             assert!(
-                error
-                    .to_string()
-                    .contains("exactly wire_protocol_version = [4]"),
-                "unexpected error for {versions:?}: {error}"
+                format!("{error:#}").contains("exactly wire_protocol_version = [4]"),
+                "unexpected error for {versions:?}: {error:#}"
             );
         }
     }
@@ -274,8 +272,8 @@ mod tests {
             .run(&mut sink)
             .expect_err("missing consensus_mode should be rejected");
         assert!(
-            err.to_string().contains("consensus_mode"),
-            "unexpected error: {err}"
+            format!("{err:#}").contains("consensus_mode"),
+            "unexpected error: {err:#}"
         );
     }
     #[test]

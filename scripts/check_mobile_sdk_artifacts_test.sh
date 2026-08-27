@@ -1873,6 +1873,7 @@ run_expect_reference_only_binary_fail \
   "connect_norito_bridge_abi_version" \
   "$inspection_tools"
 for parliament_c_symbol in \
+  connect_norito_parliament_timed_ovn_verify_casting_proof_page_v1 \
   connect_norito_parliament_timed_ovn_verify_casting_proof_v1 \
   connect_norito_parliament_timed_ovn_registration_from_proof_v1 \
   connect_norito_parliament_timed_ovn_ballot_from_proof_v1; do
@@ -2507,6 +2508,7 @@ run_expect_android_missing_symbol_fail \
   "Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeSignerContractRevision" \
   "$android_inspection_tools"
 for parliament_c_symbol in \
+  connect_norito_parliament_timed_ovn_verify_casting_proof_page_v1 \
   connect_norito_parliament_timed_ovn_verify_casting_proof_v1 \
   connect_norito_parliament_timed_ovn_registration_from_proof_v1 \
   connect_norito_parliament_timed_ovn_ballot_from_proof_v1; do
@@ -2517,6 +2519,7 @@ for parliament_c_symbol in \
 done
 for parliament_jni_symbol in \
   Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeBridgeAbiVersion \
+  Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeVerifyCastingProofPageV1 \
   Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeVerifyCastingProofV1 \
   Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeRegistrationFromProofV1 \
   Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeBallotFromProofV1; do

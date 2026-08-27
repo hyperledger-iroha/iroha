@@ -1817,6 +1817,17 @@ _OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME = "iroha.torii.v1.offline.top_up.request"
 _OFFLINE_REDEEM_REQUEST_SCHEMA_NAME = "iroha.torii.v1.offline.redeem.request"
 
 
+def _kagemusha_request_timeout(value: Optional[float], context: str) -> Optional[float]:
+    if value is not None and (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value <= 0
+    ):
+        raise ValueError(f"{context}.timeout must be a positive finite number")
+    return value
+
+
 def _validate_kagemusha_norito_request(
     value: Any,
     maximum_bytes: int,
@@ -10767,22 +10778,27 @@ class ToriiClient(
     # ------------------------------------------------------------------
     # First-release Kagemusha API
     # ------------------------------------------------------------------
-    def get_offline_capability(self) -> OfflineStatus:
-        """Fetch the universally compiled, asset-neutral offline capability."""
+    def get_offline_capability(self, *, timeout: Optional[float] = None) -> OfflineStatus:
+        """Fetch the universal offline capability with an optional request timeout."""
 
         response = self._request(
             "GET",
             _OFFLINE_CAPABILITY_PATH,
             headers={"Accept": "application/json"},
+            allow_redirects=False,
+            timeout=_kagemusha_request_timeout(timeout, "get_offline_capability"),
         )
         self._expect_status(response, {200})
         payload = self._offline_json_response(response, "offline capability response")
         return OfflineStatus.from_payload(payload)
 
     def submit_kagemusha_top_up(
-        self, request: KagemushaTopUpRequestV4
+        self,
+        request: KagemushaTopUpRequestV4,
+        *,
+        timeout: Optional[float] = None,
     ) -> OfflineOperationReference:
-        """Submit one canonical typed Norito Kagemusha top-up request."""
+        """Submit one canonical typed Norito Kagemusha top-up request with an optional timeout."""
 
         if not isinstance(request, KagemushaTopUpRequestV4):
             raise TypeError("request must be KagemushaTopUpRequestV4")
@@ -10791,12 +10807,16 @@ class ToriiClient(
             "top_up",
             request.norito,
             request.operation_id,
+            timeout=_kagemusha_request_timeout(timeout, "submit_kagemusha_top_up"),
         )
 
     def submit_kagemusha_redeem(
-        self, request: KagemushaRedeemRequestV4
+        self,
+        request: KagemushaRedeemRequestV4,
+        *,
+        timeout: Optional[float] = None,
     ) -> OfflineOperationReference:
-        """Submit one canonical typed Norito Kagemusha redemption request."""
+        """Submit one canonical typed Norito Kagemusha redemption request with an optional timeout."""
 
         if not isinstance(request, KagemushaRedeemRequestV4):
             raise TypeError("request must be KagemushaRedeemRequestV4")
@@ -10805,18 +10825,27 @@ class ToriiClient(
             "redeem",
             request.norito,
             request.operation_id,
+            timeout=_kagemusha_request_timeout(timeout, "submit_kagemusha_redeem"),
         )
 
     def get_kagemusha_operation_status(
-        self, operation_id: str
+        self,
+        operation_id: str,
+        *,
+        timeout: Optional[float] = None,
     ) -> OfflineOperationStatus:
-        """Fetch the typed state of one Kagemusha operation."""
+        """Fetch the typed state of one Kagemusha operation with an optional timeout."""
 
         canonical_id = _require_offline_operation_id(operation_id)
         response = self._request(
             "GET",
             f"{_OFFLINE_OPERATIONS_PATH}/{canonical_id}",
             headers={"Accept": "application/json"},
+            allow_redirects=False,
+            timeout=_kagemusha_request_timeout(
+                timeout,
+                "get_kagemusha_operation_status",
+            ),
         )
         self._expect_status(response, {200})
         payload = self._offline_json_response(response, "offline operation status response")
@@ -10828,6 +10857,8 @@ class ToriiClient(
         kind: Literal["top_up", "redeem"],
         body: bytes,
         operation_id: str,
+        *,
+        timeout: Optional[float],
     ) -> OfflineOperationReference:
         response = self._request(
             "POST",
@@ -10838,6 +10869,8 @@ class ToriiClient(
                 "Idempotency-Key": operation_id,
             },
             data=body,
+            allow_redirects=False,
+            timeout=timeout,
         )
         self._expect_status(response, {202})
         payload = self._offline_json_response(response, "offline operation reference response")

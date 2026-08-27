@@ -6,6 +6,7 @@ use crate::puzzle_work_admission::{
 use crate::{
     ConsensusConfigCaps, ConsensusHandshakeCaps, ConsensusMode, Error, RelayRole,
     boilerplate::*,
+    preauth::InboundAuthCompletion,
     puzzle_work_admission::{SoranetPuzzleWorkAdmission, run_soranet_admission_work},
 };
 use bytes::{Buf, BufMut, BytesMut};
@@ -3231,6 +3232,7 @@ pub mod handles {
             peer,
             service_message_sender,
             idle_timeout,
+            inbound_auth_completion: None,
             post_capacity,
             outbound_frame_queue_limits,
             outbound_post_byte_budgets,
@@ -3251,6 +3253,7 @@ pub mod handles {
         connection: Connection,
         service_message_sender: mpsc::Sender<ServiceMessage<T>>,
         idle_timeout: Duration,
+        inbound_auth_completion: InboundAuthCompletion,
         network_id: iroha_data_model::NetworkId,
         consensus_caps: Option<crate::ConsensusHandshakeCaps>,
         confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
@@ -3291,6 +3294,7 @@ pub mod handles {
             peer,
             service_message_sender,
             idle_timeout,
+            inbound_auth_completion: Some(inbound_auth_completion),
             post_capacity,
             outbound_frame_queue_limits,
             outbound_post_byte_budgets,
@@ -5035,6 +5039,7 @@ mod run {
             peer,
             service_message_sender,
             idle_timeout,
+            inbound_auth_completion,
             post_capacity,
             outbound_frame_queue_limits,
             outbound_post_byte_budgets,
@@ -5052,7 +5057,18 @@ mod run {
         async {
             // Try to do handshake process
             let hs_start = Instant::now();
-            let ready_peer = match tokio::time::timeout(idle_timeout, peer.handshake()).await {
+            let handshake_result = if let Some(completion) = inbound_auth_completion.as_ref() {
+                completion
+                    .deadline()
+                    .run(Some(idle_timeout), peer.handshake())
+                    .await
+                    .map_err(|_| ())
+            } else {
+                tokio::time::timeout(idle_timeout, peer.handshake())
+                    .await
+                    .map_err(|_| ())
+            };
+            let ready_peer = match handshake_result {
                 Ok(Ok(ready)) => {
                     let ms = u64::try_from(hs_start.elapsed().as_millis()).unwrap_or(u64::MAX);
                     observe_handshake_ms(ms);
@@ -5101,6 +5117,14 @@ mod run {
                 trust_gossip,
             } = ready_peer;
             termination_guard.set_peer(new_peer_id.clone());
+            if let Some(completion) = inbound_auth_completion {
+                if !completion.complete() {
+                    iroha_logger::warn!(
+                        "Inbound peer authenticated after its pre-authentication ownership expired"
+                    );
+                    return;
+                }
+            }
             let peer_id = new_peer_id;
             let disambiguator = cryptographer.disambiguator;
             tracing::Span::current().record("peer", peer_id.to_string());
@@ -6347,6 +6371,7 @@ mod run {
         pub peer: P,
         pub service_message_sender: mpsc::Sender<ServiceMessage<T>>,
         pub idle_timeout: Duration,
+        pub inbound_auth_completion: Option<InboundAuthCompletion>,
         pub post_capacity: usize,
         pub outbound_frame_queue_limits: OutboundFrameQueueLimits,
         pub outbound_post_byte_budgets: OutboundPostByteBudgets,

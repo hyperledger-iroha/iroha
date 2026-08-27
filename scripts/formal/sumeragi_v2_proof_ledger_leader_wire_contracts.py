@@ -491,7 +491,8 @@ let control_barrier = selected_barrier.as_ref().is_some_and(|owner| {
     owner.token.source_class == FairV2IngressLeaderWireSourceClass::Control
 });
 """,
-        "only an exact Control-class leader-wire owner may authorize dependency bypass",
+        "ordinary and timeout-control dependency bypasses require an exact "
+        "Control-class leader-wire owner",
         errors,
     )
     for sequence, description in (

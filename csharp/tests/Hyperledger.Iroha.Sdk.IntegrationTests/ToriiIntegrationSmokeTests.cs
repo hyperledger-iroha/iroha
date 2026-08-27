@@ -24,6 +24,31 @@ public sealed class ToriiIntegrationSmokeTests
     }
 
     [Fact]
+    public async Task LiveTairaKagemushaCapabilityIsExactAndReadOnly()
+    {
+        if (!string.Equals(
+                Environment.GetEnvironmentVariable("IROHA_TAIRA_KAGEMUSHA_READ_ONLY"),
+                "1",
+                StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var publicRoot = Environment.GetEnvironmentVariable("IROHA_TAIRA_PUBLIC_ROOT")
+            ?? "https://taira.sora.org";
+        using var client = new ToriiClient(new Uri(publicRoot, UriKind.Absolute));
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(
+            TestContext.Current.CancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(20));
+        var capability = await client.GetOfflineCapabilityAsync(timeout.Token);
+
+        Assert.Equal("cash_handoff_v1", capability.CashHandoffCapability);
+        Assert.Equal(23u, capability.RequiredBridgeAbiVersion);
+        Assert.Equal(8u, capability.MaxHops);
+        Assert.True(capability.Ready);
+    }
+
+    [Fact]
     public async Task LiveToriiSmoke()
     {
         if (!ShouldRunLiveTests())
@@ -49,6 +74,13 @@ public sealed class ToriiIntegrationSmokeTests
                     NetworkId.Parse(networkId)),
                 CanonicalRequestCredentials = canonicalCredentials,
             });
+
+        var offlineCapability = await client.GetOfflineCapabilityAsync(
+            TestContext.Current.CancellationToken);
+        Assert.Equal("cash_handoff_v1", offlineCapability.CashHandoffCapability);
+        Assert.Equal(23u, offlineCapability.RequiredBridgeAbiVersion);
+        Assert.Equal(8u, offlineCapability.MaxHops);
+        Assert.True(offlineCapability.Ready);
 
         var capabilities = await client.GetNodeCapabilitiesAsync(cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(1, capabilities.AbiVersion);

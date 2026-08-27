@@ -1910,16 +1910,15 @@ Both helpers fetch the latest configuration, reuse unchanged sections for parity
 and raise `ValueError` when invalid parameters are supplied, keeping
 admin-surface updates reproducible.
 
-Configuration snapshots also expose transport defaults so automation can pick up the
-streaming/SoraNet knobs without parsing raw JSON:
+Configuration snapshots also expose the active Norito-RPC transport policy without
+requiring callers to parse raw JSON:
 
 ```python
 snapshot = client.get_configuration_typed()
 transport = snapshot.transport
-if transport and transport.streaming and transport.streaming.soranet:
-    soranet = transport.streaming.soranet
-    print("SoraNet exit:", soranet.exit_multiaddr)
-    print("Provision queue cap:", soranet.provision_queue_capacity)
+if transport and transport.norito_rpc:
+    print("Norito-RPC stage:", transport.norito_rpc.stage)
+    print("mTLS required:", transport.norito_rpc.require_mtls)
 ```
 
 ## UAID portfolio and manifests

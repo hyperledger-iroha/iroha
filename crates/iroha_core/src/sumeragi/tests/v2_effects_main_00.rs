@@ -1935,6 +1935,95 @@ fn assert_leader_wire_body_terminal(
     );
     assert!(gate.exact_record_is_durable_body_terminal_for_test(token));
 }
+#[cfg(feature = "bls")]
+#[test]
+fn lifecycle_apply_preflights_wait_for_serialized_runtime_ingress() {
+    let mut fixture = ProductionTransportFixture::new();
+    assert!(
+        fixture
+            .executor
+            .lifecycle_decision_apply_dispatch_available(None)
+            .expect("inspect idle lifecycle Apply dispatch cut")
+    );
+
+    let queued = fixture.signed_timeout_vote(10_000);
+    let semantic_origin = fixture.context.roster[0].validator.clone();
+    let (queued_directory, queued_ingress, mut queued_ownerships) =
+        crate::sumeragi::v2_runtime::tests::preowned_leader_wire_ownerships(
+            &fixture.context,
+            &[(queued.clone(), semantic_origin)],
+            fixture._lifecycle_ordinals.clone(),
+        );
+    let queued_ownership = queued_ownerships
+        .pop()
+        .expect("one queued TimeoutVote retains runtime ownership");
+    assert!(queued_ownerships.is_empty());
+    fixture
+        .executor
+        .enqueue_network_with_ingress_ownership(queued, queued_ownership)
+        .expect("queue one authenticated serialized runtime command");
+    let _queued_ingress_guard = (queued_directory, queued_ingress);
+    assert_eq!(fixture.executor.runtime.queued_commands(), 1);
+    assert!(
+        !fixture
+            .executor
+            .lifecycle_decision_apply_dispatch_available(None)
+            .expect("inspect queued lifecycle Apply dispatch cut"),
+        "live Apply dispatch must wait for the inherited runtime FIFO"
+    );
+
+    let commit =
+        fixture.quorum_certificate(wire::GlobalPhase::Commit, fixture.canonical_commitment);
+    let artifact = wire::finality::V2FinalityArtifact::new(
+        fixture.context.clone(),
+        fixture.subject,
+        commit,
+        vec![vec![0x5C]; fixture.context.roster.len()],
+    );
+    let dispatch_key =
+        LifecycleDecisionApplyDispatchKeyV1::for_height_context_test(&fixture.context, 2, 0xA7);
+    let authority =
+        LifecycleDecisionApplyAdapterCompletionAuthorityV1::recovered_for_queue_preflight_test(
+            fixture.executor.current_tag(),
+            fixture.subject,
+            dispatch_key,
+            1,
+            artifact.clone(),
+        );
+    assert!(matches!(
+        fixture
+            .executor
+            .prepare_lifecycle_decision_apply_completion(authority),
+        Err(EffectExecutorError::Contract(reason))
+            if reason == "lifecycle Decision Apply completion overtook retained executor work"
+    ));
+    assert_eq!(
+        fixture.executor.runtime.queued_commands(),
+        1,
+        "executor completion preflight must leave queued ingress untouched"
+    );
+
+    let authority =
+        LifecycleDecisionApplyAdapterCompletionAuthorityV1::recovered_for_queue_preflight_test(
+            fixture.executor.current_tag(),
+            fixture.subject,
+            dispatch_key,
+            1,
+            artifact,
+        );
+    assert!(matches!(
+        fixture
+            .executor
+            .runtime
+            .prepare_lifecycle_decision_apply_completion(authority),
+        Err(AdapterError::LifecycleDecisionApplyCompletionMismatch)
+    ));
+    assert_eq!(
+        fixture.executor.runtime.queued_commands(),
+        1,
+        "serialized-runtime completion preflight must preserve queued ingress"
+    );
+}
 #[test]
 fn production_certified_body_request_rejects_locally_conflicting_qc_without_fail_close() {
     let fixture = ProductionTransportFixture::new();

@@ -80,7 +80,7 @@ fn block_and_revert_rewinds_da_indexes() {
         hashes.push(signed_first.hash());
         hashes.commit_for_tests();
     }
-    let_row! { pin_intent = iroha_data_model::da::pin_intent::DaPinIntent { lane_id: LaneId::new(0), epoch: 1, sequence: 2, storage_ticket: StorageTicketId::new([0xFF; 32]), manifest_hash: iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xAA; 32]), alias: Some("rewind-alias".to_string()), authorization: crate::da::signed_test_ingest_authorization( *state.network_id_ref(), &keypair, LaneId::new(0), 1, 2, 1, ), } };
+    let_row! { pin_intent = crate::da::signed_test_pin_intent( crate::da::signed_test_ingest_authorization( *state.network_id_ref(), &keypair, LaneId::new(0), 1, 2, 1, ), &keypair, StorageTicketId::new([0xFF; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xAA; 32]), Some("rewind-alias".to_owned()), ) };
     let_row! { pin_bundle = iroha_data_model::da::pin_intent::DaPinIntentBundle::new(vec![pin_intent.clone()]) };
     let second_bundle = DaCommitmentBundle::new(vec![make_record(2)]);
     let_row! { second_block = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, Some(&signed_first)) .with_da_commitments(Some(second_bundle.clone())) .with_da_pin_intents(Some(pin_bundle)) .sign(keypair.private_key()) .unpack(|_| {}) };

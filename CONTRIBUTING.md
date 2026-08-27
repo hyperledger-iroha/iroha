@@ -221,7 +221,7 @@ Follow these commit guidelines:
 - If you need to have a longer commit message:
   - Limit the first line of your commit message to 50 characters or less.
   - The first line of your commit message should contain the summary of the work you've done. If you need more than one line, leave a blank line between each paragraph and describe your changes in the middle. The last line must be the sign-off.
-- If you modify the Schema (check by generating the schema with `kagami schema` and diff), you should make all changes to the schema in a separate commit with the message `[schema]`.
+- If you modify the Schema (check by generating it with `kagami advanced schema` and diff), you should make all changes to the schema in a separate commit with the message `[schema]`.
 - Try to stick to one commit per meaningful change.
   - If you fixed several issues in one PR, give them separate commits.
   - As mentioned previously, changes to the `schema` and the API should be done in appropriate commits separate from the rest of your work.
@@ -248,7 +248,7 @@ Run `make guards` to validate repository policies locally:
 
 <details> <summary> Expand to learn how to change the log level or write logs to a JSON.</summary>
 
-If one of your tests is failing, you may want to decrease the maximum logging level. By default, Iroha only logs `INFO` level messages, but retains the ability to produce both `DEBUG` and `TRACE` level logs. This setting can be changed either using the `LOG_LEVEL` environment variable for code-based tests, or using the `/configuration` endpoint on one of the peers in a deployed network.
+If one of your tests is failing, you may want to decrease the maximum logging level. By default, Iroha only logs `INFO` level messages, but retains the ability to produce both `DEBUG` and `TRACE` level logs. Low-level code-based tests may inject the `LOG_LEVEL` environment alias explicitly; peers launched with `--config` must set the equivalent TOML field or use the `/configuration` endpoint in a deployed network.
 
 While logs printed in the `stdout` are sufficient, you may find it more convenient to produce `json`-formatted logs into a separate file and parse them using either [node-bunyan](https://www.npmjs.com/package/bunyan) or [rust-bunyan](https://crates.io/crates/bunyan).
 
@@ -268,8 +268,7 @@ In this case you should compile Iroha with support of tokio console like that:
 RUSTFLAGS="--cfg tokio_unstable" cargo build --features tokio-console
 ```
 
-Port for tokio console can by configured through `LOG_TOKIO_CONSOLE_ADDR` configuration parameter (or environment variable).
-Using tokio console require log level to be `TRACE`, can be enabled through configuration parameter or environment variable `LOG_LEVEL`.
+The tokio console port can be configured through `logger.tokio_console_addr`. The log level must be `TRACE`; set `logger.level` in the TOML supplied to `--config`. The `LOG_TOKIO_CONSOLE_ADDR` and `LOG_LEVEL` aliases apply only to the no-config development path and explicit test readers.
 
 Example of running Iroha with tokio console support using `scripts/test_env.sh`:
 

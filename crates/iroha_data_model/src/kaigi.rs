@@ -31,6 +31,27 @@ pub const KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1: usize = 4 * 1024;
 /// The bound is shared by native admission and operator-facing snapshots so a
 /// descriptor accepted on-chain can always be inspected through bounded APIs.
 pub const KAIGI_RELAY_REGISTRY_MAX_ENTRIES_V1: usize = 500;
+/// Hard JSON-size ceiling for native Kaigi metadata values in V1.
+///
+/// This protocol bound is independent of the configurable metadata limit so
+/// nodes never decode an arbitrarily large retained Kaigi value.
+pub const KAIGI_METADATA_VALUE_MAX_JSON_BYTES_V1: usize = 1024 * 1024;
+/// Maximum encoded JSON size of one retained Kaigi call record in V1.
+pub const KAIGI_RECORD_MAX_JSON_BYTES_V1: usize = KAIGI_METADATA_VALUE_MAX_JSON_BYTES_V1;
+/// Maximum transparent participants or private roster commitments in V1.
+pub const KAIGI_MAX_PARTICIPANTS_V1: usize = 4_096;
+/// Maximum retained private nullifiers in V1.
+///
+/// The extra two entries beyond the participant bound accommodate optional
+/// host-create and host-end nullifiers.
+pub const KAIGI_MAX_NULLIFIER_LOG_ENTRIES_V1: usize = KAIGI_MAX_PARTICIPANTS_V1 + 2;
+/// Maximum retained private usage commitments in V1.
+pub const KAIGI_MAX_USAGE_COMMITMENTS_V1: usize = 4_096;
+/// Maximum governance-allowlisted relay identities in V1.
+///
+/// This matches the live relay-registry bound while still allowing a retired
+/// predecessor identity to authorize its registered successor.
+pub const KAIGI_RELAY_ALLOWLIST_MAX_ENTRIES_V1: usize = KAIGI_RELAY_REGISTRY_MAX_ENTRIES_V1;
 fn empty_roster_root() -> Hash {
     Hash::new(KAIGI_ROSTER_EMPTY_SEED)
 }
@@ -484,7 +505,8 @@ pub struct NewKaigi {
     pub description: Option<String>,
     /// Maximum number of concurrent participants (excluding the host).
     ///
-    /// When present, native admission requires this value to be greater than zero.
+    /// When present, native admission requires this value to be between one and
+    /// [`KAIGI_MAX_PARTICIPANTS_V1`] inclusive. `None` uses that protocol maximum.
     #[getset(get = "pub")]
     pub max_participants: Option<u32>,
     /// Gas rate charged per minute of call time (host provided).
@@ -808,6 +830,9 @@ pub fn kaigi_relay_allowlist_key() -> Result<Name, crate::error::ParseError> {
 /// Prelude re-export for Kaigi data structures.
 pub mod prelude {
     pub use super::{
+        KAIGI_MAX_NULLIFIER_LOG_ENTRIES_V1, KAIGI_MAX_PARTICIPANTS_V1,
+        KAIGI_MAX_USAGE_COMMITMENTS_V1, KAIGI_METADATA_VALUE_MAX_JSON_BYTES_V1,
+        KAIGI_RECORD_MAX_JSON_BYTES_V1, KAIGI_RELAY_ALLOWLIST_MAX_ENTRIES_V1,
         KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1, KAIGI_RELAY_MANIFEST_MAX_HOPS_V1,
         KAIGI_RELAY_MANIFEST_MIN_HOPS_V1, KAIGI_RELAY_REGISTRY_MAX_ENTRIES_V1, KaigiId,
         KaigiParticipantCommitment, KaigiParticipantNullifier, KaigiPrivacyMode, KaigiRecord,

@@ -31,6 +31,8 @@ transaction_gossip_period_ms = 1_000
 transaction_gossip_resend_ticks = 3
 transaction_gossip_size = 500
 idle_timeout_ms = 10_000
+preauth_timeout_ms = 10_000
+preauth_max_connections_per_ip = 8
 reply_writer_flush_timeout_ms = 10_000
 
 [torii]

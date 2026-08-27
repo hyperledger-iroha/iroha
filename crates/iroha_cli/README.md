@@ -107,13 +107,16 @@ iroha --operator-private-key-file /run/secrets/iroha/operator.key \
   --output-format text ops sumeragi diagnostics
 ```
 
-Per-epoch VRF penalty membership is not duplicated in diagnostics. Query the
-authoritative finalized report for the exact epoch; an unavailable report is a
-hard not-found result rather than an all-zero placeholder:
+Consensus VRF epoch and penalty snapshots are retired together with the
+`vrf-epoch` and `vrf-penalties` subcommands. Production randomness comes from
+finalized global threshold-beacon pulses. Use the current read-only status and
+equivocation-evidence commands:
 
 ```bash
 iroha --operator-private-key-file /run/secrets/iroha/operator.key \
-  --output-format json ops sumeragi vrf-penalties --epoch 42
+  --output-format text ops sumeragi evidence count
+iroha --operator-private-key-file /run/secrets/iroha/operator.key \
+  --output-format text ops sumeragi evidence list --limit 100
 ```
 
 Tip: You can combine these with `jq` for consistency checks.

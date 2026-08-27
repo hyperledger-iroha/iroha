@@ -286,36 +286,6 @@ fn copy_dir_recursive_handles_missing_sources() {
     let mut iter = fs::read_dir(&dest).expect("read destination dir");
     assert!(iter.next().is_none(), "destination should remain empty");
 }
-#[test]
-fn kagami_verify_binding_accepts_the_requested_chain_and_seed() {
-    let report = KagamiVerifyReport {
-        chain_id: Some("test-chain".to_owned()),
-        vrf_seed_hex: Some("aabb".to_owned()),
-        fingerprint: Some("fp123".to_owned()),
-    };
-    validate_kagami_verify_binding(&report, "test-chain", Some("aabb"))
-        .expect("matching Kagami binding must pass");
-}
-#[test]
-fn kagami_verify_binding_rejects_chain_or_seed_mismatch() {
-    let report = KagamiVerifyReport {
-        chain_id: Some("other-chain".to_owned()),
-        vrf_seed_hex: Some("ccdd".to_owned()),
-        fingerprint: None,
-    };
-    assert!(matches!(
-        validate_kagami_verify_binding(&report, "test-chain", Some("ccdd")),
-        Err(SupervisorError::KagamiVerify(_))
-    ));
-    let report = KagamiVerifyReport {
-        chain_id: Some("test-chain".to_owned()),
-        ..report
-    };
-    assert!(matches!(
-        validate_kagami_verify_binding(&report, "test-chain", Some("aabb")),
-        Err(SupervisorError::KagamiVerify(_))
-    ));
-}
 struct KagamiStub {
     _path_guard: EnvVarGuard,
     _log_guard: EnvVarGuard,
@@ -611,9 +581,6 @@ fn test_genesis_material(paths: &NetworkPaths) -> GenesisMaterial {
         public_key_path,
         expected_hash: Some(expected_hash),
         chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
-        profile: None,
-        vrf_seed_hex: None,
-        verify_report: None,
         consensus_fingerprint: None,
     }
 }
@@ -628,7 +595,7 @@ fn binary_paths_default_respects_env_override() {
     let override_path = temp.path().to_path_buf();
     let _guard = EnvVarGuard::set("MOCHI_IROHAD", override_path.as_os_str());
     let binaries = BinaryPaths::default();
-    assert_eq!(binaries.irohad_executable(), override_path.as_path());
+    assert_eq!(binaries.irohad, override_path);
 }
 #[cfg(unix)]
 #[test]
@@ -680,11 +647,9 @@ fn binary_paths_auto_builds_when_enabled() {
     let _log_guard = RestoringEnvVarGuard::set("MOCHI_TEST_CARGO_LOG", cargo_log.as_os_str());
     let mut binaries = BinaryPaths::default().allow_auto_builds(true);
     binaries.irohad = PathBuf::from("iroha3d");
-    binaries.irohad_verified = false;
     binaries.irohad_build_attempted = false;
     binaries.irohad_auto = true;
     binaries.kagami = PathBuf::from("kagami");
-    binaries.kagami_verified = false;
     binaries.kagami_build_attempted = false;
     binaries.kagami_auto = true;
     binaries
@@ -732,7 +697,6 @@ fn binary_paths_auto_build_failure_surfaces_error() {
     let _path_guard = RestoringEnvVarGuard::set("PATH", empty_path_dir.as_os_str());
     let mut binaries = BinaryPaths::default().allow_auto_builds(true);
     binaries.irohad = PathBuf::from("iroha3d");
-    binaries.irohad_verified = false;
     binaries.irohad_build_attempted = false;
     binaries.irohad_auto = true;
     let err = binaries
@@ -1157,8 +1121,6 @@ fn relative_data_root_renders_cwd_independent_peer_paths() {
             &["snapshot", "store_dir"][..],
             &["sorafs", "storage", "data_dir"][..],
             &["streaming", "session_store_dir"][..],
-            &["streaming", "soranet", "provision_spool_dir"][..],
-            &["streaming", "soravpn", "provision_spool_dir"][..],
             &["torii", "data_dir"][..],
             &["torii", "da_ingest", "replay_cache_store_dir"][..],
             &["torii", "da_ingest", "manifest_store_dir"][..],

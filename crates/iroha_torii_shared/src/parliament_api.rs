@@ -8,6 +8,7 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::isi::governance::{
+    MAX_PARLIAMENT_SORTITION_REQUESTS_PER_BATCH_V1,
     PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1, PARLIAMENT_TIMED_OVN_BALLOT_RECORD_BYTES_V1,
     PARLIAMENT_TIMED_OVN_REGISTRATION_RECORD_BYTES_V1, ParliamentLifecycleTransitionKindV1,
     ParliamentLifecycleTransitionV1,
@@ -32,8 +33,8 @@ use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSe
 /// Current Parliament draft/read API layout.
 pub const PARLIAMENT_API_VERSION_V1: u16 = 1;
 
-/// Defensive maximum for one complete encoded Parliament reducer snapshot.
-pub const PARLIAMENT_ATTEMPT_READ_MAX_STATE_BYTES_V1: usize = 16 * 1024 * 1024;
+/// Backward-compatible Torii name for the authoritative Parliament attempt-state bound.
+pub use iroha_data_model::governance::types::MAX_PARLIAMENT_ATTEMPT_STATE_BYTES_V1 as PARLIAMENT_ATTEMPT_READ_MAX_STATE_BYTES_V1;
 
 /// Strict request for one locally signed governance-attempt creation.
 #[derive(
@@ -117,15 +118,19 @@ impl ParliamentTransitionDraftRequestV1 {
         }
         match &self.transition {
             Transition::RegisterSortitionRequest(payload) => {
-                if payload.candidate_snapshot.is_empty()
-                    || u32::try_from(payload.candidate_snapshot.len()).is_err()
+                if payload.requests.is_empty()
+                    || payload.requests.len() > MAX_PARLIAMENT_SORTITION_REQUESTS_PER_BATCH_V1
                     || payload
-                        .candidate_snapshot
+                        .requests
+                        .iter()
+                        .any(|entry| entry.request.validate(None).is_err())
+                    || payload
+                        .requests
                         .windows(2)
-                        .any(|pair| pair[0] >= pair[1])
+                        .any(|pair| pair[0].request.body >= pair[1].request.body)
                 {
                     return Err(
-                        "candidate snapshot must be nonempty, unique, and strictly ordered",
+                        "sortition request batch must be nonempty, bounded, valid, and body-ordered",
                     );
                 }
             }
@@ -417,6 +422,18 @@ pub const PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_NAME_V1: &str =
 /// under the Norito V1 type-name schema domain.
 pub const PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_HASH_HEX_V1: &str =
     "46d29299272433b1299646bee722bd11";
+
+/// Exact byte width of every canonical V1 casting-proof request frame.
+pub const PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_BYTES_V1: usize = 52;
+
+/// Exact Norito header flags for the compact-length casting-proof request.
+pub const PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_FLAGS_V1: u8 = 0x02;
+
+/// Payload alignment advertised by the canonical V1 request layout.
+pub const PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_PAYLOAD_ALIGNMENT_V1: usize = 8;
+
+/// Header padding required by the canonical V1 request layout.
+pub const PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_PADDING_BYTES_V1: usize = 0;
 
 /// Maximum consecutive finality proofs, including the caller-pinned checkpoint.
 pub const PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_FINALITY_PROOFS_V1: usize = 64;
@@ -1345,6 +1362,7 @@ mod tests {
     use super::*;
     use iroha_data_model::governance::types::{
         AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal,
+        MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1,
     };
     use iroha_data_model::smart_contract::ContractAddress;
     use norito::json;
@@ -1377,7 +1395,7 @@ mod tests {
     }
 
     #[test]
-    fn casting_proof_schema_hashes_and_framed_headers_are_golden() {
+    fn casting_proof_schema_hashes_and_frames_are_golden() {
         let request_hash = norito::core::schema_hash_for_name(
             PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA_NAME_V1,
         );
@@ -1399,8 +1417,12 @@ mod tests {
         };
         let request_bytes = norito::to_bytes(&request).expect("encode casting proof request");
         assert_eq!(
-            hex::encode(&request_bytes[..22]),
-            "4e5254300000adccf322a5fcf43040e20bea238f55f3"
+            request_bytes.len(),
+            PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_BYTES_V1
+        );
+        assert_eq!(
+            hex::encode(&request_bytes),
+            "4e5254300000adccf322a5fcf43040e20bea238f55f3000c00000000000000dfab61022cefc29f02020100081100000000000000"
         );
 
         let response_hash = norito::core::schema_hash_for_name(
@@ -2004,6 +2026,83 @@ mod tests {
             Some(PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_NAME_V1)
         );
         assert_eq!(
+            native_wallet
+                .get("casting_proof_request_schema_hash_hex")
+                .and_then(json::Value::as_str),
+            Some(PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA_HASH_HEX_V1)
+        );
+        assert_eq!(
+            native_wallet
+                .get("casting_proof_response_schema_hash_hex")
+                .and_then(json::Value::as_str),
+            Some(PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_HASH_HEX_V1)
+        );
+        assert_eq!(
+            native_wallet
+                .get("casting_proof_request_version")
+                .and_then(json::Value::as_u64),
+            Some(u64::from(PARLIAMENT_TIMED_OVN_CASTING_PROOF_VERSION_V1))
+        );
+        assert_eq!(
+            native_wallet
+                .get("casting_proof_request_flags")
+                .and_then(json::Value::as_u64),
+            Some(u64::from(
+                PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_FLAGS_V1
+            ))
+        );
+        assert_eq!(
+            native_wallet
+                .get("casting_proof_request_payload_alignment")
+                .and_then(json::Value::as_u64),
+            Some(
+                u64::try_from(PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_PAYLOAD_ALIGNMENT_V1)
+                    .expect("request alignment fits u64")
+            )
+        );
+        assert_eq!(
+            native_wallet
+                .get("casting_proof_request_padding_bytes")
+                .and_then(json::Value::as_u64),
+            Some(
+                u64::try_from(PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_PADDING_BYTES_V1)
+                    .expect("request padding fits u64")
+            )
+        );
+        let request_golden = native_wallet
+            .get("casting_proof_request_golden")
+            .and_then(json::Value::as_object)
+            .expect("fixture casting-proof request golden");
+        assert_eq!(
+            request_golden
+                .get("trusted_checkpoint_height")
+                .and_then(json::Value::as_u64),
+            Some(17)
+        );
+        assert_eq!(
+            request_golden
+                .get("payload_hex")
+                .and_then(json::Value::as_str),
+            Some("020100081100000000000000")
+        );
+        assert_eq!(
+            request_golden
+                .get("frame_hex")
+                .and_then(json::Value::as_str),
+            Some(
+                "4e5254300000adccf322a5fcf43040e20bea238f55f3000c00000000000000dfab61022cefc29f02020100081100000000000000"
+            )
+        );
+        assert_eq!(
+            request_golden
+                .get("frame_bytes")
+                .and_then(json::Value::as_u64),
+            Some(
+                u64::try_from(PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_BYTES_V1)
+                    .expect("request width fits u64")
+            )
+        );
+        assert_eq!(
             native_wallet.get("route").and_then(json::Value::as_str),
             Some(crate::uri::GOV_PARLIAMENT_TIMED_OVN_CASTING_PROOF)
         );
@@ -2034,15 +2133,22 @@ mod tests {
                 .collect::<Vec<_>>(),
             [
                 "canonical_response",
-                "terminal_page",
                 "checkpoint_finality_chain",
-                "fixed_ordinary_write_witness",
-                "casting_context_membership",
-                "canonical_core_archive",
-                "core_archive_replay",
-                "exact_compact_binding",
-                "seed_access",
+                "page_shape",
+                "checkpoint_promotion",
+                "terminal_fixed_ordinary_write_witness_if_present",
+                "terminal_casting_context_membership_if_present",
+                "terminal_canonical_core_archive_if_present",
+                "terminal_core_archive_replay_if_present",
+                "terminal_exact_compact_binding_if_present",
+                "seed_access_terminal_only",
             ]
+        );
+        assert_eq!(
+            native_wallet
+                .get("intermediate_page_secret_access")
+                .and_then(json::Value::as_str),
+            Some("forbidden")
         );
         assert_eq!(
             native_wallet
@@ -2054,6 +2160,21 @@ mod tests {
             .get("limits")
             .and_then(json::Value::as_object)
             .expect("fixture limits");
+        assert_eq!(
+            limits
+                .get("governance_attempt_sequence_max")
+                .and_then(json::Value::as_u64),
+            Some(u64::from(MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1))
+        );
+        assert_eq!(
+            limits
+                .get("timed_ovn_casting_proof_request_bytes")
+                .and_then(json::Value::as_u64),
+            Some(
+                u64::try_from(PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_BYTES_V1)
+                    .expect("proof request bound fits u64")
+            )
+        );
         assert_eq!(
             limits
                 .get("timed_ovn_casting_proof_response_bytes")
@@ -2071,6 +2192,12 @@ mod tests {
                 u64::try_from(PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_FINALITY_PROOFS_V1)
                     .expect("proof finality bound fits u64")
             )
+        );
+        assert_eq!(
+            limits
+                .get("timed_ovn_casting_proof_page_result_bytes")
+                .and_then(json::Value::as_u64),
+            Some(41)
         );
 
         let expected_public = [
@@ -2172,6 +2299,7 @@ mod tests {
             ParliamentNoResultKindV1::BallotCommitmentDeadlineExpired,
             ParliamentNoResultKindV1::BallotReleasePulseUnavailable,
             ParliamentNoResultKindV1::BallotOpeningDeadlineExpired,
+            ParliamentNoResultKindV1::SortitionRetriesExhausted,
         ];
         let fixture_no_result_kinds = fixture
             .get("no_result_kinds")

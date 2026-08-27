@@ -25,7 +25,7 @@ chain_id = ""
 # `genesis_profile` inside the profile table shown above.
 # genesis_profile = "iroha3-dev"
 # Optional VRF seed for genesis profiles that require it (testus/nexus).
-# vrf_seed_hex = ""
+# vrf_seed_hex = "<64 hexadecimal characters>"
 
 # When enabled, MOCHI submits a small “smoke” transaction and waits for it to be
 # committed before marking a peer ready.

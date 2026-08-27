@@ -5,6 +5,8 @@ use std::{
     path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
 };
+const TEST_VRF_SEED_HEX: &str =
+    "abababababababababababababababababababababababababababababababab";
 fn cli_env_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
@@ -96,6 +98,17 @@ fn parse_cli_chain_id_override_sets_value() {
     assert_eq!(parsed.overrides.chain_id.as_deref(), Some("demo-chain"));
 }
 #[test]
+fn parse_cli_chain_id_rejects_noncanonical_values() {
+    for value in ["", " demo-chain ", "bad/chain"] {
+        let args = vec![OsString::from("--chain-id"), OsString::from(value)];
+        let error = parse_cli_overrides_from(args).expect_err("invalid chain id must fail closed");
+        assert!(
+            error.to_string().contains("invalid --chain-id value"),
+            "unexpected error for `{value}`: {error}"
+        );
+    }
+}
+#[test]
 fn parse_cli_genesis_profile_sets_value() {
     let args = vec![
         OsString::from("--genesis-profile"),
@@ -154,6 +167,30 @@ fn parse_cli_profile_rejects_consensus_aliases() {
     }
 }
 #[test]
+fn parse_cli_profile_rejects_unknown_fields_and_wrong_optional_types() {
+    for (profile, expected) in [
+        (
+            "{ peer_count = 4, consensus_mode = \"npos\", peers = 4 }",
+            "unknown field `peers`",
+        ),
+        (
+            "{ peer_count = 4, consensus_mode = \"npos\", genesis_profile = 7 }",
+            "genesis_profile must be a string",
+        ),
+        (
+            "{ peer_count = 4, consensus_mode = \"npos\", genesis_profile = \"\" }",
+            "genesis_profile must not be empty",
+        ),
+    ] {
+        let args = vec![OsString::from("--profile"), OsString::from(profile)];
+        let error = parse_cli_overrides_from(args).expect_err("invalid profile must fail closed");
+        assert!(
+            error.to_string().contains(expected),
+            "unexpected error for `{profile}`: {error}"
+        );
+    }
+}
+#[test]
 fn parse_cli_profile_inline_table_sets_genesis_profile() {
     let args = vec![
         OsString::from("--profile"),
@@ -185,9 +222,23 @@ fn parse_cli_profile_genesis_conflict_errors() {
 }
 #[test]
 fn parse_cli_vrf_seed_sets_value() {
-    let args = vec![OsString::from("--vrf-seed-hex"), OsString::from("abcd")];
+    let args = vec![
+        OsString::from("--vrf-seed-hex"),
+        OsString::from(TEST_VRF_SEED_HEX),
+    ];
     let parsed = parse_cli_overrides_from(args).expect("parse CLI");
-    assert_eq!(parsed.overrides.vrf_seed_hex.as_deref(), Some("abcd"));
+    assert_eq!(
+        parsed.overrides.vrf_seed_hex.as_deref(),
+        Some(TEST_VRF_SEED_HEX)
+    );
+}
+#[test]
+fn parse_cli_vrf_seed_rejects_noncanonical_values() {
+    for value in ["", "abcd", " abcdef ", "gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg"] {
+        let args = vec![OsString::from("--vrf-seed-hex"), OsString::from(value)];
+        let error = parse_cli_overrides_from(args).expect_err("invalid VRF seed must fail closed");
+        assert!(error.to_string().contains("exactly 64 hexadecimal"));
+    }
 }
 #[test]
 fn parse_cli_nexus_config_sets_table() {
@@ -235,12 +286,24 @@ fn parse_cli_restart_mode_never_sets_policy() {
 }
 #[test]
 fn parse_cli_restart_mode_rejects_noncanonical_alias() {
-    let args = vec![
-        OsString::from("--restart-mode"),
-        OsString::from("on_failure"),
-    ];
-    let error = parse_cli_overrides_from(args).expect_err("restart alias must be rejected");
-    assert!(error.to_string().contains("expects `never` or `on-failure`"));
+    for mode in ["on_failure", "On-Failure", " on-failure ", ""] {
+        let args = vec![OsString::from("--restart-mode"), OsString::from(mode)];
+        let error = parse_cli_overrides_from(args).expect_err("restart alias must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("expects `never` or `on-failure`"),
+            "unexpected error for `{mode}`: {error}"
+        );
+    }
+}
+#[test]
+fn boolean_environment_values_require_canonical_spelling() {
+    for value in ["1", "TRUE", "yes", "on", " false "] {
+        let error = parse_bool_flag(value, "MOCHI_TEST_FLAG")
+            .expect_err("boolean aliases must be rejected");
+        assert!(error.to_string().contains("expects `true` or `false`"));
+    }
 }
 #[test]
 fn parse_cli_restart_on_failure_overrides_attempts() {
@@ -334,6 +397,30 @@ fn env_profile_override_applies() {
         overrides.profile,
         Some(NetworkProfile::from_preset(ProfilePreset::FourPeerBft))
     );
+}
+#[test]
+fn env_profile_override_rejects_unknown_fields() {
+    let _guard = cli_env_lock().lock().expect("env lock");
+    let _profile = CliEnvGuard::set(
+        "MOCHI_PROFILE",
+        "{ peer_count = 4, consensus_mode = \"npos\", peers = 4 }",
+    );
+    let error = parse_env_overrides().expect_err("unknown profile fields must fail closed");
+    assert!(error.to_string().contains("unknown field `peers`"));
+}
+#[test]
+fn environment_rejects_noncanonical_chain_and_vrf_values() {
+    let _guard = cli_env_lock().lock().expect("env lock");
+    {
+        let _chain = CliEnvGuard::set("MOCHI_CHAIN_ID", " mochi-local ");
+        let error = parse_env_overrides().expect_err("padded chain id must fail closed");
+        assert!(error.to_string().contains("invalid MOCHI_CHAIN_ID value"));
+    }
+    {
+        let _seed = CliEnvGuard::set("MOCHI_VRF_SEED_HEX", "abcd");
+        let error = parse_env_overrides().expect_err("short VRF seed must fail closed");
+        assert!(error.to_string().contains("exactly 64 hexadecimal"));
+    }
 }
 #[test]
 fn env_workspace_root_override_applies() {

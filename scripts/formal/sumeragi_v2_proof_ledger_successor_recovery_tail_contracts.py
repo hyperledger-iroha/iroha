@@ -5369,13 +5369,12 @@ pub(in crate::sumeragi) fn close_runner_ingress_for_finalized_drain(
         "lifecycle Apply dispatch quiescence gate",
         (
             "self.ensure_open()?",
-            "let queued_ingress_is_allowed = self.pending_tip_recovery.is_none() || self.runtime.queued_commands() == 0",
             "self.pending_work() == 0",
             "self.recovered_decision_fetch_request_index_is_exact_and_empty()",
             "self.retained_effect_batch.is_none()",
             "self.parked_effect_batch.is_none()",
             "self.finality_completion.is_none()",
-            "queued_ingress_is_allowed",
+            "self.runtime.queued_commands() == 0",
             "self.runtime.lifecycle_decision_apply_dispatch_available()",
         ),
     )

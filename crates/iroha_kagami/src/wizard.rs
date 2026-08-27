@@ -13,7 +13,7 @@ use iroha_primitives::addr::{SocketAddr, SocketAddrHost};
 use norito::json::{self, Value as JsonValue};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fmt, fs,
+    fmt,
     fs::File,
     io::{BufWriter, Read as _, Write},
     net::{Ipv4Addr, Ipv6Addr},
@@ -1079,7 +1079,9 @@ fn wizard_reply_source_capacity(config: &TomlValue) -> Result<usize> {
         .get("lane_profile")
         .and_then(TomlValue::as_str)
         .unwrap_or(defaults::network::lane_profile::DEFAULT);
-    let lane_profile = actual::LaneProfile::from_label(lane_profile);
+    let lane_profile = actual::LaneProfile::parse_label(lane_profile).ok_or_else(|| {
+        eyre!("wizard template network.lane_profile must be exactly `core` or `home`")
+    })?;
     Ok(lane_profile
         .derived_limits()
         .max_total_connections
@@ -1379,6 +1381,7 @@ fn trusted_peers_contain_key(peers: &[String], key: &PublicKey) -> Result<bool> 
 mod tests {
     use super::*;
     use iroha_config::base::toml::TomlSource;
+    use std::fs;
     fn checked_wizard_bls_keypair() -> KeyPair {
         KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
             .expect("wizard BLS fixture key generation should succeed")

@@ -1291,7 +1291,19 @@ fn parse_proxy_value(raw: &str) -> std::result::Result<Proxy, String> {
     })
 }
 // ---- TCP socket option helpers ----
-fn build_connect_request(target: &str, proxy: &Proxy) -> SensitiveBytes {
+fn http_connect_authority(target: &SocketAddr) -> Result<String> {
+    match target {
+        SocketAddr::Ipv4(addr) => Ok(format!("{}:{}", addr.ip, addr.port)),
+        SocketAddr::Ipv6(addr) => Ok(format!("[{}]:{}", addr.ip, addr.port)),
+        SocketAddr::Host(addr) => {
+            let host = normalize_dns_name(addr.host.as_ref())?;
+            Ok(format!("{host}:{}", addr.port))
+        }
+    }
+}
+
+fn build_connect_request(target: &SocketAddr, proxy: &Proxy) -> Result<SensitiveBytes> {
+    let target = http_connect_authority(target)?;
     let prefix =
         format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\nConnection: keep-alive\r\n");
     let mut headers = SensitiveBytes::from_vec(prefix.into_bytes());
@@ -1310,7 +1322,7 @@ fn build_connect_request(target: &str, proxy: &Proxy) -> SensitiveBytes {
         authorization.clear();
     }
     headers.extend_from_slice(b"\r\n");
-    headers
+    Ok(headers)
 }
 async fn socks5_negotiate_method<S>(stream: &mut S, proxy: &Proxy) -> Result<u8>
 where
@@ -1445,8 +1457,10 @@ async fn http_connect_tunnel<S>(
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
-    let target = target.to_string();
-    let mut req = build_connect_request(&target, proxy);
+    // Construct and validate the complete authority before writing any proxy
+    // bytes. `SocketAddrHost` is Norito-decodable and therefore must not be
+    // interpolated directly into HTTP syntax.
+    let mut req = build_connect_request(target, proxy)?;
     let write_result = stream.write_all(req.as_slice()).await;
     req.clear();
     write_result?;
@@ -1808,7 +1822,12 @@ mod tests {
             port: 8443,
             auth: Some(Arc::new(ProxyCredentials::new("user", "pass"))),
         };
-        let mut req = build_connect_request("dest:443", &proxy);
+        let target = SocketAddr::Host(
+            "dest:443"
+                .parse()
+                .expect("canonical hostname socket address"),
+        );
+        let mut req = build_connect_request(&target, &proxy).expect("CONNECT request");
         assert!(
             std::str::from_utf8(req.as_slice())
                 .expect("ASCII request")
@@ -1822,7 +1841,7 @@ mod tests {
             port: 8080,
             auth: None,
         };
-        let req = build_connect_request("dest:443", &proxy_no_auth);
+        let req = build_connect_request(&target, &proxy_no_auth).expect("CONNECT request");
         assert!(
             !std::str::from_utf8(req.as_slice())
                 .expect("ASCII request")

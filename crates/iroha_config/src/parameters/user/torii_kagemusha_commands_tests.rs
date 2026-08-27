@@ -47,7 +47,6 @@ impl Drop for TestKeyFile {
 fn sample() -> ToriiKagemushaCommands {
     let key_pair = KeyPair::from_seed(vec![0x41; 32], Algorithm::Ed25519);
     ToriiKagemushaCommands {
-        enabled: true,
         private_key: Some(key_pair.private_key().clone()),
         private_key_file: None,
         minimum_xor_balance: Quantity::from(25_u32),
@@ -58,9 +57,27 @@ fn sample() -> ToriiKagemushaCommands {
             defaults::torii::kagemusha_commands::OPERATION_REGISTRY_MAX_BYTES,
     }
 }
+fn parse_valid(config: ToriiKagemushaCommands) -> actual::ToriiKagemushaCommands {
+    let mut emitter = Emitter::new();
+    let parsed = config
+        .parse(&mut emitter)
+        .expect("valid Kagemusha command configuration");
+    emitter
+        .into_result()
+        .expect("valid Kagemusha command configuration must not emit errors");
+    parsed
+}
+fn assert_rejected(config: ToriiKagemushaCommands) {
+    let mut emitter = Emitter::new();
+    assert!(config.parse(&mut emitter).is_none());
+    assert!(
+        emitter.into_result().is_err(),
+        "invalid Kagemusha command configuration must emit an error"
+    );
+}
 #[test]
 fn parses_minimal_kagemusha_submission_authority() {
-    let parsed = sample().parse().expect("enabled configuration");
+    let parsed = parse_valid(sample());
     assert_eq!(
         parsed.operation_registry_max_entries.get(),
         defaults::torii::kagemusha_commands::OPERATION_REGISTRY_MAX_ENTRIES
@@ -78,7 +95,7 @@ fn parses_owner_held_kagemusha_submission_key() {
     let mut config = sample();
     config.private_key = None;
     config.private_key_file = Some(WithOrigin::inline(key_file.path().to_path_buf()));
-    let parsed = config.parse().expect("file-backed Kagemusha config");
+    let parsed = parse_valid(config);
     assert_eq!(
         parsed.authority,
         AccountId::new(key_pair.public_key().clone())
@@ -89,13 +106,13 @@ fn rejects_duplicate_kagemusha_private_key_sources() {
     let key_file = TestKeyFile::create("");
     let mut config = sample();
     config.private_key_file = Some(WithOrigin::inline(key_file.path().to_path_buf()));
-    assert!(std::panic::catch_unwind(|| config.parse()).is_err());
+    assert_rejected(config);
 }
 #[test]
 fn rejects_missing_kagemusha_private_key_source() {
     let mut config = sample();
     config.private_key = None;
-    assert!(std::panic::catch_unwind(|| config.parse()).is_err());
+    assert_rejected(config);
 }
 #[test]
 fn rejects_missing_or_malformed_kagemusha_private_key_file() {
@@ -106,7 +123,7 @@ fn rejects_missing_or_malformed_kagemusha_private_key_file() {
         let mut config = sample();
         config.private_key = None;
         config.private_key_file = Some(WithOrigin::inline(key_file.path().to_path_buf()));
-        assert!(std::panic::catch_unwind(|| config.parse()).is_err());
+        assert_rejected(config);
     }
 }
 #[test]
@@ -114,25 +131,25 @@ fn rejects_unsupported_kagemusha_private_key_algorithm() {
     let key_pair = KeyPair::from_seed(vec![0x43; 32], Algorithm::BlsNormal);
     let mut config = sample();
     config.private_key = Some(key_pair.private_key().clone());
-    assert!(std::panic::catch_unwind(|| config.parse()).is_err());
+    assert_rejected(config);
 }
 #[test]
 fn rejects_zero_minimum_xor_balance() {
     let mut config = sample();
     config.minimum_xor_balance = Quantity::zero();
-    assert!(std::panic::catch_unwind(|| config.parse()).is_err());
+    assert_rejected(config);
 }
 #[test]
 fn rejects_zero_operation_registry_limits() {
     let mut config = sample();
     config.operation_registry_max_entries = 0;
-    assert!(std::panic::catch_unwind(|| config.parse()).is_err());
+    assert_rejected(config);
 }
 #[test]
 fn rejects_zero_operation_registry_byte_limit() {
     let mut config = sample();
     config.operation_registry_max_bytes = 0;
-    assert!(std::panic::catch_unwind(|| config.parse()).is_err());
+    assert_rejected(config);
 }
 #[test]
 fn rejects_operation_registry_byte_limit_below_one_entry() {
@@ -143,11 +160,11 @@ fn rejects_operation_registry_byte_limit_below_one_entry() {
     );
     let mut config = sample();
     config.operation_registry_max_bytes = minimum - 1;
-    assert!(std::panic::catch_unwind(|| config.parse()).is_err());
+    assert_rejected(config);
 }
 #[test]
 fn rejects_zero_maximum_transaction_value() {
     let mut config = sample();
     config.max_tx_value = Quantity::zero();
-    assert!(std::panic::catch_unwind(|| config.parse()).is_err());
+    assert_rejected(config);
 }

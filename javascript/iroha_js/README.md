@@ -3649,8 +3649,8 @@ if (snapshot) {
   if (snapshot.confidentialGas) {
     console.log("Conf gas per nullifier:", snapshot.confidentialGas.perNullifier);
   }
-  if (snapshot.transport?.streaming?.soranet) {
-    console.log("SoraNet Norito exit:", snapshot.transport.streaming.soranet.exitMultiaddr);
+  if (snapshot.transport?.noritoRpc) {
+    console.log("Norito-RPC stage:", snapshot.transport.noritoRpc.stage);
   }
 }
 ```

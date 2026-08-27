@@ -44,10 +44,6 @@ MODULE.ROOT_CARGO_LOCK = REPO_ROOT / "Cargo.lock"
 
 DEV_FILES = {
     "README.md",
-    "config-peer-1.toml",
-    "config-peer-2.toml",
-    "config-peer-3.toml",
-    "config.toml",
     "docker-compose.yml",
     "genesis.expected_hash",
     "genesis.json",
@@ -87,7 +83,7 @@ def _valid_cli_tail(tmp_path: Path) -> list[str]:
 def test_profile_allowlist_and_closed_inventories_match_present_bundles() -> None:
     assert set(MODULE.PROFILE_FILES) == {"iroha3-dev"}
     assert set(MODULE.PROFILE_FILES["iroha3-dev"]) == DEV_FILES
-    assert len(DEV_FILES) == 15
+    assert len(DEV_FILES) == 11
     present = {
         path.name
         for path in (REPO_ROOT / "defaults" / "kagami" / "iroha3-dev").iterdir()

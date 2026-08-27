@@ -60,6 +60,8 @@ pub mod proxy;
 pub mod routing_authority;
 pub mod soranet;
 pub mod treasury;
+/// Default owner-local spool used by the optional local QUIC proxy bridges.
+pub const DEFAULT_LOCAL_PROXY_BRIDGE_SPOOL_DIR: &str = "./storage/streaming/soranet_routes";
 pub(crate) const SORANET_PQ_RANK_STEP_WEIGHT: u32 = 250;
 pub(crate) const SORANET_PQ_HANDSHAKE_BONUS: u32 = 500;
 pub(crate) const SORANET_BANDWIDTH_UNIT_BYTES: u64 = 256 * 1024; // 256 KiB per weight step.

@@ -176,8 +176,17 @@ replacement. Invalid mixed-stage groups fail before any claim or temporary-file
 write, while exact restart prefixes and fully released retries stutter. A separate pre-Kura
 reservation-batch direct-release path uses the same complete-group predicate and consumes
 its checked `DirectReleased` projection under the Queue transition and FIFO
-locks immediately before the durable release append. Existing bounded
-consumers also recheck durable execution input/READY QC/lane Commit at merge
+locks immediately before the durable release append. A retired non-producer
+replica may use that direct-release projection only after the complete durable
+ReleasePending prefix and an exact signed actor/producer distinction. Queue
+then proves the ordered group is already FIFO-only without manufacturing the
+producer's reservation owner and retains the move-only exact-hash fence while
+Kura advances the Released prefix and through terminal Queue evidence. The first
+FIFO proof remains a state-changing `ComposedNext`; an unchanged retry from an
+already `DirectReleased` state is accepted only as
+`ReleaseReservationDirectProofStutter`, with identical before/after states, and
+cannot masquerade as a state-changing `Next` step. Existing bounded consumers
+also recheck durable execution input/READY QC/lane Commit at merge
 source admission. Canonical `ApplyCarrier` projections remain in a move-only
 batch that V2 boxes as a `StateBlockCommitAuthorization`; State consumes the
 exact block/merge/cardinality-bound batch under `state_commit_lock` and the
@@ -247,8 +256,12 @@ fanout/late-body custody, lane commit, canonical WSV application, Commit
 cleanup, and ordered release. Its reverse
 terminal-owner projection distinguishes canonical-WSV Commit ownership from
 ordinary-FIFO ordered/direct release. Snapshot recovery maps to an abstract
-stutter, and direct release is an explicit named action. The schema-bound V1
-journal operation inventory contains no lane-wide removal action.
+stutter, and direct release is an explicit named action with separate ordinary
+live/no-owner and strict retired non-producer FIFO-only branches. The latter
+requires the complete ReleasePending prefix, preserves the producer's absent
+Queue reservation ownership, and permits only that exact replica owner to
+advance the Released prefix. The schema-bound V1 journal operation inventory
+contains no lane-wide removal action.
 The deterministic autonomous selection linearization point now derives its
 move-only authority from the canonical slot committee/author, revalidates the
 exact QueuePlan registry and FIFO selection, derives the complete ordered

@@ -4290,15 +4290,7 @@ mod tests {
             execute_trigger::ExecuteTriggerEventFilter,
             time::{ExecutionTime, Schedule, TimeEventFilter},
         },
-        governance::types::{
-            BallotAttemptId, BeaconPulseId, BeaconSessionId, BodyElectionAttemptId, BodyInstanceId,
-            GovernanceAttemptId, GovernanceCertificateId, GovernanceCertificateV1,
-            GovernanceExpectedHeadPresentV1, GovernanceExpectedHeadV1,
-            ParliamentAggregateOutcomeV1, ParliamentAggregateTallyV1,
-            ParliamentBallotCertificateBindingV1, ParliamentBody,
-            ParliamentBodyCertificateBindingV1, ProposalContentId, RiskTierV1, SortitionRequestV1,
-            TleKeySessionId, TleSessionId, parliament_ballot_result_root_v1,
-        },
+        governance::types::{GovernanceAttemptId, GovernanceCertificateId},
         hijiri::{FeeMultiplierBand, HijiriAccountRiskV1, HijiriFeePolicy, Q16},
         isi::{
             InstructionBox, Transfer, TransferAssetBatchEntry,
@@ -4472,8 +4464,11 @@ mod tests {
         policy.expires_after_height = Some(policy.effective_from_height + 100);
         policy
     }
+    fn test_parliament_candidates() -> Vec<AccountId> {
+        (220_u8..=243).map(account).collect()
+    }
     fn test_authorization(
-        proposal_fingerprint: [u8; 32],
+        proposal: &iroha_data_model::governance::types::ProposalKind,
         policy_effective_height: u64,
     ) -> ValidationFeeParliamentAuthorizationV1 {
         let enacted_at_height = policy_effective_height
@@ -4481,131 +4476,29 @@ mod tests {
                 iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS,
             )
             .expect("test policy leaves the full activation delay");
-        let base = enacted_at_height
-            .checked_sub(15)
-            .expect("test policy leaves a complete Parliament certificate lifecycle");
-        let root = |marker: u8| [marker; 32];
-        let proposal_content_id = ProposalContentId::new(proposal_fingerprint);
-        let governance_attempt_sequence = 0;
-        let governance_attempt_id =
-            GovernanceAttemptId::derive_v1(proposal_content_id, governance_attempt_sequence);
-        let election_attempt_sequence = 0;
-        let election_attempt_id = BodyElectionAttemptId::derive_v1(
-            governance_attempt_id,
-            ParliamentBody::PolicyJury,
-            election_attempt_sequence,
+        let attempt = crate::governance::parliament::enacted_parliament_attempt_for_testing(
+            proposal,
+            test_parliament_candidates(),
+            &validation_fee_test_network_id(),
+            enacted_at_height,
         );
-        let beacon_session_id = BeaconSessionId::new(root(2));
-        let sortition_request = SortitionRequestV1::try_new_canonical(
-            governance_attempt_id,
-            election_attempt_id,
-            ParliamentBody::PolicyJury,
-            root(1),
-            3,
-            3,
-            base + 1,
-            base + 2,
-            beacon_session_id,
-            None,
-        )
-        .expect("canonical validation-fee Policy Jury request");
-        let roster_root = root(4);
-        let body_instance_id = BodyInstanceId::derive_v1(election_attempt_id, roster_root);
-        let ballot_attempt_sequence = 0;
-        let ballot_attempt_id =
-            BallotAttemptId::derive_v1(body_instance_id, ballot_attempt_sequence);
-        let release_beacon_session_id = BeaconSessionId::new(root(7));
-        let tle_key_session_id = TleKeySessionId::new(root(8));
-        let release_height = base + 12;
-        let tle_session_id = TleSessionId::derive_v1(
-            ballot_attempt_id,
-            tle_key_session_id,
-            release_beacon_session_id,
-            release_height,
-        );
-        let opening_root = root(16);
-        let tally = ParliamentAggregateTallyV1 {
-            original_seats: 3,
-            accepted_ballots: 3,
-            aye: 2,
-            nay: 1,
-            abstain: 0,
-        };
-        let outcome = ParliamentAggregateOutcomeV1::Approved;
-        let result_height = base + 13;
-        let result_root = parliament_ballot_result_root_v1(
-            governance_attempt_id,
-            body_instance_id,
-            ballot_attempt_id,
-            opening_root,
-            tally,
-            outcome,
-            result_height,
-        );
-        let governance_certificate = GovernanceCertificateV1 {
-            proposal_content_id,
-            governance_attempt_id,
-            governance_attempt_sequence,
-            risk_tier: RiskTierV1::Standard,
-            body_bindings: vec![ParliamentBodyCertificateBindingV1 {
-                body_instance_id,
-                election_attempt_id,
-                election_attempt_sequence,
-                sortition_request_id: sortition_request.id,
-                sortition_request,
-                body: ParliamentBody::PolicyJury,
-                original_seats: tally.original_seats,
-                beacon_session_id,
-                beacon_pulse_id: BeaconPulseId::new(root(3)),
-                roster_root,
-                assignment_root: root(5),
-                result_root,
-                result_height,
-                public_finding: None,
-                ballot: Some(ParliamentBallotCertificateBindingV1 {
-                    ballot_attempt_id,
-                    ballot_attempt_sequence,
-                    tle_session_id,
-                    tle_key_session_id,
-                    registration_root: root(9),
-                    dropout_root: root(10),
-                    survivor_root: root(11),
-                    corpus_root: root(12),
-                    no_recovery_root: root(13),
-                    timed_commitment_root: root(14),
-                    release_beacon_session_id,
-                    registered_at_height: base + 3,
-                    registration_close_height: base + 7,
-                    survivor_freeze_height: base + 10,
-                    commitment_close_height: base + 11,
-                    registration_closed_at_height: base + 7,
-                    survivors_frozen_at_height: base + 10,
-                    commitment_closed_at_height: base + 11,
-                    max_ballot_retries: 3,
-                    max_corpus_entries: 3,
-                    release_height,
-                    opening_deadline_height: result_height,
-                    release_pulse_id: BeaconPulseId::new(root(15)),
-                    opening_height: release_height,
-                    opening_root,
-                    tally,
-                    outcome,
-                }),
-            }],
-            policy_version: 1,
-            effect_preimage_hash: root(19),
-            expected_head: GovernanceExpectedHeadV1::Present(GovernanceExpectedHeadPresentV1 {
-                subject_id: root(17),
-                version: 1,
-                head_root: root(18),
-            }),
-            certified_at_height: base + 14,
-            enact_at_height: enacted_at_height,
+        let governance_certificate = attempt
+            .certificate()
+            .cloned()
+            .expect("test Parliament attempt retains its enacted certificate");
+        let proposal_operator = match proposal {
+            iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(proposal) => {
+                proposal.proposal_operator.clone()
+            }
+            iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(
+                proposal,
+            ) => proposal.proposal_operator.clone(),
+            _ => panic!("validation-fee authorization fixture requires a validation-fee proposal"),
         };
         let governance_certificate_id = GovernanceCertificateId::derive_v1(&governance_certificate);
         ValidationFeeParliamentAuthorizationV1 {
-            proposal_operator: account(250),
-            proposal_fingerprint,
+            proposal_operator,
+            proposal_fingerprint: proposal.fingerprint(),
             governance_certificate_id,
             governance_certificate,
             enacted_at_height,
@@ -4628,11 +4521,10 @@ mod tests {
                             payout_binding: binding.clone(),
                         },
                     );
-                    let lifecycle_id = lifecycle_kind.fingerprint();
                     ValidationFeePayoutLifecycleReferenceV1 {
                         lifecycle_seal,
                         parliament_authorization: test_authorization(
-                            lifecycle_id,
+                            &lifecycle_kind,
                             policy.effective_from_height,
                         ),
                     }
@@ -4645,10 +4537,9 @@ mod tests {
                     policy: policy.clone(),
                     payout_lifecycle_proposal_id: lifecycle_id,
                 });
-                let proposal_id = kind.fingerprint();
                 ValidationFeePolicyRegistryEntryV1::from_enactment(
                     policy.clone(),
-                    test_authorization(proposal_id, policy.effective_from_height),
+                    test_authorization(&kind, policy.effective_from_height),
                     payout_lifecycle,
                 )
                 .expect("registry entry")
@@ -4666,18 +4557,35 @@ mod tests {
         let proposal_id = authorization.proposal_fingerprint;
         assert_eq!(kind.fingerprint(), proposal_id);
         assert_eq!(authorization.invariant_error(), None);
+        let proposal_operator = authorization.proposal_operator.clone();
+        let attempt = crate::governance::parliament::enacted_parliament_attempt_for_testing(
+            &kind,
+            test_parliament_candidates(),
+            &validation_fee_test_network_id(),
+            authorization.enacted_at_height,
+        );
+        assert_eq!(
+            attempt.certificate(),
+            Some(&authorization.governance_certificate),
+            "authorization must retain the exact certificate produced by its Parliament attempt"
+        );
+        let attempt_id = attempt.attempt().id;
         state_tx
             .world
             .put_governance_proposal(
                 proposal_id,
                 crate::state::GovernanceProposalRecord {
-                    proposer: account(250),
+                    proposer: proposal_operator,
                     kind,
                     created_height: 1,
                     status: crate::state::GovernanceProposalStatus::Enacted,
                 },
             )
             .expect("validation-fee test proposal must satisfy first-release JSON bounds");
+        state_tx
+            .world
+            .put_parliament_attempt_for_testing(attempt_id, attempt)
+            .expect("persist exact enacted validation-fee Parliament attempt");
     }
     fn install_policy_registry_fixture(
         registry: &ValidationFeePolicyRegistryV1,

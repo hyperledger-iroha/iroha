@@ -107,14 +107,14 @@ RUNTIME_SIGNER_DIRECTORY = Path("runtime") / "taira-runtime-signers"
 RUNTIME_SIGNER_FILE_BYTES = 71
 TAIRA_NEXUS_STORAGE_AGGREGATE_BYTES = 68_719_476_736
 TAIRA_NEXUS_STORAGE_WEIGHTS = (
-    ("kura_blocks_bps", 5_500),
+    ("kura_blocks_bps", 6_000),
     ("wsv_snapshots_bps", 2_000),
     ("sorafs_bps", 2_000),
-    ("soranet_spool_bps", 250),
-    ("soravpn_spool_bps", 250),
 )
 STORAGE_WEIGHT_BASIS_POINTS = 10_000
 TAIRA_SORAFS_MAX_CAPACITY_BYTES = 13_743_895_347
+TAIRA_SORACLOUD_HYDRATION_CONCURRENCY = 4
+TAIRA_SORACLOUD_PREPARED_RUNTIME_CACHE_CAPACITY = 4
 TAIRA_INROU_IDENTITY_BASE = 70_000
 TAIRA_INROU_IDENTITY_SLOTS = PEER_COUNT
 TAIRA_INROU_IDENTITY_NAME_PREFIX = "iroha-inrou-"
@@ -2935,6 +2935,39 @@ def fsync_directory(path: Path, *, label: str) -> None:
             fail(f"cannot close {label} {path}: {error}")
 
 
+def _require_canonical_taira_runtime_profile(
+    config: Path,
+    lines: Sequence[str],
+    runtime: tuple[str, bool, int, int],
+) -> None:
+    """Require the exact first-release Taira Soracloud resource profile."""
+
+    assignments = _storage_section_assignments(config, lines, runtime)
+    _require_exact_keys(
+        config,
+        _SORACLOUD_RUNTIME_SECTION,
+        assignments,
+        {
+            "state_dir",
+            "production_mode",
+            "hydration_concurrency",
+            "prepared_runtime_cache_capacity",
+        },
+    )
+    expected = {
+        "production_mode": "true",
+        "hydration_concurrency": str(TAIRA_SORACLOUD_HYDRATION_CONCURRENCY),
+        "prepared_runtime_cache_capacity": str(
+            TAIRA_SORACLOUD_PREPARED_RUNTIME_CACHE_CAPACITY
+        ),
+    }
+    if any(assignments[field] != value for field, value in expected.items()):
+        fail(
+            "generated [soracloud_runtime] is not the exact first-release "
+            f"Taira resource profile: {config}"
+        )
+
+
 def _atomic_replace_generated_config(path: Path, text: str) -> None:
     """Replace one generated config without exposing a partially written file."""
 
@@ -3094,6 +3127,10 @@ def _validated_generated_taira_profiles(target: Path) -> tuple[tuple[Path, str],
         lines, sections = _require_canonical_taira_storage_profile(
             target, peer_index, config, text
         )
+        runtime = _one_storage_section(
+            config, sections, _SORACLOUD_RUNTIME_SECTION
+        )
+        _require_canonical_taira_runtime_profile(config, lines, runtime)
         _require_canonical_taira_egress(config, lines, sections)
         retained = [
             section[0]
@@ -3132,6 +3169,10 @@ def require_canonical_taira_profiles(
         lines, sections = _require_canonical_taira_storage_profile(
             target, peer_index, config, text
         )
+        runtime = _one_storage_section(
+            config, sections, _SORACLOUD_RUNTIME_SECTION
+        )
+        _require_canonical_taira_runtime_profile(config, lines, runtime)
         _require_canonical_taira_egress(config, lines, sections)
         inrou = _one_storage_section(config, sections, _SORACLOUD_RUNTIME_INROU_SECTION)
         related = [

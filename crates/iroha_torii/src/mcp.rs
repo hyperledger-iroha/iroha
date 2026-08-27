@@ -18,7 +18,9 @@ use axum::{
 use base64::Engine as _;
 use blake3::Hasher as Blake3Hasher;
 use iroha_crypto::PublicKey;
-use iroha_data_model::account::AccountAddress;
+use iroha_data_model::{
+    account::AccountAddress, governance::types::MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1,
+};
 use iroha_torii_shared::parliament_api::{
     PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA_NAME_V1,
     PARLIAMENT_TIMED_OVN_CASTING_PROOF_VERSION_V1, ParliamentTimedOvnCastingProofRequestV1,
@@ -4782,6 +4784,11 @@ fn parliament_timed_ovn_casting_proof_request(
         trusted_checkpoint_height,
     })
 }
+fn parliament_timed_ovn_casting_proof_request_bytes(arguments: &Map) -> Result<Vec<u8>, String> {
+    let request = parliament_timed_ovn_casting_proof_request(arguments)?;
+    norito::to_bytes(&request)
+        .map_err(|error| format!("failed to frame Parliament casting-proof request: {error}"))
+}
 async fn dispatch_iroha_gov_parliament_timed_ovn_casting_proof_get(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4791,7 +4798,7 @@ async fn dispatch_iroha_gov_parliament_timed_ovn_casting_proof_get(
         arguments,
         "Parliament timed-OVN casting-proof read",
     )?;
-    let request = parliament_timed_ovn_casting_proof_request(arguments)?;
+    let request = parliament_timed_ovn_casting_proof_request_bytes(arguments)?;
     let path = format!("/v1/gov/parliament/ballots/{ballot_attempt_id}/casting-proof");
     dispatch_route(
         app,
@@ -4799,7 +4806,7 @@ async fn dispatch_iroha_gov_parliament_timed_ovn_casting_proof_get(
         Method::POST,
         &path,
         arguments.get("headers"),
-        norito::codec::Encode::encode(&request),
+        request,
         Some(crate::utils::NORITO_MIME_TYPE.to_owned()),
         Some(crate::utils::NORITO_MIME_TYPE.to_owned()),
     )
@@ -8796,7 +8803,7 @@ fn iroha_gov_parliament_attempt_draft_tool() -> ToolSpec {
                         "attempt_sequence": {
                             "type": "integer",
                             "minimum": 0,
-                            "maximum": 4_294_967_295_u64
+                            "maximum": (u64::from(MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1))
                         }
                     }
                 },
@@ -9647,6 +9654,30 @@ mod tests {
     include!("mcp/bounds_tests.rs");
 
     #[test]
+    fn parliament_attempt_draft_tool_caps_attempt_sequence_at_retry_limit() {
+        let tool = iroha_gov_parliament_attempt_draft_tool();
+        let properties = tool
+            .input_schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("attempt-draft tool properties");
+        let body_properties = properties
+            .get("body")
+            .and_then(Value::as_object)
+            .and_then(|body| body.get("properties"))
+            .and_then(Value::as_object)
+            .expect("attempt-draft body properties");
+        assert_eq!(
+            body_properties
+                .get("attempt_sequence")
+                .and_then(Value::as_object)
+                .and_then(|sequence| sequence.get("maximum"))
+                .and_then(Value::as_u64),
+            Some(u64::from(MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1))
+        );
+    }
+
+    #[test]
     fn simple_manual_get_tools_share_the_exact_read_contract() {
         let tools = [
             iroha_vpn_profile_tool(),
@@ -9847,7 +9878,7 @@ mod tests {
             "path": {
                 "ballot_attempt_id": "0101010101010101010101010101010101010101010101010101010101010101"
             },
-            "trusted_checkpoint_height": 41_u64,
+            "trusted_checkpoint_height": 17_u64,
             "headers": {}
         });
         let arguments = arguments.as_object().expect("arguments");
@@ -9857,8 +9888,13 @@ mod tests {
             request.version,
             PARLIAMENT_TIMED_OVN_CASTING_PROOF_VERSION_V1
         );
-        assert_eq!(request.trusted_checkpoint_height, 41);
-        let encoded = norito::codec::Encode::encode(&request);
+        assert_eq!(request.trusted_checkpoint_height, 17);
+        let encoded = parliament_timed_ovn_casting_proof_request_bytes(arguments)
+            .expect("framed casting-proof request");
+        assert_eq!(
+            hex::encode(&encoded),
+            "4e5254300000adccf322a5fcf43040e20bea238f55f3000c00000000000000dfab61022cefc29f02020100081100000000000000"
+        );
         assert_eq!(
             norito::decode_from_bytes::<ParliamentTimedOvnCastingProofRequestV1>(&encoded)
                 .expect("canonical casting-proof request"),

@@ -511,20 +511,18 @@ fn rekey_account_id(
     labels_to_repoint.extend(
         state_transaction
             .world
-            .account_aliases
-            .view()
-            .iter()
-            .filter(|(_, account_id)| *account_id == old_account)
-            .map(|(label, _)| label.clone()),
-    );
-    labels_to_repoint.extend(
-        state_transaction
-            .world
-            .account_rekey_records
-            .view()
-            .iter()
-            .filter(|(_, record)| &record.active_account_id == old_account)
-            .map(|(label, _)| label.clone()),
+            .account_rekey_records_by_account
+            .get(old_account)
+            .into_iter()
+            .flat_map(BTreeSet::iter)
+            .filter(|label| {
+                state_transaction
+                    .world
+                    .account_rekey_records
+                    .get(label)
+                    .is_some_and(|record| &record.active_account_id == old_account)
+            })
+            .cloned(),
     );
     if let Some(label) = account_value.label().cloned() {
         labels_to_repoint.insert(label);
@@ -653,10 +651,8 @@ fn rekey_account_id(
         state_transaction
             .world
             .insert_account_alias_binding(label.clone(), new_account.clone());
-        state_transaction
-            .world
-            .account_rekey_records
-            .insert(label, record);
+        debug_assert_eq!(label, record.label);
+        state_transaction.world.replace_account_rekey_record(record);
     }
     for (_, (storage_key, record)) in alias_lease_updates {
         state_transaction
@@ -3135,7 +3131,7 @@ mod tests {
                 SettlementReceipt,
             },
         },
-        kaigi::{KaigiId, KaigiRecord, NewKaigi, kaigi_metadata_key},
+        kaigi::{KaigiId, KaigiRecord, NewKaigi},
         nexus::{DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, UniversalAccountId},
         oracle::{FeedConfigVersion, FeedEvent, FeedEventOutcome, FeedSuccess, ObservationValue},
         permission::Permission,
@@ -4252,14 +4248,8 @@ mod tests {
             &NewKaigi::with_defaults(call_id.clone(), old_account.clone()),
             0,
         );
-        tx.world
-            .domain_mut(&domain_id)
-            .expect("domain")
-            .metadata_mut()
-            .insert(
-                kaigi_metadata_key(&call_id.call_name).expect("Kaigi key"),
-                Json::try_new(record).expect("serialize Kaigi record"),
-            );
+        crate::smartcontracts::isi::kaigi::store_kaigi_record_for_testing(&mut tx, &record)
+            .expect("store indexed Kaigi fixture");
 
         let error = rekey_account_id(&mut tx, &old_account, &new_account, Some(&domain_id))
             .expect_err("aliasless rekey must not strand the active Kaigi host ID");
@@ -4409,7 +4399,7 @@ mod tests {
             .get(&aliases[0])
             .cloned()
             .expect("canonical continuity record");
-        tx.world.account_rekey_records.remove(aliases[0].clone());
+        tx.world.remove_account_rekey_record(&aliases[0]);
         let err = rekey_account_id(&mut tx, &old_account, &new_account, Some(&domain_id))
             .expect_err("missing continuity record must reject account rekey");
         assert!(
@@ -4417,16 +4407,14 @@ mod tests {
             "{err}"
         );
         tx.world
-            .account_rekey_records
-            .insert(aliases[0].clone(), canonical_rekey_record.clone());
+            .replace_account_rekey_record(canonical_rekey_record.clone());
         assert_account_rekey_not_applied(&tx, &old_account, &new_account, &aliases);
         let mut malformed_rekey_record = canonical_rekey_record.clone();
         malformed_rekey_record
             .transition_provenance
             .push(AccountRekeyTransitionProvenance::AccountIdRekey);
         tx.world
-            .account_rekey_records
-            .insert(aliases[0].clone(), malformed_rekey_record);
+            .replace_account_rekey_record(malformed_rekey_record);
         let err = rekey_account_id(&mut tx, &old_account, &new_account, Some(&domain_id))
             .expect_err("malformed continuity record must reject account rekey");
         assert!(
@@ -4435,8 +4423,7 @@ mod tests {
         );
         assert_account_rekey_not_applied(&tx, &old_account, &new_account, &aliases);
         tx.world
-            .account_rekey_records
-            .insert(aliases[0].clone(), canonical_rekey_record);
+            .replace_account_rekey_record(canonical_rekey_record);
         rekey_account_id(&mut tx, &old_account, &new_account, Some(&domain_id))
             .expect("canonical active leases should migrate atomically");
         for alias in &aliases {

@@ -185,7 +185,7 @@ Generate a bare-metal local network: genesis, per-peer configs, client config, a
   Default value: `false`
 * `--asset-definition-id <ASSET_DEFINITION_ID>` — Register additional asset definition IDs owned by the generated client signer. Repeat the flag to register more than one asset definition. A localnet reserve is minted to the generated client signer for each requested asset definition
 * `--block-cadence-ms <MILLISECONDS>` — Override the immutable signed block cadence in milliseconds. Leave unset to use the one-second localnet cadence
-* `--consensus-mode <MODE>` — Consensus mode to emit in genesis/configs. Defaults to `permissioned` for generic localnets. Sora profile localnets and perf profiles require `npos`. Sora profile localnets require `npos` because the global merge ledger is NPoS
+* `--consensus-mode <MODE>` — Consensus mode to emit in genesis/configs. Defaults to `permissioned` for generic localnets. Sora profile localnets and perf profiles require `npos`
 
   Possible values: `permissioned`, `npos`
 
@@ -223,7 +223,7 @@ Generate validator-only Docker Compose from a prepared bundle or explicit dev se
 
    By default, the image is pulled from Docker Hub if not cached. Pass the `--build` option to build the image from a Dockerfile instead.
 
-   **Note**: Swarm only guarantees that the Docker Compose configuration it generates is compatible with the same Git revision it is built from itself. Therefore, if the specified image is not compatible with the version of Swarm you are running, the generated configuration might not work.
+   The image must be built from the same Git revision as Kagami.
 * `-b`, `--build <DIR>` — Build the image from the Dockerfile in the specified directory. Do not rebuild if the image has been cached.
 
    The provided path is resolved relative to the current working directory.
@@ -238,8 +238,6 @@ Generate validator-only Docker Compose from a prepared bundle or explicit dev se
    Note that the target path still needs to be provided, as it is used to resolve paths.
 * `-F`, `--force` — Overwrite the target file if it already exists
 * `--no-banner` — Do not include the banner with the generation notice in the file.
-
-   The banner includes the seed to help with reproducibility.
 
 
 
@@ -296,7 +294,7 @@ Sign the genesis block
 
 ###### **Options:**
 
-* `-o`, `--out-file <PATH>` — Path to signed genesis output file in Norito format (stdout by default)
+* `-o`, `--out-file <PATH>` — Path to signed genesis output file in canonical Norito wire format (stdout by default)
 * `--bound-manifest-out <PATH>` — Persist the exact config-bound genesis manifest used to build the signed block. May point to `GENESIS_FILE` to replace the input only after binding succeeds
 * `--expected-hash-out <PATH>` — Write the canonical checked NetworkId derived from the exact signed consensus-header hash as one line.
 
@@ -305,24 +303,14 @@ Sign the genesis block
 
    The final unique topology must be an exact Sumeragi v2 `3f + 1` committee in the range 4..=31.
 * `--peer-pop <PEER_POPS>` — Embed one or more PoPs into the same transaction as `--topology`. Repeatable flag: `--peer-pop <public_key=pop_hex>`
-* `--private-key <HEX>` — Private key hex (multihash payload, not prefixed) that matches the genesis public key
 * `--private-key-file <PATH>` — Owner-held mode-0600 file containing one canonical private-key multihash
 * `--expected-public-key <PUBLIC_KEY>` — Public key that the selected private key must derive.
 
    Use this when the verifier key is distributed separately from the owner-held signing key, such as through container secrets.
-* `--seed-hex <HEX>` — A 32-byte secret genesis key-generation seed encoded as 64 hexadecimal characters.
-
-   This is a testing convenience. Production operators should prefer an owner-held private-key file.
 * `--creation-time-ms <MILLISECONDS>` — Deterministic genesis transaction creation-time base in Unix milliseconds.
 
    Omit this for a fresh wall-clock timestamp. Fixture generators should set it so repeated signing produces identical canonical wire bytes.
-* `--algorithm <ALGORITHM>` — Algorithm of the genesis key (must match the genesis public key)
-
-  Default value: `ed25519`
 * `--config <PATH>` — Optional peer config TOML used to derive the DA proof-policy bundle embedded into genesis
-* `--consensus-mode <MODE>` — Select the consensus mode to stamp into the manifest (optional override)
-
-  Possible values: `permissioned`, `npos`
 
 
 

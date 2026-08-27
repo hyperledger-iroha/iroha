@@ -39,7 +39,8 @@ pub mod json_macros {
     pub use norito::derive::{FastJson, FastJsonWrite, JsonDeserialize, JsonSerialize};
 }
 /// Outcome shorthand used throughout this crate
-// Note: migrate Kagami CLI to `error_stack` once modules no longer depend on `color_eyre` convenience macros.
+// TODO: Migrate Kagami CLI to `error_stack` once modules no longer depend on
+// `color_eyre` convenience macros.
 pub(crate) type Outcome = color_eyre::Result<()>;
 /// Build-time source identity embedded for release artifact validation.
 const BUILD_SOURCE_ID: Option<&str> = option_env!("IROHA_GIT_COMMIT_HASH");
@@ -116,7 +117,7 @@ trait RunArgs<T: Write> {
     /// if inner command fails.
     fn run(self, writer: &mut BufWriter<T>) -> Outcome;
 }
-#[derive(Parser, Debug)]
+#[derive(Parser)]
 #[command(
     name = "kagami",
     version,
@@ -132,7 +133,7 @@ struct Cli {
 }
 /// Kagami is a task-first Iroha operator toolbox with guided flows for node setup and local
 /// devnets, plus advanced low-level helpers.
-#[derive(Debug, Subcommand)]
+#[derive(Subcommand)]
 enum Command {
     /// Guided node/bootstrap flow for configuring a peer against an existing network profile
     Wizard(wizard::Args),
@@ -157,7 +158,7 @@ enum Command {
     #[clap(subcommand)]
     Advanced(AdvancedCommand),
 }
-#[derive(Debug, Subcommand)]
+#[derive(Subcommand)]
 enum AdvancedCommand {
     /// Generate per-client CLI configs from a base client.toml
     #[command(name = "client-configs")]
@@ -486,6 +487,33 @@ mod tests {
         assert!(parse("kagami keys --out-dir ./custody --json").is_err());
         assert!(parse("kagami keys --out-dir ./custody --private-key deadbeef").is_err());
         assert!(parse("kagami keys --json --json-mh-prefixed").is_err());
+    }
+    #[test]
+    fn genesis_sign_accepts_only_file_backed_private_keys() {
+        assert!(
+            parse("kagami genesis sign ./genesis.json --private-key-file ./genesis.private_key")
+                .is_ok()
+        );
+        assert!(
+            parse("kagami genesis sign ./genesis.json --private-key deadbeef").is_err(),
+            "raw private-key argv input must remain retired"
+        );
+        assert!(
+            parse("kagami genesis sign ./genesis.json --seed-hex 1111111111111111111111111111111111111111111111111111111111111111")
+                .is_err(),
+            "raw signing seeds must remain retired"
+        );
+        assert!(
+            parse("kagami genesis sign ./genesis.json --private-key-file ./genesis.private_key --algorithm ed25519")
+                .is_err(),
+            "the canonical private-key record must be the only algorithm source"
+        );
+        assert!(
+            parse("kagami genesis sign ./genesis.json --private-key-file ./genesis.private_key --consensus-mode npos")
+                .is_err(),
+            "the canonical manifest must be the only consensus-mode source"
+        );
+        assert!(parse("kagami genesis sign ./genesis.json").is_err());
     }
     #[test]
     fn advanced_subcommands_parse() {

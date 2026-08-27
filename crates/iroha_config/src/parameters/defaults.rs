@@ -100,15 +100,11 @@ pub mod taira {
     /// Aggregate Nexus disk budget for one validator.
     pub const NEXUS_STORAGE_BUDGET_BYTES: u64 = 68_719_476_736;
     /// Kura share of the Nexus disk budget, in basis points.
-    pub const NEXUS_KURA_BLOCKS_BPS: u16 = 5_500;
+    pub const NEXUS_KURA_BLOCKS_BPS: u16 = 6_000;
     /// WSV snapshot share of the Nexus disk budget, in basis points.
     pub const NEXUS_WSV_SNAPSHOTS_BPS: u16 = 2_000;
     /// SoraFS share of the Nexus disk budget, in basis points.
     pub const NEXUS_SORAFS_BPS: u16 = 2_000;
-    /// SoraNet spool share of the Nexus disk budget, in basis points.
-    pub const NEXUS_SORANET_SPOOL_BPS: u16 = 250;
-    /// SoraVPN spool share of the Nexus disk budget, in basis points.
-    pub const NEXUS_SORAVPN_SPOOL_BPS: u16 = 250;
     /// Effective SoraFS component cap derived from the aggregate budget.
     pub const SORAFS_STORAGE_CAP_BYTES: u64 =
         NEXUS_STORAGE_BUDGET_BYTES * NEXUS_SORAFS_BPS as u64 / STORAGE_WEIGHT_BASIS_POINTS as u64;
@@ -118,11 +114,7 @@ pub mod taira {
     pub const INROU_EGRESS_MAX_BYTES_PER_MINUTE: u64 = 100 * 1024 * 1024;
 
     const _: () = assert!(
-        NEXUS_KURA_BLOCKS_BPS
-            + NEXUS_WSV_SNAPSHOTS_BPS
-            + NEXUS_SORAFS_BPS
-            + NEXUS_SORANET_SPOOL_BPS
-            + NEXUS_SORAVPN_SPOOL_BPS
+        NEXUS_KURA_BLOCKS_BPS + NEXUS_WSV_SNAPSHOTS_BPS + NEXUS_SORAFS_BPS
             == STORAGE_WEIGHT_BASIS_POINTS
     );
 }
@@ -153,8 +145,21 @@ pub mod soracloud_runtime {
     pub const STATE_DIR: &str = "./storage/soracloud_runtime";
     /// Default reconciliation cadence in milliseconds.
     pub const RECONCILE_INTERVAL_MS: u64 = 5_000;
-    /// Default number of concurrent hydration workers reserved for artifact fetchers.
+    /// Default number of concurrent artifact hydration workers.
+    ///
+    /// This pool is independent of prepared IVM caching and Inrou guest concurrency.
     pub const HYDRATION_CONCURRENCY: NonZeroUsize = nonzero!(4_usize);
+    /// Hard V1 ceiling for concurrent artifact hydration workers.
+    ///
+    /// A remote worker may buffer up to 256 MiB, so V1 limits the pool to 2 GiB of
+    /// concurrent remote payload buffers before protocol and allocator overhead.
+    pub const HYDRATION_CONCURRENCY_MAX: usize = 8;
+    /// Default number of idle prepared IVM runtimes retained across requests.
+    ///
+    /// This cache is independent of artifact hydration and Inrou guest concurrency.
+    pub const PREPARED_RUNTIME_CACHE_CAPACITY: NonZeroUsize = nonzero!(4_usize);
+    /// Hard V1 ceiling for idle prepared IVM runtimes.
+    pub const PREPARED_RUNTIME_CACHE_CAPACITY_MAX: usize = 64;
     /// Default bundle cache budget in bytes.
     pub const BUNDLE_CACHE_BUDGET_BYTES: NonZeroU64 = nonzero!(512_u64 * 1024 * 1024);
     /// Default static-asset cache budget in bytes.
@@ -813,6 +818,10 @@ pub mod network {
     /// Keep this comfortably above the typical integration-test runtime so peers do not churn
     /// before they exchange their first gossip/status messages.
     pub const IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+    /// Maximum total tenure for an accepted transport to authenticate.
+    pub const PREAUTH_TIMEOUT: Duration = Duration::from_secs(30);
+    /// Maximum concurrent pre-authentication transports admitted from one source IP.
+    pub const PREAUTH_MAX_CONNECTIONS_PER_IP: NonZeroUsize = nonzero!(8_usize);
     /// Base deadline for an exact reply to remain owned by one peer writer without a flush.
     pub const REPLY_WRITER_FLUSH_TIMEOUT: Duration = Duration::from_secs(30);
     /// Delay outbound peer dials after startup.
@@ -1006,42 +1015,6 @@ pub mod streaming {
     pub const SESSION_STORE_DIR: &str = "./storage/streaming";
     /// Feature bitmask advertised during capability negotiation (baseline feedback + privacy provider + bundled entropy).
     pub const FEATURE_BITS: u32 = 0b11 | CapabilityFlags::FEATURE_ENTROPY_BUNDLED;
-    /// Defaults applied to SoraNet circuit integration for streaming routes.
-    pub mod soranet {
-        use iroha_config_base::util::Bytes;
-        /// Filesystem exit publication is disabled until RouteOpen proof and durable revocation exist.
-        pub const ENABLED: bool = false;
-        /// Default exit relay multiaddr used when none is provided in manifests.
-        pub const EXIT_MULTIADDR: &str = "/dns/torii/udp/9443/quic";
-        /// Default low-latency padding budget (milliseconds) applied to circuits.
-        pub const PADDING_BUDGET_MS: u16 = 25;
-        /// Access posture enforced by the exit relay (`authenticated` or `read-only`).
-        pub const ACCESS_KIND: &str = "authenticated";
-        /// Domain separator hashed into blinded channel identifiers when deriving defaults.
-        pub const CHANNEL_SALT: &str = "iroha.soranet.channel.seed.v1";
-        /// Reserved legacy spool path; V1 never creates or writes it.
-        pub const PROVISION_SPOOL_DIR: &str = "./storage/streaming/soranet_routes";
-        /// Reserved spool budget; unused while V1 publication is disabled.
-        pub const PROVISION_SPOOL_MAX_BYTES: Bytes = Bytes(0);
-        /// Default segment window (inclusive) used when provisioning privacy routes.
-        pub const PROVISION_WINDOW_SEGMENTS: u64 = 4;
-        /// Maximum number of queued privacy-route provisioning jobs.
-        pub const PROVISION_QUEUE_CAPACITY: u64 = 256;
-        /// Convenience accessor returning the default padding budget as an `Option`.
-        #[must_use]
-        #[allow(clippy::unnecessary_wraps)]
-        pub const fn padding_budget_ms() -> Option<u16> {
-            Some(PADDING_BUDGET_MS)
-        }
-    }
-    /// Defaults applied to SoraVPN local provisioning spools.
-    pub mod soravpn {
-        use iroha_config_base::util::Bytes;
-        /// Directory used to spool SoraVPN route updates before VPN nodes ingest them.
-        pub const PROVISION_SPOOL_DIR: &str = "./storage/streaming/soravpn_routes";
-        /// Maximum on-disk footprint for the SoraVPN provision spool (0 = unlimited).
-        pub const PROVISION_SPOOL_MAX_BYTES: Bytes = Bytes(0);
-    }
     /// Defaults applied to the streaming audio/video sync enforcement gate.
     pub mod sync {
         /// Enable sync enforcement gate (disabled by default until rollout).
@@ -3111,15 +3084,11 @@ pub mod nexus {
         /// WSV hot-tier deterministic encoded-key plus measured-value budget (bytes).
         pub const MAX_WSV_MEMORY_BYTES: Bytes = Bytes(8 * 1024 * 1024 * 1024);
         /// Budget share for Kura block storage (basis points).
-        pub const KURA_BLOCKS_BPS: u16 = 3_000;
+        pub const KURA_BLOCKS_BPS: u16 = 3_500;
         /// Budget share for tiered-state cold snapshots (basis points).
         pub const WSV_SNAPSHOTS_BPS: u16 = 2_000;
         /// Budget share for SoraFS storage (basis points).
-        pub const SORAFS_BPS: u16 = 4_000;
-        /// Budget share for SoraNet route spools (basis points).
-        pub const SORANET_SPOOL_BPS: u16 = 500;
-        /// Budget share reserved for future SoraVPN storage (basis points).
-        pub const SORAVPN_SPOOL_BPS: u16 = 500;
+        pub const SORAFS_BPS: u16 = 4_500;
         /// Total basis points for storage budgeting.
         pub const BPS_TOTAL: u16 = 10_000;
     }
@@ -4183,6 +4152,8 @@ pub mod governance {
     pub const PARLIAMENT_ALTERNATE_SIZE: Option<usize> = None;
     /// Default council quorum requirement expressed in basis points (ceil-divided).
     pub const PARLIAMENT_QUORUM_BPS: u16 = 6_667;
+    /// Exact number of blocks between a Parliament sortition request and its beacon pulse.
+    pub const PARLIAMENT_SORTITION_PULSE_DELAY_BLOCKS: u64 = 4;
     /// Consensus block-height span during which selected primaries and alternates may respond.
     pub const PARLIAMENT_INVITATION_PHASE_BLOCKS: u64 = 3_600;
     /// Consensus block-height span for public-finding endorsements after Reflection begins.

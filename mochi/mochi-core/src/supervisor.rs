@@ -9,9 +9,8 @@ use crate::{
         infer_workspace_root_from_sandbox_root,
     },
     generation::{
-        GenerationInventoryContext, GenerationTransaction, PublicationFaultPoint,
-        VerifiedGeneration, current_generation_id, try_lock_generation_selection,
-        verify_selected_generation,
+        GenerationInventoryContext, GenerationTransaction, VerifiedGeneration,
+        current_generation_id, try_lock_generation_selection, verify_selected_generation,
     },
     genesis,
     logs::{LifecycleEvent, LogStreamKind, PeerLogStream},
@@ -21,6 +20,8 @@ use crate::{
     },
     vault::{SignerVault, SignerVaultError},
 };
+#[cfg(test)]
+use crate::generation::PublicationFaultPoint;
 use iroha_crypto::{
     Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair, PublicKey, bls_normal_pop_prove,
 };
@@ -58,11 +59,9 @@ use std::{
 use tokio::runtime::Handle;
 use zeroize::{Zeroize as _, Zeroizing};
 mod generation_lifecycle;
-mod kagami_verify_parse;
 mod ownership;
 mod selected_storage;
 mod snapshot_label;
-use kagami_verify_parse::parse_kagami_verify_output;
 use ownership::SupervisorOwnershipLock;
 #[cfg(test)]
 use selected_storage::resolve_selected_peer_storage_paths_with_hook;
@@ -94,9 +93,10 @@ const LOCAL_ONBOARDING_TOKEN_FILE: &str = "onboarding.token";
 const LOCAL_ONBOARDING_CREDENTIAL_ID: &str = "local-dev";
 const LOCAL_ONBOARDING_DATASPACE: &str = "universal";
 const LOCAL_ONBOARDING_SIGNER_MAX_BYTES: usize = 1_024;
-const LOCAL_ONBOARDING_TOKEN_MIN_BYTES: usize = 32;
-const LOCAL_ONBOARDING_TOKEN_MAX_BYTES: usize = 256;
-const LOCAL_ONBOARDING_TOKEN_FILE_MAX_BYTES: usize = LOCAL_ONBOARDING_TOKEN_MAX_BYTES + 2;
+const LOCAL_ONBOARDING_TOKEN_PREFIX: &str = "iroha-localnet-";
+const LOCAL_ONBOARDING_TOKEN_HEX_CHARS: usize = 64;
+const LOCAL_ONBOARDING_TOKEN_FILE_MAX_BYTES: usize =
+    LOCAL_ONBOARDING_TOKEN_PREFIX.len() + LOCAL_ONBOARDING_TOKEN_HEX_CHARS;
 const LOCAL_MULTI_PEER_POW_TICKET_TTL_SECS: i64 = 300;
 // Mochi runs every validator on one developer machine. Keep the mandatory
 // SoraNet memory-hard admission proof enabled, but use the protocol's minimum
@@ -278,9 +278,6 @@ pub enum SupervisorError {
     /// External Kagami invocation failed while preparing genesis.
     #[error("failed to generate genesis manifest via `kagami`: {0}")]
     KagamiInvocation(String),
-    /// Validation of a Kagami verify report failed.
-    #[error("kagami verify rejected: {0}")]
-    KagamiVerify(String),
     /// Attempted to start an already running peer.
     #[error("peer `{alias}` already running")]
     PeerAlreadyRunning { alias: String },
@@ -465,7 +462,11 @@ impl OnboardingRuntimeBundle {
                     ))
                 })?;
                 let token = Zeroizing::new(
-                    format!("iroha-localnet-{}", encode_hex(token_entropy.as_slice())).into_bytes(),
+                    format!(
+                        "{LOCAL_ONBOARDING_TOKEN_PREFIX}{}",
+                        encode_hex(token_entropy.as_slice())
+                    )
+                    .into_bytes(),
                 );
                 token_entropy.zeroize();
                 write_new_owner_only_runtime_file(&private_key_file, signer_payload.as_bytes())?;
@@ -656,23 +657,19 @@ fn secret_bytes_equal(left: &[u8], right: &[u8]) -> bool {
         })
         == 0
 }
-fn validated_local_onboarding_token(mut payload: Zeroizing<Vec<u8>>) -> Result<Zeroizing<Vec<u8>>> {
-    let token_len = if payload.ends_with(b"\r\n") {
-        payload.len().saturating_sub(2)
-    } else if payload.ends_with(b"\n") {
-        payload.len().saturating_sub(1)
-    } else {
-        payload.len()
-    };
-    payload.truncate(token_len);
-    if !(LOCAL_ONBOARDING_TOKEN_MIN_BYTES..=LOCAL_ONBOARDING_TOKEN_MAX_BYTES)
-        .contains(&payload.len())
-        || !payload.iter().all(|byte| (b'!'..=b'~').contains(byte))
-    {
-        return Err(SupervisorError::Config(
-            "local onboarding token must contain 32 through 256 printable non-whitespace ASCII bytes"
-                .to_owned(),
-        ));
+fn validated_local_onboarding_token(payload: Zeroizing<Vec<u8>>) -> Result<Zeroizing<Vec<u8>>> {
+    let valid = payload
+        .strip_prefix(LOCAL_ONBOARDING_TOKEN_PREFIX.as_bytes())
+        .is_some_and(|suffix| {
+            suffix.len() == LOCAL_ONBOARDING_TOKEN_HEX_CHARS
+                && suffix
+                    .iter()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+        });
+    if !valid {
+        return Err(SupervisorError::Config(format!(
+            "local onboarding token must use `{LOCAL_ONBOARDING_TOKEN_PREFIX}` followed by exactly {LOCAL_ONBOARDING_TOKEN_HEX_CHARS} lowercase hexadecimal characters"
+        )));
     }
     Ok(payload)
 }
@@ -769,34 +766,6 @@ impl Default for RestartPolicy {
         }
     }
 }
-#[derive(Debug, Clone)]
-struct KagamiVerifyReport {
-    chain_id: Option<String>,
-    vrf_seed_hex: Option<String>,
-    fingerprint: Option<String>,
-}
-fn validate_kagami_verify_binding(
-    report: &KagamiVerifyReport,
-    chain_id: &str,
-    vrf_seed_hex: Option<&str>,
-) -> Result<()> {
-    if let Some(observed_chain_id) = &report.chain_id
-        && observed_chain_id != chain_id
-    {
-        return Err(SupervisorError::KagamiVerify(format!(
-            "kagami verify reported chain `{observed_chain_id}` but genesis was built for `{chain_id}`"
-        )));
-    }
-    if let (Some(expected_seed), Some(observed_seed)) =
-        (vrf_seed_hex, report.vrf_seed_hex.as_deref())
-        && observed_seed != expected_seed
-    {
-        return Err(SupervisorError::KagamiVerify(format!(
-            "kagami verify reported vrf seed `{observed_seed}` but `{expected_seed}` was configured"
-        )));
-    }
-    Ok(())
-}
 /// Connection details for the active Mochi sandbox.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SupervisorSessionInfo {
@@ -831,11 +800,9 @@ pub struct SupervisorSessionInfo {
 #[derive(Debug, Clone)]
 pub struct BinaryPaths {
     irohad: PathBuf,
-    irohad_verified: bool,
     irohad_build_attempted: bool,
     irohad_auto: bool,
     kagami: PathBuf,
-    kagami_verified: bool,
     kagami_build_attempted: bool,
     kagami_auto: bool,
     allow_builds: bool,
@@ -886,7 +853,6 @@ impl BinaryPaths {
     /// Override the path to the `iroha3d` executable.
     pub fn irohad(mut self, path: impl Into<PathBuf>) -> Self {
         self.irohad = path.into();
-        self.irohad_verified = false;
         self.irohad_build_attempted = false;
         self.irohad_auto = false;
         self
@@ -894,7 +860,6 @@ impl BinaryPaths {
     /// Override the path to the `kagami` executable.
     pub fn kagami(mut self, path: impl Into<PathBuf>) -> Self {
         self.kagami = path.into();
-        self.kagami_verified = false;
         self.kagami_build_attempted = false;
         self.kagami_auto = false;
         self
@@ -904,18 +869,13 @@ impl BinaryPaths {
         self.allow_builds = allow;
         self
     }
-    fn irohad_executable(&self) -> &Path {
-        &self.irohad
-    }
     fn ensure_irohad_ready(&mut self) -> Result<&Path> {
         if is_executable_file(&self.irohad) {
-            self.irohad_verified = true;
             return Ok(&self.irohad);
         }
         if !is_explicit_path(&self.irohad) {
             if let Some(resolved) = resolve_name_on_path(self.irohad.as_os_str()) {
                 self.irohad = resolved;
-                self.irohad_verified = true;
                 return Ok(&self.irohad);
             }
         }
@@ -925,7 +885,6 @@ impl BinaryPaths {
                 match try_build_irohad(&workspace) {
                     Ok(path) => {
                         self.irohad = path;
-                        self.irohad_verified = true;
                         return Ok(&self.irohad);
                     }
                     Err(err) => return Err(err),
@@ -952,13 +911,11 @@ impl BinaryPaths {
     }
     fn ensure_kagami_ready(&mut self) -> Result<&Path> {
         if is_executable_file(&self.kagami) {
-            self.kagami_verified = true;
             return Ok(&self.kagami);
         }
         if !is_explicit_path(&self.kagami) {
             if let Some(resolved) = resolve_name_on_path(self.kagami.as_os_str()) {
                 self.kagami = resolved;
-                self.kagami_verified = true;
                 return Ok(&self.kagami);
             }
         }
@@ -968,7 +925,6 @@ impl BinaryPaths {
                 match try_build_kagami(&workspace) {
                     Ok(path) => {
                         self.kagami = path;
-                        self.kagami_verified = true;
                         return Ok(&self.kagami);
                     }
                     Err(err) => return Err(err),
@@ -1000,11 +956,9 @@ impl Default for BinaryPaths {
         let (kagami, kagami_auto) = default_kagami_entry();
         Self {
             irohad,
-            irohad_verified: false,
             irohad_build_attempted: false,
             irohad_auto,
             kagami,
-            kagami_verified: false,
             kagami_build_attempted: false,
             kagami_auto,
             allow_builds: false,
@@ -1610,7 +1564,6 @@ impl SupervisorBuilder {
                 onboarding,
                 binaries,
                 peer_config_overrides: peer_config_overrides.clone(),
-                irohad_ready: false,
                 _ownership_lock: ownership_lock,
             };
             Ok(supervisor)
@@ -1724,40 +1677,6 @@ fn ensure_generated_sumeragi_body_bytes(
         );
     }
     Ok(())
-}
-fn restore_streaming_soranet_defaults(table: &mut toml::Table) {
-    // `StreamingSoranet` is read as one nested value. Once Mochi emits that
-    // table to manage its spool, it must remain structurally complete instead
-    // of relying on defaults that apply only when the whole table is absent.
-    table
-        .entry("enabled")
-        .or_insert(toml::Value::Boolean(false));
-    table
-        .entry("exit_multiaddr")
-        .or_insert_with(|| toml::Value::String("/dns/torii/udp/9443/quic".to_owned()));
-    table
-        .entry("padding_budget_ms")
-        .or_insert(toml::Value::Integer(25));
-    table
-        .entry("access_kind")
-        .or_insert_with(|| toml::Value::String("authenticated".to_owned()));
-    table
-        .entry("channel_salt")
-        .or_insert_with(|| toml::Value::String("iroha.soranet.channel.seed.v1".to_owned()));
-    table
-        .entry("provision_spool_max_bytes")
-        .or_insert(toml::Value::Integer(0));
-    table
-        .entry("provision_window_segments")
-        .or_insert(toml::Value::Integer(4));
-    table
-        .entry("provision_queue_capacity")
-        .or_insert(toml::Value::Integer(256));
-}
-fn restore_streaming_soravpn_defaults(table: &mut toml::Table) {
-    table
-        .entry("provision_spool_max_bytes")
-        .or_insert(toml::Value::Integer(0));
 }
 fn lane_aliases(nexus: Option<&toml::Table>) -> BTreeMap<u32, String> {
     let Some(nexus) = nexus else {
@@ -2130,7 +2049,6 @@ pub struct Supervisor {
     onboarding: OnboardingRuntimeBundle,
     binaries: BinaryPaths,
     peer_config_overrides: PeerConfigOverrides,
-    irohad_ready: bool,
     _ownership_lock: Arc<SupervisorOwnershipLock>,
 }
 impl Supervisor {
@@ -2147,13 +2065,7 @@ impl Supervisor {
         self.peer_config_overrides.torii.as_ref()
     }
     fn ensure_irohad(&mut self) -> Result<&Path> {
-        if !self.irohad_ready {
-            let path = self.binaries.ensure_irohad_ready()?;
-            // Store the resolved path back so subsequent calls reuse it.
-            self.irohad_ready = true;
-            return Ok(path);
-        }
-        Ok(self.binaries.irohad_executable())
+        self.binaries.ensure_irohad_ready()
     }
     fn irohad_path(&mut self) -> Result<PathBuf> {
         self.ensure_irohad().map(|path| path.to_path_buf())
@@ -3626,13 +3538,10 @@ impl PeerSpec {
             }
         }
         root.insert("torii".into(), toml::Value::Table(torii));
-        // Streaming components persist sessions and provisioned routes even
-        // when a developer does not exercise streaming. Give every peer its
-        // own absolute state tree instead of inheriting process-wide relative
-        // defaults from Mochi's launcher directory.
+        // Streaming persists sessions even when a developer does not exercise
+        // it. Give every peer its own absolute state tree instead of inheriting
+        // process-wide relative defaults from Mochi's launcher directory.
         let streaming_dir = self.storage_dir.canonicalize()?.join("streaming");
-        let soranet_spool_dir = streaming_dir.join("soranet_routes");
-        let soravpn_spool_dir = streaming_dir.join("soravpn_routes");
         let mut streaming = toml::Table::new();
         streaming.insert(
             "identity_public_key".into(),
@@ -3652,23 +3561,6 @@ impl PeerSpec {
             toml::Value::String(self.rans_tables_path.display().to_string()),
         );
         streaming.insert("codec".into(), toml::Value::Table(codec));
-        let mut soranet = toml::Table::new();
-        // Automatic route provisioning is optional and unused by Mochi's
-        // local/NEVO profile. An explicit overlay can opt in without changing
-        // ownership of the provision spool.
-        restore_streaming_soranet_defaults(&mut soranet);
-        soranet.insert(
-            "provision_spool_dir".into(),
-            toml::Value::String(soranet_spool_dir.display().to_string()),
-        );
-        streaming.insert("soranet".into(), toml::Value::Table(soranet));
-        let mut soravpn = toml::Table::new();
-        restore_streaming_soravpn_defaults(&mut soravpn);
-        soravpn.insert(
-            "provision_spool_dir".into(),
-            toml::Value::String(soravpn_spool_dir.display().to_string()),
-        );
-        streaming.insert("soravpn".into(), toml::Value::Table(soravpn));
         root.insert("streaming".into(), toml::Value::Table(streaming));
         let mut genesis_table = toml::Table::new();
         genesis_table.insert(
@@ -3813,8 +3705,6 @@ impl PeerSpec {
         // validating that the overlay did not try to redirect it.
         sorafs_storage.insert("data_dir".into(), toml::Value::String(expected_sorafs_dir));
         let expected_streaming_dir = streaming_dir.display().to_string();
-        let expected_soranet_spool_dir = soranet_spool_dir.display().to_string();
-        let expected_soravpn_spool_dir = soravpn_spool_dir.display().to_string();
         let streaming = root
             .entry("streaming")
             .or_insert_with(|| toml::Value::Table(toml::Table::new()))
@@ -3831,9 +3721,9 @@ impl PeerSpec {
             "session_store_dir".into(),
             toml::Value::String(expected_streaming_dir),
         );
-        // A shallow `[streaming.soranet]` overlay replaces the generated
-        // top-level streaming table. Restore required peer identity fields
-        // only when absent, while retaining any explicit overlay values.
+        // A shallow `[streaming]` overlay replaces the generated table. Restore
+        // required peer identity fields only when absent, while retaining any
+        // explicit overlay values.
         streaming
             .entry("identity_public_key")
             .or_insert_with(|| toml::Value::String(self.keys.identity_public_key.to_string()));
@@ -3875,47 +3765,6 @@ impl PeerSpec {
             "rans_tables_path".into(),
             toml::Value::String(expected_rans_tables_path),
         );
-        let soranet = streaming
-            .entry("soranet")
-            .or_insert_with(|| toml::Value::Table(toml::Table::new()))
-            .as_table_mut()
-            .ok_or_else(|| {
-                SupervisorError::Config("streaming.soranet must be a table".to_owned())
-            })?;
-        if let Some(configured) = soranet.get("provision_spool_dir")
-            && configured.as_str() != Some(expected_soranet_spool_dir.as_str())
-        {
-            return Err(SupervisorError::Config(format!(
-                "temporary config overlays must preserve Mochi's managed SoraNet provision spool `{expected_soranet_spool_dir}`"
-            )));
-        }
-        soranet.insert(
-            "provision_spool_dir".into(),
-            toml::Value::String(expected_soranet_spool_dir),
-        );
-        soranet
-            .entry("enabled")
-            .or_insert(toml::Value::Boolean(false));
-        restore_streaming_soranet_defaults(soranet);
-        let soravpn = streaming
-            .entry("soravpn")
-            .or_insert_with(|| toml::Value::Table(toml::Table::new()))
-            .as_table_mut()
-            .ok_or_else(|| {
-                SupervisorError::Config("streaming.soravpn must be a table".to_owned())
-            })?;
-        if let Some(configured) = soravpn.get("provision_spool_dir")
-            && configured.as_str() != Some(expected_soravpn_spool_dir.as_str())
-        {
-            return Err(SupervisorError::Config(format!(
-                "temporary config overlays must preserve Mochi's managed SoraVPN provision spool `{expected_soravpn_spool_dir}`"
-            )));
-        }
-        soravpn.insert(
-            "provision_spool_dir".into(),
-            toml::Value::String(expected_soravpn_spool_dir),
-        );
-        restore_streaming_soravpn_defaults(soravpn);
         let header = Self::config_header(
             chain_id,
             genesis,
@@ -4035,9 +3884,6 @@ struct GenesisMaterial {
     public_key_path: PathBuf,
     expected_hash: Option<HashOf<BlockHeader>>,
     chain_discriminant: u16,
-    profile: Option<GenesisProfile>,
-    vrf_seed_hex: Option<String>,
-    verify_report: Option<KagamiVerifyReport>,
     consensus_fingerprint: Option<String>,
 }
 #[derive(Clone, Copy)]
@@ -4079,7 +3925,9 @@ impl TemporaryGenesisKeyFile {
                 Err(error) => return Err(error.into()),
             };
             let guard = Self { path };
-            let canonical = ExposedPrivateKey(key_pair.private_key().clone()).to_string();
+            let canonical = Zeroizing::new(
+                ExposedPrivateKey(key_pair.private_key().clone()).to_string(),
+            );
             file.write_all(canonical.as_bytes())?;
             file.write_all(b"\n")?;
             file.sync_all()?;
@@ -4228,9 +4076,6 @@ impl GenesisMaterial {
             public_key_path,
             expected_hash: None,
             chain_discriminant: manifest.chain_discriminant(),
-            profile: genesis_profile,
-            vrf_seed_hex: vrf_seed_hex.map(|value| value.to_owned()),
-            verify_report: None,
             consensus_fingerprint: None,
         };
         let primary = peers.first().ok_or_else(|| {
@@ -4249,35 +4094,19 @@ impl GenesisMaterial {
             consensus_mode,
         )?;
         material.expected_hash = Some(expected_hash);
-        let verify_report = if let Some(profile) = genesis_profile {
-            Some(Self::verify_manifest_with_kagami(
+        if let Some(profile) = genesis_profile {
+            Self::verify_manifest_with_kagami(
                 binaries,
                 &material.manifest_path,
                 profile,
                 vrf_seed_hex,
-            )?)
-        } else {
-            None
-        };
-        if let Some(report) = &verify_report {
-            validate_kagami_verify_binding(report, chain_id, vrf_seed_hex)?;
+            )?;
         }
-        let consensus_fingerprint = verify_report
-            .as_ref()
-            .and_then(|report| report.fingerprint.clone())
-            .or_else(|| {
-                manifest
-                    .consensus_fingerprint()
-                    .map(|value| value.to_string())
-            })
-            .or_else(|| {
-                let normalized = manifest.clone().with_consensus_meta();
-                normalized
-                    .consensus_fingerprint()
-                    .map(|value| value.to_string())
-            });
-        material.verify_report = verify_report;
-        material.consensus_fingerprint = consensus_fingerprint;
+        material.consensus_fingerprint = manifest
+            .clone()
+            .with_consensus_meta()
+            .consensus_fingerprint()
+            .map(|value| value.to_string());
         Ok(material)
     }
     fn copy_into_generation(&self, generation_id: &str, generation_root: &Path) -> Result<Self> {
@@ -4300,9 +4129,6 @@ impl GenesisMaterial {
             public_key_path,
             expected_hash: self.expected_hash,
             chain_discriminant: self.chain_discriminant,
-            profile: self.profile,
-            vrf_seed_hex: self.vrf_seed_hex.clone(),
-            verify_report: self.verify_report.clone(),
             consensus_fingerprint: self.consensus_fingerprint.clone(),
         })
     }
@@ -4675,7 +4501,7 @@ impl GenesisMaterial {
         manifest_path: &Path,
         profile: GenesisProfile,
         vrf_seed_hex: Option<&str>,
-    ) -> Result<KagamiVerifyReport> {
+    ) -> Result<()> {
         let kagami = binaries.ensure_kagami_ready()?;
         let mut command = Command::new(kagami);
         command
@@ -4689,12 +4515,11 @@ impl GenesisMaterial {
         }
         command
             .stdin(Stdio::null())
-            .stdout(Stdio::piped())
+            .stdout(Stdio::null())
             .stderr(Stdio::piped());
         let output = command.output().map_err(|err| {
             SupervisorError::KagamiInvocation(format!("failed to invoke `kagami verify`: {err}"))
         })?;
-        let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
         if !output.status.success() {
             return Err(SupervisorError::KagamiInvocation(format!(
@@ -4702,15 +4527,7 @@ impl GenesisMaterial {
                 output.status
             )));
         }
-        let mut combined = stdout.trim_end().to_owned();
-        let stderr_trimmed = stderr.trim_end();
-        if !stderr_trimmed.is_empty() {
-            if !combined.is_empty() {
-                combined.push('\n');
-            }
-            combined.push_str(stderr_trimmed);
-        }
-        Ok(parse_kagami_verify_output(vrf_seed_hex, &combined))
+        Ok(())
     }
     fn public_key(&self) -> &PublicKey {
         self.key_pair.public_key()
@@ -4773,22 +4590,6 @@ fn validate_managed_peer_paths_against(
             "streaming.session_store_dir",
             config.managed_paths.streaming_session_store_dir.clone(),
             streaming_dir.clone(),
-        ),
-        (
-            "streaming.soranet.provision_spool_dir",
-            config
-                .managed_paths
-                .streaming_soranet_provision_spool_dir
-                .clone(),
-            streaming_dir.join("soranet_routes"),
-        ),
-        (
-            "streaming.soravpn.provision_spool_dir",
-            config
-                .managed_paths
-                .streaming_soravpn_provision_spool_dir
-                .clone(),
-            streaming_dir.join("soravpn_routes"),
         ),
         (
             "streaming.codec.rans_tables_path",
@@ -4930,7 +4731,7 @@ fn load_snapshot_metadata(root: &Path) -> Result<SnapshotMetadata> {
         .and_then(Value::as_str)
         .ok_or_else(|| {
             SupervisorError::Config(format!(
-                "snapshot metadata `{}` missing `storage_layout` string; legacy aggregate Kura snapshots cannot be restored safely",
+                "snapshot metadata `{}` missing required `storage_layout` string; aggregate Kura snapshots cannot be restored safely",
                 metadata_path.display()
             ))
         })?;

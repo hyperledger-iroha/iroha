@@ -587,6 +587,7 @@ fn run_pending_active_height(
                     kura.as_ref(),
                     &common_config.key_pair,
                     block_sync_server,
+                    DecidedLaneRecoveryIngressDrainMode::FinalizedClosedPrefix,
                 )?;
                 dispatch_lane_work_effects(lane_work, services, control_queue_capacity)?;
                 Ok::<_, V2RunnerError>(drained.is_some())

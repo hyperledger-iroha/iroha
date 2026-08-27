@@ -60,7 +60,7 @@ pub use torii::{
     OperatorSigningContext, ReadinessOptions, ReadinessSmokeBuildError, ReadinessSmokeOutcome,
     ReadinessSmokePlan, SmokeCommitOptions, SmokeCommitSnapshot, StatusMetrics, StatusStreamEvent,
     ToriiClient, ToriiError, ToriiErrorInfo, ToriiErrorKind, ToriiMetricsSnapshot, ToriiResult,
-    ToriiStatusSnapshot, WsFrame, WsSubscription, decode_norito_with_alignment,
+    ToriiStatusSnapshot, WsFrame, WsSubscription, decode_norito,
     wait_for_all_managed_peers_genesis,
 };
 pub use vault::{SIGNERS_FILE_NAME, SignerVault, SignerVaultError};

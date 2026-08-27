@@ -99,6 +99,12 @@ const ROUTE_CHECKS: &[(&str, RouteCheckMethod, &str, &[u16])] = &[
         &[400],
     ),
     (
+        "offline_capability",
+        RouteCheckMethod::Get,
+        "/v1/offline/readiness",
+        &[200],
+    ),
+    (
         "sccp_capabilities",
         RouteCheckMethod::Get,
         "/v1/sccp/capabilities",
@@ -2008,6 +2014,7 @@ fn run_doctor(public_root: &str) -> Result<Value> {
             match *name {
                 "status" => validate_public_status(result.body.as_ref()).err(),
                 "time_now" => validate_time_snapshot(result.body.as_ref()).err(),
+                "offline_capability" => validate_offline_capability(result.body.as_ref()).err(),
                 _ => None,
             }
         } else {
@@ -4556,6 +4563,44 @@ fn validate_time_snapshot(snapshot: Option<&Value>) -> Result<(), String> {
     }
     Ok(())
 }
+
+fn validate_offline_capability(capability: Option<&Value>) -> Result<(), String> {
+    let capability = capability
+        .cloned()
+        .ok_or_else(|| "/v1/offline/readiness returned no JSON body".to_owned())?;
+    let capability: iroha::data_model::offline::OfflineStatus = json::from_value(capability)
+        .map_err(|error| {
+            format!("/v1/offline/readiness is not exact OfflineStatus JSON: {error}")
+        })?;
+    if capability.cash_handoff_capability
+        != iroha::data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1
+    {
+        return Err(
+            "/v1/offline/readiness does not advertise the exact cash_handoff_v1 contract"
+                .to_owned(),
+        );
+    }
+    if capability.required_bridge_abi_version
+        != iroha::data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4
+    {
+        return Err(
+            "/v1/offline/readiness does not require the exact Kagemusha bridge ABI 23".to_owned(),
+        );
+    }
+    if capability.max_hops != iroha::data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2
+    {
+        return Err(
+            "/v1/offline/readiness does not advertise the exact eight-hop bound".to_owned(),
+        );
+    }
+    if !capability.ready {
+        return Err(
+            "/v1/offline/readiness reports the universally compiled Kagemusha capability unavailable"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
 fn tagged_enum_name<'a>(value: &'a Value, field: &str) -> Option<&'a str> {
     let object = value.as_object()?;
     if object.len() != 2 || !object.get("value").is_some_and(Value::is_null) {
@@ -6759,6 +6804,15 @@ mod tests {
             ("GET", "/v1/pipeline/transactions/status") => {
                 MockResponse::json(400, norito::json!({"error": "missing transaction hash"}))
             }
+            ("GET", "/v1/offline/readiness") => MockResponse::json(
+                200,
+                norito::json!({
+                    "cash_handoff_capability": "cash_handoff_v1",
+                    "required_bridge_abi_version": 23,
+                    "max_hops": 8,
+                    "ready": true
+                }),
+            ),
             ("POST", "/v1/musubi/queries/ordered-prefix") => MockResponse::json(
                 401,
                 norito::json!({
@@ -7427,7 +7481,7 @@ mod tests {
     }
     #[test]
     fn doctor_mock_healthy_flow_reports_ok() {
-        let server = spawn_mock_http(14, |request| doctor_mock_response(request, None));
+        let server = spawn_mock_http(15, |request| doctor_mock_response(request, None));
         let report = run_doctor(&server.base_url).expect("doctor report");
         let requests = finish_mock(server);
         assert_eq!(report_status(&report), Some("ok"));
@@ -7447,6 +7501,9 @@ mod tests {
         }));
         assert!(requests.iter().any(|request| {
             request.method == "GET" && path_only(&request.path) == "/v1/time/now"
+        }));
+        assert!(requests.iter().any(|request| {
+            request.method == "GET" && path_only(&request.path) == "/v1/offline/readiness"
         }));
         assert!(requests.iter().any(|request| {
             request.method == "POST"
@@ -7638,6 +7695,38 @@ mod tests {
         assert!(validate_time_snapshot(None).is_err());
     }
     #[test]
+    fn offline_capability_requires_exact_universal_kagemusha_contract() {
+        let canonical = norito::json!({
+            "cash_handoff_capability": "cash_handoff_v1",
+            "required_bridge_abi_version": 23,
+            "max_hops": 8,
+            "ready": true
+        });
+        validate_offline_capability(Some(&canonical)).expect("canonical capability");
+
+        for (field, replacement) in [
+            ("cash_handoff_capability", Value::from("legacy")),
+            ("required_bridge_abi_version", Value::from(22_u64)),
+            ("max_hops", Value::from(7_u64)),
+            ("ready", Value::Bool(false)),
+        ] {
+            let mut hostile = canonical.clone();
+            hostile
+                .as_object_mut()
+                .expect("capability fixture is an object")
+                .insert(field.to_owned(), replacement);
+            assert!(validate_offline_capability(Some(&hostile)).is_err());
+        }
+
+        let mut expanded = canonical;
+        expanded
+            .as_object_mut()
+            .expect("capability fixture is an object")
+            .insert("release_ready".to_owned(), Value::Bool(true));
+        assert!(validate_offline_capability(Some(&expanded)).is_err());
+        assert!(validate_offline_capability(None).is_err());
+    }
+    #[test]
     fn write_canary_exit_gate_fails_closed() {
         ensure_write_canary_succeeded(&norito::json!({"status": "ok"}))
             .expect("an explicitly successful canary may exit zero");
@@ -7717,7 +7806,7 @@ mod tests {
     #[test]
     fn doctor_mock_required_tool_missing_reports_failure() {
         let missing_tool = REQUIRED_MCP_TOOLS[0];
-        let server = spawn_mock_http(14, move |request| {
+        let server = spawn_mock_http(15, move |request| {
             doctor_mock_response(request, Some(missing_tool))
         });
         let report = run_doctor(&server.base_url).expect("doctor report");
@@ -7737,7 +7826,7 @@ mod tests {
     }
     #[test]
     fn doctor_rejects_substituted_mcp_protocol_version() {
-        let server = spawn_mock_http(14, |request| {
+        let server = spawn_mock_http(15, |request| {
             if request.method == "GET" && path_only(&request.path) == "/v1/mcp" {
                 MockResponse::json(200, norito::json!({"protocolVersion": "2024-11-05"}))
             } else {
@@ -7764,7 +7853,7 @@ mod tests {
             norito::json!({"description": "missing name"}),
             norito::json!({"name": (REQUIRED_MCP_TOOLS[0]), "description": "duplicate"}),
         ] {
-            let server = spawn_mock_http(14, move |request| {
+            let server = spawn_mock_http(15, move |request| {
                 if request.method == "POST"
                     && path_only(&request.path) == "/v1/mcp"
                     && request.body.contains("tools/list")

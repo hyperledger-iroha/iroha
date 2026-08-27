@@ -1263,7 +1263,8 @@ the application owns reconciliation and any later explicit submission.
 `POST /v1/offline/redeem`, `GET /v1/offline/operations/{operation_id}`, and
 `POST /v1/offline/receiver-lineage`.
 Use `getOfflineCapability()`, `submitKagemushaTopUp`,
-`submitKagemushaRedeem`, `getKagemushaOperationStatus(operationId:)`, and
+`submitKagemushaRedeem`,
+`getKagemushaOperationStatus(operationId:chainDiscriminant:)`, and
 `getKagemushaRecipientRegistrationLineage(query:canonicalAuth:)`.
 `getOfflineCapability()` takes no selector.
 
@@ -1476,14 +1477,14 @@ confidential proofs yet the helper simply returns `nil`, mirroring the Python/JS
 
 ### Configuration snapshots
 
-`getConfiguration()` returns the typed snapshot, including transport defaults for streaming:
+`getConfiguration()` returns the typed snapshot, including the active Norito-RPC transport policy:
 
 ```swift
 if #available(iOS 15.0, macOS 12.0, *) {
     let snapshot = try await sdk.getConfiguration()
-    if let soranet = snapshot.transport?.streaming?.soranet {
-        print("SoraNet exit:", soranet.exitMultiaddr)
-        print("Provision queue cap:", soranet.provisionQueueCapacity)
+    if let noritoRpc = snapshot.transport?.noritoRpc {
+        print("Norito-RPC stage:", noritoRpc.stage)
+        print("mTLS required:", noritoRpc.requireMtls)
     }
 }
 ```

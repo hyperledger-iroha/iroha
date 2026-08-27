@@ -5943,7 +5943,7 @@ fn config_requires_sora_profile(config_layers: &[Table]) -> bool {
     let reader = ConfigReader::new()
         .with_env(MockEnv::default())
         .with_toml_source(TomlSource::inline(merged.clone()));
-    let config = match iroha_config::parameters::user::Root::read_and_complete(reader) {
+    let config = match reader.read_and_complete::<iroha_config::parameters::user::Root>() {
         Ok(user) => match user.parse() {
             Ok(parsed) => Some(parsed),
             Err(err) => {
@@ -6058,7 +6058,8 @@ fn parse_actual_config_for_genesis_result(
     let reader = ConfigReader::new()
         .with_env(MockEnv::default())
         .with_toml_source(TomlSource::inline(merged));
-    let user = iroha_config::parameters::user::Root::read_and_complete(reader)
+    let user = reader
+        .read_and_complete::<iroha_config::parameters::user::Root>()
         .map_err(|err| eyre!("failed to read merged config for genesis config: {err:?}"))?;
     let mut config = user
         .parse()
@@ -15153,7 +15154,8 @@ mod tests {
             .with_env(MockEnv::default())
             .read_toml_with_extends(path)
             .map_err(|error| eyre!("read peer run config {}: {error:?}", path.display()))?;
-        let user = iroha_config::parameters::user::Root::read_and_complete(reader)
+        let user = reader
+            .read_and_complete::<iroha_config::parameters::user::Root>()
             .map_err(|error| eyre!("complete peer run config {}: {error:?}", path.display()))?;
         user.parse()
             .map_err(|error| eyre!("parse peer run config {}: {error:?}", path.display()))

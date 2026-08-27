@@ -8,7 +8,7 @@ use crate::{
     tui,
 };
 use clap::{Args as ClapArgs, ValueEnum};
-use color_eyre::eyre::{Result, WrapErr as _, eyre};
+use color_eyre::eyre::{Result, WrapErr as _, ensure, eyre};
 use iroha_config::{
     base::toml::TomlSource,
     parameters::{actual, defaults::taira as taira_defaults},
@@ -89,7 +89,6 @@ use std::{
 };
 use zeroize::{Zeroize as _, Zeroizing};
 /// User-facing options for generating a bare-metal localnet.
-#[derive(Debug, Clone)]
 pub struct LocalnetOptions {
     /// Optional Sora profile selector (multi-lane / dataspace defaults).
     pub sora_profile: Option<SoraProfile>,
@@ -345,6 +344,8 @@ const DEFAULT_CHAIN_ID: &str = "00000000-0000-0000-0000-000000000000";
 const TAIRA_TESTNET_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
 const RETIRED_TAIRA_CHAIN_ID_ALIAS: &str = "iroha3-taira";
 const TAIRA_TESTNET_PEERS: u16 = 4;
+const TAIRA_SORACLOUD_HYDRATION_CONCURRENCY: i64 = 4;
+const TAIRA_SORACLOUD_PREPARED_RUNTIME_CACHE_CAPACITY: i64 = 4;
 const TAIRA_RUNTIME_SIGNER_SEED_DOMAIN: &[u8] = b"iroha:kagami:taira:runtime-signer:v1|";
 const TAIRA_RUNTIME_SIGNER_REVISION: u64 = 1;
 const TAIRA_RUNTIME_SIGNER_POLICY_DIGEST_DOMAIN: &[u8] =
@@ -605,12 +606,10 @@ const LOCALNET_KURA_FSYNC_MODE: &str = "batched";
 /// applying that host-wide production policy to a throwaway network.
 const LOCALNET_NEXUS_STORAGE_BUDGET_BYTES: u64 = 1024 * 1024 * 1024;
 /// Exact first-release Taira Nexus storage weights, in basis points.
-const TAIRA_NEXUS_STORAGE_WEIGHTS: [(&str, u16); 5] = [
+const TAIRA_NEXUS_STORAGE_WEIGHTS: [(&str, u16); 3] = [
     ("kura_blocks_bps", taira_defaults::NEXUS_KURA_BLOCKS_BPS),
     ("wsv_snapshots_bps", taira_defaults::NEXUS_WSV_SNAPSHOTS_BPS),
     ("sorafs_bps", taira_defaults::NEXUS_SORAFS_BPS),
-    ("soranet_spool_bps", taira_defaults::NEXUS_SORANET_SPOOL_BPS),
-    ("soravpn_spool_bps", taira_defaults::NEXUS_SORAVPN_SPOOL_BPS),
 ];
 /// Ed25519 signature batch size for perf-profile localnets (0 disables batching).
 const LOCALNET_SIGNATURE_BATCH_MAX_ED25519: usize = 64;
@@ -875,27 +874,66 @@ fn effective_localnet_assets_for_client(
     client_account_id: &AccountId,
 ) -> Vec<AssetSpec> {
     let mut assets = Vec::with_capacity(extra_assets.len() + 1);
-    let mut seen_asset_ids = BTreeSet::new();
-    let built_in = localnet_kagemusha_asset_spec_for_client(client_account_id);
-    seen_asset_ids.insert(built_in.id.clone());
-    assets.push(built_in);
+    assets.push(localnet_kagemusha_asset_spec_for_client(client_account_id));
+    let default_client = localnet_client_account_id();
     for asset in extra_assets {
-        if seen_asset_ids.insert(asset.id.clone()) {
-            let mut asset = asset.clone();
-            let default_client = localnet_client_account_id();
-            if asset.owned_by == default_client {
-                asset.owned_by = client_account_id.clone();
-            }
-            if asset.mint_to == default_client {
-                asset.mint_to = client_account_id.clone();
-            }
-            assets.push(asset);
+        let mut asset = asset.clone();
+        if asset.owned_by == default_client {
+            asset.owned_by = client_account_id.clone();
         }
+        if asset.mint_to == default_client {
+            asset.mint_to = client_account_id.clone();
+        }
+        assets.push(asset);
     }
     assets
 }
+
+fn validate_localnet_asset_specs(extra_assets: &[AssetSpec]) -> Result<()> {
+    let mut seen_asset_ids = BTreeSet::new();
+    let mut seen_aliases = BTreeSet::new();
+    seen_asset_ids.insert(
+        AssetDefinitionId::parse_address_literal(&localnet_kagemusha_asset_literal())
+            .expect("built-in localnet asset definition id must parse"),
+    );
+    seen_aliases.insert(
+        LOCALNET_KAGEMUSHA_ASSET_ALIAS
+            .parse::<AssetDefinitionAlias>()
+            .expect("built-in localnet asset alias must parse")
+            .to_string(),
+    );
+    for (index, asset) in extra_assets.iter().enumerate() {
+        ensure!(
+            !asset.name.trim().is_empty(),
+            "localnet asset {} has an empty display name",
+            index + 1
+        );
+        let asset_id = AssetDefinitionId::parse_address_literal(&asset.id).wrap_err_with(|| {
+            format!(
+                "localnet asset {} has invalid asset definition id `{}`",
+                index + 1,
+                asset.id
+            )
+        })?;
+        ensure!(
+            seen_asset_ids.insert(asset_id),
+            "localnet asset definition id is duplicated or collides with the built-in asset: `{}`",
+            asset.id
+        );
+        if let Some(alias) = asset.alias.as_deref() {
+            let parsed = alias.parse::<AssetDefinitionAlias>().wrap_err_with(|| {
+                format!("localnet asset {} has invalid alias `{alias}`", index + 1)
+            })?;
+            ensure!(
+                seen_aliases.insert(parsed.to_string()),
+                "localnet asset alias is duplicated or collides with the built-in asset: `{alias}`"
+            );
+        }
+    }
+    Ok(())
+}
 /// Generate a bare-metal local network (no Docker): genesis, per-peer configs, start/stop scripts.
-#[derive(ClapArgs, Debug, Clone)]
+#[derive(ClapArgs)]
 pub struct Args {
     /// Number of peers to generate (minimum four).
     #[arg(long, short, value_name = "COUNT", default_value_t = NonZeroU16::new(4).unwrap())]
@@ -952,7 +990,6 @@ pub struct Args {
     /// Consensus mode to emit in genesis/configs.
     /// Defaults to `permissioned` for generic localnets.
     /// Sora profile localnets and perf profiles require `npos`.
-    /// Sora profile localnets require `npos` because the global merge ledger is NPoS.
     #[arg(long, value_enum, value_name = "MODE")]
     consensus_mode: Option<ConsensusModeArg>,
 }
@@ -971,10 +1008,29 @@ fn resolve_requested_consensus_mode(
 }
 impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
-        let sora_profile = resolve_sora_profile(self.sora_profile, self.private_dataspace)?;
-        let perf_profile = self.perf_profile.map(LocalnetPerfProfile::from);
-        let consensus_mode = resolve_requested_consensus_mode(self.consensus_mode, perf_profile);
-        let mut assets = if self.sample_asset {
+        let Self {
+            peers,
+            seed,
+            chain_id,
+            sora_profile,
+            private_dataspace,
+            perf_profile,
+            bind_host,
+            public_host,
+            base_api_port,
+            base_p2p_port,
+            out_dir,
+            extra_accounts,
+            sample_asset,
+            asset_definition_id,
+            block_cadence_ms,
+            consensus_mode,
+        } = self;
+        let mut seed = seed.map(Zeroizing::new);
+        let sora_profile = resolve_sora_profile(sora_profile, private_dataspace)?;
+        let perf_profile = perf_profile.map(LocalnetPerfProfile::from);
+        let consensus_mode = resolve_requested_consensus_mode(consensus_mode, perf_profile);
+        let mut assets = if sample_asset {
             vec![AssetSpec {
                 id: localnet_sample_asset_literal(),
                 name: LOCALNET_SAMPLE_ASSET_NAME.to_owned(),
@@ -986,24 +1042,23 @@ impl<T: Write> RunArgs<T> for Args {
         } else {
             vec![]
         };
-        for asset_definition_id in self.asset_definition_id {
+        for asset_definition_id in asset_definition_id {
             assets.push(requested_localnet_asset_spec(&asset_definition_id)?);
         }
-        let chain_id = self.chain_id;
         let opts = LocalnetOptions {
             sora_profile,
             perf_profile,
-            peers: self.peers,
-            seed: self.seed,
-            bind_host: self.bind_host,
-            public_host: self.public_host,
-            base_api_port: self.base_api_port,
-            base_p2p_port: self.base_p2p_port,
-            out_dir: self.out_dir,
-            extra_accounts: self.extra_accounts,
+            peers,
+            seed: seed.as_mut().map(|seed| std::mem::take(&mut **seed)),
+            bind_host,
+            public_host,
+            base_api_port,
+            base_p2p_port,
+            out_dir,
+            extra_accounts,
             assets,
             consensus_mode,
-            block_cadence_ms: self.block_cadence_ms,
+            block_cadence_ms,
         };
         generate_localnet_inner(&opts, writer, Some(&chain_id))
     }
@@ -1039,8 +1094,6 @@ struct LocalnetPeerStoragePaths {
     tiered_state: PathBuf,
     da_store: PathBuf,
     streaming_sessions: PathBuf,
-    streaming_soranet_spool: PathBuf,
-    streaming_soravpn_spool: PathBuf,
     soranet_ticket_revocations: PathBuf,
     torii: PathBuf,
     torii_da_replay_cache: PathBuf,
@@ -1059,9 +1112,7 @@ impl LocalnetPeerStoragePaths {
             soracloud_runtime: state.join("soracloud_runtime"),
             tiered_state: state.join("tiered_state"),
             da_store: state.join("da_wsv_snapshots"),
-            streaming_sessions: streaming.clone(),
-            streaming_soranet_spool: streaming.join("soranet_routes"),
-            streaming_soravpn_spool: state.join("streaming").join("soravpn_routes"),
+            streaming_sessions: streaming,
             soranet_ticket_revocations: state.join("soranet").join("ticket_revocations.norito"),
             torii_da_replay_cache: torii.join("da_replay"),
             torii_da_manifests: torii.join("da_manifests"),
@@ -1091,6 +1142,7 @@ pub fn generate_localnet<T: Write>(opts: &LocalnetOptions, writer: &mut BufWrite
 }
 #[allow(clippy::too_many_lines)]
 fn validate_localnet_options(opts: &LocalnetOptions) -> Result<ResolvedHosts> {
+    validate_localnet_asset_specs(&opts.assets)?;
     if let Some(block_ms) = opts.block_cadence_ms
         && block_ms == 0
     {
@@ -1192,6 +1244,19 @@ fn generate_localnet_inner<T: Write>(
     init_instruction_registry();
     let hosts = validate_localnet_options(opts)?;
     validate_port_ranges(opts.peers, opts.base_api_port, opts.base_p2p_port)?;
+    let chain_id = resolve_localnet_chain_id(chain_id)?;
+    let taira = chain_id == TAIRA_TESTNET_CHAIN_ID;
+    if taira
+        && (opts.peers.get() != TAIRA_TESTNET_PEERS
+            || opts.consensus_mode != SumeragiConsensusMode::Npos
+            || opts.sora_profile != Some(SoraProfile::Nexus))
+    {
+        return Err(eyre!(
+            "the canonical Taira chain requires exactly four NPoS validators and the Nexus Sora profile"
+        ));
+    }
+    // No output path is created until every request-level invariant has been
+    // checked. This keeps an invalid invocation retryable with the same path.
     crate::secure_fs::prepare_empty_private_directory(&opts.out_dir)
         .wrap_err("prepare fresh localnet private output directory")?;
     let out_dir = fs::canonicalize(&opts.out_dir).wrap_err_with(|| {
@@ -1204,17 +1269,6 @@ fn generate_localnet_inner<T: Write>(
     tui::status("Copying rANS tables");
     let rans_tables_path = copy_rans_tables(&out_dir)?;
     let seed_bytes = opts.seed.as_ref().map(String::as_bytes);
-    let chain_id = resolve_localnet_chain_id(chain_id)?;
-    let taira = chain_id == TAIRA_TESTNET_CHAIN_ID;
-    if taira
-        && (opts.peers.get() != TAIRA_TESTNET_PEERS
-            || opts.consensus_mode != SumeragiConsensusMode::Npos
-            || opts.sora_profile != Some(SoraProfile::Nexus))
-    {
-        return Err(eyre!(
-            "the canonical Taira chain requires exactly four NPoS validators and the Nexus Sora profile"
-        ));
-    }
     let chain_discriminant = known_chain_discriminant_for_chain_id(&chain_id);
     // Keep every account literal and permission payload emitted by this localnet
     // generation scoped to the selected chain.  Applying the guard only while
@@ -2197,9 +2251,7 @@ fn render_peer_config(
     queue_capacity: usize,
     sumeragi_body_bytes: usize,
 ) -> String {
-    use iroha_config::parameters::defaults::streaming::{
-        self as streaming_defaults, codec as codec_defaults,
-    };
+    use iroha_config::parameters::defaults::streaming::codec as codec_defaults;
     use toml::{Table, Value};
     let (bind_host, public_host) = hosts;
     let RenderPeerFeatures {
@@ -2290,6 +2342,14 @@ fn render_peer_config(
     );
     if taira {
         soracloud_runtime.insert("production_mode".into(), Value::Boolean(true));
+        soracloud_runtime.insert(
+            "hydration_concurrency".into(),
+            Value::Integer(TAIRA_SORACLOUD_HYDRATION_CONCURRENCY),
+        );
+        soracloud_runtime.insert(
+            "prepared_runtime_cache_capacity".into(),
+            Value::Integer(TAIRA_SORACLOUD_PREPARED_RUNTIME_CACHE_CAPACITY),
+        );
         let (_, runtime_public_key) = peer
             .runtime_signer_public_key
             .try_to_bytes()
@@ -2645,78 +2705,6 @@ fn render_peer_config(
                 .into_owned(),
         ),
     );
-    let mut streaming_soranet = Table::new();
-    streaming_soranet.insert(
-        "enabled".into(),
-        Value::Boolean(streaming_defaults::soranet::ENABLED),
-    );
-    streaming_soranet.insert(
-        "exit_multiaddr".into(),
-        Value::String(streaming_defaults::soranet::EXIT_MULTIADDR.to_owned()),
-    );
-    if let Some(padding_budget_ms) = streaming_defaults::soranet::padding_budget_ms() {
-        streaming_soranet.insert(
-            "padding_budget_ms".into(),
-            Value::Integer(i64::from(padding_budget_ms)),
-        );
-    }
-    streaming_soranet.insert(
-        "access_kind".into(),
-        Value::String(streaming_defaults::soranet::ACCESS_KIND.to_owned()),
-    );
-    streaming_soranet.insert(
-        "channel_salt".into(),
-        Value::String(streaming_defaults::soranet::CHANNEL_SALT.to_owned()),
-    );
-    streaming_soranet.insert(
-        "provision_spool_dir".into(),
-        Value::String(
-            storage_paths
-                .streaming_soranet_spool
-                .to_string_lossy()
-                .into_owned(),
-        ),
-    );
-    streaming_soranet.insert(
-        "provision_spool_max_bytes".into(),
-        Value::Integer(
-            i64::try_from(streaming_defaults::soranet::PROVISION_SPOOL_MAX_BYTES.get())
-                .expect("streaming SoraNet spool maximum fits i64"),
-        ),
-    );
-    streaming_soranet.insert(
-        "provision_window_segments".into(),
-        Value::Integer(
-            i64::try_from(streaming_defaults::soranet::PROVISION_WINDOW_SEGMENTS)
-                .expect("streaming SoraNet provision window fits i64"),
-        ),
-    );
-    streaming_soranet.insert(
-        "provision_queue_capacity".into(),
-        Value::Integer(
-            i64::try_from(streaming_defaults::soranet::PROVISION_QUEUE_CAPACITY)
-                .expect("streaming SoraNet provision queue fits i64"),
-        ),
-    );
-    streaming.insert("soranet".into(), Value::Table(streaming_soranet));
-    let mut streaming_soravpn = Table::new();
-    streaming_soravpn.insert(
-        "provision_spool_dir".into(),
-        Value::String(
-            storage_paths
-                .streaming_soravpn_spool
-                .to_string_lossy()
-                .into_owned(),
-        ),
-    );
-    streaming_soravpn.insert(
-        "provision_spool_max_bytes".into(),
-        Value::Integer(
-            i64::try_from(streaming_defaults::soravpn::PROVISION_SPOOL_MAX_BYTES.get())
-                .expect("streaming SoraVPN spool maximum fits i64"),
-        ),
-    );
-    streaming.insert("soravpn".into(), Value::Table(streaming_soravpn));
     let mut streaming_codec = Table::new();
     streaming_codec.insert(
         "cabac_mode".into(),
@@ -5417,6 +5405,24 @@ mod tests {
             .expect("read generated Taira peer config");
         let peer_config: toml::Value =
             toml::from_str(&peer_config_text).expect("parse generated Taira peer config");
+        let soracloud_runtime = peer_config
+            .get("soracloud_runtime")
+            .and_then(toml::Value::as_table)
+            .expect("canonical Taira Soracloud runtime profile");
+        assert_eq!(
+            soracloud_runtime
+                .get("hydration_concurrency")
+                .and_then(toml::Value::as_integer),
+            Some(TAIRA_SORACLOUD_HYDRATION_CONCURRENCY),
+            "canonical Taira configs must explicitly pin the first-release hydration worker count"
+        );
+        assert_eq!(
+            soracloud_runtime
+                .get("prepared_runtime_cache_capacity")
+                .and_then(toml::Value::as_integer),
+            Some(TAIRA_SORACLOUD_PREPARED_RUNTIME_CACHE_CAPACITY),
+            "canonical Taira configs must explicitly pin the independent first-release prepared-runtime cache capacity"
+        );
         let credential_scope = peer_config
             .get("torii")
             .and_then(toml::Value::as_table)
@@ -5501,6 +5507,19 @@ mod tests {
             assert_eq!(
                 validator_records[peer_index].peer_id,
                 PeerId::from(peer.public_key.clone())
+            );
+            assert_eq!(
+                parsed.soracloud_runtime.hydration_concurrency.get(),
+                usize::try_from(TAIRA_SORACLOUD_HYDRATION_CONCURRENCY)
+                    .expect("Taira hydration worker count fits usize")
+            );
+            assert_eq!(
+                parsed
+                    .soracloud_runtime
+                    .prepared_runtime_cache_capacity
+                    .get(),
+                usize::try_from(TAIRA_SORACLOUD_PREPARED_RUNTIME_CACHE_CAPACITY)
+                    .expect("Taira prepared-runtime cache capacity fits usize")
             );
             let inrou = &parsed.soracloud_runtime.inrou;
             assert!(!inrou.enabled);
@@ -7791,6 +7810,117 @@ mod tests {
             assert!(
                 resolve_localnet_chain_id(Some(&padded)).is_err(),
                 "padded chain identity must fail rather than normalize: {padded:?}"
+            );
+        }
+    }
+    #[test]
+    fn invalid_chain_requests_do_not_create_partial_output_directories() {
+        fn options(out_dir: PathBuf) -> LocalnetOptions {
+            LocalnetOptions {
+                sora_profile: None,
+                perf_profile: None,
+                peers: NonZeroU16::new(4).expect("non-zero"),
+                seed: Some("pre-write-chain-validation".to_owned()),
+                bind_host: DEFAULT_BIND_HOST.to_owned(),
+                public_host: DEFAULT_PUBLIC_HOST.to_owned(),
+                base_api_port: 28_080,
+                base_p2p_port: 28_337,
+                out_dir,
+                extra_accounts: 0,
+                assets: Vec::new(),
+                block_cadence_ms: None,
+                consensus_mode: SumeragiConsensusMode::Permissioned,
+            }
+        }
+
+        let parent = tempfile::tempdir().expect("create localnet validation parent");
+        let malformed_out = parent.path().join("malformed-chain");
+        let malformed = options(malformed_out.clone());
+        let _error =
+            generate_localnet_inner(&malformed, &mut BufWriter::new(Vec::new()), Some(" padded"))
+                .expect_err("malformed chain must fail");
+        assert!(
+            !malformed_out.exists(),
+            "malformed chain must fail before creating its output directory"
+        );
+
+        let taira_out = parent.path().join("invalid-taira-profile");
+        let invalid_taira = options(taira_out.clone());
+        let _error = generate_localnet_inner(
+            &invalid_taira,
+            &mut BufWriter::new(Vec::new()),
+            Some(TAIRA_TESTNET_CHAIN_ID),
+        )
+        .expect_err("Taira profile mismatch must fail");
+        assert!(
+            !taira_out.exists(),
+            "Taira profile mismatch must fail before creating its output directory"
+        );
+    }
+    #[test]
+    fn invalid_asset_requests_do_not_create_partial_output_directories() {
+        fn options(out_dir: PathBuf, assets: Vec<AssetSpec>) -> LocalnetOptions {
+            LocalnetOptions {
+                sora_profile: None,
+                perf_profile: None,
+                peers: NonZeroU16::new(4).expect("non-zero"),
+                seed: Some("pre-write-asset-validation".to_owned()),
+                bind_host: DEFAULT_BIND_HOST.to_owned(),
+                public_host: DEFAULT_PUBLIC_HOST.to_owned(),
+                base_api_port: 28_080,
+                base_p2p_port: 28_337,
+                out_dir,
+                extra_accounts: 0,
+                assets,
+                block_cadence_ms: None,
+                consensus_mode: SumeragiConsensusMode::Permissioned,
+            }
+        }
+        fn asset(id: String, alias: Option<&str>) -> AssetSpec {
+            AssetSpec {
+                id,
+                name: "Preflight asset".to_owned(),
+                alias: alias.map(str::to_owned),
+                owned_by: ALICE_ID.clone(),
+                mint_to: ALICE_ID.clone(),
+                quantity: 1,
+            }
+        }
+
+        let parent = tempfile::tempdir().expect("create asset-validation parent");
+        let valid_id = localnet_sample_asset_literal();
+        let cases = [
+            ("invalid-id", vec![asset("not-an-id".to_owned(), None)]),
+            (
+                "invalid-alias",
+                vec![asset(valid_id.clone(), Some("not an alias"))],
+            ),
+            (
+                "duplicate-id",
+                vec![asset(valid_id.clone(), None), asset(valid_id, None)],
+            ),
+            (
+                "built-in-collision",
+                vec![asset(localnet_kagemusha_asset_literal(), None)],
+            ),
+            (
+                "duplicate-alias",
+                vec![
+                    asset(localnet_sample_asset_literal(), Some("sample#localnet")),
+                    asset(localnet_fee_asset_literal(), Some("sample#localnet")),
+                ],
+            ),
+        ];
+        for (name, assets) in cases {
+            let out_dir = parent.path().join(name);
+            let _error = generate_localnet(
+                &options(out_dir.clone(), assets),
+                &mut BufWriter::new(Vec::new()),
+            )
+            .expect_err("invalid asset request must fail");
+            assert!(
+                !out_dir.exists(),
+                "invalid asset request `{name}` must fail before creating output"
             );
         }
     }

@@ -1542,9 +1542,10 @@ mod tests {
         )
         .payload()
         .to_vec();
-        tracker
-            .authenticate_response(&fixture.context, outside_roster, &rotated_sender)
+        let authenticated_rotated_response = tracker
+            .authenticate_response(&fixture.context, outside_roster.clone(), &rotated_sender)
             .expect("current rotated archive identity authenticates historical body");
+        assert_eq!(authenticated_rotated_response.response(), &outside_roster);
         assert!(tracker.contains(request_hash));
         assert!(
             tracker.response_claims.is_empty(),

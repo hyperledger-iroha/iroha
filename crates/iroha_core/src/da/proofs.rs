@@ -505,15 +505,15 @@ mod tests {
         >::from_untyped_unchecked(
             Hash::prehashed([0xD6; 32]),
         ));
-        DaPinIntent::new(
-            lane_id,
-            1,
-            sequence,
+        let authorization = crate::da::signed_test_ingest_authorization(
+            network_id, &key_pair, lane_id, 1, sequence, 1,
+        );
+        crate::da::signed_test_pin_intent(
+            authorization,
+            &key_pair,
             StorageTicketId::new([tag; 32]),
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([tag; 32]),
-            crate::da::signed_test_ingest_authorization(
-                network_id, &key_pair, lane_id, 1, sequence, 1,
-            ),
+            None,
         )
     }
     fn header_with_pin_intent_hash(height: u64, hash: HashOf<DaPinIntentBundle>) -> BlockHeader {

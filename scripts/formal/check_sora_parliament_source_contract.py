@@ -4,9 +4,13 @@
 This deterministic structural check is intentionally narrower than parsing or
 compiling Rust. It fails when a modeled guard disappears, when authenticated
 registration or reducer-derived corpus boundaries regress, when a plaintext or
-fallback transition enters the closed Parliament instruction enum, when a
-signed draft can claim a consensus-owned certificate outcome, or when the
+fallback transition enters the closed Parliament instruction enum, when global
+timed-OVN reservation admission or restore loses fail-atomic capacity checks, when a
+persisted attempt can exceed the authoritative framed-state bound, when a signed
+draft can claim a consensus-owned certificate outcome, or when the
 current specifications regress to the retired proposal-time JIT description.
+It also keeps the PR model run bound to archived copies of its exact inputs and
+to stable, source-identified result metadata.
 """
 
 from __future__ import annotations
@@ -57,7 +61,10 @@ def main() -> int:
         (
             "if self.pulse_height <= self.request_height",
             "MAX_PARLIAMENT_BALLOT_RETRIES_V1: u32 = 16",
+            "MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1: u32 = 16",
+            "MAX_PARLIAMENT_SORTITION_RETRIES_V1: u32 = 16",
             "MAX_PARLIAMENT_BALLOT_CORPUS_ENTRIES_V1: u32 = 1_000",
+            "MAX_PARLIAMENT_ATTEMPT_STATE_BYTES_V1: usize = 16 * 1024 * 1024",
             "parliament_ballot_failure_root_v1",
             "parliament_ballot_result_root_v1",
             "OpeningDeadlineExpired",
@@ -65,6 +72,7 @@ def main() -> int:
             "PublicFindingQuorumUnreachable",
             "PublicFindingDeadlineExpired",
             "BallotOpeningDeadlineExpired",
+            "SortitionRetriesExhausted",
             "impl From<ParliamentBallotFailureKindV1> for ParliamentNoResultKindV1",
             "pub opening_deadline_height: u64",
             "ExecutionFailed",
@@ -98,6 +106,23 @@ def main() -> int:
         reducer,
         (
             "first consumed pulse must cover every initially required body in one",
+            "sortition_pulse_delay_blocks: u64",
+            ".checked_add(self.sortition_pulse_delay_blocks)",
+            "InvalidSortitionPulseSchedule",
+            "SortitionPulseAvailable",
+            "SortitionRetryLimitExceeded",
+            "GovernanceAttemptRetryLimitExceeded",
+            "AttemptStateSizeLimitExceeded",
+            "TimedOvnResourceScheduleConflict",
+            "TooManyConcurrentCastingContexts",
+            "pub fn register_sortition_request_batch(",
+            "MAX_PARLIAMENT_SORTITION_RETRIES_V1",
+            "ParliamentElectionFailureKindV1::PulseUnavailable",
+            "ParliamentElectionFailureKindV1::EmptyAcceptedRoster",
+            "request.request_height < failure_height",
+            "election.attempt.sequence == MAX_PARLIAMENT_SORTITION_RETRIES_V1",
+            "election_awaiting_pulse_shape_is_empty(election)",
+            "pulse_missing_terminal",
             "pub(crate) fn precheck_close_ballot_registration(",
             "current_height == ballot.registration_close_height",
             "pub(crate) fn precheck_freeze_ballot_survivors(",
@@ -154,6 +179,33 @@ def main() -> int:
             "endorsing_assignments,\n                endorsements,\n                quorum,",
         ),
     )
+    attempt_size_validation = section(
+        reducer,
+        "pub(crate) fn validate_encoded_size_v1(",
+        "fn expected_completed_body_count_v1(",
+        reducer_path,
+    )
+    require_all(
+        reducer_path,
+        attempt_size_validation,
+        (
+            "norito::core::encoded_frame_len(self)",
+            "MAX_PARLIAMENT_ATTEMPT_STATE_BYTES_V1",
+            "ParliamentReducerErrorV1::AttemptStateSizeLimitExceeded",
+        ),
+    )
+    full_attempt_validation = section(
+        reducer,
+        "pub fn validate(&self) -> Result<(), ParliamentReducerErrorV1> {",
+        "#[cfg(any(test, feature = \"iroha-core-tests\"))]",
+        reducer_path,
+    )
+    if not full_attempt_validation.lstrip().startswith(
+        "self.validate_encoded_size_v1()?;"
+    ):
+        raise RuntimeError(
+            f"{reducer_path}: full attempt validation must begin with the exact size-only guard"
+        )
     execution_failure_signature = re.search(
         r"pub fn mark_execution_failed\((?P<params>.*?)\)\s*->", reducer, re.S
     )
@@ -191,6 +243,9 @@ def main() -> int:
         instructions,
         (
             "PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1: usize = 32",
+            "MAX_PARLIAMENT_SORTITION_REQUESTS_PER_BATCH_V1: usize = 10",
+            "pub struct ParliamentSortitionRequestRegistrationV1",
+            "pub requests: Vec<ParliamentSortitionRequestRegistrationV1>",
             "parliament_timed_ovn_required_chunk_blocks_v1",
             "next contiguous corpus chunk is appended",
             "complete exact survivor coverage and causes automatic corpus sealing",
@@ -360,6 +415,14 @@ def main() -> int:
             "observed_head != certificate.expected_head",
             "apply_parliament_proposal_effect_v1",
             "parliament_finalized_pulse_seed_v1",
+            "parliament_verified_pulse_available_v1",
+            "entry.request.target_seats != configured_target",
+            "let first = payload.requests.first()",
+            "for entry in &payload.requests",
+            ".register_sortition_request_batch(",
+            "request.beacon_session_id",
+            "request.pulse_height",
+            "pulse_available,\n                            current_height",
             ".global_beacon_pulses",
             "ballot.release_beacon_session_id()",
             "release_pulse_available",
@@ -481,7 +544,27 @@ def main() -> int:
     require_all(
         api_path,
         api,
-        ("pub execution_failure_root: Option<[u8; 32]>",),
+        (
+            "pub execution_failure_root: Option<[u8; 32]>",
+            "MAX_PARLIAMENT_ATTEMPT_STATE_BYTES_V1 as PARLIAMENT_ATTEMPT_READ_MAX_STATE_BYTES_V1",
+        ),
+    )
+
+    torii_gov_path = "crates/iroha_torii/src/gov.rs"
+    torii_gov = read(torii_gov_path)
+    attempt_read = section(
+        torii_gov,
+        "pub async fn handle_gov_parliament_attempt_read(",
+        "/// GET `/v1/gov/parliament/ballots/{ballot_attempt_id}/release-context`",
+        torii_gov_path,
+    )
+    require_all(
+        torii_gov_path,
+        attempt_read,
+        (
+            "norito::core::to_bytes_bounded(",
+            "PARLIAMENT_ATTEMPT_READ_MAX_STATE_BYTES_V1",
+        ),
     )
 
     state_path = "crates/iroha_core/src/state.rs"
@@ -532,6 +615,9 @@ def main() -> int:
             "record_committed_parliament_transition(",
             "Transition::FailPublicFindingNoResult",
             "Transition::FailBallotNoResult",
+            "Transition::FailBodyElectionNoRoster",
+            'Kind::SortitionRetriesExhausted => "sortition_retries_exhausted"',
+            "NoResult::SortitionRetriesExhausted => transition == Transition::FailBodyElectionNoRoster",
             "pub(crate) fn seed_parliament_attempts(",
             "governance_parliament_attempts_by_status",
             "governance_parliament_attempts_by_stage",
@@ -552,6 +638,7 @@ def main() -> int:
             '"public_finding_quorum_unreachable"',
             '"public_finding_deadline_expired"',
             '"ballot_opening_deadline_expired"',
+            '"sortition_retries_exhausted"',
         ),
     )
     commitment_precheck = section(
@@ -590,6 +677,7 @@ def main() -> int:
         defaults_path,
         defaults,
         (
+            "pub const PARLIAMENT_SORTITION_PULSE_DELAY_BLOCKS: u64 = 4",
             "pub const PARLIAMENT_PUBLIC_FINDING_PHASE_BLOCKS: u64 = 3_600",
             "pub const SURVIVOR_FREEZE_PHASE_BLOCKS: u64 = 1_000",
             "pub const OPENING_PHASE_BLOCKS: u64 = 600",
@@ -601,6 +689,8 @@ def main() -> int:
         actual_config_path,
         actual_config,
         (
+            "pub parliament_sortition_pulse_delay_blocks: u64",
+            '"governance.parliament_sortition_pulse_delay_blocks"',
             "pub parliament_public_finding_phase_blocks: u64",
             '"governance.parliament_public_finding_phase_blocks"',
             "pub opening_phase_blocks: u64",
@@ -619,6 +709,10 @@ def main() -> int:
         user_config_path,
         user_config,
         (
+            "pub parliament_sortition_pulse_delay_blocks: u64",
+            "PARLIAMENT_SORTITION_PULSE_DELAY_BLOCKS",
+            "parliament_sortition_pulse_delay_blocks: self",
+            '"parliament_sortition_pulse_delay_blocks must be non-zero"',
             "pub parliament_public_finding_phase_blocks: u64",
             "PARLIAMENT_PUBLIC_FINDING_PHASE_BLOCKS",
             "parliament_public_finding_phase_blocks: self",
@@ -725,9 +819,137 @@ def main() -> int:
             "TimedOvnLifecycleStateV1::CorpusOpen(_)",
             ".validated_parliament_reducer_binding(key_session)",
             "timed_ovn_reducer_binding_matches(ballot_attempt_id, &lifecycle_binding)",
-            "parliament_timed_ovn_resource_windows_overlap_v1(left_windows, right_windows)",
         ),
     )
+    restore_size_validation = section(
+        restore,
+        "fn validate_parliament_attempt_encoded_size_bounds_v1(",
+        "#[cfg(test)]\nmod timed_ovn_persistence_phase_tests",
+        restore_path,
+    )
+    require_all(
+        restore_path,
+        restore_size_validation,
+        (".validate_encoded_size_v1()", 'field: "parliament_attempts".into()'),
+    )
+    restore_attempt_prefix = section(
+        restore,
+        "world\n        .rebuild_global_beacon_pulse_slots()",
+        "fn build_state(",
+        restore_path,
+    )
+    require_all(
+        restore_path,
+        restore_attempt_prefix,
+        ("validate_parliament_attempt_encoded_size_bounds_v1(&world)?;",),
+    )
+    restored_reservations = section(
+        restore,
+        "    let mut active_resource_reservations = Vec::new();",
+        "    let concurrent_casting_contexts = timed_ovn_evidence",
+        restore_path,
+    )
+    require_all(
+        restore_path,
+        restored_reservations,
+        (
+            "for (governance_attempt_id, governance_attempt) in parliament_attempts.iter()",
+            "for left_index in 0..active_resource_reservations.len()",
+            "for right_index in left_index + 1..active_resource_reservations.len()",
+            "parliament_timed_ovn_resource_windows_overlap_v1(left_windows, right_windows)",
+            '"active timed-OVN resource reservations overlap',
+        ),
+    )
+    restored_capacity = section(
+        restore,
+        "    let concurrent_casting_contexts = timed_ovn_evidence",
+        "    for (governance_attempt_id, governance_attempt) in parliament_attempts.iter()",
+        restore_path,
+    )
+    require_all(
+        restore_path,
+        restored_capacity,
+        (
+            "MAX_PARLIAMENT_CONCURRENT_CASTING_CONTEXTS_V1",
+            "if concurrent_casting_contexts > maximum_casting_contexts",
+            '"concurrent cast-capable timed-OVN contexts exceed the protocol maximum"',
+        ),
+    )
+
+    state_path = "crates/iroha_core/src/state.rs"
+    state = read(state_path)
+    checked_reservation_insert = section(
+        state,
+        "fn insert_parliament_timed_ovn_resource_reservation_v1(",
+        "fn parliament_timed_ovn_reservation_reducer_error_v1(",
+        state_path,
+    )
+    require_all(
+        state_path,
+        checked_reservation_insert,
+        (
+            "reservations.contains_key(&ballot_attempt_id)",
+            "parliament_timed_ovn_resource_windows_overlap_v1(",
+            "parliament_timed_ovn_casting_capacity_allows_new_v1(",
+            "reservations.insert(ballot_attempt_id, reservation)",
+        ),
+    )
+    insert_guards = (
+        checked_reservation_insert.find("reservations.contains_key(&ballot_attempt_id)"),
+        checked_reservation_insert.find("parliament_timed_ovn_resource_windows_overlap_v1("),
+        checked_reservation_insert.find("parliament_timed_ovn_casting_capacity_allows_new_v1("),
+        checked_reservation_insert.find("reservations.insert(ballot_attempt_id, reservation)"),
+    )
+    if tuple(sorted(insert_guards)) != insert_guards:
+        raise RuntimeError(
+            f"{state_path}: reservation duplicate/overlap/capacity guards must precede insertion"
+        )
+    attempt_admission = section(
+        state,
+        "    pub(crate) fn put_parliament_attempt(",
+        "    /// Validate and persist one immutable public-only adaptive TLE key session.",
+        state_path,
+    )
+    require_all(
+        state_path,
+        attempt_admission,
+        (
+            "attempt.validate()?",
+            "let mut next_reservations = BTreeMap::new()",
+            "insert_parliament_timed_ovn_resource_reservation_v1(",
+            "for ballot_attempt_id in stale_reservations",
+            "self.parliament_attempts.insert(id, attempt)",
+        ),
+    )
+    if attempt_admission.find("insert_parliament_timed_ovn_resource_reservation_v1(") > attempt_admission.find(
+        "for ballot_attempt_id in stale_reservations"
+    ):
+        raise RuntimeError(
+            f"{state_path}: attempt admission mutates the live reservation index before validation"
+        )
+    rebuilt_reservations = section(
+        state,
+        "    fn rebuild_governance_read_indexes(",
+        "    /// Rebuild the unique `(network, height)` lookup",
+        state_path,
+    )
+    require_all(
+        state_path,
+        rebuilt_reservations,
+        (
+            "-> Result<(), String>",
+            "let mut timed_ovn_resource_reservations = BTreeMap::new()",
+            "insert_parliament_timed_ovn_resource_reservation_v1(",
+            "self.parliament_timed_ovn_resource_reservations =",
+            "Ok(())",
+        ),
+    )
+    if rebuilt_reservations.find("insert_parliament_timed_ovn_resource_reservation_v1(") > rebuilt_reservations.find(
+        "self.parliament_timed_ovn_resource_reservations ="
+    ):
+        raise RuntimeError(
+            f"{state_path}: restore publishes the reservation index before complete validation"
+        )
 
     tle_release_path = "crates/iroha_core/src/tle_release.rs"
     tle_release = read(tle_release_path)
@@ -1046,6 +1268,22 @@ def main() -> int:
         model,
         (
             "FuturePulseSortition ==",
+            "SortitionPulseDelayBlocks",
+            "MaxSortitionRetries",
+            "sortitionPulseHeight' = height + SortitionPulseDelayBlocks",
+            "FailSortitionPulseUnavailable ==",
+            "RetryInitialSortitionBatch ==",
+            'sortitionFailureKind\' = "PulseUnavailable"',
+            "sortitionSequence < MaxSortitionRetries",
+            "supersededSortitionAttempts' = supersededSortitionAttempts + 1",
+            "ObjectiveBoundedSortitionRetries ==",
+            "AdmitTimedOvnResourceReservation(candidate) ==",
+            "RejectTimedOvnResourceReservation(candidate) ==",
+            "ReleaseTimedOvnResourceReservation(candidate) ==",
+            "TimedOvnReservationSafety ==",
+            "RejectedReservationDoesNotLeak ==",
+            "TimedOvnReservationAuditShape ==",
+            "reservationAuditStep = 8",
             "SimultaneousInitialDraw ==",
             "RecordSelfAbsence(assignment) ==",
             'IF findingState = "AwaitingReflection"',
@@ -1101,6 +1339,12 @@ def main() -> int:
         model_config_path,
         model_config,
         (
+            "SortitionPulseDelayBlocks = 1",
+            "MaxSortitionRetries = 2",
+            "MaxConcurrentReservations = 2",
+            "ReservationIds = {Reservation0, Reservation1, Reservation2}",
+            "FirstConflictingReservation = Reservation0",
+            "SecondConflictingReservation = Reservation1",
             "OpeningBlocks = 2",
             "RegistrationBlocks = 3",
             "SurvivorBlocks = 2",
@@ -1111,6 +1355,10 @@ def main() -> int:
             "FirstAssignment = Seat0",
             "SecondAssignment = Seat1",
             "FindingRoots = {Finding0, Finding1}",
+            "ObjectiveBoundedSortitionRetries",
+            "TimedOvnReservationSafety",
+            "RejectedReservationDoesNotLeak",
+            "TimedOvnReservationAuditShape",
             "AuthorityBoundImmutableMemberRecords",
             "PublicFindingQuorumBinding",
             "ExactPublicFindingDeadline",
@@ -1121,6 +1369,112 @@ def main() -> int:
             "NoResultTerminalization",
         ),
     )
+    expected_invariants = (
+        "TypeOK",
+        "FuturePulseSortition",
+        "ObjectiveBoundedSortitionRetries",
+        "TimedOvnReservationSafety",
+        "RejectedReservationDoesNotLeak",
+        "TimedOvnReservationAuditShape",
+        "SimultaneousInitialDraw",
+        "AuthorityBoundImmutableMemberRecords",
+        "PublicFindingQuorumBinding",
+        "ExactPublicFindingDeadline",
+        "ExactBallotSchedule",
+        "PhaseCapacity",
+        "ExactPhaseBoundaries",
+        "ObjectiveReleaseAvailability",
+        "BoundedOpeningWindow",
+        "FreshRetrySessions",
+        "NoPlaintextOrFallback",
+        "CertificateBindsApprovedResult",
+        "ExactHeightCasEnactment",
+        "CertifiedCannotPassDueHeight",
+        "NoResultTerminalization",
+    )
+    configured_invariants = tuple(
+        line.strip()
+        for line in section(
+            model_config,
+            "INVARIANTS\n",
+            "\nCHECK_DEADLOCK FALSE",
+            model_config_path,
+        ).splitlines()
+        if line.strip()
+    )
+    if configured_invariants != expected_invariants:
+        raise RuntimeError(
+            f"{model_config_path}: invariant block mismatch: "
+            f"expected {expected_invariants!r}, found {configured_invariants!r}"
+        )
+    for invariant in expected_invariants:
+        declaration_count = len(
+            re.findall(rf"(?m)^{re.escape(invariant)}[ \t]*==", model)
+        )
+        if declaration_count != 1:
+            raise RuntimeError(
+                f"{model_path}: invariant {invariant!r} must be declared exactly once; "
+                f"found {declaration_count}"
+            )
+
+    for declaration in ("SPECIFICATION Spec", "INVARIANTS", "CHECK_DEADLOCK FALSE"):
+        declaration_count = model_config.count(declaration)
+        if declaration_count != 1:
+            raise RuntimeError(
+                f"{model_config_path}: {declaration!r} must appear exactly once; "
+                f"found {declaration_count}"
+            )
+
+    workflow_path = ".github/workflows/pr.yml"
+    workflow = read(workflow_path)
+    formal_job = section(
+        workflow,
+        "  sumeragi_formal:\n",
+        "\n  nexus_cross_dataspace_localnet:\n",
+        workflow_path,
+    )
+    require_all(
+        workflow_path,
+        formal_job,
+        (
+            '"$invocation_root/artifacts/formal/sora_parliament/inputs"',
+            "SORA_PARLIAMENT_FORMAL_EVIDENCE_DIR=%s",
+            'install -m 600 -- "$model_source" "$model_input"',
+            'install -m 600 -- "$config_source" "$config_input"',
+            '"schema": "iroha.sora_parliament.formal_run.v2"',
+            '"source_commit": source_commit',
+            '"successful": source_status == 0 and model_status == 0',
+            '"jar_sha256": digest(jar_name)',
+            '**evidence(model_name, "inputs/SoraParliamentV1.tla")',
+            '**evidence(config_name, "inputs/SoraParliamentV1.cfg")',
+            '"size_bytes": item.stat().st_size',
+            'source_status_evidence["exit_status"] = source_status',
+            'model_status_evidence["exit_status"] = model_status',
+            '2>&1 | tee "$source_contract_log"',
+            '-config "$config_input"',
+            '"$model_input" 2>&1 | tee "$tlc_log"',
+            'printf \'%s\\n\' "$tlc_status" > "$tlc_status_path"',
+            "Validate SORA Parliament formal evidence closure",
+            'if document.get("source_commit") != expected_commit:',
+            'if entry.get("sha256") != hashlib.sha256(payload).hexdigest():',
+            "name: sora-parliament-formal-pr",
+            "path: ${{ steps.formal_layout.outputs.artifact_root }}/formal/sora_parliament",
+            "if-no-files-found: error",
+        ),
+    )
+    for status_capture in (
+        'source_contract_status="${PIPESTATUS[0]}"',
+        'tlc_status="${PIPESTATUS[0]}"',
+    ):
+        if formal_job.count(status_capture) != 1:
+            raise RuntimeError(
+                f"{workflow_path}: Parliament formal job must contain exactly one "
+                f"{status_capture!r}"
+            )
+    if formal_job.count("name: sora-parliament-formal-pr") != 1:
+        raise RuntimeError(
+            f"{workflow_path}: Parliament formal artifact name must appear exactly once"
+        )
 
     for spec_path in ("specs/governance_pipeline.md", "specs/governance_api.md"):
         spec = read(spec_path)
@@ -1137,6 +1491,7 @@ def main() -> int:
             "ExecutionFailed",
             "ParliamentAutomaticExecutionOutcomeV1",
             "opening_phase_blocks",
+            "parliament_sortition_pulse_delay_blocks",
             "RecordAttemptAbsence",
             "EndorsePublicFinding",
             "ceil(2 * original_seats / 3)",
@@ -1164,6 +1519,7 @@ def main() -> int:
             "ParliamentNoResultKindV1",
             "public_finding_quorum_unreachable",
             "public_finding_deadline_expired",
+            "sortition_retries_exhausted",
             "never use proposal, governance-attempt, body, ballot, assignment, pulse,",
         ),
     )

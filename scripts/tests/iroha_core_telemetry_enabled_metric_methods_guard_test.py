@@ -24,7 +24,7 @@ PREIMAGE_LINES = 14_258
 SELECTED_PREIMAGE_LINES = 1_687
 MAX_GOVERNED_LINES = 13_307
 MINIMUM_NET_REDUCTION = 900
-EXPECTED_FORWARD_ROWS = 64
+EXPECTED_FORWARD_ROWS = 61
 EXPECTED_ROWS = (('StateTelemetry',
   'inc_storage_budget_exceeded',
   'is_enabled_early_return',
@@ -140,16 +140,6 @@ EXPECTED_ROWS = (('StateTelemetry',
   'is_enabled_if',
   'explicit',
   'adee6bd6fe85afe8afa71b971a50cde68dcc6e0e1279c475f70a82c62d2b1601'),
- ('StreamingTelemetry',
-  'inc_soranet_provision_failure',
-  'is_enabled_if',
-  'explicit',
-  '00ba28b874685c2e5ac35600b1cea81d53eed1e6d570a73e5015916bee390595'),
- ('StreamingTelemetry',
-  'inc_soranet_provision_queue_drop',
-  'is_enabled_if',
-  'explicit',
-  '4d02eb34ea506c436698aee1fe5625c4e0bb0f9d2e60d42fd6c1e372ba5a08f3'),
  ('StreamingTelemetry',
   'inc_privacy_redaction_failure',
   'is_enabled_if',
@@ -631,66 +621,6 @@ EXPECTED_ROWS = (('StateTelemetry',
   'explicit',
   'c3d0c86db07d38d773841b02ccd39605ef998431c4ed8710607b7011894af7fd'),
  ('Telemetry',
-  'set_rbc_sessions_active',
-  'atomic_if',
-  'explicit',
-  '3def90f5b6e5971ce4869f3d0232cbe71df771f02a00f264948484afbe6ec611'),
- ('Telemetry',
-  'inc_rbc_init_requests',
-  'atomic_if',
-  'explicit',
-  'f6cc4f884fb00f2ae3901820181972f62159e6465bf0dc3f590f44ba620621a4'),
- ('Telemetry',
-  'inc_rbc_chunk_requests',
-  'atomic_if',
-  'explicit',
-  '81f453184e74c3db4c3657c1fee18c1a67d1daa42e79bfdd923748533c0c638d'),
- ('Telemetry',
-  'add_rbc_requested_chunks',
-  'atomic_if',
-  'explicit',
-  '2ee0e01519bfecc106576d4930b0d464c528898525bcfbb8b8b7625636807640'),
- ('Telemetry',
-  'inc_rbc_repair_fallback',
-  'atomic_if',
-  'explicit',
-  '4f55e67cefc458e8d5391a600ab5487b784c0ed7149040b6bdfcebfc72a7157b'),
- ('Telemetry',
-  'inc_rbc_ready_broadcasts',
-  'atomic_if',
-  'explicit',
-  '7833419377140de4a9f22d2cecbaf6772bebcdaf2ba716f41bcec5d1dcb243f0'),
- ('Telemetry',
-  'inc_rbc_rebroadcast_skipped',
-  'atomic_if',
-  'explicit',
-  '0b7b6d8607a578b666c1750053e2e6512fab2aecaaa05c6d2926e015e81ed058'),
- ('Telemetry',
-  'inc_rbc_deliver_broadcasts',
-  'atomic_if',
-  'explicit',
-  '467c69066a589ba59ea0b56b7c15593ed0399bdee5e267282bdd7025bc068348'),
- ('Telemetry',
-  'add_rbc_reconstructed_stripes',
-  'atomic_if',
-  'explicit',
-  '52fcb72a73034ca315c1f392e5a363e07bccf0327504ff6739fbcc4d6829a8f1'),
- ('Telemetry',
-  'observe_rbc_seed_latency',
-  'atomic_if',
-  'explicit',
-  'c126fcb48a346310333e026097574cec3e7e307526e22d20217311e6fffc74cd'),
- ('Telemetry',
-  'inc_rbc_deliver_defer_ready',
-  'atomic_if',
-  'explicit',
-  '8e91f775af6c51b7237554061644b3e63ba9f03b64fec35e3f4ae5f169ce8f1c'),
- ('Telemetry',
-  'inc_rbc_deliver_defer_chunks',
-  'atomic_if',
-  'explicit',
-  '4ac5c6c1de2ebbc9b3dcc57e4b268bb134fdbdf0cdeb8eefc6d3a3d9eed6bdad'),
- ('Telemetry',
   'inc_da_vote_ingested',
   'atomic_if',
   'explicit',
@@ -951,9 +881,20 @@ EXPECTED_ROWS = (('StateTelemetry',
   'explicit',
   '109b6ba3b68c7824434adcf5fcbf1822c543ab2ac7a3c7aeb6285b44afb16941'))
 
-EXPECTED_PUBLIC_METHODS = {'StateTelemetry': (144, 'd9491b7c0737bc149ae40fac99491d74a75e5db2c944af1cd6a276a2c176f16c'),
+EXPECTED_PUBLIC_METHODS = {'StateTelemetry': (143, '9255adfece902c4c2630420c2a7710dd06c152dcec52f94ff90fcd829a4da132'),
  'StreamingTelemetry': (21, '12cb286b009d23632d1d5cb6bb3a2416ea2e0e02fef8aecf629619befd78d747'),
- 'Telemetry': (274, 'f085cfc045e56faffb3e5a2393eb118f1519b453c6d21580708491c8779c3b56')}
+ 'Telemetry': (239, '8f171d39376ef7a64c2bbd6cfa348991b4b2e7308b75e96ba705ca50d2fe4010')}
+
+RETIRED_CONSENSUS_VRF_METHODS = (
+    "inc_vrf_commit_emitted",
+    "inc_vrf_reveal_emitted",
+    "inc_vrf_reveal_late",
+    "inc_vrf_non_reveal_for_signer",
+    "inc_vrf_non_reveal_total",
+    "inc_vrf_no_participation_for_signer",
+    "inc_vrf_no_participation_total",
+    "inc_vrf_reject_by_reason",
+)
 
 EXPECTED_MACRO_HASHES = {'state_telemetry_enabled_metric_methods': '82bed9160ac70eee38046fc0e6b3f82af00dbe4391436eb5ac318a84b90833b2',
  'state_telemetry_enabled_metric_methods_early_return': '24eee9e3e063884f4ace2adf22a0f4893958f7d0e81ee089ce36dbc6ebe7238d',
@@ -1398,6 +1339,11 @@ def validate_source(source: str, provider: str) -> dict[str, int]:
         raise GuardFailure("minimum governed Rust-line reduction was lost")
     expanded_source = _bind_macro_provider(source, provider)
     masked = _mask_non_code(expanded_source)
+    for method in RETIRED_CONSENSUS_VRF_METHODS:
+        direct = re.search(r"\bpub\s+fn\s+" + re.escape(method) + r"\b", masked)
+        generated = re.search(r"\[\s*" + re.escape(method) + r"\s*\(", masked)
+        if direct or generated:
+            raise GuardFailure(f"retired consensus-VRF method returned: {method}")
     for name, expected in EXPECTED_MACRO_HASHES.items():
         actual = _macro_digest(expanded_source, masked, name)
         if actual != expected:
@@ -1498,8 +1444,8 @@ class TelemetryEnabledMetricMethodsGuardTest(unittest.TestCase):
         self.assertEqual(
             validate_source(self.source, self.provider),
             {
-                "rows": 192,
-                "forward_rows": 64,
+                "rows": 173,
+                "forward_rows": 61,
                 "source_lines": 12_857,
                 "provider_lines": 26,
                 "governed_lines": 12_883,
@@ -1508,6 +1454,19 @@ class TelemetryEnabledMetricMethodsGuardTest(unittest.TestCase):
         )
         self.assertEqual(PREIMAGE_LINES - MAX_GOVERNED_LINES, 951)
         self.assertGreaterEqual(951, MINIMUM_NET_REDUCTION)
+
+    def test_retired_consensus_vrf_methods_are_absent(self) -> None:
+        expanded = _bind_macro_provider(self.source, self.provider)
+        masked = _mask_non_code(expanded)
+        for method in RETIRED_CONSENSUS_VRF_METHODS:
+            self.assertIsNone(
+                re.search(r"\bpub\s+fn\s+" + re.escape(method) + r"\b", masked),
+                method,
+            )
+            self.assertIsNone(
+                re.search(r"\[\s*" + re.escape(method) + r"\s*\(", masked),
+                method,
+            )
 
     def test_detached_macro_provider_is_rejected(self) -> None:
         self.assert_rejected(

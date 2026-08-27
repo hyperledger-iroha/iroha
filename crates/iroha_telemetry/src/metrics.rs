@@ -6487,10 +6487,6 @@ fields {
     pub streaming_fec_parity_current: gauge_vec(&["bucket"]);
     /// Streaming feedback timeout events.
     pub streaming_feedback_timeout_total: int_counter();
-    /// Streaming SoraNet privacy-route provisioning failures.
-    pub streaming_soranet_provision_fail_total: int_counter();
-    /// Streaming SoraNet provisioning queue drops grouped by reason.
-    pub streaming_soranet_provision_queue_drop_total: int_counter_vec(&["reason"]);
     /// Telemetry redaction events grouped by reason.
     pub telemetry_redaction_total: int_counter_vec(&["reason"]);
     /// Telemetry redaction skips grouped by reason.
@@ -6982,6 +6978,8 @@ fields {
     pub p2p_incoming_cap_reject_total: gauge();
     /// Number of incoming connections rejected due to total cap
     pub p2p_total_cap_reject_total: gauge();
+    /// Number of accepted unauthenticated transports rejected by the concurrent source cap.
+    pub p2p_preauth_source_cap_reject_total: gauge();
     /// Trust score per peer (label `peer_id`).
     pub p2p_trust_score: int_gauge_vec(&["peer_id"]);
     /// Trust penalties applied (label `reason`).
@@ -8295,6 +8293,7 @@ construct {
             "ballot_commitment_deadline_expired",
             "ballot_release_pulse_unavailable",
             "ballot_opening_deadline_expired",
+            "sortition_retries_exhausted",
         ] {
             let _ = governance_parliament_no_result_total.with_label_values(&[class]);
         }
@@ -8423,19 +8422,13 @@ construct {
         }
     }
     [streaming_gck_rotations_total streaming_quic_datagrams_sent_total
-        streaming_quic_datagrams_dropped_total streaming_fec_parity_current]
+        streaming_quic_datagrams_dropped_total streaming_fec_parity_current
+        streaming_feedback_timeout_total]
     {
         for bucket in ["0", "1", "2", "3", "4", "ge5"] {
             streaming_fec_parity_current
                 .with_label_values(&[bucket])
                 .set(0);
-        }
-    }
-    [streaming_feedback_timeout_total streaming_soranet_provision_fail_total
-        streaming_soranet_provision_queue_drop_total]
-    {
-        for reason in ["full", "disconnected"] {
-            let _ = streaming_soranet_provision_queue_drop_total.with_label_values(&[reason]);
         }
     }
     [telemetry_redaction_total]
@@ -8498,7 +8491,8 @@ construct {
         p2p_deferred_send_dropped_total p2p_session_reconnect_total p2p_connect_retry_seconds
         p2p_accept_throttled_total p2p_accept_bucket_evictions_total p2p_accept_buckets_current
         p2p_accept_prefix_cache_total p2p_accept_throttle_decisions_total
-        p2p_incoming_cap_reject_total p2p_total_cap_reject_total p2p_trust_score
+        p2p_incoming_cap_reject_total p2p_total_cap_reject_total
+        p2p_preauth_source_cap_reject_total p2p_trust_score
         p2p_trust_penalties_total p2p_trust_decay_ticks_total p2p_trust_gossip_skipped_total]
     {
         for direction in ["send", "recv"] {
@@ -9009,8 +9003,7 @@ initialize (metrics) {
         fraud_psp_score_bps fraud_psp_outcome_mismatch_total streaming_hpke_rekeys_total
         streaming_gck_rotations_total streaming_quic_datagrams_sent_total
         streaming_quic_datagrams_dropped_total streaming_fec_parity_current
-        streaming_feedback_timeout_total streaming_soranet_provision_fail_total
-        streaming_soranet_provision_queue_drop_total telemetry_redaction_total
+        streaming_feedback_timeout_total telemetry_redaction_total
         telemetry_redaction_skipped_total telemetry_truncation_total
         streaming_privacy_redaction_fail_total streaming_encode_latency_ms
         streaming_encode_audio_jitter_ms streaming_encode_audio_max_jitter_ms
@@ -9041,7 +9034,8 @@ initialize (metrics) {
         p2p_session_reconnect_total p2p_connect_retry_seconds p2p_accept_throttled_total
         p2p_accept_bucket_evictions_total p2p_accept_buckets_current p2p_accept_prefix_cache_total
         p2p_accept_throttle_decisions_total p2p_incoming_cap_reject_total
-        p2p_total_cap_reject_total p2p_trust_score p2p_trust_penalties_total
+        p2p_total_cap_reject_total p2p_preauth_source_cap_reject_total p2p_trust_score
+        p2p_trust_penalties_total
         p2p_trust_decay_ticks_total p2p_trust_gossip_skipped_total tx_gossip_sent_total
         tx_gossip_dropped_total tx_gossip_targets tx_gossip_fallback_total
         tx_gossip_frame_cap_bytes tx_gossip_public_target_cap tx_gossip_restricted_target_cap
@@ -9309,12 +9303,12 @@ epilogue {
 }
 const METRIC_CATALOG_V2: &str = include_str!("metrics/catalog_v2.tsv");
 const METRIC_CATALOG_V2_HEADER: &str = "# iroha-telemetry-metric-catalog-v2";
-const METRIC_CATALOG_V2_ROWS: usize = 812;
-const METRIC_CATALOG_V2_REGISTERED: usize = 767;
-const METRIC_CATALOG_V2_BYTES: usize = 110_834;
+const METRIC_CATALOG_V2_ROWS: usize = 813;
+const METRIC_CATALOG_V2_REGISTERED: usize = 768;
+const METRIC_CATALOG_V2_BYTES: usize = 111_005;
 #[cfg(test)]
 const METRIC_CATALOG_V2_BLAKE3: &str =
-    "1be62b26a5e9f1ddee730267ec5a5534cffe9a3826df65f14b7e15b3e2ee9a1e";
+    "4fcfbcff77a0db0a63403cd82f7bd5b221f7a7989cdd58fa4e2c0f6666569699";
 
 #[derive(Clone, Copy)]
 struct MetricSpec {

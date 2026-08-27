@@ -1114,6 +1114,244 @@ public final class HttpClientTransport implements IrohaClient {
         200);
   }
 
+  /** Fetches one authenticated pre-seal timed-OVN casting context. */
+  public CompletableFuture<ParliamentApiV1.TimedOvnCastingContextResponse>
+      getParliamentTimedOvnCastingContextV1(
+          final String ballotAttemptId,
+          final ToriiCanonicalRequestAuth canonicalAuth) {
+    return fetchJson(
+        buildVpnRequest(
+            "GET",
+            ParliamentApiV1.timedOvnCastingContextReadPath(ballotAttemptId),
+            null,
+            canonicalAuth,
+            ParliamentApiV1.MAX_STATE_BYTES),
+        response ->
+            ParliamentApiV1.parseTimedOvnCastingContextResponse(
+                response, ballotAttemptId),
+        "Parliament timed-OVN casting context",
+        200);
+  }
+
+  /** Requests one exact, consensus-authenticated timed-OVN casting-proof page. */
+  public CompletableFuture<ParliamentApiV1.TimedOvnCastingProofResponse>
+      requestParliamentTimedOvnCastingProofV1(
+          final String ballotAttemptId,
+          final BigInteger trustedCheckpointHeight,
+          final ToriiCanonicalRequestAuth canonicalAuth) {
+    final byte[] body =
+        ParliamentApiV1.timedOvnCastingProofRequestNorito(trustedCheckpointHeight);
+    final TransportRequest request =
+        buildExactNoritoPostRequest(
+            ParliamentApiV1.timedOvnCastingProofPath(ballotAttemptId),
+            body,
+            ParliamentApiV1.MAX_TIMED_OVN_CASTING_PROOF_RESPONSE_BYTES,
+            canonicalAuth);
+    return fetchExactNoritoBytes(
+            request, "Parliament timed-OVN casting proof", true)
+        .thenApply(ParliamentApiV1::parseTimedOvnCastingProofResponse);
+  }
+
+  /** Convenience overload for positive signed checkpoint heights. */
+  public CompletableFuture<ParliamentApiV1.TimedOvnCastingProofResponse>
+      requestParliamentTimedOvnCastingProofV1(
+          final String ballotAttemptId,
+          final long trustedCheckpointHeight,
+          final ToriiCanonicalRequestAuth canonicalAuth) {
+    return requestParliamentTimedOvnCastingProofV1(
+        ballotAttemptId, BigInteger.valueOf(trustedCheckpointHeight), canonicalAuth);
+  }
+
+  /** Fetches one bounded checkpoint-promotion page for native wallet verification. */
+  public CompletableFuture<ParliamentApiV1.TimedOvnCastingProofResponse>
+      getParliamentTimedOvnCastingProofPageV1(
+          final String ballotAttemptId,
+          final BigInteger trustedCheckpointHeight,
+          final ToriiCanonicalRequestAuth canonicalAuth) {
+    return requestParliamentTimedOvnCastingProofV1(
+        ballotAttemptId, trustedCheckpointHeight, canonicalAuth);
+  }
+
+  /** Convenience overload for positive signed checkpoint heights. */
+  public CompletableFuture<ParliamentApiV1.TimedOvnCastingProofResponse>
+      getParliamentTimedOvnCastingProofPageV1(
+          final String ballotAttemptId,
+          final long trustedCheckpointHeight,
+          final ToriiCanonicalRequestAuth canonicalAuth) {
+    return getParliamentTimedOvnCastingProofPageV1(
+        ballotAttemptId, BigInteger.valueOf(trustedCheckpointHeight), canonicalAuth);
+  }
+
+  /**
+   * Fetches, natively authenticates, and durably promotes bounded proof pages until terminal.
+   *
+   * <p>The authentication must leave timestamp and nonce unpinned so each exact POST receives a
+   * fresh anti-replay tuple. A promoted checkpoint is never used until persistence completes.
+   */
+  public CompletableFuture<ParliamentApiV1.TimedOvnCastingProofTerminal>
+      requestParliamentTimedOvnCastingProofUntilTerminalV1(
+          final String ballotAttemptId,
+          final BigInteger initialTrustedCheckpointHeight,
+          final byte[] initialTrustedCheckpointContextId,
+          final ToriiCanonicalRequestAuth canonicalAuth,
+          final ParliamentApiV1.TimedOvnCastingProofPageVerifier pageVerifier,
+          final ParliamentApiV1.TimedOvnCastingCheckpointPersister checkpointPersister) {
+    final BigInteger initialHeight =
+        ParliamentApiV1.requireTimedOvnCastingCheckpointHeight(
+            initialTrustedCheckpointHeight);
+    final byte[] initialContext =
+        requireCastingCheckpointContext(initialTrustedCheckpointContextId);
+    Objects.requireNonNull(canonicalAuth, "canonicalAuth");
+    if (canonicalAuth.timestampMs() != null || canonicalAuth.nonce() != null) {
+      throw new IllegalArgumentException(
+          "casting-proof paging requires unpinned canonical authentication");
+    }
+    return requestParliamentTimedOvnCastingProofPageV1(
+        ballotAttemptId,
+        initialHeight,
+        initialContext,
+        initialHeight,
+        canonicalAuth,
+        Objects.requireNonNull(pageVerifier, "pageVerifier"),
+        Objects.requireNonNull(checkpointPersister, "checkpointPersister"),
+        0);
+  }
+
+  /** Convenience overload for a positive signed initial checkpoint. */
+  public CompletableFuture<ParliamentApiV1.TimedOvnCastingProofTerminal>
+      requestParliamentTimedOvnCastingProofUntilTerminalV1(
+          final String ballotAttemptId,
+          final long initialTrustedCheckpointHeight,
+          final byte[] initialTrustedCheckpointContextId,
+          final ToriiCanonicalRequestAuth canonicalAuth,
+          final ParliamentApiV1.TimedOvnCastingProofPageVerifier pageVerifier,
+          final ParliamentApiV1.TimedOvnCastingCheckpointPersister checkpointPersister) {
+    return requestParliamentTimedOvnCastingProofUntilTerminalV1(
+        ballotAttemptId,
+        BigInteger.valueOf(initialTrustedCheckpointHeight),
+        initialTrustedCheckpointContextId,
+        canonicalAuth,
+        pageVerifier,
+        checkpointPersister);
+  }
+
+  private CompletableFuture<ParliamentApiV1.TimedOvnCastingProofTerminal>
+      requestParliamentTimedOvnCastingProofPageV1(
+          final String ballotAttemptId,
+          final BigInteger currentHeight,
+          final byte[] currentContext,
+          final BigInteger initialHeight,
+          final ToriiCanonicalRequestAuth canonicalAuth,
+          final ParliamentApiV1.TimedOvnCastingProofPageVerifier pageVerifier,
+          final ParliamentApiV1.TimedOvnCastingCheckpointPersister checkpointPersister,
+          final int verifiedPages) {
+    if (verifiedPages >= ParliamentApiV1.MAX_TIMED_OVN_CASTING_PROOF_PAGES) {
+      return failedCastingProofPageFuture(
+          new IllegalStateException("Parliament casting-proof page limit was reached"));
+    }
+    return requestParliamentTimedOvnCastingProofV1(
+            ballotAttemptId, currentHeight, canonicalAuth)
+        .thenCompose(
+            response -> {
+              final ParliamentApiV1.TimedOvnCastingProofPageVerification verification =
+                  Objects.requireNonNull(
+                      pageVerifier.verify(
+                          response, currentHeight, currentContext.clone()),
+                      "native page verification");
+              validateCastingProofPromotion(
+                  initialHeight, currentHeight, currentContext, verification);
+              final CompletableFuture<Void> persisted =
+                  Objects.requireNonNull(
+                      checkpointPersister.persist(verification),
+                      "casting checkpoint persistence");
+              return persisted.thenCompose(
+                  ignored -> {
+                    final int nextPageCount = verifiedPages + 1;
+                    if (!verification.moreAvailable) {
+                      return CompletableFuture.completedFuture(
+                          new ParliamentApiV1.TimedOvnCastingProofTerminal(
+                              response,
+                              currentHeight,
+                              currentContext,
+                              verification,
+                              nextPageCount));
+                    }
+                    return requestParliamentTimedOvnCastingProofPageV1(
+                        ballotAttemptId,
+                        verification.evaluatedBlockHeight,
+                        verification.evaluatedContextId(),
+                        initialHeight,
+                        canonicalAuth,
+                        pageVerifier,
+                        checkpointPersister,
+                        nextPageCount);
+                  });
+            });
+  }
+
+  private static void validateCastingProofPromotion(
+      final BigInteger initialHeight,
+      final BigInteger currentHeight,
+      final byte[] currentContext,
+      final ParliamentApiV1.TimedOvnCastingProofPageVerification verification) {
+    final BigInteger evaluatedHeight = verification.evaluatedBlockHeight;
+    if (evaluatedHeight.compareTo(currentHeight) < 0) {
+      throw new IllegalArgumentException(
+          "native casting-proof verification regressed the checkpoint height");
+    }
+    final BigInteger pageAdvance = evaluatedHeight.subtract(currentHeight);
+    if (pageAdvance.compareTo(
+            BigInteger.valueOf(
+                ParliamentApiV1.MAX_TIMED_OVN_CASTING_PROOF_PAGE_HEIGHT_ADVANCE))
+        > 0) {
+      throw new IllegalArgumentException(
+          "native casting-proof verification exceeded the page height bound");
+    }
+    if (evaluatedHeight
+            .subtract(initialHeight)
+            .compareTo(
+                BigInteger.valueOf(
+                    ParliamentApiV1.MAX_TIMED_OVN_CASTING_PROOF_HEIGHT_ADVANCE))
+        > 0) {
+      throw new IllegalArgumentException(
+          "native casting-proof verification exceeded the aggregate height bound");
+    }
+    if (verification.moreAvailable && pageAdvance.signum() == 0) {
+      throw new IllegalArgumentException(
+          "nonterminal casting-proof page did not advance its checkpoint");
+    }
+    if (!verification.moreAvailable
+        && pageAdvance.signum() == 0
+        && !MessageDigest.isEqual(currentContext, verification.evaluatedContextId())) {
+      throw new IllegalArgumentException(
+          "terminal casting-proof page changed context without advancing height");
+    }
+  }
+
+  private static byte[] requireCastingCheckpointContext(final byte[] value) {
+    if (value == null || value.length != 32) {
+      throw new IllegalArgumentException(
+          "initialTrustedCheckpointContextId must contain exactly 32 nonzero bytes");
+    }
+    boolean nonzero = false;
+    for (final byte item : value) {
+      nonzero |= item != 0;
+    }
+    if (!nonzero) {
+      throw new IllegalArgumentException(
+          "initialTrustedCheckpointContextId must contain exactly 32 nonzero bytes");
+    }
+    return value.clone();
+  }
+
+  private static CompletableFuture<ParliamentApiV1.TimedOvnCastingProofTerminal>
+      failedCastingProofPageFuture(final Throwable error) {
+    final CompletableFuture<ParliamentApiV1.TimedOvnCastingProofTerminal> future =
+        new CompletableFuture<>();
+    future.completeExceptionally(error);
+    return future;
+  }
+
   /** Fetches the complete public transcript for one currently authorized TLE release. */
   public CompletableFuture<ParliamentApiV1.TleReleaseContextResponse>
       getParliamentTleReleaseContextV1(
@@ -2170,6 +2408,46 @@ public final class HttpClientTransport implements IrohaClient {
     return builder.build();
   }
 
+  private TransportRequest buildExactNoritoPostRequest(
+      final String path,
+      final byte[] body,
+      final long maximumResponseBytes,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
+    final List<String> managedHeaders =
+        Arrays.asList("Accept", "Content-Type", "Accept-Encoding", "Content-Encoding");
+    for (final String candidate : config.defaultHeaders().keySet()) {
+      for (final String managed : managedHeaders) {
+        if (candidate.equalsIgnoreCase(managed)) {
+          throw new IllegalArgumentException(
+              "exact Norito POST headers must not be overridden");
+        }
+      }
+    }
+    requireCanonicalHeadersUnset();
+    final URI target = resolvePath(path);
+    final TransportRequest.Builder builder =
+        TransportRequest.builder()
+            .setUri(target)
+            .setMethod("POST")
+            .setBody(Objects.requireNonNull(body, "body"))
+            .addHeader("Content-Type", APPLICATION_NORITO)
+            .addHeader("Accept", APPLICATION_NORITO)
+            .addHeader("Accept-Encoding", "identity")
+            .setMaximumResponseBytes(Long.valueOf(maximumResponseBytes))
+            .setTimeout(config.requestTimeout());
+    for (final Map.Entry<String, String> entry : config.defaultHeaders().entrySet()) {
+      builder.addHeader(entry.getKey(), entry.getValue());
+    }
+    final Map<String, String> canonicalHeaders =
+        buildCanonicalHeaders("POST", target, body, canonicalAuth);
+    for (final Map.Entry<String, String> entry : canonicalHeaders.entrySet()) {
+      builder.addHeader(entry.getKey(), entry.getValue());
+    }
+    TransportSecurity.requireHttpRequestAllowed(
+        "HttpClientTransport", config.baseUri(), target, canonicalHeaders, body);
+    return builder.build();
+  }
+
   private void requireCanonicalHeadersUnset() {
     for (final String candidate : config.defaultHeaders().keySet()) {
       if (candidate.equalsIgnoreCase(CanonicalRequestSigner.HEADER_ACCOUNT)
@@ -2629,6 +2907,13 @@ public final class HttpClientTransport implements IrohaClient {
 
   private CompletableFuture<byte[]> fetchExactNoritoBytes(
       final TransportRequest request, final String errorContext) {
+    return fetchExactNoritoBytes(request, errorContext, false);
+  }
+
+  private CompletableFuture<byte[]> fetchExactNoritoBytes(
+      final TransportRequest request,
+      final String errorContext,
+      final boolean requireIdentityEncoding) {
     notifyRequest(request);
     final CompletableFuture<byte[]> future = new CompletableFuture<>();
     executor
@@ -2661,6 +2946,9 @@ public final class HttpClientTransport implements IrohaClient {
                     "Content-Type",
                     APPLICATION_NORITO,
                     errorContext);
+                if (requireIdentityEncoding) {
+                  requireHeaderAbsent(response.headers(), "Content-Encoding", errorContext);
+                }
                 if (body.length == 0) {
                   throw new IllegalStateException(errorContext + " response must not be empty");
                 }
@@ -2696,6 +2984,18 @@ public final class HttpClientTransport implements IrohaClient {
     if (values.size() != 1 || !expected.equals(values.get(0))) {
       throw new IllegalStateException(
           errorContext + " response " + name + " must be exactly " + expected);
+    }
+  }
+
+  private static void requireHeaderAbsent(
+      final Map<String, List<String>> headers,
+      final String name,
+      final String errorContext) {
+    for (final String candidate : headers.keySet()) {
+      if (candidate != null && candidate.equalsIgnoreCase(name)) {
+        throw new IllegalStateException(
+            errorContext + " response must not contain " + name);
+      }
     }
   }
 

@@ -14080,7 +14080,7 @@ fn run_config_debug(path: &Path) -> Result<(), Box<dyn Error>> {
             return Err("failed to read config source".into());
         }
     };
-    match user::Root::read_and_complete(reader) {
+    match reader.read_and_complete::<user::Root>() {
         Ok(_cfg) => {
             println!("config OK");
             Ok(())
@@ -14096,7 +14096,8 @@ fn load_actual_config(path: &Path) -> eyre::Result<actual::Root> {
     let reader = reader
         .read_toml_with_extends(path)
         .map_err(|err| eyre!("failed to read `{}`: {err}", path.display()))?;
-    let user_cfg = user::Root::read_and_complete(reader)
+    let user_cfg = reader
+        .read_and_complete::<user::Root>()
         .map_err(|err| eyre!("failed to parse `{}`: {err:?}", path.display()))?;
     user_cfg
         .parse()

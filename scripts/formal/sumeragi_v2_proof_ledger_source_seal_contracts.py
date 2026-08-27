@@ -1965,7 +1965,7 @@ _PRODUCTION_CAUSAL_FIFO_RUNTIME_REGRESSION_SHA256 = {
 # inventory may be bulk-refreshed.
 _TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256 = {
     "ingress::fair_v2_ingress_queue_gate_verdict": (
-        "f36657087882729316031bc2d321b625ee4eba01b742645757a20d31f4001fa8"
+        "217a9045fe04898fdbe2190451c990e44f75fb54b07f73197fb88a755a0cf75d"
     ),
     "ingress::select_fair_v2_ingress_candidate": (
         "9d12522aa0b65a229efc08e35feae5d887c7656366fa074e05b14c2c370a6068"
@@ -2139,7 +2139,7 @@ _TIMEOUT_VOTE_EPISODE_TLA_OPERATOR_SHA256 = {
             "8dd0ff9ee7a45c7bd12d8cee1c0ba3c155115b1ec6f8cc83bbdfc237fe14b7d9"
         ),
         "AsyncTimeoutControlDependencyAdvancesLeaderWire": (
-            "fc8c50a29cf3a52c5ceccccf383c03b7b9d8e5d63670fb774d212c2049e1c0a2"
+            "f823bff8bf0319f9bdea8a9286328f81e850303b2ca7188655ea990ff50fa143"
         ),
         "AsyncServeIngressIndexMayPrecedeAdmittedTarget": (
             "836fb332ad28f0f0a5a5afa54ac9e14d1c0e74200427327d2a5c9dc2f328887e"
@@ -3293,13 +3293,13 @@ _RETAINED_EFFECT_PROGRESS_INGRESS_REGRESSION_SHA256 = (
 # only after those owners have drained.
 _PRODUCTION_LIFECYCLE_DECISION_APPLY_ITEM_SHA256 = {
     "lifecycle_decision_apply_dispatch_available": (
-        "26ea20b9abab0f5ed47e1abf733e9dc09a6a2ae92d70864d54147fbf5a00d639"
+        "7e2cda73ed33428f470058749765f60ddbc1498fe3e5139dd20e274063127faf"
     ),
     "prepare_lifecycle_decision_apply_executor_dispatch": (
         "aa50a92c3308f82cf1e31a5fb2746668c9584b9267c00aa21d5a406ca96a3de5"
     ),
     "prepare_lifecycle_decision_apply_completion": (
-        "ac93c32e181e18f1a143e604486fce86063ecd7cf0f6a95c8fc919c6d5fa6e4d"
+        "49d307803293b19e905bd8b7153ee043dc2835288619293d12f194642791a2d7"
     ),
     "commit_lifecycle_decision_apply_finality": (
         "9689f8d90c03e75fe9397df07d650b9c7a9fd0b98c120c82acdda16c0f4999c0"
@@ -3860,7 +3860,7 @@ _LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256 = {
         "76784616876c15608e352a93941912c2002d252ceda70ebefedf4a10495a8730"
     ),
     "fair_v2_ingress_queue_gate_verdict": (
-        "f36657087882729316031bc2d321b625ee4eba01b742645757a20d31f4001fa8"
+        "217a9045fe04898fdbe2190451c990e44f75fb54b07f73197fb88a755a0cf75d"
     ),
     "ingress_scheduler_ordinals": (
         "994beede48b0f3f8b0418f2eac37029ca5f65fc934aa4206e9dfc69d1a2acefe"

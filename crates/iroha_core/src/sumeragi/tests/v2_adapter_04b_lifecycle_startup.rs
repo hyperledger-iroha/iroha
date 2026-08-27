@@ -1242,6 +1242,34 @@ fn exercise_pending_kura_production_lifecycle(
 }
 
 #[cfg(feature = "bls")]
+fn settle_terminal_fixture_runner_handoff(
+    activated: &mut super::super::v2_lifecycle_coordinator::ActivatedProductionLifecycleV1,
+    runner: &mut super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1,
+    lane_work: &mut super::super::v2_lane_work::V2LaneWorkAdapter,
+    output_guard: &crate::sumeragi::output_guard::ConsensusOutputGuard,
+) {
+    let permit =
+        super::super::v2_runner::LifecycleProducerClaimDispositionV1::ApplyTerminalSettled
+            .decided_lane_recovery_permit()
+            .expect("settled Apply authorizes its exact runner handoff");
+    activated
+        .with_runner_runtime(
+            runner,
+            |_owner, executor, services, local_proposal| {
+                super::super::v2_runner::lifecycle_run_inner::settle_apply_barrier_runner_decision_handoff(
+                    executor,
+                    services,
+                    local_proposal,
+                    lane_work,
+                    output_guard,
+                    &permit,
+                )
+            },
+        )
+        .expect("retire the terminal fixture's exact runner Decision handoff");
+}
+
+#[cfg(feature = "bls")]
 #[test]
 fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies() {
     if std::thread::current().name() != Some("production-lifecycle-marker-replay") {
@@ -2132,6 +2160,12 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 super::super::v2_runner::ordinary_ingress_consumer::ProductionPreparedOrdinaryIngressConsumptionV1::Continue,
             );
             assert!(!output_guard.restart_required());
+            settle_terminal_fixture_runner_handoff(
+                &mut activated,
+                &mut ordinary_runner,
+                &mut lane_work,
+                output_guard.as_ref(),
+            );
             let (invalid_turn, after_invalid_ingress) = with_lifecycle_current_runner_turn_for_test(
                 &recovered_context,
                 LifecycleRunnerRankTarget::Ingress,
@@ -2171,6 +2205,12 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             );
             assert_eq!(leader_wire_ingress.len(), 0);
             assert!(!output_guard.restart_required());
+            settle_terminal_fixture_runner_handoff(
+                &mut activated,
+                &mut invalid_runner,
+                &mut lane_work,
+                output_guard.as_ref(),
+            );
             let batch_message = BlockMessage::V2(wire::ConsensusMessageV2::new(
                 wire::ConsensusMessageV2Payload::PayloadManifest(manifest.clone()),
             ));
@@ -2202,6 +2242,12 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             )
             .expect("drain one exact lifecycle-owned ordinary batch");
             assert!(!producer_claim.requires_yield());
+            settle_terminal_fixture_runner_handoff(
+                &mut activated,
+                &mut batch_runner,
+                &mut lane_work,
+                output_guard.as_ref(),
+            );
             assert_eq!(leader_wire_ingress.len(), 0);
             assert!(!output_guard.restart_required());
             let (rejected_serve, admitted_serve) =
@@ -2496,6 +2542,12 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 crate::sumeragi::status::clear_v2_status();
                 continue;
             }
+            settle_terminal_fixture_runner_handoff(
+                &mut activated,
+                &mut runner,
+                &mut lane_work,
+                output_guard.as_ref(),
+            );
             let mut cleanup_supervisor = super::super::v2_worker::V2CleanupSupervisor::default();
             let ((), retained_sidecars, outcome) =
                 super::super::v2_runner::lifecycle_run_inner::finalize_lifecycle_height(

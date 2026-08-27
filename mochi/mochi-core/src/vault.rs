@@ -10,6 +10,7 @@ use crate::{
 use iroha_crypto::{ExposedPrivateKey, KeyPair, PrivateKey};
 use iroha_data_model::{account::AccountId, role::RoleId};
 use norito::json::{self, Map, Value};
+use zeroize::Zeroizing;
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
 use std::{
@@ -37,6 +38,8 @@ const SIGNER_VAULT_MAX_JSON_ARRAY_ENTRIES_V1: usize =
     SIGNER_VAULT_MAX_SIGNERS_V1 * (SIGNER_VAULT_MAX_ROLES_PER_SIGNER_V1 + 12 + 1);
 const SIGNER_VAULT_MAX_JSON_OBJECT_ENTRIES_V1: usize = SIGNER_VAULT_MAX_SIGNERS_V1 * 8;
 const SIGNER_VAULT_MAX_JSON_DEPTH_V1: usize = 8;
+const SIGNER_VAULT_ENTRY_FIELDS_V1: [&str; 5] =
+    ["label", "account", "private_key", "permissions", "roles"];
 /// Errors emitted when reading or writing signing authorities.
 #[derive(Debug, thiserror::Error)]
 pub enum SignerVaultError {
@@ -172,6 +175,34 @@ fn create_vault_temp(path: &Path) -> io::Result<(PathBuf, File)> {
         "could not allocate a unique signer-vault temporary file",
     ))
 }
+fn prepare_vault_parent(path: &Path) -> io::Result<PathBuf> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent)?;
+    let metadata = fs::symlink_metadata(parent)?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "signer vault parent `{}` must be a real directory",
+                parent.display()
+            ),
+        ));
+    }
+    #[cfg(unix)]
+    if metadata.mode() & 0o022 != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "signer vault parent `{}` must not be writable by group or other users",
+                parent.display()
+            ),
+        ));
+    }
+    Ok(parent.to_path_buf())
+}
 fn signer_vault_limit(message: impl Into<String>) -> SignerVaultError {
     SignerVaultError::InvalidEntry(message.into())
 }
@@ -301,19 +332,18 @@ impl SignerVault {
                 )));
             }
         }
+        let parent = prepare_vault_parent(&self.path)?;
         let serialized = Value::Array(
             signers
                 .iter()
                 .map(encode_entry)
                 .collect::<Result<Vec<_>, _>>()?,
         );
-        let text =
+        let text = Zeroizing::new(
             json::to_json_bounded(&serialized, SIGNER_VAULT_MAX_BYTES_V1).map_err(|error| {
                 signer_vault_limit(format!("bounded vault encoding failed: {error}"))
-            })?;
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent)?;
-        }
+            })?,
+        );
         let (tmp_path, mut file) = create_vault_temp(&self.path)?;
         let write_result = (|| -> io::Result<()> {
             file.write_all(text.as_bytes())?;
@@ -328,9 +358,9 @@ impl SignerVault {
             return Err(err.into());
         }
         #[cfg(unix)]
-        if let Some(parent) = self.path.parent() {
-            File::open(parent)?.sync_all()?;
-        }
+        File::open(parent)?.sync_all()?;
+        #[cfg(not(unix))]
+        let _ = parent;
         Ok(())
     }
 }
@@ -362,7 +392,9 @@ fn signer_worst_case_json_bytes(signer: &SigningAuthority) -> Result<usize, Sign
         "signer account",
         SIGNER_VAULT_MAX_ACCOUNT_BYTES_V1,
     )?;
-    let private_key = ExposedPrivateKey(signer.key_pair().private_key().clone()).to_string();
+    let private_key = Zeroizing::new(
+        ExposedPrivateKey(signer.key_pair().private_key().clone()).to_string(),
+    );
     charge_string(
         &mut total,
         private_key.as_str(),
@@ -399,6 +431,14 @@ fn parse_entry(entry: &Value) -> Result<SigningAuthority, SignerVaultError> {
     let object = entry.as_object().ok_or_else(|| {
         SignerVaultError::InvalidEntry("signer entry must be a JSON object".to_owned())
     })?;
+    if let Some(field) = object
+        .keys()
+        .find(|field| !SIGNER_VAULT_ENTRY_FIELDS_V1.contains(&field.as_str()))
+    {
+        return Err(SignerVaultError::InvalidEntry(format!(
+            "unknown signer field `{field}`"
+        )));
+    }
     let label = extract_string(
         object,
         "label",
@@ -442,9 +482,9 @@ fn parse_entry(entry: &Value) -> Result<SigningAuthority, SignerVaultError> {
     ))
 }
 fn parse_permissions(object: &Map) -> Result<BTreeSet<InstructionPermission>, SignerVaultError> {
-    let raw = object.get("permissions").ok_or_else(|| {
-        SignerVaultError::InvalidEntry("missing `permissions` field".to_owned())
-    })?;
+    let raw = object
+        .get("permissions")
+        .ok_or_else(|| SignerVaultError::InvalidEntry("missing `permissions` field".to_owned()))?;
     let array = raw.as_array().ok_or_else(|| {
         SignerVaultError::InvalidEntry("`permissions` must be an array".to_owned())
     })?;
@@ -467,7 +507,11 @@ fn parse_permissions(object: &Map) -> Result<BTreeSet<InstructionPermission>, Si
                 "unknown permission `{item}`"
             )));
         };
-        set.insert(permission);
+        if !set.insert(permission) {
+            return Err(SignerVaultError::InvalidEntry(format!(
+                "duplicate permission `{item}`"
+            )));
+        }
     }
     if set.is_empty() {
         return Err(SignerVaultError::InvalidEntry(
@@ -477,9 +521,9 @@ fn parse_permissions(object: &Map) -> Result<BTreeSet<InstructionPermission>, Si
     Ok(set)
 }
 fn parse_roles(object: &Map) -> Result<BTreeSet<RoleId>, SignerVaultError> {
-    let Some(raw) = object.get("roles") else {
-        return Ok(BTreeSet::new());
-    };
+    let raw = object
+        .get("roles")
+        .ok_or_else(|| SignerVaultError::InvalidEntry("missing `roles` field".to_owned()))?;
     let array = raw
         .as_array()
         .ok_or_else(|| SignerVaultError::InvalidEntry("`roles` must be an array".to_owned()))?;
@@ -498,7 +542,11 @@ fn parse_roles(object: &Map) -> Result<BTreeSet<RoleId>, SignerVaultError> {
         let role = RoleId::from_str(item).map_err(|err| {
             SignerVaultError::InvalidEntry(format!("invalid role id `{item}`: {err}"))
         })?;
-        set.insert(role);
+        if !set.insert(role) {
+            return Err(SignerVaultError::InvalidEntry(format!(
+                "duplicate role `{item}`"
+            )));
+        }
     }
     Ok(set)
 }
@@ -613,7 +661,7 @@ mod tests {
         );
     }
     #[test]
-    fn parser_requires_canonical_private_key_and_explicit_permissions() {
+    fn parser_requires_the_exact_canonical_field_set() {
         let signer = &development_signing_authorities()[0];
         let Value::Object(mut object) = encode_entry(signer).expect("encode development signer")
         else {
@@ -625,14 +673,54 @@ mod tests {
         object.insert("privateKey".to_owned(), private_key.clone());
         let error = parse_entry(&Value::Object(object.clone()))
             .expect_err("legacy private-key aliases must be rejected");
-        assert!(error.to_string().contains("missing `private_key`"));
+        assert!(
+            error
+                .to_string()
+                .contains("unknown signer field `privateKey`")
+        );
 
         object.remove("privateKey");
         object.insert("private_key".to_owned(), private_key);
         object.remove("permissions");
-        let error = parse_entry(&Value::Object(object))
-            .expect_err("permissions must be explicit");
+        let error =
+            parse_entry(&Value::Object(object.clone())).expect_err("permissions must be explicit");
         assert!(error.to_string().contains("missing `permissions`"));
+
+        object.insert(
+            "permissions".to_owned(),
+            Value::Array(vec![Value::from(InstructionPermission::MintAsset.key())]),
+        );
+        object.remove("roles");
+        let error = parse_entry(&Value::Object(object)).expect_err("roles must be explicit");
+        assert!(error.to_string().contains("missing `roles`"));
+    }
+    #[test]
+    fn parser_rejects_duplicate_permissions_and_roles() {
+        let signer = &development_signing_authorities()[0];
+        let Value::Object(mut object) = encode_entry(signer).expect("encode development signer")
+        else {
+            panic!("encoded signer must be an object");
+        };
+        let permission = Value::from(InstructionPermission::MintAsset.key());
+        object.insert(
+            "permissions".to_owned(),
+            Value::Array(vec![permission.clone(), permission]),
+        );
+        let error = parse_entry(&Value::Object(object.clone()))
+            .expect_err("duplicate permissions must not be normalized");
+        assert!(error.to_string().contains("duplicate permission"));
+
+        object.insert(
+            "permissions".to_owned(),
+            Value::Array(vec![Value::from(InstructionPermission::MintAsset.key())]),
+        );
+        object.insert(
+            "roles".to_owned(),
+            Value::Array(vec![Value::from("basic_user"), Value::from("basic_user")]),
+        );
+        let error = parse_entry(&Value::Object(object))
+            .expect_err("duplicate roles must not be normalized");
+        assert!(error.to_string().contains("duplicate role"));
     }
     #[test]
     fn load_missing_vault_produces_empty_list() {
@@ -747,9 +835,10 @@ mod tests {
             fs::read_dir(vault.path().parent().expect("vault parent"))
                 .expect("list vault parent")
                 .filter_map(Result::ok)
-                .all(|entry| !entry.file_name().to_string_lossy().starts_with(&format!(
-                    "{file_name}.tmp."
-                ))),
+                .all(|entry| !entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(&format!("{file_name}.tmp."))),
             "temporary vault file should be removed after rename"
         );
     }
@@ -793,5 +882,21 @@ mod tests {
             .load()
             .expect_err("vault symlinks must be rejected");
         assert!(error.to_string().contains("not a symlink"));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn save_rejects_a_symlinked_parent_directory() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempdir().expect("vault root");
+        let outside = tempdir().expect("outside target");
+        let linked_parent = root.path().join("linked-parent");
+        symlink(outside.path(), &linked_parent).expect("create parent symlink");
+        let vault = SignerVault::from_path(linked_parent.join(SIGNERS_FILE_NAME));
+        let error = vault
+            .save(development_signing_authorities())
+            .expect_err("a vault parent symlink must fail closed");
+        assert!(error.to_string().contains("must be a real directory"));
+        assert!(!outside.path().join(SIGNERS_FILE_NAME).exists());
     }
 }

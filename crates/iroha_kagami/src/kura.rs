@@ -208,7 +208,7 @@ fn print_blockchain(
             let len = usize::try_from(idx.length).wrap_err("block length does not fit usize")?;
             if len > block_buf.capacity() {
                 block_buf
-                    .try_reserve_exact(len - block_buf.capacity())
+                    .try_reserve_exact(len - block_buf.len())
                     .wrap_err_with(|| {
                         format!(
                             "failed to reserve {} bytes for block № {}",

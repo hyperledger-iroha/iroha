@@ -30,7 +30,6 @@ use eframe::{
 };
 use egui_plot::{Legend, Line, Plot, PlotPoint, PlotPoints};
 use hex::encode_upper;
-#[allow(unused_imports)]
 use iroha_data_model::{
     account::{
         AccountAdmissionMode, AccountAdmissionPolicy,
@@ -46,13 +45,13 @@ use iroha_data_model::{
         pipeline::{BlockStatus, PipelineEventBox, TransactionStatus},
         trigger_completed::{TriggerCompletedEvent, TriggerCompletedOutcome},
     },
-    isi::{InstructionBox, Register},
+    isi::Register,
     nexus::{
         DataSpaceId, LaneConfig as LaneMetadata, LaneId, LaneLifecyclePlan, LaneRelayEnvelope,
         LaneStorageProfile, LaneVisibility,
     },
     parameter::system::SumeragiConsensusMode,
-    prelude::{AccountId, Name, Numeric, Quantity},
+    prelude::{AccountId, ChainId, Name, Quantity},
     role::RoleId,
 };
 use iroha_executor_data_model::isi::multisig::MultisigSpec;
@@ -326,13 +325,7 @@ where
             }
             "--chain-id" => {
                 let value = next_value_string(&mut iter, "--chain-id")?;
-                let trimmed = value.trim();
-                if trimmed.is_empty() {
-                    return Err(CliParseError::new(
-                        "--chain-id value must not be empty or whitespace",
-                    ));
-                }
-                overrides.chain_id = Some(trimmed.to_owned());
+                overrides.chain_id = Some(parse_chain_id_override(&value, "--chain-id")?);
             }
             "--genesis-profile" => {
                 let value = next_value_string(&mut iter, "--genesis-profile")?;
@@ -348,7 +341,10 @@ where
             }
             "--vrf-seed-hex" => {
                 let value = next_value_string(&mut iter, "--vrf-seed-hex")?;
-                overrides.vrf_seed_hex = Some(value);
+                overrides.vrf_seed_hex = Some(parse_vrf_seed_override(
+                    &value,
+                    "--vrf-seed-hex",
+                )?);
             }
             "--nexus-config" => {
                 let value = next_value_string(&mut iter, "--nexus-config")?;
@@ -478,13 +474,7 @@ fn parse_env_overrides() -> Result<CliOverrides, CliParseError> {
         apply_profile_override(&mut overrides, parsed, "MOCHI_PROFILE")?;
     }
     if let Some(chain_id) = env_value("MOCHI_CHAIN_ID")? {
-        let trimmed = chain_id.trim();
-        if trimmed.is_empty() {
-            return Err(CliParseError::new(
-                "MOCHI_CHAIN_ID value must not be empty or whitespace",
-            ));
-        }
-        overrides.chain_id = Some(trimmed.to_owned());
+        overrides.chain_id = Some(parse_chain_id_override(&chain_id, "MOCHI_CHAIN_ID")?);
     }
     if let Some(profile) = env_value("MOCHI_GENESIS_PROFILE")? {
         let parsed = parse_genesis_profile_flag(&profile)?;
@@ -498,7 +488,7 @@ fn parse_env_overrides() -> Result<CliOverrides, CliParseError> {
         overrides.genesis_profile = Some(parsed);
     }
     if let Some(seed) = env_value("MOCHI_VRF_SEED_HEX")? {
-        overrides.vrf_seed_hex = Some(seed);
+        overrides.vrf_seed_hex = Some(parse_vrf_seed_override(&seed, "MOCHI_VRF_SEED_HEX")?);
     }
     if let Some(port) = env_value("MOCHI_TORII_START")? {
         overrides.torii_start = Some(parse_port_flag(&port, "MOCHI_TORII_START")?);
@@ -622,6 +612,14 @@ fn parse_profile_override(value: &str) -> Result<ParsedProfileOverride, CliParse
     parse_profile_table_override(table)
 }
 fn parse_profile_table_override(table: &TomlTable) -> Result<ParsedProfileOverride, CliParseError> {
+    if let Some(field) = table
+        .keys()
+        .find(|field| !matches!(field.as_str(), "peer_count" | "consensus_mode" | "genesis_profile"))
+    {
+        return Err(CliParseError::new(format!(
+            "profile override contains unknown field `{field}`"
+        )));
+    }
     let peer_value = table
         .get("peer_count")
         .ok_or_else(|| CliParseError::new("profile override missing `peer_count`"))?;
@@ -630,12 +628,24 @@ fn parse_profile_table_override(table: &TomlTable) -> Result<ParsedProfileOverri
         .get("consensus_mode")
         .ok_or_else(|| CliParseError::new("profile override missing `consensus_mode`"))?;
     let consensus_mode = parse_profile_consensus_mode(consensus_value)?;
-    let genesis_profile = table
-        .get("genesis_profile")
-        .and_then(TomlValue::as_str)
-        .filter(|value| !value.is_empty())
-        .map(|value| value.parse().map_err(|err: String| CliParseError::new(err)))
-        .transpose()?;
+    let genesis_profile = match table.get("genesis_profile") {
+        None => None,
+        Some(TomlValue::String(value)) if !value.is_empty() => Some(
+            value
+                .parse()
+                .map_err(|err: String| CliParseError::new(err))?,
+        ),
+        Some(TomlValue::String(_)) => {
+            return Err(CliParseError::new(
+                "profile override genesis_profile must not be empty",
+            ));
+        }
+        Some(_) => {
+            return Err(CliParseError::new(
+                "profile override genesis_profile must be a string",
+            ));
+        }
+    };
     if genesis_profile.is_some() && consensus_mode != SumeragiConsensusMode::Npos {
         return Err(CliParseError::new(
             "profile override with genesis_profile requires consensus_mode = \"npos\"",
@@ -718,13 +728,27 @@ fn parse_port_flag(value: &str, flag: &str) -> Result<u16, CliParseError> {
     }
     Ok(port)
 }
+fn parse_chain_id_override(value: &str, source: &str) -> Result<String, CliParseError> {
+    value
+        .parse::<ChainId>()
+        .map(|chain_id| chain_id.to_string())
+        .map_err(|error| CliParseError::new(format!("invalid {source} value: {error}")))
+}
+fn parse_vrf_seed_override(value: &str, source: &str) -> Result<String, CliParseError> {
+    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(CliParseError::new(format!(
+            "{source} must contain exactly 64 hexadecimal characters"
+        )));
+    }
+    Ok(value.to_owned())
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RestartModeFlag {
     Never,
     OnFailure,
 }
 fn parse_restart_mode_flag(value: &str) -> Result<RestartModeFlag, CliParseError> {
-    match value.to_ascii_lowercase().as_str() {
+    match value {
         "never" => Ok(RestartModeFlag::Never),
         "on-failure" => Ok(RestartModeFlag::OnFailure),
         other => Err(CliParseError::new(format!(
@@ -757,11 +781,11 @@ fn parse_positive_millis_flag(value: &str, flag: &str) -> Result<Duration, CliPa
     Ok(Duration::from_millis(millis))
 }
 fn parse_bool_flag(value: &str, flag: &str) -> Result<bool, CliParseError> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "1" | "true" | "yes" | "on" => Ok(true),
-        "0" | "false" | "no" | "off" => Ok(false),
+    match value {
+        "true" => Ok(true),
+        "false" => Ok(false),
         other => Err(CliParseError::new(format!(
-            "{flag} expects a boolean (true/false/1/0), got `{other}`"
+            "{flag} expects `true` or `false`, got `{other}`"
         ))),
     }
 }
@@ -1781,7 +1805,7 @@ enum ChaosUpdate {
         error: Option<String>,
     },
 }
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct SignerEntryState {
     label: String,
     account: String,
@@ -1807,7 +1831,7 @@ impl SignerEntryState {
         }
     }
 }
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct SignerEntryForm {
     label: String,
     account: String,
@@ -1833,7 +1857,6 @@ impl SignerEntryForm {
         *self = Self::default();
     }
 }
-#[derive(Debug)]
 struct SignerVaultDialog {
     entries: Vec<SignerEntryState>,
     new_entry: SignerEntryForm,
@@ -5023,11 +5046,7 @@ impl MochiApp {
             .and_then(|entries| {
                 entries.iter().find_map(|entry| {
                     let table = entry.as_table()?;
-                    let entry_lane_id = table
-                        .get("index")
-                        .or_else(|| table.get("id"))
-                        .and_then(toml_u32)
-                        .unwrap_or(lane_id);
+                    let entry_lane_id = table.get("index").and_then(toml_u32).unwrap_or(lane_id);
                     (entry_lane_id == lane_id).then_some(table)
                 })
             });
@@ -5053,7 +5072,6 @@ impl MochiApp {
             }
             if let Some(storage) = table
                 .get("storage")
-                .or_else(|| table.get("storage_profile"))
                 .and_then(toml_string)
                 .and_then(|raw| raw.parse::<LaneStorageProfile>().ok())
             {
@@ -5061,7 +5079,6 @@ impl MochiApp {
             }
             if let Some(scheme) = table
                 .get("proof_scheme")
-                .or_else(|| table.get("proof"))
                 .and_then(toml_string)
                 .and_then(|raw| raw.parse::<DaProofScheme>().ok())
             {
@@ -5143,7 +5160,6 @@ impl MochiApp {
                 };
                 let lane_id = table
                     .get("index")
-                    .or_else(|| table.get("id"))
                     .and_then(toml_u32)
                     .or_else(|| u32::try_from(idx).ok())
                     .unwrap_or(0);
@@ -5899,7 +5915,7 @@ impl MochiApp {
                                     "Auto-build missing binaries (cargo build)",
                                 );
                                 ui.small(
-                                    "When enabled, MOCHI may run `cargo build` to build missing `iroha3d`, `kagami`, and `iroha` binaries.",
+                                    "When enabled, MOCHI may run `cargo build` to build missing `iroha3d` and `kagami` binaries.",
                                 );
                                 ui.add_space(6.0);
                                 ui.checkbox(
@@ -11346,7 +11362,6 @@ fn lane_slug(alias: &str, lane_id: u32) -> String {
 fn toml_u32(value: &TomlValue) -> Option<u32> {
     match value {
         TomlValue::Integer(raw) => u32::try_from(*raw).ok(),
-        TomlValue::String(raw) => raw.parse::<u32>().ok(),
         _ => None,
     }
 }
@@ -11370,7 +11385,6 @@ fn lane_catalog_snapshot(nexus: Option<&TomlTable>) -> LaneCatalogSnapshot {
             let alias = table.get("alias").and_then(toml_string);
             let id = table
                 .get("id")
-                .or_else(|| table.get("index"))
                 .and_then(toml_u32)
                 .or_else(|| u32::try_from(idx).ok());
             if let (Some(alias), Some(id)) = (alias, id) {
@@ -11385,7 +11399,6 @@ fn lane_catalog_snapshot(nexus: Option<&TomlTable>) -> LaneCatalogSnapshot {
             };
             let lane_id = table
                 .get("index")
-                .or_else(|| table.get("id"))
                 .and_then(toml_u32)
                 .or_else(|| u32::try_from(idx).ok())
                 .unwrap_or(0);
@@ -11395,20 +11408,14 @@ fn lane_catalog_snapshot(nexus: Option<&TomlTable>) -> LaneCatalogSnapshot {
                 .unwrap_or_else(|| default_lane_alias(lane_id));
             snapshot.lane_aliases.insert(lane_id, alias);
             let dataspace_id = table
-                .get("dataspace_id")
-                .and_then(toml_u32)
-                .or_else(|| table.get("dataspace").and_then(toml_u32))
-                .or_else(|| {
-                    table
-                        .get("dataspace")
-                        .and_then(toml_string)
-                        .and_then(|alias| {
-                            snapshot
-                                .dataspace_aliases
-                                .iter()
-                                .find(|(_, name)| *name == &alias)
-                                .map(|(id, _)| *id)
-                        })
+                .get("dataspace")
+                .and_then(toml_string)
+                .and_then(|alias| {
+                    snapshot
+                        .dataspace_aliases
+                        .iter()
+                        .find(|(_, name)| *name == &alias)
+                        .map(|(id, _)| *id)
                 });
             if let Some(dataspace_id) = dataspace_id {
                 snapshot.lane_dataspaces.insert(lane_id, dataspace_id);

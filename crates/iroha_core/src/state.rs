@@ -216,7 +216,7 @@ use std::{
     cell::OnceCell,
     collections::{BTreeMap, BTreeSet, HashSet, VecDeque},
     fmt::Write,
-    io, mem,
+    mem,
     num::{NonZeroU32, NonZeroU64, NonZeroUsize},
     path::{Path, PathBuf},
     str::FromStr,
@@ -777,23 +777,6 @@ enum ResolvedIvmTriggerProgram {
     Contract(Arc<ivm::PreparedContract>),
     Generic(crate::smartcontracts::ivm::cache::GenericProgramSummary),
 }
-#[derive(Clone)]
-struct StreamingStoragePaths {
-    soranet_provision_spool_dir: PathBuf,
-    soravpn_provision_spool_dir: PathBuf,
-}
-impl Default for StreamingStoragePaths {
-    fn default() -> Self {
-        Self {
-            soranet_provision_spool_dir:
-                iroha_config::parameters::actual::StreamingSoranet::from_defaults()
-                    .provision_spool_dir,
-            soravpn_provision_spool_dir:
-                iroha_config::parameters::actual::StreamingSoravpn::from_defaults()
-                    .provision_spool_dir,
-        }
-    }
-}
 pub(crate) fn account_label_is_pii(label: &AccountAlias) -> bool {
     let raw = label.label.as_ref();
     if raw.is_empty() {
@@ -814,6 +797,9 @@ pub(crate) fn account_label_is_pii(label: &AccountAlias) -> bool {
         return false;
     }
     matches!(digits, 8..=15)
+}
+fn account_ids_in_rekey_record(record: &AccountRekeyRecord) -> impl Iterator<Item = &AccountId> {
+    core::iter::once(&record.active_account_id).chain(record.previous_account_ids.iter())
 }
 pub(crate) fn current_axt_slot_from_block(header: &BlockHeader, slot_length_ms: NonZeroU64) -> u64 {
     header.creation_time_ms / slot_length_ms.get()
@@ -901,6 +887,7 @@ macro_rules! with_world_overlay_fields {
             domains,
             domains_by_owner,
             kaigi_relay_registry,
+            kaigi_account_dependencies,
             accounts,
             uaid_accounts,
             account_aliases,
@@ -917,6 +904,7 @@ macro_rules! with_world_overlay_fields {
             fee_sponsor_budget_counters,
             identifier_claims,
             account_rekey_records,
+            account_rekey_records_by_account,
             account_recovery_policies,
             account_recovery_requests,
             asset_definitions,
@@ -1133,6 +1121,7 @@ macro_rules! with_world_overlay_fields {
             global_beacon_active_session,
             global_beacon_latest_pulse,
             global_beacon_pulses,
+            global_beacon_pulse_slots,
             merge_hint_roots,
             merge_global_state_root,
             ]
@@ -3898,6 +3887,13 @@ struct ParliamentTimedOvnResourceReservationV1 {
     cast_capable: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ParliamentTimedOvnResourceReservationErrorV1 {
+    DuplicateBallotAttempt,
+    ResourceScheduleConflict,
+    TooManyConcurrentCastingContexts,
+}
+
 /// The global entity consisting of `domains`, `triggers` and etc.
 /// For example registration of domain, will have this as an ISI target.
 #[derive(Default, JsonSerialize)]
@@ -3914,6 +3910,9 @@ pub struct World {
     /// Derived index from Kaigi relay account ids to authoritative metadata domains.
     #[norito(skip)]
     pub(crate) kaigi_relay_registry: Storage<AccountId, DomainId>,
+    /// Derived reverse index from raw Kaigi account references to typed metadata locations.
+    #[norito(skip)]
+    pub(crate) kaigi_account_dependencies: Storage<AccountId, BTreeSet<(u8, DomainId, Name)>>,
     /// Registered accounts.
     pub(crate) accounts: Storage<AccountId, AccountValue>,
     /// Index from UAID to bound account (1:1).
@@ -3954,6 +3953,9 @@ pub struct World {
     pub(crate) identifier_claims: Storage<OpaqueAccountId, IdentifierClaimRecord>,
     /// Stable account labels and signatory history.
     pub(crate) account_rekey_records: Storage<AccountAlias, AccountRekeyRecord>,
+    /// Derived reverse occurrence index from rekey-history account ids to supporting aliases.
+    #[norito(skip)]
+    pub(crate) account_rekey_records_by_account: Storage<AccountId, BTreeSet<AccountAlias>>,
     /// Alias-keyed account recovery policies.
     pub(crate) account_recovery_policies: Storage<AccountAlias, AccountRecoveryPolicy>,
     /// Alias-keyed account recovery requests.
@@ -4402,7 +4404,6 @@ pub struct World {
     /// `SoraFS` pin manifest registry keyed by manifest digest.
     pub(crate) pin_manifests: Storage<ManifestDigest, PinManifestRecord>,
     /// Active alias bindings keyed by `namespace/name`.
-    #[norito(skip)]
     pub(crate) manifest_aliases: Storage<ManifestAliasId, ManifestAliasRecord>,
     /// Outstanding replication orders keyed by order identifier.
     pub(crate) replication_orders: Storage<ReplicationOrderId, ReplicationOrderRecord>,
@@ -4537,6 +4538,9 @@ pub struct World {
     /// Append-only finalized beacon pulse history keyed by canonical pulse id.
     pub(crate) global_beacon_pulses:
         Storage<[u8; 32], iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1>,
+    /// Derived unique pulse id keyed by the authoritative `(network, height)` slot.
+    #[norito(skip)]
+    pub(crate) global_beacon_pulse_slots: Storage<(iroha_data_model::NetworkId, u64), [u8; 32]>,
     /// Placeholder buffer of events pending publication to external subscribers.
     /// Included for formal correctness, although used only below the block level.
     external_event_buf: Cell<Vec<EventBox>>,
@@ -4574,6 +4578,10 @@ pub struct WorldBlock<'world> {
     /// Derived index from Kaigi relay account ids to authoritative metadata domains.
     #[norito(skip)]
     pub(crate) kaigi_relay_registry: StorageBlock<'world, AccountId, DomainId>,
+    /// Derived reverse index from raw Kaigi account references to typed metadata locations.
+    #[norito(skip)]
+    pub(crate) kaigi_account_dependencies:
+        StorageBlock<'world, AccountId, BTreeSet<(u8, DomainId, Name)>>,
     /// Registered accounts.
     pub(crate) accounts: StorageBlock<'world, AccountId, AccountValue>,
     /// Index from UAID to bound account (1:1).
@@ -4615,6 +4623,10 @@ pub struct WorldBlock<'world> {
     pub(crate) identifier_claims: StorageBlock<'world, OpaqueAccountId, IdentifierClaimRecord>,
     /// Stable account labels and signatory history.
     pub(crate) account_rekey_records: StorageBlock<'world, AccountAlias, AccountRekeyRecord>,
+    /// Derived reverse occurrence index from rekey-history account ids to supporting aliases.
+    #[norito(skip)]
+    pub(crate) account_rekey_records_by_account:
+        StorageBlock<'world, AccountId, BTreeSet<AccountAlias>>,
     /// Alias-keyed account recovery policies.
     pub(crate) account_recovery_policies: StorageBlock<'world, AccountAlias, AccountRecoveryPolicy>,
     /// Alias-keyed account recovery requests.
@@ -5109,7 +5121,6 @@ pub struct WorldBlock<'world> {
     /// `SoraFS` pin manifest registry keyed by manifest digest.
     pub(crate) pin_manifests: StorageBlock<'world, ManifestDigest, PinManifestRecord>,
     /// Active alias bindings keyed by alias identifier.
-    #[norito(skip)]
     pub(crate) manifest_aliases: StorageBlock<'world, ManifestAliasId, ManifestAliasRecord>,
     /// Outstanding replication orders keyed by order identifier.
     pub(crate) replication_orders: StorageBlock<'world, ReplicationOrderId, ReplicationOrderRecord>,
@@ -5261,6 +5272,10 @@ pub struct WorldBlock<'world> {
         [u8; 32],
         iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1,
     >,
+    /// Derived unique pulse id keyed by the authoritative `(network, height)` slot.
+    #[norito(skip)]
+    pub(crate) global_beacon_pulse_slots:
+        StorageBlock<'world, (iroha_data_model::NetworkId, u64), [u8; 32]>,
     /// Latest lane merge-hint roots observed via the merge ledger during this block.
     pub(crate) merge_hint_roots: CellBlock<'world, Vec<Hash>>,
     /// Latest reduced global state root observed via the merge ledger during this block.
@@ -5571,6 +5586,7 @@ impl WorldBlock<'_> {
             domains,
             domains_by_owner,
             kaigi_relay_registry,
+            kaigi_account_dependencies,
             accounts,
             uaid_accounts,
             account_aliases,
@@ -5587,6 +5603,7 @@ impl WorldBlock<'_> {
             fee_sponsor_budget_counters,
             identifier_claims,
             account_rekey_records,
+            account_rekey_records_by_account,
             account_recovery_policies,
             account_recovery_requests,
             asset_definitions,
@@ -5779,6 +5796,7 @@ impl WorldBlock<'_> {
             global_beacon_active_session,
             global_beacon_latest_pulse,
             global_beacon_pulses,
+            global_beacon_pulse_slots,
         );
         out
     }
@@ -5814,6 +5832,9 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) domains_by_owner: StorageTransaction<'block, 'world, AccountId, BTreeSet<DomainId>>,
     /// Derived index from Kaigi relay account ids to authoritative metadata domains.
     pub(crate) kaigi_relay_registry: StorageTransaction<'block, 'world, AccountId, DomainId>,
+    /// Derived reverse index from raw Kaigi account references to typed metadata locations.
+    pub(crate) kaigi_account_dependencies:
+        StorageTransaction<'block, 'world, AccountId, BTreeSet<(u8, DomainId, Name)>>,
     /// Registered accounts.
     pub(crate) accounts: StorageTransaction<'block, 'world, AccountId, AccountValue>,
     /// Index from UAID to bound account (1:1).
@@ -5859,6 +5880,9 @@ pub struct WorldTransaction<'block, 'world> {
     /// Stable account labels and signatory history.
     pub(crate) account_rekey_records:
         StorageTransaction<'block, 'world, AccountAlias, AccountRekeyRecord>,
+    /// Derived reverse occurrence index from rekey-history account ids to supporting aliases.
+    pub(crate) account_rekey_records_by_account:
+        StorageTransaction<'block, 'world, AccountId, BTreeSet<AccountAlias>>,
     /// Alias-keyed account recovery policies.
     pub(crate) account_recovery_policies:
         StorageTransaction<'block, 'world, AccountAlias, AccountRecoveryPolicy>,
@@ -6566,6 +6590,8 @@ pub struct WorldTransaction<'block, 'world> {
         [u8; 32],
         iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1,
     >,
+    pub(crate) global_beacon_pulse_slots:
+        StorageTransaction<'block, 'world, (iroha_data_model::NetworkId, u64), [u8; 32]>,
     /// Buffer of events pending publication to external subscribers.
     pub(crate) merge_hint_roots: CellTransaction<'block, 'world, Vec<Hash>>,
     /// Latest reduced global state root observed in this transaction scope.
@@ -6959,16 +6985,20 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self.account_aliases_by_account
     }
     #[cfg(any(test, feature = "iroha-core-tests"))]
-    /// Provides mutable access to account rekey records for tests and API scaffolding.
-    pub fn account_rekey_records_mut_for_testing(
+    /// Insert or replace an account rekey fixture while maintaining its reverse index.
+    pub fn replace_account_rekey_record_for_testing(
         &mut self,
-    ) -> &mut StorageTransaction<
-        'block,
-        'world,
-        iroha_data_model::account::rekey::AccountAlias,
-        iroha_data_model::account::rekey::AccountRekeyRecord,
-    > {
-        &mut self.account_rekey_records
+        record: iroha_data_model::account::rekey::AccountRekeyRecord,
+    ) -> Option<iroha_data_model::account::rekey::AccountRekeyRecord> {
+        self.replace_account_rekey_record(record)
+    }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Remove an account rekey fixture while maintaining its reverse index.
+    pub fn remove_account_rekey_record_for_testing(
+        &mut self,
+        label: &iroha_data_model::account::rekey::AccountAlias,
+    ) -> Option<iroha_data_model::account::rekey::AccountRekeyRecord> {
+        self.remove_account_rekey_record(label)
     }
     /// Record that the given asset definition belongs to its domain.
     pub(crate) fn track_asset_definition_domain(&mut self, definition_id: &AssetDefinitionId) {
@@ -8026,6 +8056,9 @@ pub struct WorldView<'world> {
     pub(crate) domains_by_owner: StorageView<'world, AccountId, BTreeSet<DomainId>>,
     /// Derived index from Kaigi relay account ids to authoritative metadata domains.
     pub(crate) kaigi_relay_registry: StorageView<'world, AccountId, DomainId>,
+    /// Derived reverse index from raw Kaigi account references to typed metadata locations.
+    pub(crate) kaigi_account_dependencies:
+        StorageView<'world, AccountId, BTreeSet<(u8, DomainId, Name)>>,
     /// Registered accounts.
     pub(crate) accounts: StorageView<'world, AccountId, AccountValue>,
     /// Index from UAID to bound account (1:1).
@@ -8062,6 +8095,9 @@ pub struct WorldView<'world> {
     pub(crate) identifier_claims: StorageView<'world, OpaqueAccountId, IdentifierClaimRecord>,
     /// Stable account labels and signatory history.
     pub(crate) account_rekey_records: StorageView<'world, AccountAlias, AccountRekeyRecord>,
+    /// Derived reverse occurrence index from rekey-history account ids to supporting aliases.
+    pub(crate) account_rekey_records_by_account:
+        StorageView<'world, AccountId, BTreeSet<AccountAlias>>,
     /// Alias-keyed account recovery policies.
     pub(crate) account_recovery_policies: StorageView<'world, AccountAlias, AccountRecoveryPolicy>,
     /// Alias-keyed account recovery requests.
@@ -8621,6 +8657,9 @@ pub struct WorldView<'world> {
         [u8; 32],
         iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1,
     >,
+    /// Derived unique pulse id keyed by the authoritative `(network, height)` slot.
+    pub(crate) global_beacon_pulse_slots:
+        StorageView<'world, (iroha_data_model::NetworkId, u64), [u8; 32]>,
 }
 /// Verifying-key binding enforced for a ZK asset operation.
 #[derive(
@@ -10332,8 +10371,6 @@ pub struct State {
     pipeline_ivm_prepared_cache: parking_lot::RwLock<PreparedContractCache>,
     /// Oracle aggregation configuration.
     pub oracle: iroha_config::parameters::actual::Oracle,
-    /// Process-local streaming spool paths used by storage-budget enforcement.
-    streaming_storage_paths: StreamingStoragePaths,
     /// Cryptography configuration (enabled algorithms, defaults).
     pub crypto: parking_lot::RwLock<Arc<iroha_config::parameters::actual::Crypto>>,
     /// Nexus configuration snapshot (lanes, fusion, DA policies).
@@ -16430,7 +16467,68 @@ fn ensure_asset_quantity_value(value: &Quantity, spec: NumericSpec) -> Result<()
         .into()
     })
 }
+fn account_rekey_occurrence_index<'a>(
+    records: impl IntoIterator<Item = (&'a AccountAlias, &'a AccountRekeyRecord)>,
+) -> BTreeMap<AccountId, BTreeSet<AccountAlias>> {
+    let mut index = BTreeMap::<AccountId, BTreeSet<AccountAlias>>::new();
+    for (label, record) in records {
+        index
+            .entry(record.active_account_id.clone())
+            .or_default()
+            .insert(label.clone());
+        for previous_account_id in &record.previous_account_ids {
+            index
+                .entry(previous_account_id.clone())
+                .or_default()
+                .insert(label.clone());
+        }
+    }
+    index
+}
+/// Reconstruct a skipped derived storage together with its latest-block undo projection.
+pub(crate) fn rebuild_derived_storage_with_previous<K, V>(
+    current: BTreeMap<K, V>,
+    previous: BTreeMap<K, V>,
+) -> Storage<K, V>
+where
+    K: MvKey,
+    V: MvValue + PartialEq,
+{
+    let previous_keys = previous.keys().cloned().collect::<Vec<_>>();
+    let rebuilt: Storage<K, V> = previous.into_iter().collect();
+    {
+        let mut block = rebuilt.block();
+        for key in previous_keys {
+            if !current.contains_key(&key) {
+                block.remove(key);
+            }
+        }
+        for (key, value) in current {
+            if block.get(&key) != Some(&value) {
+                block.insert(key, value);
+            }
+        }
+        block.commit();
+    }
+    rebuilt
+}
 impl World {
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Insert or replace an account rekey fixture while maintaining its reverse index.
+    pub fn replace_account_rekey_record_for_testing(
+        &mut self,
+        record: AccountRekeyRecord,
+    ) -> Option<AccountRekeyRecord> {
+        let mut block = self.block();
+        let previous = {
+            let mut transaction = block.transaction_without_telemetry(LaneConfig::default(), 0);
+            let previous = transaction.replace_account_rekey_record_for_testing(record);
+            transaction.apply();
+            previous
+        };
+        block.commit();
+        previous
+    }
     /// Creates an empty `World`.
     pub fn new() -> Self {
         Self::default()
@@ -16929,9 +17027,11 @@ impl World {
             domains,
             domains_by_owner: Storage::default(),
             kaigi_relay_registry: Storage::default(),
+            kaigi_account_dependencies: Storage::default(),
             accounts,
             uaid_accounts: Storage::default(),
             account_rekey_records,
+            account_rekey_records_by_account: Storage::default(),
             account_recovery_policies: Storage::default(),
             account_recovery_requests: Storage::default(),
             account_scope_accounts: Storage::default(),
@@ -17021,6 +17121,8 @@ impl World {
             .expect("invalid account rekey state in world constructor");
         crate::smartcontracts::isi::kaigi::rebuild_kaigi_relay_registry(&mut world)
             .expect("invalid Kaigi relay registry in world constructor");
+        crate::smartcontracts::isi::kaigi::rebuild_kaigi_account_dependencies(&mut world)
+            .expect("invalid Kaigi account dependencies in world constructor");
         world
             .rebuild_asset_definition_alias_indexes()
             .expect("duplicate asset definition alias in world constructor");
@@ -17033,7 +17135,9 @@ impl World {
         world
             .rebuild_confidential_policy_transition_index()
             .expect("invalid confidential-policy transition in world constructor");
-        world.rebuild_governance_read_indexes();
+        world
+            .rebuild_governance_read_indexes()
+            .expect("invalid governance read indexes in world constructor");
         world.rebuild_nft_owner_index();
         world.rebuild_rwa_indexes();
         world.rebuild_escrow_indexes();
@@ -17155,10 +17259,22 @@ impl World {
                 ));
             }
         }
-        // `account_aliases` is the authoritative binding ledger. Preserve its MV revert map so a
-        // restored node can still roll back the latest block; only the skipped reverse index is
-        // derived from it here.
-        self.account_aliases_by_account = reverse.into_iter().collect();
+        let previous_reverse = {
+            let reverted_aliases = self.account_aliases.block_and_revert();
+            let mut previous = BTreeMap::<AccountId, BTreeSet<AccountAlias>>::new();
+            for (label, account_id) in reverted_aliases.iter() {
+                previous
+                    .entry(account_id.clone())
+                    .or_default()
+                    .insert(label.clone());
+            }
+            // Abort the temporary revert view so the authoritative alias ledger and its undo
+            // journal remain byte-for-byte unchanged.
+            drop(reverted_aliases);
+            previous
+        };
+        self.account_aliases_by_account =
+            rebuild_derived_storage_with_previous(reverse, previous_reverse);
         Ok(())
     }
     fn rebuild_account_scope_directory(&mut self) -> Result<(), String> {
@@ -17191,7 +17307,7 @@ impl World {
         }
         self.account_scope_accounts = index.into_iter().collect();
     }
-    fn rebuild_account_rekey_records(&mut self) -> Result<(), String> {
+    pub(crate) fn rebuild_account_rekey_records(&mut self) -> Result<(), String> {
         let mut records = BTreeMap::new();
         let mut active_account_id_rekey_targets = BTreeMap::<AccountId, AccountId>::new();
         let existing_records: Vec<_> = self
@@ -17301,6 +17417,17 @@ impl World {
                 ));
             }
         }
+        let current_index = account_rekey_occurrence_index(records.iter());
+        let previous_index = {
+            let reverted_records = self.account_rekey_records.block_and_revert();
+            let previous = account_rekey_occurrence_index(reverted_records.iter());
+            // Dropping this uncommitted MV write transaction preserves the authoritative
+            // record and undo layers; only its projected previous view is needed here.
+            drop(reverted_records);
+            previous
+        };
+        self.account_rekey_records_by_account =
+            rebuild_derived_storage_with_previous(current_index, previous_index);
         Ok(())
     }
     fn rebuild_asset_definition_alias_indexes(&mut self) -> Result<(), String> {
@@ -17466,7 +17593,7 @@ impl World {
         self.asset_definition_nonzero_holders = nonzero_holders.into_iter().collect();
         Ok(())
     }
-    fn rebuild_governance_read_indexes(&mut self) {
+    fn rebuild_governance_read_indexes(&mut self) -> Result<(), String> {
         let mut lock_expiries =
             BTreeMap::<u64, BTreeSet<(String, iroha_data_model::account::AccountId)>>::new();
         for (referendum_id, locks) in self.governance_locks.view().iter() {
@@ -17491,23 +17618,64 @@ impl World {
             })
             .map(|(proposal_id, proposal)| ((proposal.created_height, *proposal_id), ()))
             .collect();
-        let timed_ovn_resource_reservations = self
-            .parliament_attempts
-            .view()
-            .iter()
-            .flat_map(|(governance_attempt_id, attempt)| {
-                attempt
-                    .ballot_attempts()
-                    .filter_map(move |(ballot_attempt_id, _)| {
-                        parliament_timed_ovn_resource_reservation_v1(
-                            *governance_attempt_id,
-                            attempt,
-                            *ballot_attempt_id,
-                        )
-                    })
-            })
-            .collect();
-        self.parliament_timed_ovn_resource_reservations = timed_ovn_resource_reservations;
+        let mut timed_ovn_resource_reservations = BTreeMap::new();
+        for (governance_attempt_id, attempt) in self.parliament_attempts.view().iter() {
+            for (ballot_attempt_id, _) in attempt.ballot_attempts() {
+                let Some((ballot_attempt_id, reservation)) =
+                    parliament_timed_ovn_resource_reservation_v1(
+                        *governance_attempt_id,
+                        attempt,
+                        *ballot_attempt_id,
+                    )
+                else {
+                    continue;
+                };
+                insert_parliament_timed_ovn_resource_reservation_v1(
+                    &mut timed_ovn_resource_reservations,
+                    ballot_attempt_id,
+                    reservation,
+                )
+                .map_err(|error| {
+                    format!(
+                        "invalid Parliament timed-OVN reservation {governance_attempt_id:?}/{ballot_attempt_id:?}: {error:?}"
+                    )
+                })?;
+            }
+        }
+        self.parliament_timed_ovn_resource_reservations =
+            timed_ovn_resource_reservations.into_iter().collect();
+        Ok(())
+    }
+    /// Rebuild the unique `(network, height)` lookup for finalized global-beacon pulses.
+    ///
+    /// # Errors
+    /// Returns an error when an authoritative pulse is stored under a noncanonical id or two
+    /// distinct pulse records claim the same consensus slot.
+    pub(crate) fn rebuild_global_beacon_pulse_slots(&mut self) -> Result<(), String> {
+        let rebuilt = {
+            let pulses = self.global_beacon_pulses.view();
+            let mut rebuilt = BTreeMap::new();
+            for (stored_pulse_id, pulse) in pulses.iter() {
+                if pulse.pulse_id != *stored_pulse_id {
+                    return Err(format!(
+                        "global beacon pulse {} is stored under noncanonical id {}",
+                        hex::encode(pulse.pulse_id),
+                        hex::encode(stored_pulse_id)
+                    ));
+                }
+                let slot = (pulse.network_id, pulse.height);
+                if let Some(existing_pulse_id) = rebuilt.insert(slot, *stored_pulse_id) {
+                    return Err(format!(
+                        "global beacon pulses {} and {} claim the same network-height slot",
+                        hex::encode(existing_pulse_id),
+                        hex::encode(stored_pulse_id)
+                    ));
+                }
+            }
+            rebuilt
+        };
+        self.global_beacon_pulse_slots = rebuilt.into_iter().collect();
+        Ok(())
     }
     fn rebuild_confidential_policy_transition_index(&mut self) -> core::result::Result<(), String> {
         let mut transitions = BTreeMap::<(u64, AssetDefinitionId), ()>::new();
@@ -18232,6 +18400,9 @@ macro_rules! world_ro_accessors {
             storage domains_by_owner: AccountId => BTreeSet<DomainId>;
             /// Kaigi relay account to authoritative metadata domain index (read-only).
             storage kaigi_relay_registry: AccountId => DomainId;
+            /// Raw Kaigi account reference to typed metadata locations index (read-only).
+            storage kaigi_account_dependencies:
+                AccountId => BTreeSet<(u8, DomainId, Name)>;
             /// Endorsement committees (read-only).
             storage domain_committees: String => DomainCommittee;
             /// Per-domain endorsement policies (read-only).
@@ -18279,6 +18450,8 @@ macro_rules! world_ro_accessors {
         world_ro_accessors!(@items $mode;
             /// Account label/signatory registry (read-only).
             storage account_rekey_records: AccountAlias => AccountRekeyRecord;
+            /// Reverse rekey-history occurrence index (read-only).
+            storage account_rekey_records_by_account: AccountId => BTreeSet<AccountAlias>;
             /// Alias-keyed account recovery policy registry (read-only).
             storage account_recovery_policies: AccountAlias => AccountRecoveryPolicy;
             /// Alias-keyed account recovery request registry (read-only).
@@ -18787,6 +18960,9 @@ macro_rules! world_ro_accessors {
             /// Append-only finalized beacon pulse history by pulse id.
             storage global_beacon_pulses:
                 [u8; 32] => iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1;
+            /// Derived unique pulse id keyed by the authoritative `(network, height)` slot.
+            storage global_beacon_pulse_slots:
+                (iroha_data_model::NetworkId, u64) => [u8; 32];
         );
     };
 }
@@ -19002,6 +19178,22 @@ pub trait WorldReadOnly {
         self.global_beacon_active_session()
             .get(&GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY)
             .copied()
+    }
+    /// Resolve one exact global-beacon slot through the authoritative derived index.
+    ///
+    /// This checks the index-to-record binding but intentionally leaves public DKG and final
+    /// signature verification to the caller's purpose-specific cryptographic boundary.
+    fn global_beacon_pulse_at_slot(
+        &self,
+        network_id: &iroha_data_model::NetworkId,
+        height: u64,
+    ) -> Option<&iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1> {
+        let pulse_id = self
+            .global_beacon_pulse_slots()
+            .get(&(*network_id, height))?;
+        let pulse = self.global_beacon_pulses().get(pulse_id)?;
+        (pulse.pulse_id == *pulse_id && pulse.network_id == *network_id && pulse.height == height)
+            .then_some(pulse)
     }
     /// Return the exact TLE key session currently eligible for new ballots.
     fn active_tle_key_session(&self) -> Option<TleKeySessionId> {
@@ -20025,6 +20217,7 @@ impl<'world> WorldBlock<'world> {
             domains,
             domains_by_owner,
             kaigi_relay_registry,
+            kaigi_account_dependencies,
             accounts,
             uaid_accounts,
             account_aliases,
@@ -20041,6 +20234,7 @@ impl<'world> WorldBlock<'world> {
             fee_sponsor_budget_counters,
             identifier_claims,
             account_rekey_records,
+            account_rekey_records_by_account,
             account_recovery_policies,
             account_recovery_requests,
             asset_definitions,
@@ -20255,6 +20449,7 @@ impl<'world> WorldBlock<'world> {
             global_beacon_active_session,
             global_beacon_latest_pulse,
             global_beacon_pulses,
+            global_beacon_pulse_slots,
             merge_hint_roots,
             merge_global_state_root,
             // Always drop at the block level.
@@ -20413,6 +20608,7 @@ impl<'world> WorldBlock<'world> {
         global_beacon_active_session.commit();
         global_beacon_latest_pulse.commit();
         global_beacon_pulses.commit();
+        global_beacon_pulse_slots.commit();
         merge_global_state_root.commit();
         merge_hint_roots.commit();
         oracle_provider_stats.commit();
@@ -20476,6 +20672,7 @@ impl<'world> WorldBlock<'world> {
         account_recovery_requests.commit();
         account_recovery_policies.commit();
         account_rekey_records.commit();
+        account_rekey_records_by_account.commit();
         asset_metadata.commit();
         asset_definition_alias_bindings.commit();
         asset_definition_aliases.commit();
@@ -20500,6 +20697,7 @@ impl<'world> WorldBlock<'world> {
         domains.commit();
         domains_by_owner.commit();
         kaigi_relay_registry.commit();
+        kaigi_account_dependencies.commit();
         peers.commit();
         parameters.commit();
     }
@@ -20567,6 +20765,69 @@ fn parliament_timed_ovn_resource_windows_overlap_v1(
             .into_iter()
             .any(|(right_start, right_end)| left_start <= right_end && right_start <= left_end)
     })
+}
+
+/// Insert one derived timed-OVN reservation into a prospective exact index.
+///
+/// Callers build the prospective index off to the side and publish it only
+/// after every reservation passes. This keeps attempt admission and restore
+/// fail-atomic while sharing one exact duplicate, overlap, and capacity rule.
+fn insert_parliament_timed_ovn_resource_reservation_v1(
+    reservations: &mut BTreeMap<BallotAttemptId, ParliamentTimedOvnResourceReservationV1>,
+    ballot_attempt_id: BallotAttemptId,
+    reservation: ParliamentTimedOvnResourceReservationV1,
+) -> Result<(), ParliamentTimedOvnResourceReservationErrorV1> {
+    if reservations.contains_key(&ballot_attempt_id) {
+        return Err(ParliamentTimedOvnResourceReservationErrorV1::DuplicateBallotAttempt);
+    }
+    if reservations.values().any(|existing| {
+        parliament_timed_ovn_resource_windows_overlap_v1(
+            reservation.resource_windows,
+            existing.resource_windows,
+        )
+    }) {
+        return Err(ParliamentTimedOvnResourceReservationErrorV1::ResourceScheduleConflict);
+    }
+    if reservation.cast_capable {
+        let current_count = u32::try_from(
+            reservations
+                .values()
+                .filter(|existing| existing.cast_capable)
+                .count(),
+        )
+        .map_err(|_| {
+            ParliamentTimedOvnResourceReservationErrorV1::TooManyConcurrentCastingContexts
+        })?;
+        if !iroha_data_model::parliament_casting::parliament_timed_ovn_casting_capacity_allows_new_v1(
+            current_count,
+        ) {
+            return Err(
+                ParliamentTimedOvnResourceReservationErrorV1::TooManyConcurrentCastingContexts,
+            );
+        }
+    }
+    reservations.insert(ballot_attempt_id, reservation);
+    Ok(())
+}
+
+fn parliament_timed_ovn_reservation_reducer_error_v1(
+    error: ParliamentTimedOvnResourceReservationErrorV1,
+) -> crate::governance::parliament::ParliamentReducerErrorV1 {
+    use crate::governance::parliament::{ParliamentReducerEntityV1, ParliamentReducerErrorV1};
+
+    match error {
+        ParliamentTimedOvnResourceReservationErrorV1::DuplicateBallotAttempt => {
+            ParliamentReducerErrorV1::DuplicateOrZeroIdentifier(
+                ParliamentReducerEntityV1::BallotAttempt,
+            )
+        }
+        ParliamentTimedOvnResourceReservationErrorV1::ResourceScheduleConflict => {
+            ParliamentReducerErrorV1::TimedOvnResourceScheduleConflict
+        }
+        ParliamentTimedOvnResourceReservationErrorV1::TooManyConcurrentCastingContexts => {
+            ParliamentReducerErrorV1::TooManyConcurrentCastingContexts
+        }
+    }
 }
 
 impl<'block, 'world> WorldTransaction<'block, 'world> {
@@ -20652,6 +20913,80 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         if remove_entry {
             self.account_aliases_by_account.remove(account_id.clone());
         }
+    }
+    fn add_account_rekey_record_to_reverse_index(
+        &mut self,
+        label: &AccountAlias,
+        record: &AccountRekeyRecord,
+    ) {
+        for account_id in account_ids_in_rekey_record(record) {
+            if self
+                .account_rekey_records_by_account
+                .get(account_id)
+                .is_none()
+            {
+                self.account_rekey_records_by_account
+                    .insert(account_id.clone(), BTreeSet::new());
+            }
+            if let Some(aliases) = self.account_rekey_records_by_account.get_mut(account_id) {
+                aliases.insert(label.clone());
+            }
+        }
+    }
+    fn remove_account_rekey_record_from_reverse_index(
+        &mut self,
+        label: &AccountAlias,
+        record: &AccountRekeyRecord,
+    ) {
+        for account_id in account_ids_in_rekey_record(record) {
+            let remove_entry = self
+                .account_rekey_records_by_account
+                .get_mut(account_id)
+                .is_some_and(|aliases| {
+                    aliases.remove(label);
+                    aliases.is_empty()
+                });
+            if remove_entry {
+                self.account_rekey_records_by_account
+                    .remove(account_id.clone());
+            }
+        }
+    }
+    /// Insert a new account rekey record while maintaining its reverse occurrence index.
+    pub(crate) fn insert_account_rekey_record(
+        &mut self,
+        record: AccountRekeyRecord,
+    ) -> Option<AccountRekeyRecord> {
+        self.replace_account_rekey_record(record)
+    }
+    /// Replace an account rekey record while maintaining its reverse occurrence index.
+    pub(crate) fn replace_account_rekey_record(
+        &mut self,
+        record: AccountRekeyRecord,
+    ) -> Option<AccountRekeyRecord> {
+        let label = record.label.clone();
+        let previous = self.account_rekey_records.insert(label.clone(), record);
+        if let Some(previous) = previous.as_ref() {
+            self.remove_account_rekey_record_from_reverse_index(&label, previous);
+        }
+        let record = self
+            .account_rekey_records
+            .get(&label)
+            .cloned()
+            .expect("record was just inserted");
+        self.add_account_rekey_record_to_reverse_index(&label, &record);
+        previous
+    }
+    /// Remove an account rekey record while maintaining its reverse occurrence index.
+    pub(crate) fn remove_account_rekey_record(
+        &mut self,
+        label: &AccountAlias,
+    ) -> Option<AccountRekeyRecord> {
+        let removed = self.account_rekey_records.remove(label.clone());
+        if let Some(record) = removed.as_ref() {
+            self.remove_account_rekey_record_from_reverse_index(label, record);
+        }
+        removed
     }
     fn remove_account_scope_accounts_index_entry(&mut self, account_id: &AccountId) {
         let Some(entry) = self.account_scope_directory.get(account_id).cloned() else {
@@ -21513,6 +21848,28 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
                 parliament_timed_ovn_resource_reservation_v1(id, &attempt, *ballot_attempt_id)
             })
             .collect::<Vec<_>>();
+        let mut next_reservations = BTreeMap::new();
+        for (ballot_attempt_id, reservation) in
+            self.parliament_timed_ovn_resource_reservations.iter()
+        {
+            if reservation.governance_attempt_id == id {
+                continue;
+            }
+            insert_parliament_timed_ovn_resource_reservation_v1(
+                &mut next_reservations,
+                *ballot_attempt_id,
+                *reservation,
+            )
+            .map_err(parliament_timed_ovn_reservation_reducer_error_v1)?;
+        }
+        for (ballot_attempt_id, reservation) in &active_reservations {
+            insert_parliament_timed_ovn_resource_reservation_v1(
+                &mut next_reservations,
+                *ballot_attempt_id,
+                *reservation,
+            )
+            .map_err(parliament_timed_ovn_reservation_reducer_error_v1)?;
+        }
         for ballot_attempt_id in stale_reservations {
             self.parliament_timed_ovn_resource_reservations
                 .remove(ballot_attempt_id);
@@ -21783,23 +22140,20 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         if self.global_beacon_pulses.get(&pulse.pulse_id).is_some() {
             return Err(GlobalThresholdBeaconError::ReusedPulse);
         }
+        let pulse_slot = (pulse.network_id, pulse.height);
+        if self.global_beacon_pulse_slots.len() != self.global_beacon_pulses.len() {
+            return Err(GlobalThresholdBeaconError::InvalidPulseHistory);
+        }
+        if self.global_beacon_pulse_slots.get(&pulse_slot).is_some() {
+            return Err(GlobalThresholdBeaconError::ReusedPulse);
+        }
+        let logical_beacon_session_id =
+            iroha_data_model::governance::types::BeaconSessionId::for_network_v1(&pulse.network_id);
         if self.parliament_attempts.iter().any(|(_, attempt)| {
-            attempt.ballot_attempts().any(|(_, ballot)| {
-                ballot.failure_kind()
-                    == Some(
-                        iroha_data_model::governance::types::ParliamentBallotFailureKindV1::ReleasePulseUnavailable,
-                    )
-                    && ballot.release_beacon_session_id()
-                        == Some(
-                            iroha_data_model::governance::types::BeaconSessionId::for_network_v1(
-                                &pulse.network_id,
-                            ),
-                        )
-                    && ballot.release_height() == Some(pulse.height)
-            })
+            attempt.classifies_beacon_pulse_unavailable_at(logical_beacon_session_id, pulse.height)
         }) {
-            // Once consensus has objectively closed an absent release slot, accepting a
-            // late pulse for that same slot would make the persisted Parliament transcript
+            // Once consensus has objectively closed an absent sortition or release slot,
+            // accepting a late pulse would make the persisted Parliament transcript
             // contradictory and non-restartable.
             return Err(GlobalThresholdBeaconError::PersistenceConflict);
         }
@@ -21815,19 +22169,14 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         } else if self.global_beacon_pulses.iter().next().is_some() {
             return Err(GlobalThresholdBeaconError::InvalidPulseHistory);
         }
-        if self.global_beacon_pulses.iter().any(|(_, existing)| {
-            existing.session_id == pulse.session_id
-                && existing.height == pulse.height
-                && existing.round == pulse.round
-        }) {
-            return Err(GlobalThresholdBeaconError::ReusedPulse);
-        }
         let link =
             verify_finalized_global_threshold_beacon_pulse_v1(session, &pulse, expected_anchor)?;
         if validate_persisted_global_threshold_beacon_pulse_v1(&pulse)? != link {
             return Err(GlobalThresholdBeaconError::InvalidPulseHistory);
         }
         self.global_beacon_pulses.insert(link.pulse_id, pulse);
+        self.global_beacon_pulse_slots
+            .insert(pulse_slot, link.pulse_id);
         self.global_beacon_latest_pulse
             .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, link);
         Ok(link)
@@ -21997,6 +22346,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             domains,
             domains_by_owner,
             kaigi_relay_registry,
+            kaigi_account_dependencies,
             accounts,
             uaid_accounts,
             account_aliases,
@@ -22013,6 +22363,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             fee_sponsor_budget_counters,
             identifier_claims,
             account_rekey_records,
+            account_rekey_records_by_account,
             account_recovery_policies,
             account_recovery_requests,
             asset_definitions,
@@ -22226,6 +22577,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             global_beacon_active_session,
             global_beacon_latest_pulse,
             global_beacon_pulses,
+            global_beacon_pulse_slots,
             consensus_evidence,
             external_event_sink,
             mut external_event_buf,
@@ -22434,6 +22786,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         global_beacon_active_session.apply();
         global_beacon_latest_pulse.apply();
         global_beacon_pulses.apply();
+        global_beacon_pulse_slots.apply();
         tx_sequences.apply();
         oracle_disputes.apply();
         oracle_changes.apply();
@@ -22494,6 +22847,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         account_recovery_requests.apply();
         account_recovery_policies.apply();
         account_rekey_records.apply();
+        account_rekey_records_by_account.apply();
         asset_metadata.apply();
         assets.apply();
         asset_definition_alias_bindings.apply();
@@ -22519,6 +22873,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         domains.apply();
         domains_by_owner.apply();
         kaigi_relay_registry.apply();
+        kaigi_account_dependencies.apply();
         peers.apply();
         parameters.apply();
         #[cfg(feature = "telemetry")]
@@ -24832,10 +25187,14 @@ impl State {
     pub(crate) fn rebuild_derived_state_indexes(&mut self) -> core::result::Result<(), String> {
         crate::smartcontracts::isi::kaigi::rebuild_kaigi_relay_registry(&mut self.world)
             .map_err(|error| format!("failed to rebuild Kaigi relay registry: {error}"))?;
+        crate::smartcontracts::isi::kaigi::rebuild_kaigi_account_dependencies(&mut self.world)
+            .map_err(|error| format!("failed to rebuild Kaigi account dependencies: {error}"))?;
         let nexus = self.nexus_snapshot();
         let world = self.world_view_with_nexus(&nexus);
         crate::smartcontracts::isi::kaigi::validate_rebuilt_kaigi_relay_registry(&world)
             .map_err(|error| format!("failed to validate Kaigi relay registry: {error}"))?;
+        crate::smartcontracts::isi::kaigi::validate_rebuilt_kaigi_account_dependencies(&world)
+            .map_err(|error| format!("failed to validate Kaigi account dependencies: {error}"))?;
         drop(world);
         self.world
             .rebuild_asset_definition_alias_indexes()
@@ -24858,7 +25217,12 @@ impl State {
             .map_err(|error| {
                 format!("failed to rebuild confidential-policy transition index: {error}")
             })?;
-        self.world.rebuild_governance_read_indexes();
+        self.world
+            .rebuild_governance_read_indexes()
+            .map_err(|error| format!("failed to rebuild governance read indexes: {error}"))?;
+        self.world
+            .rebuild_global_beacon_pulse_slots()
+            .map_err(|error| format!("failed to rebuild global beacon pulse slots: {error}"))?;
         // Defer AXT policy refresh until the runtime lane catalog is applied.
         Ok(())
     }
@@ -24873,6 +25237,13 @@ impl State {
             );
             return Ok(());
         }
+        let nexus = self.nexus_snapshot();
+        let world = self.world_view_with_nexus(&nexus);
+        crate::smartcontracts::isi::kaigi::validate_rebuilt_kaigi_relay_registry(&world)
+            .map_err(|error| format!("failed to validate Kaigi relay registry: {error}"))?;
+        crate::smartcontracts::isi::kaigi::validate_rebuilt_kaigi_account_dependencies(&world)
+            .map_err(|error| format!("failed to validate Kaigi account dependencies: {error}"))?;
+        drop(world);
         let leases = self.world.vpn_leases.view();
         for (_, record) in leases.iter() {
             validate_vpn_lease_network(record, &self.network_id)?;
@@ -25107,7 +25478,6 @@ impl State {
             .copied()
             .map(|lane_id| (lane_id, 0))
             .collect();
-        let streaming_storage_paths = StreamingStoragePaths::default();
         let da_shard_cursors = parking_lot::RwLock::new(DaShardCursorIndex::default());
         let LoadedStateJournals {
             query_index: query_index_journal,
@@ -25244,7 +25614,6 @@ impl State {
                 PreparedContractCache::with_capacity(pipeline_cache_size),
             ),
             oracle: default_oracle(),
-            streaming_storage_paths,
             nexus: parking_lot::RwLock::new(nexus),
             lane_incarnations: parking_lot::RwLock::new(lane_incarnations),
             lane_incarnation_lineage: parking_lot::RwLock::new(lane_incarnation_lineage),
@@ -25430,6 +25799,8 @@ impl State {
                     iroha_config::parameters::defaults::governance::PARLIAMENT_ALTERNATE_SIZE,
                 parliament_quorum_bps:
                     iroha_config::parameters::defaults::governance::PARLIAMENT_QUORUM_BPS,
+                parliament_sortition_pulse_delay_blocks:
+                    iroha_config::parameters::defaults::governance::PARLIAMENT_SORTITION_PULSE_DELAY_BLOCKS,
                 parliament_invitation_phase_blocks:
                     iroha_config::parameters::defaults::governance::PARLIAMENT_INVITATION_PHASE_BLOCKS,
                 parliament_public_finding_phase_blocks:
@@ -40998,7 +41369,6 @@ impl State {
             .store(block_height, Ordering::Relaxed);
         true
     }
-    #[allow(clippy::too_many_lines)]
     fn enforce_nexus_storage_budget(&self, block_height: u64) {
         if self.kura.emergency_fast_startup_enabled() {
             return;
@@ -41019,41 +41389,11 @@ impl State {
         if !self.should_enforce_nexus_storage_budget(block_height, interval_blocks) {
             return;
         }
-        let soranet_spool_dir = self
-            .streaming_storage_paths
-            .soranet_provision_spool_dir
-            .clone();
-        let soravpn_spool_dir = self
-            .streaming_storage_paths
-            .soravpn_provision_spool_dir
-            .clone();
         let mut kura_used = match self.kura.disk_usage_bytes() {
             Ok(bytes) => bytes,
             Err(err) => {
                 warn!(?err, "nexus storage eviction: failed to measure Kura usage");
                 return;
-            }
-        };
-        let mut soranet_used = match dir_size(&soranet_spool_dir) {
-            Ok(bytes) => bytes,
-            Err(err) => {
-                warn!(
-                    ?err,
-                    path = %soranet_spool_dir.display(),
-                    "nexus storage eviction: failed to measure SoraNet spool usage"
-                );
-                0
-            }
-        };
-        let mut soravpn_used = match dir_size(&soravpn_spool_dir) {
-            Ok(bytes) => bytes,
-            Err(err) => {
-                warn!(
-                    ?err,
-                    path = %soravpn_spool_dir.display(),
-                    "nexus storage eviction: failed to measure SoraVPN spool usage"
-                );
-                0
             }
         };
         let mut cold_used = {
@@ -41066,52 +41406,11 @@ impl State {
                 }
             }
         };
-        let mut total = kura_used
-            .saturating_add(cold_used)
-            .saturating_add(soranet_used)
-            .saturating_add(soravpn_used);
+        let mut total = kura_used.saturating_add(cold_used);
         if total <= max_disk {
             return;
         }
         let mut excess = total.saturating_sub(max_disk);
-        if excess > 0 && !soranet_spool_dir.as_os_str().is_empty() {
-            match prune_spool_dir(&soranet_spool_dir, excess) {
-                Ok((remaining, freed)) => {
-                    excess = remaining;
-                    soranet_used = soranet_used.saturating_sub(freed);
-                    #[cfg(feature = "telemetry")]
-                    if freed > 0 {
-                        self.telemetry.inc_storage_budget_exceeded("soranet_spool");
-                    }
-                }
-                Err(err) => {
-                    warn!(
-                        ?err,
-                        path = %soranet_spool_dir.display(),
-                        "nexus storage eviction: failed to prune SoraNet spool"
-                    );
-                }
-            }
-        }
-        if excess > 0 && !soravpn_spool_dir.as_os_str().is_empty() {
-            match prune_spool_dir(&soravpn_spool_dir, excess) {
-                Ok((remaining, freed)) => {
-                    excess = remaining;
-                    soravpn_used = soravpn_used.saturating_sub(freed);
-                    #[cfg(feature = "telemetry")]
-                    if freed > 0 {
-                        self.telemetry.inc_storage_budget_exceeded("soravpn_spool");
-                    }
-                }
-                Err(err) => {
-                    warn!(
-                        ?err,
-                        path = %soravpn_spool_dir.display(),
-                        "nexus storage eviction: failed to prune SoraVPN spool"
-                    );
-                }
-            }
-        }
         if excess > 0 && cold_used > 0 {
             let target = cold_used.saturating_sub(excess);
             let backend = self.tiered_backend.lock();
@@ -41134,10 +41433,7 @@ impl State {
                     warn!(?err, "tiered-state: failed to remeasure cold store bytes");
                 }
             }
-            total = kura_used
-                .saturating_add(cold_used)
-                .saturating_add(soranet_used)
-                .saturating_add(soravpn_used);
+            total = kura_used.saturating_add(cold_used);
             excess = total.saturating_sub(max_disk);
         }
         if excess > 0 {
@@ -41166,10 +41462,7 @@ impl State {
                     );
                 }
             }
-            total = kura_used
-                .saturating_add(cold_used)
-                .saturating_add(soranet_used)
-                .saturating_add(soravpn_used);
+            total = kura_used.saturating_add(cold_used);
             excess = total.saturating_sub(max_disk);
         }
         if excess > 0 {
@@ -41198,10 +41491,7 @@ impl State {
                     );
                 }
             }
-            total = kura_used
-                .saturating_add(cold_used)
-                .saturating_add(soranet_used)
-                .saturating_add(soravpn_used);
+            total = kura_used.saturating_add(cold_used);
             excess = total.saturating_sub(max_disk);
         }
         if excess > 0 {
@@ -41210,8 +41500,6 @@ impl State {
                 max_disk,
                 kura_used,
                 cold_used,
-                soranet_used,
-                soravpn_used,
                 "nexus storage eviction could not reclaim enough space"
             );
         }
@@ -41269,91 +41557,6 @@ impl State {
         }
         self.gov = gov;
     }
-}
-struct SpoolEntry {
-    key: String,
-    path: PathBuf,
-    size: u64,
-}
-fn spool_entries_sorted(spool_dir: &Path) -> io::Result<Vec<SpoolEntry>> {
-    if spool_dir.as_os_str().is_empty() || !spool_dir.exists() {
-        return Ok(Vec::new());
-    }
-    let mut files = Vec::new();
-    let mut stack = vec![spool_dir.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        for entry in std::fs::read_dir(&dir)? {
-            let entry = entry?;
-            let file_type = entry.file_type()?;
-            let path = entry.path();
-            if file_type.is_dir() {
-                stack.push(path);
-            } else if file_type.is_file() {
-                if path.extension().and_then(|ext| ext.to_str()) == Some("tmp") {
-                    continue;
-                }
-                let size = entry.metadata()?.len();
-                let rel = path.strip_prefix(spool_dir).unwrap_or(&path);
-                let mut key = String::new();
-                for (idx, component) in rel.components().enumerate() {
-                    if idx > 0 {
-                        key.push('/');
-                    }
-                    key.push_str(&component.as_os_str().to_string_lossy());
-                }
-                files.push(SpoolEntry { key, path, size });
-            }
-        }
-    }
-    files.sort_by(|a, b| a.key.cmp(&b.key));
-    Ok(files)
-}
-fn prune_spool_dir(spool_dir: &Path, mut bytes_to_free: u64) -> io::Result<(u64, u64)> {
-    if bytes_to_free == 0 {
-        return Ok((0, 0));
-    }
-    let entries = spool_entries_sorted(spool_dir)?;
-    let mut freed = 0u64;
-    for entry in entries {
-        if bytes_to_free == 0 {
-            break;
-        }
-        match std::fs::remove_file(&entry.path) {
-            Ok(()) => {
-                freed = freed.saturating_add(entry.size);
-                bytes_to_free = bytes_to_free.saturating_sub(entry.size);
-            }
-            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-            Err(err) => {
-                warn!(
-                    ?err,
-                    path = %entry.path.display(),
-                    "failed to remove spool file during eviction"
-                );
-            }
-        }
-    }
-    Ok((bytes_to_free, freed))
-}
-fn dir_size(path: &Path) -> io::Result<u64> {
-    if path.as_os_str().is_empty() || !path.exists() {
-        return Ok(0);
-    }
-    let mut total = 0u64;
-    let mut stack = vec![path.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        for entry in std::fs::read_dir(&dir)? {
-            let entry = entry?;
-            let file_type = entry.file_type()?;
-            let entry_path = entry.path();
-            if file_type.is_dir() {
-                stack.push(entry_path);
-            } else if file_type.is_file() {
-                total = total.saturating_add(entry.metadata()?.len());
-            }
-        }
-    }
-    Ok(total)
 }
 include!("state/lane_lifecycle_support.rs");
 fn prepare_lane_lifecycle_update(
@@ -42699,12 +42902,14 @@ static DEFAULT_TEST_IDENTITIES: LazyLock<(iroha_data_model::ChainId, iroha_data_
                     config_path.display()
                 )
             });
-        let user_config = user::Root::read_and_complete(reader).unwrap_or_else(|err| {
-            panic!(
-                "default testing config `{}` is incomplete: {err:?}",
-                config_path.display()
-            )
-        });
+        let user_config = reader
+            .read_and_complete::<user::Root>()
+            .unwrap_or_else(|err| {
+                panic!(
+                    "default testing config `{}` is incomplete: {err:?}",
+                    config_path.display()
+                )
+            });
         let config: iroha_config::parameters::actual::Root =
             user_config.parse().unwrap_or_else(|err| {
                 panic!(
@@ -55105,7 +55310,6 @@ fn isolated_state_for_replay_prevalidation(state: &State, kura: &Arc<Kura>) -> R
     *isolated.pipeline_ivm_prepared_cache.write() =
         PreparedContractCache::with_capacity(isolated.pipeline.cache_size);
     isolated.oracle = state.oracle.clone();
-    isolated.streaming_storage_paths = state.streaming_storage_paths.clone();
     isolated.settlement = state.settlement.clone();
     isolated.settlement_engine = state.settlement_engine.clone();
     *isolated.crypto.write() = state.crypto();
@@ -57231,6 +57435,7 @@ impl StateTransaction<'_, '_> {
         Ok(step)
     }
     /// Execute deterministic pipeline triggers, staging their state changes.
+    #[cfg(test)]
     pub(crate) fn execute_pipeline_triggers(
         &mut self,
         events: impl IntoIterator<Item = PipelineEventBox>,

@@ -176,7 +176,7 @@ impl Drop for LiveValidateApplyWorkProjectionLinearity {
     fn drop(&mut self) {}
 }
 impl LiveValidateApplyWorkProjectionPermit {
-    fn new(candidate: CandidateAdmission) -> Self {
+    pub(super) fn new(candidate: CandidateAdmission) -> Self {
         Self {
             candidate,
             _linearity: LiveValidateApplyWorkProjectionLinearity,
@@ -184,17 +184,46 @@ impl LiveValidateApplyWorkProjectionPermit {
     }
 }
 
-/// Closed process-local carrier for one live Validate-to-Apply successor.
+/// Exact validation evidence retained by one live-WAL Apply.
 ///
-/// The full validated receipt and detached Validate parent remain inseparable
-/// from the exact WAL admission. This is deliberately not ordinary pending
-/// adapter work and cannot be mistaken for the recovered Decision lineage.
+/// The ordinary path moves the successful Validate carrier into its linked
+/// successor. The released path instead retains the immutable proof of an
+/// older `AdvancedNoSuccessor` Validate tombstone. Neither variant grants a
+/// generic Apply capability; both remain inside the lifecycle-owned carrier.
+enum DurableLiveWalApplyValidationSourceV1 {
+    Linked {
+        parent_address: ConcreteWorkAddress,
+        parent: Box<ConcreteLifecycleWork>,
+    },
+    Released(crate::sumeragi::v2::ReleasedLifecycleValidateTerminalProofV1),
+}
+
+impl fmt::Debug for DurableLiveWalApplyValidationSourceV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Linked { parent_address, .. } => formatter
+                .debug_struct("Linked")
+                .field("parent_address", parent_address)
+                .finish_non_exhaustive(),
+            Self::Released(terminal) => formatter
+                .debug_struct("Released")
+                .field("terminal_ordinal", &terminal.ordinal())
+                .finish_non_exhaustive(),
+        }
+    }
+}
+
+/// Closed process-local carrier for one live-WAL Apply.
+///
+/// The full validated receipt and either its linked Validate parent or the
+/// authenticated terminal-Validate proof remain inseparable from the exact
+/// WAL admission. This is deliberately not ordinary pending adapter work and
+/// cannot be mistaken for the recovered Decision lineage.
 struct DurableLiveWalApplyWork {
     admission: PreparedLiveWalAdmissionV1,
     candidate: CandidateAdmission,
     validated_receipt: ValidatedBodyReceipt,
-    parent_address: ConcreteWorkAddress,
-    parent: Box<ConcreteLifecycleWork>,
+    validation_source: DurableLiveWalApplyValidationSourceV1,
     address: ConcreteWorkAddress,
     dispatch_key: Option<LifecycleDecisionApplyDispatchKeyV1>,
 }
@@ -204,7 +233,7 @@ impl fmt::Debug for DurableLiveWalApplyWork {
         formatter
             .debug_struct("DurableLiveWalApplyWork")
             .field("address", &self.address)
-            .field("parent_address", &self.parent_address)
+            .field("validation_source", &self.validation_source)
             .field("dispatched", &self.dispatch_key.is_some())
             .finish_non_exhaustive()
     }
@@ -247,16 +276,101 @@ impl DurableLiveWalApplyWork {
                 .exactly_authorizes_candidate(self.context(), &self.candidate)
     }
 
+    fn released_terminal_causal_root(
+        terminal: &crate::sumeragi::v2::ReleasedLifecycleValidateTerminalProofV1,
+    ) -> super::CausalRoot {
+        super::CausalRoot::new(digest_from_hash(terminal.pending().causal_lifecycle_key()))
+    }
+
+    fn released_terminal_key_is_exact(
+        &self,
+        terminal: &crate::sumeragi::v2::ReleasedLifecycleValidateTerminalProofV1,
+        key: LifecycleKey,
+    ) -> bool {
+        let statement = terminal.statement();
+        key.context() == self.context().id()
+            && key.round()
+                == LifecycleRound::new(statement.round().height, statement.round().view)
+            && key.proposal_round()
+                == Some(LifecycleRound::new(
+                    statement.proposal_round().height,
+                    statement.proposal_round().view,
+                ))
+            && key.subject() == statement.subject().map(projection::block_subject)
+            && key.phase() == LifecyclePhase::Validate
+            && key.execution_commitment()
+                == statement
+                    .execution_commitment()
+                    .map(projection::execution_commitment)
+    }
+
+    fn released_terminal_proof_is_exact(
+        &self,
+        terminal: &crate::sumeragi::v2::ReleasedLifecycleValidateTerminalProofV1,
+    ) -> bool {
+        let AdapterEffect::ValidateBody {
+            tag,
+            round,
+            subject,
+        } = terminal.effect()
+        else {
+            return false;
+        };
+        let statement = terminal.statement();
+        terminal.ordinal() != 0
+            && terminal.ordinal() < self.address.ordinal
+            && terminal.pending().exactly_binds_adapter_effect(terminal.effect())
+            && terminal.pending().candidate_statement() == Some(statement)
+            && terminal.durable() == self.validated_receipt.durable()
+            && terminal.durable().round() == *round
+            && terminal.durable().subject() == *subject
+            && statement.context_id() == round.context_id
+            && statement.round().context_id == round.context_id
+            && statement.proposal_round() == *round
+            && statement.subject() == Some(*subject)
+            && statement.execution_commitment().is_none_or(|commitment| {
+                commitment == self.validated_receipt.execution_commitment()
+            })
+            && tag.height() == statement.round().height
+            && tag.view() == statement.round().view
+            && self.context().height() == round.height
+            && self.context().id().as_bytes() == round.context_id.0.as_ref()
+            && Self::released_terminal_causal_root(terminal) != self.address.owner.causal_root()
+    }
+
+    fn validation_source_is_exact(&self) -> bool {
+        match &self.validation_source {
+            DurableLiveWalApplyValidationSourceV1::Linked {
+                parent_address,
+                parent,
+            } => {
+                parent.validates_at(*parent_address)
+                    && parent_address != &self.address
+                    && parent_address.owner == self.address.owner
+                    && matches!(
+                        &parent.kind,
+                        ConcreteLifecycleWorkKind::DurableValidateCompletion(completion)
+                            if completion.outcome.validated_receipt()
+                                == Some(&self.validated_receipt)
+                    )
+            }
+            DurableLiveWalApplyValidationSourceV1::Released(terminal) => {
+                self.released_terminal_proof_is_exact(terminal)
+            }
+        }
+    }
+
+    fn validate_predecessor_ordinal(&self) -> u128 {
+        match &self.validation_source {
+            DurableLiveWalApplyValidationSourceV1::Linked { parent_address, .. } => {
+                parent_address.ordinal
+            }
+            DurableLiveWalApplyValidationSourceV1::Released(terminal) => terminal.ordinal(),
+        }
+    }
+
     fn validates_at(&self, address: ConcreteWorkAddress, digest: LifecycleDigest) -> bool {
-        let parent_is_exact = self.parent.validates_at(self.parent_address)
-            && matches!(
-                &self.parent.kind,
-                ConcreteLifecycleWorkKind::DurableValidateCompletion(completion)
-                    if completion.outcome.validated_receipt() == Some(&self.validated_receipt)
-            );
         self.address == address
-            && self.parent_address != address
-            && self.parent_address.owner == address.owner
             && address.owner.causal_root() == self.candidate.causal_root
             && address.slot
                 == PhysicalSlotId::for_capacity(LifecycleWorkClass::Apply.capacity_class(), 0)
@@ -265,100 +379,202 @@ impl DurableLiveWalApplyWork {
             && self.candidate.stage.kind() == LifecycleStageKind::ApplyDecision
             && self.candidate.initial_state == InitialLifecycleState::Ready
             && self.exact_body_binding()
-            && parent_is_exact
+            && self.validation_source_is_exact()
     }
 
-    fn predecessor_is_exact_in_coordinator(&self, coordinator: &LifecycleCoordinator) -> bool {
-        coordinator
-            .records
-            .get(&self.parent_address.ordinal)
-            .is_some_and(|record| {
-                record.owner == self.parent_address.owner
-                    && record.ordinal == self.parent_address.ordinal
+    fn validation_source_is_exact_in_coordinator(
+        &self,
+        coordinator: &LifecycleCoordinator,
+    ) -> bool {
+        match &self.validation_source {
+            DurableLiveWalApplyValidationSourceV1::Linked {
+                parent_address,
+                parent,
+            } => coordinator
+                .records
+                .get(&parent_address.ordinal)
+                .is_some_and(|record| {
+                    record.owner == parent_address.owner
+                        && record.ordinal == parent_address.ordinal
+                        && record.work_class == LifecycleWorkClass::Validate
+                        && record.state
+                            == super::LifecycleState::Terminal(super::TerminalOutcome::Advanced)
+                        && record.physical_slots
+                            == BTreeMap::from([(parent_address.slot, parent.digest())])
+                })
+                && coordinator
+                    .durable_records
+                    .get(&parent_address.ordinal)
+                    .is_some_and(|metadata| {
+                        metadata.continuation
+                            == super::schema::DurableContinuation::successor(
+                                super::schema::DurableContinuationEdge::ValidateToApply,
+                                self.address.ordinal,
+                            )
+                    }),
+            DurableLiveWalApplyValidationSourceV1::Released(terminal) => {
+                let (Some(record), Some(metadata)) = (
+                    coordinator.records.get(&terminal.ordinal()),
+                    coordinator.durable_records.get(&terminal.ordinal()),
+                ) else {
+                    return false;
+                };
+                let terminal_root = Self::released_terminal_causal_root(terminal);
+                let terminal_digest = digest_from_hash(terminal.pending().exact_effect_identity());
+                let terminal_slot = PhysicalSlotId::for_capacity(
+                    LifecycleWorkClass::Validate.capacity_class(),
+                    0,
+                );
+                let Some(expected_payload) = projection::durable_body_frame_reference(
+                    self.context(),
+                    terminal.durable(),
+                )
+                .map(DurablePayloadReference::BodyFrame)
+                else {
+                    return false;
+                };
+                self.released_terminal_proof_is_exact(terminal)
+                    && self.released_terminal_key_is_exact(terminal, record.key)
+                    && record.owner.causal_root() == terminal_root
+                    && record.ordinal == terminal.ordinal()
                     && record.work_class == LifecycleWorkClass::Validate
+                    && record.stage.kind() == LifecycleStageKind::ValidateBody
+                    && record.stage.predecessor_scope() == PredecessorScope::Independent
                     && record.state
                         == super::LifecycleState::Terminal(super::TerminalOutcome::Advanced)
-                    && record.physical_slots
-                        == BTreeMap::from([(self.parent_address.slot, self.parent.digest())])
-            })
-            && coordinator
-                .durable_records
-                .get(&self.parent_address.ordinal)
-                .is_some_and(|metadata| {
-                    metadata.continuation
-                        == super::schema::DurableContinuation::successor(
-                            super::schema::DurableContinuationEdge::ValidateToApply,
-                            self.address.ordinal,
-                        )
-                })
+                    && record.physical_slots == BTreeMap::from([(terminal_slot, terminal_digest)])
+                    && metadata.reconstruction_source == terminal_root.digest()
+                    && metadata.payload == expected_payload
+                    && metadata.continuation
+                        == super::schema::DurableContinuation::AdvancedNoSuccessor
+                    && coordinator.key_index.get(&record.key) == Some(&terminal.ordinal())
+                    && coordinator.owner_index.get(&terminal_root) == Some(&record.owner)
+            }
+        }
+    }
+
+    fn apply_record_is_exact(
+        &self,
+        record: &super::ledger::LifecycleLedgerRecordV1,
+    ) -> bool {
+        record.key() == Some(self.candidate.key)
+            && record.owner() == self.address.owner
+            && record.ordinal() == self.address.ordinal
+            && record.work_class() == Some(LifecycleWorkClass::Apply)
+            && record.stage() == Some(self.candidate.stage)
+            && record.terminal() == Some(None)
+            && record.reconstruction_source() == self.candidate.reconstruction_source
+            && record.durable_payload() == Some(self.candidate.payload)
+            && record.continuation() == Some(super::schema::DurableContinuation::None)
+            && record.replay_matches_candidate(&self.candidate)
     }
 
     fn validates_in_ledger(&self, ledger: &super::ledger::LifecycleLedgerV1) -> bool {
-        let (Some(parent_record), Some(apply_record)) = (
-            ledger
-                .records()
-                .iter()
-                .find(|record| record.ordinal() == self.parent_address.ordinal),
-            ledger
-                .records()
-                .iter()
-                .find(|record| record.ordinal() == self.address.ordinal),
-        ) else {
-            return false;
-        };
-        let ConcreteLifecycleWorkKind::DurableValidateCompletion(completion) = &self.parent.kind
+        let Some(apply_record) = ledger
+            .records()
+            .iter()
+            .find(|record| record.ordinal() == self.address.ordinal)
         else {
             return false;
         };
-        let (Some(parent_key), Some(parent_stage), Some(parent_payload)) = (
-            parent_record.key(),
-            parent_record.stage(),
-            parent_record.durable_payload(),
-        ) else {
+        if !self.validates_at(self.address, self.digest())
+            || ledger.context() != self.context()
+            || !self.apply_record_is_exact(apply_record)
+        {
             return false;
-        };
-        self.validates_at(self.address, self.digest())
-            && ledger.context() == self.context()
-            && self.parent.validates_at(self.parent_address)
-            && completion.outcome.validated_receipt() == Some(&self.validated_receipt)
-            && parent_record.owner() == self.parent_address.owner
-            && parent_record.ordinal() == self.parent_address.ordinal
-            && parent_record.work_class() == Some(LifecycleWorkClass::Validate)
-            && parent_stage.kind() == LifecycleStageKind::ValidateBody
-            && parent_record.terminal() == Some(Some(super::TerminalOutcome::Advanced))
-            && parent_record.continuation()
-                == Some(super::schema::DurableContinuation::successor(
-                    super::schema::DurableContinuationEdge::ValidateToApply,
-                    self.address.ordinal,
-                ))
-            && projection::recovered_validate_no_successor_ledger_identity_is_authenticated(
-                ledger.context(),
-                parent_key,
-                self.parent_address.owner.causal_root(),
-                parent_record.reconstruction_source(),
-                parent_stage,
-                parent_payload,
-                &completion.outcome,
-            )
-            && apply_record.key() == Some(self.candidate.key)
-            && apply_record.owner() == self.address.owner
-            && apply_record.ordinal() == self.address.ordinal
-            && apply_record.work_class() == Some(LifecycleWorkClass::Apply)
-            && apply_record.stage() == Some(self.candidate.stage)
-            && apply_record.terminal() == Some(None)
-            && apply_record.reconstruction_source() == self.candidate.reconstruction_source
-            && apply_record.durable_payload() == Some(self.candidate.payload)
-            && apply_record.continuation() == Some(super::schema::DurableContinuation::None)
-            && apply_record.replay_matches_candidate(&self.candidate)
-            && ledger
-                .records()
-                .iter()
-                .filter(|record| {
-                    record.owner() == self.address.owner
-                        && record.ordinal() >= self.parent_address.ordinal
-                })
-                .count()
-                == 2
+        }
+        match &self.validation_source {
+            DurableLiveWalApplyValidationSourceV1::Linked {
+                parent_address,
+                parent,
+            } => {
+                let Some(parent_record) = ledger
+                    .records()
+                    .iter()
+                    .find(|record| record.ordinal() == parent_address.ordinal)
+                else {
+                    return false;
+                };
+                let ConcreteLifecycleWorkKind::DurableValidateCompletion(completion) = &parent.kind
+                else {
+                    return false;
+                };
+                let (Some(parent_key), Some(parent_stage), Some(parent_payload)) = (
+                    parent_record.key(),
+                    parent_record.stage(),
+                    parent_record.durable_payload(),
+                ) else {
+                    return false;
+                };
+                parent.validates_at(*parent_address)
+                    && completion.outcome.validated_receipt() == Some(&self.validated_receipt)
+                    && parent_record.owner() == parent_address.owner
+                    && parent_record.ordinal() == parent_address.ordinal
+                    && parent_record.work_class() == Some(LifecycleWorkClass::Validate)
+                    && parent_stage.kind() == LifecycleStageKind::ValidateBody
+                    && parent_record.terminal()
+                        == Some(Some(super::TerminalOutcome::Advanced))
+                    && parent_record.continuation()
+                        == Some(super::schema::DurableContinuation::successor(
+                            super::schema::DurableContinuationEdge::ValidateToApply,
+                            self.address.ordinal,
+                        ))
+                    && projection::recovered_validate_no_successor_ledger_identity_is_authenticated(
+                        ledger.context(),
+                        parent_key,
+                        parent_address.owner.causal_root(),
+                        parent_record.reconstruction_source(),
+                        parent_stage,
+                        parent_payload,
+                        &completion.outcome,
+                    )
+                    && ledger
+                        .records()
+                        .iter()
+                        .filter(|record| {
+                            record.owner() == self.address.owner
+                                && record.ordinal() >= parent_address.ordinal
+                        })
+                        .count()
+                        == 2
+            }
+            DurableLiveWalApplyValidationSourceV1::Released(terminal) => {
+                let Some(terminal_record) = ledger
+                    .records()
+                    .iter()
+                    .find(|record| record.ordinal() == terminal.ordinal())
+                else {
+                    return false;
+                };
+                let (Some(key), Some(stage), Some(payload)) = (
+                    terminal_record.key(),
+                    terminal_record.stage(),
+                    terminal_record.durable_payload(),
+                ) else {
+                    return false;
+                };
+                let terminal_root = Self::released_terminal_causal_root(terminal);
+                let expected_payload = projection::durable_body_frame_reference(
+                    self.context(),
+                    terminal.durable(),
+                )
+                .map(DurablePayloadReference::BodyFrame);
+                self.released_terminal_proof_is_exact(terminal)
+                    && self.released_terminal_key_is_exact(terminal, key)
+                    && terminal_record.owner().causal_root() == terminal_root
+                    && terminal_record.owner() != self.address.owner
+                    && terminal_record.ordinal() == terminal.ordinal()
+                    && terminal_record.work_class() == Some(LifecycleWorkClass::Validate)
+                    && stage.kind() == LifecycleStageKind::ValidateBody
+                    && stage.predecessor_scope() == PredecessorScope::Independent
+                    && terminal_record.terminal()
+                        == Some(Some(super::TerminalOutcome::Advanced))
+                    && terminal_record.reconstruction_source() == terminal_root.digest()
+                    && Some(payload) == expected_payload
+                    && terminal_record.continuation()
+                        == Some(super::schema::DurableContinuation::AdvancedNoSuccessor)
+            }
+        }
     }
 
     fn matches_record(
@@ -375,7 +591,7 @@ impl DurableLiveWalApplyWork {
             return false;
         };
         self.validates_at(address, digest)
-            && self.predecessor_is_exact_in_coordinator(coordinator)
+            && self.validation_source_is_exact_in_coordinator(coordinator)
             && coordinator.fault.is_none()
             && coordinator.active_context == self.context()
             && record.key == self.candidate.key
@@ -479,7 +695,7 @@ impl DurableLiveWalApplyWork {
         };
         Some(LiveLifecycleDecisionApplyReconciliationAuthorityV1 {
             dispatch_key,
-            validate_predecessor_ordinal: self.parent_address.ordinal,
+            validate_predecessor_ordinal: self.validate_predecessor_ordinal(),
             tag: *tag,
             subject: *subject,
             certificate: certificate.clone(),
@@ -500,7 +716,7 @@ impl DurableLiveWalApplyWork {
             permit,
             self.context(),
             self.address,
-            self.parent_address.ordinal,
+            self.validate_predecessor_ordinal(),
             self.digest(),
             &self.admission.bound.effect,
             &self.validated_receipt,
@@ -623,8 +839,10 @@ impl PreparedLiveValidateApplyRegistryWork {
                 admission,
                 candidate,
                 validated_receipt,
-                parent_address,
-                parent: Box::new(parent),
+                validation_source: DurableLiveWalApplyValidationSourceV1::Linked {
+                    parent_address,
+                    parent: Box::new(parent),
+                },
                 address,
                 dispatch_key: None,
             }),
@@ -643,9 +861,13 @@ impl PreparedLiveValidateApplyRegistryWork {
                 admission,
                 candidate,
                 validated_receipt,
-                parent,
+                validation_source,
                 ..
             } = carrier;
+            let DurableLiveWalApplyValidationSourceV1::Linked { parent, .. } = validation_source
+            else {
+                unreachable!("linked live Apply retained its moved Validate parent")
+            };
             Err((
                 Self {
                     admission: PreparedLifecycleAdmissionV1 {
@@ -655,6 +877,88 @@ impl PreparedLiveValidateApplyRegistryWork {
                     validated_receipt,
                 },
                 *parent,
+            ))
+        }
+    }
+
+    /// Join the closed Apply admission to an older terminal Validate proof.
+    ///
+    /// Unlike the linked path, this publishes an independently owned Apply;
+    /// the historical Validate remains an immutable `AdvancedNoSuccessor`
+    /// tombstone. The prospective carrier must match both the complete staged
+    /// coordinator and its staged LedgerV1 frame before it can escape this
+    /// boundary. Failure returns both move-only inputs unchanged.
+    pub(super) fn into_released_typed_concrete(
+        self,
+        terminal: crate::sumeragi::v2::ReleasedLifecycleValidateTerminalProofV1,
+        address: ConcreteWorkAddress,
+        digest: LifecycleDigest,
+        staged_coordinator: &LifecycleCoordinator,
+        staged_ledger: &super::ledger::LifecycleLedgerV1,
+    ) -> Result<
+        ConcreteLifecycleWork,
+        (
+            Self,
+            crate::sumeragi::v2::ReleasedLifecycleValidateTerminalProofV1,
+        ),
+    > {
+        if !self.validates_publication(address.owner, address.ordinal, address.slot, digest) {
+            return Err((self, terminal));
+        }
+        let Self {
+            admission,
+            validated_receipt,
+        } = self;
+        let PreparedLifecycleAdmissionV1 { owner, candidate } = admission;
+        let PreparedLifecycleAdmissionOwnerV1::LiveWal(admission) = owner else {
+            unreachable!("prepared released Apply retained another admission origin")
+        };
+        let work = ConcreteLifecycleWork {
+            digest,
+            kind: ConcreteLifecycleWorkKind::DurableLiveWalApply(DurableLiveWalApplyWork {
+                admission,
+                candidate,
+                validated_receipt,
+                validation_source: DurableLiveWalApplyValidationSourceV1::Released(terminal),
+                address,
+                dispatch_key: None,
+            }),
+        };
+        let publication_is_exact = matches!(
+            &work.kind,
+            ConcreteLifecycleWorkKind::DurableLiveWalApply(carrier)
+                if carrier.matches_current_ready_record(address, digest, staged_coordinator)
+                    && carrier.validates_in_ledger(staged_ledger)
+        );
+        if publication_is_exact {
+            Ok(work)
+        } else {
+            let ConcreteLifecycleWork {
+                kind: ConcreteLifecycleWorkKind::DurableLiveWalApply(carrier),
+                ..
+            } = work
+            else {
+                unreachable!("new released Apply retained its dedicated typed carrier")
+            };
+            let DurableLiveWalApplyWork {
+                admission,
+                candidate,
+                validated_receipt,
+                validation_source,
+                ..
+            } = carrier;
+            let DurableLiveWalApplyValidationSourceV1::Released(terminal) = validation_source else {
+                unreachable!("released live Apply retained its terminal Validate proof")
+            };
+            Err((
+                Self {
+                    admission: PreparedLifecycleAdmissionV1 {
+                        owner: PreparedLifecycleAdmissionOwnerV1::LiveWal(admission),
+                        candidate,
+                    },
+                    validated_receipt,
+                },
+                terminal,
             ))
         }
     }

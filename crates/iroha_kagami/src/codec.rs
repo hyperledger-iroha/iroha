@@ -1,7 +1,7 @@
 use crate::{Outcome, RunArgs, tui};
 use clap::{Args as ClapArgs, Subcommand};
 use color_eyre::{
-    eyre::{Result, WrapErr, eyre},
+    eyre::{Result, eyre},
     owo_colors::OwoColorize,
 };
 use iroha_data_model::{account::NewAccount, asset::AssetId, domain::Domain, peer::Peer};
@@ -13,9 +13,9 @@ use norito::{
 use std::{
     collections::BTreeMap,
     fmt::{self, Debug, Write as _},
-    fs::{self, File},
+    fs::{self, OpenOptions},
     io,
-    io::{BufRead, BufReader, BufWriter, Read, Write},
+    io::{BufWriter, Read, Write},
     marker::PhantomData,
     path::{Path, PathBuf},
     sync::Arc,
@@ -25,6 +25,7 @@ use std::{
 // grow beyond the artifact class the command is intended to inspect.
 const MAX_CODEC_INPUT_BYTES_V1: usize = iroha_genesis::SIGNED_GENESIS_MAX_BYTES_V1;
 const MAX_CODEC_OUTPUT_BYTES_V1: usize = iroha_genesis::SIGNED_GENESIS_MAX_BYTES_V1;
+const MAX_CODEC_JSON_BODY_BYTES_V1: usize = MAX_CODEC_OUTPUT_BYTES_V1 - 1;
 const CODEC_DECODE_LIMITS_V1: norito::DecodeLimits =
     iroha_genesis::signed_genesis_decode_limits_v1();
 /// Generate map with types and converter trait object
@@ -82,31 +83,49 @@ impl fmt::Write for BoundedDebugString {
             return Err(fmt::Error);
         }
         self.value
-            .try_reserve_exact(value.len())
+            .try_reserve(value.len())
             .map_err(|_| fmt::Error)?;
         self.value.push_str(value);
         Ok(())
     }
 }
-fn charge_guessed_output(
-    retained_bytes: usize,
-    type_name_bytes: usize,
-    formatted_bytes: usize,
+struct BoundedCodecOutput {
+    bytes: Vec<u8>,
     max_bytes: usize,
-) -> Result<usize> {
-    let candidate_bytes = type_name_bytes
-        .checked_add(formatted_bytes)
-        .and_then(|length| length.checked_add(3))
-        .ok_or_else(|| eyre!("guessed codec output length overflow"))?;
-    let retained_bytes = retained_bytes
-        .checked_add(candidate_bytes)
-        .ok_or_else(|| eyre!("guessed codec output length overflow"))?;
-    if retained_bytes > max_bytes {
-        return Err(eyre!(
-            "combined guessed codec output exceeds the first-release {max_bytes}-byte limit"
-        ));
+}
+impl BoundedCodecOutput {
+    const fn new(max_bytes: usize) -> Self {
+        Self {
+            bytes: Vec::new(),
+            max_bytes,
+        }
     }
-    Ok(retained_bytes)
+    fn finish(self) -> Vec<u8> {
+        self.bytes
+    }
+}
+impl io::Write for BoundedCodecOutput {
+    fn write(&mut self, value: &[u8]) -> io::Result<usize> {
+        let next_len = self
+            .bytes
+            .len()
+            .checked_add(value.len())
+            .ok_or_else(|| io::Error::other("codec output length overflow"))?;
+        if next_len > self.max_bytes {
+            return Err(io::Error::other(format!(
+                "codec output exceeds the first-release {}-byte limit",
+                self.max_bytes
+            )));
+        }
+        self.bytes
+            .try_reserve(value.len())
+            .map_err(|error| io::Error::other(format!("reserve codec output: {error}")))?;
+        self.bytes.extend_from_slice(value);
+        Ok(value.len())
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 struct ConverterImpl<T>(PhantomData<T>);
 impl<T> ConverterImpl<T>
@@ -131,7 +150,8 @@ where
     fn norito_to_rust(&self, mut input: &[u8]) -> Result<String> {
         let object =
             norito::with_decode_limits_scope(CODEC_DECODE_LIMITS_V1, || T::decode_all(&mut input))?;
-        let mut output = BoundedDebugString::new(MAX_CODEC_OUTPUT_BYTES_V1);
+        // Reserve one byte for the typed decoder's canonical line terminator.
+        let mut output = BoundedDebugString::new(MAX_CODEC_OUTPUT_BYTES_V1 - 1);
         write!(&mut output, "{object:#?}").map_err(|_| {
             eyre!(
                 "Rust debug output exceeds the first-release {}-byte codec limit",
@@ -144,7 +164,9 @@ where
         let object = norito::with_decode_limits_scope(CODEC_DECODE_LIMITS_V1, || {
             norito::decode_from_bytes::<T>(input)
         })?;
-        let json = norito::json::to_json_bounded(&object, MAX_CODEC_OUTPUT_BYTES_V1)?;
+        // Reserve one byte in the total output corridor for the canonical
+        // line terminator added by `norito_to_json`.
+        let json = norito::json::to_json_bounded(&object, MAX_CODEC_JSON_BODY_BYTES_V1)?;
         Ok(json)
     }
     fn json_to_norito(&self, input: &str) -> Result<Vec<u8>> {
@@ -257,6 +279,18 @@ fn same_file_identity(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
     false
 }
 
+fn same_codec_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    #[cfg(any(unix, windows))]
+    let same_identity = same_file_identity(left, right);
+    #[cfg(not(any(unix, windows)))]
+    let same_identity = true;
+
+    same_identity
+        && left.is_file() == right.is_file()
+        && left.len() == right.len()
+        && left.modified().ok() == right.modified().ok()
+}
+
 fn reject_codec_input_output_alias(input: Option<&Path>, output: Option<&Path>) -> Result<()> {
     let (Some(input), Some(output)) = (input, output) else {
         return Ok(());
@@ -312,7 +346,18 @@ fn read_codec_input_bounded<R: Read + ?Sized>(
     max_bytes: usize,
     label: &str,
 ) -> Result<Vec<u8>> {
+    read_codec_input_bounded_with_capacity(reader, max_bytes, label, max_bytes.min(8 * 1024))
+}
+fn read_codec_input_bounded_with_capacity<R: Read + ?Sized>(
+    reader: &mut R,
+    max_bytes: usize,
+    label: &str,
+    initial_capacity: usize,
+) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
+    bytes
+        .try_reserve(initial_capacity.min(max_bytes))
+        .map_err(|error| eyre!("failed to reserve {label} buffer storage: {error}"))?;
     let mut chunk = [0_u8; 8 * 1024];
     while bytes.len() < max_bytes {
         let remaining = max_bytes - bytes.len();
@@ -328,7 +373,7 @@ fn read_codec_input_bounded<R: Read + ?Sized>(
             return Ok(bytes);
         }
         bytes
-            .try_reserve_exact(count)
+            .try_reserve(count)
             .map_err(|error| eyre!("failed to reserve {label} buffer storage: {error}"))?;
         bytes.extend_from_slice(&chunk[..count]);
     }
@@ -348,11 +393,25 @@ fn read_codec_input_bounded<R: Read + ?Sized>(
     Ok(bytes)
 }
 fn read_codec_file_bounded(path: &Path) -> Result<Vec<u8>> {
-    let mut file = File::open(path)?;
-    let before = file.metadata()?;
-    if !before.is_file() {
+    let lexical = fs::symlink_metadata(path)?;
+    if !lexical.is_file() || lexical.file_type().is_symlink() {
         return Err(eyre!(
-            "codec input is not a regular file: {}",
+            "codec input must be a non-symlink regular file: {}",
+            path.display()
+        ));
+    }
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let mut file = options.open(path)?;
+    let before = file.metadata()?;
+    if !before.is_file() || !same_codec_file_snapshot(&lexical, &before) {
+        return Err(eyre!(
+            "codec input changed while opening or is not a regular file: {}",
             path.display()
         ));
     }
@@ -363,9 +422,16 @@ fn read_codec_file_bounded(path: &Path) -> Result<Vec<u8>> {
             MAX_CODEC_INPUT_BYTES_V1
         ));
     }
-    let bytes = read_codec_input_bounded(&mut file, MAX_CODEC_INPUT_BYTES_V1, "codec input")?;
+    let initial_capacity = usize::try_from(before.len())
+        .map_err(|_| eyre!("codec input length cannot be addressed on this platform"))?;
+    let bytes = read_codec_input_bounded_with_capacity(
+        &mut file,
+        MAX_CODEC_INPUT_BYTES_V1,
+        "codec input",
+        initial_capacity,
+    )?;
     let after = file.metadata()?;
-    if before.len() != after.len() || after.len() != bytes.len() as u64 {
+    if !same_codec_file_snapshot(&before, &after) || after.len() != bytes.len() as u64 {
         return Err(eyre!(
             "codec input changed while it was being read: {}",
             path.display()
@@ -386,61 +452,49 @@ impl<'map> NoritoToRustDecoder<'map> {
     /// Decode type and print to `writer`
     pub fn decode<W: io::Write>(&self, writer: &mut W) -> Result<()> {
         let bytes = read_codec_file_bounded(&self.args.binary)?;
-        if let Some(type_name) = &self.args.type_name {
-            return self.decode_by_type(type_name, &bytes, writer);
-        }
-        self.decode_by_guess(&bytes, writer)
+        let rendered = self.args.type_name.as_ref().map_or_else(
+            || self.render_by_guess(&bytes, MAX_CODEC_OUTPUT_BYTES_V1),
+            |type_name| self.render_by_type(type_name, &bytes, MAX_CODEC_OUTPUT_BYTES_V1),
+        )?;
+        writer.write_all(&rendered).map_err(Into::into)
     }
-    /// Decode concrete `type` from `bytes` and print to `writer`
-    fn decode_by_type<W: io::Write>(
-        &self,
-        type_name: &str,
-        bytes: &[u8],
-        writer: &mut W,
-    ) -> Result<()> {
+    /// Decode concrete `type` from `bytes` into one bounded result.
+    fn render_by_type(&self, type_name: &str, bytes: &[u8], max_bytes: usize) -> Result<Vec<u8>> {
+        let mut output = BoundedCodecOutput::new(max_bytes);
         self.map.get(type_name).map_or_else(
             || Err(eyre!("Unknown type: `{type_name}`")),
-            |converter| Self::dump_decoded(converter.as_ref(), bytes, writer),
-        )
+            |converter| Self::dump_decoded(converter.as_ref(), bytes, &mut output),
+        )?;
+        Ok(output.finish())
     }
-    /// Try to decode every type from `bytes` and print to `writer`
-    fn decode_by_guess<W: io::Write>(&self, bytes: &[u8], writer: &mut W) -> Result<()> {
+    /// Try every type and render all matches plus the summary into one bounded result.
+    fn render_by_guess(&self, bytes: &[u8], max_bytes: usize) -> Result<Vec<u8>> {
         // Guessing is deliberately sequential. Every successful converter can render up to the
-        // full output corridor, so parallel collection would multiply peak retention by the
-        // number of registered types even though the final output is one stream.
-        let mut matches = Vec::new();
-        let mut retained_bytes = 0_usize;
+        // full output corridor, so parallel conversion would multiply peak memory by the number
+        // of registered types even though the final output is one bounded stream.
+        let mut output = BoundedCodecOutput::new(max_bytes);
+        let mut matches = 0_usize;
         for (type_name, converter) in self.map {
-            let mut buf = Vec::new();
-            if Self::dump_decoded(converter.as_ref(), bytes, &mut buf).is_err() {
-                continue;
-            }
-            let formatted = match String::from_utf8(buf) {
+            let formatted = match converter.norito_to_rust(bytes) {
                 Ok(value) => value,
                 Err(_) => continue,
             };
-            retained_bytes = charge_guessed_output(
-                retained_bytes,
-                type_name.len(),
-                formatted.len(),
-                MAX_CODEC_OUTPUT_BYTES_V1,
-            )?;
-            matches.push((type_name.clone(), formatted));
-        }
-        for (type_name, formatted) in &matches {
             writeln!(
-                writer,
+                output,
                 "{}:\n{}",
                 type_name.as_str().italic().cyan(),
                 formatted
-            )?;
+            )
+            .map_err(|error| eyre!(error))?;
+            matches += 1;
         }
-        match matches.len() {
-            0 => writeln!(writer, "No compatible types found"),
-            1 => writeln!(writer, "{} compatible type found", "1".bold()),
-            n => writeln!(writer, "{} compatible types found", n.to_string().bold()),
+        match matches {
+            0 => writeln!(output, "No compatible types found"),
+            1 => writeln!(output, "{} compatible type found", "1".bold()),
+            n => writeln!(output, "{} compatible types found", n.to_string().bold()),
         }
-        .map_err(Into::into)
+        .map_err(|error| eyre!(error))?;
+        Ok(output.finish())
     }
     fn dump_decoded(converter: &dyn Converter, input: &[u8], w: &mut dyn io::Write) -> Result<()> {
         let result = converter.norito_to_rust(input)?;
@@ -449,70 +503,52 @@ impl<'map> NoritoToRustDecoder<'map> {
     }
 }
 struct NoritoJsonDecoder<'map> {
-    reader: Box<dyn BufRead>,
+    input: Vec<u8>,
     converter: &'map dyn Converter,
 }
+
+fn append_json_line_terminator(output: String, max_bytes: usize) -> Result<Vec<u8>> {
+    if output.len() >= max_bytes {
+        return Err(eyre!(
+            "JSON codec output leaves no room for its line terminator within the {max_bytes}-byte limit"
+        ));
+    }
+    let mut output = output.into_bytes();
+    output
+        .try_reserve_exact(1)
+        .map_err(|error| eyre!("failed to reserve JSON codec output terminator: {error}"))?;
+    output.push(b'\n');
+    Ok(output)
+}
+
 impl<'map> NoritoJsonDecoder<'map> {
     fn new(input: Option<PathBuf>, type_name: &str, map: &'map ConverterMap) -> Result<Self> {
-        let reader: Box<dyn BufRead> = match input {
-            None => Box::new(io::stdin().lock()),
-            Some(path) => {
-                let file = File::open(&path)?;
-                let metadata = file.metadata()?;
-                if !metadata.is_file() {
-                    return Err(eyre!(
-                        "codec input is not a regular file: {}",
-                        path.display()
-                    ));
-                }
-                if metadata.len() > MAX_CODEC_INPUT_BYTES_V1 as u64 {
-                    return Err(eyre!(
-                        "codec input {} exceeds the first-release {}-byte limit",
-                        path.display(),
-                        MAX_CODEC_INPUT_BYTES_V1
-                    ));
-                }
-                Box::new(BufReader::new(file))
-            }
-        };
         let Some(converter) = map.get(type_name) else {
             return Err(eyre!("Unknown type: `{type_name}`"));
         };
+        let input = match input {
+            None => read_codec_input_bounded(
+                &mut io::stdin().lock(),
+                MAX_CODEC_INPUT_BYTES_V1,
+                "codec input",
+            )?,
+            Some(path) => read_codec_file_bounded(&path)?,
+        };
         Ok(Self {
-            reader,
+            input,
             converter: converter.as_ref(),
         })
     }
     fn norito_to_json(self) -> Result<Vec<u8>> {
-        let Self {
-            mut reader,
-            converter,
-        } = self;
-        let input = read_codec_input_bounded(
-            reader.as_mut(),
-            MAX_CODEC_INPUT_BYTES_V1,
-            "Norito codec input",
-        )?;
-        let mut output = converter.norito_to_json(&input)?.into_bytes();
-        output
-            .try_reserve_exact(1)
-            .map_err(|error| eyre!("failed to reserve JSON codec output terminator: {error}"))?;
-        output.push(b'\n');
-        Ok(output)
+        append_json_line_terminator(
+            self.converter.norito_to_json(&self.input)?,
+            MAX_CODEC_OUTPUT_BYTES_V1,
+        )
     }
     fn json_to_norito(self) -> Result<Vec<u8>> {
-        let Self {
-            mut reader,
-            converter,
-        } = self;
-        let input = read_codec_input_bounded(
-            reader.as_mut(),
-            MAX_CODEC_INPUT_BYTES_V1,
-            "JSON codec input",
-        )?;
-        let input = String::from_utf8(input)
+        let input = String::from_utf8(self.input)
             .map_err(|error| eyre!("JSON codec input is not valid UTF-8: {error}"))?;
-        converter.json_to_norito(&input)
+        self.converter.json_to_norito(&input)
     }
 }
 /// Print all supported types from `map` to `writer`
@@ -534,8 +570,8 @@ fn list_types<W: io::Write>(map: &ConverterMap, writer: &mut W) -> Result<()> {
 mod tests {
     use super::{
         BoundedDebugString, Converter, ConverterImpl, ConverterMap, JsonConversion, NoritoJsonArgs,
-        NoritoToRustArgs, NoritoToRustDecoder, charge_guessed_output, generate_map,
-        read_codec_input_bounded, run_json_conversion,
+        NoritoToRustArgs, NoritoToRustDecoder, append_json_line_terminator, generate_map,
+        read_codec_file_bounded, read_codec_input_bounded, run_json_conversion,
     };
     use color_eyre::eyre::Result as EyreResult;
     use iroha_data_model::{account::NewAccount, asset::AssetId, peer::Peer};
@@ -566,6 +602,24 @@ mod tests {
             .expect_err("limit plus one must be rejected");
         assert!(error.to_string().contains("32-byte codec limit"));
     }
+    #[cfg(unix)]
+    #[test]
+    fn codec_file_reader_rejects_symlinks_and_special_files_without_blocking() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().expect("create adversarial codec-input directory");
+        let target = directory.path().join("target.nrt");
+        let linked = directory.path().join("linked.nrt");
+        fs::write(&target, b"payload").expect("seed codec input target");
+        symlink(&target, &linked).expect("create codec input symlink");
+        let error = read_codec_file_bounded(&linked).expect_err("codec symlink must fail closed");
+        assert!(error.to_string().contains("non-symlink regular file"));
+
+        let fifo = directory.path().join("input.fifo");
+        crate::secure_fs::create_fifo_for_test(&fifo, 0o600).expect("create codec input FIFO");
+        let error = read_codec_file_bounded(&fifo).expect_err("codec FIFO must fail closed");
+        assert!(error.to_string().contains("non-symlink regular file"));
+    }
     #[test]
     fn bounded_debug_writer_rejects_growth_before_append() {
         let mut output = BoundedDebugString::new(3);
@@ -574,12 +628,14 @@ mod tests {
         assert_eq!(output.finish(), "abc");
     }
     #[test]
-    fn guessed_output_charge_accepts_exact_limit_and_rejects_plus_one() {
+    fn json_line_terminator_is_charged_to_the_total_output_limit() {
         assert_eq!(
-            charge_guessed_output(4, 2, 1, 10).expect("exact aggregate limit"),
-            10
+            append_json_line_terminator("abc".to_owned(), 4).expect("exact total limit"),
+            b"abc\n"
         );
-        assert!(charge_guessed_output(4, 2, 2, 10).is_err());
+        let error = append_json_line_terminator("abcd".to_owned(), 4)
+            .expect_err("body at total limit leaves no room for terminator");
+        assert!(error.to_string().contains("line terminator"));
     }
     #[test]
     fn json_conversion_rejects_same_input_and_output_without_modifying_it() {
@@ -617,7 +673,7 @@ mod tests {
             type_name: <NewAccount as TypeId>::id(),
         };
         let mut stdout = BufWriter::new(Vec::new());
-        run_json_conversion(
+        let _error = run_json_conversion(
             args,
             &generate_map(),
             &mut stdout,
@@ -647,7 +703,7 @@ mod tests {
             type_name: <NewAccount as TypeId>::id(),
         };
         let mut stdout = BufWriter::new(Vec::new());
-        run_json_conversion(
+        let _error = run_json_conversion(
             args,
             &generate_map(),
             &mut stdout,
@@ -772,9 +828,8 @@ mod tests {
             },
             &map,
         );
-        let mut output = Vec::new();
-        decoder
-            .decode_by_guess(b"", &mut output)
+        let output = decoder
+            .render_by_guess(b"", 1_024)
             .expect("decoder succeeds");
         let output = String::from_utf8(output).expect("valid UTF-8");
         let alpha_pos = output.find("Alpha").expect("Alpha reported");
@@ -787,5 +842,48 @@ mod tests {
             output.contains("compatible types found"),
             "summary should mention matching types"
         );
+
+        let exact = decoder
+            .render_by_guess(b"", output.len())
+            .expect("exact guessed-output limit succeeds");
+        assert_eq!(exact, output.as_bytes());
+        let error = decoder
+            .render_by_guess(b"", output.len() - 1)
+            .expect_err("guessed output one byte over the limit fails");
+        assert!(error.to_string().contains("codec output exceeds"));
+    }
+    #[test]
+    fn typed_rust_output_limit_includes_the_line_terminator() {
+        struct TestConverter;
+        impl Converter for TestConverter {
+            fn norito_to_rust(&self, _input: &[u8]) -> EyreResult<String> {
+                Ok("abc".to_owned())
+            }
+            fn norito_to_json(&self, _input: &[u8]) -> EyreResult<String> {
+                unreachable!()
+            }
+            fn json_to_norito(&self, _input: &str) -> EyreResult<Vec<u8>> {
+                unreachable!()
+            }
+        }
+        let mut map: ConverterMap = ConverterMap::new();
+        map.insert("Exact".to_owned(), Arc::new(TestConverter));
+        let decoder = NoritoToRustDecoder::new(
+            NoritoToRustArgs {
+                binary: PathBuf::new(),
+                type_name: Some("Exact".to_owned()),
+            },
+            &map,
+        );
+        assert_eq!(
+            decoder
+                .render_by_type("Exact", b"", 4)
+                .expect("body plus newline at exact limit"),
+            b"abc\n"
+        );
+        let error = decoder
+            .render_by_type("Exact", b"", 3)
+            .expect_err("line terminator beyond limit fails");
+        assert!(error.to_string().contains("codec output exceeds"));
     }
 }

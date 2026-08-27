@@ -113,6 +113,8 @@ The following gauges are exposed via Prometheus when telemetry is enabled:
 - `p2p_accept_throttle_decisions_total{scope="prefix|ip",decision="allowed|throttled"}`: accept throttle outcomes split by prefix vs per-IP buckets.
 - `p2p_incoming_cap_reject_total`: number of incoming connections rejected due to `max_incoming`.
 - `p2p_total_cap_reject_total`: number of connections rejected due to `max_total_connections`.
+- `p2p_preauth_source_cap_reject_total`: number of accepted unauthenticated TCP or
+  address-validated QUIC transports rejected by `preauth_max_connections_per_ip`.
 - `p2p_scion_inbound_total`: accepted inbound SCION P2P connections (reserved for future inbound listener support).
 - `p2p_scion_outbound_total`: successful outbound SCION-guided P2P connections.
 
@@ -193,6 +195,10 @@ p2p_incoming_cap_reject_total 0
 # HELP p2p_total_cap_reject_total Number of connections rejected by total cap
 # TYPE p2p_total_cap_reject_total gauge
 p2p_total_cap_reject_total 0
+
+# HELP p2p_preauth_source_cap_reject_total Number of accepted unauthenticated transports rejected by the concurrent per-source cap
+# TYPE p2p_preauth_source_cap_reject_total gauge
+p2p_preauth_source_cap_reject_total 0
 
 # HELP p2p_scion_outbound_total Successful outbound SCION P2P connections
 # TYPE p2p_scion_outbound_total gauge
@@ -339,6 +345,8 @@ transaction_gossip_size = 500 # configurable batch limit; canonical wire ceiling
 transaction_gossip_period_ms = 1000
 transaction_gossip_resend_ticks = 3
 idle_timeout_ms = 60000
+preauth_timeout_ms = 30000
+preauth_max_connections_per_ip = 8
 reply_writer_flush_timeout_ms = 30000
 connect_startup_delay_ms = 0
 # Trust decay/penalties for gossip senders (decays toward 0)
@@ -348,8 +356,23 @@ trust_penalty_unknown_peer = 3     # penalty applied when gossip references peer
 trust_min_score = -20              # drop trust gossip at or below this score
 ```
 
-- Gossip, idle, and exact reply-writer timeout intervals are clamped to >=100ms
+- Gossip, idle, pre-authentication, and exact reply-writer timeout intervals are clamped to >=100ms
   to prevent zero-duration spin loops.
+- `preauth_timeout_ms` is one absolute deadline shared by admission, TLS/QUIC
+  setup, required-stream acceptance, and the signed application handshake for
+  an accepted transport. It starts when TCP accepts the socket or when QUIC
+  completes address validation, before the connection waits for global
+  pre-authentication capacity.
+  Successful peers are governed only by `idle_timeout_ms` after authentication.
+- `preauth_max_connections_per_ip` caps concurrent accepted-but-unauthenticated
+  transports from one canonical source IP (default: 8). One shared reservation
+  gate covers TCP and address-validated QUIC, and reserves the source before
+  global capacity. IPv4-mapped IPv6 addresses canonicalise to native IPv4;
+  native IPv6 addresses otherwise remain exact. The reservation is released
+  when authentication completes or the pending connection is cancelled or
+  terminated. Operators whose legitimate peers share a NAT may raise the cap,
+  but it remains enabled by default. Rejections increment
+  `p2p_preauth_source_cap_reject_total` without consuming a global slot.
 - `transaction_gossip_size` may be lowered to reduce per-message admission work,
   but cannot exceed 512. The canonical decoder rejects transaction, route, or
   routing-plan sequences above that ceiling before allocating or decoding their

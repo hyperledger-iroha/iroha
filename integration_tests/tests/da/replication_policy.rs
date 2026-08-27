@@ -2,13 +2,14 @@
 //! DA-4 regression: Torii must enforce the configured retention profile even
 //! when callers submit stale values. The manifest fetched from Torii should
 //! always expose the canonical policy, not the caller intent.
-use eyre::Result;
+use eyre::{Result, eyre};
 use hex::encode as hex_encode;
 use integration_tests::sandbox::start_network_async_or_skip;
 use iroha_config::parameters::actual::DaReplicationPolicy;
+use iroha_crypto::Signature;
 use iroha_data_model::{
     da::{
-        ingest::{DaIngestReceipt, DaIngestRequest, DaIngestRequestIntentV1},
+        ingest::{DaIngestReceipt, DaIngestRequest, DaIngestRequestIntentV1, DaPinScopeV1},
         manifest::{ChunkCommitment, ChunkRole, DaManifestV1},
         types::{
             BlobClass, BlobCodec, BlobDigest, Compression, DaRentPolicyV1, DaRentQuote,
@@ -22,12 +23,21 @@ use iroha_data_model::{
 };
 use iroha_test_network::{Network, NetworkBuilder};
 use iroha_test_samples::ALICE_KEYPAIR;
+use iroha_torii::{
+    HEADER_ACCOUNT, HEADER_NONCE, HEADER_SIGNATURE, HEADER_TIMESTAMP_MS, Method, Uri,
+    canonical_network_request_signature_message, signature_header_value,
+};
 use norito::{
     json::{self, Value},
     to_bytes,
 };
 use reqwest::{Client, StatusCode};
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::BTreeMap,
+    path::Path,
+    sync::atomic::{AtomicU64, Ordering},
+    time::{SystemTime, UNIX_EPOCH},
+};
 use tempfile::tempdir;
 use toml::value::{Table, Value as TomlValue};
 const TEST_NAME: &str = "da_replication_policy_is_enforced";
@@ -96,7 +106,7 @@ fn build_da_request(network: &Network, retention_policy: RetentionPolicy) -> DaI
         client_blob_id,
         lane_id: LaneId::SINGLE,
         epoch: 7,
-        sequence: 1,
+        sequence: 0,
         blob_class: BlobClass::NexusLaneSidecar,
         codec: BlobCodec("video/cmaf".into()),
         erasure_profile: ErasureProfile::default(),
@@ -117,39 +127,80 @@ struct ManifestFetchOutcome {
     manifest: DaManifestV1,
     response: Value,
 }
+
+#[derive(Debug, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct DaIngestHttpResponse {
+    status: String,
+    duplicate: bool,
+    receipt: Option<DaIngestReceipt>,
+    pin_scope: Option<DaPinScopeV1>,
+}
+
 async fn ingest_and_fetch_manifest(
     network: &Network,
     http: &Client,
     caller_policy: RetentionPolicy,
 ) -> Result<ManifestFetchOutcome> {
+    const MAX_INGEST_POSTS: usize = 2;
+
     let ingest_request = build_da_request(network, caller_policy);
-    let request_value =
-        json::to_value(&ingest_request).expect("serialize DA ingest request to JSON");
-    let request_json =
-        json::to_string(&request_value).expect("render DA ingest request JSON literal");
     let ingest_url = network
         .client()
         .torii_url
         .join("/v1/da/ingest")
         .expect("compose DA ingest URL");
-    let response = http
-        .post(ingest_url)
-        .header("Content-Type", "application/json")
-        .header("Accept", "application/json")
-        .body(request_json)
-        .send()
-        .await?;
-    assert!(
-        response.status().is_success(),
-        "DA ingest must succeed, got {}",
-        response.status()
+    let mut ingest_posts = 1_usize;
+    let first = post_da_ingest_once(network, http, &ingest_url, &ingest_request, "prepare").await?;
+    assert_eq!(
+        first.status, "pending_pin_authorization",
+        "the prepare submission must wait for an exact producer-approved pin scope"
     );
-    let response_value: Value = json::from_slice(&response.bytes().await?)?;
-    let receipt_value = response_value
-        .get("receipt")
-        .cloned()
-        .expect("DA ingest response must include a receipt");
-    let receipt: DaIngestReceipt = json::from_value(receipt_value)?;
+    assert!(!first.duplicate, "the prepare submission must be fresh");
+    let first_receipt = first
+        .receipt
+        .clone()
+        .expect("the prepare response must include the durable receipt");
+    let pin_scope = first
+        .pin_scope
+        .clone()
+        .expect("the pending prepare response must include its exact pin scope");
+
+    let mut authorized_request = ingest_request.clone();
+    authorized_request
+        .try_add_pin_scope_signature(&pin_scope, &ALICE_KEYPAIR)
+        .expect("sign the exact post-ingest pin scope");
+    assert!(
+        ingest_posts < MAX_INGEST_POSTS,
+        "pin-scope finalization must have exactly one bounded retry available"
+    );
+    ingest_posts += 1;
+    let finalized =
+        post_da_ingest_once(network, http, &ingest_url, &authorized_request, "finalize").await?;
+    assert_eq!(
+        finalized.status, "accepted",
+        "one producer-authorized retry must finalize the DA pin"
+    );
+    assert!(
+        finalized.duplicate,
+        "the bounded finalize retry must reuse the prepared durable artifacts"
+    );
+    assert_eq!(
+        finalized.pin_scope.as_ref(),
+        Some(&pin_scope),
+        "the finalize response must retain the exact producer-approved scope"
+    );
+    let receipt = finalized
+        .receipt
+        .expect("the finalized response must include the durable receipt");
+    assert_eq!(
+        receipt, first_receipt,
+        "the bounded finalize retry must not replace the prepared receipt"
+    );
+    assert_eq!(
+        ingest_posts, MAX_INGEST_POSTS,
+        "DA pin authorization is bounded to one prepare plus one retry"
+    );
     let manifest_ticket_hex = hex_encode(receipt.storage_ticket.as_bytes());
     let manifest_url = network
         .client()
@@ -178,6 +229,60 @@ async fn ingest_and_fetch_manifest(
         manifest,
         response: manifest_value,
     })
+}
+
+async fn post_da_ingest_once(
+    network: &Network,
+    http: &Client,
+    ingest_url: &reqwest::Url,
+    request: &DaIngestRequest,
+    phase: &str,
+) -> Result<DaIngestHttpResponse> {
+    static NONCE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    let body = json::to_vec(request)?;
+    let timestamp_ms: u64 = SystemTime::now()
+        .duration_since(UNIX_EPOCH)?
+        .as_millis()
+        .try_into()?;
+    let nonce = format!(
+        "da-replication-policy-{phase}-{}",
+        NONCE_COUNTER.fetch_add(1, Ordering::Relaxed)
+    );
+    let signing_uri: Uri = match ingest_url.query() {
+        Some(query) => format!("{}?{query}", ingest_url.path()).parse()?,
+        None => ingest_url.path().parse()?,
+    };
+    let message = canonical_network_request_signature_message(
+        &network.network_id(),
+        &Method::POST,
+        &signing_uri,
+        &body,
+        timestamp_ms,
+        &nonce,
+    )?;
+    let signature = Signature::try_new(ALICE_KEYPAIR.private_key(), &message)
+        .expect("sign canonical DA ingest HTTP request");
+    let response = http
+        .post(ingest_url.clone())
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json")
+        .header(HEADER_ACCOUNT, request.owner.to_canonical_hex()?)
+        .header(HEADER_SIGNATURE, signature_header_value(&signature)?)
+        .header(HEADER_TIMESTAMP_MS, timestamp_ms.to_string())
+        .header(HEADER_NONCE, nonce)
+        .body(body)
+        .send()
+        .await?;
+    let status = response.status();
+    let response_body = response.bytes().await?;
+    if status != StatusCode::ACCEPTED && status != StatusCode::OK {
+        return Err(eyre!(
+            "DA ingest {phase} submission failed with {status}: {}",
+            String::from_utf8_lossy(&response_body)
+        ));
+    }
+    Ok(json::from_slice(&response_body)?)
 }
 fn assert_override_applied(manifest: &DaManifestV1, override_policy: &PolicyNumbers) {
     let enforced = retention_from_numbers(override_policy);

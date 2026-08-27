@@ -195,8 +195,10 @@ pub struct SoracloudRuntime {
     pub state_dir: PathBuf,
     /// Reconciliation cadence against authoritative world state.
     pub reconcile_interval: Duration,
-    /// Maximum concurrent artifact hydration workers.
+    /// Maximum concurrent artifact hydration workers, independent of Inrou guest concurrency.
     pub hydration_concurrency: NonZeroUsize,
+    /// Maximum idle prepared IVM runtimes retained independently of hydration workers.
+    pub prepared_runtime_cache_capacity: NonZeroUsize,
     /// Cache budgets for hydrated Soracloud artifacts.
     pub cache_budgets: SoracloudRuntimeCacheBudgets,
     /// Inrou microVM hosting limits.
@@ -214,6 +216,8 @@ impl_default!(SoracloudRuntime => {
                 defaults::soracloud_runtime::RECONCILE_INTERVAL_MS,
             ),
             hydration_concurrency: defaults::soracloud_runtime::HYDRATION_CONCURRENCY,
+            prepared_runtime_cache_capacity:
+                defaults::soracloud_runtime::PREPARED_RUNTIME_CACHE_CAPACITY,
             cache_budgets: SoracloudRuntimeCacheBudgets::default(),
             inrou: SoracloudRuntimeInrou::default(),
             submission: SoracloudRuntimeSubmission::default(),
@@ -227,6 +231,16 @@ impl SoracloudRuntime {
     /// callers that construct runtime settings directly cannot bypass the
     /// runtime posture checks performed by user-config parsing.
     pub fn assert_runtime_posture(&self) {
+        assert!(
+            self.hydration_concurrency.get()
+                <= defaults::soracloud_runtime::HYDRATION_CONCURRENCY_MAX,
+            "soracloud_runtime.hydration_concurrency exceeds the first-release worker limit"
+        );
+        assert!(
+            self.prepared_runtime_cache_capacity.get()
+                <= defaults::soracloud_runtime::PREPARED_RUNTIME_CACHE_CAPACITY_MAX,
+            "soracloud_runtime.prepared_runtime_cache_capacity exceeds the first-release idle-runtime limit"
+        );
         self.inrou.assert_archive_resource_bounds();
         self.inrou.assert_lifecycle_grace_bounds();
         self.inrou.assert_portable_vm_v1_shape();
@@ -525,14 +539,13 @@ impl Root {
     /// # Errors
     /// If config reading/parsing fails.
     pub fn from_toml_source(src: TomlSource) -> Result<Self, FromTomlSourceError> {
-        user::Root::read_and_complete(
-            ConfigReader::new()
-                .without_env()
-                .with_toml_source(src),
-        )
-        .change_context(FromTomlSourceError)?
-        .parse()
-        .change_context(FromTomlSourceError)
+        ConfigReader::new()
+            .without_env()
+            .with_toml_source(src)
+            .read_and_complete::<user::Root>()
+            .change_context(FromTomlSourceError)?
+            .parse()
+            .change_context(FromTomlSourceError)
     }
     /// Check whether the configuration already enables Sora/Nexus-only features.
     #[must_use]
@@ -665,14 +678,6 @@ impl Root {
             configured_caps.sorafs_max_capacity_bytes,
             derived_caps.sorafs_bytes,
         );
-        self.streaming.soranet.provision_spool_max_bytes = min_nonzero_bytes(
-            configured_caps.soranet_spool_max_bytes,
-            derived_caps.soranet_spool_bytes,
-        );
-        self.streaming.soravpn.provision_spool_max_bytes = min_nonzero_bytes(
-            configured_caps.soravpn_spool_max_bytes,
-            derived_caps.soravpn_spool_bytes,
-        );
     }
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -680,8 +685,6 @@ struct NexusStorageComponentCaps {
     kura_bytes: u64,
     wsv_cold_bytes: u64,
     sorafs_bytes: u64,
-    soranet_spool_bytes: u64,
-    soravpn_spool_bytes: u64,
 }
 impl NexusStorageComponentCaps {
     fn add_budget(&mut self, component: NexusStorageBudgetComponent, budget_bytes: u64) {
@@ -689,8 +692,6 @@ impl NexusStorageComponentCaps {
             NexusStorageBudgetComponent::Kura => &mut self.kura_bytes,
             NexusStorageBudgetComponent::WsvCold => &mut self.wsv_cold_bytes,
             NexusStorageBudgetComponent::Sorafs => &mut self.sorafs_bytes,
-            NexusStorageBudgetComponent::SoranetSpool => &mut self.soranet_spool_bytes,
-            NexusStorageBudgetComponent::SoravpnSpool => &mut self.soravpn_spool_bytes,
         };
         *target = target
             .checked_add(budget_bytes)
@@ -701,8 +702,6 @@ impl NexusStorageComponentCaps {
             NexusStorageBudgetComponent::Kura => self.kura_bytes,
             NexusStorageBudgetComponent::WsvCold => self.wsv_cold_bytes,
             NexusStorageBudgetComponent::Sorafs => self.sorafs_bytes,
-            NexusStorageBudgetComponent::SoranetSpool => self.soranet_spool_bytes,
-            NexusStorageBudgetComponent::SoravpnSpool => self.soravpn_spool_bytes,
         }
     }
     fn total(self) -> u64 {
@@ -718,8 +717,6 @@ pub(crate) struct NexusStorageConfiguredComponentCaps {
     kura_max_disk_usage_bytes: Bytes,
     wsv_cold_max_bytes: Bytes,
     sorafs_max_capacity_bytes: Bytes,
-    soranet_spool_max_bytes: Bytes,
-    soravpn_spool_max_bytes: Bytes,
 }
 impl NexusStorageConfiguredComponentCaps {
     fn capture(root: &Root) -> Self {
@@ -727,8 +724,6 @@ impl NexusStorageConfiguredComponentCaps {
             kura_max_disk_usage_bytes: root.kura.max_disk_usage_bytes,
             wsv_cold_max_bytes: root.tiered_state.max_cold_bytes,
             sorafs_max_capacity_bytes: root.torii.sorafs_storage.max_capacity_bytes,
-            soranet_spool_max_bytes: root.streaming.soranet.provision_spool_max_bytes,
-            soravpn_spool_max_bytes: root.streaming.soravpn.provision_spool_max_bytes,
         }
     }
 }
@@ -742,8 +737,6 @@ fn derive_global_nexus_storage_component_caps(
         kura_bytes: budget(weights.kura_blocks_bps),
         wsv_cold_bytes: budget(weights.wsv_snapshots_bps),
         sorafs_bytes: budget(weights.sorafs_bps),
-        soranet_spool_bytes: budget(weights.soranet_spool_bps),
-        soravpn_spool_bytes: budget(weights.soravpn_spool_bps),
     };
     let allocated = caps.total();
     caps.add_budget(
@@ -1400,12 +1393,13 @@ pub enum LaneProfile {
     Home,
 }
 impl LaneProfile {
-    /// Resolve a profile label into a typed variant.
+    /// Resolve an exact first-release profile label into a typed variant.
     #[must_use]
-    pub fn from_label(label: &str) -> Self {
-        match label.to_ascii_lowercase().as_str() {
-            "home" => Self::Home,
-            _ => Self::Core,
+    pub fn parse_label(label: &str) -> Option<Self> {
+        match label {
+            "core" => Some(Self::Core),
+            "home" => Some(Self::Home),
+            _ => None,
         }
     }
     /// Return the baked-in defaults for the profile.
@@ -1541,6 +1535,10 @@ pub struct Network {
     pub require_sm_openssl_preview_match: bool,
     /// Idle connection timeout.
     pub idle_timeout: Duration,
+    /// Maximum total tenure for an accepted transport to authenticate.
+    pub preauth_timeout: Duration,
+    /// Maximum concurrent pre-authentication transports admitted from one source IP.
+    pub preauth_max_connections_per_ip: NonZeroUsize,
     /// Base deadline for an exact reply to await one peer writer's full flush.
     pub reply_writer_flush_timeout: Duration,
     /// Delay outbound peer dials after startup.
@@ -2191,6 +2189,8 @@ pub struct Governance {
     pub parliament_alternate_size: Option<usize>,
     /// Quorum requirement for council approvals (basis points, ceil-divided).
     pub parliament_quorum_bps: u16,
+    /// Exact future-beacon delay frozen into Parliament sortition requests.
+    pub parliament_sortition_pulse_delay_blocks: u64,
     /// Consensus block-height span for immutable Parliament invitation responses.
     pub parliament_invitation_phase_blocks: u64,
     /// Consensus block-height span for public-finding endorsements after Reflection begins.
@@ -2293,6 +2293,8 @@ impl_default!(Governance => {
             .expect("valid default governance asset id"),
             parliament_alternate_size: defaults::governance::PARLIAMENT_ALTERNATE_SIZE,
             parliament_quorum_bps: defaults::governance::PARLIAMENT_QUORUM_BPS,
+            parliament_sortition_pulse_delay_blocks:
+                defaults::governance::PARLIAMENT_SORTITION_PULSE_DELAY_BLOCKS,
             parliament_invitation_phase_blocks:
                 defaults::governance::PARLIAMENT_INVITATION_PHASE_BLOCKS,
             parliament_public_finding_phase_blocks:
@@ -2656,20 +2658,10 @@ pub enum NexusStorageBudgetComponent {
     WsvCold,
     /// SoraFS storage root.
     Sorafs,
-    /// SoraNet provisioning spool.
-    SoranetSpool,
-    /// SoraVPN provisioning spool.
-    SoravpnSpool,
 }
 impl NexusStorageBudgetComponent {
     /// Components in the deterministic split and remainder order.
-    pub const ORDER: [Self; 5] = [
-        Self::Kura,
-        Self::WsvCold,
-        Self::Sorafs,
-        Self::SoranetSpool,
-        Self::SoravpnSpool,
-    ];
+    pub const ORDER: [Self; 3] = [Self::Kura, Self::WsvCold, Self::Sorafs];
     /// Stable string label used in diagnostics.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -2677,8 +2669,6 @@ impl NexusStorageBudgetComponent {
             Self::Kura => "kura",
             Self::WsvCold => "wsv_cold",
             Self::Sorafs => "sorafs",
-            Self::SoranetSpool => "soranet_spool",
-            Self::SoravpnSpool => "soravpn_spool",
         }
     }
     fn weight_bps(self, weights: NexusStorageWeights) -> u16 {
@@ -2686,8 +2676,6 @@ impl NexusStorageBudgetComponent {
             Self::Kura => weights.kura_blocks_bps,
             Self::WsvCold => weights.wsv_snapshots_bps,
             Self::Sorafs => weights.sorafs_bps,
-            Self::SoranetSpool => weights.soranet_spool_bps,
-            Self::SoravpnSpool => weights.soravpn_spool_bps,
         }
     }
 }
@@ -2818,20 +2806,12 @@ pub struct NexusStorageWeights {
     pub wsv_snapshots_bps: u16,
     /// Budget share for SoraFS storage (basis points).
     pub sorafs_bps: u16,
-    /// Budget share for SoraNet route spools (basis points).
-    pub soranet_spool_bps: u16,
-    /// Budget share reserved for future SoraVPN storage (basis points).
-    pub soravpn_spool_bps: u16,
 }
 impl NexusStorageWeights {
     /// Total basis points across all weights.
     #[must_use]
     pub const fn total_bps(self) -> u32 {
-        self.kura_blocks_bps as u32
-            + self.wsv_snapshots_bps as u32
-            + self.sorafs_bps as u32
-            + self.soranet_spool_bps as u32
-            + self.soravpn_spool_bps as u32
+        self.kura_blocks_bps as u32 + self.wsv_snapshots_bps as u32 + self.sorafs_bps as u32
     }
 }
 impl_default!(NexusStorageWeights => {
@@ -2839,8 +2819,6 @@ impl_default!(NexusStorageWeights => {
             kura_blocks_bps: defaults::nexus::storage::KURA_BLOCKS_BPS,
             wsv_snapshots_bps: defaults::nexus::storage::WSV_SNAPSHOTS_BPS,
             sorafs_bps: defaults::nexus::storage::SORAFS_BPS,
-            soranet_spool_bps: defaults::nexus::storage::SORANET_SPOOL_BPS,
-            soravpn_spool_bps: defaults::nexus::storage::SORAVPN_SPOOL_BPS,
         }
 });
 /// Nexus configuration describing lanes, data spaces, and routing policy.
@@ -4036,6 +4014,10 @@ pub fn execution_policy_digest_v1(
     policy.push(
         "governance.parliament_quorum_bps",
         &governance.parliament_quorum_bps,
+    );
+    policy.push(
+        "governance.parliament_sortition_pulse_delay_blocks",
+        &governance.parliament_sortition_pulse_delay_blocks,
     );
     policy.push(
         "governance.parliament_invitation_phase_blocks",
@@ -5763,10 +5745,10 @@ pub enum GasLiquidity {
 impl FromStr for GasLiquidity {
     type Err = ();
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        match s.trim().to_ascii_lowercase().as_str() {
-            "tier1" | "tier1-deep" | "deep" => Ok(Self::Tier1),
-            "tier2" | "tier2-medium" | "medium" => Ok(Self::Tier2),
-            "tier3" | "tier3-thin" | "thin" => Ok(Self::Tier3),
+        match s {
+            "tier1" => Ok(Self::Tier1),
+            "tier2" => Ok(Self::Tier2),
+            "tier3" => Ok(Self::Tier3),
             _ => Err(()),
         }
     }
@@ -5785,10 +5767,10 @@ pub enum GasVolatility {
 impl FromStr for GasVolatility {
     type Err = ();
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        match s.trim().to_ascii_lowercase().as_str() {
-            "stable" | "calm" => Ok(Self::Stable),
-            "elevated" | "stress" => Ok(Self::Elevated),
-            "dislocated" | "extreme" => Ok(Self::Dislocated),
+        match s {
+            "stable" => Ok(Self::Stable),
+            "elevated" => Ok(Self::Elevated),
+            "dislocated" => Ok(Self::Dislocated),
             _ => Err(()),
         }
     }
@@ -8214,12 +8196,12 @@ pub enum NoritoRpcStage {
     Ga,
 }
 impl NoritoRpcStage {
-    /// Parse a human-readable label into a stage variant.
+    /// Parse an exact first-release label into a stage variant.
     pub fn parse(label: &str) -> Option<Self> {
-        match label.trim().to_ascii_lowercase().as_str() {
+        match label {
             "disabled" => Some(Self::Disabled),
             "canary" => Some(Self::Canary),
-            "ga" | "general" | "general_availability" => Some(Self::Ga),
+            "ga" => Some(Self::Ga),
             _ => None,
         }
     }
@@ -8244,22 +8226,6 @@ impl_default!(NoritoRpcTransport => {
                 .expect("default Norito-RPC stage label is valid"),
         }
 });
-impl From<user::ToriiTransport> for ToriiTransport {
-    fn from(value: user::ToriiTransport) -> Self {
-        Self {
-            trusted_proxy_cidrs: value.trusted_proxy_cidrs,
-            http: ToriiHttpTransport {
-                max_connections: value.http.max_connections,
-                max_connections_per_ip: value.http.max_connections_per_ip,
-                header_read_timeout: value.http.header_read_timeout_ms.get(),
-                write_timeout: value.http.write_timeout_ms.get(),
-                max_headers: value.http.max_headers,
-                max_header_bytes: value.http.max_header_bytes,
-            },
-            norito_rpc: value.norito_rpc.into(),
-        }
-    }
-}
 impl_default!(ToriiMcp => {
         Self {
             enabled: defaults::torii::mcp::ENABLED,
@@ -8274,49 +8240,6 @@ impl_default!(ToriiMcp => {
             burst: defaults::torii::mcp::BURST.and_then(NonZeroU32::new),
         }
 });
-impl From<user::ToriiMcp> for ToriiMcp {
-    fn from(value: user::ToriiMcp) -> Self {
-        Self {
-            enabled: value.enabled,
-            max_request_bytes: value.max_request_bytes.max(1),
-            max_tools_per_list: value.max_tools_per_list.max(1),
-            profile: ToriiMcpProfile::parse(&value.profile).unwrap_or_else(|| {
-                panic!(
-                    "invalid torii.mcp.profile value `{}`. Expected read_only|writer|operator",
-                    value.profile
-                )
-            }),
-            expose_operator_routes: value.expose_operator_routes,
-            allow_tool_prefixes: value.allow_tool_prefixes,
-            deny_tool_prefixes: value.deny_tool_prefixes,
-            rate_per_minute: value
-                .rate_per_minute
-                .or(defaults::torii::mcp::RATE_PER_MINUTE)
-                .and_then(NonZeroU32::new),
-            burst: value
-                .burst
-                .or(defaults::torii::mcp::BURST)
-                .and_then(NonZeroU32::new),
-        }
-    }
-}
-impl From<user::ToriiNoritoRpcTransport> for NoritoRpcTransport {
-    fn from(value: user::ToriiNoritoRpcTransport) -> Self {
-        let stage = NoritoRpcStage::parse(&value.stage).unwrap_or_else(|| {
-            panic!(
-                "invalid torii.transport.norito_rpc.stage value `{}`. Expected disabled|canary|ga",
-                value.stage
-            )
-        });
-        Self {
-            enabled: value.enabled,
-            require_mtls: value.require_mtls,
-            allowed_clients: value.allowed_clients,
-            mtls_trusted_proxy_cidrs: value.mtls_trusted_proxy_cidrs,
-            stage,
-        }
-    }
-}
 /// Account-onboarding authority wiring exposed to Torii.
 #[derive(Debug, Clone)]
 pub struct AccountOnboarding {
@@ -11447,10 +11370,6 @@ pub struct Streaming {
     pub session_store_dir: PathBuf,
     /// Feature bitmask advertised during capability negotiation.
     pub feature_bits: u32,
-    /// Default SoraNet integration parameters applied to streaming privacy routes.
-    pub soranet: StreamingSoranet,
-    /// SoraVPN provisioning spool settings for streaming routes.
-    pub soravpn: StreamingSoravpn,
     /// Audio/video sync enforcement policy.
     pub sync: StreamingSync,
     /// Codec toggles (CABAC gating, trellis scopes, rANS artefact path).
@@ -11486,97 +11405,6 @@ impl StreamingSync {
 impl_default!(StreamingSync => {
         Self::from_defaults()
 });
-/// SoraNet bridge defaults applied when provisioning streaming privacy routes.
-#[derive(Debug, Clone)]
-pub struct StreamingSoranet {
-    /// Reserved exit-publication switch; V1 startup rejects `true`.
-    pub enabled: bool,
-    /// Exit relay multiaddr used when manifests omit explicit routing metadata.
-    pub exit_multiaddr: String,
-    /// Optional padding budget (milliseconds) applied to low-latency circuits.
-    pub padding_budget_ms: Option<u16>,
-    /// Access policy enforced by exit relays when bridging to Torii.
-    pub access_kind: StreamingSoranetAccessKind,
-    /// Domain-separated salt used to derive blinded channel identifiers.
-    pub channel_salt: String,
-    /// Reserved legacy spool path; V1 never creates or writes it.
-    pub provision_spool_dir: PathBuf,
-    /// Reserved spool budget; unused while V1 publication is disabled.
-    pub provision_spool_max_bytes: Bytes,
-    /// Segment window (inclusive) used when provisioning privacy routes.
-    pub provision_window_segments: u64,
-    /// Maximum number of queued privacy-route provisioning jobs.
-    pub provision_queue_capacity: u64,
-}
-impl StreamingSoranet {
-    /// Construct SoraNet defaults using the repository constants.
-    #[must_use]
-    pub fn from_defaults() -> Self {
-        Self {
-            enabled: defaults::streaming::soranet::ENABLED,
-            exit_multiaddr: defaults::streaming::soranet::EXIT_MULTIADDR.to_owned(),
-            padding_budget_ms: defaults::streaming::soranet::padding_budget_ms(),
-            access_kind: defaults::streaming::soranet::ACCESS_KIND
-                .parse::<StreamingSoranetAccessKind>()
-                .unwrap_or(StreamingSoranetAccessKind::Authenticated),
-            channel_salt: defaults::streaming::soranet::CHANNEL_SALT.to_owned(),
-            provision_spool_dir: PathBuf::from(defaults::streaming::soranet::PROVISION_SPOOL_DIR),
-            provision_spool_max_bytes: defaults::streaming::soranet::PROVISION_SPOOL_MAX_BYTES,
-            provision_window_segments: defaults::streaming::soranet::PROVISION_WINDOW_SEGMENTS,
-            provision_queue_capacity: defaults::streaming::soranet::PROVISION_QUEUE_CAPACITY,
-        }
-    }
-}
-/// SoraVPN provisioning spool settings for streaming routes.
-#[derive(Debug, Clone)]
-pub struct StreamingSoravpn {
-    /// Filesystem spool where SoraVPN route updates are staged for local VPN nodes.
-    pub provision_spool_dir: PathBuf,
-    /// Maximum on-disk footprint for the SoraVPN provision spool (0 = unlimited).
-    pub provision_spool_max_bytes: Bytes,
-}
-impl StreamingSoravpn {
-    /// Construct SoraVPN defaults using the repository constants.
-    #[must_use]
-    pub fn from_defaults() -> Self {
-        Self {
-            provision_spool_dir: PathBuf::from(defaults::streaming::soravpn::PROVISION_SPOOL_DIR),
-            provision_spool_max_bytes: defaults::streaming::soravpn::PROVISION_SPOOL_MAX_BYTES,
-        }
-    }
-}
-/// Access stance enforced by exit relays when bridging SoraNet circuits.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StreamingSoranetAccessKind {
-    /// Exit relays forward read-only content without viewer authentication.
-    ReadOnly,
-    /// Exit relays require viewer authentication/tickets.
-    Authenticated,
-}
-impl StreamingSoranetAccessKind {
-    /// Parse an access kind label (e.g., `authenticated`, `read-only`).
-    pub fn parse_label(label: &str) -> Option<Self> {
-        match label.to_ascii_lowercase().as_str() {
-            "authenticated" | "auth" => Some(Self::Authenticated),
-            "read-only" | "readonly" | "read_only" | "ro" => Some(Self::ReadOnly),
-            _ => None,
-        }
-    }
-    /// Render the access kind using the canonical label.
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::ReadOnly => "read-only",
-            Self::Authenticated => "authenticated",
-        }
-    }
-}
-impl FromStr for StreamingSoranetAccessKind {
-    type Err = ();
-    fn from_str(s: &str) -> core::result::Result<Self, Self::Err> {
-        Self::parse_label(s).ok_or(())
-    }
-}
 /// Settlement execution state and conversion routing configuration.
 #[derive(Debug, Clone, Default)]
 pub struct Settlement {

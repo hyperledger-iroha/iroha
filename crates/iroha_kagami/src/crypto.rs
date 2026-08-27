@@ -5,7 +5,7 @@ use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
 use std::path::PathBuf;
 use zeroize::Zeroizing;
 /// Use `Kagami` to generate cryptographic key-pairs.
-#[derive(ClapArgs, Debug, Clone)]
+#[derive(ClapArgs)]
 pub struct Args {
     /// An algorithm to use for the key-pair generation
     #[clap(default_value_t, long, short)]
@@ -222,7 +222,8 @@ mod tests {
     fn out_dir_writes_consistent_owner_only_custody_and_refuses_reuse() {
         use std::{fs, os::unix::fs::PermissionsExt as _, str::FromStr as _};
         let sandbox = tempfile::tempdir().expect("create key custody sandbox");
-        let out_dir = sandbox.path().join("custody");
+        let sandbox_root = fs::canonicalize(sandbox.path()).expect("canonical custody sandbox");
+        let out_dir = sandbox_root.join("custody");
         let args = Args {
             algorithm: AlgorithmArg(Algorithm::Ed25519),
             seed: Some("42".repeat(32)),
@@ -230,9 +231,7 @@ mod tests {
             pop: false,
         };
         let mut writer = BufWriter::new(Vec::new());
-        args.clone()
-            .run(&mut writer)
-            .expect("write key custody directory");
+        args.run(&mut writer).expect("write key custody directory");
         let output = String::from_utf8(writer.into_inner().expect("flush custody summary"))
             .expect("custody summary is UTF-8");
         let public_record =
@@ -266,9 +265,14 @@ mod tests {
                 0o600
             );
         }
-        let error = args
-            .run(&mut BufWriter::new(Vec::new()))
-            .expect_err("existing custody directory must never be reused");
+        let error = Args {
+            algorithm: AlgorithmArg(Algorithm::Ed25519),
+            seed: Some("42".repeat(32)),
+            out_dir,
+            pop: false,
+        }
+        .run(&mut BufWriter::new(Vec::new()))
+        .expect_err("existing custody directory must never be reused");
         assert!(error.to_string().contains("prepare key custody directory"));
     }
     #[test]

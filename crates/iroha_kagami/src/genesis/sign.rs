@@ -1,4 +1,4 @@
-use super::{ensure_npos_parameters, generate::ConsensusModeArg, require_v2_wire_protocol_only};
+use super::{ensure_npos_parameters, require_v2_wire_protocol_only};
 use crate::{
     Outcome, RunArgs,
     genesis::{PUBLIC_XOR_ALIAS, public_xor_profile_for_chain_id},
@@ -20,7 +20,7 @@ use iroha_core::{
     state::{State, World},
     sumeragi::{VotingBlock, network_topology::Topology},
 };
-use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair, PrivateKey, PublicKey};
+use iroha_crypto::{ExposedPrivateKey, Hash, KeyPair, PublicKey};
 use iroha_data_model::{
     account::address::{AccountAddress, ChainDiscriminantGuard},
     asset::AssetDefinitionAlias,
@@ -46,11 +46,11 @@ use std::{
 };
 use zeroize::Zeroize as _;
 /// Sign the genesis block
-#[derive(Clone, Debug, Parser)]
+#[derive(Parser)]
 pub struct Args {
     /// Path to genesis json file
     genesis_file: PathBuf,
-    /// Path to signed genesis output file in Norito format (stdout by default).
+    /// Path to signed genesis output file in canonical Norito wire format (stdout by default).
     #[clap(short, long, value_name("PATH"))]
     out_file: Option<PathBuf>,
     /// Persist the exact config-bound genesis manifest used to build the signed block.
@@ -75,43 +75,24 @@ pub struct Args {
     /// Repeatable flag: `--peer-pop <public_key=pop_hex>`
     #[clap(long = "peer-pop")]
     peer_pops: Vec<String>,
-    /// Private key hex (multihash payload, not prefixed) that matches the genesis public key.
-    #[clap(long, conflicts_with = "seed", value_name = "HEX")]
-    private_key: Option<String>,
     /// Owner-held mode-0600 file containing one canonical private-key multihash.
-    #[clap(
-        long,
-        conflicts_with_all = ["private_key", "seed"],
-        value_name = "PATH"
-    )]
-    private_key_file: Option<PathBuf>,
+    #[clap(long, value_name = "PATH")]
+    private_key_file: PathBuf,
     /// Public key that the selected private key must derive.
     ///
     /// Use this when the verifier key is distributed separately from the
     /// owner-held signing key, such as through container secrets.
     #[clap(long, value_name = "PUBLIC_KEY")]
     expected_public_key: Option<PublicKey>,
-    /// A 32-byte secret genesis key-generation seed encoded as 64 hexadecimal characters.
-    ///
-    /// This is a testing convenience. Production operators should prefer an
-    /// owner-held private-key file.
-    #[clap(long = "seed-hex", conflicts_with = "private_key", value_name = "HEX")]
-    seed: Option<String>,
     /// Deterministic genesis transaction creation-time base in Unix milliseconds.
     ///
     /// Omit this for a fresh wall-clock timestamp. Fixture generators should
     /// set it so repeated signing produces identical canonical wire bytes.
     #[clap(long, value_name = "MILLISECONDS")]
     creation_time_ms: Option<u64>,
-    /// Algorithm of the genesis key (must match the genesis public key).
-    #[clap(long, default_value = "ed25519", value_name = "ALGORITHM")]
-    algorithm: Algorithm,
     /// Optional peer config TOML used to derive the DA proof-policy bundle embedded into genesis.
     #[clap(long, value_name = "PATH")]
     config: Option<PathBuf>,
-    /// Select the consensus mode to stamp into the manifest (optional override).
-    #[clap(long, value_enum, value_name = "MODE")]
-    consensus_mode: Option<ConsensusModeArg>,
 }
 const DEFAULT_NPOS_BOOTSTRAP_DOMAIN: &str = "nexus.universal";
 const DEFAULT_NPOS_BOOTSTRAP_STAKE_ASSET_NAME: &str = "xor";
@@ -1124,7 +1105,6 @@ impl<T: Write> RunArgs<T> for Args {
                 }
             }
         }
-        let consensus_mode_override = self.consensus_mode.map(SumeragiConsensusMode::from);
         let mut genesis = RawGenesisTransaction::from_path(&self.genesis_file)?;
         // Keep every same-thread rebuild, config parse, and bound-manifest
         // serialization on the manifest's network. Staged execution re-enters
@@ -1139,7 +1119,7 @@ impl<T: Write> RunArgs<T> for Args {
         }
         let manifest_consensus_mode = genesis.consensus_mode();
         require_v2_wire_protocol_only(&genesis)?;
-        let consensus_mode = consensus_mode_override.unwrap_or(manifest_consensus_mode);
+        let consensus_mode = manifest_consensus_mode;
         if self.topology.is_some() {
             genesis = genesis.clear_topology();
         }
@@ -1185,12 +1165,7 @@ impl<T: Write> RunArgs<T> for Args {
                 "--peer-pop requires --topology to align PoPs with peers"
             ));
         }
-        let genesis_key_pair = load_genesis_key(
-            self.private_key.as_deref(),
-            self.private_key_file.as_deref(),
-            self.seed.as_deref(),
-            self.algorithm,
-        )?;
+        let genesis_key_pair = load_genesis_key_file(&self.private_key_file)?;
         ensure_expected_public_key(&genesis_key_pair, self.expected_public_key.as_ref())?;
         let da_proof_policies = resolve_da_proof_policies(peer_config.as_ref());
         let confidential_policy_hash = resolve_confidential_policy_hash(peer_config.as_ref());
@@ -1323,30 +1298,6 @@ impl<T: Write> RunArgs<T> for Args {
         Ok(())
     }
 }
-fn load_genesis_key(
-    private_key_hex: Option<&str>,
-    private_key_file: Option<&Path>,
-    seed: Option<&str>,
-    algorithm: Algorithm,
-) -> Result<KeyPair, color_eyre::eyre::Error> {
-    match (private_key_hex, private_key_file, seed) {
-        (Some(hex), None, None) => {
-            let sk = PrivateKey::from_hex(algorithm, hex).wrap_err("decode genesis private key")?;
-            KeyPair::from_private_key(sk).wrap_err("derive genesis key pair from private key")
-        }
-        (None, Some(path), None) => load_genesis_key_file(path, algorithm),
-        (None, None, Some(seed)) => {
-            let seed = crate::crypto::parse_keygen_seed_hex(seed)?;
-            KeyPair::try_from_seed(seed, algorithm).wrap_err("derive seeded genesis key pair")
-        }
-        (None, None, None) => Err(eyre!(
-            "genesis signing requires a private key; pass --private-key-file, --private-key, or --seed-hex"
-        )),
-        _ => Err(eyre!(
-            "genesis signing key sources are mutually exclusive; select exactly one"
-        )),
-    }
-}
 fn ensure_expected_public_key(
     key_pair: &KeyPair,
     expected_public_key: Option<&PublicKey>,
@@ -1360,20 +1311,14 @@ fn ensure_expected_public_key(
     }
     Ok(())
 }
-fn load_genesis_key_file(
-    path: &Path,
-    algorithm: Algorithm,
-) -> Result<KeyPair, color_eyre::eyre::Error> {
+fn load_genesis_key_file(path: &Path) -> Result<KeyPair, color_eyre::eyre::Error> {
     let mut raw = zeroize::Zeroizing::new(crate::secure_fs::read_private_file(path)?);
     let text =
         std::str::from_utf8(raw.as_slice()).wrap_err("genesis private-key file is not UTF-8")?;
     let canonical = text.strip_suffix('\n').ok_or_else(|| {
         eyre!("genesis private-key file must contain one canonical key and a final newline")
     })?;
-    if canonical.is_empty()
-        || canonical.chars().any(char::is_whitespace)
-        || format!("{canonical}\n").as_bytes() != raw.as_slice()
-    {
+    if canonical.is_empty() || canonical.chars().any(char::is_whitespace) {
         return Err(eyre!(
             "genesis private-key file is not one canonical key record"
         ));
@@ -1381,10 +1326,9 @@ fn load_genesis_key_file(
     let exposed = canonical
         .parse::<ExposedPrivateKey>()
         .wrap_err("decode canonical genesis private-key file")?;
-    if exposed.to_string() != canonical || exposed.0.algorithm() != algorithm {
-        return Err(eyre!(
-            "genesis private-key file encoding or algorithm is not canonical"
-        ));
+    let canonical_encoding = zeroize::Zeroizing::new(exposed.to_string());
+    if canonical_encoding.as_str() != canonical {
+        return Err(eyre!("genesis private-key file encoding is not canonical"));
     }
     raw.zeroize();
     KeyPair::from_private_key(exposed.0).wrap_err("derive genesis key pair from private-key file")
@@ -1478,7 +1422,7 @@ fn decode_hex(s: &str) -> Result<Vec<u8>, color_eyre::eyre::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_crypto::{KeyPair as CryptoKeyPair, bls_normal_pop_prove};
+    use iroha_crypto::{Algorithm, KeyPair as CryptoKeyPair, bls_normal_pop_prove};
     use iroha_data_model::{
         ChainId,
         asset::AssetDefinitionAlias,
@@ -1699,23 +1643,22 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         genesis_path: &str,
         config_path: Option<&str>,
     ) -> ConsensusHandshakeMetaTest {
-        const SAMPLE_GENESIS_PRIVATE_KEY: &str =
-            "82B3BDE54AEBECA4146257DA0DE8D59D8E46D5FE34887DCD8072866792FCB3AD";
         const DEV_GENESIS_SEED: &str =
             "435e15ae8cca7d8ce54313e1ed60b98bd3be7832bbaa6e33b358068b61f6ea97";
         const NEXUS_GENESIS_SEED: &str =
             "ac74a176f589853d5a7488ae8c04caee8b99b408a98c1d2971b3d525e9f0e91c";
-        let (private_key, seed) = match genesis_path {
-            "defaults/kagami/iroha3-dev/genesis.json" => (None, Some(DEV_GENESIS_SEED.to_owned())),
-            "defaults/kagami/iroha3-nexus/genesis.json" => {
-                (None, Some(NEXUS_GENESIS_SEED.to_owned()))
-            }
-            "defaults/genesis.json"
-            | "defaults/nexus/genesis.json"
-            | "configs/soranexus/nexus/genesis.json" => {
-                (Some(SAMPLE_GENESIS_PRIVATE_KEY.to_owned()), None)
-            }
-            _ => (Some(test_private_key_hex()), None),
+        let key_file_from_seed = |seed: &str| {
+            let key_pair = KeyPair::try_from_seed(
+                crate::crypto::parse_keygen_seed_hex(seed).expect("decode checked-in fixture seed"),
+                Algorithm::Ed25519,
+            )
+            .expect("derive checked-in fixture key");
+            test_private_key_file_for(&key_pair)
+        };
+        let private_key_file = match genesis_path {
+            "defaults/kagami/iroha3-dev/genesis.json" => key_file_from_seed(DEV_GENESIS_SEED),
+            "defaults/kagami/iroha3-nexus/genesis.json" => key_file_from_seed(NEXUS_GENESIS_SEED),
+            _ => test_private_key_file(),
         };
         let rendered_config =
             config_path.map(|path| locally_loadable_profile_config(&root.join(path)));
@@ -1726,16 +1669,12 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             expected_hash_out: None,
             topology: None,
             peer_pops: Vec::new(),
-            private_key,
-            private_key_file: None,
+            private_key_file,
             expected_public_key: None,
-            seed,
             creation_time_ms: None,
-            algorithm: Algorithm::Ed25519,
             config: rendered_config
                 .as_ref()
                 .map(|(_, rendered)| rendered.clone()),
-            consensus_mode: None,
         };
         let mut writer = BufWriter::new(Vec::new());
         args.run(&mut writer)
@@ -1865,7 +1804,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     #[test]
     fn signing_profile_hash_placeholder_is_never_a_runtime_trust_root() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let path = root.join("defaults/kagami/iroha3-dev/config.toml");
+        let path = root.join("defaults/kagami/iroha3-dev/peer0.toml");
         let runtime_source = TomlSource::from_file(&path).expect("read signing profile");
         assert!(
             actual::Root::from_toml_source(runtime_source).is_err(),
@@ -1901,7 +1840,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         assert_checked_in_profile_commitment_matches_production_signing(
             &root,
             "defaults/kagami/iroha3-dev/genesis.json",
-            "defaults/kagami/iroha3-dev/config.toml",
+            "defaults/kagami/iroha3-dev/peer0.toml",
         );
     }
     #[test]
@@ -1911,7 +1850,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     )]
     fn signer_and_final_network_id_restaging_have_exact_context_parity() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let mut config = checked_in_config(&root.join("defaults/kagami/iroha3-dev/config.toml"));
+        let mut config = checked_in_config(&root.join("defaults/kagami/iroha3-dev/peer0.toml"));
         let genesis_key_pair = KeyPair::try_from_seed(vec![0x6D; 32], Algorithm::Ed25519)
             .expect("derive deterministic genesis key");
         config.genesis.public_key = genesis_key_pair.public_key().clone();
@@ -2056,7 +1995,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             ("defaults/genesis.json", None),
             (
                 "defaults/kagami/iroha3-dev/genesis.json",
-                Some("defaults/kagami/iroha3-dev/config.toml"),
+                Some("defaults/kagami/iroha3-dev/peer0.toml"),
             ),
             (
                 "defaults/kagami/iroha3-nexus/genesis.json",
@@ -2142,14 +2081,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 expected_hash_out: None,
                 topology: None,
                 peer_pops: Vec::new(),
-                private_key: Some(test_private_key_hex()),
-                private_key_file: None,
+                private_key_file: test_private_key_file(),
                 expected_public_key: None,
-                seed: None,
                 creation_time_ms: None,
-                algorithm: Algorithm::Ed25519,
                 config: None,
-                consensus_mode: None,
             };
             let error = args
                 .run(&mut BufWriter::new(Vec::new()))
@@ -2171,14 +2106,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             expected_hash_out: None,
             topology: None,
             peer_pops: Vec::new(),
-            private_key: Some(test_private_key_hex()),
-            private_key_file: None,
+            private_key_file: test_private_key_file(),
             expected_public_key: None,
-            seed: None,
             creation_time_ms: None,
-            algorithm: Algorithm::Ed25519,
             config: None,
-            consensus_mode: None,
         };
         current_args
             .run(&mut BufWriter::new(Vec::new()))
@@ -2196,14 +2127,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 expected_hash_out: None,
                 topology: None,
                 peer_pops: Vec::new(),
-                private_key: Some(test_private_key_hex()),
-                private_key_file: None,
+                private_key_file: test_private_key_file(),
                 expected_public_key: None,
-                seed: None,
                 creation_time_ms: None,
-                algorithm: Algorithm::Ed25519,
                 config: None,
-                consensus_mode: None,
             };
             let error = args.run(&mut BufWriter::new(Vec::new())).expect_err(
                 "retired or unknown future scalar protocol version must be rejected before signing",
@@ -2219,7 +2146,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     #[test]
     fn explicit_creation_time_repeats_signed_wire_bytes() {
         let genesis_file = minimal_genesis_file();
-        let private_key = test_private_key_hex();
+        let private_key_file = test_private_key_file();
         let sign = || {
             let args = Args {
                 genesis_file: genesis_file.clone(),
@@ -2228,14 +2155,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 expected_hash_out: None,
                 topology: None,
                 peer_pops: Vec::new(),
-                private_key: Some(private_key.clone()),
-                private_key_file: None,
+                private_key_file: private_key_file.clone(),
                 expected_public_key: None,
-                seed: None,
                 creation_time_ms: Some(1_700_000_000_000),
-                algorithm: Algorithm::Ed25519,
                 config: None,
-                consensus_mode: None,
             };
             let mut writer = BufWriter::new(Vec::new());
             args.run(&mut writer).expect("sign at fixed creation time");
@@ -2267,14 +2190,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             expected_hash_out: None,
             topology: None,
             peer_pops: vec!["pk=00".to_string()],
-            private_key: Some(test_private_key_hex()),
-            private_key_file: None,
+            private_key_file: test_private_key_file(),
             expected_public_key: None,
-            seed: None,
             creation_time_ms: None,
-            algorithm: Algorithm::Ed25519,
             config: None,
-            consensus_mode: None,
         };
         let mut sink = BufWriter::new(Vec::new());
         let err = args
@@ -2298,14 +2217,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             expected_hash_out: None,
             topology: Some(topology_json),
             peer_pops,
-            private_key: Some(test_private_key_hex()),
-            private_key_file: None,
+            private_key_file: test_private_key_file(),
             expected_public_key: None,
-            seed: None,
             creation_time_ms: None,
-            algorithm: Algorithm::Ed25519,
             config: None,
-            consensus_mode: None,
         };
         let mut sink = BufWriter::new(Vec::new());
         let err = args.run(&mut sink).expect_err("duplicate pop should fail");
@@ -2352,17 +2267,13 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let temp = tempfile::tempdir().expect("bound manifest temp dir");
         let bound_manifest_path = temp.path().join("genesis.bound.json");
         let genesis_file = minimal_genesis_file();
-        let seed = "41".repeat(32);
-        let genesis_key_pair = KeyPair::try_from_seed(
-            crate::crypto::parse_keygen_seed_hex(&seed).expect("decode fixture seed"),
-            Algorithm::Ed25519,
-        )
-        .expect("derive genesis signing key");
+        let genesis_key_pair = KeyPair::try_from_seed(vec![0x41; 32], Algorithm::Ed25519)
+            .expect("derive genesis signing key");
         let unbound_manifest = RawGenesisTransaction::from_path(&genesis_file)
             .expect("parse unbound genesis manifest");
         let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         let config_source =
-            fs::read_to_string(workspace_root.join("defaults/kagami/iroha3-dev/config.toml"))
+            fs::read_to_string(workspace_root.join("defaults/kagami/iroha3-dev/peer0.toml"))
                 .expect("read current peer config fixture");
         let mut config_table = config_source
             .parse::<toml::Table>()
@@ -2399,14 +2310,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             expected_hash_out: None,
             topology: Some(norito::json::to_json(&topology).expect("serialize topology override")),
             peer_pops,
-            private_key: None,
-            private_key_file: None,
+            private_key_file: test_private_key_file_for(&genesis_key_pair),
             expected_public_key: None,
-            seed: Some(seed),
             creation_time_ms: None,
-            algorithm: Algorithm::Ed25519,
             config: Some(config_path),
-            consensus_mode: None,
         };
         let mut writer = BufWriter::new(Vec::new());
         args.run(&mut writer).expect("sign genesis");
@@ -2475,14 +2382,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             expected_hash_out: None,
             topology: Some("not valid json".to_owned()),
             peer_pops: Vec::new(),
-            private_key: Some(test_private_key_hex()),
-            private_key_file: None,
+            private_key_file: test_private_key_file(),
             expected_public_key: None,
-            seed: None,
             creation_time_ms: None,
-            algorithm: Algorithm::Ed25519,
             config: None,
-            consensus_mode: None,
         };
         let _ = args
             .run(&mut BufWriter::new(Vec::new()))
@@ -2506,14 +2409,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             expected_hash_out: None,
             topology: None,
             peer_pops: Vec::new(),
-            private_key: Some(test_private_key_hex()),
-            private_key_file: None,
+            private_key_file: test_private_key_file(),
             expected_public_key: None,
-            seed: None,
             creation_time_ms: None,
-            algorithm: Algorithm::Ed25519,
             config: None,
-            consensus_mode: None,
         };
         let _ = args
             .run(&mut BufWriter::new(Vec::new()))
@@ -2537,14 +2436,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             expected_hash_out: None,
             topology: None,
             peer_pops: Vec::new(),
-            private_key: Some(test_private_key_hex()),
-            private_key_file: None,
+            private_key_file: test_private_key_file(),
             expected_public_key: None,
-            seed: None,
             creation_time_ms: None,
-            algorithm: Algorithm::Ed25519,
             config: None,
-            consensus_mode: None,
         };
         let error = args
             .run(&mut BufWriter::new(Vec::new()))
@@ -2582,14 +2477,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             expected_hash_out: Some(identity_path.clone()),
             topology: None,
             peer_pops: Vec::new(),
-            private_key: Some(test_private_key_hex()),
-            private_key_file: None,
+            private_key_file: test_private_key_file(),
             expected_public_key: None,
-            seed: None,
             creation_time_ms: None,
-            algorithm: Algorithm::Ed25519,
             config: None,
-            consensus_mode: None,
         };
         let error = args
             .run(&mut BufWriter::new(Vec::new()))
@@ -2636,14 +2527,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             expected_hash_out: Some(expected_hash_path.clone()),
             topology: None,
             peer_pops: Vec::new(),
-            private_key: Some(test_private_key_hex()),
-            private_key_file: None,
+            private_key_file: test_private_key_file(),
             expected_public_key: None,
-            seed: None,
             creation_time_ms: None,
-            algorithm: Algorithm::Ed25519,
             config: None,
-            consensus_mode: None,
         };
         let mut writer = BufWriter::new(Vec::new());
         args.run(&mut writer)
@@ -2696,31 +2583,11 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         );
     }
     #[test]
-    fn load_genesis_key_accepts_seed_and_algorithm() {
-        let seed = "42".repeat(32);
-        let kp = load_genesis_key(None, None, Some(&seed), Algorithm::Secp256k1)
-            .expect("seed path should work");
-        assert_eq!(
-            kp.public_key()
-                .try_algorithm()
-                .expect("fixture public key must be valid"),
-            Algorithm::Secp256k1
-        );
-    }
-    #[test]
     fn pop_hex_decoder_accepts_one_optional_prefix_and_rejects_malformed_input() {
         assert_eq!(decode_hex("a50f").expect("bare hex"), [0xA5, 0x0F]);
         assert_eq!(decode_hex("0xa50f").expect("prefixed hex"), [0xA5, 0x0F]);
         assert!(decode_hex("0x0xa50f").is_err());
         assert!(decode_hex("abc").is_err());
-    }
-    #[test]
-    fn load_genesis_key_rejects_programmatic_source_conflicts() {
-        let private_key = test_private_key_hex();
-        let seed = "42".repeat(32);
-        let error = load_genesis_key(Some(&private_key), None, Some(&seed), Algorithm::Ed25519)
-            .expect_err("conflicting sources must not rely on Clap validation");
-        assert!(error.to_string().contains("mutually exclusive"));
     }
     #[test]
     fn expected_public_key_must_match_selected_private_key() {
@@ -2746,85 +2613,28 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             expected_hash_out: None,
             topology: Some("not valid json".to_owned()),
             peer_pops: Vec::new(),
-            private_key: Some(test_private_key_hex()),
-            private_key_file: None,
+            private_key_file: test_private_key_file(),
             expected_public_key: None,
-            seed: None,
             creation_time_ms: None,
-            algorithm: Algorithm::Ed25519,
             config: None,
-            consensus_mode: None,
         };
         let mut writer = BufWriter::new(Vec::new());
         let result = args.run(&mut writer);
         assert!(result.is_err());
     }
     #[test]
-    fn run_requires_key_material() {
-        let args = Args {
-            genesis_file: npos_genesis_file(),
-            out_file: None,
-            bound_manifest_out: None,
-            expected_hash_out: None,
-            topology: None,
-            peer_pops: Vec::new(),
-            private_key: None,
-            private_key_file: None,
-            expected_public_key: None,
-            seed: None,
-            creation_time_ms: None,
-            algorithm: Algorithm::Ed25519,
-            config: None,
-            consensus_mode: None,
-        };
-        let mut writer = BufWriter::new(Vec::new());
-        let result = args.run(&mut writer);
-        assert!(result.is_err(), "signing should require key material");
-    }
-    #[test]
     fn sign_requires_consensus_mode_in_manifest() {
         let args = Args {
-            genesis_file: legacy_genesis_file_missing_consensus_mode(),
+            genesis_file: invalid_genesis_file_missing_consensus_mode(),
             out_file: None,
             bound_manifest_out: None,
             expected_hash_out: None,
             topology: None,
             peer_pops: Vec::new(),
-            private_key: Some(test_private_key_hex()),
-            private_key_file: None,
+            private_key_file: test_private_key_file(),
             expected_public_key: None,
-            seed: None,
             creation_time_ms: None,
-            algorithm: Algorithm::Ed25519,
             config: None,
-            consensus_mode: None,
-        };
-        let mut writer = BufWriter::new(Vec::new());
-        let err = args
-            .run(&mut writer)
-            .expect_err("missing consensus_mode should be rejected");
-        assert!(
-            err.to_string().contains("consensus_mode"),
-            "unexpected error: {err}"
-        );
-    }
-    #[test]
-    fn sign_rejects_missing_consensus_mode_even_with_override() {
-        let args = Args {
-            genesis_file: legacy_genesis_file_missing_consensus_mode(),
-            out_file: None,
-            bound_manifest_out: None,
-            expected_hash_out: None,
-            topology: None,
-            peer_pops: Vec::new(),
-            private_key: Some(test_private_key_hex()),
-            private_key_file: None,
-            expected_public_key: None,
-            seed: None,
-            creation_time_ms: None,
-            algorithm: Algorithm::Ed25519,
-            config: None,
-            consensus_mode: Some(ConsensusModeArg::Permissioned),
         };
         let mut writer = BufWriter::new(Vec::new());
         let err = args
@@ -2848,14 +2658,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             expected_hash_out: None,
             topology: Some(topology_json),
             peer_pops: vec![peer_pops[0].clone()],
-            private_key: Some(test_private_key_hex()),
-            private_key_file: None,
+            private_key_file: test_private_key_file(),
             expected_public_key: None,
-            seed: None,
             creation_time_ms: None,
-            algorithm: Algorithm::Ed25519,
             config: None,
-            consensus_mode: None,
         };
         let mut writer = BufWriter::new(Vec::new());
         let result = args.run(&mut writer);
@@ -2894,14 +2700,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             expected_hash_out: None,
             topology: Some(topology_json),
             peer_pops,
-            private_key: Some(test_private_key_hex()),
-            private_key_file: None,
+            private_key_file: test_private_key_file(),
             expected_public_key: None,
-            seed: None,
             creation_time_ms: None,
-            algorithm: Algorithm::Ed25519,
             config: None,
-            consensus_mode: None,
         };
         let mut writer = BufWriter::new(Vec::new());
         args.run(&mut writer).expect("sign should succeed");
@@ -2947,12 +2749,8 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let genesis_file = tempfile::NamedTempFile::new().expect("create temp genesis file");
         let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis manifest");
         fs::write(genesis_file.path(), json).expect("write genesis json");
-        let seed = "43".repeat(32);
-        let key_pair = KeyPair::try_from_seed(
-            crate::crypto::parse_keygen_seed_hex(&seed).expect("decode fixture seed"),
-            Algorithm::Ed25519,
-        )
-        .expect("derive checked genesis fixture key");
+        let key_pair = KeyPair::try_from_seed(vec![0x43; 32], Algorithm::Ed25519)
+            .expect("derive checked genesis fixture key");
         let expected = manifest
             .clone()
             .build_and_sign_with_confidential_policy_hash(
@@ -2967,14 +2765,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             expected_hash_out: None,
             topology: None,
             peer_pops: vec![],
-            private_key: None,
-            private_key_file: None,
+            private_key_file: test_private_key_file_for(&key_pair),
             expected_public_key: None,
-            seed: Some(seed),
             creation_time_ms: None,
-            algorithm: Algorithm::Ed25519,
             config: None,
-            consensus_mode: None,
         };
         let mut writer = BufWriter::new(Vec::new());
         args.run(&mut writer).expect("sign should succeed");
@@ -3041,7 +2835,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             crate::localnet::GENESIS_SEED,
         )
         .expect("derive generated localnet genesis key");
-        let (_, genesis_private_key_bytes) = genesis_private_key.0.to_bytes();
         let genesis_key_pair = KeyPair::new(genesis_public_key, genesis_private_key.0.clone())
             .expect("reconstruct generated localnet genesis key pair");
         let mut invalid_compliance_config = config.clone();
@@ -3074,14 +2867,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             expected_hash_out: None,
             topology: None,
             peer_pops: vec![],
-            private_key: Some(hex::encode(genesis_private_key_bytes)),
-            private_key_file: None,
+            private_key_file: test_private_key_file_for(&genesis_key_pair),
             expected_public_key: None,
-            seed: None,
             creation_time_ms: None,
-            algorithm: Algorithm::Ed25519,
             config: Some(config_path),
-            consensus_mode: None,
         };
         let mut writer = BufWriter::new(Vec::new());
         args.run(&mut writer)
@@ -3187,11 +2976,9 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let _chain_discriminant = staged_genesis_chain_discriminant(&manifest);
         let expected_escrow = configured_npos_bootstrap_escrow_account_id(&manifest, None)
             .expect("resolve default staking escrow");
-        let private_key_hex = test_private_key_hex();
-        let genesis_key_pair =
-            load_genesis_key(Some(&private_key_hex), None, None, Algorithm::Ed25519)
-                .expect("load fixture genesis signer");
-        let legacy_orphan = AccountId::new(
+        let genesis_key_pair = test_genesis_key_pair();
+        let private_key_file = test_private_key_file_for(&genesis_key_pair);
+        let public_key_derived_orphan = AccountId::new(
             KeyPair::try_from_seed(
                 genesis_key_pair
                     .public_key()
@@ -3201,7 +2988,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                     .collect(),
                 Algorithm::default(),
             )
-            .expect("derive legacy orphan identity")
+            .expect("derive prohibited public-key-based orphan identity")
             .public_key()
             .clone(),
         );
@@ -3214,14 +3001,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             expected_hash_out: None,
             topology: Some(topology_json),
             peer_pops,
-            private_key: Some(private_key_hex),
-            private_key_file: None,
+            private_key_file,
             expected_public_key: None,
-            seed: None,
             creation_time_ms: None,
-            algorithm: Algorithm::Ed25519,
             config: None,
-            consensus_mode: None,
         };
         let mut writer = BufWriter::new(Vec::new());
         args.run(&mut writer).expect("sign should succeed");
@@ -3267,7 +3050,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             "auto-bootstrap must register the escrow account selected by nexus.staking"
         );
         assert!(
-            !registered_accounts.contains(&legacy_orphan),
+            !registered_accounts.contains(&public_key_derived_orphan),
             "auto-bootstrap must not emit an orphan account derived from public genesis data"
         );
     }
@@ -3324,14 +3107,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             expected_hash_out: None,
             topology: Some(topology_json),
             peer_pops,
-            private_key: Some(test_private_key_hex()),
-            private_key_file: None,
+            private_key_file: test_private_key_file(),
             expected_public_key: None,
-            seed: None,
             creation_time_ms: None,
-            algorithm: Algorithm::Ed25519,
             config: Some(nexus_profile_with_stake_asset_id("xor#universal")),
-            consensus_mode: None,
         };
         let mut writer = BufWriter::new(Vec::new());
         args.run(&mut writer).expect("sign should succeed");
@@ -3362,7 +3141,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         );
         assert!(
             !registered_asset_ids.contains(&default_npos_bootstrap_stake_asset_id()),
-            "alias-backed stake asset should not force the legacy localnet bootstrap asset"
+            "alias-backed stake asset should not force the synthetic localnet bootstrap asset"
         );
     }
     #[test]
@@ -3380,14 +3159,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             expected_hash_out: None,
             topology: Some(topology_json),
             peer_pops,
-            private_key: Some(test_private_key_hex()),
-            private_key_file: None,
+            private_key_file: test_private_key_file(),
             expected_public_key: None,
-            seed: None,
             creation_time_ms: None,
-            algorithm: Algorithm::Ed25519,
             config: None,
-            consensus_mode: None,
         };
         let mut writer = BufWriter::new(Vec::new());
         args.run(&mut writer).expect("sign should succeed");
@@ -3443,14 +3218,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             expected_hash_out: None,
             topology: Some(topology_json),
             peer_pops,
-            private_key: Some(test_private_key_hex()),
-            private_key_file: None,
+            private_key_file: test_private_key_file(),
             expected_public_key: None,
-            seed: None,
             creation_time_ms: None,
-            algorithm: Algorithm::Ed25519,
             config: None,
-            consensus_mode: None,
         };
         let mut writer = BufWriter::new(Vec::new());
         let err = args
@@ -3472,16 +3243,12 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             expected_hash_out: None,
             topology: Some(topology_json),
             peer_pops,
-            private_key: Some(test_private_key_hex()),
-            private_key_file: None,
+            private_key_file: test_private_key_file(),
             expected_public_key: None,
-            seed: None,
             creation_time_ms: None,
-            algorithm: Algorithm::Ed25519,
             config: Some(nexus_profile_with_stake_asset_id(
                 "61CtjvNd9T3THAR65GsMVHr82Bjc",
             )),
-            consensus_mode: None,
         };
         let mut writer = BufWriter::new(Vec::new());
         let err = args
@@ -3504,14 +3271,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             expected_hash_out: None,
             topology: Some(topology_json),
             peer_pops,
-            private_key: Some(test_private_key_hex()),
-            private_key_file: None,
+            private_key_file: test_private_key_file(),
             expected_public_key: None,
-            seed: None,
             creation_time_ms: None,
-            algorithm: Algorithm::Ed25519,
             config: None,
-            consensus_mode: None,
         };
         let mut writer = BufWriter::new(Vec::new());
         let err = args
@@ -3533,17 +3296,13 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             expected_hash_out: None,
             topology: Some(topology_json),
             peer_pops,
-            private_key: Some(test_private_key_hex()),
-            private_key_file: None,
+            private_key_file: test_private_key_file(),
             expected_public_key: None,
-            seed: None,
             creation_time_ms: None,
-            algorithm: Algorithm::Ed25519,
             config: Some(nexus_profile_with_validator_modes(
                 "admin_managed",
                 "admin_managed",
             )),
-            consensus_mode: None,
         };
         let mut writer = BufWriter::new(Vec::new());
         args.run(&mut writer).expect("sign should succeed");
@@ -3578,14 +3337,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             expected_hash_out: None,
             topology: Some(topology_json),
             peer_pops,
-            private_key: Some(test_private_key_hex()),
-            private_key_file: None,
+            private_key_file: test_private_key_file(),
             expected_public_key: None,
-            seed: None,
             creation_time_ms: None,
-            algorithm: Algorithm::Ed25519,
             config: None,
-            consensus_mode: None,
         };
         let mut writer = BufWriter::new(Vec::new());
         args.run(&mut writer).expect("sign should succeed");
@@ -3624,14 +3379,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             expected_hash_out: None,
             topology: None,
             peer_pops: Vec::new(),
-            private_key: Some(test_private_key_hex()),
-            private_key_file: None,
+            private_key_file: test_private_key_file(),
             expected_public_key: None,
-            seed: None,
             creation_time_ms: None,
-            algorithm: Algorithm::Ed25519,
             config: None,
-            consensus_mode: Some(ConsensusModeArg::Npos),
         };
         let mut writer = BufWriter::new(Vec::new());
         let err = args
@@ -3651,14 +3402,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             expected_hash_out: None,
             topology: None,
             peer_pops: Vec::new(),
-            private_key: Some(test_private_key_hex()),
-            private_key_file: None,
+            private_key_file: test_private_key_file(),
             expected_public_key: None,
-            seed: None,
             creation_time_ms: None,
-            algorithm: Algorithm::Ed25519,
             config: None,
-            consensus_mode: None,
         };
         let mut writer = BufWriter::new(Vec::new());
         args.run(&mut writer)
@@ -3711,14 +3458,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             expected_hash_out: None,
             topology: None,
             peer_pops: Vec::new(),
-            private_key: Some(test_private_key_hex()),
-            private_key_file: None,
+            private_key_file: test_private_key_file(),
             expected_public_key: None,
-            seed: None,
             creation_time_ms: None,
-            algorithm: Algorithm::Ed25519,
             config: Some(nexus_profile_config_path()),
-            consensus_mode: None,
         };
         let mut writer = BufWriter::new(Vec::new());
         args.run(&mut writer).expect("sign should succeed");
@@ -3744,14 +3487,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             expected_hash_out: None,
             topology: None,
             peer_pops: Vec::new(),
-            private_key: Some(test_private_key_hex()),
-            private_key_file: None,
+            private_key_file: test_private_key_file(),
             expected_public_key: None,
-            seed: None,
             creation_time_ms: None,
-            algorithm: Algorithm::Ed25519,
             config: None,
-            consensus_mode: None,
         };
         let mut writer = BufWriter::new(Vec::new());
         args.run(&mut writer)
@@ -3826,9 +3565,9 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let (_file, path) = genesis_file.keep().expect("persist temp genesis");
         path
     }
-    fn legacy_genesis_file_missing_consensus_mode() -> PathBuf {
+    fn invalid_genesis_file_missing_consensus_mode() -> PathBuf {
         let mut genesis_file = tempfile::Builder::new()
-            .prefix("kagami-genesis-legacy-")
+            .prefix("kagami-genesis-invalid-")
             .tempfile()
             .expect("create temp genesis file");
         let genesis_json = r#"{
@@ -4023,7 +3762,12 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     #[test]
     fn private_key_file_round_trips_owner_only_canonical_material() {
         use std::os::unix::fs::PermissionsExt as _;
-        let temp = tempfile::tempdir().expect("private key temp dir");
+        let temp = tempfile::Builder::new()
+            .prefix(".genesis-key-roundtrip-")
+            .tempdir_in(env!("CARGO_MANIFEST_DIR"))
+            .expect("private key temp dir");
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700))
+            .expect("harden private key temp dir");
         let key_pair = checked_genesis_sign_keypair_with_algorithm(Algorithm::Ed25519);
         let canonical = ExposedPrivateKey(key_pair.private_key().clone()).to_string();
         let path = temp.path().join("genesis.private_key");
@@ -4038,30 +3782,34 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 & 0o777,
             0o600
         );
-        let loaded =
-            load_genesis_key_file(&path, Algorithm::Ed25519).expect("load canonical private key");
+        let loaded = load_genesis_key_file(&path).expect("load canonical private key");
         assert_eq!(loaded.public_key(), key_pair.public_key());
     }
     #[cfg(unix)]
     #[test]
-    fn private_key_file_rejects_unsafe_mode_symlink_hardlink_and_whitespace() {
+    fn private_key_file_rejects_unsafe_mode_links_whitespace_and_oversize() {
         use std::os::unix::fs::{PermissionsExt as _, symlink};
-        let temp = tempfile::tempdir().expect("private key temp dir");
+        let temp = tempfile::Builder::new()
+            .prefix(".genesis-key-rejections-")
+            .tempdir_in(env!("CARGO_MANIFEST_DIR"))
+            .expect("private key temp dir");
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700))
+            .expect("harden private key temp dir");
         let key_pair = checked_genesis_sign_keypair_with_algorithm(Algorithm::Ed25519);
         let canonical = ExposedPrivateKey(key_pair.private_key().clone()).to_string();
         let unsafe_mode = temp.path().join("unsafe-mode.key");
         fs::write(&unsafe_mode, format!("{canonical}\n")).expect("write unsafe key");
         fs::set_permissions(&unsafe_mode, fs::Permissions::from_mode(0o644))
             .expect("set unsafe mode");
-        assert!(load_genesis_key_file(&unsafe_mode, Algorithm::Ed25519).is_err());
+        assert!(load_genesis_key_file(&unsafe_mode).is_err());
         fs::set_permissions(&unsafe_mode, fs::Permissions::from_mode(0o600))
             .expect("set safe mode");
         let symlink_path = temp.path().join("symlink.key");
         symlink(&unsafe_mode, &symlink_path).expect("create symlink");
-        assert!(load_genesis_key_file(&symlink_path, Algorithm::Ed25519).is_err());
+        assert!(load_genesis_key_file(&symlink_path).is_err());
         let hardlink_path = temp.path().join("hardlink.key");
         fs::hard_link(&unsafe_mode, &hardlink_path).expect("create hardlink");
-        assert!(load_genesis_key_file(&unsafe_mode, Algorithm::Ed25519).is_err());
+        assert!(load_genesis_key_file(&unsafe_mode).is_err());
         fs::remove_file(&hardlink_path).expect("remove hardlink");
         let whitespace = temp.path().join("whitespace.key");
         crate::secure_fs::write_private_file_atomic(
@@ -4069,11 +3817,45 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             format!(" {canonical}\n").as_bytes(),
         )
         .expect("write whitespace key");
-        assert!(load_genesis_key_file(&whitespace, Algorithm::Ed25519).is_err());
+        assert!(load_genesis_key_file(&whitespace).is_err());
+        let oversized = temp.path().join("oversized.key");
+        fs::write(&oversized, vec![b'A'; 1024 * 1024 + 1]).expect("write oversized key");
+        fs::set_permissions(&oversized, fs::Permissions::from_mode(0o600))
+            .expect("set oversized key mode");
+        assert!(load_genesis_key_file(&oversized).is_err());
     }
-    fn test_private_key_hex() -> String {
-        let kp = checked_genesis_sign_keypair_with_algorithm(Algorithm::Ed25519);
-        let (_alg, bytes) = kp.private_key().to_bytes();
-        hex::encode(bytes)
+    fn test_genesis_key_pair() -> KeyPair {
+        const PRIVATE_KEY: &str =
+            "80262082B3BDE54AEBECA4146257DA0DE8D59D8E46D5FE34887DCD8072866792FCB3AD";
+        let exposed = PRIVATE_KEY
+            .parse::<ExposedPrivateKey>()
+            .expect("parse canonical fixture private key");
+        KeyPair::from_private_key(exposed.0).expect("derive fixture genesis key pair")
+    }
+    fn test_private_key_file() -> PathBuf {
+        test_private_key_file_for(&test_genesis_key_pair())
+    }
+    fn test_private_key_file_for(key_pair: &KeyPair) -> PathBuf {
+        use std::cell::RefCell;
+
+        thread_local! {
+            static PRIVATE_KEY_FILES: RefCell<Vec<tempfile::NamedTempFile>> = const { RefCell::new(Vec::new()) };
+        }
+
+        let mut file = tempfile::Builder::new()
+            .prefix(".genesis-sign-test-key-")
+            .tempfile_in(env!("CARGO_MANIFEST_DIR"))
+            .expect("create owner-only private-key fixture");
+        let canonical = zeroize::Zeroizing::new(
+            format!("{}\n", ExposedPrivateKey(key_pair.private_key().clone())).into_bytes(),
+        );
+        file.write_all(canonical.as_slice())
+            .expect("write private-key fixture");
+        file.as_file_mut()
+            .sync_all()
+            .expect("sync private-key fixture");
+        let path = file.path().to_path_buf();
+        PRIVATE_KEY_FILES.with(|files| files.borrow_mut().push(file));
+        path
     }
 }

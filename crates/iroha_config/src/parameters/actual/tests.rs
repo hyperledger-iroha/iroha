@@ -7,6 +7,40 @@ mod tests {
     };
 
     #[test]
+    fn first_release_labels_are_exact_and_alias_free() {
+        assert_eq!(LaneProfile::parse_label("core"), Some(LaneProfile::Core));
+        assert_eq!(LaneProfile::parse_label("home"), Some(LaneProfile::Home));
+        for label in ["CORE", " home", "unknown"] {
+            assert_eq!(LaneProfile::parse_label(label), None, "{label:?}");
+        }
+
+        assert_eq!(GasLiquidity::from_str("tier1"), Ok(GasLiquidity::Tier1));
+        for label in ["deep", "tier1-deep", "TIER1", " tier1"] {
+            assert!(GasLiquidity::from_str(label).is_err(), "{label:?}");
+        }
+        assert_eq!(
+            GasVolatility::from_str("stable"),
+            Ok(GasVolatility::Stable)
+        );
+        for label in ["calm", "STABLE", "stable "] {
+            assert!(GasVolatility::from_str(label).is_err(), "{label:?}");
+        }
+
+        assert_eq!(NoritoRpcStage::parse("ga"), Some(NoritoRpcStage::Ga));
+        for label in ["general", "general_availability", "GA", " ga"] {
+            assert_eq!(NoritoRpcStage::parse(label), None, "{label:?}");
+        }
+
+        assert_eq!(
+            ToriiMcpProfile::parse("read_only"),
+            Some(ToriiMcpProfile::ReadOnly)
+        );
+        for label in ["readonly", "read-only", "write", "ops", "OPERATOR"] {
+            assert_eq!(ToriiMcpProfile::parse(label), None, "{label:?}");
+        }
+    }
+
+    #[test]
     #[should_panic(expected = "inrou.enabled requires soracloud_runtime.production_mode = true")]
     fn soracloud_actual_posture_rejects_nonproduction_inrou() {
         let mut runtime = SoracloudRuntime {
@@ -410,6 +444,12 @@ mod tests {
         let mut changed = baseline.clone();
         changed.gov.plain_voting_enabled = !changed.gov.plain_voting_enabled;
         assert_changed("governance execution policy", changed);
+        let mut changed = baseline.clone();
+        changed.gov.parliament_sortition_pulse_delay_blocks = changed
+            .gov
+            .parliament_sortition_pulse_delay_blocks
+            .saturating_add(1);
+        assert_changed("Parliament sortition pulse-delay policy", changed);
         let mut changed = baseline.clone();
         changed.gov.parliament_timed_ovn.release_delay_blocks = changed
             .gov

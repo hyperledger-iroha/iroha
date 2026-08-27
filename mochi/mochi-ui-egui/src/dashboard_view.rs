@@ -294,7 +294,12 @@ impl MochiApp {
                         .inner_margin(Margin::symmetric(12, 10))
                         .show(&mut columns[1], |ui| {
                             ui.label(RichText::new(format!("Block {}", block.height)).strong());
-                            ui.small(&block.created_at);
+                            ui.small(
+                                block
+                                    .created_at
+                                    .as_deref()
+                                    .unwrap_or("Timestamp unavailable"),
+                            );
                             ui.small(format!(
                                 "{} tx • {} rejected",
                                 block.transactions_total, block.transactions_rejected

@@ -560,6 +560,7 @@ PRIVACY_COMPILED_PROFILE_C_SYMBOLS=(
 )
 
 PARLIAMENT_TIMED_OVN_C_SYMBOLS=(
+  connect_norito_parliament_timed_ovn_verify_casting_proof_page_v1
   connect_norito_parliament_timed_ovn_verify_casting_proof_v1
   connect_norito_parliament_timed_ovn_registration_from_proof_v1
   connect_norito_parliament_timed_ovn_ballot_from_proof_v1
@@ -672,6 +673,7 @@ VALIDATION_FEE_JNI_SYMBOLS=(
 
 PARLIAMENT_TIMED_OVN_JNI_SYMBOLS=(
   Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeBridgeAbiVersion
+  Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeVerifyCastingProofPageV1
   Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeVerifyCastingProofV1
   Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeRegistrationFromProofV1
   Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeBallotFromProofV1
@@ -3159,6 +3161,7 @@ with archive:
         "cargo_locked",
         "privacy_production_enabled",
         "cargo_features",
+        "kagemusha_production_authorization_sha256",
         "build_environment",
         "source_commit",
         "source_tree_dirty",
@@ -3189,6 +3192,14 @@ with archive:
             "client-android native provenance cargo_features must be exactly "
             f"{expected_features}"
         )
+    authorization = manifest["kagemusha_production_authorization_sha256"]
+    if authorization is not None and (
+        not production
+        or not isinstance(authorization, str)
+        or not sha256_pattern.fullmatch(authorization)
+        or authorization == "0" * 64
+    ):
+        fail("client-android native provenance Kagemusha production authorization is invalid")
     build_environment = manifest["build_environment"]
     expected_build_environment_fields = {
         "schema",

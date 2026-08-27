@@ -17361,8 +17361,7 @@ mod tests {
         world
             .account_aliases_by_account
             .insert(source.clone(), BTreeSet::from([alias.clone()]));
-        world.account_rekey_records.insert(
-            alias.clone(),
+        world.replace_account_rekey_record_for_testing(
             iroha_data_model::account::rekey::AccountRekeyRecord::new(alias, source.clone()),
         );
         assert!(
@@ -17455,8 +17454,7 @@ mod tests {
         world
             .account_aliases_by_account
             .insert(trigger_owner.clone(), BTreeSet::from([alias.clone()]));
-        world.account_rekey_records.insert(
-            alias.clone(),
+        world.replace_account_rekey_record_for_testing(
             iroha_data_model::account::rekey::AccountRekeyRecord::new(alias, trigger_owner.clone()),
         );
         assert!(

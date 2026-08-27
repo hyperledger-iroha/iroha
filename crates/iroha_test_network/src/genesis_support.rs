@@ -39,10 +39,6 @@ pub struct ManagedNodePaths {
     pub torii_sorafs_storage_data_dir: PathBuf,
     /// Streaming session-store directory.
     pub streaming_session_store_dir: PathBuf,
-    /// Streaming SoraNet provision-spool directory.
-    pub streaming_soranet_provision_spool_dir: PathBuf,
-    /// Streaming SoraVPN provision-spool directory.
-    pub streaming_soravpn_provision_spool_dir: PathBuf,
     /// Streaming codec's signed rANS-table path.
     pub streaming_rans_tables_path: PathBuf,
     /// SoraNet proof-of-work ticket-revocation store path.
@@ -114,16 +110,6 @@ impl ManagedNodeConfig {
             torii_da_manifest_store_dir: config.torii.da_ingest.manifest_store_dir.clone(),
             torii_sorafs_storage_data_dir: config.torii.sorafs_storage.data_dir.clone(),
             streaming_session_store_dir: config.streaming.session_store_dir.clone(),
-            streaming_soranet_provision_spool_dir: config
-                .streaming
-                .soranet
-                .provision_spool_dir
-                .clone(),
-            streaming_soravpn_provision_spool_dir: config
-                .streaming
-                .soravpn
-                .provision_spool_dir
-                .clone(),
             streaming_rans_tables_path: config.streaming.codec.rans_tables_path.clone(),
             soranet_pow_revocation_store_path: PathBuf::from(
                 config
@@ -404,12 +390,6 @@ data_dir = "managed/sorafs"
 [streaming.codec]
 rans_tables_path = "__RANS_TABLES_PATH__"
 
-[streaming.soranet]
-provision_spool_dir = "managed/streaming/soranet"
-
-[streaming.soravpn]
-provision_spool_dir = "managed/streaming/soravpn"
-
 [network.soranet_handshake.pow]
 revocation_store_path = "managed/soranet/revocations.norito"
 "#,
@@ -485,18 +465,6 @@ revocation_store_path = "managed/soranet/revocations.norito"
         assert_eq!(
             projected.managed_paths.streaming_session_store_dir,
             PathBuf::from("managed/streaming")
-        );
-        assert_eq!(
-            projected
-                .managed_paths
-                .streaming_soranet_provision_spool_dir,
-            PathBuf::from("managed/streaming/soranet")
-        );
-        assert_eq!(
-            projected
-                .managed_paths
-                .streaming_soravpn_provision_spool_dir,
-            PathBuf::from("managed/streaming/soravpn")
         );
         assert_eq!(
             projected.managed_paths.streaming_rans_tables_path,

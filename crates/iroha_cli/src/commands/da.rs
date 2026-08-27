@@ -20,7 +20,7 @@ use iroha::data_model::{
     asset::AssetDefinitionId,
     da::{
         commitment::{DaCommitmentProof, DaProofPolicyBundle},
-        ingest::DaIngestReceipt,
+        ingest::{DaIngestReceipt, DaIngestRequest, DaPinScopeV1},
         manifest::DaManifestV1,
         pin_intent::DaPinIntentProof,
         types::{
@@ -187,7 +187,10 @@ struct SubmitRequestOutput {
 }
 #[derive(Debug, Clone, norito::json::JsonSerialize)]
 struct SubmitReceiptOutput {
+    status: String,
+    duplicate: bool,
     receipt: DaIngestReceipt,
+    pin_scope: Option<DaPinScopeV1>,
     receipt_path: String,
     receipt_json_path: String,
     pdp_commitment_header: Option<String>,
@@ -472,10 +475,6 @@ impl SubmitArgs {
             &context.config().key_pair,
             manifest_bytes,
         )?;
-        let request_bytes = to_bytes(&request)
-            .map_err(|err| eyre!("failed to encode DA request as Norito: {err}"))?;
-        let request_json = norito::json::to_json_pretty(&request)
-            .map_err(|err| eyre!("failed to render DA request JSON: {err}"))?;
         let artifact_root = default_artifact_root(self.artifact_dir)?;
         fs::create_dir_all(&artifact_root).wrap_err_with(|| {
             format!(
@@ -483,22 +482,9 @@ impl SubmitArgs {
                 artifact_root.display()
             )
         })?;
-        let request_path = artifact_root.join("da_request.norito");
-        let request_json_path = artifact_root.join("da_request.json");
-        fs::write(&request_path, &request_bytes)
-            .wrap_err_with(|| format!("failed to write DA request `{}`", request_path.display()))?;
-        fs::write(&request_json_path, request_json.as_bytes()).wrap_err_with(|| {
-            format!(
-                "failed to write DA request JSON `{}`",
-                request_json_path.display()
-            )
-        })?;
-        let request_output = SubmitRequestOutput {
-            client_blob_id: hex::encode(request.client_blob_id.as_bytes()),
-            request_path: request_path.display().to_string(),
-            request_json_path: request_json_path.display().to_string(),
-            request_bytes: request_bytes.len(),
-        };
+        // Persist the producer-signed prepare request before network I/O so a failed
+        // submission still leaves a complete, replayable artifact.
+        let mut request_output = persist_submit_request(&artifact_root, &request)?;
         if self.no_submit {
             if self.receipt_fixture.is_some() {
                 return Err(eyre!(
@@ -514,11 +500,17 @@ impl SubmitArgs {
             return print_with_optional_text(context, Some(text), &output);
         }
         let receipt = if let Some(path) = &self.receipt_fixture {
-            load_da_receipt_fixture(path)?
+            load_da_receipt_fixture(path, &request)?
         } else {
             let publisher = DaPublisher::new(context.config(), self.endpoint.as_deref())?;
+            let request_bytes = to_bytes(&request)
+                .map_err(|err| eyre!("failed to encode DA request as Norito: {err}"))?;
             publisher.publish(&request_bytes)?
         };
+        // A pending prepare response causes the publisher to add the exact pin-scope
+        // witness and retry once. Replace the prepare artifact with the exact request
+        // that was submitted last so operators can inspect or gather more witnesses.
+        request_output = persist_submit_request(&artifact_root, &receipt.submitted_request)?;
         let receipt_path = artifact_root.join("da_receipt.norito");
         let receipt_json_path = artifact_root.join("da_receipt.json");
         fs::write(&receipt_path, &receipt.bytes)
@@ -534,7 +526,10 @@ impl SubmitArgs {
         }
         let receipt_record = receipt.receipt.clone();
         let receipt_output = SubmitReceiptOutput {
+            status: receipt.status,
+            duplicate: receipt.duplicate,
             receipt: receipt_record,
+            pin_scope: receipt.pin_scope,
             receipt_path: receipt_path.display().to_string(),
             receipt_json_path: receipt_json_path.display().to_string(),
             pdp_commitment_header: receipt.pdp_commitment_header.clone(),
@@ -1162,6 +1157,8 @@ fn render_submit_text(output: &SubmitOutput) -> String {
     let _ = writeln!(out, "request_json: {}", output.request.request_json_path);
     let _ = writeln!(out, "request_bytes: {}", output.request.request_bytes);
     if let Some(receipt) = output.receipt.as_ref() {
+        let _ = writeln!(out, "status: {}", receipt.status);
+        let _ = writeln!(out, "duplicate: {}", receipt.duplicate);
         let _ = writeln!(out, "receipt: {}", receipt.receipt_path);
         let _ = writeln!(out, "receipt_json: {}", receipt.receipt_json_path);
         if let Some(header) = receipt.pdp_commitment_header.as_deref() {
@@ -1269,7 +1266,32 @@ fn persist_receipt_headers(root: &Path, header_value: &str) -> Result<()> {
         )
     })
 }
-fn load_da_receipt_fixture(path: &Path) -> Result<DaPublisherReceipt> {
+fn persist_submit_request(root: &Path, request: &DaIngestRequest) -> Result<SubmitRequestOutput> {
+    let request_bytes =
+        to_bytes(request).map_err(|err| eyre!("failed to encode DA request as Norito: {err}"))?;
+    let request_json = norito::json::to_json_pretty(request)
+        .map_err(|err| eyre!("failed to render DA request JSON: {err}"))?;
+    let request_path = root.join("da_request.norito");
+    let request_json_path = root.join("da_request.json");
+    fs::write(&request_path, &request_bytes)
+        .wrap_err_with(|| format!("failed to write DA request `{}`", request_path.display()))?;
+    fs::write(&request_json_path, request_json.as_bytes()).wrap_err_with(|| {
+        format!(
+            "failed to write DA request JSON `{}`",
+            request_json_path.display()
+        )
+    })?;
+    Ok(SubmitRequestOutput {
+        client_blob_id: hex::encode(request.client_blob_id.as_bytes()),
+        request_path: request_path.display().to_string(),
+        request_json_path: request_json_path.display().to_string(),
+        request_bytes: request_bytes.len(),
+    })
+}
+fn load_da_receipt_fixture(
+    path: &Path,
+    submitted_request: &DaIngestRequest,
+) -> Result<DaPublisherReceipt> {
     let bytes = fs::read(path)
         .wrap_err_with(|| format!("failed to read DA receipt fixture `{}`", path.display()))?;
     let value: Value = norito::json::from_slice(&bytes).map_err(|err| {
@@ -1314,9 +1336,13 @@ fn load_da_receipt_fixture(path: &Path) -> Result<DaPublisherReceipt> {
         .and_then(Value::as_str)
         .map(ToString::to_string);
     Ok(DaPublisherReceipt {
+        status: "accepted".to_owned(),
+        duplicate: false,
         bytes: receipt_bytes,
         json,
         receipt,
+        pin_scope: None,
+        submitted_request: submitted_request.clone(),
         pdp_commitment_header: header_value,
     })
 }
@@ -1761,7 +1787,9 @@ mod tests {
     use iroha_crypto::Algorithm;
     use iroha_data_model::da::{
         commitment::DaProofPolicyBundle,
-        ingest::{DaIngestAuthorizationV1, DaIngestSignatureV1},
+        ingest::{
+            DaIngestAuthorizationV1, DaIngestSignatureV1, DaPinScopeAuthorizationV1, DaPinScopeV1,
+        },
         manifest::{ChunkCommitment, ChunkRole},
         pin_intent::{DaPinIntent, DaPinIntentBundle},
         types::{
@@ -2238,6 +2266,50 @@ mod tests {
         assert!(text.contains("request: /tmp/request.norito"));
         assert!(text.contains("request_json: /tmp/request.json"));
     }
+
+    #[test]
+    fn persist_submit_request_replaces_prepare_with_pin_scope_witness() {
+        let context = TestContext::new(CliOutputFormat::Json);
+        let request = da::build_da_request(
+            context.cfg.network_id,
+            context.cfg.account.clone(),
+            vec![0x51, 0x52, 0x53],
+            &DaIngestParams::default(),
+            ExtraMetadata::default(),
+            &context.cfg.key_pair,
+            None,
+        )
+        .expect("build DA submit persistence fixture");
+        let scope = DaPinScopeV1::new(
+            &request.authorization(),
+            StorageTicketId::new([0x54; 32]),
+            ManifestDigest::new([0x55; 32]),
+            None,
+        );
+        let mut authorized = request.clone();
+        authorized
+            .try_add_pin_scope_signature(&scope, &context.cfg.key_pair)
+            .expect("authorize exact DA pin scope");
+        let dir = tempdir().expect("artifact directory");
+
+        persist_submit_request(dir.path(), &request).expect("persist prepare request");
+        let output = persist_submit_request(dir.path(), &authorized)
+            .expect("replace prepare request with authorized request");
+
+        let raw: DaIngestRequest = decode_from_bytes(
+            &fs::read(dir.path().join("da_request.norito")).expect("read request Norito"),
+        )
+        .expect("decode persisted request Norito");
+        let rendered: DaIngestRequest = norito::json::from_slice(
+            &fs::read(dir.path().join("da_request.json")).expect("read request JSON"),
+        )
+        .expect("decode persisted request JSON");
+        assert_eq!(raw, authorized);
+        assert_eq!(rendered, authorized);
+        assert_eq!(raw.signing_digest(), request.signing_digest());
+        assert_eq!(raw.pin_scope_signatures.len(), 1);
+        assert_eq!(output.request_bytes, to_bytes(&authorized).unwrap().len());
+    }
     #[test]
     fn commitment_query_args_build_request() {
         let args = CommitmentQueryArgs {
@@ -2332,14 +2404,15 @@ mod tests {
             )
             .expect("sign deterministic CLI DA proof authorization"),
         });
-        let intent = DaPinIntent::new(
-            lane_id,
-            2,
-            3,
+        let scope = DaPinScopeV1::new(
+            &authorization,
             StorageTicketId::new([0x44; 32]),
             ManifestDigest::new([0x55; 32]),
-            authorization,
+            None,
         );
+        let scope_authorization = DaPinScopeAuthorizationV1::try_sign(scope, &key_pair)
+            .expect("sign deterministic CLI DA pin scope");
+        let intent = DaPinIntent::new(authorization, scope_authorization);
         let proof = DaPinIntentProof {
             intent,
             location: iroha::data_model::da::commitment::DaCommitmentLocation {

@@ -245,7 +245,8 @@ fn fair_v2_ingress_queue_gate_verdict(
             fair_v2_ingress_certified_fence_escape_advances_owner(&owner.token, &entry.inbound)
         });
     let dependency_bypass = !ingress_barrier_allows
-        && ((leader_wire_control_barrier && (earlier_dependency || timeout_control_dependency))
+        && ((leader_wire_control_barrier && earlier_dependency)
+            || timeout_control_dependency
             || ((leader_wire_control_barrier || leader_wire_chunk_barrier)
                 && certified_fence_escape_dependency));
     if has_live_control_predecessor || (!ingress_barrier_allows && !dependency_bypass) {

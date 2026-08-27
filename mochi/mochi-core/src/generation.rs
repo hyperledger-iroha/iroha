@@ -33,7 +33,7 @@ const GENERATION_INVENTORY_MAX_BYTES_V1: usize = 8 * 1024 * 1024;
 const GENERATION_SMALL_RECORD_MAX_BYTES_V1: usize = 4 * 1024;
 const GENERATION_MAX_PEER_DIRECTORIES_V1: usize = 7;
 const GENERATION_ID_RECORD_BYTES: usize = 32 + 1;
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PublicationFaultPoint {
     BeforeInventory,
@@ -272,8 +272,12 @@ impl GenerationTransaction {
         self,
         context: GenerationInventoryContext<'_>,
     ) -> std::result::Result<PublishedGeneration, FailedGenerationPublication> {
-        self.publish_inner(context, None)
+        #[cfg(test)]
+        return self.publish_inner(context, None);
+        #[cfg(not(test))]
+        self.publish_inner(context)
     }
+    #[cfg(test)]
     #[expect(clippy::result_large_err, reason = "failure retains generation lock")]
     pub(crate) fn publish_with_fault_retaining_failure(
         self,
@@ -286,9 +290,13 @@ impl GenerationTransaction {
     fn publish_inner(
         mut self,
         context: GenerationInventoryContext<'_>,
-        #[cfg_attr(not(test), allow(unused_variables))] fault: Option<PublicationFaultPoint>,
+        #[cfg(test)] fault: Option<PublicationFaultPoint>,
     ) -> std::result::Result<PublishedGeneration, FailedGenerationPublication> {
-        match self.try_publish_inner(context, fault) {
+        #[cfg(test)]
+        let result = self.try_publish_inner(context, fault);
+        #[cfg(not(test))]
+        let result = self.try_publish_inner(context);
+        match result {
             Ok(durability_error) => Ok(PublishedGeneration {
                 transaction: self,
                 durability_error,
@@ -302,7 +310,7 @@ impl GenerationTransaction {
     fn try_publish_inner(
         &mut self,
         context: GenerationInventoryContext<'_>,
-        #[cfg_attr(not(test), allow(unused_variables))] fault: Option<PublicationFaultPoint>,
+        #[cfg(test)] fault: Option<PublicationFaultPoint>,
     ) -> Result<Option<std::io::Error>> {
         #[cfg(test)]
         inject_fault(fault, PublicationFaultPoint::BeforeInventory)?;
@@ -379,6 +387,7 @@ impl GenerationTransaction {
         // The atomic pointer replacement is the commit point. Never remove a
         // generation after this point, even if directory durability is unknown.
         self.committed = true;
+        #[cfg(test)]
         let durability_error = if fault == Some(PublicationFaultPoint::AfterPointerRename) {
             Some(std::io::Error::other(
                 "injected generation publication fault after pointer rename",
@@ -386,6 +395,8 @@ impl GenerationTransaction {
         } else {
             sync_directory(&self.network_root).err()
         };
+        #[cfg(not(test))]
+        let durability_error = sync_directory(&self.network_root).err();
         Ok(durability_error)
     }
     fn sync_runtime_storage_roots(&self) -> Result<()> {
@@ -1759,12 +1770,6 @@ data_dir = "managed/sorafs"
 
 [streaming.codec]
 rans_tables_path = "__RANS_TABLES_PATH__"
-
-[streaming.soranet]
-provision_spool_dir = "managed/streaming/soranet"
-
-[streaming.soravpn]
-provision_spool_dir = "managed/streaming/soravpn"
 
 [network.soranet_handshake.pow]
 revocation_store_path = "managed/soranet/revocations.norito"

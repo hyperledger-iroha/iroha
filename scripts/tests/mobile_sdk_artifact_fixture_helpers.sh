@@ -99,6 +99,7 @@ manifest = {
     "cargo_locked": True,
     "privacy_production_enabled": production,
     "cargo_features": ["privacy-production-enabled"] if production else [],
+    "kagemusha_production_authorization_sha256": None,
     "build_environment": {
         "schema": "iroha.mobile-native-build-environment.v1",
         "hermetic_runner_schema": "iroha.mobile-hermetic-command.v1",
@@ -528,6 +529,7 @@ SWIFT
   "native_bridge_abi_version": 23,
   "privacy_production_enabled": false,
   "cargo_features": [],
+  "kagemusha_production_authorization_sha256": null,
   "build_environment": {
     "schema": "iroha.mobile-native-build-environment.v1",
     "hermetic_runner_schema": "iroha.mobile-hermetic-command.v1",
@@ -597,6 +599,7 @@ SWIFT
     "connect_norito_canonical_json_blake3_v1",
     "connect_norito_encode_account_onboarding_plan_body_v1",
     "connect_norito_alias_instruction_round_trip_v1",
+    "connect_norito_parliament_timed_ovn_verify_casting_proof_page_v1",
     "connect_norito_parliament_timed_ovn_verify_casting_proof_v1",
     "connect_norito_parliament_timed_ovn_registration_from_proof_v1",
     "connect_norito_parliament_timed_ovn_ballot_from_proof_v1",

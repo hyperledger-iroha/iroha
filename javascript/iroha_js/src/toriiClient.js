@@ -56,6 +56,7 @@ import {
   ValidationErrorCode,
   ValidationError,
 } from "./validationError.js";
+import { KAIGI_MAX_PARTICIPANTS_V1 } from "./instructionBuilders.js";
 import {
   assertNonBlankString,
   normalizeTransactionStatusScope,
@@ -110,6 +111,28 @@ import {
   createToriiGovernanceNormalizers,
   VERIFYING_KEY_PRIVATE_KEY_FIELDS,
 } from "./toriiGovernanceNormalizers.js";
+import {
+  PARLIAMENT_ATTEMPT_DRAFT_PATH_V1,
+  PARLIAMENT_ATTEMPT_STATE_MAX_BYTES_V1,
+  PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_ARCHIVE_MAX_BYTES_V1,
+  PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_MAX_BYTES_V1,
+  PARLIAMENT_TRANSITION_DRAFT_PATH_V1,
+  buildParliamentAttemptDraftRequestV1,
+  buildParliamentTransitionDraftRequestV1,
+  encodeParliamentTimedOvnCastingProofRequestV1,
+  normalizeParliamentAttemptDraftResponseV1,
+  normalizeParliamentAttemptReadResponseV1,
+  normalizeParliamentTimedOvnCastingContextResponseV1,
+  normalizeParliamentTlePartialReleaseShareV1,
+  normalizeParliamentTleReleaseContextResponseV1,
+  normalizeParliamentTransitionDraftResponseV1,
+  parliamentAttemptReadPathV1,
+  parliamentTimedOvnCastingContextReadPathV1,
+  parliamentTimedOvnCastingProofPathV1,
+  parliamentTlePartialReleasePathV1,
+  parliamentTleReleaseContextReadPathV1,
+  validateParliamentTimedOvnCastingProofResponseFrameV1,
+} from "./parliamentApiV1.js";
 import { createSubscriptionResponseNormalizers } from "./subscriptionResponses.js";
 import {
   decodeExactSoracloudJsonResponse,
@@ -220,6 +243,7 @@ const VERIFYING_KEY_CLIENT_URL = new URL(
   import.meta.url,
 ).href;
 const PRIVACY_CAPABILITIES_JSON_MAX_BYTES = 256 * 1024;
+const KAGEMUSHA_JSON_RESPONSE_MAX_BYTES = 256 * 1024;
 const FEE_QUOTE_JSON_MAX_BYTES = 64 * 1024;
 const FEE_SPONSOR_PROGRAM_JSON_MAX_BYTES = 64 * 1024;
 const PIPELINE_RECEIPT_MAX_BYTES = 1024 * 1024;
@@ -1601,16 +1625,19 @@ export class ToriiClient {
     const response = await this._request("GET", "/v1/offline/readiness", {
       headers: JSON_ACCEPT_HEADERS,
       signal,
+      redirect: "error",
     });
     await this._expectStatus(response, [200]);
     requireKagemushaJsonContentType(
       this._getHeader(response, "content-type"),
       "Offline capability response",
     );
-    const payload = await this._maybeJson(response);
-    if (!payload) {
-      throw new TypeError("Offline capability response must contain JSON");
-    }
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      KAGEMUSHA_JSON_RESPONSE_MAX_BYTES,
+      "Offline capability response",
+      { signal },
+    );
     return normalizeOfflineStatus(payload);
   }
 
@@ -1647,17 +1674,19 @@ export class ToriiClient {
     const response = await this._request(
       "GET",
       `/v1/offline/operations/${canonicalId}`,
-      { headers: JSON_ACCEPT_HEADERS, signal },
+      { headers: JSON_ACCEPT_HEADERS, signal, redirect: "error" },
     );
     await this._expectStatus(response, [200]);
     requireKagemushaJsonContentType(
       this._getHeader(response, "content-type"),
       "Kagemusha operation status response",
     );
-    const payload = await this._maybeJson(response);
-    if (!payload) {
-      throw new TypeError("Kagemusha operation status response must contain JSON");
-    }
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      KAGEMUSHA_JSON_RESPONSE_MAX_BYTES,
+      "Kagemusha operation status response",
+      { signal },
+    );
     return normalizeKagemushaOperationStatus(payload, canonicalId);
   }
 
@@ -1676,6 +1705,7 @@ export class ToriiClient {
       },
       body: Buffer.from(normalized.norito),
       signal,
+      redirect: "error",
     });
     await this._expectStatus(response, [202]);
     requireKagemushaJsonContentType(
@@ -1684,10 +1714,12 @@ export class ToriiClient {
     );
     const location = this._getHeader(response, "location");
     const retryAfter = this._getHeader(response, "retry-after");
-    const payload = await this._maybeJson(response);
-    if (!payload) {
-      throw new TypeError("Kagemusha operation reference response must contain JSON");
-    }
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      KAGEMUSHA_JSON_RESPONSE_MAX_BYTES,
+      "Kagemusha operation reference response",
+      { signal },
+    );
     return normalizeKagemushaOperationReference(payload, {
       expectedOperationId: normalized.operationId,
       expectedKind: kind,
@@ -7552,6 +7584,60 @@ export class ToriiClient {
       { signal },
     );
     return normalizeParliamentTimedOvnCastingContextResponseV1(payload, ballotAttemptId);
+  }
+
+  /** Transport one bounded finality-bound casting-proof page for native verification. */
+  async getParliamentTimedOvnCastingProofPageV1(
+    ballotAttemptId,
+    trustedCheckpointHeight,
+    options,
+  ) {
+    const context = "getParliamentTimedOvnCastingProofPageV1";
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, context);
+    const path = parliamentTimedOvnCastingProofPathV1(ballotAttemptId);
+    const body = encodeParliamentTimedOvnCastingProofRequestV1(trustedCheckpointHeight);
+    const response = await this._request("POST", path, {
+      headers: {
+        "Content-Type": APPLICATION_NORITO,
+        Accept: APPLICATION_NORITO,
+        "Accept-Encoding": "identity",
+      },
+      body,
+      canonicalAuth,
+      disableRetries: true,
+      redirect: "error",
+      signal,
+    });
+    await this._expectStatus(response, [200], {
+      maximumBodyBytes: PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_MAX_BYTES_V1,
+      responseLabel: `${context} response`,
+      signal,
+    });
+
+    let contentType;
+    let contentEncoding;
+    try {
+      contentType = this._getHeader(response, "content-type");
+      contentEncoding = this._getHeader(response, "content-encoding");
+    } catch (error) {
+      cancelResponseBodyBestEffort(response, `${context} rejected unreadable headers`);
+      throw error;
+    }
+    if (contentType !== APPLICATION_NORITO) {
+      cancelResponseBodyBestEffort(response, `${context} rejected non-Norito bytes`);
+      throw new TypeError(`${context} must use exactly ${APPLICATION_NORITO}`);
+    }
+    if (contentEncoding !== null && contentEncoding.toLowerCase() !== "identity") {
+      cancelResponseBodyBestEffort(response, `${context} rejected transformed bytes`);
+      throw new TypeError(`${context} Content-Encoding must be identity`);
+    }
+    const { bytes } = await this._readBoundedResponseBytes(
+      response,
+      PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_MAX_BYTES_V1,
+      context,
+      { signal },
+    );
+    return validateParliamentTimedOvnCastingProofResponseFrameV1(bytes);
   }
 
   /** Fetch one Core-authorized bounded public Parliament TLE release context. */
@@ -16351,11 +16437,7 @@ function normalizeConfigurationTransport(value, context) {
     record.norito_rpc,
     `${context}.norito_rpc`,
   );
-  const streaming = normalizeConfigurationTransportStreaming(
-    record.streaming,
-    `${context}.streaming`,
-  );
-  return { noritoRpc, streaming };
+  return { noritoRpc };
 }
 
 function normalizeConfigurationTransportNoritoRpc(value, context) {
@@ -16374,69 +16456,6 @@ function normalizeConfigurationTransportNoritoRpc(value, context) {
       record.canary_allowlist_size ?? 0,
       `${context}.canary_allowlist_size`,
       { allowZero: true },
-    ),
-  };
-}
-
-function normalizeConfigurationTransportStreaming(value, context) {
-  if (value === undefined || value === null) {
-    return null;
-  }
-  const record = ensureRecord(value, context);
-  const soranet = normalizeConfigurationStreamingSoranet(
-    record.soranet,
-    `${context}.soranet`,
-  );
-  return { soranet };
-}
-
-function normalizeConfigurationStreamingSoranet(value, context) {
-  const record = ensureRecord(value ?? {}, context);
-  const paddingRaw = record.padding_budget_ms ?? null;
-  const paddingBudgetMs =
-    paddingRaw === null
-      ? null
-      : ToriiClient._normalizeUnsignedInteger(
-          paddingRaw,
-          `${context}.padding_budget_ms`,
-          { allowZero: true },
-        );
-  return {
-    enabled: coerceBoolean(record.enabled ?? false, `${context}.enabled`),
-    streamTag: requireNonEmptyString(
-      record.stream_tag ?? "",
-      `${context}.stream_tag`,
-    ),
-    exitMultiaddr: requireNonEmptyString(
-      record.exit_multiaddr ?? "",
-      `${context}.exit_multiaddr`,
-    ),
-    paddingBudgetMs,
-    accessKind: requireNonEmptyString(
-      record.access_kind ?? "",
-      `${context}.access_kind`,
-    ),
-    garCategory: requireNonEmptyString(
-      record.gar_category ?? "",
-      `${context}.gar_category`,
-    ),
-    channelSalt: requireNonEmptyString(
-      record.channel_salt ?? "",
-      `${context}.channel_salt`,
-    ),
-    provisionSpoolDir: requireNonEmptyString(
-      record.provision_spool_dir ?? "",
-      `${context}.provision_spool_dir`,
-    ),
-    provisionWindowSegments: ToriiClient._normalizeUnsignedInteger(
-      record.provision_window_segments,
-      `${context}.provision_window_segments`,
-      { allowZero: false },
-    ),
-    provisionQueueCapacity: ToriiClient._normalizeUnsignedInteger(
-      record.provision_queue_capacity,
-      `${context}.provision_queue_capacity`,
-      { allowZero: false },
     ),
   };
 }
@@ -30565,8 +30584,10 @@ function normalizeKaigiCallView(payload, expectedCallId) {
           0xffff_ffff,
         )
     : undefined;
-  if (maxParticipants === 0) {
-    throw new RangeError(`${context}.max_participants must be between 1 and 4294967295`);
+  if (maxParticipants === 0 || maxParticipants > KAIGI_MAX_PARTICIPANTS_V1) {
+    throw new RangeError(
+      `${context}.max_participants must be between 1 and ${KAIGI_MAX_PARTICIPANTS_V1}`,
+    );
   }
   const createdAtMs = normalizeKaigiU64(
     record.created_at_ms,

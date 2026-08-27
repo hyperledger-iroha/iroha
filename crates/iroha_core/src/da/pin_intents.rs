@@ -543,6 +543,8 @@ fn sort_pin_intents(intents: &mut [DaPinIntent]) {
             intent.alias.clone(),
             to_bytes(&intent.authorization)
                 .expect("DA ingest authorization must have a canonical Norito encoding"),
+            to_bytes(&intent.pin_scope_authorization)
+                .expect("DA pin-scope authorization must have a canonical Norito encoding"),
         )
     });
 }
@@ -573,22 +575,21 @@ mod tests {
         >::from_untyped_unchecked(
             iroha_crypto::Hash::prehashed([0xD2; 32]),
         ));
-        DaPinIntent {
-            lane_id: LaneId::new(lane),
-            epoch: 1,
-            sequence: seq,
-            storage_ticket: StorageTicketId::new([lane_byte; 32]),
-            manifest_hash: ManifestDigest::new([seq_byte; 32]),
-            alias: Some(format!("alias-{lane}-{seq}")),
-            authorization: crate::da::signed_test_ingest_authorization(
-                network_id,
-                &key_pair,
-                LaneId::new(lane),
-                1,
-                seq,
-                1,
-            ),
-        }
+        let authorization = crate::da::signed_test_ingest_authorization(
+            network_id,
+            &key_pair,
+            LaneId::new(lane),
+            1,
+            seq,
+            1,
+        );
+        crate::da::signed_test_pin_intent(
+            authorization,
+            &key_pair,
+            StorageTicketId::new([lane_byte; 32]),
+            ManifestDigest::new([seq_byte; 32]),
+            Some(format!("alias-{lane}-{seq}")),
+        )
     }
     fn pin_intent_file_name(intent: &DaPinIntent, fingerprint: [u8; 32]) -> String {
         format!(

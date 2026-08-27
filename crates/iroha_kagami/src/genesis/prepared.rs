@@ -16,7 +16,7 @@ use iroha_genesis::{
 };
 use std::{
     collections::BTreeSet,
-    fs::File,
+    fs::{self, OpenOptions},
     io::{BufWriter, Read as _, Write},
     path::{Path, PathBuf},
 };
@@ -89,6 +89,31 @@ struct ValidatorBinding {
 
 type LoadedValidatorConfigs = (Vec<Vec<u8>>, Vec<actual::Root>, Vec<ValidatorBinding>);
 
+#[cfg(unix)]
+fn same_prepared_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+
+    left.dev() == right.dev()
+        && left.ino() == right.ino()
+        && left.mode() == right.mode()
+        && left.uid() == right.uid()
+        && left.gid() == right.gid()
+        && left.nlink() == right.nlink()
+        && left.size() == right.size()
+        && left.mtime() == right.mtime()
+        && left.mtime_nsec() == right.mtime_nsec()
+        && left.ctime() == right.ctime()
+        && left.ctime_nsec() == right.ctime_nsec()
+}
+
+#[cfg(not(unix))]
+fn same_prepared_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.is_file() == right.is_file()
+        && left.is_dir() == right.is_dir()
+        && left.len() == right.len()
+        && left.modified().ok() == right.modified().ok()
+}
+
 fn read_prepared_file_bounded(
     path: &Path,
     max_bytes: usize,
@@ -96,11 +121,29 @@ fn read_prepared_file_bounded(
 ) -> color_eyre::Result<Vec<u8>> {
     let max_bytes_u64 = u64::try_from(max_bytes)
         .map_err(|_| eyre!("{label} byte limit is not representable on this platform"))?;
-    let mut file = File::open(path)?;
-    let before = file.metadata()?;
+    let lexical = fs::symlink_metadata(path)
+        .wrap_err_with(|| format!("inspect {label} {}", path.display()))?;
     ensure!(
-        before.is_file(),
-        "{label} must be a regular file: {}",
+        lexical.is_file() && !lexical.file_type().is_symlink(),
+        "{label} must be a non-symlink regular file: {}",
+        path.display()
+    );
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let mut file = options
+        .open(path)
+        .wrap_err_with(|| format!("open {label} {}", path.display()))?;
+    let before = file
+        .metadata()
+        .wrap_err_with(|| format!("inspect opened {label} {}", path.display()))?;
+    ensure!(
+        before.is_file() && same_prepared_file_snapshot(&lexical, &before),
+        "{label} changed while opening or is not a regular file: {}",
         path.display()
     );
     ensure!(
@@ -114,7 +157,7 @@ fn read_prepared_file_bounded(
     bytes
         .try_reserve_exact(capacity.saturating_add(1))
         .map_err(|error| eyre!("failed to reserve {label} input buffer: {error}"))?;
-    file.by_ref()
+    std::io::Read::by_ref(&mut file)
         .take(max_bytes_u64.saturating_add(1))
         .read_to_end(&mut bytes)?;
     ensure!(
@@ -124,7 +167,8 @@ fn read_prepared_file_bounded(
     );
     let after = file.metadata()?;
     ensure!(
-        before.len() == after.len() && u64::try_from(bytes.len()).ok() == Some(before.len()),
+        same_prepared_file_snapshot(&before, &after)
+            && u64::try_from(bytes.len()).ok() == Some(before.len()),
         "{label} changed while it was being read: {}",
         path.display()
     );
@@ -600,6 +644,27 @@ mod tests {
         assert!(error.to_string().contains("32-byte limit"));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn bounded_prepared_reader_rejects_symlinks_and_special_files_without_blocking() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().expect("create adversarial prepared-input directory");
+        let target = directory.path().join("target.toml");
+        let linked = directory.path().join("linked.toml");
+        std::fs::write(&target, b"value = 1\n").expect("seed prepared input target");
+        symlink(&target, &linked).expect("create prepared input symlink");
+        let error = read_prepared_file_bounded(&linked, 32, "test prepared input")
+            .expect_err("prepared input symlink must fail closed");
+        assert!(error.to_string().contains("non-symlink regular file"));
+
+        let fifo = directory.path().join("input.fifo");
+        crate::secure_fs::create_fifo_for_test(&fifo, 0o600).expect("create prepared input FIFO");
+        let error = read_prepared_file_bounded(&fifo, 32, "test prepared input")
+            .expect_err("prepared input FIFO must fail closed");
+        assert!(error.to_string().contains("non-symlink regular file"));
+    }
+
     struct Fixture {
         _directory: tempfile::TempDir,
         reviewed: PathBuf,
@@ -623,10 +688,10 @@ mod tests {
         let defaults = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../defaults/kagami/iroha3-dev");
         let sources = [
-            defaults.join("config.toml"),
-            defaults.join("config-peer-1.toml"),
-            defaults.join("config-peer-2.toml"),
-            defaults.join("config-peer-3.toml"),
+            defaults.join("peer0.toml"),
+            defaults.join("peer1.toml"),
+            defaults.join("peer2.toml"),
+            defaults.join("peer3.toml"),
         ];
         let mut config_tables = Vec::new();
         let mut config_paths = Vec::new();

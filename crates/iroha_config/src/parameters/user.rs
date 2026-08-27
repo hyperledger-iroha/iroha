@@ -19,8 +19,10 @@
 // (`specs/references/configuration.md`).
 #![allow(clippy::doc_markdown, clippy::doc_link_with_quotes)]
 use error_stack::{Report, ResultExt};
+#[cfg(test)]
+use iroha_config_base::ParameterId;
 use iroha_config_base::{
-    ParameterId, ParameterOrigin, ReadConfig, WithOrigin,
+    ParameterOrigin, ReadConfig, WithOrigin,
     attach::ConfigValueAndOrigin,
     env::FromEnvStr,
     read::{ConfigReader, FinalWrap, ReadConfig as ReadConfigTrait},
@@ -939,6 +941,12 @@ pub enum ParseError {
     /// Sumeragi consensus parameters failed validation.
     #[error("Invalid Sumeragi consensus configuration")]
     InvalidSumeragiConfig,
+    /// Peer-to-peer network parameters failed validation.
+    #[error("Invalid network configuration")]
+    InvalidNetworkConfig,
+    /// Transaction pipeline parameters failed validation.
+    #[error("Invalid pipeline configuration")]
+    InvalidPipelineConfig,
     /// Streaming configuration block lacked required or valid values.
     #[error("Invalid streaming configuration")]
     InvalidStreamingConfig,
@@ -998,55 +1006,6 @@ impl AccountAddressParseScope {
     }
 }
 impl Root {
-    /// Read the root configuration after canonicalizing explicitly disabled
-    /// optional service subtrees across all ordered TOML sources.
-    ///
-    /// `torii.kagemusha_commands` is an optional online command-submission
-    /// service. Its own explicit `enabled = false` switch makes subordinate
-    /// values dormant. Offline application support has no node enable switch
-    /// and is never inspected or rewritten here.
-    ///
-    /// # Errors
-    ///
-    /// Returns the ordinary collective configuration-reader error when an
-    /// active or otherwise non-canonicalized parameter is invalid.
-    pub fn read_and_complete(
-        reader: ConfigReader,
-    ) -> core::result::Result<Self, Report<[iroha_config_base::read::Error]>> {
-        fn effective_bool_source(
-            sources: &[iroha_config_base::toml::TomlSource],
-            path: &[&str],
-        ) -> Option<(usize, Option<bool>)> {
-            let id = ParameterId::from(path);
-            sources
-                .iter()
-                .enumerate()
-                .rev()
-                .find_map(|(index, source)| source.fetch(&id).map(|value| (index, value.as_bool())))
-        }
-        fn remove_path(table: &mut toml::Table, path: &[&str]) {
-            let Some((segment, tail)) = path.split_first() else {
-                return;
-            };
-            if tail.is_empty() {
-                table.remove(*segment);
-                return;
-            }
-            if let Some(child) = table.get_mut(*segment).and_then(toml::Value::as_table_mut) {
-                remove_path(child, tail);
-            }
-        }
-        let reader = reader.rewrite_toml_sources(|sources| {
-            const COMMANDS: &[&str] = &["torii", "kagemusha_commands"];
-            const COMMANDS_ENABLED: &[&str] = &["torii", "kagemusha_commands", "enabled"];
-            if let Some((_, Some(false))) = effective_bool_source(sources, COMMANDS_ENABLED) {
-                for source in sources.iter_mut() {
-                    remove_path(source.table_mut(), COMMANDS);
-                }
-            }
-        });
-        reader.read_and_complete::<Self>()
-    }
     fn derive_default_snapshot_store_dir(snapshot: &mut Snapshot, kura: &actual::Kura) {
         if !matches!(snapshot.store_dir.origin(), ParameterOrigin::Default { .. }) {
             return;
@@ -1375,7 +1334,7 @@ impl Root {
                 );
             }
         }
-        let pipeline = self.pipeline.parse();
+        let pipeline = self.pipeline.parse(&mut emitter);
         let tiered_state = self.tiered_state.parse();
         let compute = self.compute.parse(&mut emitter);
         let content = self.content.parse();
@@ -1718,7 +1677,7 @@ pub struct SorafsPinPolicyConstraints {
     pub max_replicas_ceiling: Option<u16>,
     /// Optional retention epoch cap (inclusive).
     pub max_retention_epoch: Option<u64>,
-    /// Allowed storage classes (case-insensitive). `None` permits any class.
+    /// Allowed exact first-release storage-class labels. `None` permits any class.
     pub allowed_storage_classes: Option<AlgorithmListConfig>,
     /// Require council signatures on pin manifests. Public paid pin submissions require an authenticated account.
     #[config(
@@ -1809,12 +1768,12 @@ impl SorafsPinPolicyConstraints {
             classes
                 .into_vec()
                 .into_iter()
-                .map(|class| match class.trim().to_ascii_lowercase().as_str() {
+                .map(|class| match class.as_str() {
                     "hot" => SorafsStorageClass::Hot,
                     "warm" => SorafsStorageClass::Warm,
                     "cold" => SorafsStorageClass::Cold,
-                    other => panic!(
-                        "Invalid governance.sorafs_pin_policy.allowed_storage_classes entry `{other}`; expected hot, warm, or cold"
+                    _ => panic!(
+                        "Invalid governance.sorafs_pin_policy.allowed_storage_classes entry `{class}`; expected exactly hot, warm, or cold"
                     ),
                 })
                 .collect::<BTreeSet<_>>()
@@ -1929,6 +1888,22 @@ impl SorafsPinPolicyConstraints {
             max_bytes_per_authority: self.max_bytes_per_authority,
             max_lineage_depth: self.max_lineage_depth,
             max_successor_fanout: self.max_successor_fanout,
+        }
+    }
+}
+#[cfg(test)]
+mod exact_sorafs_pin_policy_label_tests {
+    use super::*;
+
+    #[test]
+    fn pin_policy_storage_classes_reject_case_and_whitespace_aliases() {
+        for invalid in ["HOT", " hot", "hot "] {
+            let mut policy = SorafsPinPolicyConstraints::default();
+            policy.allowed_storage_classes = Some(AlgorithmListConfig(vec![invalid.to_owned()]));
+            assert!(
+                std::panic::catch_unwind(|| policy.parse()).is_err(),
+                "{invalid:?} must fail closed"
+            );
         }
     }
 }
@@ -2553,6 +2528,11 @@ pub struct Governance {
         default = "crate::parameters::defaults::governance::PARLIAMENT_QUORUM_BPS"
     )]
     pub parliament_quorum_bps: u16,
+    /// Exact nonzero delay from a committed Parliament sortition request to its beacon pulse.
+    #[config(
+        default = "crate::parameters::defaults::governance::PARLIAMENT_SORTITION_PULSE_DELAY_BLOCKS"
+    )]
+    pub parliament_sortition_pulse_delay_blocks: u64,
     /// Consensus block-height span for immutable primary and alternate invitation responses.
     #[config(
         default = "crate::parameters::defaults::governance::PARLIAMENT_INVITATION_PHASE_BLOCKS"
@@ -2685,6 +2665,8 @@ impl Default for Governance {
             ),
             parliament_alternate_size: defaults::governance::PARLIAMENT_ALTERNATE_SIZE,
             parliament_quorum_bps: defaults::governance::PARLIAMENT_QUORUM_BPS,
+            parliament_sortition_pulse_delay_blocks:
+                defaults::governance::PARLIAMENT_SORTITION_PULSE_DELAY_BLOCKS,
             parliament_invitation_phase_blocks:
                 defaults::governance::PARLIAMENT_INVITATION_PHASE_BLOCKS,
             parliament_public_finding_phase_blocks:
@@ -2727,6 +2709,10 @@ impl Governance {
         assert!(
             (1..=10_000).contains(&self.parliament_quorum_bps),
             "parliament_quorum_bps must be within 1..=10_000 (basis points)"
+        );
+        assert!(
+            self.parliament_sortition_pulse_delay_blocks > 0,
+            "parliament_sortition_pulse_delay_blocks must be non-zero"
         );
         assert!(
             self.parliament_invitation_phase_blocks > 0,
@@ -2889,6 +2875,7 @@ impl Governance {
                 .expect("invalid parliament eligibility asset id"),
             parliament_alternate_size: self.parliament_alternate_size,
             parliament_quorum_bps: self.parliament_quorum_bps,
+            parliament_sortition_pulse_delay_blocks: self.parliament_sortition_pulse_delay_blocks,
             parliament_invitation_phase_blocks: self.parliament_invitation_phase_blocks,
             parliament_public_finding_phase_blocks: self.parliament_public_finding_phase_blocks,
             parliament_timed_ovn,
@@ -2914,6 +2901,36 @@ impl Governance {
 mod governance_tests {
     use super::*;
     use iroha_config_base::{read::ConfigReader, toml::TomlSource};
+
+    #[test]
+    fn parliament_sortition_pulse_delay_is_file_configured_nonzero_and_defaults_to_four() {
+        let table: toml::Table = toml::from_str("parliament_sortition_pulse_delay_blocks = 7")
+            .expect("parse Parliament sortition delay TOML");
+        let parsed = ConfigReader::new()
+            .with_toml_source(TomlSource::inline(table))
+            .read_and_complete::<Governance>()
+            .expect("read Governance with sortition delay")
+            .parse();
+        assert_eq!(parsed.parliament_sortition_pulse_delay_blocks, 7);
+
+        assert_eq!(
+            Governance::default()
+                .parse()
+                .parliament_sortition_pulse_delay_blocks,
+            defaults::governance::PARLIAMENT_SORTITION_PULSE_DELAY_BLOCKS
+        );
+        assert_eq!(
+            defaults::governance::PARLIAMENT_SORTITION_PULSE_DELAY_BLOCKS,
+            4
+        );
+
+        let mut invalid = Governance::default();
+        invalid.parliament_sortition_pulse_delay_blocks = 0;
+        assert!(
+            std::panic::catch_unwind(|| invalid.parse()).is_err(),
+            "zero sortition delay must fail before an attempt can be created"
+        );
+    }
 
     #[test]
     fn parliament_invitation_window_is_file_configured_and_nonzero() {
@@ -4317,7 +4334,7 @@ impl Oracle {
     }
 }
 impl Pipeline {
-    fn parse(self) -> actual::Pipeline {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::Pipeline {
         actual::Pipeline {
             dynamic_prepass: self.dynamic_prepass,
             access_set_cache_enabled: self.access_set_cache_enabled,
@@ -4340,7 +4357,7 @@ impl Pipeline {
             overlay_max_instructions: self.overlay_max_instructions,
             overlay_max_bytes: self.overlay_max_bytes,
             overlay_chunk_instructions: self.overlay_chunk_instructions,
-            gas: self.gas.parse(),
+            gas: self.gas.parse(emitter),
             ivm_max_cycles_upper_bound: self.ivm_max_cycles_upper_bound,
             ivm_max_decoded_instructions: self.ivm_max_decoded_instructions,
             ivm_max_decoded_bytes: self.ivm_max_decoded_bytes,
@@ -4440,10 +4457,16 @@ mod pipeline_tests {
     }
     #[test]
     fn pipeline_parse_maps_debug_flags() {
-        let baseline = pipeline_with_debug(false, false).parse();
+        let mut emitter = Emitter::new();
+        let baseline = pipeline_with_debug(false, false).parse(&mut emitter);
+        emitter
+            .into_result()
+            .expect("baseline pipeline must be valid");
         assert!(!baseline.debug_trace_scheduler_inputs);
         assert!(!baseline.debug_trace_tx_eval);
-        let debug_enabled = pipeline_with_debug(true, true).parse();
+        let mut emitter = Emitter::new();
+        let debug_enabled = pipeline_with_debug(true, true).parse(&mut emitter);
+        emitter.into_result().expect("debug pipeline must be valid");
         assert!(debug_enabled.debug_trace_scheduler_inputs);
         assert!(debug_enabled.debug_trace_tx_eval);
     }
@@ -5509,8 +5532,7 @@ impl StreamingCodec {
         emitter: &mut Emitter<ParseError>,
     ) -> Option<EntropyMode> {
         let (mode_text, origin) = entropy_mode.into_tuple();
-        let normalized = mode_text.trim().to_ascii_lowercase();
-        if normalized != "rans_bundled" && normalized != "rans-bundled" {
+        if mode_text != "rans_bundled" {
             emitter.emit(
                 Report::new(ParseError::InvalidStreamingConfig)
                     .attach(
@@ -5530,7 +5552,7 @@ impl StreamingCodec {
             );
             return None;
         }
-        let mode = EntropyMode::from_str(&normalized).ok()?;
+        let mode = EntropyMode::from_str(&mode_text).ok()?;
         debug_assert_eq!(mode, EntropyMode::RansBundled);
         Some(mode)
     }
@@ -5585,10 +5607,9 @@ impl StreamingCodec {
             return None;
         }
         let (raw_value, origin) = bundle_accel.into_tuple();
-        let normalized = raw_value.trim().to_ascii_lowercase().replace('-', "_");
-        let accel = match normalized.as_str() {
+        let accel = match raw_value.as_str() {
             "none" => actual::BundleAcceleration::None,
-            "cpu_simd" | "cpusimd" => actual::BundleAcceleration::CpuSimd,
+            "cpu_simd" => actual::BundleAcceleration::CpuSimd,
             "gpu" => actual::BundleAcceleration::Gpu,
             _ => {
                 emitter.emit(
@@ -5946,57 +5967,77 @@ pub struct Gas {
     pub units_per_gas: Vec<GasRate>,
 }
 impl Gas {
-    fn parse(self) -> actual::Gas {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::Gas {
         actual::Gas {
             tech_account_id: self.tech_account_id,
             accepted_assets: self.accepted_assets,
             units_per_gas: self
                 .units_per_gas
                 .into_iter()
-                .map(|r| {
+                .filter_map(|r| {
                     let asset = r.asset;
-                    let twap = r
-                        .twap_local_per_xor
-                        .as_deref()
-                        .map_or_else(Numeric::one, |value| {
-                            let parsed = Numeric::from_str(value).unwrap_or_else(|error| {
-                                panic!(
-                                    "invalid pipeline.gas.units_per_gas twap `{value}` for asset `{asset}`: {error}"
-                                )
-                            });
-                            assert!(
-                                parsed > Numeric::zero(),
-                                "invalid pipeline.gas.units_per_gas twap `{value}` for asset `{asset}`: value must be positive"
-                            );
-                            parsed
-                        });
-                    let liquidity = r.liquidity_profile.as_deref().map_or_else(
-                        actual::GasLiquidity::default,
-                        |value| {
-                            actual::GasLiquidity::from_str(value).unwrap_or_else(|()| {
-                                panic!(
-                                    "invalid pipeline.gas.units_per_gas liquidity `{value}` for asset `{asset}`"
-                                )
-                            })
+                    let twap = match r.twap_local_per_xor.as_deref() {
+                        None => Some(Numeric::one()),
+                        Some(value) => match Numeric::from_str(value) {
+                            Ok(parsed) if parsed > Numeric::zero() => Some(parsed),
+                            Ok(_) => {
+                                emitter.emit(
+                                    Report::new(ParseError::InvalidPipelineConfig).attach(format!(
+                                        "pipeline.gas.units_per_gas twap `{value}` for asset `{asset}` must be positive"
+                                    )),
+                                );
+                                None
+                            }
+                            Err(error) => {
+                                emitter.emit(
+                                    Report::new(ParseError::InvalidPipelineConfig).attach(format!(
+                                        "invalid pipeline.gas.units_per_gas twap `{value}` for asset `{asset}`: {error}"
+                                    )),
+                                );
+                                None
+                            }
                         },
-                    );
-                    let volatility = r.volatility_class.as_deref().map_or_else(
-                        actual::GasVolatility::default,
-                        |value| {
-                            actual::GasVolatility::from_str(value).unwrap_or_else(|()| {
-                                panic!(
-                                    "invalid pipeline.gas.units_per_gas volatility `{value}` for asset `{asset}`"
-                                )
-                            })
+                    };
+                    let liquidity = match r.liquidity_profile.as_deref() {
+                        None => Some(actual::GasLiquidity::default()),
+                        Some(value) => match actual::GasLiquidity::from_str(value) {
+                            Ok(parsed) => Some(parsed),
+                            Err(()) => {
+                                emitter.emit(
+                                    Report::new(ParseError::InvalidPipelineConfig).attach(format!(
+                                        "invalid pipeline.gas.units_per_gas liquidity `{value}` for asset `{asset}`; expected exactly `tier1`, `tier2`, or `tier3`"
+                                    )),
+                                );
+                                None
+                            }
                         },
-                    );
-                    actual::GasRate {
+                    };
+                    let volatility = match r.volatility_class.as_deref() {
+                        None => Some(actual::GasVolatility::default()),
+                        Some(value) => match actual::GasVolatility::from_str(value) {
+                            Ok(parsed) => Some(parsed),
+                            Err(()) => {
+                                emitter.emit(
+                                    Report::new(ParseError::InvalidPipelineConfig).attach(format!(
+                                        "invalid pipeline.gas.units_per_gas volatility `{value}` for asset `{asset}`; expected exactly `stable`, `elevated`, or `dislocated`"
+                                    )),
+                                );
+                                None
+                            }
+                        },
+                    };
+                    let (Some(twap), Some(liquidity), Some(volatility)) =
+                        (twap, liquidity, volatility)
+                    else {
+                        return None;
+                    };
+                    Some(actual::GasRate {
                         asset,
                         units_per_gas: r.units_per_gas,
                         twap_local_per_xor: twap,
                         liquidity,
                         volatility,
-                    }
+                    })
                 })
                 .collect(),
         }
@@ -6015,6 +6056,35 @@ pub struct GasRate {
     pub liquidity_profile: Option<String>,
     /// Override for the volatility bucket (`stable`, `elevated`, `dislocated`).
     pub volatility_class: Option<String>,
+}
+#[cfg(test)]
+mod gas_parse_error_tests {
+    use super::*;
+
+    #[test]
+    fn invalid_gas_rate_labels_emit_errors_without_unwinding() {
+        for (twap, liquidity, volatility) in [
+            (Some("invalid"), Some("tier1"), Some("stable")),
+            (Some("1"), Some("deep"), Some("stable")),
+            (Some("1"), Some("tier1"), Some("calm")),
+        ] {
+            let gas = Gas {
+                tech_account_id: "system".to_owned(),
+                accepted_assets: vec!["xor#universal".to_owned()],
+                units_per_gas: vec![GasRate {
+                    asset: "xor#universal".to_owned(),
+                    units_per_gas: 1,
+                    twap_local_per_xor: twap.map(str::to_owned),
+                    liquidity_profile: liquidity.map(str::to_owned),
+                    volatility_class: volatility.map(str::to_owned),
+                }],
+            };
+            let mut emitter = Emitter::new();
+            let parsed = gas.parse(&mut emitter);
+            assert!(parsed.units_per_gas.is_empty());
+            assert!(emitter.into_result().is_err());
+        }
+    }
 }
 /// User-level configuration container for `Genesis`.
 #[derive(Debug, ReadConfig)]
@@ -6651,7 +6721,8 @@ impl SoranetHandshake {
         // overrides. Origin and exact-match checks ensure operator-supplied
         // vectors remain authoritative and are validated strictly by P2P.
         if client_uses_defaults {
-            // First TLV: snnet.pqkem (u16 type, u16 length, u8 KEM id).
+            // First TLV: snnet.pqkem. Replace the preferred KEM and retain the
+            // remaining canonical fallback list from the default vector.
             client_capabilities[4] = kem_id;
         }
         if relay_uses_defaults {
@@ -7693,6 +7764,13 @@ pub struct Network {
     /// (clamped to >= 100ms).
     #[config(default = "defaults::network::IDLE_TIMEOUT.into()")]
     pub idle_timeout_ms: DurationMs,
+    /// Maximum total tenure for an accepted transport to authenticate
+    /// (clamped to >= 100ms).
+    #[config(default = "defaults::network::PREAUTH_TIMEOUT.into()")]
+    pub preauth_timeout_ms: DurationMs,
+    /// Maximum concurrent pre-authentication transports admitted from one source IP.
+    #[config(default = "defaults::network::PREAUTH_MAX_CONNECTIONS_PER_IP")]
+    pub preauth_max_connections_per_ip: NonZeroUsize,
     /// Base deadline for an exact reply to await one peer writer's full flush
     /// (clamped to >= 100ms).
     #[config(default = "defaults::network::REPLY_WRITER_FLUSH_TIMEOUT.into()")]
@@ -7975,6 +8053,8 @@ impl Network {
             transaction_gossip_restricted_fallback,
             transaction_gossip_restricted_public_payload,
             idle_timeout_ms: idle_timeout,
+            preauth_timeout_ms: preauth_timeout,
+            preauth_max_connections_per_ip,
             reply_writer_flush_timeout_ms: reply_writer_flush_timeout,
             connect_startup_delay_ms: connect_startup_delay,
             dial_timeout_ms: dial_timeout,
@@ -8061,15 +8141,17 @@ impl Network {
         if matches!(relay_mode, RelayMode::Spoke | RelayMode::Assist)
             && relay_hub_addresses.is_empty()
         {
-            panic!(
-                "network.relay_hub_addresses must be set when network.relay_mode is spoke or assist"
-            );
+            emitter.emit(Report::new(ParseError::InvalidNetworkConfig).attach(
+                "network.relay_hub_addresses must be set when network.relay_mode is spoke or assist",
+            ));
         }
         if transaction_gossip_size > defaults::network::TRANSACTION_GOSSIP_MAX_SIZE {
-            panic!(
-                "network.transaction_gossip_size must not exceed the canonical per-message maximum of {}, got {}",
-                defaults::network::TRANSACTION_GOSSIP_MAX_SIZE,
-                transaction_gossip_size,
+            emitter.emit(
+                Report::new(ParseError::InvalidNetworkConfig).attach(format!(
+                    "network.transaction_gossip_size must not exceed the canonical per-message maximum of {}, got {}",
+                    defaults::network::TRANSACTION_GOSSIP_MAX_SIZE,
+                    transaction_gossip_size,
+                )),
             );
         }
         let transaction_gossip_restricted_target_cap = transaction_gossip_restricted_target_cap
@@ -8109,7 +8191,14 @@ impl Network {
         let soranet_handshake = soranet_handshake.parse(emitter);
         let soranet_privacy = user_soranet_privacy.parse(emitter);
         let soranet_vpn = soranet_vpn.parse();
-        let lane_profile = actual::LaneProfile::from_label(&lane_profile);
+        let lane_profile = actual::LaneProfile::parse_label(&lane_profile).unwrap_or_else(|| {
+            emitter.emit(
+                Report::new(ParseError::InvalidNetworkConfig).attach(format!(
+                    "network.lane_profile must be exactly `core` or `home`, got `{lane_profile}`"
+                )),
+            );
+            actual::LaneProfile::Core
+        });
         let limits = lane_profile.derived_limits();
         let max_incoming = max_incoming.or(limits.max_incoming);
         let max_total_connections = max_total_connections.or(limits.max_total_connections);
@@ -8117,38 +8206,34 @@ impl Network {
             low_priority_rate_per_sec.or(limits.low_priority_rate_per_sec);
         let low_priority_bytes_per_sec =
             low_priority_bytes_per_sec.or(limits.low_priority_bytes_per_sec);
-        let restricted_fallback = match transaction_gossip_restricted_fallback
-            .to_ascii_lowercase()
-            .as_str()
-        {
+        let restricted_fallback = match transaction_gossip_restricted_fallback.as_str() {
             "drop" => actual::DataspaceGossipFallback::Drop,
             "public_overlay" => actual::DataspaceGossipFallback::UsePublicOverlay,
-            other => panic!(
-                "transaction_gossip_restricted_fallback must be drop|public_overlay, got {other}"
-            ),
+            other => {
+                emitter.emit(
+                    Report::new(ParseError::InvalidNetworkConfig).attach(format!(
+                        "network.transaction_gossip_restricted_fallback must be exactly `drop` or `public_overlay`, got `{other}`"
+                    )),
+                );
+                actual::DataspaceGossipFallback::Drop
+            }
         };
-        let _restricted_public_payload = match transaction_gossip_restricted_public_payload
-            .to_ascii_lowercase()
-            .as_str()
+        let restricted_public_payload = match transaction_gossip_restricted_public_payload.as_str()
         {
             "refuse" => actual::RestrictedPublicPayload::Refuse,
             "forward" => actual::RestrictedPublicPayload::Forward,
-            other => panic!(
-                "transaction_gossip_restricted_public_payload must be refuse|forward, got {other}"
-            ),
-        };
-        let restricted_public_payload = match transaction_gossip_restricted_public_payload
-            .to_ascii_lowercase()
-            .as_str()
-        {
-            "refuse" => actual::RestrictedPublicPayload::Refuse,
-            "forward" => actual::RestrictedPublicPayload::Forward,
-            other => panic!(
-                "transaction_gossip_restricted_public_payload must be refuse|forward, got {other}"
-            ),
+            other => {
+                emitter.emit(
+                    Report::new(ParseError::InvalidNetworkConfig).attach(format!(
+                        "network.transaction_gossip_restricted_public_payload must be exactly `refuse` or `forward`, got `{other}`"
+                    )),
+                );
+                actual::RestrictedPublicPayload::Refuse
+            }
         };
         let min_interval = MIN_TIMER_INTERVAL;
         let idle_timeout = idle_timeout.get().max(min_interval);
+        let preauth_timeout = preauth_timeout.get().max(min_interval);
         let reply_writer_flush_timeout = reply_writer_flush_timeout.get().max(min_interval);
         let dial_timeout = dial_timeout.get().max(min_interval);
         let peer_gossip_period = peer_gossip_period.get().max(min_interval);
@@ -8183,6 +8268,8 @@ impl Network {
                 relay_hub_addresses,
                 relay_ttl,
                 idle_timeout,
+                preauth_timeout,
+                preauth_max_connections_per_ip,
                 reply_writer_flush_timeout,
                 connect_startup_delay: connect_startup_delay.get(),
                 dial_timeout,
@@ -8910,10 +8997,6 @@ pub struct Streaming {
     pub session_store_dir: WithOrigin<PathBuf>,
     /// Feature bitmask advertised during streaming capability negotiation.
     pub feature_bits: WithOrigin<u32>,
-    /// Optional overrides for SoraNet circuit integration defaults.
-    pub soranet: Option<WithOrigin<StreamingSoranet>>,
-    /// Optional overrides for SoraVPN provisioning spools.
-    pub soravpn: Option<WithOrigin<StreamingSoravpn>>,
     /// Optional overrides for audio/video sync enforcement.
     pub sync: Option<WithOrigin<StreamingSync>>,
     /// Optional codec overrides (CABAC gating, trellis scopes, rANS tables).
@@ -8959,14 +9042,6 @@ impl ReadConfigTrait for Streaming {
             .read_parameter::<u32>(["feature_bits"])
             .value_or_else(|| 0)
             .finish_with_origin();
-        let soranet = reader
-            .read_parameter::<StreamingSoranet>(["soranet"])
-            .value_optional()
-            .finish_with_origin();
-        let soravpn = reader
-            .read_parameter::<StreamingSoravpn>(["soravpn"])
-            .value_optional()
-            .finish_with_origin();
         let sync = reader
             .read_parameter::<StreamingSync>(["sync"])
             .value_optional()
@@ -8984,8 +9059,6 @@ impl ReadConfigTrait for Streaming {
             identity_private_key_file: identity_private_key_file.unwrap(),
             session_store_dir: session_store_dir.unwrap(),
             feature_bits: feature_bits.unwrap(),
-            soranet: soranet.unwrap(),
-            soravpn: soravpn.unwrap(),
             sync: sync.unwrap(),
             codec: codec.unwrap(),
         })
@@ -8998,8 +9071,6 @@ impl Streaming {
         identity: &KeyPair,
         emitter: &mut Emitter<ParseError>,
     ) -> Option<actual::Streaming> {
-        let soranet_overrides = self.soranet.clone().map(WithOrigin::into_tuple);
-        let soravpn_overrides = self.soravpn.clone().map(WithOrigin::into_tuple);
         let sync_overrides = self.sync.clone().map(WithOrigin::into_tuple);
         let codec_overrides = self.codec.clone().map(WithOrigin::into_tuple);
         let streaming_identity = self.resolve_identity(identity, emitter)?;
@@ -9022,20 +9093,10 @@ impl Streaming {
         }
         let store_dir = self.session_store_dir.into_value();
         let feature_bits = self.feature_bits.into_value();
-        let soranet = match soranet_overrides {
-            Some((overrides, _origin)) => overrides.parse(emitter)?,
-            None => actual::StreamingSoranet::from_defaults(),
-        };
-        let soravpn = match soravpn_overrides {
-            Some((overrides, _origin)) => overrides.parse(emitter)?,
-            None => actual::StreamingSoravpn::from_defaults(),
-        };
         Some(actual::Streaming {
             key_material,
             session_store_dir: store_dir,
             feature_bits,
-            soranet,
-            soravpn,
             sync: match sync_overrides {
                 Some((sync_cfg, _origin)) => sync_cfg.parse(emitter)?,
                 None => actual::StreamingSync::from_defaults(),
@@ -9334,199 +9395,6 @@ impl StreamingSync {
         }
         config.hard_cap_ms = hard_cap_ms;
         Some(config)
-    }
-}
-/// SoraNet integration defaults surfaced in user configuration.
-#[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
-pub struct StreamingSoranet {
-    #[config(default = "defaults::streaming::soranet::ENABLED")]
-    /// Reserved SoraNet exit-publication switch; V1 rejects `true`.
-    pub enabled: bool,
-    #[config(default = "defaults::streaming::soranet::EXIT_MULTIADDR.to_string()")]
-    /// Default exit relay multi-address.
-    pub exit_multiaddr: WithOrigin<String>,
-    #[config(default = "defaults::streaming::soranet::padding_budget_ms()")]
-    /// Optional padding jitter budget expressed in milliseconds.
-    pub padding_budget_ms: WithOrigin<Option<u16>>,
-    #[config(default = "defaults::streaming::soranet::ACCESS_KIND.to_string()")]
-    /// Access policy applied when establishing SoraNet circuits.
-    pub access_kind: WithOrigin<String>,
-    /// Optional override hashed into blinded channel identifiers.
-    pub channel_salt: Option<WithOrigin<String>>,
-    #[config(default = "PathBuf::from(defaults::streaming::soranet::PROVISION_SPOOL_DIR)")]
-    /// Reserved spool path; V1 never creates or writes it.
-    pub provision_spool_dir: WithOrigin<PathBuf>,
-    /// Reserved spool budget; unused while V1 publication is disabled.
-    #[config(default = "defaults::streaming::soranet::PROVISION_SPOOL_MAX_BYTES")]
-    pub provision_spool_max_bytes: WithOrigin<Bytes>,
-    /// Segment window (inclusive) used when provisioning privacy routes.
-    #[config(default = "defaults::streaming::soranet::PROVISION_WINDOW_SEGMENTS")]
-    pub provision_window_segments: WithOrigin<u64>,
-    /// Maximum number of queued privacy-route provisioning jobs.
-    #[config(default = "defaults::streaming::soranet::PROVISION_QUEUE_CAPACITY")]
-    pub provision_queue_capacity: WithOrigin<u64>,
-}
-impl StreamingSoranet {
-    /// Convert user-supplied overrides into runtime defaults.
-    pub fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::StreamingSoranet> {
-        let mut config = actual::StreamingSoranet::from_defaults();
-        if self.enabled {
-            emitter.emit(
-                Report::new(ParseError::InvalidStreamingConfig).attach(
-                    "streaming.soranet.enabled cannot be enabled in V1: token-bearing filesystem exit publication requires RouteOpen proof and durable revocation tombstones",
-                ),
-            );
-            return None;
-        }
-        config.enabled = self.enabled;
-        let (exit_multiaddr, exit_origin) = self.exit_multiaddr.into_tuple();
-        if exit_multiaddr.trim().is_empty() {
-            emitter.emit(
-                Report::new(ParseError::InvalidStreamingConfig)
-                    .attach("streaming.soranet.exit_multiaddr must not be empty")
-                    .attach(ConfigValueAndOrigin::new(exit_multiaddr, exit_origin)),
-            );
-            return None;
-        }
-        config.exit_multiaddr = exit_multiaddr;
-        let (padding_budget_ms, _padding_origin) = self.padding_budget_ms.into_tuple();
-        config.padding_budget_ms = padding_budget_ms;
-        let (access_label, access_origin) = self.access_kind.into_tuple();
-        if let Ok(kind) = access_label.parse::<actual::StreamingSoranetAccessKind>() {
-            config.access_kind = kind;
-        } else {
-            emitter.emit(
-                Report::new(ParseError::InvalidStreamingConfig)
-                    .attach(format!(
-                        "unknown streaming.soranet.access_kind `{access_label}`; expected `authenticated` or `read-only`"
-                    ))
-                    .attach(ConfigValueAndOrigin::new(access_label, access_origin)),
-            );
-            return None;
-        }
-        if let Some(channel_salt) = self.channel_salt {
-            let (label, origin) = channel_salt.into_tuple();
-            if label.trim().is_empty() {
-                emitter.emit(
-                    Report::new(ParseError::InvalidStreamingConfig)
-                        .attach("streaming.soranet.channel_salt must not be empty when provided")
-                        .attach(ConfigValueAndOrigin::new(label, origin)),
-                );
-                return None;
-            }
-            config.channel_salt = label;
-        }
-        let (spool_dir, spool_origin) = self.provision_spool_dir.into_tuple();
-        if spool_dir.as_os_str().is_empty() {
-            emitter.emit(
-                Report::new(ParseError::InvalidStreamingConfig)
-                    .attach("streaming.soranet.provision_spool_dir must not be empty")
-                    .attach(ConfigValueAndOrigin::new(
-                        spool_dir.to_string_lossy().into_owned(),
-                        spool_origin,
-                    )),
-            );
-            return None;
-        }
-        config.provision_spool_dir = spool_dir;
-        let (spool_max_bytes, _spool_max_origin) = self.provision_spool_max_bytes.into_tuple();
-        config.provision_spool_max_bytes = spool_max_bytes;
-        let (window_segments, window_origin) = self.provision_window_segments.into_tuple();
-        if window_segments == 0 {
-            emitter.emit(
-                Report::new(ParseError::InvalidStreamingConfig)
-                    .attach("streaming.soranet.provision_window_segments must be greater than zero")
-                    .attach(ConfigValueAndOrigin::new(
-                        window_segments.to_string(),
-                        window_origin,
-                    )),
-            );
-            return None;
-        }
-        config.provision_window_segments = window_segments;
-        let (queue_capacity, queue_origin) = self.provision_queue_capacity.into_tuple();
-        if queue_capacity == 0 {
-            emitter.emit(
-                Report::new(ParseError::InvalidStreamingConfig)
-                    .attach("streaming.soranet.provision_queue_capacity must be greater than zero")
-                    .attach(ConfigValueAndOrigin::new(
-                        queue_capacity.to_string(),
-                        queue_origin,
-                    )),
-            );
-            return None;
-        }
-        if usize::try_from(queue_capacity).is_err() {
-            emitter.emit(
-                Report::new(ParseError::InvalidStreamingConfig)
-                    .attach(
-                        "streaming.soranet.provision_queue_capacity must fit the platform usize",
-                    )
-                    .attach(ConfigValueAndOrigin::new(
-                        queue_capacity.to_string(),
-                        queue_origin,
-                    )),
-            );
-            return None;
-        }
-        config.provision_queue_capacity = queue_capacity;
-        Some(config)
-    }
-}
-/// SoraVPN provisioning spools surfaced in user configuration.
-#[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
-pub struct StreamingSoravpn {
-    #[config(default = "PathBuf::from(defaults::streaming::soravpn::PROVISION_SPOOL_DIR)")]
-    /// Directory where SoraVPN route updates are spooled for local VPN nodes.
-    pub provision_spool_dir: WithOrigin<PathBuf>,
-    /// Maximum on-disk footprint for the SoraVPN provision spool (0 = unlimited).
-    #[config(default = "defaults::streaming::soravpn::PROVISION_SPOOL_MAX_BYTES")]
-    pub provision_spool_max_bytes: WithOrigin<Bytes>,
-}
-impl StreamingSoravpn {
-    /// Convert user-supplied overrides into runtime defaults.
-    pub fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::StreamingSoravpn> {
-        let mut config = actual::StreamingSoravpn::from_defaults();
-        let (spool_dir, spool_origin) = self.provision_spool_dir.into_tuple();
-        if spool_dir.as_os_str().is_empty() {
-            emitter.emit(
-                Report::new(ParseError::InvalidStreamingConfig)
-                    .attach("streaming.soravpn.provision_spool_dir must not be empty")
-                    .attach(ConfigValueAndOrigin::new(
-                        spool_dir.to_string_lossy().into_owned(),
-                        spool_origin,
-                    )),
-            );
-            return None;
-        }
-        config.provision_spool_dir = spool_dir;
-        let (spool_max_bytes, _spool_max_origin) = self.provision_spool_max_bytes.into_tuple();
-        config.provision_spool_max_bytes = spool_max_bytes;
-        Some(config)
-    }
-}
-#[cfg(test)]
-#[path = "user/streaming_soranet_tests.rs"]
-mod streaming_soranet_tests;
-#[cfg(test)]
-mod streaming_soravpn_tests {
-    use super::*;
-    #[test]
-    fn streaming_soravpn_rejects_empty_spool_dir() {
-        let mut emitter = Emitter::<ParseError>::new();
-        let config = StreamingSoravpn {
-            provision_spool_dir: WithOrigin::inline(PathBuf::new()),
-            provision_spool_max_bytes: WithOrigin::inline(Bytes(0)),
-        };
-        assert!(config.parse(&mut emitter).is_none());
-        let err = emitter
-            .into_result()
-            .expect_err("empty spool dir must be rejected");
-        let debug = format!("{err:?}");
-        assert!(
-            debug.contains("streaming.soravpn.provision_spool_dir"),
-            "unexpected error payload: {debug}"
-        );
     }
 }
 /// Cryptography configuration (user view).
@@ -9853,8 +9721,6 @@ impl NexusStorage {
                 weights.kura_blocks_bps,
                 weights.wsv_snapshots_bps,
                 weights.sorafs_bps,
-                weights.soranet_spool_bps,
-                weights.soravpn_spool_bps,
             ]
             .into_iter()
             .map(|weight| {
@@ -9897,35 +9763,23 @@ pub struct NexusStorageWeights {
     /// Budget share for SoraFS storage (basis points).
     #[config(default = "defaults::nexus::storage::SORAFS_BPS")]
     pub sorafs_bps: u16,
-    /// Budget share for SoraNet route spools (basis points).
-    #[config(default = "defaults::nexus::storage::SORANET_SPOOL_BPS")]
-    pub soranet_spool_bps: u16,
-    /// Budget share reserved for future SoraVPN storage (basis points).
-    #[config(default = "defaults::nexus::storage::SORAVPN_SPOOL_BPS")]
-    pub soravpn_spool_bps: u16,
 }
 impl_default!(NexusStorageWeights {
     kura_blocks_bps: defaults::nexus::storage::KURA_BLOCKS_BPS,
     wsv_snapshots_bps: defaults::nexus::storage::WSV_SNAPSHOTS_BPS,
     sorafs_bps: defaults::nexus::storage::SORAFS_BPS,
-    soranet_spool_bps: defaults::nexus::storage::SORANET_SPOOL_BPS,
-    soravpn_spool_bps: defaults::nexus::storage::SORAVPN_SPOOL_BPS,
 });
 impl NexusStorageWeights {
     fn total_bps(&self) -> u32 {
         u32::from(self.kura_blocks_bps)
             + u32::from(self.wsv_snapshots_bps)
             + u32::from(self.sorafs_bps)
-            + u32::from(self.soranet_spool_bps)
-            + u32::from(self.soravpn_spool_bps)
     }
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::NexusStorageWeights> {
         if let Some((field, _)) = [
             ("kura_blocks_bps", self.kura_blocks_bps),
             ("wsv_snapshots_bps", self.wsv_snapshots_bps),
             ("sorafs_bps", self.sorafs_bps),
-            ("soranet_spool_bps", self.soranet_spool_bps),
-            ("soravpn_spool_bps", self.soravpn_spool_bps),
         ]
         .into_iter()
         .find(|(_, weight)| *weight == 0)
@@ -9947,8 +9801,6 @@ impl NexusStorageWeights {
             kura_blocks_bps: self.kura_blocks_bps,
             wsv_snapshots_bps: self.wsv_snapshots_bps,
             sorafs_bps: self.sorafs_bps,
-            soranet_spool_bps: self.soranet_spool_bps,
-            soravpn_spool_bps: self.soravpn_spool_bps,
         })
     }
 }
@@ -13004,9 +12856,12 @@ pub struct SoracloudRuntime {
         default = "DurationMs(std::time::Duration::from_millis(defaults::soracloud_runtime::RECONCILE_INTERVAL_MS))"
     )]
     pub reconcile_interval_ms: DurationMs,
-    /// Maximum concurrent artifact hydration workers.
+    /// Maximum concurrent artifact hydration workers, independent of Inrou guest concurrency.
     #[config(default = "defaults::soracloud_runtime::HYDRATION_CONCURRENCY")]
     pub hydration_concurrency: NonZeroUsize,
+    /// Maximum idle prepared IVM runtimes retained independently of hydration workers.
+    #[config(default = "defaults::soracloud_runtime::PREPARED_RUNTIME_CACHE_CAPACITY")]
+    pub prepared_runtime_cache_capacity: NonZeroUsize,
     /// Cache budgets for hydrated Soracloud artifacts.
     #[config(default)]
     pub cache_budgets: SoracloudRuntimeCacheBudgets,
@@ -13033,11 +12888,31 @@ impl SoracloudRuntime {
                 ),
             );
         }
+        if self.hydration_concurrency.get() > defaults::soracloud_runtime::HYDRATION_CONCURRENCY_MAX
+        {
+            emitter.emit(
+                Report::new(ParseError::InvalidSoracloudConfig).attach(format!(
+                    "soracloud_runtime.hydration_concurrency must not exceed {}",
+                    defaults::soracloud_runtime::HYDRATION_CONCURRENCY_MAX
+                )),
+            );
+        }
+        if self.prepared_runtime_cache_capacity.get()
+            > defaults::soracloud_runtime::PREPARED_RUNTIME_CACHE_CAPACITY_MAX
+        {
+            emitter.emit(
+                Report::new(ParseError::InvalidSoracloudConfig).attach(format!(
+                    "soracloud_runtime.prepared_runtime_cache_capacity must not exceed {}",
+                    defaults::soracloud_runtime::PREPARED_RUNTIME_CACHE_CAPACITY_MAX
+                )),
+            );
+        }
         actual::SoracloudRuntime {
             production_mode,
             state_dir: self.state_dir.resolve_relative_path(),
             reconcile_interval,
             hydration_concurrency: self.hydration_concurrency,
+            prepared_runtime_cache_capacity: self.prepared_runtime_cache_capacity,
             cache_budgets: self.cache_budgets.parse(),
             inrou: self.inrou.parse(emitter),
             submission,
@@ -13051,6 +12926,7 @@ struct SoracloudRuntimeFields {
     state_dir: Option<WithOrigin<PathBuf>>,
     reconcile_interval_ms: Option<DurationMs>,
     hydration_concurrency: Option<NonZeroUsize>,
+    prepared_runtime_cache_capacity: Option<NonZeroUsize>,
     cache_budgets: Option<SoracloudRuntimeCacheBudgets>,
     inrou: Option<SoracloudRuntimeInrou>,
     submission: Option<SoracloudRuntimeSubmission>,
@@ -13102,6 +12978,12 @@ impl SoracloudRuntimeFields {
                 parser,
                 <NonZeroUsize as json::JsonDeserialize>::json_deserialize,
             ),
+            "prepared_runtime_cache_capacity" => Self::set_unique(
+                &mut self.prepared_runtime_cache_capacity,
+                "prepared_runtime_cache_capacity",
+                parser,
+                <NonZeroUsize as json::JsonDeserialize>::json_deserialize,
+            ),
             "cache_budgets" => Self::set_unique(
                 &mut self.cache_budgets,
                 "cache_budgets",
@@ -13145,6 +13027,9 @@ impl SoracloudRuntimeFields {
             hydration_concurrency: self
                 .hydration_concurrency
                 .unwrap_or(defaults::soracloud_runtime::HYDRATION_CONCURRENCY),
+            prepared_runtime_cache_capacity: self
+                .prepared_runtime_cache_capacity
+                .unwrap_or(defaults::soracloud_runtime::PREPARED_RUNTIME_CACHE_CAPACITY),
             cache_budgets: self.cache_budgets.unwrap_or_default(),
             inrou: self.inrou.unwrap_or_default(),
             submission: self.submission.unwrap_or_default(),
@@ -14750,10 +14635,11 @@ impl ToriiPush {
                 .unwrap_or(nonzero!(1_usize)),
             fcm_project_id: trim_optional(self.fcm_project_id),
             fcm_service_account_path: self.fcm_service_account_path,
-            apns_environment: if self.apns_environment.trim().is_empty() {
-                defaults::torii::PUSH_APNS_ENVIRONMENT.to_owned()
-            } else {
-                self.apns_environment.trim().to_ascii_lowercase()
+            apns_environment: match self.apns_environment.as_str() {
+                "sandbox" | "production" => self.apns_environment,
+                value => panic!(
+                    "torii.push.apns_environment must be exactly `sandbox` or `production`, got `{value}`"
+                ),
             },
             apns_topic: trim_optional(self.apns_topic),
             apns_team_id: trim_optional(self.apns_team_id),
@@ -14812,7 +14698,7 @@ mod torii_push_tests {
             max_topics_per_device: 0,
             fcm_project_id: Some("  taira-mobile  ".to_owned()),
             fcm_service_account_path: Some(PathBuf::from("/run/secrets/fcm.json")),
-            apns_environment: "  PRODUCTION  ".to_owned(),
+            apns_environment: "production".to_owned(),
             apns_topic: Some("  org.sora.wallet  ".to_owned()),
             apns_team_id: Some("  TEAMID  ".to_owned()),
             apns_key_id: Some("  KEYID  ".to_owned()),
@@ -14844,33 +14730,69 @@ mod torii_push_tests {
             Some("https://apns.internal.example")
         );
     }
+    #[test]
+    fn torii_push_rejects_noncanonical_apns_environment_labels() {
+        for apns_environment in ["", " PRODUCTION ", "Production", "sandbox "] {
+            let config = ToriiPush {
+                apns_environment: apns_environment.to_owned(),
+                ..ToriiPush::default()
+            };
+            assert!(
+                std::panic::catch_unwind(|| config.parse()).is_err(),
+                "{apns_environment:?} must fail closed"
+            );
+        }
+    }
 }
 impl Torii {
     fn parse_receipt_signer(
         receipt_public_key: Option<&PublicKey>,
         receipt_private_key: Option<&PrivateKey>,
+        emitter: &mut Emitter<ParseError>,
     ) -> Option<KeyPair> {
         match (receipt_public_key, receipt_private_key) {
             (None, None) => None,
             (Some(_), None) => {
-                panic!(
-                    "torii.receipt_private_key must be set when torii.receipt_public_key is set"
+                emit_torii_config_error(
+                    emitter,
+                    "torii.receipt_private_key must be set when torii.receipt_public_key is set",
                 );
+                None
             }
             (None, Some(_)) => {
-                panic!(
-                    "torii.receipt_public_key must be set when torii.receipt_private_key is set"
+                emit_torii_config_error(
+                    emitter,
+                    "torii.receipt_public_key must be set when torii.receipt_private_key is set",
                 );
+                None
             }
             (Some(public_key), Some(private_key)) => {
-                let key_pair = KeyPair::new(public_key.clone(), private_key.clone())
-                    .unwrap_or_else(|err| panic!("invalid torii receipt key pair: {err}"));
-                let algorithm = key_pair
-                    .public_key()
-                    .try_algorithm()
-                    .unwrap_or_else(|err| panic!("invalid torii receipt public key: {err}"));
+                let key_pair = match KeyPair::new(public_key.clone(), private_key.clone()) {
+                    Ok(key_pair) => key_pair,
+                    Err(err) => {
+                        emit_torii_config_error(
+                            emitter,
+                            format!("invalid torii receipt key pair: {err}"),
+                        );
+                        return None;
+                    }
+                };
+                let algorithm = match key_pair.public_key().try_algorithm() {
+                    Ok(algorithm) => algorithm,
+                    Err(err) => {
+                        emit_torii_config_error(
+                            emitter,
+                            format!("invalid torii receipt public key: {err}"),
+                        );
+                        return None;
+                    }
+                };
                 if matches!(algorithm, Algorithm::BlsNormal | Algorithm::BlsSmall) {
-                    panic!("torii.receipt_* must not use BLS keys; use ed25519 or secp256k1");
+                    emit_torii_config_error(
+                        emitter,
+                        "torii.receipt_* must not use BLS keys; use ed25519 or secp256k1",
+                    );
+                    return None;
                 }
                 Some(key_pair)
             }
@@ -15097,7 +15019,16 @@ impl Torii {
         let receipt_signer = Self::parse_receipt_signer(
             self.receipt_public_key.as_ref(),
             self.receipt_private_key.as_ref(),
+            emitter,
         );
+        let operator_auth = self.operator_auth.parse(emitter);
+        let attachments_sanitizer_mode = parse_attachment_sanitizer_mode(
+            &self.attachments_sanitizer_mode,
+        )
+        .unwrap_or_else(|message| {
+            emit_torii_config_error(emitter, message);
+            actual::AttachmentSanitizerMode::Subprocess
+        });
         let torii = actual::Torii {
             address: self.address,
             max_content_len: self.max_content_len,
@@ -15192,7 +15123,7 @@ impl Torii {
             soranet_privacy_ingest: self.soranet_privacy_ingest.parse(),
             privacy_bootle_lantern_issuer,
             debug_match_filters: self.debug_match_filters,
-            operator_auth: self.operator_auth.parse(),
+            operator_auth,
             operator_signatures: self.operator_signatures.parse(),
             preauth_max_connections: self
                 .preauth_max_connections
@@ -15236,9 +15167,7 @@ impl Torii {
             attachments_allowed_mime_types: self.attachments_allowed_mime_types,
             attachments_max_expanded_bytes: self.attachments_max_expanded_bytes,
             attachments_max_archive_depth: self.attachments_max_archive_depth,
-            attachments_sanitizer_mode: parse_attachment_sanitizer_mode(
-                &self.attachments_sanitizer_mode,
-            ),
+            attachments_sanitizer_mode,
             attachments_sanitize_timeout_ms: self.attachments_sanitize_timeout_ms,
             zk_prover_enabled: self.zk_prover_enabled,
             zk_prover_scan_period_secs: self.zk_prover_scan_period_secs,
@@ -15273,8 +15202,8 @@ impl Torii {
             sorafs_gateway,
             sorafs_por,
             sorafs_appeal_finance_settlement,
-            transport: self.transport.into(),
-            mcp: self.mcp.into(),
+            transport: self.transport.parse(emitter),
+            mcp: self.mcp.parse(emitter),
             cors: self.cors.parse(emitter),
             webhook,
             webhook_security,
@@ -15285,12 +15214,12 @@ impl Torii {
             faucet: self.faucet.and_then(|config| config.parse(emitter)),
             kagemusha_commands: self
                 .kagemusha_commands
-                .and_then(ToriiKagemushaCommands::parse),
+                .and_then(|config| config.parse(emitter)),
             ram_lfe: self.ram_lfe.and_then(ToriiRamLfe::parse),
             tx_history: self.tx_history.map(ToriiTxHistory::parse),
             recipient_lookup: self
                 .recipient_lookup
-                .map(ToriiRecipientLookup::parse)
+                .and_then(|config| config.parse(emitter))
                 .unwrap_or_default(),
             app_api: actual::AppApi {
                 default_list_limit,
@@ -15323,8 +15252,14 @@ mod torii_receipt_signer_tests {
         )
         .expect("fixture seed derives Torii receipt Ed25519 keypair");
         let private_key = key_pair.private_key().clone();
-        let parsed = Torii::parse_receipt_signer(Some(key_pair.public_key()), Some(&private_key))
-            .expect("receipt signer");
+        let mut emitter = Emitter::new();
+        let parsed = Torii::parse_receipt_signer(
+            Some(key_pair.public_key()),
+            Some(&private_key),
+            &mut emitter,
+        )
+        .expect("receipt signer");
+        emitter.into_result().expect("valid receipt signer");
         assert_eq!(
             parsed
                 .public_key()
@@ -15332,6 +15267,23 @@ mod torii_receipt_signer_tests {
                 .expect("receipt signer public key is valid"),
             Algorithm::Ed25519
         );
+    }
+
+    #[test]
+    fn torii_receipt_signer_reports_incomplete_key_pair() {
+        let key_pair = KeyPair::try_from_seed(
+            b"iroha:config:test:torii-receipt-signer-incomplete".to_vec(),
+            Algorithm::Ed25519,
+        )
+        .expect("fixture seed derives Torii receipt Ed25519 keypair");
+        let mut emitter = Emitter::new();
+        assert!(
+            Torii::parse_receipt_signer(Some(key_pair.public_key()), None, &mut emitter).is_none()
+        );
+        let error = emitter
+            .into_result()
+            .expect_err("incomplete receipt signer must be rejected");
+        assert!(format!("{error:?}").contains("receipt_private_key must be set"));
     }
 }
 include!("user/torii_tx_history.rs");
@@ -15354,28 +15306,64 @@ pub struct ToriiRecipientLookup {
     pub routes: Vec<ToriiRecipientLookupRoute>,
 }
 impl ToriiRecipientLookup {
-    fn parse(self) -> actual::ToriiRecipientLookup {
-        let policy_id = self
-            .policy_id
-            .parse()
-            .unwrap_or_else(|err| panic!("invalid torii.recipient_lookup.policy_id: {err}"));
-        assert!(
-            (1..=defaults::torii::recipient_lookup::REQUESTS_PER_MINUTE)
-                .contains(&self.requests_per_minute),
-            "torii.recipient_lookup.requests_per_minute must be between 1 and {}",
-            defaults::torii::recipient_lookup::REQUESTS_PER_MINUTE,
-        );
-        actual::ToriiRecipientLookup {
-            policy_id,
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::ToriiRecipientLookup> {
+        let mut valid = true;
+        let policy_id = match self.policy_id.parse() {
+            Ok(policy_id) => Some(policy_id),
+            Err(err) => {
+                emit_torii_config_error(
+                    emitter,
+                    format!("invalid torii.recipient_lookup.policy_id: {err}"),
+                );
+                valid = false;
+                None
+            }
+        };
+        if !(1..=defaults::torii::recipient_lookup::REQUESTS_PER_MINUTE)
+            .contains(&self.requests_per_minute)
+        {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.recipient_lookup.requests_per_minute must be between 1 and {}",
+                    defaults::torii::recipient_lookup::REQUESTS_PER_MINUTE,
+                ),
+            );
+            valid = false;
+        }
+        if self.request_timeout_ms.get().is_zero() {
+            emit_torii_config_error(
+                emitter,
+                "torii.recipient_lookup.request_timeout_ms must be greater than zero",
+            );
+            valid = false;
+        }
+        let mut route_ids = BTreeSet::new();
+        let mut routes = Vec::with_capacity(self.routes.len());
+        for (index, route) in self.routes.into_iter().enumerate() {
+            if let Some(route) = route.parse(index, emitter) {
+                if !route_ids.insert(route.fi_id.clone()) {
+                    emit_torii_config_error(
+                        emitter,
+                        format!(
+                            "torii.recipient_lookup.routes contains duplicate FI id `{}`",
+                            route.fi_id
+                        ),
+                    );
+                    valid = false;
+                } else {
+                    routes.push(route);
+                }
+            } else {
+                valid = false;
+            }
+        }
+        valid.then(|| actual::ToriiRecipientLookup {
+            policy_id: policy_id.expect("validated recipient lookup policy id"),
             requests_per_minute: self.requests_per_minute,
             request_timeout: self.request_timeout_ms.get(),
-            routes: self
-                .routes
-                .into_iter()
-                .enumerate()
-                .map(|(index, route)| route.parse(index))
-                .collect(),
-        }
+            routes,
+        })
     }
 }
 /// Single bank Core API route used by the retail recipient lookup endpoint.
@@ -15389,23 +15377,39 @@ pub struct ToriiRecipientLookupRoute {
     pub bearer_token: String,
 }
 impl ToriiRecipientLookupRoute {
-    fn parse(self, index: usize) -> actual::ToriiRecipientLookupRoute {
-        let fi_id = match self.fi_id.trim().to_ascii_lowercase().as_str() {
-            "hbl.sbp" => "hbl.sbp".to_owned(),
-            "ubl.sbp" => "ubl.sbp".to_owned(),
-            other => panic!(
-                "invalid torii.recipient_lookup.routes[{index}].fi_id `{other}`; expected `hbl.sbp` or `ubl.sbp`"
-            ),
+    fn parse(
+        self,
+        index: usize,
+        emitter: &mut Emitter<ParseError>,
+    ) -> Option<actual::ToriiRecipientLookupRoute> {
+        let fi_id = match self.fi_id.as_str() {
+            "hbl.sbp" | "ubl.sbp" => self.fi_id,
+            _ => {
+                emit_torii_config_error(
+                    emitter,
+                    format!(
+                        "invalid torii.recipient_lookup.routes[{index}].fi_id `{}`; expected exactly `hbl.sbp` or `ubl.sbp`",
+                        self.fi_id
+                    ),
+                );
+                return None;
+            }
         };
         let bearer_token = self.bearer_token.trim().to_owned();
         if bearer_token.is_empty() {
-            panic!("torii.recipient_lookup.routes[{index}].bearer_token must not be empty");
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.recipient_lookup.routes[{index}].bearer_token must not be empty"
+                ),
+            );
+            return None;
         }
-        actual::ToriiRecipientLookupRoute {
+        Some(actual::ToriiRecipientLookupRoute {
             fi_id,
             base_url: self.base_url,
             bearer_token,
-        }
+        })
     }
 }
 #[cfg(test)]
@@ -15413,17 +15417,20 @@ mod torii_recipient_lookup_tests {
     use super::*;
     #[test]
     fn torii_recipient_lookup_parse_accepts_canonical_fi_routes() {
+        let mut emitter = Emitter::new();
         let parsed = ToriiRecipientLookup {
             policy_id: "cbuae_aed_sbp_pkr".to_owned(),
             requests_per_minute: 30,
             request_timeout_ms: DurationMs(Duration::from_millis(750)),
             routes: vec![ToriiRecipientLookupRoute {
-                fi_id: " HBL.SBP ".to_owned(),
+                fi_id: "hbl.sbp".to_owned(),
                 base_url: Url::parse("https://core-api.example/hbl.sbp").expect("valid URL"),
                 bearer_token: " service-token ".to_owned(),
             }],
         }
-        .parse();
+        .parse(&mut emitter)
+        .expect("valid recipient lookup");
+        emitter.into_result().expect("valid recipient lookup");
         assert_eq!(parsed.request_timeout, Duration::from_millis(750));
         assert_eq!(parsed.policy_id.as_ref(), "cbuae_aed_sbp_pkr");
         assert_eq!(parsed.requests_per_minute, 30);
@@ -15437,8 +15444,49 @@ mod torii_recipient_lookup_tests {
             base_url: Url::parse("https://core-api.example/hbl").expect("valid URL"),
             bearer_token: "service-token".to_owned(),
         };
-        let panic = std::panic::catch_unwind(|| route.parse(0));
-        assert!(panic.is_err(), "expected short FI id to panic");
+        let mut emitter = Emitter::new();
+        assert!(route.parse(0, &mut emitter).is_none());
+        let error = emitter.into_result().expect_err("reject short FI id");
+        assert!(format!("{error:?}").contains("expected exactly `hbl.sbp` or `ubl.sbp`"));
+    }
+    #[test]
+    fn torii_recipient_lookup_rejects_noncanonical_fi_labels() {
+        for fi_id in ["HBL.SBP", " hbl.sbp", "hbl.sbp "] {
+            let route = ToriiRecipientLookupRoute {
+                fi_id: fi_id.to_owned(),
+                base_url: Url::parse("https://bank.example").expect("valid URL"),
+                bearer_token: "secret".to_owned(),
+            };
+            let mut emitter = Emitter::new();
+            assert!(route.parse(0, &mut emitter).is_none());
+            let _error = emitter
+                .into_result()
+                .expect_err("noncanonical FI id must fail closed");
+        }
+    }
+
+    #[test]
+    fn torii_recipient_lookup_rejects_zero_timeout_and_duplicate_routes() {
+        let route = ToriiRecipientLookupRoute {
+            fi_id: "hbl.sbp".to_owned(),
+            base_url: Url::parse("https://bank.example").expect("valid URL"),
+            bearer_token: "secret".to_owned(),
+        };
+        let mut emitter = Emitter::new();
+        let parsed = ToriiRecipientLookup {
+            policy_id: "cbuae_aed_sbp_pkr".to_owned(),
+            requests_per_minute: 1,
+            request_timeout_ms: DurationMs(Duration::ZERO),
+            routes: vec![route.clone(), route],
+        }
+        .parse(&mut emitter);
+        assert!(parsed.is_none());
+        let error = emitter
+            .into_result()
+            .expect_err("unsafe recipient lookup must be rejected");
+        let error = format!("{error:?}");
+        assert!(error.contains("request_timeout_ms must be greater than zero"));
+        assert!(error.contains("duplicate FI id `hbl.sbp`"));
     }
 }
 /// Operator request-signature authentication configuration for Torii operator endpoints.
@@ -15555,9 +15603,17 @@ pub struct ToriiOperatorWebAuthn {
     pub allowed_algorithms: Vec<String>,
 }
 impl ToriiOperatorAuth {
-    fn parse(self) -> actual::ToriiOperatorAuth {
-        let token_fallback = parse_operator_token_fallback(&self.token_fallback);
-        let token_source = parse_operator_token_source(&self.token_source);
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::ToriiOperatorAuth {
+        let token_fallback =
+            parse_operator_token_fallback(&self.token_fallback).unwrap_or_else(|message| {
+                emit_torii_config_error(emitter, message);
+                actual::OperatorTokenFallback::Disabled
+            });
+        let token_source =
+            parse_operator_token_source(&self.token_source).unwrap_or_else(|message| {
+                emit_torii_config_error(emitter, message);
+                actual::OperatorTokenSource::OperatorTokens
+            });
         let rate_per_minute = self
             .rate_per_minute
             .or(super::defaults::torii::operator_auth::RATE_PER_MIN)
@@ -15570,13 +15626,14 @@ impl ToriiOperatorAuth {
         let lockout_window = Duration::from_secs(self.lockout_window_secs.max(1));
         let lockout_duration = Duration::from_secs(self.lockout_duration_secs.max(1));
         let webauthn = if self.enabled {
-            self.webauthn.parse()
+            self.webauthn.parse(emitter)
         } else {
             None
         };
         if self.enabled && webauthn.is_none() {
-            panic!(
-                "torii.operator_auth.webauthn.enabled must be true when operator auth is enabled"
+            emit_torii_config_error(
+                emitter,
+                "torii.operator_auth.webauthn must be valid and enabled when operator auth is enabled",
             );
         }
         actual::ToriiOperatorAuth {
@@ -15598,50 +15655,119 @@ impl ToriiOperatorAuth {
     }
 }
 impl ToriiOperatorWebAuthn {
-    fn parse(self) -> Option<actual::OperatorWebAuthnConfig> {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::OperatorWebAuthnConfig> {
         if !self.enabled {
             return None;
         }
+        let mut invalid = false;
         let rp_id = self.rp_id.unwrap_or_else(|| {
-            panic!("torii.operator_auth.webauthn.rp_id must be set when WebAuthn is enabled");
+            invalid = true;
+            emit_torii_config_error(
+                emitter,
+                "torii.operator_auth.webauthn.rp_id must be set when WebAuthn is enabled",
+            );
+            String::new()
         });
-        validate_webauthn_rp_id_v1(&rp_id).unwrap_or_else(|error| {
-            panic!(
-                "torii.operator_auth.webauthn.rp_id must be a canonical V1 DNS relying-party id: {error:?}"
-            )
-        });
+        if let Err(error) = validate_webauthn_rp_id_v1(&rp_id) {
+            invalid = true;
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.operator_auth.webauthn.rp_id must be a canonical V1 DNS relying-party id: {error:?}"
+                ),
+            );
+        }
         if self.origins.is_empty() {
-            panic!("torii.operator_auth.webauthn.origins must not be empty");
+            invalid = true;
+            emit_torii_config_error(
+                emitter,
+                "torii.operator_auth.webauthn.origins must not be empty",
+            );
         }
         let mut unique_origins = BTreeSet::new();
         let origins = self
             .origins
             .into_iter()
-            .map(|origin| {
+            .filter_map(|origin| {
                 if !unique_origins.insert(origin.clone()) {
-                    panic!(
-                        "torii.operator_auth.webauthn.origins must not contain duplicate origins"
+                    invalid = true;
+                    emit_torii_config_error(
+                        emitter,
+                        format!(
+                            "torii.operator_auth.webauthn.origins contains duplicate origin `{origin}`"
+                        ),
                     );
+                    return None;
                 }
-                validate_webauthn_origin_v1(&origin, &rp_id).unwrap_or_else(|error| {
-                    panic!(
-                        "invalid torii.operator_auth.webauthn.origins entry `{origin}`: {error:?}"
-                    )
-                });
-                url::Url::parse(&origin).unwrap_or_else(|err| {
-                    panic!("invalid torii.operator_auth.webauthn.origins entry `{origin}`: {err}")
-                })
+                if let Err(error) = validate_webauthn_origin_v1(&origin, &rp_id) {
+                    invalid = true;
+                    emit_torii_config_error(
+                        emitter,
+                        format!(
+                            "invalid torii.operator_auth.webauthn.origins entry `{origin}`: {error:?}"
+                        ),
+                    );
+                    return None;
+                }
+                match url::Url::parse(&origin) {
+                    Ok(origin) => Some(origin),
+                    Err(error) => {
+                        invalid = true;
+                        emit_torii_config_error(
+                            emitter,
+                            format!(
+                                "invalid torii.operator_auth.webauthn.origins entry `{origin}`: {error}"
+                            ),
+                        );
+                        None
+                    }
+                }
             })
             .collect();
         let user_id = self.user_id.into_bytes();
         if user_id.is_empty() || user_id.len() > 64 {
-            panic!("torii.operator_auth.webauthn.user_id must be 1..=64 bytes");
+            invalid = true;
+            emit_torii_config_error(
+                emitter,
+                "torii.operator_auth.webauthn.user_id must be 1..=64 bytes",
+            );
         }
         let algorithms = self
             .allowed_algorithms
             .into_iter()
-            .map(|label| parse_operator_webauthn_algorithm(&label))
-            .collect();
+            .filter_map(|label| match parse_operator_webauthn_algorithm(&label) {
+                Ok(algorithm) => Some(algorithm),
+                Err(message) => {
+                    invalid = true;
+                    emit_torii_config_error(emitter, message);
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        if algorithms.is_empty() {
+            invalid = true;
+            emit_torii_config_error(
+                emitter,
+                "torii.operator_auth.webauthn.allowed_algorithms must not be empty",
+            );
+        }
+        if self.challenge_ttl_secs == 0 {
+            invalid = true;
+            emit_torii_config_error(
+                emitter,
+                "torii.operator_auth.webauthn.challenge_ttl_secs must be greater than zero",
+            );
+        }
+        if self.session_ttl_secs == 0 {
+            invalid = true;
+            emit_torii_config_error(
+                emitter,
+                "torii.operator_auth.webauthn.session_ttl_secs must be greater than zero",
+            );
+        }
+        if invalid {
+            return None;
+        }
         Some(actual::OperatorWebAuthnConfig {
             rp_id,
             rp_name: self.rp_name,
@@ -15649,8 +15775,8 @@ impl ToriiOperatorWebAuthn {
             user_id,
             user_name: self.user_name,
             user_display_name: self.user_display_name,
-            challenge_ttl: Duration::from_secs(self.challenge_ttl_secs.max(1)),
-            session_ttl: Duration::from_secs(self.session_ttl_secs.max(1)),
+            challenge_ttl: Duration::from_secs(self.challenge_ttl_secs),
+            session_ttl: Duration::from_secs(self.session_ttl_secs),
             require_user_verification: self.require_user_verification,
             allowed_algorithms: algorithms,
         })
@@ -15679,7 +15805,13 @@ mod torii_operator_webauthn_tests {
     }
     #[test]
     fn operator_webauthn_accepts_exact_rp_and_subdomain_origins() {
-        let parsed = valid_config().parse().expect("enabled WebAuthn policy");
+        let mut emitter = Emitter::new();
+        let parsed = valid_config()
+            .parse(&mut emitter)
+            .expect("enabled WebAuthn policy");
+        emitter
+            .into_result()
+            .expect("valid WebAuthn configuration must not emit errors");
         assert_eq!(parsed.rp_id, "review.example");
         assert_eq!(
             parsed.origins.iter().map(Url::as_str).collect::<Vec<_>>(),
@@ -15694,10 +15826,9 @@ mod torii_operator_webauthn_tests {
         for rp_id in ["Review.example", "localhost", "127.0.0.1"] {
             let mut config = valid_config();
             config.rp_id = Some(rp_id.to_owned());
-            assert!(
-                std::panic::catch_unwind(|| config.parse()).is_err(),
-                "{rp_id:?} must fail closed"
-            );
+            let mut emitter = Emitter::new();
+            assert!(config.parse(&mut emitter).is_none(), "{rp_id:?}");
+            assert!(emitter.into_result().is_err(), "{rp_id:?}");
         }
         for origin in [
             "http://review.example",
@@ -15710,55 +15841,98 @@ mod torii_operator_webauthn_tests {
         ] {
             let mut config = valid_config();
             config.origins = vec![origin.to_owned()];
-            assert!(
-                std::panic::catch_unwind(|| config.parse()).is_err(),
-                "{origin:?} must fail closed"
-            );
+            let mut emitter = Emitter::new();
+            assert!(config.parse(&mut emitter).is_none(), "{origin:?}");
+            assert!(emitter.into_result().is_err(), "{origin:?}");
         }
         let mut duplicate = valid_config();
         duplicate.origins = vec![
             "https://review.example".to_owned(),
             "https://review.example".to_owned(),
         ];
-        assert!(std::panic::catch_unwind(|| duplicate.parse()).is_err());
+        let mut emitter = Emitter::new();
+        assert!(duplicate.parse(&mut emitter).is_none());
+        assert!(emitter.into_result().is_err());
     }
 }
-fn parse_operator_token_fallback(value: &str) -> actual::OperatorTokenFallback {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "disabled" => actual::OperatorTokenFallback::Disabled,
-        "bootstrap" => actual::OperatorTokenFallback::Bootstrap,
-        "always" => actual::OperatorTokenFallback::Always,
-        other => panic!(
+fn parse_operator_token_fallback(
+    value: &str,
+) -> core::result::Result<actual::OperatorTokenFallback, String> {
+    match value {
+        "disabled" => Ok(actual::OperatorTokenFallback::Disabled),
+        "bootstrap" => Ok(actual::OperatorTokenFallback::Bootstrap),
+        "always" => Ok(actual::OperatorTokenFallback::Always),
+        other => Err(format!(
             "invalid torii.operator_auth.token_fallback `{other}`; expected `disabled`, `bootstrap`, or `always`"
-        ),
+        )),
     }
 }
-fn parse_operator_token_source(value: &str) -> actual::OperatorTokenSource {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "operator" => actual::OperatorTokenSource::OperatorTokens,
-        "api" => actual::OperatorTokenSource::ApiTokens,
-        "both" => actual::OperatorTokenSource::Both,
-        other => panic!(
+fn parse_operator_token_source(
+    value: &str,
+) -> core::result::Result<actual::OperatorTokenSource, String> {
+    match value {
+        "operator" => Ok(actual::OperatorTokenSource::OperatorTokens),
+        "api" => Ok(actual::OperatorTokenSource::ApiTokens),
+        "both" => Ok(actual::OperatorTokenSource::Both),
+        other => Err(format!(
             "invalid torii.operator_auth.token_source `{other}`; expected `operator`, `api`, or `both`"
-        ),
+        )),
     }
 }
-fn parse_attachment_sanitizer_mode(value: &str) -> actual::AttachmentSanitizerMode {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "in_process" | "inprocess" | "inline" => actual::AttachmentSanitizerMode::InProcess,
-        "subprocess" | "external" | "process" => actual::AttachmentSanitizerMode::Subprocess,
-        other => panic!(
+fn parse_attachment_sanitizer_mode(
+    value: &str,
+) -> core::result::Result<actual::AttachmentSanitizerMode, String> {
+    match value {
+        "in_process" => Ok(actual::AttachmentSanitizerMode::InProcess),
+        "subprocess" => Ok(actual::AttachmentSanitizerMode::Subprocess),
+        other => Err(format!(
             "invalid torii.attachments_sanitizer_mode `{other}`; expected `subprocess` or `in_process`"
-        ),
+        )),
     }
 }
-fn parse_operator_webauthn_algorithm(value: &str) -> actual::OperatorWebAuthnAlgorithm {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "es256" | "p256" => actual::OperatorWebAuthnAlgorithm::Es256,
-        "ed25519" | "eddsa" => actual::OperatorWebAuthnAlgorithm::Ed25519,
-        other => panic!(
+fn parse_operator_webauthn_algorithm(
+    value: &str,
+) -> core::result::Result<actual::OperatorWebAuthnAlgorithm, String> {
+    match value {
+        "es256" => Ok(actual::OperatorWebAuthnAlgorithm::Es256),
+        "ed25519" => Ok(actual::OperatorWebAuthnAlgorithm::Ed25519),
+        other => Err(format!(
             "invalid torii.operator_auth.webauthn.allowed_algorithms entry `{other}`; expected `es256` or `ed25519`"
-        ),
+        )),
+    }
+}
+#[cfg(test)]
+mod exact_torii_label_tests {
+    use super::*;
+
+    #[test]
+    fn operator_and_sanitizer_labels_reject_aliases_and_normalization() {
+        parse_operator_token_fallback("disabled").expect("canonical fallback");
+        parse_operator_token_source("operator").expect("canonical source");
+        parse_attachment_sanitizer_mode("in_process").expect("canonical sanitizer");
+        parse_operator_webauthn_algorithm("es256").expect("canonical algorithm");
+
+        for invalid in ["DISABLED", " disabled", "disabled "] {
+            assert!(
+                parse_operator_token_fallback(invalid).is_err(),
+                "{invalid:?}"
+            );
+        }
+        for invalid in ["API", " api", "api "] {
+            assert!(parse_operator_token_source(invalid).is_err(), "{invalid:?}");
+        }
+        for invalid in ["inline", "inprocess", "external", "process", "IN_PROCESS"] {
+            assert!(
+                parse_attachment_sanitizer_mode(invalid).is_err(),
+                "{invalid:?}"
+            );
+        }
+        for invalid in ["p256", "eddsa", "ES256", " ed25519"] {
+            assert!(
+                parse_operator_webauthn_algorithm(invalid).is_err(),
+                "{invalid:?}"
+            );
+        }
     }
 }
 /// Transport-specific Torii configuration (Norito-RPC rollout, streaming knobs).
@@ -15848,6 +16022,43 @@ impl Default for ToriiNoritoRpcTransport {
         }
     }
 }
+impl ToriiNoritoRpcTransport {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::NoritoRpcTransport {
+        let stage = actual::NoritoRpcStage::parse(&self.stage).unwrap_or_else(|| {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.transport.norito_rpc.stage must be exactly `disabled`, `canary`, or `ga`, got `{}`",
+                    self.stage
+                ),
+            );
+            actual::NoritoRpcStage::Disabled
+        });
+        actual::NoritoRpcTransport {
+            enabled: self.enabled,
+            require_mtls: self.require_mtls,
+            mtls_trusted_proxy_cidrs: self.mtls_trusted_proxy_cidrs,
+            allowed_clients: self.allowed_clients,
+            stage,
+        }
+    }
+}
+impl ToriiTransport {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::ToriiTransport {
+        actual::ToriiTransport {
+            trusted_proxy_cidrs: self.trusted_proxy_cidrs,
+            http: actual::ToriiHttpTransport {
+                max_connections: self.http.max_connections,
+                max_connections_per_ip: self.http.max_connections_per_ip,
+                header_read_timeout: self.http.header_read_timeout_ms.get(),
+                write_timeout: self.http.write_timeout_ms.get(),
+                max_headers: self.http.max_headers,
+                max_header_bytes: self.http.max_header_bytes,
+            },
+            norito_rpc: self.norito_rpc.parse(emitter),
+        }
+    }
+}
 /// Native MCP endpoint configuration parameters.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct ToriiMcp {
@@ -15876,6 +16087,59 @@ pub struct ToriiMcp {
     pub rate_per_minute: Option<u32>,
     /// Optional MCP burst budget.
     pub burst: Option<u32>,
+}
+impl ToriiMcp {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::ToriiMcp {
+        let profile = actual::ToriiMcpProfile::parse(&self.profile).unwrap_or_else(|| {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.mcp.profile must be exactly `read_only`, `writer`, or `operator`, got `{}`",
+                    self.profile
+                ),
+            );
+            actual::ToriiMcpProfile::ReadOnly
+        });
+        actual::ToriiMcp {
+            enabled: self.enabled,
+            max_request_bytes: self.max_request_bytes.max(1),
+            max_tools_per_list: self.max_tools_per_list.max(1),
+            profile,
+            expose_operator_routes: self.expose_operator_routes,
+            allow_tool_prefixes: self.allow_tool_prefixes,
+            deny_tool_prefixes: self.deny_tool_prefixes,
+            rate_per_minute: self
+                .rate_per_minute
+                .or(defaults::torii::mcp::RATE_PER_MINUTE)
+                .and_then(NonZeroU32::new),
+            burst: self
+                .burst
+                .or(defaults::torii::mcp::BURST)
+                .and_then(NonZeroU32::new),
+        }
+    }
+}
+#[cfg(test)]
+mod exact_torii_transport_label_tests {
+    use super::*;
+
+    #[test]
+    fn rpc_and_mcp_aliases_emit_errors_without_unwinding() {
+        for stage in ["general", "general_availability", "GA", " ga"] {
+            let mut transport = ToriiTransport::default();
+            transport.norito_rpc.stage = stage.to_owned();
+            let mut emitter = Emitter::new();
+            let _ = transport.parse(&mut emitter);
+            assert!(emitter.into_result().is_err(), "{stage:?}");
+        }
+        for profile in ["readonly", "read-only", "write", "ops", "OPERATOR"] {
+            let mut mcp = ToriiMcp::default();
+            mcp.profile = profile.to_owned();
+            let mut emitter = Emitter::new();
+            let _ = mcp.parse(&mut emitter);
+            assert!(emitter.into_result().is_err(), "{profile:?}");
+        }
+    }
 }
 /// CORS response-header policy for Torii.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
@@ -17165,16 +17429,14 @@ impl ToriiFaucet {
     }
 }
 /// Kagemusha command-submission configuration for app-facing lifecycle routes.
-#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+///
+/// The whole table is optional. When present, every policy and capacity field is required.
+#[derive(Debug, Clone, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub struct ToriiKagemushaCommands {
-    /// Master enable switch (defaults to enabled when the section is present).
-    #[config(default = "true")]
-    pub enabled: bool,
     /// Private key for the account submitting typed Kagemusha instructions.
-    #[config(env = "TORII_KAGEMUSHA_COMMANDS_PRIVATE_KEY")]
     pub private_key: Option<PrivateKey>,
     /// Owner-held file containing the Kagemusha command submitter's private key.
-    #[config(env = "TORII_KAGEMUSHA_COMMANDS_PRIVATE_KEY_FILE")]
     pub private_key_file: Option<WithOrigin<PathBuf>>,
     /// Minimum live XOR balance required for the self-funded command authority.
     ///
@@ -17182,74 +17444,138 @@ pub struct ToriiKagemushaCommands {
     /// positive operational funding floor.
     pub minimum_xor_balance: Quantity,
     /// Maximum value accepted for one Kagemusha command.
-    #[config(default = "defaults::torii::kagemusha_commands::max_tx_value()")]
     pub max_tx_value: Quantity,
     /// Maximum number of admitted and in-flight operations retained in memory.
-    #[config(default = "defaults::torii::kagemusha_commands::OPERATION_REGISTRY_MAX_ENTRIES")]
     pub operation_registry_max_entries: usize,
     /// Maximum canonical bytes reserved by admitted and in-flight operations.
-    #[config(default = "defaults::torii::kagemusha_commands::OPERATION_REGISTRY_MAX_BYTES")]
     pub operation_registry_max_bytes: usize,
 }
 impl ToriiKagemushaCommands {
-    fn parse(self) -> Option<actual::ToriiKagemushaCommands> {
-        if !self.enabled {
-            return None;
-        }
-        let private_key = match (self.private_key, self.private_key_file) {
-            (Some(_), Some(_)) => panic!(
-                "torii.kagemusha_commands.private_key and torii.kagemusha_commands.private_key_file are mutually exclusive"
-            ),
-            (Some(private_key), None) => private_key,
-            (None, Some(file)) => {
-                read_private_key_file(file, "torii.kagemusha_commands.private_key_file")
-                    .unwrap_or_else(|err| panic!("invalid Kagemusha command key file: {err}"))
-                    .0
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::ToriiKagemushaCommands> {
+        let Self {
+            private_key,
+            private_key_file,
+            minimum_xor_balance,
+            max_tx_value,
+            operation_registry_max_entries,
+            operation_registry_max_bytes,
+        } = self;
+        let private_key = match (private_key, private_key_file) {
+            (Some(_), Some(_)) => {
+                emit_torii_config_error(
+                    emitter,
+                    "torii.kagemusha_commands.private_key and torii.kagemusha_commands.private_key_file are mutually exclusive",
+                );
+                None
             }
-            (None, None) => panic!(
-                "exactly one of torii.kagemusha_commands.private_key or torii.kagemusha_commands.private_key_file is required"
-            ),
+            (Some(private_key), None) => Some(private_key),
+            (None, Some(file)) => {
+                match read_private_key_file(file, "torii.kagemusha_commands.private_key_file") {
+                    Ok((private_key, _)) => Some(private_key),
+                    Err(error) => {
+                        emit_torii_config_error(emitter, error);
+                        None
+                    }
+                }
+            }
+            (None, None) => {
+                emit_torii_config_error(
+                    emitter,
+                    "exactly one of torii.kagemusha_commands.private_key or torii.kagemusha_commands.private_key_file is required",
+                );
+                None
+            }
         };
-        let key_pair = KeyPair::from_private_key(private_key.clone())
-            .unwrap_or_else(|err| panic!("invalid torii.kagemusha_commands.private_key: {err}"));
-        let algorithm = key_pair
-            .public_key()
-            .try_algorithm()
-            .unwrap_or_else(|err| panic!("invalid torii.kagemusha_commands.public_key: {err}"));
-        if !matches!(algorithm, Algorithm::Ed25519 | Algorithm::Secp256k1) {
-            panic!("torii.kagemusha_commands.private_key must use ed25519 or secp256k1");
-        }
-        if self.minimum_xor_balance.is_zero() {
-            panic!("torii.kagemusha_commands.minimum_xor_balance must be greater than zero");
-        }
-        if self.max_tx_value.is_zero() {
-            panic!("torii.kagemusha_commands.max_tx_value must be greater than zero");
-        }
-        let operation_registry_max_entries =
-            NonZeroUsize::new(self.operation_registry_max_entries).unwrap_or_else(|| {
-                panic!(
-                    "torii.kagemusha_commands.operation_registry_max_entries must be greater than zero"
-                )
-            });
-        let operation_registry_max_bytes =
-            NonZeroUsize::new(self.operation_registry_max_bytes).unwrap_or_else(|| {
-                panic!(
-                    "torii.kagemusha_commands.operation_registry_max_bytes must be greater than zero"
-                )
-            });
-        if operation_registry_max_bytes.get()
-            < defaults::torii::kagemusha_commands::OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY
-        {
-            panic!(
-                "torii.kagemusha_commands.operation_registry_max_bytes must be at least {}",
-                defaults::torii::kagemusha_commands::OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY
+        let key_pair = private_key.and_then(|private_key| {
+            let key_pair = match KeyPair::from_private_key(private_key) {
+                Ok(key_pair) => key_pair,
+                Err(error) => {
+                    emit_torii_config_error(
+                        emitter,
+                        format!("invalid torii.kagemusha_commands.private_key: {error}"),
+                    );
+                    return None;
+                }
+            };
+            match key_pair.public_key().try_algorithm() {
+                Ok(Algorithm::Ed25519 | Algorithm::Secp256k1) => Some(key_pair),
+                Ok(_) => {
+                    emit_torii_config_error(
+                        emitter,
+                        "torii.kagemusha_commands.private_key must use ed25519 or secp256k1",
+                    );
+                    None
+                }
+                Err(error) => {
+                    emit_torii_config_error(
+                        emitter,
+                        format!("invalid torii.kagemusha_commands.public_key: {error}"),
+                    );
+                    None
+                }
+            }
+        });
+        let minimum_xor_balance_valid = !minimum_xor_balance.is_zero();
+        if !minimum_xor_balance_valid {
+            emit_torii_config_error(
+                emitter,
+                "torii.kagemusha_commands.minimum_xor_balance must be greater than zero",
             );
         }
+        let max_tx_value_valid = !max_tx_value.is_zero();
+        if !max_tx_value_valid {
+            emit_torii_config_error(
+                emitter,
+                "torii.kagemusha_commands.max_tx_value must be greater than zero",
+            );
+        }
+        let operation_registry_max_entries = NonZeroUsize::new(operation_registry_max_entries);
+        if operation_registry_max_entries.is_none() {
+            emit_torii_config_error(
+                emitter,
+                "torii.kagemusha_commands.operation_registry_max_entries must be greater than zero",
+            );
+        }
+        let operation_registry_max_bytes = NonZeroUsize::new(operation_registry_max_bytes);
+        if operation_registry_max_bytes.is_none() {
+            emit_torii_config_error(
+                emitter,
+                "torii.kagemusha_commands.operation_registry_max_bytes must be greater than zero",
+            );
+        } else if operation_registry_max_bytes.is_some_and(|limit| {
+            limit.get()
+                < defaults::torii::kagemusha_commands::OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY
+        }) {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.kagemusha_commands.operation_registry_max_bytes must be at least {}",
+                    defaults::torii::kagemusha_commands::OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY
+                ),
+            );
+            return None;
+        }
+        let (
+            Some(key_pair),
+            true,
+            true,
+            Some(operation_registry_max_entries),
+            Some(operation_registry_max_bytes),
+        ) = (
+            key_pair,
+            minimum_xor_balance_valid,
+            max_tx_value_valid,
+            operation_registry_max_entries,
+            operation_registry_max_bytes,
+        )
+        else {
+            return None;
+        };
         Some(actual::ToriiKagemushaCommands {
             authority: AccountId::new(key_pair.public_key().clone()),
             key_pair,
-            minimum_xor_balance: self.minimum_xor_balance,
-            max_tx_value: self.max_tx_value,
+            minimum_xor_balance,
+            max_tx_value,
             operation_registry_max_entries,
             operation_registry_max_bytes,
         })
@@ -18280,12 +18606,11 @@ mod da_rent_policy_tests {
     }
 }
 fn parse_blob_class(value: &str) -> BlobClass {
-    let normalized = value.trim().to_ascii_lowercase().replace('-', "_");
-    match normalized.as_str() {
-        "taikai_segment" | "taikai" => BlobClass::TaikaiSegment,
-        "nexus_lane_sidecar" | "lane_sidecar" | "sidecar" => BlobClass::NexusLaneSidecar,
-        "governance_artifact" | "governance" => BlobClass::GovernanceArtifact,
-        _ => normalized.strip_prefix("custom:").map_or_else(
+    match value {
+        "taikai_segment" => BlobClass::TaikaiSegment,
+        "nexus_lane_sidecar" => BlobClass::NexusLaneSidecar,
+        "governance_artifact" => BlobClass::GovernanceArtifact,
+        _ => value.strip_prefix("custom:").map_or_else(
             || {
                 panic!("unsupported blob class `{value}`");
             },
@@ -18307,7 +18632,7 @@ fn format_blob_class(class: BlobClass) -> String {
     }
 }
 fn parse_taikai_availability_class(value: &str) -> TaikaiAvailabilityClass {
-    match value.trim().to_ascii_lowercase().as_str() {
+    match value {
         "hot" => TaikaiAvailabilityClass::Hot,
         "warm" => TaikaiAvailabilityClass::Warm,
         "cold" => TaikaiAvailabilityClass::Cold,
@@ -18323,7 +18648,7 @@ fn format_taikai_availability_class(class: TaikaiAvailabilityClass) -> String {
     .to_string()
 }
 fn parse_storage_class(value: &str) -> SorafsStorageClass {
-    match value.trim().to_ascii_lowercase().as_str() {
+    match value {
         "hot" => SorafsStorageClass::Hot,
         "warm" => SorafsStorageClass::Warm,
         "cold" => SorafsStorageClass::Cold,
@@ -18335,6 +18660,43 @@ fn storage_class_to_str(class: SorafsStorageClass) -> &'static str {
         SorafsStorageClass::Hot => "hot",
         SorafsStorageClass::Warm => "warm",
         SorafsStorageClass::Cold => "cold",
+    }
+}
+#[cfg(test)]
+mod exact_da_label_tests {
+    use super::*;
+
+    #[test]
+    fn da_class_labels_reject_aliases_case_and_whitespace() {
+        assert_eq!(parse_blob_class("taikai_segment"), BlobClass::TaikaiSegment);
+        assert_eq!(
+            parse_taikai_availability_class("hot"),
+            TaikaiAvailabilityClass::Hot
+        );
+        assert_eq!(parse_storage_class("warm"), SorafsStorageClass::Warm);
+
+        for invalid in [
+            "taikai",
+            "sidecar",
+            "governance",
+            "TAIKAI_SEGMENT",
+            " taikai_segment",
+        ] {
+            assert!(
+                std::panic::catch_unwind(|| parse_blob_class(invalid)).is_err(),
+                "{invalid:?}"
+            );
+        }
+        for invalid in ["HOT", " hot", "hot "] {
+            assert!(
+                std::panic::catch_unwind(|| parse_taikai_availability_class(invalid)).is_err(),
+                "{invalid:?}"
+            );
+            assert!(
+                std::panic::catch_unwind(|| parse_storage_class(invalid)).is_err(),
+                "{invalid:?}"
+            );
+        }
     }
 }
 /// User-facing Taikai anchoring configuration.
@@ -31191,6 +31553,35 @@ mod offline_cfg_tests {
         assert!(emitter.into_result().is_err());
     }
     #[test]
+    fn codec_parse_rejects_noncanonical_entropy_and_acceleration_aliases() {
+        for entropy_mode in ["rans-bundled", "RANS_BUNDLED", " rans_bundled"] {
+            let codec = StreamingCodec {
+                cabac_mode: WithOrigin::inline(CabacMode::Disabled),
+                trellis_blocks: WithOrigin::inline(Vec::new()),
+                rans_tables_path: WithOrigin::inline(bundled_tables_path()),
+                entropy_mode: WithOrigin::inline(entropy_mode.to_owned()),
+                bundle_width: WithOrigin::inline(2),
+                bundle_accel: WithOrigin::inline("cpu_simd".to_owned()),
+            };
+            let mut emitter = Emitter::new();
+            assert!(codec.parse(&mut emitter).is_none(), "{entropy_mode:?}");
+            assert!(emitter.into_result().is_err());
+        }
+        for bundle_accel in ["cpusimd", "cpu-simd", "CPU_SIMD", " cpu_simd"] {
+            let codec = StreamingCodec {
+                cabac_mode: WithOrigin::inline(CabacMode::Disabled),
+                trellis_blocks: WithOrigin::inline(Vec::new()),
+                rans_tables_path: WithOrigin::inline(bundled_tables_path()),
+                entropy_mode: WithOrigin::inline("rans_bundled".to_owned()),
+                bundle_width: WithOrigin::inline(2),
+                bundle_accel: WithOrigin::inline(bundle_accel.to_owned()),
+            };
+            let mut emitter = Emitter::new();
+            assert!(codec.parse(&mut emitter).is_none(), "{bundle_accel:?}");
+            assert!(emitter.into_result().is_err());
+        }
+    }
+    #[test]
     fn codec_parse_enforces_bundled_build_support() {
         assert!(
             norito::streaming::BUNDLED_RANS_BUILD_AVAILABLE,
@@ -31890,6 +32281,27 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .read_and_complete::<super::Root>()
             .expect("load minimal user config")
     }
+    #[test]
+    fn network_enum_labels_reject_aliases_without_panicking() {
+        for (field, value) in [
+            ("lane_profile", "CORE"),
+            ("lane_profile", " core"),
+            ("transaction_gossip_restricted_fallback", "PUBLIC_OVERLAY"),
+            ("transaction_gossip_restricted_public_payload", "FORWARD"),
+        ] {
+            let mut table = base_table();
+            table
+                .get_mut("network")
+                .and_then(Value::as_table_mut)
+                .expect("network table")
+                .insert(field.to_owned(), Value::String(value.to_owned()));
+            let result = std::panic::catch_unwind(|| {
+                actual::Root::from_toml_source(TomlSource::inline(table))
+            });
+            let parsed = result.expect("ordinary network config errors must not unwind");
+            assert!(parsed.is_err(), "{field}={value:?} must fail closed");
+        }
+    }
     fn torii_http_table_mut(table: &mut Table) -> &mut Table {
         table
             .get_mut("torii")
@@ -32154,7 +32566,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         config.torii.receipt_public_key = Some(key_pair.public_key().clone());
         config.torii.receipt_private_key = Some(private_key.clone());
         config.torii.kagemusha_commands = Some(super::ToriiKagemushaCommands {
-            enabled: true,
             private_key: Some(private_key.clone()),
             private_key_file: None,
             minimum_xor_balance: Quantity::from(1_u64),
@@ -32335,7 +32746,6 @@ policy_digest_hex = "{policy_digest_hex}"
         torii.insert(
             "kagemusha_commands".into(),
             Value::Table(Table::from_iter([
-                ("enabled".into(), Value::Boolean(true)),
                 ("private_key".into(), Value::String(private_key)),
                 ("minimum_xor_balance".into(), Value::String("1".into())),
                 ("max_tx_value".into(), Value::String("1000000000".into())),
@@ -32394,8 +32804,16 @@ policy_digest_hex = "{policy_digest_hex}"
     include!("user/verified_source_ingress_tests.rs");
     include!("user/iso_bridge_store_memory_tests.rs");
     #[test]
-    fn disabled_kagemusha_command_middleware_ignores_dormant_subordinates() {
+    fn kagemusha_commands_reject_redundant_enabled_switch() {
         let mut table = base_table();
+        let key_pair = KeyPair::try_from_seed(
+            b"iroha:config:test:kagemusha-enabled-retired".to_vec(),
+            Algorithm::Ed25519,
+        )
+        .expect("fixture seed derives command-service keypair");
+        let private_key = ExposedPrivateKey(key_pair.private_key().clone())
+            .try_to_multihash_string()
+            .expect("encode command-service private key");
         let torii = table
             .get_mut("torii")
             .and_then(Value::as_table_mut)
@@ -32403,18 +32821,28 @@ policy_digest_hex = "{policy_digest_hex}"
         torii.insert(
             "kagemusha_commands".into(),
             Value::Table(Table::from_iter([
-                ("enabled".into(), Value::Boolean(false)),
-                ("private_key".into(), Value::Integer(7)),
-                ("minimum_xor_balance".into(), Value::Array(Vec::new())),
+                ("private_key".into(), Value::String(private_key)),
+                ("minimum_xor_balance".into(), Value::String("1".into())),
+                ("max_tx_value".into(), Value::String("1000000000".into())),
+                (
+                    "operation_registry_max_entries".into(),
+                    Value::Integer(4096),
+                ),
                 (
                     "operation_registry_max_bytes".into(),
-                    Value::String("bad".into()),
+                    Value::Integer(524_288),
                 ),
+                ("enabled".into(), Value::Boolean(false)),
             ])),
         );
-        let actual = actual::Root::from_toml_source(TomlSource::inline(table))
-            .expect("disabled command service must ignore dormant subordinate values");
-        assert!(actual.torii.kagemusha_commands.is_none());
+        let error = actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect_err("section presence is the only first-release enable switch");
+        let report = format!("{error:?}");
+        assert!(report.contains("enabled"), "unexpected error: {report}");
+        assert!(
+            report.contains("unknown") || report.contains("unexpected"),
+            "retired switch must be reported as an unknown field: {report}"
+        );
     }
     #[test]
     fn enabled_kagemusha_commands_keep_malformed_subordinates_strict() {
@@ -32426,7 +32854,6 @@ policy_digest_hex = "{policy_digest_hex}"
         torii.insert(
             "kagemusha_commands".into(),
             Value::Table(Table::from_iter([
-                ("enabled".into(), Value::Boolean(true)),
                 ("private_key".into(), Value::Integer(7)),
                 ("minimum_xor_balance".into(), Value::Array(Vec::new())),
             ])),
@@ -35052,11 +35479,9 @@ publish_delay_seconds = 17
         storage.insert("local_budget_bytes".into(), Value::Integer(1_024));
         storage.insert("max_wsv_memory_bytes".into(), Value::Integer(128));
         let mut weights = Table::new();
-        weights.insert("kura_blocks_bps".into(), Value::Integer(3_000));
+        weights.insert("kura_blocks_bps".into(), Value::Integer(3_500));
         weights.insert("wsv_snapshots_bps".into(), Value::Integer(2_000));
-        weights.insert("sorafs_bps".into(), Value::Integer(4_000));
-        weights.insert("soranet_spool_bps".into(), Value::Integer(500));
-        weights.insert("soravpn_spool_bps".into(), Value::Integer(500));
+        weights.insert("sorafs_bps".into(), Value::Integer(4_500));
         storage.insert("disk_budget_weights".into(), Value::Table(weights));
         nexus.insert("storage".into(), Value::Table(storage));
         let actual = load_root(table);
@@ -35072,7 +35497,7 @@ publish_delay_seconds = 17
                 .map(Bytes::get),
             Some(1_024)
         );
-        assert_eq!(actual.kura.max_disk_usage_bytes.get(), 309);
+        assert_eq!(actual.kura.max_disk_usage_bytes.get(), 360);
         assert_eq!(actual.tiered_state.hot_retained_bytes.get(), 128);
     }
     #[test]
@@ -35093,11 +35518,9 @@ publish_delay_seconds = 17
                 Value::Integer(i64::try_from(BUDGET_BYTES).expect("budget fits TOML integer")),
             );
             let mut weights = Table::new();
-            weights.insert("kura_blocks_bps".into(), Value::Integer(5_500));
+            weights.insert("kura_blocks_bps".into(), Value::Integer(6_000));
             weights.insert("wsv_snapshots_bps".into(), Value::Integer(2_000));
             weights.insert("sorafs_bps".into(), Value::Integer(2_000));
-            weights.insert("soranet_spool_bps".into(), Value::Integer(250));
-            weights.insert("soravpn_spool_bps".into(), Value::Integer(250));
             storage.insert("disk_budget_weights".into(), Value::Table(weights));
             nexus.insert("storage".into(), Value::Table(storage));
 
@@ -35219,6 +35642,7 @@ publish_delay_seconds = 17
             runtime.state_dir => defaults::soracloud_runtime::state_dir(),
             runtime.reconcile_interval => StdDuration::from_millis(defaults::soracloud_runtime::RECONCILE_INTERVAL_MS),
             runtime.hydration_concurrency => defaults::soracloud_runtime::HYDRATION_CONCURRENCY,
+            runtime.prepared_runtime_cache_capacity => defaults::soracloud_runtime::PREPARED_RUNTIME_CACHE_CAPACITY,
             runtime.cache_budgets.bundle_bytes => defaults::soracloud_runtime::BUNDLE_CACHE_BUDGET_BYTES,
             inrou.enabled => defaults::soracloud_runtime::INROU_ENABLED,
             inrou.guest_image_max_bytes => defaults::soracloud_runtime::INROU_GUEST_IMAGE_MAX_BYTES,
@@ -35803,6 +36227,7 @@ max_storage_bytes = 10737418240
 state_dir = "./runtime/custom"
 reconcile_interval_ms = 2500
 hydration_concurrency = 7
+prepared_runtime_cache_capacity = 11
 
 [cache_budgets]
 bundle_bytes = 1024
@@ -35849,6 +36274,7 @@ max_bytes_per_minute = 262144
         assert_all_eq!(
             runtime.reconcile_interval => StdDuration::from_millis(2_500),
             runtime.hydration_concurrency.get() => 7,
+            runtime.prepared_runtime_cache_capacity.get() => 11,
             runtime.cache_budgets.bundle_bytes.get() => 1_024,
             runtime.cache_budgets.model_weight_bytes.get() => 6_144,
             inrou.guest_image_max_bytes.get() => 12_345_678,
@@ -35893,6 +36319,35 @@ max_bytes_per_minute = 262144
                 )))
                 .is_err(),
                 "noncanonical Soracloud runtime configuration must fail closed: {snippet}"
+            );
+        }
+    }
+    #[test]
+    fn soracloud_runtime_worker_and_cache_limits_are_bounded() {
+        for (field, maximum) in [
+            (
+                "hydration_concurrency",
+                defaults::soracloud_runtime::HYDRATION_CONCURRENCY_MAX,
+            ),
+            (
+                "prepared_runtime_cache_capacity",
+                defaults::soracloud_runtime::PREPARED_RUNTIME_CACHE_CAPACITY_MAX,
+            ),
+        ] {
+            actual::Root::from_toml_source(TomlSource::inline(table_with_soracloud_runtime(
+                &format!("{field} = {maximum}\n"),
+            )))
+            .unwrap_or_else(|error| panic!("{field} must accept its V1 ceiling: {error:?}"));
+
+            let rejected = maximum.checked_add(1).expect("V1 limit plus one");
+            let error = actual::Root::from_toml_source(TomlSource::inline(
+                table_with_soracloud_runtime(&format!("{field} = {rejected}\n")),
+            ))
+            .expect_err("values above the V1 ceiling must fail closed");
+            let report = format!("{error:?}");
+            assert!(
+                report.contains(field),
+                "out-of-range {field} diagnostic must identify the field: {report}"
             );
         }
     }

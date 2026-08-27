@@ -10,30 +10,28 @@ use iroha_data_model::{
 };
 use std::{
     collections::BTreeSet,
-    fs::{self, File},
+    fs::{self, OpenOptions},
     io::{BufWriter, Read as _, Write},
     path::{Path, PathBuf},
     str::FromStr as _,
 };
-use zeroize::Zeroizing;
+use zeroize::{Zeroize as _, Zeroizing};
 const DEFAULT_TTL_MS: u64 = 120_000;
 const DEFAULT_STATUS_TIMEOUT_MS: u64 = 120_000;
 const MAX_BASE_CONFIG_BYTES: u64 = 64 * 1024;
 const CLIENT_CONFIG_DERIVATION_DOMAIN: &[u8] = b"iroha:kagami:client-config:v1";
-#[derive(Debug, Clone)]
 struct BaseConfig {
     chain: String,
     network_id: NetworkId,
     torii_url: String,
     basic_auth: Option<BasicAuth>,
 }
-#[derive(Debug, Clone)]
 struct BasicAuth {
     web_login: String,
     password: Zeroizing<String>,
 }
 /// Generate per-client CLI configs from a base client.toml.
-#[derive(ClapArgs, Debug, Clone)]
+#[derive(ClapArgs)]
 pub struct Args {
     /// Base client config to copy `chain`, `torii_url`, and `basic_auth` from.
     #[arg(long, value_name = "PATH")]
@@ -56,16 +54,22 @@ pub struct Args {
 }
 impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
-        let base = load_base_config(&self.base_config)?;
-        let out_dir = resolve_out_dir(&self.base_config, self.out_dir)?;
-        let names = normalize_names(self.names)?;
-        let master_seed = self
-            .seed_hex
-            .map(|seed_hex| {
-                let seed_hex = Zeroizing::new(seed_hex);
-                crate::crypto::parse_keygen_seed_hex(seed_hex.as_str()).map(Zeroizing::new)
-            })
-            .transpose()?;
+        let Self {
+            base_config,
+            out_dir,
+            domain,
+            seed_hex,
+            names,
+        } = self;
+        let seed_hex = seed_hex.map(Zeroizing::new);
+        let master_seed = seed_hex
+            .as_ref()
+            .map(|seed_hex| crate::crypto::parse_keygen_seed_hex(seed_hex.as_str()))
+            .transpose()?
+            .map(Zeroizing::new);
+        let base = load_base_config(&base_config)?;
+        let out_dir = resolve_out_dir(&base_config, out_dir)?;
+        let names = normalize_names(names)?;
         crate::secure_fs::prepare_empty_private_directory(&out_dir)
             .wrap_err("prepare client-config private output directory")?;
         tui::status(format!(
@@ -80,7 +84,7 @@ impl<T: Write> RunArgs<T> for Args {
                 KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
                     .wrap_err("failed to generate an OS-random client key pair")?
             };
-            let rendered = render_client_config(&base, &self.domain, &key_pair)?;
+            let rendered = render_client_config(&base, &domain, &key_pair)?;
             let path = out_dir.join(format!("{name}.toml"));
             crate::secure_fs::write_private_file_atomic(&path, rendered.as_bytes())
                 .wrap_err_with(|| format!("failed to write {}", path.display()))?;
@@ -156,18 +160,83 @@ fn load_base_config(path: &Path) -> Result<BaseConfig> {
         basic_auth,
     })
 }
+#[cfg(unix)]
+fn same_base_config_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    left.dev() == right.dev()
+        && left.ino() == right.ino()
+        && left.mode() == right.mode()
+        && left.uid() == right.uid()
+        && left.gid() == right.gid()
+        && left.nlink() == right.nlink()
+        && left.size() == right.size()
+        && left.mtime() == right.mtime()
+        && left.mtime_nsec() == right.mtime_nsec()
+        && left.ctime() == right.ctime()
+        && left.ctime_nsec() == right.ctime_nsec()
+}
+#[cfg(not(unix))]
+fn same_base_config_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.is_file() == right.is_file()
+        && left.len() == right.len()
+        && left.modified().ok() == right.modified().ok()
+}
 fn read_base_config(path: &Path) -> Result<Zeroizing<String>> {
-    let file = File::open(path).wrap_err_with(|| format!("failed to open {}", path.display()))?;
-    let mut raw = Zeroizing::new(String::new());
-    file.take(MAX_BASE_CONFIG_BYTES + 1)
-        .read_to_string(&mut raw)
-        .wrap_err_with(|| format!("failed to read UTF-8 TOML from {}", path.display()))?;
-    if raw.len() as u64 > MAX_BASE_CONFIG_BYTES {
+    let lexical = fs::symlink_metadata(path)
+        .wrap_err_with(|| format!("failed to inspect {}", path.display()))?;
+    if !lexical.is_file()
+        || lexical.file_type().is_symlink()
+        || lexical.len() > MAX_BASE_CONFIG_BYTES
+    {
         return Err(eyre!(
-            "base config exceeds the {MAX_BASE_CONFIG_BYTES}-byte input limit"
+            "base config must be a non-symlink regular file within the {MAX_BASE_CONFIG_BYTES}-byte input limit"
         ));
     }
-    Ok(raw)
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let mut file = options
+        .open(path)
+        .wrap_err_with(|| format!("failed to open {}", path.display()))?;
+    let before = file
+        .metadata()
+        .wrap_err_with(|| format!("failed to inspect opened {}", path.display()))?;
+    if !before.is_file() || !same_base_config_snapshot(&lexical, &before) {
+        return Err(eyre!("base config changed while it was opened"));
+    }
+    let capacity = usize::try_from(before.len())
+        .map_err(|_| eyre!("base config length cannot be addressed on this platform"))?;
+    let mut raw = Zeroizing::new(Vec::new());
+    raw.try_reserve_exact(capacity.saturating_add(1))
+        .wrap_err("reserve base config buffer")?;
+    std::io::Read::by_ref(&mut file)
+        .take(MAX_BASE_CONFIG_BYTES + 1)
+        .read_to_end(&mut raw)
+        .wrap_err_with(|| format!("failed to read TOML from {}", path.display()))?;
+    let after = file
+        .metadata()
+        .wrap_err_with(|| format!("failed to reinspect {}", path.display()))?;
+    if raw.len() as u64 > MAX_BASE_CONFIG_BYTES
+        || raw.len() as u64 != before.len()
+        || !same_base_config_snapshot(&before, &after)
+    {
+        return Err(eyre!(
+            "base config changed while it was read or exceeded its input limit"
+        ));
+    }
+    match String::from_utf8(std::mem::take(&mut *raw)) {
+        Ok(raw) => Ok(Zeroizing::new(raw)),
+        Err(error) => {
+            let utf8_error = error.utf8_error();
+            let mut bytes = error.into_bytes();
+            bytes.zeroize();
+            Err(eyre!("base config is not UTF-8: {utf8_error}"))
+        }
+    }
 }
 fn resolve_out_dir(base_config: &Path, out_dir: Option<PathBuf>) -> Result<PathBuf> {
     if let Some(out_dir) = out_dir {
@@ -339,7 +408,9 @@ web_login = "demo"
         let path = temp.path().join("client.toml");
         let oversized_len = usize::try_from(MAX_BASE_CONFIG_BYTES).expect("limit fits usize") + 1;
         fs::write(&path, vec![b'x'; oversized_len]).expect("write oversized config");
-        let error = load_base_config(&path).expect_err("oversized config must be rejected");
+        let error = load_base_config(&path)
+            .err()
+            .expect("oversized config must be rejected");
         assert!(error.to_string().contains("input limit"));
 
         let malformed = r#"
@@ -349,8 +420,26 @@ torii_url = "http://127.0.0.1:8080/"
 basic_auth = "not a table"
 "#;
         fs::write(&path, malformed).expect("write malformed config");
-        let error = load_base_config(&path).expect_err("malformed auth must be rejected");
+        let error = load_base_config(&path)
+            .err()
+            .expect("malformed auth must be rejected");
         assert!(error.to_string().contains("must be a TOML table"));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn base_config_reader_rejects_symlinks_and_special_files() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().expect("temp dir");
+        let target = temp.path().join("client.toml");
+        write_base_config(&target);
+        let linked = temp.path().join("linked.toml");
+        symlink(&target, &linked).expect("create base-config symlink");
+        assert!(read_base_config(&linked).is_err());
+
+        let fifo = temp.path().join("client.fifo");
+        crate::secure_fs::create_fifo_for_test(&fifo, 0o600).expect("create base-config FIFO");
+        assert!(read_base_config(&fifo).is_err());
     }
     #[test]
     fn resolve_out_dir_defaults_to_clients_dir() {
@@ -540,9 +629,10 @@ basic_auth = "not a table"
     #[test]
     fn run_writes_client_configs() {
         let temp = tempfile::tempdir().expect("temp dir");
-        let base_path = temp.path().join("client.toml");
+        let root = fs::canonicalize(temp.path()).expect("canonical temp dir");
+        let base_path = root.join("client.toml");
         write_base_config(&base_path);
-        let out_dir = temp.path().join("clients");
+        let out_dir = root.join("clients");
         let args = Args {
             base_config: base_path.clone(),
             out_dir: Some(out_dir.clone()),
@@ -560,9 +650,10 @@ basic_auth = "not a table"
     fn random_default_uses_distinct_keys_and_owner_only_atomic_outputs() {
         use std::os::unix::fs::PermissionsExt as _;
         let temp = tempfile::tempdir().expect("temp dir");
-        let base_path = temp.path().join("client.toml");
+        let root = fs::canonicalize(temp.path()).expect("canonical temp dir");
+        let base_path = root.join("client.toml");
         write_base_config(&base_path);
-        let out_dir = temp.path().join("fresh-clients");
+        let out_dir = root.join("fresh-clients");
         let args = Args {
             base_config: base_path,
             out_dir: Some(out_dir.clone()),

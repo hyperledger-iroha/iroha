@@ -249,6 +249,8 @@ Root {
         require_sm_handshake_match: true,
         require_sm_openssl_preview_match: true,
         idle_timeout: 300s,
+        preauth_timeout: 30s,
+        preauth_max_connections_per_ip: 8,
         reply_writer_flush_timeout: 30s,
         connect_startup_delay: 0ns,
         dial_timeout: 5s,
@@ -1622,6 +1624,7 @@ Root {
         state_dir: "./storage/soracloud_runtime",
         reconcile_interval: 5s,
         hydration_concurrency: 4,
+        prepared_runtime_cache_capacity: 4,
         cache_budgets: SoracloudRuntimeCacheBudgets {
             bundle_bytes: 536870912,
             static_asset_bytes: 536870912,
@@ -1792,11 +1795,9 @@ Root {
                 8589934592,
             ),
             disk_budget_weights: NexusStorageWeights {
-                kura_blocks_bps: 3000,
+                kura_blocks_bps: 3500,
                 wsv_snapshots_bps: 2000,
-                sorafs_bps: 4000,
-                soranet_spool_bps: 500,
-                soravpn_spool_bps: 500,
+                sorafs_bps: 4500,
             },
         },
         staking: NexusStaking {
@@ -2924,27 +2925,6 @@ Root {
         },
         session_store_dir: "./storage/streaming",
         feature_bits: 0,
-        soranet: StreamingSoranet {
-            enabled: false,
-            exit_multiaddr: "/dns/torii/udp/9443/quic",
-            padding_budget_ms: Some(
-                25,
-            ),
-            access_kind: Authenticated,
-            channel_salt: "iroha.soranet.channel.seed.v1",
-            provision_spool_dir: "./storage/streaming/soranet_routes",
-            provision_spool_max_bytes: Bytes(
-                0,
-            ),
-            provision_window_segments: 4,
-            provision_queue_capacity: 256,
-        },
-        soravpn: StreamingSoravpn {
-            provision_spool_dir: "./storage/streaming/soravpn_routes",
-            provision_spool_max_bytes: Bytes(
-                0,
-            ),
-        },
         sync: StreamingSync {
             enabled: false,
             observe_only: true,

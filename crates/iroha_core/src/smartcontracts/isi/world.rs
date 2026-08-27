@@ -17,6 +17,7 @@ use iroha_telemetry::metrics;
 /// Iroha Special Instructions that have `World` as their target.
 #[allow(clippy::used_underscore_binding)]
 pub mod isi {
+    use crate::governance::draw::body_committee_size;
     use crate::governance::parliament::{
         PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1, ParliamentBodyStateV1,
         parliament_attempt_policy_v1,
@@ -105,7 +106,8 @@ pub mod isi {
         governance::types::{
             AbiVersion, DeployContractProposal, GovernanceAttemptStatusV1, GovernanceCertificateV1,
             GovernanceExpectedHeadAbsentV1, GovernanceExpectedHeadPresentV1,
-            GovernanceExpectedHeadV1, GovernanceStageV1, ParliamentAggregateTallyV1,
+            GovernanceExpectedHeadV1, GovernanceStageV1,
+            MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1, ParliamentAggregateTallyV1,
             ParliamentBody, ProposalKind, RuntimeUpgradeProposal, SccpRouteGovernanceProposal,
             SorafsProviderGovernanceProposal, ValidationFeePayoutLifecycleProposal,
             ValidationFeePolicyProposal, parliament_ballot_participant_hash_v1,
@@ -7768,6 +7770,14 @@ pub mod isi {
             if let Some(reason) = self.proposal.first_release_exact_json_u64_invariant_error() {
                 return Err(InstructionExecutionError::InvariantViolation(reason.into()));
             }
+            if self.attempt_sequence > MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1 {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "Parliament governance attempt sequence exceeds the first-release retry limit of {MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1}"
+                    )
+                    .into(),
+                ));
+            }
 
             let proposal_id = self.proposal.fingerprint();
             let proposal_record = state_transaction
@@ -7858,6 +7868,9 @@ pub mod isi {
             let attempt = crate::governance::parliament::ParliamentAttemptStateV1::try_new(
                 self.canonical_attempt(risk_tier),
                 PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1,
+                state_transaction
+                    .gov
+                    .parliament_sortition_pulse_delay_blocks,
                 effect_preimage_hash,
                 expected_head,
                 required_bodies,
@@ -8003,7 +8016,7 @@ pub mod isi {
         })
     }
 
-    fn parliament_verified_release_pulse_available_v1(
+    fn parliament_verified_pulse_available_v1(
         session_id: iroha_data_model::governance::types::BeaconSessionId,
         height: u64,
         state_transaction: &StateTransaction<'_, '_>,
@@ -8011,25 +8024,35 @@ pub mod isi {
         if ensure_parliament_logical_beacon_v1(session_id, state_transaction).is_err() {
             return false;
         }
-        state_transaction
+        let Some(pulse_id) = state_transaction
+            .world
+            .global_beacon_pulse_slots
+            .get(&(state_transaction.network_id, height))
+            .copied()
+        else {
+            return false;
+        };
+        let Some(pulse) = state_transaction
             .world
             .global_beacon_pulses
-            .iter()
-            .filter_map(|(pulse_id, pulse)| {
-                (pulse.network_id == state_transaction.network_id
-                    && pulse.height == height
-                    && pulse.pulse_id == *pulse_id)
-                    .then_some(*pulse)
-            })
-            .any(|pulse| {
-                crate::beacon::verified_persisted_global_threshold_beacon_governance_seed_v1(
-                    &state_transaction.world,
-                    &state_transaction.network_id,
-                    pulse,
-                    height,
-                )
-                .is_ok()
-            })
+            .get(&pulse_id)
+            .copied()
+        else {
+            return false;
+        };
+        if pulse.pulse_id != pulse_id
+            || pulse.network_id != state_transaction.network_id
+            || pulse.height != height
+        {
+            return false;
+        }
+        crate::beacon::verified_persisted_global_threshold_beacon_governance_seed_v1(
+            &state_transaction.world,
+            &state_transaction.network_id,
+            pulse,
+            height,
+        )
+        .is_ok()
     }
 
     fn parliament_timed_ovn_error_v1(error: impl core::fmt::Display) -> Error {
@@ -8181,33 +8204,49 @@ pub mod isi {
                     .complete_qualification(governance_attempt_id)
                     .map_err(parliament_reducer_error)?,
                 gov::ParliamentLifecycleTransitionV1::RegisterSortitionRequest(payload) => {
-                    if payload.request.request_height != current_height {
-                        return Err(InstructionExecutionError::InvariantViolation(
-                            "Parliament sortition request height must equal the containing block height"
-                                .into(),
-                        ));
-                    }
-                    ensure_parliament_logical_beacon_v1(
-                        payload.request.beacon_session_id,
-                        state_transaction,
-                    )?;
+                    let first = payload.requests.first().ok_or_else(|| {
+                        InstructionExecutionError::InvariantViolation(
+                            "Parliament sortition request batch must be nonempty".into(),
+                        )
+                    })?;
                     let expected_candidates = canonical_parliament_candidate_snapshot_v1(
-                        payload.request.body,
+                        first.request.body,
                         &attempt,
                         state_transaction,
                     )?;
-                    if payload.candidate_snapshot != expected_candidates {
-                        return Err(InstructionExecutionError::InvariantViolation(
-                            "Parliament sortition candidate snapshot differs from the complete body-specific eligible citizen set"
-                                .into(),
-                        ));
+                    for entry in &payload.requests {
+                        if entry.request.request_height != current_height {
+                            return Err(InstructionExecutionError::InvariantViolation(
+                                "Parliament sortition request height must equal the containing block height"
+                                    .into(),
+                            ));
+                        }
+                        ensure_parliament_logical_beacon_v1(
+                            entry.request.beacon_session_id,
+                            state_transaction,
+                        )?;
+                        let configured_target = u32::try_from(body_committee_size(
+                            &state_transaction.gov,
+                            entry.request.body,
+                        ))
+                        .map_err(|_| {
+                            InstructionExecutionError::InvariantViolation(
+                                "configured Parliament body size exceeds the V1 request domain"
+                                    .into(),
+                            )
+                        })?;
+                        if entry.request.target_seats != configured_target {
+                            return Err(InstructionExecutionError::InvariantViolation(
+                                "Parliament sortition target seats must equal the configured body size"
+                                    .into(),
+                            ));
+                        }
                     }
                     attempt
-                        .register_sortition_request(
+                        .register_sortition_request_batch(
                             governance_attempt_id,
-                            payload.sequence,
-                            payload.request,
-                            payload.candidate_snapshot,
+                            payload.requests,
+                            expected_candidates,
                         )
                         .map_err(parliament_reducer_error)?;
                 }
@@ -8242,13 +8281,36 @@ pub mod isi {
                         .map_err(parliament_reducer_error)?;
                 }
                 gov::ParliamentLifecycleTransitionV1::FailBodyElectionNoRoster(payload) => {
+                    let election =
+                        attempt
+                            .election(&payload.election_attempt_id)
+                            .ok_or_else(|| {
+                                InstructionExecutionError::InvariantViolation(
+                                    "unknown Parliament election attempt at no-roster transition"
+                                        .into(),
+                                )
+                            })?;
+                    let request = election.attempt().request;
+                    let pulse_available = parliament_verified_pulse_available_v1(
+                        request.beacon_session_id,
+                        request.pulse_height,
+                        state_transaction,
+                    );
                     attempt
                         .fail_body_election_no_roster(
                             governance_attempt_id,
                             payload.election_attempt_id,
+                            pulse_available,
                             current_height,
                         )
                         .map_err(parliament_reducer_error)?;
+                    if attempt.attempt().status
+                        == iroha_data_model::governance::types::GovernanceAttemptStatusV1::Rejected
+                    {
+                        no_result_kind = Some(
+                            iroha_data_model::governance::types::ParliamentNoResultKindV1::SortitionRetriesExhausted,
+                        );
+                    }
                 }
                 gov::ParliamentLifecycleTransitionV1::SealBodyRoster(payload) => {
                     attempt
@@ -8647,7 +8709,7 @@ pub mod isi {
                     let release_pulse_available =
                         match (ballot.release_beacon_session_id(), ballot.release_height()) {
                             (Some(release_session_id), Some(release_height)) => {
-                                parliament_verified_release_pulse_available_v1(
+                                parliament_verified_pulse_available_v1(
                                     release_session_id,
                                     release_height,
                                     state_transaction,
@@ -15478,6 +15540,15 @@ pub mod isi {
                         .into(),
                 ));
             }
+            if let Some((key, value)) = domain
+                .metadata
+                .iter()
+                .find(|(key, _)| key.as_ref() == "kaigi_relay_allowlist")
+            {
+                crate::smartcontracts::isi::kaigi::validate_kaigi_relay_allowlist_metadata(
+                    key, value,
+                )?;
+            }
             let requires_endorsement = state_transaction
                 .world
                 .domain_endorsement_policies
@@ -18571,10 +18642,7 @@ pub mod isi {
                     account.set_label(None);
                 }
                 for label in labels {
-                    state_transaction
-                        .world
-                        .account_rekey_records
-                        .remove(label.clone());
+                    state_transaction.world.remove_account_rekey_record(&label);
                     state_transaction.world.remove_account_alias_binding(&label);
                 }
             }
@@ -19285,7 +19353,7 @@ pub mod isi {
                 )
                 .expect("canonical proposal storage");
             let create = gov::CreateParliamentGovernanceAttemptV1 {
-                proposal: canonical,
+                proposal: canonical.clone(),
                 attempt_sequence: 0,
             };
             let attempt_id = create.governance_attempt_id();
@@ -19298,6 +19366,17 @@ pub mod isi {
                     .parliament_attempts
                     .get(&attempt_id)
                     .is_some()
+            );
+
+            let retry_limit_error = gov::CreateParliamentGovernanceAttemptV1 {
+                proposal: canonical,
+                attempt_sequence: MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1 + 1,
+            }
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("direct ISI submission must not bypass the governance attempt retry cap");
+            assert!(
+                format!("{retry_limit_error:?}").contains("first-release retry limit"),
+                "unexpected attempt retry-limit rejection: {retry_limit_error:?}"
             );
 
             let maximum = iroha_data_model::parliament_types::FIRST_RELEASE_MAX_EXACT_JSON_U64;
@@ -19452,12 +19531,16 @@ pub mod isi {
                 .world
                 .global_beacon_pulses
                 .insert(pulse.pulse_id, pulse);
+            state_transaction
+                .world
+                .global_beacon_pulse_slots
+                .insert((pulse.network_id, pulse.height), pulse.pulse_id);
             let logical_session =
                 iroha_data_model::governance::types::BeaconSessionId::for_network_v1(
                     &state_transaction.network_id,
                 );
 
-            assert!(parliament_verified_release_pulse_available_v1(
+            assert!(parliament_verified_pulse_available_v1(
                 logical_session,
                 release_height,
                 &state_transaction,
@@ -19470,7 +19553,7 @@ pub mod isi {
                 .global_beacon_pulses
                 .insert(pulse.pulse_id, tampered);
             assert!(
-                !parliament_verified_release_pulse_available_v1(
+                !parliament_verified_pulse_available_v1(
                     logical_session,
                     release_height,
                     &state_transaction,
@@ -19874,7 +19957,7 @@ pub mod isi {
                             ballot_attempt_id,
                             registration_root,
                             3,
-                            32,
+                            34,
                         )
                         .expect("close deterministic ballot registration");
                     attempt
@@ -19957,6 +20040,7 @@ pub mod isi {
                     status: GovernanceAttemptStatusV1::Active,
                 },
                 PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1,
+                10,
                 proposal_kind.effect_preimage_hash_v1(),
                 expected_head,
                 requirements.clone(),
@@ -25590,6 +25674,36 @@ seiyaku GovernanceLifecycle {
                     "domain registration must retain the governance allowlist path",
                 );
             assert!(stx.world.domains.get(&domain_id).is_some());
+
+            let rejected_domain_id =
+                DomainId::try_new("kaigi-allowlist-over-cap", "universal").expect("domain id");
+            let mut allowlist = KaigiRelayAllowlist::default();
+            for _ in 0..=iroha_data_model::kaigi::KAIGI_RELAY_ALLOWLIST_MAX_ENTRIES_V1 {
+                let (relay_id, _) = gen_account_in("allowlist");
+                allowlist.allowed_relays.insert(relay_id);
+            }
+            let mut metadata = Metadata::default();
+            metadata.insert(
+                kaigi_relay_allowlist_key().expect("relay allowlist key"),
+                Json::try_new(allowlist).expect("over-limit allowlist JSON"),
+            );
+            let error = Register::domain(
+                Domain::new(rejected_domain_id.clone()).with_metadata(metadata),
+            )
+            .expect_execute_err(
+                &ALICE_ID,
+                &mut stx,
+                "domain registration must reject an over-limit relay allowlist",
+            );
+            assert_contains!(
+                error.to_string(),
+                "500-entry limit",
+                "unexpected error: {error}"
+            );
+            assert!(
+                stx.world.domains.get(&rejected_domain_id).is_none(),
+                "rejected registration must not materialize the domain"
+            );
         });
         world_test!(register_domain_accepts_matching_active_sns_lease {
             let kura = Kura::blank_kura_for_testing();
@@ -27018,9 +27132,7 @@ seiyaku GovernanceLifecycle {
                 .expect("independent alias reassignment");
             stx.world
                 .insert_account_alias_binding(alias.clone(), alias_owner.clone());
-            stx.world
-                .account_rekey_records
-                .insert(alias.clone(), history.clone());
+            stx.world.replace_account_rekey_record(history.clone());
             let call_name: Name = "active-call".parse().expect("call name");
             let call = KaigiId::new(call_domain.clone(), call_name.clone());
             let record = KaigiRecord::from_new(
@@ -27028,14 +27140,11 @@ seiyaku GovernanceLifecycle {
                 0,
             );
             let key = kaigi_metadata_key(&call_name).expect("Kaigi metadata key");
-            stx.world
-                .domain_mut(&call_domain)
-                .expect("call domain")
-                .metadata_mut()
-                .insert(
-                    key.clone(),
-                    Json::try_new(record).expect("Kaigi record JSON"),
-                );
+            crate::smartcontracts::isi::kaigi::store_kaigi_record_for_testing(
+                &mut stx,
+                &record,
+            )
+            .expect("store indexed Kaigi fixture");
 
             let error = Unregister::domain(alias_domain.clone()).expect_execute_err(
                 &ALICE_ID,
@@ -27230,8 +27339,7 @@ seiyaku GovernanceLifecycle {
                 .set_label(Some(primary_label.clone()));
             stx.world
                 .insert_account_alias_binding(primary_label.clone(), account_id.clone());
-            stx.world.account_rekey_records.insert(
-                primary_label.clone(),
+            stx.world.replace_account_rekey_record(
                 iroha_data_model::account::rekey::AccountRekeyRecord::new(
                     primary_label.clone(),
                     account_id.clone(),
@@ -27239,8 +27347,7 @@ seiyaku GovernanceLifecycle {
             );
             stx.world
                 .insert_account_alias_binding(retail_label.clone(), account_id.clone());
-            stx.world.account_rekey_records.insert(
-                retail_label.clone(),
+            stx.world.replace_account_rekey_record(
                 iroha_data_model::account::rekey::AccountRekeyRecord::new(
                     retail_label.clone(),
                     account_id.clone(),
@@ -28331,27 +28438,24 @@ seiyaku GovernanceLifecycle {
                 ),
             );
             let ticket_id = iroha_data_model::da::types::StorageTicketId::new([0xD2; 32]);
+            let pin_authorization = crate::da::signed_test_ingest_authorization(
+                network_id,
+                &account_keypair,
+                LaneId::new(1),
+                1,
+                1,
+                1,
+            );
             stx.world.da_pin_intents_by_ticket.insert(
                 ticket_id,
                 iroha_data_model::da::pin_intent::DaPinIntentWithLocation {
-                    intent: iroha_data_model::da::pin_intent::DaPinIntent {
-                        lane_id: LaneId::new(1),
-                        epoch: 1,
-                        sequence: 1,
-                        storage_ticket: ticket_id,
-                        manifest_hash: iroha_data_model::sorafs::pin_registry::ManifestDigest::new(
-                            [0xE3; 32],
-                        ),
-                        alias: None,
-                        authorization: crate::da::signed_test_ingest_authorization(
-                            network_id,
-                            &account_keypair,
-                            LaneId::new(1),
-                            1,
-                            1,
-                            1,
-                        ),
-                    },
+                    intent: crate::da::signed_test_pin_intent(
+                        pin_authorization,
+                        &account_keypair,
+                        ticket_id,
+                        iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xE3; 32]),
+                        None,
+                    ),
                     location: iroha_data_model::da::commitment::DaCommitmentLocation {
                         block_height: 1,
                         index_in_bundle: 0,

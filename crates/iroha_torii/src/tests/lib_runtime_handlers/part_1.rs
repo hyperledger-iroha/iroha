@@ -1127,8 +1127,7 @@ pub(crate) fn bind_account_alias_for_test(
     world
         .account_aliases_by_account_mut_for_testing()
         .insert(account_id.clone(), labels);
-    world.account_rekey_records_mut_for_testing().insert(
-        label.clone(),
+    world.replace_account_rekey_record_for_testing(
         iroha_data_model::account::rekey::AccountRekeyRecord::new(label, account_id.clone()),
     );
     world.smart_contract_state_mut_for_testing().insert(
@@ -1222,8 +1221,7 @@ pub(crate) fn bind_dynamic_account_alias_for_test(
     world
         .account_aliases_by_account_mut_for_testing()
         .insert(account_id.clone(), labels);
-    world.account_rekey_records_mut_for_testing().insert(
-        label.clone(),
+    world.replace_account_rekey_record_for_testing(
         iroha_data_model::account::rekey::AccountRekeyRecord::new(label, account_id.clone()),
     );
     world.smart_contract_state_mut_for_testing().insert(
@@ -2018,7 +2016,6 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         #[cfg(feature = "app_api")]
         account_onboarding: None,
         vpn_relay_trust: None,
-        vpn_quotes: Arc::new(DashMap::new()),
         vpn_used_payments: Arc::new(DashMap::new()),
         vpn_sessions: Arc::new(DashMap::new()),
         vpn_receipts: Arc::new(DashMap::new()),

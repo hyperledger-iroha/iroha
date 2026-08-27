@@ -44,6 +44,7 @@ import {
 const DEFAULT_SUCCESS_STATUSES = [200];
 const BOUNDED_RESPONSE_MAX_STREAM_CHUNKS = 16_384;
 const PRIVACY_CAPABILITIES_JSON_MAX_BYTES = 256 * 1024;
+const KAGEMUSHA_JSON_RESPONSE_MAX_BYTES = 256 * 1024;
 const KAIGI_JSON_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
 const KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS = 500;
 const MAX_UINT64_BIGINT = (1n << 64n) - 1n;
@@ -1769,6 +1770,12 @@ export class ToriiBrowserClient {
     const opts = signalOnlyOptions(options, "getOfflineCapability options");
     return this._json("GET", "/v1/offline/readiness", {
       signal: opts.signal,
+      oneShot: true,
+      maximumBodyBytes: KAGEMUSHA_JSON_RESPONSE_MAX_BYTES,
+      jsonParser: (text) => parseStrictLosslessIntegerJson(
+        text,
+        "Offline capability response",
+      ),
       responseObserver: (response) => requireKagemushaJsonContentType(
         response.headers.get("content-type"),
         "Offline capability response",
@@ -1801,6 +1808,12 @@ export class ToriiBrowserClient {
     const opts = signalOnlyOptions(options, "getKagemushaOperationStatus options");
     return this._json("GET", `/v1/offline/operations/${canonicalId}`, {
       signal: opts.signal,
+      oneShot: true,
+      maximumBodyBytes: KAGEMUSHA_JSON_RESPONSE_MAX_BYTES,
+      jsonParser: (text) => parseStrictLosslessIntegerJson(
+        text,
+        "Kagemusha operation status response",
+      ),
       responseObserver: (response) => requireKagemushaJsonContentType(
         response.headers.get("content-type"),
         "Kagemusha operation status response",
@@ -1824,6 +1837,12 @@ export class ToriiBrowserClient {
         "Idempotency-Key": normalized.operationId,
       },
       signal: opts.signal,
+      oneShot: true,
+      maximumBodyBytes: KAGEMUSHA_JSON_RESPONSE_MAX_BYTES,
+      jsonParser: (text) => parseStrictLosslessIntegerJson(
+        text,
+        "Kagemusha operation reference response",
+      ),
       successStatuses: [202],
       responseObserver: (response) => {
         requireKagemushaJsonContentType(

@@ -198,20 +198,6 @@ mod tests {
     };
     use sorafs_node::evidence_viewer::EVIDENCE_VIEWER_MAX_OPAQUE_TOKEN_BYTES_V1;
     use std::collections::{BTreeSet, VecDeque};
-
-    fn catalog_method_name(method: CatalogHttpMethod) -> &'static str {
-        match method {
-            CatalogHttpMethod::Get => "get",
-            CatalogHttpMethod::Post => "post",
-            CatalogHttpMethod::Put => "put",
-            CatalogHttpMethod::Patch => "patch",
-            CatalogHttpMethod::Delete => "delete",
-            CatalogHttpMethod::Any => {
-                panic!("ANY gateways cannot enter the OpenAPI surface")
-            }
-        }
-    }
-
     const GOVERNANCE_HASH_LITERAL_PATTERN: &str =
         "^(?:[bB][lL][aA][kK][eE]2[bB]32:)?(?:0[xX])?[0-9a-fA-F]{64}$";
     const GOVERNANCE_LOWER_HEX32_PATTERN: &str = "^[0-9a-f]{64}$";
@@ -4328,6 +4314,15 @@ mod tests {
                 .and_then(Value::as_str),
             Some("offlineCapability")
         );
+        let capability_description = capability_operation
+            .get("description")
+            .and_then(Value::as_str)
+            .expect("offline capability description");
+        assert!(
+            capability_description.contains("native bridge ABI 23"),
+            "offline capability documentation must match the compiled Kagemusha bridge ABI"
+        );
+        assert!(!capability_description.contains("ABI 22"));
         assert!(
             capability_operation
                 .get("parameters")
@@ -5078,6 +5073,12 @@ mod tests {
                 "retired Sumeragi VRF path remains in the canonical full-profile document: {retired_path}"
             );
         }
+        assert!(
+            paths
+                .keys()
+                .all(|path| !path.starts_with("/v1/sumeragi/vrf/")),
+            "canonical full-profile document must not expose any retired Sumeragi VRF path"
+        );
         let compiled_paths = generate_spec()
             .get("paths")
             .and_then(Value::as_object)
@@ -5095,10 +5096,14 @@ mod tests {
             .and_then(|components| components.get("schemas"))
             .and_then(Value::as_object)
             .expect("canonical schemas section");
-        for retired_schema in ["SumeragiVrfCommitRequest", "SumeragiVrfRevealRequest"] {
+        for retired_schema in [
+            "SumeragiVrfCommitRequest",
+            "SumeragiVrfRevealRequest",
+            "SumeragiVrfPenaltiesReport",
+        ] {
             assert!(
                 !schemas.contains_key(retired_schema),
-                "retired Sumeragi VRF request schema remains documented: {retired_schema}"
+                "retired Sumeragi VRF schema remains documented: {retired_schema}"
             );
         }
     }

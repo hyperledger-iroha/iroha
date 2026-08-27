@@ -392,6 +392,31 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
+KAGEMUSHA_PRODUCTION_AUTHORIZATION_SHA256="${KAGEMUSHA_PRODUCTION_AUTHORIZATION_SHA256:-}"
+REQUIRE_KAGEMUSHA_PRODUCTION_AUTHORIZATION="${MOBILE_SDK_REQUIRE_KAGEMUSHA_PRODUCTION_AUTHORIZATION:-0}"
+if [[ "$REQUIRE_KAGEMUSHA_PRODUCTION_AUTHORIZATION" != "0" \
+    && "$REQUIRE_KAGEMUSHA_PRODUCTION_AUTHORIZATION" != "1" ]]; then
+  echo "[-] MOBILE_SDK_REQUIRE_KAGEMUSHA_PRODUCTION_AUTHORIZATION must be 0 or 1" >&2
+  exit 1
+fi
+if [[ -n "$KAGEMUSHA_PRODUCTION_AUTHORIZATION_SHA256" ]]; then
+  if [[ ! "$KAGEMUSHA_PRODUCTION_AUTHORIZATION_SHA256" =~ ^[0-9a-f]{64}$ \
+      || "$KAGEMUSHA_PRODUCTION_AUTHORIZATION_SHA256" == "$(printf '0%.0s' {1..64})" ]]; then
+    echo "[-] KAGEMUSHA_PRODUCTION_AUTHORIZATION_SHA256 must be non-zero lowercase SHA-256" >&2
+    exit 1
+  fi
+  if [[ "$PRIVACY_PRODUCTION_ENABLED" != "1" ]]; then
+    echo "[-] a Kagemusha production authorization may bind only a production-enabled build" >&2
+    exit 1
+  fi
+fi
+if [[ "$REQUIRE_KAGEMUSHA_PRODUCTION_AUTHORIZATION" == "1" \
+    && "$PRIVACY_PRODUCTION_ENABLED" == "1" \
+    && -z "$KAGEMUSHA_PRODUCTION_AUTHORIZATION_SHA256" ]]; then
+  echo "[-] official production build requires a verified Kagemusha authorization digest" >&2
+  exit 1
+fi
+
 CI_HANDOFF_DIR="$OUT_DIR/NoritoBridge.ci-handoff"
 if [[ "$CI_HANDOFF_ONLY" == "1" ]]; then
   if [[ -n "$ARCHIVE_OUTPUT" || "$ALLOW_DIRTY_SOURCE" == "1" ]]; then
@@ -1224,9 +1249,13 @@ fi
 SOURCE_FINGERPRINT="$SOURCE_FINGERPRINT_START"
 PRIVACY_PRODUCTION_JSON=false
 CARGO_FEATURES_JSON='[]'
+KAGEMUSHA_PRODUCTION_AUTHORIZATION_JSON=null
 if [[ "$PRIVACY_PRODUCTION_ENABLED" == "1" ]]; then
   PRIVACY_PRODUCTION_JSON=true
   CARGO_FEATURES_JSON='["privacy-production-enabled"]'
+fi
+if [[ -n "$KAGEMUSHA_PRODUCTION_AUTHORIZATION_SHA256" ]]; then
+  KAGEMUSHA_PRODUCTION_AUTHORIZATION_JSON="\"$KAGEMUSHA_PRODUCTION_AUTHORIZATION_SHA256\""
 fi
 
 cat > "$PUBLISH_MANIFEST" <<EOF
@@ -1235,6 +1264,7 @@ cat > "$PUBLISH_MANIFEST" <<EOF
   "native_bridge_abi_version": $BRIDGE_ABI_VERSION,
   "privacy_production_enabled": $PRIVACY_PRODUCTION_JSON,
   "cargo_features": $CARGO_FEATURES_JSON,
+  "kagemusha_production_authorization_sha256": $KAGEMUSHA_PRODUCTION_AUTHORIZATION_JSON,
   "build_environment": {
     "schema": "iroha.mobile-native-build-environment.v1",
     "hermetic_runner_schema": "iroha.mobile-hermetic-command.v1",
@@ -1348,6 +1378,7 @@ cat > "$PUBLISH_MANIFEST" <<EOF
     "connect_norito_canonical_json_blake3_v1",
     "connect_norito_encode_account_onboarding_plan_body_v1",
     "connect_norito_alias_instruction_round_trip_v1",
+    "connect_norito_parliament_timed_ovn_verify_casting_proof_page_v1",
     "connect_norito_parliament_timed_ovn_verify_casting_proof_v1",
     "connect_norito_parliament_timed_ovn_registration_from_proof_v1",
     "connect_norito_parliament_timed_ovn_ballot_from_proof_v1",

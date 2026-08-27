@@ -11,7 +11,6 @@ use base64::{
 use blake3::hash as blake3_hash;
 use ed25519_dalek::{Signer, SigningKey};
 use hex::encode as hex_encode;
-use iroha_config::parameters::defaults::streaming::soranet::PROVISION_SPOOL_DIR;
 use iroha_crypto::{KeyPair, PrivateKey, PublicKey, Signature};
 use iroha_data_model::{
     NetworkId,
@@ -48,6 +47,7 @@ use norito::{
     json::{Map, Number, Value, from_slice, to_string_pretty, to_value, to_vec},
     to_bytes,
 };
+use sorafs_orchestrator::DEFAULT_LOCAL_PROXY_BRIDGE_SPOOL_DIR;
 use reqwest::{
     StatusCode,
     blocking::Client as HttpClient,
@@ -3574,13 +3574,13 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
         }
         if matches!(proxy_cfg.proxy_mode, ProxyMode::Bridge) && proxy_cfg.norito_bridge.is_none() {
             proxy_cfg.norito_bridge = Some(ProxyNoritoBridgeConfig {
-                spool_dir: PROVISION_SPOOL_DIR.to_string(),
+                spool_dir: DEFAULT_LOCAL_PROXY_BRIDGE_SPOOL_DIR.to_string(),
                 extension: Some("norito".to_string()),
             });
         }
         if matches!(proxy_cfg.proxy_mode, ProxyMode::Bridge) && proxy_cfg.kaigi_bridge.is_none() {
             proxy_cfg.kaigi_bridge = Some(ProxyKaigiBridgeConfig {
-                spool_dir: PROVISION_SPOOL_DIR.to_string(),
+                spool_dir: DEFAULT_LOCAL_PROXY_BRIDGE_SPOOL_DIR.to_string(),
                 extension: Some("norito".to_string()),
                 room_policy: Some("public".to_string()),
             });
@@ -3589,7 +3589,7 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
             let bridge = proxy_cfg
                 .kaigi_bridge
                 .get_or_insert_with(|| ProxyKaigiBridgeConfig {
-                    spool_dir: PROVISION_SPOOL_DIR.to_string(),
+                    spool_dir: DEFAULT_LOCAL_PROXY_BRIDGE_SPOOL_DIR.to_string(),
                     extension: Some("norito".to_string()),
                     room_policy: None,
                 });

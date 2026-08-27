@@ -219,7 +219,6 @@ target/debug/kagami genesis sign \
   --peer-pop "$PK_B=$POP_B" \
   --private-key-file "$GENESIS_PRIVATE_KEY_FILE" \
   --expected-public-key "$GENESIS_PUBLIC_KEY" \
-  --algorithm ed25519 \
   --out-file genesis.signed.nrt \
   --expected-hash-out genesis.expected_hash
 ```

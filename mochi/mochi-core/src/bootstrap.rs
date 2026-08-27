@@ -104,12 +104,21 @@ impl BootstrapInputs {
     }
 }
 /// A generated bootstrap file and its relative destination.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct BootstrapArtifact {
     /// Relative path from the selected workspace root.
     pub relative_path: PathBuf,
     /// File contents ready to write.
     pub contents: String,
+}
+impl std::fmt::Debug for BootstrapArtifact {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("BootstrapArtifact")
+            .field("relative_path", &self.relative_path)
+            .field("contents_len", &self.contents.len())
+            .finish()
+    }
 }
 impl BootstrapArtifact {
     /// Join the artifact path onto a workspace root.
@@ -477,6 +486,7 @@ mod tests {
         assert!(!debug.contains("private key value"));
         assert!(debug.contains("[REDACTED]"));
         let bundle = BootstrapBundle::render(&inputs);
+        assert!(!format!("{bundle:?}").contains("private key value"));
         let paths = bundle
             .artifacts
             .iter()
@@ -576,8 +586,12 @@ mod tests {
         let mochi_dir = temp.path().join(".mochi");
         fs::create_dir(&mochi_dir).expect("create .mochi");
         symlink(outside.path(), mochi_dir.join("generated")).expect("link generated directory");
-        let error = write_bootstrap_bundle(temp.path(), &BootstrapBundle::render(&sample_inputs()), false)
-            .expect_err("symlinked artifact parent must be rejected");
+        let error = write_bootstrap_bundle(
+            temp.path(),
+            &BootstrapBundle::render(&sample_inputs()),
+            false,
+        )
+        .expect_err("symlinked artifact parent must be rejected");
         assert!(matches!(error, BootstrapWriteError::Io(_)));
         assert!(!outside.path().join("typescript/connect.ts").exists());
     }

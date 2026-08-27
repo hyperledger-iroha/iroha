@@ -124,7 +124,7 @@ custody path.
 - `-i, --image <NAME>`: Specifies the Docker image used by the peer services. 
   - By default, the image is pulled from Docker Hub if not cached. 
   - Pass the `--build` option to build the image from a Dockerfile instead. 
-  - **Note:** Kagami only guarantees that the Docker Compose configuration it generates is compatible with the same Git revision it is built from itself. Therefore, if the specified image is not compatible with the version of Kagami you are running, the generated configuration might not work.
+  - The image must be built from the same Git revision as Kagami.
 
 - `-b, --build <DIR>`: Builds the image from the Dockerfile in the specified directory. 
   - Do not rebuild if the image has been cached. 
@@ -144,7 +144,6 @@ custody path.
 - `-F, --force`: Overwrites the target file if it already exists.
 
 - `    --no-banner`: Do not include the banner with the generation notice in the file.
-  - The banner includes the passed arguments in order to help with reproducibility.
 
 ## Examples
 

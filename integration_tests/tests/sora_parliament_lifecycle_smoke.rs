@@ -23,8 +23,8 @@ use iroha::{
             BodyElectionAttemptId, BodyInstanceId, BodyInstanceStatusV1, ContractAbiHash,
             ContractCodeHash, DeliberationPhaseV1, DeployContractProposal, GovernanceAttemptId,
             GovernanceAttemptStatusV1, GovernanceStageV1, ParliamentAggregateOutcomeV1,
-            ParliamentBody, ProposalKind, SortitionRequestV1, TleSessionId,
-            parliament_ballot_participant_hash_v1, parliament_candidate_root_v1,
+            ParliamentBody, ParliamentNoResultKindV1, ProposalKind, SortitionRequestV1,
+            TleSessionId, parliament_ballot_participant_hash_v1, parliament_candidate_root_v1,
         },
         isi::{
             InstructionBox, Log,
@@ -39,9 +39,10 @@ use iroha::{
                 ParliamentEndorsePublicFindingV1, ParliamentFinalizeOpenedBallotV1,
                 ParliamentFreezeBallotSurvivorsV1, ParliamentFreezeTimedOvnCorpusV1,
                 ParliamentInvitationDecisionV1, ParliamentLifecycleTransitionV1,
-                ParliamentRecordInvitationResponseV1, ParliamentRegisterBallotAttemptV1,
-                ParliamentRegisterBallotParticipantV1, ParliamentRegisterSortitionRequestV1,
-                ParliamentSealBodyRosterV1, ParliamentTleFinalReleaseSignatureV1,
+                ParliamentRecordAttemptAbsenceV1, ParliamentRecordInvitationResponseV1,
+                ParliamentRegisterBallotAttemptV1, ParliamentRegisterBallotParticipantV1,
+                ParliamentRegisterSortitionRequestV1, ParliamentSealBodyRosterV1,
+                ParliamentSortitionRequestRegistrationV1, ParliamentTleFinalReleaseSignatureV1,
                 ProposeDeployContract, RegisterCitizen, SubmitParliamentLifecycleTransitionV1,
             },
             smart_contract_code::{
@@ -50,7 +51,7 @@ use iroha::{
             },
         },
         parameter::{
-            Parameter, SetParameter,
+            Parameter,
             system::{
                 ConsensusHandshakeMetadata, SumeragiConsensusMode, SumeragiNposParameters,
                 consensus_metadata,
@@ -60,6 +61,7 @@ use iroha::{
         permission::Permission,
         prelude::{
             Account, FeePaymentIntent, FindBlocks, Grant, Level, QueryBuilderExt as _, Register,
+            SetParameter,
         },
         smart_contract::ContractAddress,
     },
@@ -92,8 +94,7 @@ use iroha_core::{
 };
 use iroha_crypto::timed_ovn::{TimedOvnChoiceV1, TimedOvnRegistrationSecretV1};
 use iroha_executor_data_model::permission::{
-    governance::{CanManageParliament, CanProposeContractDeployment},
-    smart_contract::CanRegisterSmartContractCode,
+    governance::CanProposeContractDeployment, smart_contract::CanRegisterSmartContractCode,
 };
 use iroha_test_network::{NetworkBuilder, ParliamentBeaconSignerMode};
 use iroha_test_samples::ALICE_ID;
@@ -111,6 +112,8 @@ const RELEASE_DELAY_BLOCKS: u64 = 3;
 const OPENING_PHASE_BLOCKS: u64 = 8;
 const MIN_ENACTMENT_DELAY: u64 = 3;
 const MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS: u64 = 8;
+const PARLIAMENT_NETWORK_STACK_BYTES: usize = 32 * 1024 * 1024;
+const TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES: i64 = 1_073_741_824;
 const OPERATION_TIMEOUT: Duration = Duration::from_secs(300);
 const FAIL_CLOSED_BEACON_OBSERVATION_WINDOW: Duration = Duration::from_secs(8);
 const POSITIVE_BEACON_SIGNER_MODES: [ParliamentBeaconSignerMode; VALIDATOR_COUNT] = [
@@ -126,6 +129,8 @@ const FAIL_CLOSED_BEACON_SIGNER_MODES: [ParliamentBeaconSignerMode; VALIDATOR_CO
     ParliamentBeaconSignerMode::Invalid,
 ];
 const CONTRACT_ADDRESS: &str = "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
+const NO_RESULT_RETRY_CONTRACT_ADDRESS: &str =
+    "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh";
 
 fn fee() -> FeePaymentIntent {
     FeePaymentIntent::authority(Vec::new(), None)
@@ -195,7 +200,11 @@ fn citizen_accounts(keys: &[KeyPair]) -> Vec<AccountId> {
 fn client_for(base: &Client, account: &AccountId, keys: &[KeyPair]) -> Client {
     let key = keys
         .iter()
-        .find(|key| key.public_key() == account.signatory())
+        .find(|key| {
+            account
+                .try_signatory()
+                .is_some_and(|signatory| key.public_key() == signatory)
+        })
         .expect("selected citizen owns one deterministic key")
         .clone();
     let mut client = base.clone();
@@ -298,7 +307,7 @@ fn read_attempt(
 }
 
 fn ordered_validator_roster(network: &sandbox::SerializedNetwork) -> Result<Vec<PeerId>> {
-    let roster = iroha_core::sumeragi::signed_genesis_voting_peers(&network.genesis().0)
+    let roster = iroha_core::sumeragi::signed_genesis_voting_peers(&network.genesis())
         .wrap_err("read exact signed genesis voting roster")?;
     if roster.len() != VALIDATOR_COUNT {
         return Err(eyre!("expected exactly four signed validators"));
@@ -531,16 +540,8 @@ fn stage_contract_artifact(
         client.submit_all_blocking(instructions, fee())?;
     }
     client.submit_blocking(RegisterSmartContractCode { manifest }, fee())?;
-    let code_hash: [u8; 32] = verified
-        .code_hash
-        .as_ref()
-        .try_into()
-        .expect("IVM contract code hash is fixed at 32 bytes");
-    let abi_hash: [u8; 32] = verified
-        .abi_hash
-        .as_ref()
-        .try_into()
-        .expect("IVM ABI hash is fixed at 32 bytes");
+    let code_hash = *verified.code_hash.as_ref();
+    let abi_hash = *verified.abi_hash.as_ref();
     Ok((
         ContractCodeHash::new(code_hash),
         ContractAbiHash::new(abi_hash),
@@ -566,11 +567,345 @@ fn exact_block(client: &Client, height: u64) -> Result<SignedBlock> {
         .ok_or_else(|| eyre!("peer does not retain finalized block {height}"))
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn() -> Result<()> {
+async fn exercise_public_finding_impossible_quorum_retry(
+    network: &sandbox::SerializedNetwork,
+    client: &Client,
+    citizens: &[AccountId],
+    citizen_keys: &[KeyPair],
+    contract_address: &ContractAddress,
+    code_hash: ContractCodeHash,
+    abi_hash: ContractAbiHash,
+    logical_beacon: BeaconSessionId,
+) -> Result<()> {
+    let proposal = ProposalKind::DeployContract(DeployContractProposal {
+        contract_address: contract_address.clone(),
+        code_hash,
+        abi_hash,
+        abi_version: AbiVersion::new(1),
+        manifest_provenance: None,
+    });
+    let create = CreateParliamentGovernanceAttemptV1 {
+        proposal: proposal.clone(),
+        attempt_sequence: 0,
+    };
+    let attempt_id = create.governance_attempt_id();
+    client.submit_all_blocking(
+        [
+            InstructionBox::from(ProposeDeployContract {
+                contract_address: contract_address.clone(),
+                code_hash,
+                abi_hash,
+                abi_version: AbiVersion::new(1),
+                manifest_provenance: None,
+            }),
+            InstructionBox::from(create),
+        ],
+        fee(),
+    )?;
+    submit_transition(
+        client,
+        attempt_id,
+        ParliamentLifecycleTransitionV1::CompleteQualification,
+    )?;
+
+    let expected_bodies = [
+        ParliamentBody::RulesCommittee,
+        ParliamentBody::AgendaCouncil,
+        ParliamentBody::InterestPanel,
+        ParliamentBody::ReviewPanel,
+        ParliamentBody::OversightCommittee,
+        ParliamentBody::PolicyJury,
+    ];
+    let request_height = current_height(client)? + 1;
+    let sortition_pulse_height = request_height + 4;
+    let mut election_ids = BTreeMap::new();
+    let mut request_ids = Vec::new();
+    let mut registrations = Vec::new();
+    for body in expected_bodies {
+        let election_id = BodyElectionAttemptId::derive_v1(attempt_id, body, 0);
+        let request = SortitionRequestV1::try_new_canonical(
+            attempt_id,
+            election_id,
+            body,
+            parliament_candidate_root_v1(attempt_id, body, citizens),
+            u32::try_from(citizens.len())?,
+            BODY_SEATS,
+            request_height,
+            sortition_pulse_height,
+            logical_beacon,
+            None,
+        )
+        .map_err(|error| eyre!("construct no-result sortition request: {error}"))?;
+        election_ids.insert(body, election_id);
+        request_ids.push(request.id);
+        registrations.push(ParliamentSortitionRequestRegistrationV1 {
+            sequence: 0,
+            request,
+        });
+    }
+    request_ids.sort_unstable();
+    submit_transition(
+        client,
+        attempt_id,
+        ParliamentLifecycleTransitionV1::RegisterSortitionRequest(
+            ParliamentRegisterSortitionRequestV1 {
+                requests: registrations,
+            },
+        ),
+    )?;
+    assert_eq!(current_height(client)?, request_height);
+    advance_to_predecessor(
+        client,
+        sortition_pulse_height,
+        "no-result retry sortition pulse",
+    )?;
+    network.ensure_blocks(sortition_pulse_height).await?;
+    let pulses = network
+        .peers()
+        .iter()
+        .map(|peer| pulse_at(&peer.client(), sortition_pulse_height))
+        .collect::<Result<Vec<_>>>()?;
+    assert!(pulses.windows(2).all(|pair| pair[0] == pair[1]));
+    let pulse = &pulses[0];
+    submit_transition(
+        client,
+        attempt_id,
+        ParliamentLifecycleTransitionV1::ConsumeSortitionPulseBatch(
+            ParliamentConsumeSortitionPulseBatchV1 {
+                request_ids,
+                beacon_session_id: logical_beacon,
+                pulse_height: sortition_pulse_height,
+                pulse_id: BeaconPulseId::new(pulse.pulse_id),
+            },
+        ),
+    )?;
+
+    submit_transitions(
+        client,
+        attempt_id,
+        expected_bodies.into_iter().map(|body| {
+            ParliamentLifecycleTransitionV1::BeginInvitationAcceptance(
+                ParliamentBeginInvitationAcceptanceV1 {
+                    election_attempt_id: election_ids[&body],
+                },
+            )
+        }),
+    )?;
+    let invitation_state = read_attempt(client, attempt_id)?;
+    let invitation_close_height = expected_bodies
+        .into_iter()
+        .map(|body| {
+            invitation_state
+                .election(&election_ids[&body])
+                .and_then(|election| election.invitation_close_height())
+                .expect("no-result invitation deadline is frozen")
+        })
+        .reduce(|left, right| {
+            assert_eq!(left, right);
+            left
+        })
+        .expect("the no-result attempt requires Parliament bodies");
+    let mut invitations_by_member =
+        BTreeMap::<AccountId, Vec<(ParliamentBody, BodyElectionAttemptId)>>::new();
+    for body in expected_bodies {
+        let election = invitation_state
+            .election(&election_ids[&body])
+            .expect("no-result body election");
+        for assignment in election.primary_assignments() {
+            invitations_by_member
+                .entry(assignment.member.clone())
+                .or_default()
+                .push((body, election_ids[&body]));
+        }
+    }
+    for (member, invitations) in invitations_by_member {
+        submit_transitions(
+            &client_for(client, &member, citizen_keys),
+            attempt_id,
+            invitations.into_iter().map(|(body, election_attempt_id)| {
+                ParliamentLifecycleTransitionV1::RecordInvitationResponse(
+                    ParliamentRecordInvitationResponseV1 {
+                        election_attempt_id,
+                        body,
+                        decision: ParliamentInvitationDecisionV1::Accept,
+                    },
+                )
+            }),
+        )?;
+    }
+    assert!(current_height(client)? <= invitation_close_height);
+    let roster_seal_height = invitation_close_height
+        .checked_add(1)
+        .ok_or_else(|| eyre!("no-result roster-seal height overflow"))?;
+    advance_to_predecessor(client, roster_seal_height, "no-result retry roster sealing")?;
+    submit_transitions(
+        client,
+        attempt_id,
+        expected_bodies.into_iter().map(|body| {
+            ParliamentLifecycleTransitionV1::SealBodyRoster(ParliamentSealBodyRosterV1 {
+                election_attempt_id: election_ids[&body],
+            })
+        }),
+    )?;
+
+    let rules_body_id = read_attempt(client, attempt_id)?
+        .sealed_body_for_role(ParliamentBody::RulesCommittee)
+        .expect("no-result Rules Committee is sealed")
+        .instance()
+        .id;
+    submit_transitions(
+        client,
+        attempt_id,
+        [
+            DeliberationPhaseV1::Orientation,
+            DeliberationPhaseV1::Evidence,
+            DeliberationPhaseV1::Questions,
+            DeliberationPhaseV1::Responses,
+            DeliberationPhaseV1::Deliberation,
+            DeliberationPhaseV1::Reflection,
+        ]
+        .into_iter()
+        .map(|target| {
+            ParliamentLifecycleTransitionV1::AdvanceBodyPhase(ParliamentAdvanceBodyPhaseV1 {
+                body_instance_id: rules_body_id,
+                target,
+            })
+        }),
+    )?;
+    let reflecting = read_attempt(client, attempt_id)?;
+    let rules = reflecting
+        .body(&rules_body_id)
+        .expect("reflecting no-result Rules Committee");
+    let public_finding_deadline = rules
+        .public_finding_deadline_height()
+        .expect("no-result public-finding deadline is frozen");
+    let absent_assignments = rules.assignments()[..2].to_vec();
+    for (index, assignment) in absent_assignments.iter().enumerate() {
+        submit_transition(
+            &client_for(client, &assignment.member, citizen_keys),
+            attempt_id,
+            ParliamentLifecycleTransitionV1::RecordAttemptAbsence(
+                ParliamentRecordAttemptAbsenceV1 {
+                    body_instance_id: rules_body_id,
+                    assignment_id: assignment.assignment_id,
+                },
+            ),
+        )?;
+        let observed = read_attempt(client, attempt_id)?;
+        let observed_rules = observed
+            .body(&rules_body_id)
+            .expect("no-result Rules Committee survives projection");
+        assert_eq!(observed_rules.excluded_assignments().len(), index + 1);
+        if index == 0 {
+            assert_eq!(observed.attempt().status, GovernanceAttemptStatusV1::Active);
+            assert_eq!(
+                observed_rules.instance().status,
+                BodyInstanceStatusV1::Deliberating(DeliberationPhaseV1::Reflection),
+            );
+        }
+    }
+    let failed_height = current_height(client)?;
+    assert!(
+        failed_height < public_finding_deadline,
+        "objective quorum impossibility must terminate before the frozen deadline",
+    );
+    let rejected = read_attempt(client, attempt_id)?;
+    let rejected_rules = rejected
+        .body(&rules_body_id)
+        .expect("rejected Rules Committee remains auditable");
+    assert_eq!(
+        rejected.attempt().status,
+        GovernanceAttemptStatusV1::Rejected,
+    );
+    assert_eq!(
+        rejected_rules.instance().status,
+        BodyInstanceStatusV1::NoResult
+    );
+    assert_eq!(
+        rejected_rules.public_finding_no_result_kind(),
+        Some(ParliamentNoResultKindV1::PublicFindingQuorumUnreachable),
+    );
+    assert_eq!(
+        rejected_rules.public_finding_no_result_height(),
+        Some(failed_height),
+    );
+    assert!(
+        client.get_gov_contract_json(contract_address).is_err(),
+        "a no-result Parliament attempt must not apply its governed effect",
+    );
+
+    let retry = CreateParliamentGovernanceAttemptV1 {
+        proposal,
+        attempt_sequence: 1,
+    };
+    let retry_id = retry.governance_attempt_id();
+    client.submit_blocking(retry, fee())?;
+    let retry_height = current_height(client)?;
+    network.ensure_blocks(retry_height).await?;
+    let retry_state = read_attempt(client, retry_id)?;
+    assert_eq!(retry_state.attempt().sequence, 1);
+    assert_eq!(
+        retry_state.attempt().status,
+        GovernanceAttemptStatusV1::Active
+    );
+    assert_eq!(
+        retry_state.attempt().stage,
+        GovernanceStageV1::Qualification
+    );
+
+    let rejected_response = client.get_parliament_attempt(attempt_id)?;
+    let retry_response = client.get_parliament_attempt(retry_id)?;
+    for peer in network.peers() {
+        let peer_client = peer.client();
+        let peer_rejected = peer_client.get_parliament_attempt(attempt_id)?;
+        let peer_retry = peer_client.get_parliament_attempt(retry_id)?;
+        assert_eq!(
+            peer_rejected.state_payload_hex,
+            rejected_response.state_payload_hex
+        );
+        assert_eq!(
+            peer_retry.state_payload_hex,
+            retry_response.state_payload_hex
+        );
+        assert!(
+            peer_client.get_gov_contract_json(contract_address).is_err(),
+            "every validator must preserve no-result effect isolation",
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn() -> Result<()> {
+    let name = stringify!(four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn);
+    let handle = std::thread::Builder::new()
+        .name(name.to_owned())
+        .stack_size(PARLIAMENT_NETWORK_STACK_BYTES)
+        .spawn(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(4)
+                .thread_stack_size(PARLIAMENT_NETWORK_STACK_BYTES)
+                .enable_all()
+                .build()
+                .expect("build four-validator Parliament test runtime")
+                .block_on(
+                    four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_impl(),
+                )
+        })
+        .expect("spawn four-validator Parliament test thread");
+    match handle.join() {
+        Ok(result) => result,
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
+}
+
+async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_impl() -> Result<()>
+{
     let citizen_keys = citizen_keys();
     let citizens = citizen_accounts(&citizen_keys);
     let contract_address = ContractAddress::from_str(CONTRACT_ADDRESS)?;
+    let no_result_retry_contract_address =
+        ContractAddress::from_str(NO_RESULT_RETRY_CONTRACT_ADDRESS)?;
     let mut builder = NetworkBuilder::new()
         .with_peers(VALIDATOR_COUNT)
         .with_auto_populated_trusted_peers()
@@ -579,70 +914,73 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn()
         .with_block_cadence(Duration::from_secs(1))
         .with_config_layer(|layer| {
             layer
-                .write(["nexus", "lane_count"], 1_i64)
-                .write(["governance", "citizenship_bond_amount"], "0")
-                .write(
-                    ["governance", "min_enactment_delay"],
-                    MIN_ENACTMENT_DELAY as i64,
-                )
-                .write(["governance", "parliament_alternate_size"], 0_i64)
-                .write(
-                    ["governance", "parliament_invitation_phase_blocks"],
-                    INVITATION_PHASE_BLOCKS as i64,
-                )
-                .write(
-                    ["governance", "parliament_public_finding_phase_blocks"],
-                    20_i64,
-                )
-                .write(["governance", "rules_committee_size"], BODY_SEATS as i64)
-                .write(["governance", "agenda_council_size"], BODY_SEATS as i64)
-                .write(["governance", "interest_panel_size"], BODY_SEATS as i64)
-                .write(["governance", "review_panel_size"], BODY_SEATS as i64)
-                .write(
-                    ["governance", "oversight_committee_size"],
-                    BODY_SEATS as i64,
-                )
-                .write(["governance", "policy_jury_size"], BODY_SEATS as i64)
+                // Keep mandatory SoraNet admission enabled while bounding the
+                // localhost-only puzzle cost so this corridor measures
+                // Parliament/consensus liveness rather than Argon2 contention.
                 .write(
                     [
-                        "governance",
-                        "parliament_timed_ovn",
-                        "registration_phase_blocks",
+                        "network",
+                        "soranet_handshake",
+                        "pow",
+                        "puzzle",
+                        "memory_kib",
                     ],
+                    i64::from(iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB),
+                )
+                .write(
+                    ["network", "soranet_handshake", "pow", "puzzle", "time_cost"],
+                    1_i64,
+                )
+                .write(
+                    ["network", "soranet_handshake", "pow", "puzzle", "lanes"],
+                    1_i64,
+                )
+                .write(["nexus", "lane_count"], 1_i64)
+                .write(
+                    ["nexus", "storage", "local_budget_bytes"],
+                    TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES,
+                )
+                .write(["gov", "citizenship_bond_amount"], "0")
+                .write(["gov", "min_enactment_delay"], MIN_ENACTMENT_DELAY as i64)
+                .write(["gov", "parliament_alternate_size"], 0_i64)
+                .write(
+                    ["gov", "parliament_invitation_phase_blocks"],
+                    INVITATION_PHASE_BLOCKS as i64,
+                )
+                .write(["gov", "parliament_public_finding_phase_blocks"], 20_i64)
+                .write(["gov", "rules_committee_size"], BODY_SEATS as i64)
+                .write(["gov", "agenda_council_size"], BODY_SEATS as i64)
+                .write(["gov", "interest_panel_size"], BODY_SEATS as i64)
+                .write(["gov", "review_panel_size"], BODY_SEATS as i64)
+                .write(["gov", "oversight_committee_size"], BODY_SEATS as i64)
+                .write(["gov", "policy_jury_size"], BODY_SEATS as i64)
+                .write(["gov", "confirmation_jury_size"], BODY_SEATS as i64)
+                .write(
+                    ["gov", "parliament_timed_ovn", "registration_phase_blocks"],
                     REGISTRATION_PHASE_BLOCKS as i64,
                 )
                 .write(
                     [
-                        "governance",
+                        "gov",
                         "parliament_timed_ovn",
                         "survivor_freeze_phase_blocks",
                     ],
                     SURVIVOR_PHASE_BLOCKS as i64,
                 )
                 .write(
-                    [
-                        "governance",
-                        "parliament_timed_ovn",
-                        "commitment_phase_blocks",
-                    ],
+                    ["gov", "parliament_timed_ovn", "commitment_phase_blocks"],
                     COMMITMENT_PHASE_BLOCKS as i64,
                 )
                 .write(
-                    ["governance", "parliament_timed_ovn", "release_delay_blocks"],
+                    ["gov", "parliament_timed_ovn", "release_delay_blocks"],
                     RELEASE_DELAY_BLOCKS as i64,
                 )
                 .write(
-                    ["governance", "parliament_timed_ovn", "opening_phase_blocks"],
+                    ["gov", "parliament_timed_ovn", "opening_phase_blocks"],
                     OPENING_PHASE_BLOCKS as i64,
                 )
-                .write(
-                    ["governance", "parliament_timed_ovn", "max_ballot_retries"],
-                    0_i64,
-                )
-                .write(
-                    ["governance", "parliament_timed_ovn", "max_corpus_entries"],
-                    8_i64,
-                );
+                .write(["gov", "parliament_timed_ovn", "max_ballot_retries"], 0_i64)
+                .write(["gov", "parliament_timed_ovn", "max_corpus_entries"], 8_i64);
         })
         .with_genesis_instruction(Grant::account_permission(
             Permission::from(CanRegisterSmartContractCode),
@@ -655,7 +993,9 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn()
             ALICE_ID.clone(),
         ))
         .with_genesis_instruction(Grant::account_permission(
-            Permission::from(CanManageParliament),
+            Permission::from(CanProposeContractDeployment {
+                contract_address: no_result_retry_contract_address.clone(),
+            }),
             ALICE_ID.clone(),
         ));
     for citizen in &citizens {
@@ -783,7 +1123,7 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn()
     let logical_beacon = BeaconSessionId::for_network_v1(&network.network_id());
     let mut election_ids = BTreeMap::new();
     let mut request_ids = Vec::new();
-    let mut request_transitions = Vec::new();
+    let mut request_registrations = Vec::new();
     for body in expected_bodies {
         let election_id = BodyElectionAttemptId::derive_v1(attempt_id, body, 0);
         let request = SortitionRequestV1::try_new_canonical(
@@ -801,16 +1141,21 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn()
         .map_err(|error| eyre!("construct canonical sortition request: {error}"))?;
         election_ids.insert(body, election_id);
         request_ids.push(request.id);
-        request_transitions.push(ParliamentLifecycleTransitionV1::RegisterSortitionRequest(
-            ParliamentRegisterSortitionRequestV1 {
-                sequence: 0,
-                request,
-                candidate_snapshot: citizens.clone(),
-            },
-        ));
+        request_registrations.push(ParliamentSortitionRequestRegistrationV1 {
+            sequence: 0,
+            request,
+        });
     }
     request_ids.sort_unstable();
-    submit_transitions(&client, attempt_id, request_transitions)?;
+    submit_transition(
+        &client,
+        attempt_id,
+        ParliamentLifecycleTransitionV1::RegisterSortitionRequest(
+            ParliamentRegisterSortitionRequestV1 {
+                requests: request_registrations,
+            },
+        ),
+    )?;
     assert_eq!(current_height(&client)?, request_height);
     advance_to_predecessor(&client, sortition_pulse_height, "sortition pulse")?;
     network.ensure_blocks(sortition_pulse_height).await?;
@@ -1644,6 +1989,14 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn()
         peer_client
             .get_gov_contract_json(&contract_address)
             .wrap_err("every validator must expose the consensus-enacted contract")?;
+        let status = peer_client.get_sumeragi_status()?;
+        status
+            .validate()
+            .map_err(|error| eyre!("invalid enacted Parliament peer status: {error}"))?;
+        assert!(
+            !status.restart_required,
+            "an enacted Parliament validator must not be live-but-fail-stopped",
+        );
     }
 
     let restart_index = network.peers().len() - 1;
@@ -1680,12 +2033,56 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn()
         .client()
         .get_gov_contract_json(&contract_address)
         .wrap_err("normal restart must restore the consensus-enacted contract")?;
+    let restarted_status = restart_peer.client().get_sumeragi_status()?;
+    restarted_status
+        .validate()
+        .map_err(|error| eyre!("invalid restarted Parliament peer status: {error}"))?;
+    assert!(
+        !restarted_status.restart_required,
+        "normal restart must restore a live non-fail-stopped consensus reducer",
+    );
+    exercise_public_finding_impossible_quorum_retry(
+        &network,
+        &client,
+        &citizens,
+        &citizen_keys,
+        &no_result_retry_contract_address,
+        code_hash,
+        abi_hash,
+        logical_beacon,
+    )
+    .await?;
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_gate() -> Result<()>
-{
+#[test]
+fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_gate() -> Result<()> {
+    let name =
+        stringify!(four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_gate);
+    let handle = std::thread::Builder::new()
+        .name(name.to_owned())
+        .stack_size(PARLIAMENT_NETWORK_STACK_BYTES)
+        .spawn(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(4)
+                .thread_stack_size(PARLIAMENT_NETWORK_STACK_BYTES)
+                .enable_all()
+                .build()
+                .expect("build four-validator mandatory-beacon test runtime")
+                .block_on(
+                    four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_gate_impl(
+                    ),
+                )
+        })
+        .expect("spawn four-validator mandatory-beacon test thread");
+    match handle.join() {
+        Ok(result) => result,
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
+}
+
+async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_gate_impl()
+-> Result<()> {
     let mut npos = SumeragiNposParameters::default();
     npos.epoch_length_blocks = NonZeroU64::new(MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS)
         .expect("mandatory NPoS epoch length is non-zero");
@@ -1698,13 +2095,34 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
         .with_npos_consensus()
         .with_parliament_beacon_signer_modes(POSITIVE_BEACON_SIGNER_MODES)
         .with_block_cadence(Duration::from_secs(1))
+        .with_config_layer(|layer| {
+            layer
+                .write(
+                    [
+                        "network",
+                        "soranet_handshake",
+                        "pow",
+                        "puzzle",
+                        "memory_kib",
+                    ],
+                    i64::from(iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB),
+                )
+                .write(
+                    ["network", "soranet_handshake", "pow", "puzzle", "time_cost"],
+                    1_i64,
+                )
+                .write(
+                    ["network", "soranet_handshake", "pow", "puzzle", "lanes"],
+                    1_i64,
+                )
+                .write(
+                    ["nexus", "storage", "local_budget_bytes"],
+                    TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES,
+                );
+        })
         .with_genesis_instruction(SetParameter::new(Parameter::Custom(
             npos.into_custom_parameter(),
-        )))
-        .with_genesis_instruction(Grant::account_permission(
-            Permission::from(CanManageParliament),
-            ALICE_ID.clone(),
-        ));
+        )));
     let context =
         stringify!(four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_gate);
     let network = sandbox::start_network_async_or_skip(builder, context).await?;
@@ -1806,6 +2224,10 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
         status
             .validate()
             .map_err(|error| eyre!("invalid successor NPoS status: {error}"))?;
+        assert!(
+            !status.restart_required,
+            "a successful mandatory beacon transition must not fail-stop a validator",
+        );
         assert!(status.last_committed_height >= boundary_height + 1);
         assert_eq!(status.height_context.epoch, successor_epoch);
         assert_eq!(status.height_context.epoch_seed, successor_seed);
@@ -1819,8 +2241,29 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn four_validator_mandatory_npos_beacon_fails_closed_below_threshold() -> Result<()> {
+#[test]
+fn four_validator_mandatory_npos_beacon_fails_closed_below_threshold() -> Result<()> {
+    let name = stringify!(four_validator_mandatory_npos_beacon_fails_closed_below_threshold);
+    let handle = std::thread::Builder::new()
+        .name(name.to_owned())
+        .stack_size(PARLIAMENT_NETWORK_STACK_BYTES)
+        .spawn(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(4)
+                .thread_stack_size(PARLIAMENT_NETWORK_STACK_BYTES)
+                .enable_all()
+                .build()
+                .expect("build four-validator fail-closed beacon test runtime")
+                .block_on(four_validator_mandatory_npos_beacon_fails_closed_below_threshold_impl())
+        })
+        .expect("spawn four-validator fail-closed beacon test thread");
+    match handle.join() {
+        Ok(result) => result,
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
+}
+
+async fn four_validator_mandatory_npos_beacon_fails_closed_below_threshold_impl() -> Result<()> {
     assert_eq!(
         FAIL_CLOSED_BEACON_SIGNER_MODES
             .iter()
@@ -1841,13 +2284,34 @@ async fn four_validator_mandatory_npos_beacon_fails_closed_below_threshold() -> 
         .with_npos_consensus()
         .with_parliament_beacon_signer_modes(FAIL_CLOSED_BEACON_SIGNER_MODES)
         .with_block_cadence(Duration::from_secs(1))
+        .with_config_layer(|layer| {
+            layer
+                .write(
+                    [
+                        "network",
+                        "soranet_handshake",
+                        "pow",
+                        "puzzle",
+                        "memory_kib",
+                    ],
+                    i64::from(iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB),
+                )
+                .write(
+                    ["network", "soranet_handshake", "pow", "puzzle", "time_cost"],
+                    1_i64,
+                )
+                .write(
+                    ["network", "soranet_handshake", "pow", "puzzle", "lanes"],
+                    1_i64,
+                )
+                .write(
+                    ["nexus", "storage", "local_budget_bytes"],
+                    TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES,
+                );
+        })
         .with_genesis_instruction(SetParameter::new(Parameter::Custom(
             npos.into_custom_parameter(),
-        )))
-        .with_genesis_instruction(Grant::account_permission(
-            Permission::from(CanManageParliament),
-            ALICE_ID.clone(),
-        ));
+        )));
     let context = stringify!(four_validator_mandatory_npos_beacon_fails_closed_below_threshold);
     let network = sandbox::start_network_async_or_skip(builder, context).await?;
     let Some(network) = sandbox::enforce_network_start_requirement(network, context)? else {
@@ -1914,8 +2378,12 @@ async fn four_validator_mandatory_npos_beacon_fails_closed_below_threshold() -> 
         status
             .validate()
             .map_err(|error| eyre!("invalid fail-closed NPoS status: {error}"))?;
+        assert!(
+            !status.restart_required,
+            "below-threshold beacon liveness must stall without fail-stopping consensus",
+        );
         assert_eq!(status.last_committed_height, predecessor_height);
-        assert_eq!(status.height_context.height, pulse_height);
+        assert_eq!(status.height, pulse_height);
     }
 
     network.shutdown().await;
@@ -1978,6 +2446,12 @@ fn parliament_network_corridor_has_no_legacy_or_consensus_bypass_surface() {
         concat!("combine_partial_", "releases"),
         concat!("FinalizeOpened", "Ballot"),
         concat!("GovernanceAttemptStatusV1::", "Enacted"),
+        concat!("exercise_public_finding_", "impossible_quorum_retry"),
+        concat!(
+            "ParliamentNoResultKindV1::",
+            "PublicFindingQuorumUnreachable"
+        ),
+        concat!("attempt_sequence:", " 1"),
         concat!("shutdown_if_", "started"),
         concat!("start_", "checked"),
     ] {

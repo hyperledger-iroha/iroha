@@ -15,6 +15,7 @@ import org.hyperledger.iroha.android.IrohaKeyManager;
 import org.hyperledger.iroha.android.client.queue.DirectoryPendingTransactionQueue;
 import org.hyperledger.iroha.android.client.queue.FilePendingTransactionQueue;
 import org.hyperledger.iroha.android.client.queue.PendingTransactionQueue;
+import org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProver;
 import org.hyperledger.iroha.android.telemetry.AndroidDeviceProfileProvider;
 import org.hyperledger.iroha.android.telemetry.AndroidNetworkContextProvider;
 import org.hyperledger.iroha.android.telemetry.CrashTelemetryHandler;
@@ -292,6 +293,23 @@ public final class ClientConfig {
         .defaultHeaders(defaultHeaders)
         .observers(observers)
         .build();
+  }
+
+  /**
+   * Creates a Kagemusha Torii client using this config's public base URI, request timeout, and exact
+   * deployed network identity. Kagemusha authorization stays in typed requests and per-call
+   * canonical auth, so ambient default headers are deliberately not copied into the client.
+   */
+  public KagemushaRecursiveSpendProver.ToriiClient toKagemushaToriiClient(
+      final HttpTransportExecutor executor) {
+    Objects.requireNonNull(executor, "executor");
+    return KagemushaRecursiveSpendProver.newToriiClient(
+        baseUri, executor, requireLocalSigningContext(), requestTimeout);
+  }
+
+  /** Creates a Kagemusha Torii client with the default HTTP executor. */
+  public KagemushaRecursiveSpendProver.ToriiClient toKagemushaToriiClient() {
+    return toKagemushaToriiClient(PlatformHttpTransportExecutor.createDefault());
   }
 
   /**

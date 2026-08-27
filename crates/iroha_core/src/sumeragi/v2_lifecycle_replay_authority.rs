@@ -1420,6 +1420,100 @@ impl RecoveredDecisionApplyCandidateLineageV1 {
                 super::schema::DurableContinuation::None,
             )
     }
+    /// Build the independent Apply row used when an older successful Validate
+    /// already terminalized without a successor.
+    ///
+    /// The current Decision WAL still authenticates the complete logical body
+    /// family, but only its final Apply is published.  Giving the Apply a fresh
+    /// owner rooted at its own ordinal prevents it from inheriting either the
+    /// historical Validate owner or a synthetic recovered Fetch parent.
+    pub(super) fn standalone_apply_record(
+        &self,
+        context: LifecycleContext,
+        apply_ordinal: u128,
+    ) -> Option<LifecycleLedgerRecordV1> {
+        if apply_ordinal == 0 || !self.is_exact(context) {
+            return None;
+        }
+        let owner = OwnerId::new(self.apply.causal_root, apply_ordinal);
+        LifecycleLedgerRecordV1::new(
+            self.apply.key,
+            owner,
+            apply_ordinal,
+            self.apply.work_class,
+            self.apply.stage,
+            None,
+            self.apply.reconstruction_source,
+            self.apply.payload,
+            self.apply.replay_authority.clone(),
+            super::schema::DurableContinuation::None,
+        )
+        .ok()
+    }
+    /// Compare one already-published independent live Apply row.
+    pub(super) fn exactly_matches_standalone_apply_record(
+        &self,
+        context: LifecycleContext,
+        apply: &LifecycleLedgerRecordV1,
+    ) -> bool {
+        let owner = OwnerId::new(self.apply.causal_root, apply.ordinal());
+        self.is_exact(context)
+            && apply.ordinal() != 0
+            && Self::candidate_matches_record(
+                &self.apply,
+                apply,
+                owner,
+                None,
+                super::schema::DurableContinuation::None,
+            )
+    }
+    /// Compare the same independent Apply after durable terminal settlement.
+    pub(super) fn exactly_matches_terminal_standalone_apply_record(
+        &self,
+        context: LifecycleContext,
+        apply: &LifecycleLedgerRecordV1,
+    ) -> bool {
+        let owner = OwnerId::new(self.apply.causal_root, apply.ordinal());
+        self.is_exact(context)
+            && apply.ordinal() != 0
+            && Self::candidate_matches_record(
+                &self.apply,
+                apply,
+                owner,
+                Some(TerminalOutcome::Advanced),
+                super::schema::DurableContinuation::None,
+            )
+    }
+    /// Join an older released Validate replay envelope directly to this
+    /// lineage's independent Apply without inventing an intermediate owner.
+    pub(super) fn exactly_continues_released_validate(
+        &self,
+        context: LifecycleContext,
+        validate_authority: &LifecycleReplayAuthorityV1,
+        validate_payload: DurablePayloadReference,
+    ) -> bool {
+        self.is_exact(context)
+            && recovered_decision_body_continuation_is_exact(
+                super::schema::DurableContinuationEdge::ValidateToApply,
+                validate_authority,
+                validate_payload,
+                &self.apply.replay_authority,
+                self.apply.payload,
+            ) == Some(true)
+    }
+    /// Insert only the independent Apply after its exact row was authenticated.
+    pub(super) fn splice_standalone_apply_candidate_from_record(
+        &self,
+        context: LifecycleContext,
+        apply: &LifecycleLedgerRecordV1,
+        candidates: &mut std::collections::BTreeMap<LifecycleKey, CandidateAdmission>,
+    ) -> bool {
+        self.exactly_matches_standalone_apply_record(context, apply)
+            && !candidates.contains_key(&self.apply.key)
+            && candidates
+                .insert(self.apply.key, self.apply.clone())
+                .is_none()
+    }
     /// Compare the complete recovered body chain after its Apply child was
     /// durably terminalized.
     ///

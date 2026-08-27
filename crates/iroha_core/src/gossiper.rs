@@ -4155,6 +4155,9 @@ mod tests {
             require_sm_handshake_match: defaults::network::REQUIRE_SM_HANDSHAKE_MATCH,
             require_sm_openssl_preview_match: defaults::network::REQUIRE_SM_OPENSSL_PREVIEW_MATCH,
             idle_timeout: defaults::network::IDLE_TIMEOUT,
+            preauth_timeout: defaults::network::PREAUTH_TIMEOUT,
+            preauth_max_connections_per_ip:
+                defaults::network::PREAUTH_MAX_CONNECTIONS_PER_IP,
             reply_writer_flush_timeout: defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
             connect_startup_delay: defaults::network::CONNECT_STARTUP_DELAY,
             dial_timeout: defaults::network::DIAL_TIMEOUT,

@@ -89,16 +89,24 @@ the same deterministic framing.
   Each quote binds the account, exit class, relay, client metering public key,
   protocol-fixed XOR fee asset, deterministic per-lease custody account, and
   tariff, and returns exactly one required Norito-framed `OpenVpnLeaseEscrow`
-  instruction as `open_lease_instruction`. Session
-  creation only succeeds after the wallet submits that exact native lease-open
-  transaction and provides its committed entrypoint hash. Direct and
-  sealed-reveal entrypoints are only lookup handles: Torii derives the inner
-  signed transaction hash, requires it to equal the consensus lease's
-  `open_tx_hash`, and carries only that canonical payment identity into helper
-  tickets and receipts. Native `vpn_leases`
-  are the settlement source of truth: Torii process-local quote/session/receipt
-  maps are live UX caches only. Active session lookups can reconstruct an
-  unexpired active session from WSV after a Torii restart, and
+  instruction as `open_lease_instruction`. Quote issuance is stateless and
+  unpaid: Torii signs and returns the response without reserving process-local
+  capacity or creating durable session authority, so a quote remains usable
+  across a Torii restart or load-balanced request.
+  Session creation only succeeds after the wallet submits that exact native
+  lease-open transaction and provides its committed entrypoint hash. In one WSV
+  view, Torii requires the account and address-slot active indexes to select the
+  same unexpired `Active` lease, then binds the retained signed quote, account,
+  lease/session identifiers, exit class, metering key, and open-transaction
+  hash to the request. Direct and sealed-reveal entrypoints are only lookup
+  handles: Torii derives the inner signed transaction hash, requires it to equal
+  the consensus lease's `open_tx_hash`, and carries only that canonical payment
+  identity into helper tickets and receipts. Native `vpn_leases` are the sole
+  authority for paid session creation and settlement. The bounded process-local
+  session and receipt maps are optional live-UX accelerators: their absence or
+  capacity exhaustion cannot reject an otherwise valid WSV-backed paid session.
+  Active session lookups can reconstruct an unexpired active session from WSV
+  after a Torii restart, and
   `/v1/vpn/receipts` rebuilds settlement context from WSV by lease id or relay
   receipt quote id within the on-chain grace window.
   V1 intentionally has no Torii or SDK session-deletion operation: removing a

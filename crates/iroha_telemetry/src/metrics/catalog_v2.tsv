@@ -187,8 +187,6 @@ streaming_quic_datagrams_sent_total	streaming_quic_datagrams_sent_total	Streamin
 streaming_quic_datagrams_dropped_total	streaming_quic_datagrams_dropped_total	Streaming QUIC datagrams dropped	registered
 streaming_fec_parity_current	streaming_fec_parity_current	Streaming parity bucket occupancy (active sessions per bucket)	registered
 streaming_feedback_timeout_total	streaming_feedback_timeout_total	Streaming feedback timeout events	registered
-streaming_soranet_provision_fail_total	streaming_soranet_provision_fail_total	Streaming SoraNet privacy-route provisioning failures	registered
-streaming_soranet_provision_queue_drop_total	streaming_soranet_provision_queue_drop_total	Streaming SoraNet provisioning queue drops grouped by reason	registered
 telemetry_redaction_total	telemetry_redaction_total	Telemetry redaction events grouped by reason	registered
 telemetry_redaction_skipped_total	telemetry_redaction_skipped_total	Telemetry redaction skips grouped by reason	registered
 telemetry_truncation_total	telemetry_truncation_total	Telemetry field truncations	registered
@@ -260,6 +258,7 @@ p2p_accept_prefix_cache_total	p2p_accept_prefix_cache_total	Prefix bucket cache 
 p2p_accept_throttle_decisions_total	p2p_accept_throttle_decisions_total	Accept throttle decisions (label `scope` = prefix|ip, `decision` = allowed|throttled)	registered
 p2p_incoming_cap_reject_total	p2p_incoming_cap_reject_total	Number of incoming connections rejected due to incoming cap	registered
 p2p_total_cap_reject_total	p2p_total_cap_reject_total	Number of incoming connections rejected due to total cap	registered
+p2p_preauth_source_cap_reject_total	p2p_preauth_source_cap_reject_total	Number of accepted unauthenticated transports rejected by the concurrent per-source cap	registered
 p2p_trust_score	p2p_trust_score	Per-peer trust score maintained by the gossip layer (decays toward zero)	registered
 p2p_trust_penalties_total	p2p_trust_penalties_total	Applied trust penalties labeled by reason	registered
 p2p_trust_decay_ticks_total	p2p_trust_decay_ticks_total	Half-life decay ticks applied to peer trust scores (label `peer_id`)	registered

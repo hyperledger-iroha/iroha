@@ -2232,6 +2232,106 @@ impl ConcreteLifecycleWorkRegistry {
         };
         self.validate_recovered_decision_apply_carrier(verified, address, authority)
     }
+    /// Install a recovered Decision Apply whose successful Validate parent was
+    /// already released as an immutable no-successor tombstone.
+    pub(super) fn install_recovered_released_decision_apply<'registry>(
+        &'registry mut self,
+        verified: &VerifiedHeightContext,
+        ledger: &super::ledger::LifecycleLedgerV1,
+        projection: Box<RecoveredDecisionApplyStagedStorageV1>,
+        effects: Vec<AdapterEffect>,
+        released: AuthenticatedRecoveredReleasedValidateNoSuccessorV1,
+    ) -> Result<
+        (
+            ProductionLifecycleAdapterStartupV1,
+            InstalledRecoveredDecisionApplyRegistryCut<'registry>,
+        ),
+        RecoveredDecisionApplyInstallError,
+    > {
+        if !self.entries.is_empty() || !projection.validates(verified) {
+            return Err(RecoveredDecisionApplyInstallError::released_projection(
+                "released recovered Decision Apply failed exact registry preflight",
+                projection,
+                effects,
+                released,
+            ));
+        }
+        let (restaged, apply_ordinal, _) =
+            match ledger.stage_recovered_released_decision_apply(projection.as_ref()) {
+                Ok(staged) => staged,
+                Err(_) => {
+                    return Err(RecoveredDecisionApplyInstallError::released_projection(
+                        "released recovered Decision Apply ledger lineage is not exact",
+                        projection,
+                        effects,
+                        released,
+                    ));
+                }
+            };
+        if restaged != *ledger {
+            return Err(RecoveredDecisionApplyInstallError::released_projection(
+                "released recovered Decision Apply prospective ledger is incomplete",
+                projection,
+                effects,
+                released,
+            ));
+        }
+        let Some(record) = ledger
+            .records()
+            .iter()
+            .find(|record| record.ordinal() == apply_ordinal)
+        else {
+            return Err(RecoveredDecisionApplyInstallError::released_projection(
+                "released recovered Decision Apply ledger has no standalone row",
+                projection,
+                effects,
+                released,
+            ));
+        };
+        if released.ordinal() >= apply_ordinal || released.owner() == record.owner() {
+            return Err(RecoveredDecisionApplyInstallError::released_projection(
+                "released recovered Decision Apply reused its historical Validate owner",
+                projection,
+                effects,
+                released,
+            ));
+        }
+        let slot = PhysicalSlotId::for_capacity(CapacityClass::Effect, 0);
+        let Some(address) = ConcreteWorkAddress::new(record.owner(), apply_ordinal, slot) else {
+            return Err(RecoveredDecisionApplyInstallError::released_projection(
+                "released recovered Decision Apply address is invalid",
+                projection,
+                effects,
+                released,
+            ));
+        };
+        let authority = match projection.into_released_registry_carrier(
+            RecoveredDecisionApplyRegistryProjectionPermit::new(),
+            verified,
+            effects,
+            released,
+        ) {
+            Ok(parts) => parts,
+            Err((projection, effects, released)) => {
+                return Err(RecoveredDecisionApplyInstallError::released_projection(
+                    "released recovered Decision Apply retained inconsistent authority",
+                    projection,
+                    effects,
+                    released,
+                ));
+            }
+        };
+        if !authority
+            .1
+            .validates_in_ledger(verified, ledger, apply_ordinal)
+        {
+            return Err(RecoveredDecisionApplyInstallError::carrier(
+                "released recovered Decision Apply carrier disagrees with durable lineage",
+                authority,
+            ));
+        }
+        self.validate_recovered_decision_apply_carrier(verified, address, authority)
+    }
     #[allow(clippy::result_large_err)]
     #[inline(never)]
     fn validate_recovered_decision_apply_carrier<'registry>(

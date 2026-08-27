@@ -2240,8 +2240,8 @@ async fn core_info_handlers_ok() {
             .is_empty(),
         "handshake descriptor should be present in config payload"
     );
-    assert_ne!(
-        config.network.soranet_handshake.pow.puzzle.memory_kib, 0,
+    assert!(
+        config.network.soranet_handshake.pow.puzzle.memory_kib > 0,
         "mandatory puzzle parameters should be advertised in configuration payload"
     );
     // peers
@@ -2755,7 +2755,11 @@ fn make_empty_signed_block(
         &header,
         "sign Torii empty committed-header fixture block",
     );
-    SignedBlock::presigned(signature, header, Vec::new())
+    let mut block = SignedBlock::presigned(signature, header, Vec::new());
+    block
+        .set_transaction_results(Vec::new(), &[], Vec::new())
+        .expect("empty committed-header fixture has a matching empty result set");
+    block
 }
 pub(crate) fn record_latest_committed_header_for_test(
     app: &SharedAppState,

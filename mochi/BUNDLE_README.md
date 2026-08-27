@@ -140,8 +140,8 @@ Kura/merge-log path preview (the generated peer configs include the same paths
 in their header). Use the Maintenance bar to reset a single lane:
 MOCHI submits a signed retire/add lifecycle replacement via Torii and leaves the
 authenticated storage transition to Kura. The Lane status panel surfaces DA cursors,
-relay lag, legacy-labeled transport-byte observations, and relay ingest state per
-peer so operators can spot lagging lanes quickly.
+relay lag, transport-byte observations, and relay ingest state per peer so operators
+can spot lagging lanes quickly.
 The Settings dialog also includes a profile override field that accepts preset
 slugs or inline TOML tables for custom peer counts/consensus modes.
 

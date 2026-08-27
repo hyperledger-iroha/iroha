@@ -224,7 +224,8 @@ use sorafs_manifest::{
     validate_pdp_proof_bytes,
 };
 use sorafs_orchestrator::{
-    AnonymityPolicy, OrchestratorConfig, RolloutPhase, TransportPolicy, fetch_via_gateway,
+    AnonymityPolicy, DEFAULT_LOCAL_PROXY_BRIDGE_SPOOL_DIR, OrchestratorConfig, RolloutPhase,
+    TransportPolicy, fetch_via_gateway,
     proxy::{
         LocalQuicProxyConfig, ProxyCarBridgeConfig, ProxyKaigiBridgeConfig, ProxyMode,
         ProxyNoritoBridgeConfig,
@@ -3786,13 +3787,13 @@ fn sorafs_gateway_fetch_py(
         }
         if matches!(proxy_cfg.proxy_mode, ProxyMode::Bridge) && proxy_cfg.norito_bridge.is_none() {
             proxy_cfg.norito_bridge = Some(ProxyNoritoBridgeConfig {
-                spool_dir: defaults::streaming::soranet::PROVISION_SPOOL_DIR.to_string(),
+                spool_dir: DEFAULT_LOCAL_PROXY_BRIDGE_SPOOL_DIR.to_string(),
                 extension: Some("norito".to_string()),
             });
         }
         if matches!(proxy_cfg.proxy_mode, ProxyMode::Bridge) && proxy_cfg.kaigi_bridge.is_none() {
             proxy_cfg.kaigi_bridge = Some(ProxyKaigiBridgeConfig {
-                spool_dir: defaults::streaming::soranet::PROVISION_SPOOL_DIR.to_string(),
+                spool_dir: DEFAULT_LOCAL_PROXY_BRIDGE_SPOOL_DIR.to_string(),
                 extension: Some("norito".to_string()),
                 room_policy: Some("public".to_string()),
             });

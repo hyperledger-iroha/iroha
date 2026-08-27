@@ -13,7 +13,6 @@ use crate::{
     sorafs::pin_registry::{ManifestAliasBinding, StorageClass},
 };
 use core::{fmt, str::FromStr};
-use derive_more::Display;
 use iroha_crypto::{Algorithm, KeyPair, PublicKey, SignatureOf};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -55,7 +54,10 @@ pub fn is_canonical_taikai_anchor_base_id(base_id: &str) -> bool {
 }
 
 fn fixed_hex(value: &str, width: usize) -> bool {
-    value.len() == width && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+    value.len() == width
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 /// Statement signed by a Taikai anchor after durably accepting one exact upload.
@@ -1084,7 +1086,7 @@ pub enum TaikaiSegmentWindowError {
         /// Inclusive upper bound of the invalid window.
         end_sequence: u64,
     },
-    /// The inclusive upper bound would leave no successor window.
+    /// The inclusive upper bound selected the reserved terminal sequence.
     #[error("segment window end must be less than u64::MAX")]
     TerminalEndSequence,
     /// The inclusive window exceeded the first-release routing bound.
@@ -1390,6 +1392,12 @@ mod tests {
         assert_eq!(
             body.validate(),
             Err(TaikaiAnchorReceiptError::ZeroRequestDigest)
+        );
+        let mut body = sample_anchor_receipt_body();
+        body.base_id.make_ascii_uppercase();
+        assert_eq!(
+            body.validate(),
+            Err(TaikaiAnchorReceiptError::InvalidBaseId)
         );
     }
     #[test]
@@ -1765,6 +1773,9 @@ mod tests {
         TaikaiSegmentWindow::new(0, TAIKAI_SEGMENT_WINDOW_MAX_SEQUENCES_V1 - 1)
             .validate()
             .expect("the exact first-release window bound is valid");
+        TaikaiSegmentWindow::new(u64::MAX - 1, u64::MAX - 1)
+            .validate()
+            .expect("a penultimate singleton is structurally valid; lineage enforces its origin");
         assert_eq!(
             TaikaiSegmentWindow::new(0, TAIKAI_SEGMENT_WINDOW_MAX_SEQUENCES_V1).validate(),
             Err(TaikaiSegmentWindowError::TooWide {

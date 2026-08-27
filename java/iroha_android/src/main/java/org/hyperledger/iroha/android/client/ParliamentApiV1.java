@@ -15,7 +15,9 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.regex.Pattern;
+import org.hyperledger.iroha.norito.CRC64;
 import org.hyperledger.iroha.norito.NoritoHeader;
 
 /** Reflection-free builders and strict response admission for Parliament API V1. */
@@ -43,11 +45,35 @@ public final class ParliamentApiV1 {
   public static final int MAX_TLE_COMMITTEE_SIZE = 31;
   public static final int MAX_TIMED_OVN_CASTING_ARCHIVE_BYTES = 4 * 1024 * 1024;
   public static final int MAX_TIMED_OVN_CASTING_PROOF_RESPONSE_BYTES = 8 * 1024 * 1024;
+  public static final int MAX_TIMED_OVN_CASTING_PROOF_FINALITY_PROOFS = 64;
+  /** Maximum checkpoint advance authenticated by one checkpoint-inclusive finality page. */
+  public static final int MAX_TIMED_OVN_CASTING_PROOF_PAGE_HEIGHT_ADVANCE =
+      MAX_TIMED_OVN_CASTING_PROOF_FINALITY_PROOFS - 1;
+  /** Deterministic maximum number of pages admitted by one client catch-up operation. */
+  public static final int MAX_TIMED_OVN_CASTING_PROOF_PAGES = 64;
+  /** Deterministic aggregate height advance admitted by one client catch-up operation. */
+  public static final int MAX_TIMED_OVN_CASTING_PROOF_HEIGHT_ADVANCE =
+      MAX_TIMED_OVN_CASTING_PROOF_PAGE_HEIGHT_ADVANCE * MAX_TIMED_OVN_CASTING_PROOF_PAGES;
+  public static final String TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA =
+      "iroha.torii.v1.parliament.timed_ovn_casting_proof.request";
+  public static final String TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA =
+      "iroha.torii.v1.parliament.timed_ovn_casting_proof.response";
+  public static final String TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA_HASH_HEX =
+      "adccf322a5fcf43040e20bea238f55f3";
+  public static final String TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_HASH_HEX =
+      "46d29299272433b1299646bee722bd11";
+  public static final int TIMED_OVN_CASTING_PROOF_REQUEST_VERSION = 1;
+  public static final int TIMED_OVN_CASTING_PROOF_REQUEST_FLAGS = NoritoHeader.COMPACT_LEN;
+  public static final int TIMED_OVN_CASTING_PROOF_REQUEST_PAYLOAD_ALIGNMENT = 8;
+  public static final int TIMED_OVN_CASTING_PROOF_REQUEST_PADDING_BYTES = 0;
+  public static final int TIMED_OVN_CASTING_PROOF_REQUEST_BYTES = 52;
   public static final int TIMED_OVN_REGISTRATION_RECORD_BYTES = 3_624;
   public static final int TIMED_OVN_BALLOT_RECORD_BYTES = 2_858;
   /** Maximum records appended by one transition; the complete corpus may contain 1,000. */
   public static final int TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS = 32;
   public static final int MAX_TIMED_OVN_CORPUS_ENTRIES = 1_000;
+  /** Maximum retry sequence for a whole governance attempt; valid sequences are 0 through 16. */
+  public static final int MAX_GOVERNANCE_ATTEMPT_RETRIES = 16;
   public static final String PUBLIC_TRANSITION_DIGEST_DOMAIN =
       "iroha.governance.parliament.lifecycle_transition.digest.v1";
   public static final String AUTOMATIC_OUTCOME_DIGEST_DOMAIN =
@@ -103,7 +129,8 @@ public final class ParliamentApiV1 {
           new NoResultKindLayout(3, "BallotSurvivorDeadlineExpired"),
           new NoResultKindLayout(4, "BallotCommitmentDeadlineExpired"),
           new NoResultKindLayout(5, "BallotReleasePulseUnavailable"),
-          new NoResultKindLayout(6, "BallotOpeningDeadlineExpired"));
+          new NoResultKindLayout(6, "BallotOpeningDeadlineExpired"),
+          new NoResultKindLayout(7, "SortitionRetriesExhausted"));
 
   public static final Map<String, String> CERTIFICATE_RESULT_ROOT_DOMAINS =
       certificateResultRootDomains();
@@ -137,8 +164,20 @@ public final class ParliamentApiV1 {
           "no_result_kind",
           "no_result_height",
           "timed_ovn_progress");
+  /** Canonical presentation order for first-release Parliament bodies. */
+  public static final List<String> CANONICAL_BODY_ORDER =
+      listOf(
+          "rules-committee",
+          "agenda-council",
+          "interest-panel",
+          "review-panel",
+          "coordination-council",
+          "mpc-committee",
+          "fma-committee",
+          "oversight-committee",
+          "policy-jury",
+          "confirmation-jury");
 
-  private static final long U32_MAX = 4_294_967_295L;
   private static final Pattern ID = Pattern.compile("[0-9a-f]{64}");
   private static final Map<String, TransitionLayout> PUBLIC_TRANSITIONS_BY_TAG =
       publicTransitionsByTag();
@@ -249,19 +288,7 @@ public final class ParliamentApiV1 {
           "z_u");
   private static final Set<String> ATTEMPT_FIELDS =
       setOf("id", "proposal_content_id", "sequence", "risk_tier", "stage", "status");
-  private static final List<String> BODY_ORDER =
-      listOf(
-          "rules-committee",
-          "agenda-council",
-          "interest-panel",
-          "review-panel",
-          "coordination-council",
-          "mpc-committee",
-          "fma-committee",
-          "oversight-committee",
-          "policy-jury",
-          "confirmation-jury");
-  private static final Set<String> BODIES = new LinkedHashSet<>(BODY_ORDER);
+  private static final Set<String> BODIES = new LinkedHashSet<>(CANONICAL_BODY_ORDER);
   private static final Set<String> PRIVATE_BODIES =
       setOf("policy-jury", "confirmation-jury");
   private static final Set<String> BODY_STATUSES =
@@ -420,7 +447,11 @@ public final class ParliamentApiV1 {
     public final String governanceAttemptId;
     public final String currentHeight;
     public final String statePayloadHex;
+    /** Canonical ordered body names admitted from {@code required_bodies}. */
+    public final List<String> requiredBodyOrder;
     public final List<BodyStateProjection> bodyStates;
+    /** Canonical ordered body names carried by the certificate, or empty when absent. */
+    public final List<String> certificateBodyOrder;
     public final List<PublicFindingCertificateBinding> publicFindingBindings;
     public final Map<String, Object> raw;
 
@@ -428,13 +459,17 @@ public final class ParliamentApiV1 {
         final String governanceAttemptId,
         final String currentHeight,
         final String statePayloadHex,
+        final List<String> requiredBodyOrder,
         final List<BodyStateProjection> bodyStates,
+        final List<String> certificateBodyOrder,
         final List<PublicFindingCertificateBinding> publicFindingBindings,
         final Map<String, Object> raw) {
       this.governanceAttemptId = governanceAttemptId;
       this.currentHeight = currentHeight;
       this.statePayloadHex = statePayloadHex;
+      this.requiredBodyOrder = List.copyOf(requiredBodyOrder);
       this.bodyStates = List.copyOf(bodyStates);
+      this.certificateBodyOrder = List.copyOf(certificateBodyOrder);
       this.publicFindingBindings = List.copyOf(publicFindingBindings);
       this.raw = Collections.unmodifiableMap(new LinkedHashMap<>(raw));
     }
@@ -711,6 +746,146 @@ public final class ParliamentApiV1 {
     }
   }
 
+  /** Canonical bounded checkpoint request for the Parliament timed-OVN casting proof route. */
+  public static final class TimedOvnCastingProofRequest {
+    public final BigInteger trustedCheckpointHeight;
+
+    public TimedOvnCastingProofRequest(final BigInteger trustedCheckpointHeight) {
+      this.trustedCheckpointHeight =
+          requireTimedOvnCastingCheckpointHeight(trustedCheckpointHeight);
+    }
+
+    public TimedOvnCastingProofRequest(final long trustedCheckpointHeight) {
+      this(BigInteger.valueOf(trustedCheckpointHeight));
+    }
+
+    /** Encodes the exact uncompressed, zero-padding Norito request frame. */
+    public byte[] toNoritoBytes() {
+      return timedOvnCastingProofRequestNorito(trustedCheckpointHeight);
+    }
+  }
+
+  /**
+   * Schema- and checksum-admitted response frame passed unchanged to the native wallet bridge.
+   * Framing admission does not establish consensus validity; native verification still requires
+   * the external network, checkpoint context, and expected ballot before seed access.
+   */
+  public static final class TimedOvnCastingProofResponse {
+    private final byte[] canonicalNorito;
+    private final byte[] payload;
+
+    private TimedOvnCastingProofResponse(
+        final byte[] canonicalNorito, final byte[] payload) {
+      this.canonicalNorito = canonicalNorito.clone();
+      this.payload = payload.clone();
+    }
+
+    /** Returns the exact canonical response frame, including its Norito header. */
+    public byte[] canonicalNorito() {
+      return canonicalNorito.clone();
+    }
+
+    /** Returns the exact payload bytes covered by the frame CRC64-XZ checksum. */
+    public byte[] payload() {
+      return payload.clone();
+    }
+  }
+
+  /** Native-authenticated promotion carried by one bounded casting-proof page. */
+  public static final class TimedOvnCastingProofPageVerification {
+    public final BigInteger evaluatedBlockHeight;
+    private final byte[] evaluatedContextId;
+    public final boolean moreAvailable;
+
+    public TimedOvnCastingProofPageVerification(
+        final BigInteger evaluatedBlockHeight,
+        final byte[] evaluatedContextId,
+        final boolean moreAvailable) {
+      this.evaluatedBlockHeight =
+          requireTimedOvnCastingCheckpointHeight(evaluatedBlockHeight);
+      if (evaluatedContextId == null || evaluatedContextId.length != 32) {
+        throw new IllegalArgumentException("evaluatedContextId must contain exactly 32 bytes");
+      }
+      boolean nonzero = false;
+      for (final byte value : evaluatedContextId) {
+        nonzero |= value != 0;
+      }
+      if (!nonzero) {
+        throw new IllegalArgumentException("evaluatedContextId must be nonzero");
+      }
+      this.evaluatedContextId = evaluatedContextId.clone();
+      this.moreAvailable = moreAvailable;
+    }
+
+    /** Returns a defensive copy of the authenticated {@code HeightContextId}. */
+    public byte[] evaluatedContextId() {
+      return evaluatedContextId.clone();
+    }
+
+    @Override
+    public boolean equals(final Object other) {
+      if (!(other instanceof TimedOvnCastingProofPageVerification)) {
+        return false;
+      }
+      final TimedOvnCastingProofPageVerification verification =
+          (TimedOvnCastingProofPageVerification) other;
+      return evaluatedBlockHeight.equals(verification.evaluatedBlockHeight)
+          && Arrays.equals(evaluatedContextId, verification.evaluatedContextId)
+          && moreAvailable == verification.moreAvailable;
+    }
+
+    @Override
+    public int hashCode() {
+      int result = evaluatedBlockHeight.hashCode();
+      result = 31 * result + Arrays.hashCode(evaluatedContextId);
+      return 31 * result + Boolean.valueOf(moreAvailable).hashCode();
+    }
+  }
+
+  /** Native page verifier used by the bounded transport loop. */
+  @FunctionalInterface
+  public interface TimedOvnCastingProofPageVerifier {
+    /** Authenticates {@code response} against the supplied durable checkpoint. */
+    TimedOvnCastingProofPageVerification verify(
+        TimedOvnCastingProofResponse response,
+        BigInteger trustedCheckpointHeight,
+        byte[] trustedCheckpointContextId);
+  }
+
+  /** Durable checkpoint sink; completion must mean the promoted anchor is committed. */
+  @FunctionalInterface
+  public interface TimedOvnCastingCheckpointPersister {
+    /** Persists one native-authenticated promotion before another page is requested. */
+    CompletableFuture<Void> persist(TimedOvnCastingProofPageVerification verification);
+  }
+
+  /** Terminal proof page plus the exact checkpoint against which native code authenticated it. */
+  public static final class TimedOvnCastingProofTerminal {
+    public final TimedOvnCastingProofResponse response;
+    public final BigInteger verificationAnchorHeight;
+    private final byte[] verificationAnchorContextId;
+    public final TimedOvnCastingProofPageVerification verification;
+    public final int verifiedPageCount;
+
+    TimedOvnCastingProofTerminal(
+        final TimedOvnCastingProofResponse response,
+        final BigInteger verificationAnchorHeight,
+        final byte[] verificationAnchorContextId,
+        final TimedOvnCastingProofPageVerification verification,
+        final int verifiedPageCount) {
+      this.response = response;
+      this.verificationAnchorHeight = verificationAnchorHeight;
+      this.verificationAnchorContextId = verificationAnchorContextId.clone();
+      this.verification = verification;
+      this.verifiedPageCount = verifiedPageCount;
+    }
+
+    /** Returns the context supplied while authenticating the terminal page. */
+    public byte[] verificationAnchorContextId() {
+      return verificationAnchorContextId.clone();
+    }
+  }
+
   /** Core-authorized release context available only during the inclusive Opening window. */
   public static final class TleReleaseContextResponse {
     public final String currentHeight;
@@ -800,6 +975,96 @@ public final class ParliamentApiV1 {
         "{ballot_attempt_id}", canonicalId(ballotAttemptId));
   }
 
+  /** Encodes one positive u64 checkpoint height as the canonical zero-padding request frame. */
+  public static byte[] timedOvnCastingProofRequestNorito(
+      final BigInteger trustedCheckpointHeight) {
+    final BigInteger height =
+        requireTimedOvnCastingCheckpointHeight(trustedCheckpointHeight);
+    final byte[] payload = new byte[12];
+    // Compact-Norito struct field count, version field, then aligned u64 field.
+    payload[0] = 2;
+    payload[1] = (byte) TIMED_OVN_CASTING_PROOF_REQUEST_VERSION;
+    payload[2] = 0;
+    payload[3] = (byte) TIMED_OVN_CASTING_PROOF_REQUEST_PAYLOAD_ALIGNMENT;
+    for (int index = 0; index < 8; index++) {
+      payload[4 + index] = height.shiftRight(index * 8).byteValue();
+    }
+    final NoritoHeader header =
+        new NoritoHeader(
+            decodeHex(TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA_HASH_HEX),
+            payload.length,
+            CRC64.compute(payload),
+            TIMED_OVN_CASTING_PROOF_REQUEST_FLAGS,
+            NoritoHeader.COMPRESSION_NONE);
+    final byte[] encodedHeader = header.encode();
+    final byte[] frame = Arrays.copyOf(encodedHeader, encodedHeader.length + payload.length);
+    System.arraycopy(payload, 0, frame, encodedHeader.length, payload.length);
+    if (frame.length != TIMED_OVN_CASTING_PROOF_REQUEST_BYTES) {
+      throw new IllegalStateException("canonical casting-proof request frame width changed");
+    }
+    return frame;
+  }
+
+  /** Convenience overload for positive signed heights. */
+  public static byte[] timedOvnCastingProofRequestNorito(
+      final long trustedCheckpointHeight) {
+    return timedOvnCastingProofRequestNorito(BigInteger.valueOf(trustedCheckpointHeight));
+  }
+
+  /** Admits one exact, uncompressed, compact-length response frame with no header padding. */
+  public static TimedOvnCastingProofResponse parseTimedOvnCastingProofResponse(
+      final byte[] bytes) {
+    if (bytes == null || bytes.length == 0) {
+      throw new IllegalArgumentException(
+          "Parliament timed-OVN casting proof response is empty");
+    }
+    if (bytes.length > MAX_TIMED_OVN_CASTING_PROOF_RESPONSE_BYTES) {
+      throw new IllegalArgumentException(
+          "Parliament timed-OVN casting proof response exceeds its 8 MiB bound");
+    }
+    final NoritoHeader.DecodeResult decoded;
+    try {
+      decoded =
+          NoritoHeader.decode(
+              bytes, decodeHex(TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_HASH_HEX));
+    } catch (final RuntimeException error) {
+      throw new IllegalArgumentException(
+          "Parliament timed-OVN casting proof response is not a valid Norito frame",
+          error);
+    }
+    if (decoded.header().compression() != NoritoHeader.COMPRESSION_NONE) {
+      throw new IllegalArgumentException(
+          "Parliament timed-OVN casting proof response must use identity encoding");
+    }
+    if (decoded.header().flags() != TIMED_OVN_CASTING_PROOF_REQUEST_FLAGS) {
+      throw new IllegalArgumentException(
+          "Parliament timed-OVN casting proof response has non-canonical Norito flags");
+    }
+    if (bytes.length != NoritoHeader.HEADER_LENGTH + decoded.header().payloadLength()) {
+      throw new IllegalArgumentException(
+          "Parliament timed-OVN casting proof response must not contain header padding");
+    }
+    if (!Arrays.equals(
+        decoded.header().encode(), Arrays.copyOfRange(bytes, 0, NoritoHeader.HEADER_LENGTH))) {
+      throw new IllegalArgumentException(
+          "Parliament timed-OVN casting proof response header is not canonical");
+    }
+    if (decoded.payload().length == 0) {
+      throw new IllegalArgumentException(
+          "Parliament timed-OVN casting proof response payload is empty");
+    }
+    decoded.header().validateChecksum(decoded.payload());
+    return new TimedOvnCastingProofResponse(bytes, decoded.payload());
+  }
+
+  static BigInteger requireTimedOvnCastingCheckpointHeight(final BigInteger value) {
+    if (value == null || value.signum() <= 0 || value.bitLength() > 64) {
+      throw new IllegalArgumentException(
+          "trustedCheckpointHeight must be a positive u64");
+    }
+    return value;
+  }
+
   /** Replace the release-context ballot parameter after exact lowercase validation. */
   public static String tleReleaseContextReadPath(final String ballotAttemptId) {
     return TLE_RELEASE_CONTEXT_READ_PATH.replace(
@@ -815,8 +1080,8 @@ public final class ParliamentApiV1 {
   /** Build the exact V1 attempt-draft JSON envelope. */
   public static byte[] attemptDraftRequestJson(
       final Proposal proposal, final long attemptSequence) {
-    if (attemptSequence < 0 || attemptSequence > U32_MAX) {
-      throw new IllegalArgumentException("attempt_sequence is outside u32");
+    if (attemptSequence < 0 || attemptSequence > MAX_GOVERNANCE_ATTEMPT_RETRIES) {
+      throw new IllegalArgumentException("attempt_sequence must be between 0 and 16");
     }
     final Map<String, Object> request = new LinkedHashMap<>();
     request.put("version", VERSION);
@@ -1002,12 +1267,22 @@ public final class ParliamentApiV1 {
             policyVersion,
             requiredBodies,
             bodyStates);
+    final List<String> certificateBodyOrder =
+        root.get("certificate") == null ? List.of() : List.copyOf(requiredBodies);
     final String stateHex = canonicalHex(root.get("state_payload_hex"), "state_payload_hex", false);
     if (stateHex.length() / 2 > MAX_STATE_BYTES) {
       throw new IllegalArgumentException("state_payload_hex exceeds its bound");
     }
     validateStateFrame(decodeHex(stateHex));
-    return new AttemptReadResponse(attemptId, height, stateHex, bodyStates, publicFindings, root);
+    return new AttemptReadResponse(
+        attemptId,
+        height,
+        stateHex,
+        requiredBodies,
+        bodyStates,
+        certificateBodyOrder,
+        publicFindings,
+        root);
   }
 
   /** Strictly admit one replay-validated public timed-OVN wallet context. */
@@ -1452,7 +1727,7 @@ public final class ParliamentApiV1 {
           || bodies.contains(body)) {
         throw new IllegalArgumentException(context + ".body is unknown or duplicated");
       }
-      final int bodyIndex = BODY_ORDER.indexOf(body);
+      final int bodyIndex = CANONICAL_BODY_ORDER.indexOf(body);
       if (bodyIndex <= previousBodyIndex) {
         throw new IllegalArgumentException(
             "required_bodies must use strict canonical body order");

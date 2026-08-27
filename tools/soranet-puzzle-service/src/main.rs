@@ -1333,7 +1333,7 @@ async fn mint_ticket(
             MintedCredential::Signed(signed_ticket) => {
                 let expires_at = signed_ticket.ticket.expires_at;
                 let difficulty = signed_ticket.ticket.difficulty;
-                let fingerprint = encode(signed_ticket.revocation_fingerprint());
+                let fingerprint = encode(signed_ticket.ticket.revocation_fingerprint());
                 let signed_ticket_bytes = SensitiveBytes(signed_ticket.encode());
                 (
                     "signed".to_owned(),
@@ -2417,7 +2417,7 @@ mod tests {
                 .signed_ticket_fingerprint_hex
                 .as_deref()
                 .expect("fingerprint"),
-            hex::encode(signed.revocation_fingerprint())
+            hex::encode(signed.ticket.revocation_fingerprint())
         );
     }
     #[test]
@@ -2605,7 +2605,7 @@ mod tests {
             .expect("signed ticket verifies");
         assert_eq!(
             fingerprint,
-            hex::encode(signed.revocation_fingerprint()),
+            hex::encode(signed.ticket.revocation_fingerprint()),
             "fingerprint must track the signed ticket signature"
         );
     }

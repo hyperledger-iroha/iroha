@@ -47,6 +47,60 @@ fn context() -> HeightContext {
     context_with_powers(VotingMode::Permissioned, &[1, 1, 1, 1])
 }
 #[test]
+fn queue_plan_selection_mints_current_source_bound_witness() {
+    let binding_a = CanonicalIdentityProjection::from_bytes(
+        IDENTITY_DOMAIN_PAYLOAD,
+        IDENTITY_KIND_CANONICAL_PAYLOAD,
+        [0x61; 32],
+    );
+    let before = ProductionInFlightFirstReleaseStateProjection {
+        validator_count: 1,
+        producer: 1,
+        producer_selected_owner: 1,
+        replicated_carrier_owners: 0,
+        payload_binding_a: 1,
+        binding_a,
+        queue: ProductionInFlightFirstReleaseQueueProjection {
+            plan_state: IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_ABSENT,
+            selected_count: 0,
+            reservation_state: IN_FLIGHT_FIRST_RELEASE_RESERVATION_ABSENT,
+        },
+        carrier: ProductionInFlightFirstReleaseCarrierProjection::default(),
+        session: ProductionInFlightFirstReleaseSessionProjection {
+            bodies: 1,
+            producer_alive: true,
+            ..ProductionInFlightFirstReleaseSessionProjection::default()
+        },
+        history: ProductionInFlightFirstReleaseHistoryProjection::default(),
+        decision: ProductionInFlightFirstReleaseDecisionProjection::default(),
+        release: ProductionInFlightFirstReleaseReleaseProjection::default(),
+    };
+    let mut after = before;
+    after.queue.plan_state = IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED;
+    after.queue.selected_count = 2;
+    after.history.ever_queue_plan_v1 = true;
+    let projection = ProductionInFlightFirstReleaseTransitionProjection {
+        action: IN_FLIGHT_FIRST_RELEASE_ACTION_SELECT_QUEUE_PLAN_V1,
+        actor: 0,
+        target: 0,
+        before,
+        after,
+    };
+
+    let checked = check_production_in_flight_first_release_transition(projection)
+        .expect("QueuePlan selection must pass the source-bound production wrapper");
+    let witness = *checked
+        .first_release_witness()
+        .expect("production wrapper must attach a first-release witness");
+    assert_eq!(
+        witness.source_identity,
+        PRODUCTION_IN_FLIGHT_FIRST_RELEASE_TLA_SOURCE_SHA256
+    );
+    assert!(
+        authenticate_production_in_flight_first_release_transition_witness_v1(projection, witness,)
+    );
+}
+#[test]
 fn snapshot_bootstrap_context_is_explicit_and_cannot_replace_genesis() {
     let roster = (1_u8..=4)
         .map(|validator| Validator::new(id(validator), VotingPower::new(1)))

@@ -296,14 +296,6 @@ pub(super) fn validate_selected_peer_storage_paths_under_lock(
             "selected streaming directory",
             storage_dir.join("streaming"),
         ),
-        (
-            "selected SoraNet route spool",
-            storage_dir.join("streaming/soranet_routes"),
-        ),
-        (
-            "selected SoraVPN route spool",
-            storage_dir.join("streaming/soravpn_routes"),
-        ),
     ] {
         validate_optional_managed_descendant_directory(&storage_dir, &path, label)?;
     }

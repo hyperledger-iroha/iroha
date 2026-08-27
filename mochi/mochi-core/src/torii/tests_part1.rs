@@ -1551,14 +1551,14 @@ fn event_message_from_box(event: EventBox) -> EventMessage {
     EventMessage::new(event)
 }
 fn time_event_fixture_message() -> EventMessage {
-    decode_norito_with_alignment(EVENT_MESSAGE_FIXTURE).expect("decode event fixture")
+    decode_norito(EVENT_MESSAGE_FIXTURE).expect("decode event fixture")
 }
 fn pipeline_event_fixture_message() -> EventMessage {
-    decode_norito_with_alignment(PIPELINE_EVENT_MESSAGE_FIXTURE)
+    decode_norito(PIPELINE_EVENT_MESSAGE_FIXTURE)
         .expect("decode pipeline event fixture")
 }
 fn data_event_fixture_message() -> EventMessage {
-    decode_norito_with_alignment(DATA_EVENT_MESSAGE_FIXTURE).expect("decode data event fixture")
+    decode_norito(DATA_EVENT_MESSAGE_FIXTURE).expect("decode data event fixture")
 }
 fn time_event_fixture_event() -> EventBox {
     time_event_fixture_message().into()
@@ -1570,7 +1570,7 @@ fn data_event_fixture_event() -> EventBox {
     data_event_fixture_message().into()
 }
 fn encode_status_payload(status: &TelemetryStatus) -> Vec<u8> {
-    norito::codec::encode_adaptive(status)
+    norito::to_bytes(status).expect("encode framed status")
 }
 fn encode_sumeragi_status_payload(status: &SumeragiV2Status) -> Vec<u8> {
     let mut encoded = Vec::new();
@@ -2042,7 +2042,7 @@ async fn event_stream_decodes_data_events() {
 fn time_event_message_matches_fixture() {
     let message = time_event_fixture_message();
     let decoded_again: EventBox =
-        decode_norito_with_alignment::<EventMessage>(EVENT_MESSAGE_FIXTURE)
+        decode_norito::<EventMessage>(EVENT_MESSAGE_FIXTURE)
             .expect("decode fixture message")
             .into();
     assert_eq!(EventBox::from(message), decoded_again);
@@ -2051,7 +2051,7 @@ fn time_event_message_matches_fixture() {
 fn pipeline_event_message_matches_fixture() {
     let message = pipeline_event_fixture_message();
     let decoded_again: EventBox =
-        decode_norito_with_alignment::<EventMessage>(PIPELINE_EVENT_MESSAGE_FIXTURE)
+        decode_norito::<EventMessage>(PIPELINE_EVENT_MESSAGE_FIXTURE)
             .expect("decode pipeline fixture")
             .into();
     assert_eq!(EventBox::from(message), decoded_again);
@@ -2060,7 +2060,7 @@ fn pipeline_event_message_matches_fixture() {
 fn data_event_message_matches_fixture() {
     let message = data_event_fixture_message();
     let decoded_again: EventBox =
-        decode_norito_with_alignment::<EventMessage>(DATA_EVENT_MESSAGE_FIXTURE)
+        decode_norito::<EventMessage>(DATA_EVENT_MESSAGE_FIXTURE)
             .expect("decode data fixture")
             .into();
     assert_eq!(EventBox::from(message), decoded_again);

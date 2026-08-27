@@ -126,6 +126,46 @@ fn deeply_nested_type_hits_depth_budget_without_recursive_parsing() {
     assert!(has_code(&output.diagnostics.diagnostics, "K0003"));
 }
 #[test]
+fn malformed_boundary_types_are_recovered_without_recursive_drop() {
+    std::thread::Builder::new()
+        .name("malformed-boundary-type".to_owned())
+        .stack_size(128 * 1024)
+        .spawn(|| {
+            let mut completed = String::from("int");
+            for _ in 0..MAX_NESTING_DEPTH - 2 {
+                completed = format!("Option<{completed}>");
+            }
+            for (source_id, name, ty) in [
+                (
+                    64,
+                    "malformed-boundary-generic.ko",
+                    format!("Pair<{completed}, >"),
+                ),
+                (
+                    65,
+                    "malformed-boundary-tuple.ko",
+                    format!("({completed}, )"),
+                ),
+            ] {
+                let text = format!("seiyaku Demo {{ state {ty} value; }}");
+                let source = SourceFile::new(SourceId(source_id), name, text);
+                let output = parse_program(&source, FrontendBudget::v1());
+                assert!(output.program.is_none());
+                assert!(
+                    !output.diagnostics.diagnostics.is_empty(),
+                    "malformed type must emit a diagnostic"
+                );
+                assert!(
+                    !has_code(&output.diagnostics.diagnostics, "K0003"),
+                    "the malformed type must reach, but not exceed, the depth boundary"
+                );
+            }
+        })
+        .expect("spawn small-stack malformed-type parser")
+        .join()
+        .expect("malformed-type parser must not overflow its stack");
+}
+#[test]
 fn mixed_grouping_and_prefixes_share_one_depth_budget() {
     let grouping = 100;
     let prefixes = MAX_NESTING_DEPTH - 2 - grouping;

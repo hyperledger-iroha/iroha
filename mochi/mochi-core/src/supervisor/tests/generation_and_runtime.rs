@@ -1821,7 +1821,7 @@ fn peer_spec_rejects_sorafs_state_root_override() {
     }
 }
 #[test]
-fn peer_specs_write_distinct_managed_streaming_state_roots() {
+fn peer_specs_write_distinct_managed_streaming_session_roots() {
     let temp = tempfile::tempdir().expect("temp dir");
     let profile = NetworkProfile::from_preset(ProfilePreset::FourPeerBft);
     let paths = NetworkPaths::from_root(temp.path(), &profile);
@@ -1844,8 +1844,6 @@ fn peer_specs_write_distinct_managed_streaming_state_roots() {
         .expect("write config");
     }
     let mut session_roots = HashSet::new();
-    let mut soranet_roots = HashSet::new();
-    let mut soravpn_roots = HashSet::new();
     for spec in &specs {
         let contents = fs::read_to_string(&spec.config_path).expect("read config");
         let value: toml::Table = toml::from_str(&contents).expect("parse config");
@@ -1857,61 +1855,18 @@ fn peer_specs_write_distinct_managed_streaming_state_roots() {
             .get("session_store_dir")
             .and_then(toml::Value::as_str)
             .expect("managed streaming session directory");
-        let soranet = streaming
-            .get("soranet")
-            .and_then(toml::Value::as_table)
-            .expect("SoraNet streaming config");
-        let soranet_spool = soranet
-            .get("provision_spool_dir")
-            .and_then(toml::Value::as_str)
-            .expect("managed SoraNet spool directory");
-        let soravpn_spool = streaming
-            .get("soravpn")
-            .and_then(toml::Value::as_table)
-            .and_then(|table| table.get("provision_spool_dir"))
-            .and_then(toml::Value::as_str)
-            .expect("managed SoraVPN spool directory");
         let expected = spec
             .storage_dir
             .canonicalize()
             .expect("storage root")
             .join("streaming");
         assert_eq!(Path::new(session), expected);
-        assert_eq!(Path::new(soranet_spool), expected.join("soranet_routes"));
-        assert_eq!(Path::new(soravpn_spool), expected.join("soravpn_routes"));
         assert!(Path::new(session).is_absolute());
-        assert!(Path::new(soranet_spool).is_absolute());
-        assert!(Path::new(soravpn_spool).is_absolute());
-        assert_eq!(
-            soranet.get("enabled").and_then(toml::Value::as_bool),
-            Some(false)
-        );
-        for required in [
-            "exit_multiaddr",
-            "padding_budget_ms",
-            "access_kind",
-            "channel_salt",
-            "provision_spool_max_bytes",
-            "provision_window_segments",
-            "provision_queue_capacity",
-        ] {
-            assert!(
-                soranet.contains_key(required),
-                "generated streaming.soranet is missing required field {required}"
-            );
-        }
-        let soravpn = streaming
-            .get("soravpn")
-            .and_then(toml::Value::as_table)
-            .expect("SoraVPN streaming config");
-        assert!(soravpn.contains_key("provision_spool_max_bytes"));
+        assert!(!streaming.contains_key("soranet"));
+        assert!(!streaming.contains_key("soravpn"));
         assert!(session_roots.insert(session.to_owned()));
-        assert!(soranet_roots.insert(soranet_spool.to_owned()));
-        assert!(soravpn_roots.insert(soravpn_spool.to_owned()));
     }
     assert_eq!(session_roots.len(), specs.len());
-    assert_eq!(soranet_roots.len(), specs.len());
-    assert_eq!(soravpn_roots.len(), specs.len());
 }
 #[test]
 fn peer_specs_stage_distinct_rans_tables_and_write_absolute_paths() {
@@ -1991,24 +1946,13 @@ fn peer_specs_stage_distinct_rans_tables_and_write_absolute_paths() {
     assert_eq!(configured_paths.len(), specs.len());
 }
 #[test]
-fn peer_spec_preserves_managed_streaming_roots_with_shallow_opt_in_overlay() {
+fn peer_spec_preserves_managed_streaming_roots_with_shallow_overlay() {
     let temp = tempfile::tempdir().expect("temp dir");
     let profile = NetworkProfile::default();
     let paths = NetworkPaths::from_root(temp.path(), &profile);
     paths.ensure().expect("paths");
     let spec = test_peer_spec(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
     let genesis = test_genesis_material(&paths);
-    let mut soranet = toml::Table::new();
-    soranet.insert("enabled".into(), toml::Value::Boolean(true));
-    soranet.insert(
-        "exit_multiaddr".into(),
-        toml::Value::String("/dns/example.test/tcp/443".to_owned()),
-    );
-    let mut soravpn = toml::Table::new();
-    soravpn.insert(
-        "provision_spool_max_bytes".into(),
-        toml::Value::Integer(4096),
-    );
     let mut codec = toml::Table::new();
     codec.insert(
         "cabac_mode".into(),
@@ -2020,7 +1964,7 @@ fn peer_spec_preserves_managed_streaming_roots_with_shallow_opt_in_overlay() {
     );
     codec.insert(
         "entropy_mode".into(),
-        toml::Value::String("rans-bundled".to_owned()),
+        toml::Value::String("rans_bundled".to_owned()),
     );
     codec.insert("bundle_width".into(), toml::Value::Integer(3));
     codec.insert(
@@ -2030,8 +1974,6 @@ fn peer_spec_preserves_managed_streaming_roots_with_shallow_opt_in_overlay() {
     let mut streaming = toml::Table::new();
     streaming.insert("feature_bits".into(), toml::Value::Integer(7));
     streaming.insert("codec".into(), toml::Value::Table(codec));
-    streaming.insert("soranet".into(), toml::Value::Table(soranet));
-    streaming.insert("soravpn".into(), toml::Value::Table(soravpn));
     let mut overlay = toml::Table::new();
     overlay.insert("streaming".into(), toml::Value::Table(streaming));
     spec.write_config(
@@ -2084,7 +2026,7 @@ fn peer_spec_preserves_managed_streaming_roots_with_shallow_opt_in_overlay() {
     assert_eq!(trellis_blocks[1].as_integer(), Some(32));
     assert_eq!(
         codec.get("entropy_mode").and_then(toml::Value::as_str),
-        Some("rans-bundled")
+        Some("rans_bundled")
     );
     assert_eq!(
         codec.get("bundle_width").and_then(toml::Value::as_integer),
@@ -2094,40 +2036,8 @@ fn peer_spec_preserves_managed_streaming_roots_with_shallow_opt_in_overlay() {
         codec.get("bundle_accel").and_then(toml::Value::as_str),
         Some("cpu_simd")
     );
-    let soranet = streaming
-        .get("soranet")
-        .and_then(toml::Value::as_table)
-        .expect("SoraNet config");
-    assert_eq!(
-        soranet.get("enabled").and_then(toml::Value::as_bool),
-        Some(true)
-    );
-    assert_eq!(
-        soranet.get("exit_multiaddr").and_then(toml::Value::as_str),
-        Some("/dns/example.test/tcp/443")
-    );
-    assert_eq!(
-        soranet
-            .get("provision_spool_dir")
-            .and_then(toml::Value::as_str),
-        Some(expected.join("soranet_routes").to_string_lossy().as_ref())
-    );
-    let soravpn = streaming
-        .get("soravpn")
-        .and_then(toml::Value::as_table)
-        .expect("SoraVPN config");
-    assert_eq!(
-        soravpn
-            .get("provision_spool_max_bytes")
-            .and_then(toml::Value::as_integer),
-        Some(4096)
-    );
-    assert_eq!(
-        soravpn
-            .get("provision_spool_dir")
-            .and_then(toml::Value::as_str),
-        Some(expected.join("soravpn_routes").to_string_lossy().as_ref())
-    );
+    assert!(!streaming.contains_key("soranet"));
+    assert!(!streaming.contains_key("soravpn"));
 }
 #[test]
 fn peer_spec_rejects_managed_streaming_state_redirects() {
@@ -2138,16 +2048,10 @@ fn peer_spec_rejects_managed_streaming_state_redirects() {
     let spec = test_peer_spec(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
     let genesis = test_genesis_material(&paths);
     for (key, nested, expected_error) in [
-        ("session_store_dir", None, "managed streaming session root"),
         (
-            "provision_spool_dir",
-            Some("soranet"),
-            "managed SoraNet provision spool",
-        ),
-        (
-            "provision_spool_dir",
-            Some("soravpn"),
-            "managed SoraVPN provision spool",
+            "session_store_dir",
+            None::<&str>,
+            "managed streaming session root",
         ),
     ] {
         let redirect = toml::Value::String("/tmp/shared-streaming-state".to_owned());
@@ -2406,45 +2310,33 @@ fn onboarding_bundle_reuses_existing_material_without_rotation() {
 }
 #[test]
 #[cfg(unix)]
-fn onboarding_bundle_reuses_dpn_tokens_and_hashes_normalized_body() {
+fn onboarding_bundle_reuses_exact_canonical_token() {
     let temp = tempfile::tempdir().expect("temp dir");
     let authority = localnet_admin_signer().expect("localnet admin");
     let private_key = ExposedPrivateKey(authority.key_pair().private_key().clone());
     let signer_payload = format!("{private_key}\n");
-    let token_body = format!("nevo-local-{}", "A".repeat(48));
-    for (index, terminator) in [b"\n".as_slice(), b"\r\n".as_slice()]
-        .into_iter()
-        .enumerate()
-    {
-        let paths = onboarding_test_paths(temp.path(), &format!("dpn-{index}"));
-        let runtime = paths.root().join(LOCAL_ONBOARDING_RUNTIME_DIRECTORY);
-        fs::create_dir(&runtime).expect("create runtime");
-        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700))
-            .expect("set runtime permissions");
-        let signer = runtime.join(LOCAL_ONBOARDING_SIGNER_KEY_FILE);
-        let token = runtime.join(LOCAL_ONBOARDING_TOKEN_FILE);
-        write_private_test_file(&signer, signer_payload.as_bytes());
-        let mut persisted_token = token_body.as_bytes().to_vec();
-        persisted_token.extend_from_slice(terminator);
-        write_private_test_file(&token, &persisted_token);
-        let manifest = runtime.join("onboarding.json");
-        write_private_test_file(&manifest, b"legacy DPN-owned manifest\n");
-        let signer_inode = fs::metadata(&signer).unwrap().ino();
-        let token_inode = fs::metadata(&token).unwrap().ino();
-        let manifest_inode = fs::metadata(&manifest).unwrap().ino();
-        let bundle = OnboardingRuntimeBundle::create(&paths, authority)
-            .expect("reuse DPN onboarding material");
-        assert_eq!(
-            bundle.token_hash,
-            *blake3::hash(token_body.as_bytes()).as_bytes()
-        );
-        assert_eq!(fs::read(&signer).unwrap(), signer_payload.as_bytes());
-        assert_eq!(fs::read(&token).unwrap(), persisted_token);
-        assert_eq!(fs::metadata(&signer).unwrap().ino(), signer_inode);
-        assert_eq!(fs::metadata(&token).unwrap().ino(), token_inode);
-        assert_eq!(fs::read(&manifest).unwrap(), b"legacy DPN-owned manifest\n");
-        assert_eq!(fs::metadata(&manifest).unwrap().ino(), manifest_inode);
-    }
+    let token_body = format!("{LOCAL_ONBOARDING_TOKEN_PREFIX}{}", "a".repeat(64));
+    let paths = onboarding_test_paths(temp.path(), "canonical-reuse");
+    let runtime = paths.root().join(LOCAL_ONBOARDING_RUNTIME_DIRECTORY);
+    fs::create_dir(&runtime).expect("create runtime");
+    fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700))
+        .expect("set runtime permissions");
+    let signer = runtime.join(LOCAL_ONBOARDING_SIGNER_KEY_FILE);
+    let token = runtime.join(LOCAL_ONBOARDING_TOKEN_FILE);
+    write_private_test_file(&signer, signer_payload.as_bytes());
+    write_private_test_file(&token, token_body.as_bytes());
+    let signer_inode = fs::metadata(&signer).unwrap().ino();
+    let token_inode = fs::metadata(&token).unwrap().ino();
+    let bundle = OnboardingRuntimeBundle::create(&paths, authority)
+        .expect("reuse canonical onboarding material");
+    assert_eq!(
+        bundle.token_hash,
+        *blake3::hash(token_body.as_bytes()).as_bytes()
+    );
+    assert_eq!(fs::read(&signer).unwrap(), signer_payload.as_bytes());
+    assert_eq!(fs::read(&token).unwrap(), token_body.as_bytes());
+    assert_eq!(fs::metadata(&signer).unwrap().ino(), signer_inode);
+    assert_eq!(fs::metadata(&token).unwrap().ino(), token_inode);
 }
 #[test]
 #[cfg(unix)]
@@ -2496,7 +2388,7 @@ fn onboarding_bundle_rejects_partial_material_without_completion() {
         } else {
             write_private_test_file(
                 &token,
-                b"nevo-local-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                format!("{LOCAL_ONBOARDING_TOKEN_PREFIX}{}", "a".repeat(64)),
             );
         }
         let error = OnboardingRuntimeBundle::create(&paths, authority)
@@ -2554,8 +2446,12 @@ fn onboarding_bundle_rejects_malformed_tokens() {
     let signer_payload = format!("{private_key}\n");
     let malformed_tokens = [
         b"too-short".as_slice(),
-        b"nevo-local-AAAAAAAAAAAAAAAAAAAA AAAAAAAAAAAAAAAAAAAAAAAAAAA".as_slice(),
-        b"nevo-local-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n\n".as_slice(),
+        b"nevo-local-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            .as_slice(),
+        b"iroha-localnet-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+            .as_slice(),
+        b"iroha-localnet-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+            .as_slice(),
     ];
     for (index, malformed_token) in malformed_tokens.into_iter().enumerate() {
         let paths = onboarding_test_paths(temp.path(), &format!("malformed-{index}"));
@@ -2572,7 +2468,7 @@ fn onboarding_bundle_rejects_malformed_tokens() {
             .expect_err("malformed token must fail");
         assert!(matches!(
             error,
-            SupervisorError::Config(message) if message.contains("32 through 256 printable")
+            SupervisorError::Config(message) if message.contains("exactly 64 lowercase hexadecimal")
         ));
     }
 }

@@ -98,7 +98,10 @@ pub struct ReplayCacheConfig {
     pub max_entries_per_lane: NonZeroUsize,
     /// Maximum number of distinct `(lane, epoch)` windows retained globally.
     pub max_lane_epochs: NonZeroUsize,
-    /// How long a manifest stays live in the cache after its last observation.
+    /// How long a manifest fingerprint stays live after its last observation.
+    ///
+    /// Expiry retains the lane/epoch sequence floor until [`ReplayCache::clear_lane_epoch`], so a
+    /// pruned lane cannot be re-created at an arbitrary nonzero sequence.
     pub ttl: Duration,
     /// Maximum allowed distance from the highest observed sequence number before a new
     /// manifest is considered stale.
@@ -188,7 +191,8 @@ pub enum ReplayInsertOutcome {
         /// Highest sequence observed for this `(lane, epoch)` window.
         highest_observed: u64,
     },
-    /// Sequence number skipped over the next required slot.
+    /// Sequence number skipped over the next required slot, including sequence zero for a new
+    /// `(lane, epoch)` window.
     SequenceGap {
         /// The next accepted sequence after the lane/epoch high-water mark.
         expected_next: u64,
@@ -251,6 +255,9 @@ impl ReplayCache {
         }
     }
     /// Insert a manifest fingerprint into the cache and obtain the resulting outcome.
+    ///
+    /// A new `(lane, epoch)` window starts at sequence zero. Once present, each fresh sequence must
+    /// be the exact successor of its high-water mark.
     #[must_use]
     pub fn insert(&self, key: ReplayKey, now: Instant) -> ReplayInsertOutcome {
         self.insert_inner(key, now, false).0
@@ -259,7 +266,8 @@ impl ReplayCache {
     ///
     /// The optional handle is present exactly when the outcome is [`ReplayInsertOutcome::Fresh`].
     /// Pending reservations are not evicted by cache pruning and do not displace committed replay
-    /// history before their durable receipt commits.
+    /// history before their durable receipt commits. A new `(lane, epoch)` reservation must start
+    /// at sequence zero; later fresh reservations must be contiguous.
     #[must_use]
     pub fn reserve(
         &self,
@@ -282,6 +290,15 @@ impl ReplayCache {
             return (
                 ReplayInsertOutcome::LaneEpochCapacityExceeded {
                     capacity: self.config.max_lane_epochs.get(),
+                },
+                None,
+            );
+        }
+        if !guard.lanes.contains_key(&key.lane_epoch) && key.sequence != 0 {
+            return (
+                ReplayInsertOutcome::SequenceGap {
+                    expected_next: 0,
+                    observed: key.sequence,
                 },
                 None,
             );
@@ -569,6 +586,7 @@ impl LaneState {
         let ttl = config.ttl;
         let highest = self.highest_sequence;
         let max_lag = config.max_sequence_lag;
+        let mut retired_floor = self.stale_floor;
         self.entries.retain(|sequence, entry| {
             if entry.reservation_generation.is_some() {
                 return true;
@@ -577,8 +595,13 @@ impl LaneState {
                 .checked_duration_since(entry.last_seen)
                 .is_some_and(|duration| duration >= ttl);
             let too_far = highest.saturating_sub(*sequence) > max_lag;
-            !(expired || too_far)
+            let retain = !(expired || too_far);
+            if !retain {
+                retired_floor = Some(retired_floor.map_or(*sequence, |floor| floor.max(*sequence)));
+            }
+            retain
         });
+        self.stale_floor = retired_floor;
         self.entries.is_empty() && self.stale_floor.is_none()
     }
     fn enforce_capacity(&mut self, config: &ReplayCacheConfig, protected_sequence: Option<u64>) {
@@ -699,12 +722,12 @@ mod tests {
     fn fresh_insert_is_recorded() {
         let cache = ReplayCache::new(ReplayCacheConfig::new());
         let lane_epoch = LaneEpoch::new(LaneId::SINGLE, 42);
-        let key = ReplayKey::new(lane_epoch, 1, fingerprint(1));
+        let key = ReplayKey::new(lane_epoch, 0, fingerprint(1));
         let now = Instant::now();
         let outcome = cache.insert(key, now);
         match outcome {
             ReplayInsertOutcome::Fresh { snapshot, .. } => {
-                assert_eq!(snapshot.sequence, 1);
+                assert_eq!(snapshot.sequence, 0);
                 assert_eq!(snapshot.hit_count, 1);
                 assert_eq!(snapshot.first_seen, now);
                 assert_eq!(snapshot.last_seen, now);
@@ -714,16 +737,30 @@ mod tests {
         assert_eq!(cache.len_for_lane_epoch(lane_epoch), 1);
     }
     #[test]
-    fn first_insert_may_start_at_nonzero_sequence() {
+    fn first_reservation_requires_zero_sequence_without_allocating_lane_state() {
         let cache = ReplayCache::new(ReplayCacheConfig::new());
         let lane_epoch = LaneEpoch::new(LaneId::SINGLE, 42);
-        assert!(matches!(
-            cache.insert(
-                ReplayKey::new(lane_epoch, 77, fingerprint(77)),
-                Instant::now()
-            ),
-            ReplayInsertOutcome::Fresh { .. }
-        ));
+        for (sequence, seed) in [(1, 1), (77, 77), (u64::MAX - 1, 0xFE)] {
+            let (outcome, reservation) = cache.reserve(
+                ReplayKey::new(lane_epoch, sequence, fingerprint(seed)),
+                Instant::now(),
+            );
+            assert_eq!(
+                outcome,
+                ReplayInsertOutcome::SequenceGap {
+                    expected_next: 0,
+                    observed: sequence,
+                }
+            );
+            assert!(reservation.is_none());
+            assert_eq!(cache.lane_epoch_count(), 0);
+        }
+        let (outcome, reservation) = cache.reserve(
+            ReplayKey::new(lane_epoch, 0, fingerprint(0)),
+            Instant::now(),
+        );
+        assert!(matches!(outcome, ReplayInsertOutcome::Fresh { .. }));
+        assert!(reservation.is_some());
     }
     #[test]
     fn forward_sequence_gap_rejected_after_history_exists() {
@@ -731,18 +768,18 @@ mod tests {
         let lane_epoch = LaneEpoch::new(LaneId::SINGLE, 42);
         let now = Instant::now();
         assert!(matches!(
-            cache.insert(ReplayKey::new(lane_epoch, 7, fingerprint(7)), now),
+            cache.insert(ReplayKey::new(lane_epoch, 0, fingerprint(7)), now),
             ReplayInsertOutcome::Fresh { .. }
         ));
         let outcome = cache.insert(
-            ReplayKey::new(lane_epoch, 9, fingerprint(9)),
+            ReplayKey::new(lane_epoch, 2, fingerprint(9)),
             now + Duration::from_millis(1),
         );
         assert_eq!(
             outcome,
             ReplayInsertOutcome::SequenceGap {
-                expected_next: 8,
-                observed: 9
+                expected_next: 1,
+                observed: 2
             }
         );
         assert_eq!(
@@ -752,7 +789,7 @@ mod tests {
         );
         assert!(matches!(
             cache.insert(
-                ReplayKey::new(lane_epoch, 8, fingerprint(8)),
+                ReplayKey::new(lane_epoch, 1, fingerprint(8)),
                 now + Duration::from_millis(2),
             ),
             ReplayInsertOutcome::Fresh { .. }
@@ -786,7 +823,7 @@ mod tests {
     fn duplicate_updates_hit_count() {
         let cache = ReplayCache::new(ReplayCacheConfig::new());
         let lane_epoch = LaneEpoch::new(LaneId::SINGLE, 7);
-        let key = ReplayKey::new(lane_epoch, 5, fingerprint(5));
+        let key = ReplayKey::new(lane_epoch, 0, fingerprint(5));
         let first = Instant::now();
         let second = first + Duration::from_secs(1);
         let third = second + Duration::from_secs(1);
@@ -819,7 +856,7 @@ mod tests {
     fn matching_pending_reservation_is_not_a_durable_duplicate() {
         let cache = ReplayCache::new(ReplayCacheConfig::new());
         let lane_epoch = LaneEpoch::new(LaneId::SINGLE, 17);
-        let key = ReplayKey::new(lane_epoch, 5, fingerprint(5));
+        let key = ReplayKey::new(lane_epoch, 0, fingerprint(5));
         let first = Instant::now();
         let second = first + Duration::from_secs(1);
         let reservation = reserve_fresh(&cache, key, first);
@@ -847,7 +884,7 @@ mod tests {
     fn rollback_reservation_reopens_only_the_matching_fresh_entry() {
         let cache = ReplayCache::new(ReplayCacheConfig::new());
         let lane_epoch = LaneEpoch::new(LaneId::SINGLE, 8);
-        let key = ReplayKey::new(lane_epoch, 5, fingerprint(5));
+        let key = ReplayKey::new(lane_epoch, 0, fingerprint(5));
         let now = Instant::now();
         let first_reservation = reserve_fresh(&cache, key, now);
         let stale_first_reservation = first_reservation;
@@ -866,7 +903,7 @@ mod tests {
                 .with_max_entries_per_lane(NonZeroUsize::new(1).expect("non-zero capacity")),
         );
         let lane_epoch = LaneEpoch::new(LaneId::SINGLE, 9);
-        let key = ReplayKey::new(lane_epoch, 5, fingerprint(5));
+        let key = ReplayKey::new(lane_epoch, 0, fingerprint(5));
         let now = Instant::now();
         let old_reservation = reserve_fresh(&cache, key, now);
         cache.clear_lane_epoch(lane_epoch);
@@ -884,7 +921,7 @@ mod tests {
         let lane_epoch = LaneEpoch::new(LaneId::SINGLE, 15);
         let pending = reserve_fresh(
             &cache,
-            ReplayKey::new(lane_epoch, 5, fingerprint(5)),
+            ReplayKey::new(lane_epoch, 0, fingerprint(5)),
             Instant::now(),
         );
 
@@ -897,7 +934,7 @@ mod tests {
         assert_eq!(cache.highest_sequence(lane_epoch), Some(10));
         assert_eq!(
             cache.insert(
-                ReplayKey::new(lane_epoch, 5, fingerprint(5)),
+                ReplayKey::new(lane_epoch, 0, fingerprint(5)),
                 Instant::now(),
             ),
             ReplayInsertOutcome::StaleSequence {
@@ -912,8 +949,8 @@ mod tests {
                 .with_max_entries_per_lane(NonZeroUsize::new(1).expect("non-zero capacity")),
         );
         let lane_epoch = LaneEpoch::new(LaneId::SINGLE, 10);
-        let accepted_key = ReplayKey::new(lane_epoch, 5, fingerprint(5));
-        let failed_key = ReplayKey::new(lane_epoch, 6, fingerprint(6));
+        let accepted_key = ReplayKey::new(lane_epoch, 0, fingerprint(5));
+        let failed_key = ReplayKey::new(lane_epoch, 1, fingerprint(6));
         let now = Instant::now();
         assert!(matches!(
             cache.insert(accepted_key, now),
@@ -927,7 +964,7 @@ mod tests {
         ));
         assert!(matches!(
             cache.insert(
-                ReplayKey::new(lane_epoch, 5, fingerprint(6)),
+                ReplayKey::new(lane_epoch, 0, fingerprint(6)),
                 now + Duration::from_millis(1),
             ),
             ReplayInsertOutcome::ConflictingFingerprint { .. }
@@ -942,6 +979,9 @@ mod tests {
         );
         let lane_epoch = LaneEpoch::new(LaneId::SINGLE, 12);
         let base = Instant::now();
+        cache
+            .prime_lane_epoch(lane_epoch, 8)
+            .expect("seed durable predecessor");
         for sequence in 9_u64..=10 {
             assert!(matches!(
                 cache.insert(
@@ -996,6 +1036,9 @@ mod tests {
         let first_pending_key = ReplayKey::new(lane_epoch, 11, fingerprint(11));
         let second_pending_key = ReplayKey::new(lane_epoch, 12, fingerprint(12));
         let now = Instant::now();
+        cache
+            .prime_lane_epoch(lane_epoch, 9)
+            .expect("seed durable predecessor");
         assert!(matches!(
             cache.insert(accepted_key, now),
             ReplayInsertOutcome::Fresh { .. }
@@ -1036,6 +1079,9 @@ mod tests {
         let accepted_key = ReplayKey::new(lane_epoch, 10, fingerprint(10));
         let first_pending_key = ReplayKey::new(lane_epoch, 11, fingerprint(11));
         let now = Instant::now();
+        cache
+            .prime_lane_epoch(lane_epoch, 9)
+            .expect("seed durable predecessor");
         assert!(matches!(
             cache.insert(accepted_key, now),
             ReplayInsertOutcome::Fresh { .. }
@@ -1068,7 +1114,9 @@ mod tests {
         );
         let lane_epoch = LaneEpoch::new(LaneId::SINGLE, 14);
         let base = Instant::now();
-        for sequence in 9_u64..=10 {
+        let stale_pending =
+            reserve_fresh(&cache, ReplayKey::new(lane_epoch, 0, fingerprint(0)), base);
+        for sequence in 1_u64..=2 {
             assert!(matches!(
                 cache.insert(
                     ReplayKey::new(lane_epoch, sequence, fingerprint(sequence as u8)),
@@ -1077,21 +1125,16 @@ mod tests {
                 ReplayInsertOutcome::Fresh { .. }
             ));
         }
-        let stale_pending = reserve_fresh(
-            &cache,
-            ReplayKey::new(lane_epoch, 8, fingerprint(8)),
-            base + Duration::from_millis(11),
-        );
         let first_successor = reserve_fresh(
             &cache,
-            ReplayKey::new(lane_epoch, 11, fingerprint(11)),
-            base + Duration::from_millis(12),
+            ReplayKey::new(lane_epoch, 3, fingerprint(3)),
+            base + Duration::from_millis(3),
         );
         assert!(cache.commit_reservation(&first_successor));
         let second_successor = reserve_fresh(
             &cache,
-            ReplayKey::new(lane_epoch, 12, fingerprint(12)),
-            base + Duration::from_millis(13),
+            ReplayKey::new(lane_epoch, 4, fingerprint(4)),
+            base + Duration::from_millis(4),
         );
 
         assert!(cache.commit_reservation(&second_successor));
@@ -1101,11 +1144,11 @@ mod tests {
         );
         assert_eq!(
             cache.insert(
-                ReplayKey::new(lane_epoch, 9, fingerprint(9)),
-                base + Duration::from_millis(14),
+                ReplayKey::new(lane_epoch, 1, fingerprint(1)),
+                base + Duration::from_millis(5),
             ),
             ReplayInsertOutcome::StaleSequence {
-                highest_observed: 12
+                highest_observed: 4
             }
         );
         assert_eq!(cache.len_for_lane_epoch(lane_epoch), 3);
@@ -1114,6 +1157,9 @@ mod tests {
     fn conflicting_fingerprint_detected() {
         let cache = ReplayCache::new(ReplayCacheConfig::new());
         let lane_epoch = LaneEpoch::new(LaneId::SINGLE, 1);
+        cache
+            .prime_lane_epoch(lane_epoch, 9)
+            .expect("seed durable predecessor");
         let key_a = ReplayKey::new(lane_epoch, 10, fingerprint(10));
         let key_b = ReplayKey::new(lane_epoch, 10, fingerprint(11));
         let now = Instant::now();
@@ -1131,6 +1177,9 @@ mod tests {
         let config = ReplayCacheConfig::new().with_max_sequence_lag(2);
         let cache = ReplayCache::new(config);
         let lane_epoch = LaneEpoch::new(LaneId::SINGLE, 1);
+        cache
+            .prime_lane_epoch(lane_epoch, 4)
+            .expect("seed durable predecessor");
         assert!(matches!(
             cache.insert(
                 ReplayKey::new(lane_epoch, 5, fingerprint(1)),
@@ -1149,13 +1198,13 @@ mod tests {
         ));
     }
     #[test]
-    fn ttl_eviction_clears_entries() {
+    fn ttl_eviction_preserves_sequence_floor_and_accepts_exact_successor() {
         let config = ReplayCacheConfig::new()
             .with_ttl(Duration::from_millis(10))
             .with_max_entries_per_lane(NonZeroUsize::new(16).unwrap());
         let cache = ReplayCache::new(config);
         let lane_epoch = LaneEpoch::new(LaneId::SINGLE, 1);
-        let key = ReplayKey::new(lane_epoch, 1, fingerprint(1));
+        let key = ReplayKey::new(lane_epoch, 0, fingerprint(1));
         let now = Instant::now();
         assert!(matches!(
             cache.insert(key, now),
@@ -1164,26 +1213,39 @@ mod tests {
         assert_eq!(cache.len_for_lane_epoch(lane_epoch), 1);
         thread::sleep(Duration::from_millis(20));
         let later = Instant::now();
-        // Trigger prune by inserting a different sequence.
+        // Trigger pruning with the exact successor. The expired entry leaves a
+        // floor so this lane/epoch cannot be reinitialized at an arbitrary head.
         assert!(matches!(
-            cache.insert(ReplayKey::new(lane_epoch, 2, fingerprint(2)), later),
+            cache.insert(ReplayKey::new(lane_epoch, 1, fingerprint(2)), later),
             ReplayInsertOutcome::Fresh { .. }
         ));
         assert_eq!(cache.len_for_lane_epoch(lane_epoch), 1);
+        assert_eq!(
+            cache.insert(key, later + Duration::from_millis(1)),
+            ReplayInsertOutcome::StaleSequence {
+                highest_observed: 1
+            }
+        );
     }
     #[test]
     fn ttl_expires_at_exact_boundary() {
         let ttl = Duration::from_millis(10);
         let cache = ReplayCache::new(ReplayCacheConfig::new().with_ttl(ttl));
         let lane_epoch = LaneEpoch::new(LaneId::SINGLE, 16);
-        let key = ReplayKey::new(lane_epoch, 1, fingerprint(1));
+        let key = ReplayKey::new(lane_epoch, 0, fingerprint(1));
         let now = Instant::now();
         assert!(matches!(
             cache.insert(key, now),
             ReplayInsertOutcome::Fresh { .. }
         ));
-        assert!(matches!(
+        assert_eq!(
             cache.insert(key, now + ttl),
+            ReplayInsertOutcome::StaleSequence {
+                highest_observed: 0
+            }
+        );
+        assert!(matches!(
+            cache.insert(ReplayKey::new(lane_epoch, 1, fingerprint(2)), now + ttl),
             ReplayInsertOutcome::Fresh { .. }
         ));
     }
@@ -1213,6 +1275,9 @@ mod tests {
         );
         let lane_epoch = LaneEpoch::new(LaneId::SINGLE, 1);
         let base = Instant::now();
+        cache
+            .prime_lane_epoch(lane_epoch, 9)
+            .expect("seed durable predecessor");
         for sequence in 10_u64..=12 {
             assert!(matches!(
                 cache.insert(
@@ -1251,6 +1316,9 @@ mod tests {
         );
         let lane_epoch = LaneEpoch::new(LaneId::SINGLE, 1);
         let base = Instant::now();
+        cache
+            .prime_lane_epoch(lane_epoch, 9)
+            .expect("seed durable predecessor");
         assert!(matches!(
             cache.insert(
                 ReplayKey::new(lane_epoch, 10, fingerprint(10)),
@@ -1292,6 +1360,9 @@ mod tests {
         );
         let lane_epoch = LaneEpoch::new(LaneId::SINGLE, 17);
         let base = Instant::now();
+        cache
+            .prime_lane_epoch(lane_epoch, 0)
+            .expect("seed durable predecessor");
         let first = ReplayKey::new(lane_epoch, 1, fingerprint(1));
         let second = ReplayKey::new(lane_epoch, 2, fingerprint(2));
         for key in [first, second] {
@@ -1336,6 +1407,9 @@ mod tests {
         );
         let lane_epoch = LaneEpoch::new(LaneId::SINGLE, 18);
         let now = Instant::now();
+        cache
+            .prime_lane_epoch(lane_epoch, 8)
+            .expect("seed durable predecessor");
         for sequence in 9_u64..=10 {
             assert!(matches!(
                 cache.insert(
@@ -1374,11 +1448,11 @@ mod tests {
     fn fresh_then_duplicate_for_replayed_sequences() {
         let cases: &[&[u64]] = &[
             &[0],
-            &[1, 1],
+            &[0, 0],
             &[0, 1, 0, 2, 1],
-            &[255, 0, 255, 128, 128, 3],
-            &[7, 8, 9, 10, 7, 8, 10, 9],
-            &[31, 31, 32, 33, 32, 34, 31],
+            &[0, 1, 2, 0, 2, 1, 3],
+            &[0, 1, 2, 3, 0, 1, 3, 2],
+            &[0, 0, 1, 2, 1, 3, 0],
         ];
         for sequences in cases {
             let cache = ReplayCache::new(ReplayCacheConfig::new().with_max_sequence_lag(u64::MAX));

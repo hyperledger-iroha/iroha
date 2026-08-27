@@ -39,9 +39,8 @@ guardrails used for Norito streaming.
   matching Norito/CAR behaviour.
 
 ## Operator checklist
-- Leave `streaming.soranet.enabled = false` and omit relay
-  `kaigi_stream.spool_dir`. Explicit producer enablement or relay spool
-  configuration is a startup error.
+- Omit the retired `[streaming.soranet]` node table and relay
+  `kaigi_stream.spool_dir`. Either configuration is a startup error in V1.
 - Re-enablement requires a replay-protected RouteOpen proof binding viewer
   authority, selected route, and authoritative segment plus a durable
   unpublish/tombstone lifecycle. The intended custody contract is a direct

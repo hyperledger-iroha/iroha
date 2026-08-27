@@ -13,6 +13,32 @@ use color_eyre::eyre::{Result, eyre};
     target_os = "redox"
 ))]
 use std::path::Path;
+#[cfg(all(test, unix))]
+/// Creates a named pipe for Unix special-file regression tests.
+#[allow(
+    unsafe_code,
+    reason = "POSIX mkfifo requires FFI; this test-only wrapper validates the C path"
+)]
+pub(crate) fn create_fifo_for_test(
+    path: &std::path::Path,
+    mode: libc::mode_t,
+) -> std::io::Result<()> {
+    use std::{ffi::CString, os::unix::ffi::OsStrExt as _};
+
+    let path = CString::new(path.as_os_str().as_bytes()).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "FIFO path contains an interior NUL",
+        )
+    })?;
+    // SAFETY: `path` is a live, NUL-terminated C string and `mode` is passed
+    // directly using the platform's `mode_t` type.
+    if unsafe { libc::mkfifo(path.as_ptr(), mode) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
 #[cfg(all(
     unix,
     not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
@@ -741,7 +767,7 @@ mod unix {
         let mut options = OpenOptions::new();
         options
             .read(true)
-            .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+            .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK);
         let mut file = options
             .open(path)
             .wrap_err_with(|| format!("open private file {}", path.display()))?;
@@ -811,6 +837,15 @@ mod unix {
             assert_eq!(read.len(), MAX_PRIVATE_FILE_BYTES as usize);
             assert_eq!(read.first(), Some(&0xA5));
             assert_eq!(read.last(), Some(&0xA5));
+        }
+        #[test]
+        fn private_file_reader_rejects_fifo_without_waiting_for_a_writer() {
+            let (_root_guard, root) = private_root();
+            let path = root.join("named-pipe.secret");
+            crate::secure_fs::create_fifo_for_test(&path, 0o600)
+                .expect("create private-input FIFO");
+            let error = read_private_file(&path).expect_err("FIFO must not be accepted as a key");
+            assert!(error.to_string().contains("single-link regular data"));
         }
         #[test]
         fn private_file_writer_rejects_size_limit_plus_one_before_creation() {

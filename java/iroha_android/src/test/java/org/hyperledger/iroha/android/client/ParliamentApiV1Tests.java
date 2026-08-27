@@ -14,6 +14,7 @@ import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -70,6 +71,51 @@ public final class ParliamentApiV1Tests {
     assertEquals(
         ParliamentApiV1.MAX_TIMED_OVN_CORPUS_ENTRIES,
         ((Number) limits.get("timed_ovn_corpus_entries")).intValue());
+    assertEquals(
+        ParliamentApiV1.TIMED_OVN_CASTING_PROOF_REQUEST_BYTES,
+        ((Number) limits.get("timed_ovn_casting_proof_request_bytes")).intValue());
+    assertEquals(
+        ParliamentApiV1.MAX_TIMED_OVN_CASTING_PROOF_RESPONSE_BYTES,
+        ((Number) limits.get("timed_ovn_casting_proof_response_bytes")).intValue());
+    assertEquals(
+        ParliamentApiV1.MAX_TIMED_OVN_CASTING_PROOF_FINALITY_PROOFS,
+        ((Number) limits.get("timed_ovn_casting_proof_finality_entries")).intValue());
+    final Map<String, Object> nativeWallet =
+        objectValue(fixture.get("timed_ovn_native_wallet"));
+    assertEquals(
+        ParliamentApiV1.TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA,
+        nativeWallet.get("request_norito_schema"));
+    assertEquals(
+        ParliamentApiV1.TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA,
+        nativeWallet.get("response_norito_schema"));
+    assertEquals(
+        ParliamentApiV1.TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA_HASH_HEX,
+        nativeWallet.get("casting_proof_request_schema_hash_hex"));
+    assertEquals(
+        ParliamentApiV1.TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_HASH_HEX,
+        nativeWallet.get("casting_proof_response_schema_hash_hex"));
+    assertEquals(
+        ParliamentApiV1.TIMED_OVN_CASTING_PROOF_REQUEST_VERSION,
+        ((Number) nativeWallet.get("casting_proof_request_version")).intValue());
+    assertEquals(
+        ParliamentApiV1.TIMED_OVN_CASTING_PROOF_REQUEST_FLAGS,
+        ((Number) nativeWallet.get("casting_proof_request_flags")).intValue());
+    assertEquals(
+        ParliamentApiV1.TIMED_OVN_CASTING_PROOF_REQUEST_PAYLOAD_ALIGNMENT,
+        ((Number) nativeWallet.get("casting_proof_request_payload_alignment")).intValue());
+    assertEquals(
+        ParliamentApiV1.TIMED_OVN_CASTING_PROOF_REQUEST_PADDING_BYTES,
+        ((Number) nativeWallet.get("casting_proof_request_padding_bytes")).intValue());
+    final Map<String, Object> castingGolden =
+        objectValue(nativeWallet.get("casting_proof_request_golden"));
+    assertEquals(
+        ParliamentApiV1.TIMED_OVN_CASTING_PROOF_REQUEST_BYTES,
+        ((Number) castingGolden.get("frame_bytes")).intValue());
+    assertArrayEquals(
+        decodeTestHex((String) castingGolden.get("frame_hex")),
+        ParliamentApiV1.timedOvnCastingProofRequestNorito(
+            BigInteger.valueOf(
+                ((Number) castingGolden.get("trusted_checkpoint_height")).longValue())));
 
     final List<?> transitions = (List<?>) fixture.get("public_transitions");
     assertEquals(ParliamentApiV1.PUBLIC_TRANSITIONS.size(), transitions.size());
@@ -140,14 +186,23 @@ public final class ParliamentApiV1Tests {
     assertEquals("forbidden", privateJury.get("public_finding"));
     assertEquals("ballot.tally.original_seats", privateJury.get("original_seats"));
     final List<?> noResultKinds = (List<?>) fixture.get("no_result_kinds");
+    assertEquals(ParliamentApiV1.NO_RESULT_KINDS.size(), noResultKinds.size());
     for (int i = 0; i < noResultKinds.size(); i++) {
+      final Map<String, Object> fixtureKind = objectValue(noResultKinds.get(i));
       assertEquals(
           ParliamentApiV1.NO_RESULT_KINDS.get(i).jsonTag,
-          objectValue(noResultKinds.get(i)).get("json_tag"));
+          fixtureKind.get("json_tag"));
+      assertEquals(
+          ParliamentApiV1.NO_RESULT_KINDS.get(i).noritoIndex,
+          ((Number) fixtureKind.get("norito_index")).intValue());
     }
     assertEquals(
         ParliamentApiV1.BODY_STATE_FIELDS,
         objectValue(fixture.get("attempt_read_body_state")).get("json_fields"));
+    assertEquals(ParliamentApiV1.CANONICAL_BODY_ORDER, fixture.get("canonical_body_order"));
+    assertEquals(
+        "strictly increasing subset of canonical_body_order",
+        objectValue(fixture.get("attempt_read_body_presentation")).get("subset_rule"));
     assertEquals(
         List.of(
             "version",
@@ -210,6 +265,24 @@ public final class ParliamentApiV1Tests {
         () ->
             ParliamentApiV1.Proposal.fromJson(
                 bytes("{\"proposal_kind\":\"RuntimeUpgrade\",\"payload\":{}}")));
+  }
+
+  @Test
+  public void attemptDraftSequenceAcceptsSixteenAndRejectsSeventeen() {
+    final Map<String, Object> accepted =
+        objectValue(
+            ParliamentApiV1.attemptDraftRequestJson(
+                proposal("RuntimeUpgrade"),
+                ParliamentApiV1.MAX_GOVERNANCE_ATTEMPT_RETRIES));
+    assertEquals(
+        (long) ParliamentApiV1.MAX_GOVERNANCE_ATTEMPT_RETRIES,
+        accepted.get("attempt_sequence"));
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            ParliamentApiV1.attemptDraftRequestJson(
+                proposal("RuntimeUpgrade"),
+                (long) ParliamentApiV1.MAX_GOVERNANCE_ATTEMPT_RETRIES + 1L));
   }
 
   @Test
@@ -356,6 +429,88 @@ public final class ParliamentApiV1Tests {
   }
 
   @Test
+  public void castingProofNoritoPinsU64GoldenAndRejectsNoncanonicalResponses() {
+    final byte[] golden =
+        decodeTestHex(
+            "4e5254300000adccf322a5fcf43040e20bea238f55f3000c00000000000000"
+                + "dfab61022cefc29f02020100081100000000000000");
+    assertArrayEquals(
+        golden,
+        ParliamentApiV1.timedOvnCastingProofRequestNorito(BigInteger.valueOf(17L)));
+    assertArrayEquals(
+        golden, new ParliamentApiV1.TimedOvnCastingProofRequest(17L).toNoritoBytes());
+    final BigInteger maximum = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE);
+    final byte[] maximumFrame =
+        ParliamentApiV1.timedOvnCastingProofRequestNorito(maximum);
+    final byte[] maximumHeightBytes = new byte[8];
+    Arrays.fill(maximumHeightBytes, (byte) 0xff);
+    assertArrayEquals(
+        maximumHeightBytes, Arrays.copyOfRange(maximumFrame, 44, 52));
+    for (final BigInteger height :
+        Arrays.asList(BigInteger.ZERO, BigInteger.valueOf(-1L), BigInteger.ONE.shiftLeft(64))) {
+      assertThrows(
+          IllegalArgumentException.class,
+          () -> ParliamentApiV1.timedOvnCastingProofRequestNorito(height));
+    }
+
+    final byte[] payload = new byte[] {2, 1, 0, 1};
+    final NoritoHeader header =
+        new NoritoHeader(
+            decodeTestHex(ParliamentApiV1.TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_HASH_HEX),
+            payload.length,
+            CRC64.compute(payload),
+            NoritoHeader.COMPACT_LEN,
+            NoritoHeader.COMPRESSION_NONE);
+    final byte[] canonical = concat(header.encode(), payload);
+    final ParliamentApiV1.TimedOvnCastingProofResponse parsed =
+        ParliamentApiV1.parseTimedOvnCastingProofResponse(canonical);
+    assertArrayEquals(canonical, parsed.canonicalNorito());
+    assertArrayEquals(payload, parsed.payload());
+    parsed.canonicalNorito()[0] = 0;
+    parsed.payload()[0] = 0;
+    assertArrayEquals(canonical, parsed.canonicalNorito());
+    assertArrayEquals(payload, parsed.payload());
+
+    final byte[] wrongSchema =
+        concat(
+            new NoritoHeader(
+                    repeatedBytes(16, 7),
+                    payload.length,
+                    CRC64.compute(payload),
+                    NoritoHeader.COMPACT_LEN,
+                    NoritoHeader.COMPRESSION_NONE)
+                .encode(),
+            payload);
+    final byte[] badChecksum = canonical.clone();
+    badChecksum[badChecksum.length - 1]++;
+    final byte[] compressed = canonical.clone();
+    compressed[22] = 1;
+    final byte[] padded = concat(header.encode(), new byte[] {0}, payload);
+    final byte[] wrongFlags =
+        concat(
+            new NoritoHeader(
+                    decodeTestHex(
+                        ParliamentApiV1.TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_HASH_HEX),
+                    payload.length,
+                    CRC64.compute(payload),
+                    0,
+                    NoritoHeader.COMPRESSION_NONE)
+                .encode(),
+            payload);
+    for (final byte[] hostile :
+        Arrays.asList(wrongSchema, badChecksum, compressed, padded, wrongFlags)) {
+      assertThrows(
+          IllegalArgumentException.class,
+          () -> ParliamentApiV1.parseTimedOvnCastingProofResponse(hostile));
+    }
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            ParliamentApiV1.parseTimedOvnCastingProofResponse(
+                new byte[ParliamentApiV1.MAX_TIMED_OVN_CASTING_PROOF_RESPONSE_BYTES + 1]));
+  }
+
+  @Test
   public void strictDraftParsersBindVersionIdentifiersDigestAndWireIds() {
     final Map<String, Object> attemptResponse = new LinkedHashMap<>();
     attemptResponse.put("version", 1);
@@ -410,10 +565,62 @@ public final class ParliamentApiV1Tests {
     final ParliamentApiV1.AttemptReadResponse parsed =
         ParliamentApiV1.parseAttemptReadResponse(encode(response), ATTEMPT_ID);
     assertEquals("9", parsed.currentHeight);
+    assertEquals(List.of("rules-committee"), parsed.requiredBodyOrder);
     assertEquals("rules-committee", parsed.bodyStates.get(0).body);
+    assertEquals(List.of("rules-committee"), parsed.certificateBodyOrder);
     assertEquals(
         List.of("11".repeat(32), "12".repeat(32)),
         parsed.publicFindingBindings.get(0).endorsingAssignments);
+
+    final Map<String, Object> canonicalOrder = new LinkedHashMap<>(response);
+    final Map<String, Object> canonicalAttempt =
+        new LinkedHashMap<>(objectValue(response.get("attempt")));
+    canonicalAttempt.put("stage", Map.of("stage", "Qualification"));
+    canonicalAttempt.put("status", Map.of("status", "Active"));
+    canonicalOrder.put("attempt", canonicalAttempt);
+    canonicalOrder.put("certificate", null);
+    final List<Map<String, Object>> requiredBodies = new ArrayList<>();
+    final List<Map<String, Object>> bodyStates = new ArrayList<>();
+    for (final String body : ParliamentApiV1.CANONICAL_BODY_ORDER) {
+      requiredBodies.add(
+          Map.of(
+              "body",
+              body,
+              "decision_mode",
+              Map.of(
+                  "mode",
+                  body.equals("policy-jury") || body.equals("confirmation-jury")
+                      ? "HiddenBindingBallot"
+                      : "PublicFinding")));
+      final Map<String, Object> state = new LinkedHashMap<>();
+      state.put("body", body);
+      state.put("body_instance_id", null);
+      state.put("status", null);
+      state.put("public_finding_opened_at_height", null);
+      state.put("public_finding_phase_blocks", null);
+      state.put("public_finding_deadline_height", null);
+      state.put("no_result_kind", null);
+      state.put("no_result_height", null);
+      state.put("timed_ovn_progress", null);
+      bodyStates.add(state);
+    }
+    canonicalOrder.put("required_bodies", requiredBodies);
+    canonicalOrder.put("body_states", bodyStates);
+    final ParliamentApiV1.AttemptReadResponse canonicalParsed =
+        ParliamentApiV1.parseAttemptReadResponse(encode(canonicalOrder), ATTEMPT_ID);
+    assertEquals(ParliamentApiV1.CANONICAL_BODY_ORDER, canonicalParsed.requiredBodyOrder);
+    assertEquals(
+        ParliamentApiV1.CANONICAL_BODY_ORDER,
+        canonicalParsed.bodyStates.stream().map(state -> state.body).toList());
+    assertEquals(List.of(), canonicalParsed.certificateBodyOrder);
+
+    final Map<String, Object> reordered = new LinkedHashMap<>(canonicalOrder);
+    final List<Map<String, Object>> reorderedRequired = new ArrayList<>(requiredBodies);
+    Collections.swap(reorderedRequired, 0, 1);
+    reordered.put("required_bodies", reorderedRequired);
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> ParliamentApiV1.parseAttemptReadResponse(encode(reordered), ATTEMPT_ID));
 
     final Map<String, Object> alias = new LinkedHashMap<>(response);
     alias.put("statePayloadHex", alias.remove("state_payload_hex"));
@@ -1280,6 +1487,29 @@ public final class ParliamentApiV1Tests {
 
   private static byte[] bytes(final String value) {
     return value.getBytes(StandardCharsets.UTF_8);
+  }
+
+  private static byte[] decodeTestHex(final String value) {
+    final byte[] decoded = new byte[value.length() / 2];
+    for (int index = 0; index < decoded.length; index++) {
+      decoded[index] =
+          (byte) Integer.parseInt(value.substring(index * 2, index * 2 + 2), 16);
+    }
+    return decoded;
+  }
+
+  private static byte[] repeatedBytes(final int count, final int value) {
+    final byte[] bytes = new byte[count];
+    Arrays.fill(bytes, (byte) value);
+    return bytes;
+  }
+
+  private static byte[] concat(final byte[]... parts) {
+    final ByteArrayOutputStream output = new ByteArrayOutputStream();
+    for (final byte[] part : parts) {
+      output.write(part, 0, part.length);
+    }
+    return output.toByteArray();
   }
 
   @SuppressWarnings("unchecked")

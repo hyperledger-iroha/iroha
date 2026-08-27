@@ -228,13 +228,12 @@ mod tests {
             signer: key_pair.public_key().clone(),
             signature,
         });
-        DaPinIntent::new(
-            LaneId::SINGLE,
-            1,
-            sequence,
+        crate::da::signed_test_pin_intent(
+            authorization,
+            &key_pair,
             StorageTicketId::new([sequence as u8; 32]),
             ManifestDigest::new([sequence as u8; 32]),
-            authorization,
+            None,
         )
     }
     #[test]

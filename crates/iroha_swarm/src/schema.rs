@@ -1218,7 +1218,8 @@ mod tests {
             );
             let mock_env = mock_env_from_value(value);
             let reader = iroha_config::base::read::ConfigReader::new().with_env(mock_env.clone());
-            let config = iroha_config::parameters::user::Root::read_and_complete(reader)
+            let config = reader
+                .read_and_complete::<iroha_config::parameters::user::Root>()
                 .expect("config in env should be exhaustive");
             config
                 .parse()

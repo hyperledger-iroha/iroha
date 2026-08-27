@@ -9,9 +9,9 @@ use mochi_core::{
     wait_for_all_managed_peers_genesis, write_bootstrap_bundle,
 };
 #[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt as _;
-#[cfg(unix)]
 use std::fs::File;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt as _;
 use std::{
     collections::BTreeSet,
     env,
@@ -116,8 +116,8 @@ fn write_session_metadata_file(
             }
         }
     }
-    let (staged_path, mut file) = staged
-        .ok_or_else(|| "failed to allocate a unique session metadata file".to_owned())?;
+    let (staged_path, mut file) =
+        staged.ok_or_else(|| "failed to allocate a unique session metadata file".to_owned())?;
     let write_result = file.write_all(&bytes).and_then(|()| file.sync_all());
     if let Err(error) = write_result {
         let _ = fs::remove_file(&staged_path);
@@ -193,9 +193,10 @@ pub(super) fn run_serve(overrides: CliOverrides) -> Result<(), String> {
         requirements,
         "sandbox startup",
     ))?;
-    let private_key = supervisor.signers().first().map(|signer| {
-        ExposedPrivateKey(signer.key_pair().private_key().clone()).to_string()
-    });
+    let private_key = supervisor
+        .signers()
+        .first()
+        .map(|signer| ExposedPrivateKey(signer.key_pair().private_key().clone()).to_string());
     write_bootstrap_files_for_session(&workspace_root, &proof.session, private_key)
         .map_err(|err| format!("failed while writing workspace bootstrap files: {err}"))?;
     let session_path = proof.session.sandbox_root.join("session.json");
@@ -710,7 +711,7 @@ mod tests {
             &session,
             Some("existing-local-client-key".to_owned()),
         )
-            .expect("write bootstrap files");
+        .expect("write bootstrap files");
         assert_eq!(written.len(), 4);
         let env_local =
             fs::read_to_string(temp.path().join(".env.local")).expect("read generated env file");

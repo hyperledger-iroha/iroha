@@ -16,6 +16,8 @@ cmp "${SDK_DIR}/src/toriiClient.js" "${SDK_DIR}/dist/toriiClient.js"
 cmp "${SDK_DIR}/src/toriiBrowserClient.js" "${SDK_DIR}/dist/toriiBrowserClient.js"
 
 grep -Fq 'KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION = 23' "${source_file}"
+grep -Fq 'KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION: 23' "${types_file}"
+grep -Fq 'readonly required_bridge_abi_version: 23;' "${types_file}"
 grep -Fq 'KAGEMUSHA_MANIFEST_VERSION = 4' "${source_file}"
 grep -Fq 'KAGEMUSHA_MAX_HOPS = 8' "${source_file}"
 grep -Fq 'KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES = 512 * 1024' "${source_file}"

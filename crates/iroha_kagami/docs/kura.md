@@ -53,7 +53,7 @@ The `sidecar` command reads the pipeline recovery sidecar for a given block heig
 
 |      Option       |                          Description                          |  Default value  |  Type  |
 | ----------------- | -------------------------------------------------------------- | --------------- | ------ |
-| `-h`, `--height`  | The block height whose sidecar to print                        | required        | number |
+| `-H`, `--height`  | The block height whose sidecar to print                        | required        | number |
 | `-o`, `--output`  | Where to atomically write the sidecar JSON; it must be outside the block store | stdout | file |
 
 Notes:
@@ -72,7 +72,7 @@ Notes:
 - Save the sidecar for height 42 to a file:
 
   ```bash
-  kagami advanced kura <path> sidecar -h 42 -o sidecar_42.json
+  kagami advanced kura <path> sidecar -H 42 -o sidecar_42.json
   ```
 
 ### `sidecar` errors

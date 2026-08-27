@@ -144,11 +144,9 @@ fn apply_storage_budget_clamps_component_caps() {
     root.nexus.storage.local_budget_bytes = Some(Bytes(1_000));
     root.nexus.storage.max_wsv_memory_bytes = Bytes(512);
     root.nexus.storage.disk_budget_weights = NexusStorageWeights {
-        kura_blocks_bps: 5_000,
+        kura_blocks_bps: 3_500,
         wsv_snapshots_bps: 2_000,
-        sorafs_bps: 2_000,
-        soranet_spool_bps: 500,
-        soravpn_spool_bps: 500,
+        sorafs_bps: 4_500,
     };
     root.tiered_state.enabled = false;
     root.tiered_state.cold_store_root = None;
@@ -156,8 +154,6 @@ fn apply_storage_budget_clamps_component_caps() {
     root.kura.max_disk_usage_bytes = Bytes(0);
     root.tiered_state.max_cold_bytes = Bytes(0);
     root.torii.sorafs_storage.max_capacity_bytes = Bytes(0);
-    root.streaming.soranet.provision_spool_max_bytes = Bytes(0);
-    root.streaming.soravpn.provision_spool_max_bytes = Bytes(0);
     root.apply_storage_budget();
     assert_eq!(
         root.nexus
@@ -174,11 +170,9 @@ fn apply_storage_budget_clamps_component_caps() {
             .map(Bytes::get),
         Some(1_000)
     );
-    assert_eq!(root.kura.max_disk_usage_bytes.get(), 500);
+    assert_eq!(root.kura.max_disk_usage_bytes.get(), 350);
     assert_eq!(root.tiered_state.max_cold_bytes.get(), 200);
-    assert_eq!(root.torii.sorafs_storage.max_capacity_bytes.get(), 200);
-    assert_eq!(root.streaming.soranet.provision_spool_max_bytes.get(), 50);
-    assert_eq!(root.streaming.soravpn.provision_spool_max_bytes.get(), 50);
+    assert_eq!(root.torii.sorafs_storage.max_capacity_bytes.get(), 450);
     assert!(root.tiered_state.enabled, "tiered state should be enabled");
     assert_eq!(root.tiered_state.hot_retained_bytes.get(), 512);
     assert!(root.tiered_state.da_store_root.is_none());
@@ -204,20 +198,14 @@ fn apply_derived_storage_budget_uses_filesystem_group_caps() {
         },
         NexusStorageFilesystemBudget {
             budget_bytes: NonZeroU64::new(1_200).expect("non-zero budget"),
-            components: vec![
-                NexusStorageBudgetComponent::WsvCold,
-                NexusStorageBudgetComponent::SoranetSpool,
-                NexusStorageBudgetComponent::SoravpnSpool,
-            ],
+            components: vec![NexusStorageBudgetComponent::WsvCold],
         },
     ];
     root.nexus.storage.max_wsv_memory_bytes = Bytes(256);
     root.nexus.storage.disk_budget_weights = NexusStorageWeights {
-        kura_blocks_bps: 5_000,
+        kura_blocks_bps: 3_500,
         wsv_snapshots_bps: 2_000,
-        sorafs_bps: 2_000,
-        soranet_spool_bps: 500,
-        soravpn_spool_bps: 500,
+        sorafs_bps: 4_500,
     };
     root.tiered_state.enabled = false;
     root.tiered_state.cold_store_root = None;
@@ -225,8 +213,6 @@ fn apply_derived_storage_budget_uses_filesystem_group_caps() {
     root.kura.max_disk_usage_bytes = Bytes(0);
     root.tiered_state.max_cold_bytes = Bytes(0);
     root.torii.sorafs_storage.max_capacity_bytes = Bytes(0);
-    root.streaming.soranet.provision_spool_max_bytes = Bytes(0);
-    root.streaming.soravpn.provision_spool_max_bytes = Bytes(0);
     let aggregate = root
         .apply_derived_storage_budget(&filesystem_budgets)
         .expect("valid filesystem budgets");
@@ -239,11 +225,9 @@ fn apply_derived_storage_budget_uses_filesystem_group_caps() {
             .map(Bytes::get),
         Some(2_000)
     );
-    assert_eq!(root.kura.max_disk_usage_bytes.get(), 572);
-    assert_eq!(root.tiered_state.max_cold_bytes.get(), 800);
-    assert_eq!(root.torii.sorafs_storage.max_capacity_bytes.get(), 228);
-    assert_eq!(root.streaming.soranet.provision_spool_max_bytes.get(), 200);
-    assert_eq!(root.streaming.soravpn.provision_spool_max_bytes.get(), 200);
+    assert_eq!(root.kura.max_disk_usage_bytes.get(), 350);
+    assert_eq!(root.tiered_state.max_cold_bytes.get(), 1_200);
+    assert_eq!(root.torii.sorafs_storage.max_capacity_bytes.get(), 450);
     assert_eq!(root.tiered_state.hot_retained_bytes.get(), 256);
 }
 #[test]
@@ -399,18 +383,6 @@ fn storage_budget_splitting_is_exact_at_u64_max() {
     for component in NexusStorageBudgetComponent::ORDER {
         assert!(filesystem.budget_for(component) > 0);
     }
-}
-#[test]
-fn streaming_soravpn_defaults_match_constants() {
-    let config = StreamingSoravpn::from_defaults();
-    assert_eq!(
-        config.provision_spool_dir,
-        PathBuf::from(defaults::streaming::soravpn::PROVISION_SPOOL_DIR)
-    );
-    assert_eq!(
-        config.provision_spool_max_bytes.get(),
-        defaults::streaming::soravpn::PROVISION_SPOOL_MAX_BYTES.get()
-    );
 }
 #[test]
 fn soranet_vpn_defaults_construct_with_canonical_operator_account() {

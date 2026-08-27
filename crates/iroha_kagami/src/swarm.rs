@@ -39,9 +39,10 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
+use zeroize::Zeroizing;
 /// Docker Compose configuration generator for Iroha.
 #[allow(clippy::struct_excessive_bools)]
-#[derive(ClapArgs, Debug, Clone)]
+#[derive(ClapArgs)]
 pub struct Args {
     /// Number of peer services in the configuration.
     ///
@@ -94,10 +95,7 @@ pub struct Args {
     /// By default, the image is pulled from Docker Hub if not cached.
     /// Pass the `--build` option to build the image from a Dockerfile instead.
     ///
-    /// **Note**: Swarm only guarantees that the Docker Compose configuration it generates
-    /// is compatible with the same Git revision it is built from itself. Therefore, if the
-    /// specified image is not compatible with the version of Swarm you are running,
-    /// the generated configuration might not work.
+    /// The image must be built from the same Git revision as Kagami.
     #[arg(long, short, value_name = "NAME")]
     image: String,
     /// Build the image from the Dockerfile in the specified directory.
@@ -127,8 +125,6 @@ pub struct Args {
     #[arg(long, short = 'F')]
     force: bool,
     /// Do not include the banner with the generation notice in the file.
-    ///
-    /// The banner includes the seed to help with reproducibility.
     #[arg(long)]
     no_banner: bool,
 }
@@ -1598,14 +1594,6 @@ fn ensure_fresh_prepared_state(
         &config.streaming.session_store_dir,
         "streaming session state",
     )?;
-    directory(
-        &config.streaming.soranet.provision_spool_dir,
-        "streaming SoraNet spool",
-    )?;
-    directory(
-        &config.streaming.soravpn.provision_spool_dir,
-        "streaming SoraVPN spool",
-    )?;
     if let Some(path) = config.telemetry_integrity.state_dir.as_deref() {
         directory(path, "telemetry-integrity state")?;
     }
@@ -1922,98 +1910,6 @@ fn project_prepared_runtime_config(
         "rans_tables_path",
         RANS_TARGET,
     )?;
-    {
-        let streaming = ensure_toml_table(&mut table, &["streaming"])?;
-        let mut soranet = match streaming.get("soranet") {
-            Some(toml::Value::Table(existing)) => existing.clone(),
-            Some(_) => {
-                return Err(eyre!(
-                    "prepared runtime projection expected `streaming.soranet` to be a TOML table"
-                ));
-            }
-            None => {
-                let source = &source.streaming.soranet;
-                let padding_budget_ms = source.padding_budget_ms.ok_or_else(|| {
-                    eyre!(
-                        "prepared runtime projection cannot encode an absent \
-                         streaming.soranet.padding_budget_ms in TOML"
-                    )
-                })?;
-                let mut complete = toml::Table::new();
-                complete.insert("enabled".into(), toml::Value::Boolean(source.enabled));
-                complete.insert(
-                    "exit_multiaddr".into(),
-                    toml::Value::String(source.exit_multiaddr.clone()),
-                );
-                complete.insert(
-                    "padding_budget_ms".into(),
-                    toml::Value::Integer(i64::from(padding_budget_ms)),
-                );
-                complete.insert(
-                    "access_kind".into(),
-                    toml::Value::String(source.access_kind.as_str().to_owned()),
-                );
-                complete.insert(
-                    "channel_salt".into(),
-                    toml::Value::String(source.channel_salt.clone()),
-                );
-                complete.insert(
-                    "provision_spool_max_bytes".into(),
-                    toml::Value::Integer(
-                        i64::try_from(source.provision_spool_max_bytes.get()).wrap_err(
-                            "streaming.soranet.provision_spool_max_bytes exceeds TOML integer range",
-                        )?,
-                    ),
-                );
-                complete.insert(
-                    "provision_window_segments".into(),
-                    toml::Value::Integer(
-                        i64::try_from(source.provision_window_segments).wrap_err(
-                            "streaming.soranet.provision_window_segments exceeds TOML integer range",
-                        )?,
-                    ),
-                );
-                complete.insert(
-                    "provision_queue_capacity".into(),
-                    toml::Value::Integer(i64::try_from(source.provision_queue_capacity).wrap_err(
-                        "streaming.soranet.provision_queue_capacity exceeds TOML integer range",
-                    )?),
-                );
-                complete
-            }
-        };
-        soranet.insert(
-            "provision_spool_dir".into(),
-            toml::Value::String("/storage/streaming/soranet".to_owned()),
-        );
-        streaming.insert("soranet".into(), toml::Value::Table(soranet));
-        let mut soravpn = match streaming.get("soravpn") {
-            Some(toml::Value::Table(existing)) => existing.clone(),
-            Some(_) => {
-                return Err(eyre!(
-                    "prepared runtime projection expected `streaming.soravpn` to be a TOML table"
-                ));
-            }
-            None => {
-                let mut complete = toml::Table::new();
-                complete.insert(
-                    "provision_spool_max_bytes".into(),
-                    toml::Value::Integer(
-                        i64::try_from(source.streaming.soravpn.provision_spool_max_bytes.get())
-                            .wrap_err(
-                                "streaming.soravpn.provision_spool_max_bytes exceeds TOML integer range",
-                            )?,
-                    ),
-                );
-                complete
-            }
-        };
-        soravpn.insert(
-            "provision_spool_dir".into(),
-            toml::Value::String("/storage/streaming/soravpn".to_owned()),
-        );
-        streaming.insert("soravpn".into(), toml::Value::Table(soravpn));
-    }
     let captured_onboarding_private_key = source
         .torii
         .account_onboarding
@@ -2898,18 +2794,48 @@ fn load_prepared_bundle(
 impl<T: Write> RunArgs<T> for Args {
     #[allow(clippy::too_many_lines)]
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
-        // let args: Args = <Args as clap::Parser>::parse();
-        let args = self;
+        let mut args = self;
+        let seed = args.seed.take().map(Zeroizing::new);
         ensure!(
             is_valid_committee_size(usize::from(args.peers.get())),
             "`--peers` ({}) must form an exact Sumeragi v2 `3f + 1` validator committee \
              in the supported range 4..={MAX_VALIDATORS_PER_HEIGHT}",
             args.peers
         );
+        // Prepared mode materializes runtime projections beside the nominal output even with
+        // `--print`, so it must stay outside the authoritative bundle. Deterministic development
+        // mode has no projection and may render tracked fixtures inside `config_dir`.
+        args.out_file = if seed.is_none() {
+            crate::atomic_output::resolve_outside_directory(
+                &args.config_dir,
+                &args.out_file,
+                "config directory",
+            )?
+        } else {
+            crate::atomic_output::resolve_output_file(&args.out_file)?
+        };
+        let genesis_path = args.config_dir.join("genesis.json");
+        let genesis_path = fs::canonicalize(&genesis_path).wrap_err_with(|| {
+            format!("resolve genesis manifest input {}", genesis_path.display())
+        })?;
+        ensure!(
+            args.out_file != genesis_path,
+            "Compose output must not replace its genesis manifest input: {}",
+            genesis_path.display()
+        );
+        if let Some(peer_config) = args.peer_config.as_deref() {
+            let peer_config = fs::canonicalize(peer_config).wrap_err_with(|| {
+                format!("resolve peer override input {}", peer_config.display())
+            })?;
+            ensure!(
+                args.out_file != peer_config,
+                "Compose output must not replace its peer override input: {}",
+                peer_config.display()
+            );
+        }
         if !args.print && !args.user_allows_overwrite()? {
             return Ok(());
         }
-        let genesis_path = args.config_dir.join("genesis.json");
         let manifest_raw = read_runtime_file_bounded(
             &genesis_path,
             "genesis manifest",
@@ -2935,7 +2861,7 @@ impl<T: Write> RunArgs<T> for Args {
         };
         tui::status("Composing Docker deployment manifest");
         let prepared_artifacts;
-        let swarm = if let Some(seed) = args.seed.as_deref() {
+        let swarm = if let Some(seed) = seed.as_deref() {
             prepared_artifacts = None;
             iroha_swarm::Swarm::deterministic_dev(
                 args.peers,
@@ -2980,30 +2906,19 @@ impl<T: Write> RunArgs<T> for Args {
             swarm
         };
         let schema = swarm.build();
-        let banner = if args.no_banner {
-            None
-        } else {
-            let mut lines = vec![
+        let banner = (!args.no_banner).then(|| {
+            vec![
                 "Generated by `kagami docker`.".to_owned(),
                 "You should not edit this manually.".to_owned(),
-            ];
-            if let Some(seed) = args.seed.as_ref() {
-                lines.push(format!("Seed: {seed}"));
-            }
-            Some(lines)
-        };
+            ]
+        });
         let banner_refs = banner
             .as_ref()
             .map(|lines| lines.iter().map(String::as_str).collect::<Vec<_>>());
         if args.print {
             schema.write(&mut *writer, banner_refs.as_deref())?;
         } else {
-            let output = crate::atomic_output::resolve_outside_directory(
-                &args.config_dir,
-                &args.out_file,
-                "prepared config directory",
-            )?;
-            crate::atomic_output::write_file(&output, ".kagami-compose-", |writer| {
+            crate::atomic_output::write_file(&args.out_file, ".kagami-compose-", |writer| {
                 schema
                     .write(writer, banner_refs.as_deref())
                     .map_err(Into::into)
@@ -3188,34 +3103,37 @@ mod tests {
         load_prepared_bundle(config_dir, projection_root, count, &manifest)
     }
     #[test]
-    fn run_succeeds_without_banner() {
+    fn banner_is_optional_and_never_discloses_the_development_seed() {
         let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
         let config_dir = temp_dir.path().join("cfg");
         fs::create_dir_all(&config_dir).expect("create config dir");
         write_minimal_genesis(&config_dir.join("genesis.json"));
-        let args = Args {
-            peers: NonZeroU16::new(4).expect("non-zero"),
-            seed: Some("swarm-no-banner-dev".to_owned()),
-            healthcheck: false,
-            config_dir,
-            peer_config: None,
-            image: "hyperledger/iroha:dev".to_owned(),
-            build: None,
-            no_cache: false,
-            out_file: temp_dir.path().join("docker-compose.yml"),
-            print: true,
-            force: false,
-            no_banner: true,
-        };
-        let mut buffer = Vec::new();
-        let mut writer = BufWriter::new(&mut buffer);
-        args.run(&mut writer)
-            .expect("`Args::run` should succeed without banner");
-        writer.flush().expect("flush buffer");
-        drop(writer);
-        let output = String::from_utf8(buffer).expect("output should be UTF-8");
-        assert!(!output.contains("Generated by `kagami docker`."));
-        assert!(!output.contains("Seed:"));
+        let seed = "swarm-banner-secret-dev";
+        for (no_banner, expected_banner) in [(false, true), (true, false)] {
+            let args = Args {
+                peers: NonZeroU16::new(4).expect("non-zero"),
+                seed: Some(seed.to_owned()),
+                healthcheck: false,
+                config_dir: config_dir.clone(),
+                peer_config: None,
+                image: "hyperledger/iroha:dev".to_owned(),
+                build: None,
+                no_cache: false,
+                out_file: temp_dir.path().join("docker-compose.yml"),
+                print: true,
+                force: false,
+                no_banner,
+            };
+            let mut buffer = Vec::new();
+            args.run(&mut BufWriter::new(&mut buffer))
+                .expect("`Args::run` should render the requested banner mode");
+            let output = String::from_utf8(buffer).expect("output should be UTF-8");
+            assert_eq!(
+                output.contains("Generated by `kagami docker`."),
+                expected_banner
+            );
+            assert!(!output.contains(seed));
+        }
     }
     #[test]
     fn file_output_reports_required_runtime_genesis_artifacts() {
@@ -3279,11 +3197,79 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("inside the prepared config directory")
+                .contains("must not replace its genesis manifest input")
         );
         assert_eq!(
             fs::read(genesis_path).expect("read preserved genesis"),
             original
+        );
+    }
+    #[test]
+    fn deterministic_print_accepts_fixture_target_inside_config_directory() {
+        let temp_dir = tempfile::tempdir().expect("deterministic print directory");
+        let config_dir = temp_dir.path().join("cfg");
+        fs::create_dir_all(&config_dir).expect("create config directory");
+        write_minimal_genesis(&config_dir.join("genesis.json"));
+        let out_file = config_dir.join("docker-compose.yml");
+        let args = Args {
+            peers: NonZeroU16::new(4).expect("non-zero"),
+            seed: Some("tracked-fixture".to_owned()),
+            healthcheck: false,
+            config_dir,
+            peer_config: None,
+            image: "hyperledger/iroha:dev".to_owned(),
+            build: None,
+            no_cache: false,
+            out_file: out_file.clone(),
+            print: true,
+            force: false,
+            no_banner: true,
+        };
+        let mut output = BufWriter::new(Vec::new());
+        args.run(&mut output)
+            .expect("deterministic fixture render inside config directory");
+        assert!(
+            !out_file.exists(),
+            "--print must not publish its nominal target"
+        );
+        assert!(
+            !output
+                .into_inner()
+                .expect("flush rendered Compose")
+                .is_empty()
+        );
+    }
+    #[test]
+    fn prepared_print_rejects_config_target_before_materializing_projection() {
+        let temp_dir = tempfile::tempdir().expect("prepared print safety directory");
+        let config_dir = generate_prepared_bundle(temp_dir.path());
+        let genesis_path = config_dir.join("genesis.json");
+        let original = fs::read(&genesis_path).expect("read original genesis");
+        let args = Args {
+            peers: NonZeroU16::new(4).expect("non-zero"),
+            seed: None,
+            healthcheck: false,
+            config_dir: config_dir.clone(),
+            peer_config: None,
+            image: "hyperledger/iroha:dev".to_owned(),
+            build: None,
+            no_cache: false,
+            out_file: genesis_path.clone(),
+            print: true,
+            force: false,
+            no_banner: true,
+        };
+        let error = args
+            .run(&mut BufWriter::new(Vec::new()))
+            .expect_err("config-bundle target must be rejected before projection");
+        assert!(error.to_string().contains("inside the config directory"));
+        assert_eq!(
+            fs::read(genesis_path).expect("read preserved genesis"),
+            original
+        );
+        assert!(
+            !config_dir.join(".kagami-compose").exists(),
+            "invalid output placement must not create a runtime projection inside the bundle"
         );
     }
     #[test]

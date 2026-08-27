@@ -41,7 +41,7 @@ fn require_v2_wire_protocol_only(manifest: &RawGenesisTransaction) -> color_eyre
     }
     Ok(())
 }
-#[derive(Debug, Clone, Subcommand)]
+#[derive(Subcommand)]
 pub enum Args {
     Sign(sign::Args),
     Generate(generate::Args),

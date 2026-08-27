@@ -158,6 +158,219 @@ fn losing_autonomous_carrier_is_durably_retired_before_cache_drop() {
     );
 }
 #[test]
+fn losing_pending_autonomous_payload_is_retired_by_fifo_only_replica() {
+    let (mut producer_adapter, keys) =
+        autonomous_test_fixture(wire::ConsensusMode::Permissioned, true);
+    let lane_id = LaneId::new(1);
+    let dataspace_id = DataSpaceId::new(7);
+    prepare_autonomous_test_lane(&mut producer_adapter, &keys, lane_id, dataspace_id);
+    assert_autonomous_test_role(&producer_adapter, &keys, lane_id, dataspace_id, true);
+    let journal_dir = tempfile::tempdir().expect("replica retirement journal directory");
+    let journal_path = journal_dir.path().join("lane-reservations.norito");
+    let plan_journal_path = journal_path.with_extension("plans.norito");
+    let queue =
+        install_autonomous_test_queue(&mut producer_adapter, lane_id, dataspace_id, &journal_path);
+    enqueue_autonomous_test_transactions(&producer_adapter, &queue, lane_id, dataspace_id, 1);
+    let original_fifo = queue.fifo_snapshot_for_test();
+    producer_adapter
+        .schedule_autonomous_lane_production(0, autonomous_test_candidate_limits(2, 2))
+        .expect("produce the authenticated replica-retirement payload");
+    let payload = producer_adapter
+        .pending_autonomous_anchor_payloads
+        .values()
+        .find(|payload| {
+            payload.origin_proposal.descriptor.lane_id == lane_id
+                && payload.origin_proposal.descriptor.dataspace_id == dataspace_id
+        })
+        .expect("deterministic producer publishes the replica-retirement payload")
+        .clone();
+    let producer = payload.producer.clone();
+    assert_eq!(payload.origin_proposal.payload_block_hint, None);
+    assert_eq!(queue.live_lane_reservations(), payload.reservation_keys);
+    let queue_plan_binding = producer_adapter
+        .state
+        .queue_plan_pending_binding_for_entrypoint(payload.reservation_keys[0].entrypoint_hash)
+        .expect("read replica-retirement QueuePlan binding")
+        .expect("replica-retirement QueuePlan binding remains pending");
+    let producer_context = producer_adapter.context.clone();
+
+    // Construct the exact state a non-producer replica has after QueuePlan
+    // gossip: the complete transaction and immutable claim remain FIFO-owned,
+    // while no local lane reservation owner remains. The producer Kura is
+    // deliberately discarded below; only this Queue replica is shared.
+    assert_eq!(
+        queue
+            .release_lane_reservations_in_order(&payload.reservation_keys)
+            .expect("restore FIFO-only replica ownership"),
+        payload.reservation_keys.len(),
+    );
+    assert!(queue.live_lane_reservations().is_empty());
+    assert_eq!(queue.fifo_snapshot_for_test(), original_fifo);
+    let empty_owner_snapshot = queue
+        .lane_reservation_reconciliation_snapshot()
+        .expect("capture FIFO-only replica ownership");
+    assert!(
+        empty_owner_snapshot.is_empty(),
+        "the follower seam must begin without any Queue reservation owner family",
+    );
+    let reservation_journal_before =
+        std::fs::read(&journal_path).expect("read FIFO-only reservation journal");
+    let plan_journal_before =
+        std::fs::read(&plan_journal_path).expect("read FIFO-only QueuePlan journal");
+    drop(producer_adapter);
+
+    let (mut adapter, replica_keys) =
+        autonomous_test_fixture(wire::ConsensusMode::Permissioned, false);
+    prepare_autonomous_test_lane(&mut adapter, &replica_keys, lane_id, dataspace_id);
+    assert_autonomous_test_role(&adapter, &replica_keys, lane_id, dataspace_id, false);
+    assert_eq!(
+        adapter.context, producer_context,
+        "producer and follower fixtures must share one frozen height context",
+    );
+    assert_ne!(
+        adapter.local_peer, producer,
+        "the retirement actor must be a strict non-producer replica",
+    );
+    install_autonomous_fixture_queue_plan_registry_value(
+        adapter.state.as_ref(),
+        &queue_plan_binding,
+    );
+    adapter
+        .install_lane_drain_queue(Arc::clone(&queue))
+        .expect("install the FIFO-only replica Queue");
+    let descriptor = &payload.origin_proposal.descriptor;
+    let lane_block_height = descriptor.lane_block_height;
+    let proposal_height = descriptor.proposal_height;
+    let network_id = adapter.native_network_id();
+    let epoch = adapter.context.epoch;
+    assert!(
+        adapter
+            .kura
+            .read_autonomous_lane_block_artifact(lane_id, lane_block_height, network_id, epoch)
+            .is_none(),
+        "the follower must not begin with the producer's Kura attempt",
+    );
+    assert_eq!(
+        accept_lane_message_from(
+            &mut adapter,
+            BlockMessage::LaneExecutablePayload(payload.clone()),
+            producer.clone(),
+            0,
+        ),
+        V2LaneIngressOutcome::Inserted,
+        "authenticated hint-free ingress must enter the follower pending cache",
+    );
+    assert_eq!(adapter.pending_autonomous_anchor_payloads.len(), 1);
+    assert!(
+        adapter
+            .pending_autonomous_anchor_payloads
+            .values()
+            .any(|pending| pending == &payload),
+    );
+    assert!(
+        adapter
+            .kura
+            .read_autonomous_lane_block_artifact(lane_id, lane_block_height, network_id, epoch)
+            .is_none(),
+        "hint-free follower ingress alone must not manufacture durable custody",
+    );
+    assert_eq!(
+        queue
+            .lane_reservation_reconciliation_snapshot()
+            .expect("recheck pending follower Queue ownership"),
+        empty_owner_snapshot,
+    );
+    assert_eq!(queue.fifo_snapshot_for_test(), original_fifo);
+
+    let leader_index =
+        usize::try_from(adapter.context.leader(0)).expect("empty-carrier leader index");
+    let carrier_header = adapter
+        .merge_carrier_context_header(0)
+        .expect("exact empty-carrier round header");
+    let carrier = BlockBuilder::new(carrier_header)
+        .build_with_signature(
+            u64::try_from(leader_index).expect("leader index fits u64"),
+            replica_keys[leader_index].private_key(),
+        )
+        .canonical_resultless_proposal();
+    let (locked_round, _locked_subject) = mark_global_body_locked_for_block(&mut adapter, &carrier);
+    assert!(
+        adapter
+            .pending_autonomous_anchor_payloads
+            .values()
+            .any(|pending| pending == &payload),
+        "the lock alone cannot retire a pending follower payload",
+    );
+    assert_eq!(
+        queue
+            .lane_reservation_reconciliation_snapshot()
+            .expect("recheck locked follower Queue ownership"),
+        empty_owner_snapshot,
+    );
+    assert_eq!(
+        adapter.bind_locked_global_body(&carrier),
+        V2LaneIngressOutcome::Duplicate,
+        "the empty canonical carrier must retire the omitted follower payload",
+    );
+
+    let expected_retirement = crate::kura::AutonomousLaneSlotRetirementV1::from_payload(&payload);
+    let retired = adapter
+        .kura
+        .read_autonomous_lane_retired_attempt(
+            lane_id,
+            lane_block_height,
+            proposal_height,
+            network_id,
+            epoch,
+        )
+        .expect("read follower retirement custody")
+        .expect("the losing follower attempt is durably retired");
+    assert_eq!(retired.artifact.executable_payload, payload);
+    assert_eq!(retired.retirement, expected_retirement);
+    assert!(adapter.pending_autonomous_anchor_payloads.is_empty());
+    assert!(adapter.autonomous_payloads.is_empty());
+    assert!(adapter.autonomous_payload_order.is_empty());
+    assert!(adapter.autonomous_payload_views.is_empty());
+    assert_eq!(
+        queue
+            .lane_reservation_reconciliation_snapshot()
+            .expect("capture retired follower Queue ownership"),
+        empty_owner_snapshot,
+        "FIFO-only retirement must not manufacture a Queue owner family",
+    );
+    assert!(queue.live_lane_reservations().is_empty());
+    assert_eq!(queue.fifo_snapshot_for_test(), original_fifo);
+    assert_eq!(
+        std::fs::read(&journal_path).expect("reread follower reservation journal"),
+        reservation_journal_before,
+        "FIFO-only retirement must stutter the reservation journal",
+    );
+    assert_eq!(
+        std::fs::read(&plan_journal_path).expect("reread follower QueuePlan journal"),
+        plan_journal_before,
+        "FIFO-only retirement must stutter the QueuePlan journal",
+    );
+    assert!(
+        adapter
+            .kura
+            .pending_autonomous_lifecycle_terminal_outcome_inventory()
+            .expect("inspect follower terminal outcomes")
+            .is_empty(),
+        "the live retirement must consume its Pending terminal outcome",
+    );
+    assert!(!adapter.output_guard.restart_required());
+    assert_eq!(
+        accept_lane_message_from(
+            &mut adapter,
+            BlockMessage::LaneExecutablePayload(payload),
+            producer,
+            locked_round.view,
+        ),
+        V2LaneIngressOutcome::Rejected,
+        "a delayed payload cannot reclaim the durably retired follower slot",
+    );
+}
+#[test]
 fn canonical_kura_anchor_cannot_bypass_route_reset_or_incarnation_guards() {
     let lane_id = LaneId::SINGLE;
     let dataspace_id = DataSpaceId::UNIVERSAL;
@@ -1155,6 +1368,10 @@ fn record_production_merge_candidate_for_persistence_retry(
         world
             .global_beacon_pulses
             .insert(beacon_pulse.pulse_id, beacon_pulse);
+        world.global_beacon_pulse_slots.insert(
+            (beacon_pulse.network_id, beacon_pulse.height),
+            beacon_pulse.pulse_id,
+        );
         world.global_beacon_latest_pulse.insert(
             crate::state::GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY,
             beacon_link,

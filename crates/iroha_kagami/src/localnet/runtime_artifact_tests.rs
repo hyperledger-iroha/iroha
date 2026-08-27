@@ -37,14 +37,8 @@ fn genesis_key_files_are_canonical_consistent_and_non_overwriting() {
             .expect("derive fixture genesis key")
             .into_parts();
     let private_key = ExposedPrivateKey(private_key);
-    write_genesis_key_files(
-        &public_path,
-        &private_path,
-        &public_key,
-        &private_key,
-        false,
-    )
-    .expect("write genesis key files");
+    write_genesis_key_files(&public_path, &private_path, &public_key, &private_key)
+        .expect("write genesis key files");
     let public_record = fs::read_to_string(&public_path).expect("read public key file");
     assert_eq!(public_record, format!("{public_key}\n"));
     let private_record = fs::read_to_string(&private_path).expect("read private key file");
@@ -70,14 +64,7 @@ fn genesis_key_files_are_canonical_consistent_and_non_overwriting() {
         0o600
     );
     assert!(
-        write_genesis_key_files(
-            &public_path,
-            &private_path,
-            &public_key,
-            &private_key,
-            false,
-        )
-        .is_err(),
+        write_genesis_key_files(&public_path, &private_path, &public_key, &private_key).is_err(),
         "existing genesis key custody must never be overwritten"
     );
 }

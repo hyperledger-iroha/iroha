@@ -80,9 +80,10 @@ Hardening` roadmap line items and will be updated as decisions land.
 - Build all binaries that need to handle TC26 keys (`iroha3d`, `iroha`, tooling such as
   `kagami`) with `--features gost` so the algorithm IDs and parsing helpers are available
   end to end.
-- Provision validator keys with `kagami crypto generate --algorithm gost3410-2012-*-paramset-*`.
-  Use the `--seed` flag (32 bytes for 256-bit curves, 64 bytes for 512-bit curves) when you
-  need deterministic regeneration; otherwise rely on the default OS randomness.
+- Provision GOST key material for supported non-consensus consumers with
+  `kagami keys --algorithm gost3410-2012-*-paramset-* --out-dir <owner-only-directory>`.
+  Use `--seed-hex` with exactly 32 secret bytes only for deterministic test fixtures;
+  otherwise rely on the default operating-system randomness.
 - When wiring the keys into genesis manifests or `iroha_config`, encode them as multihash
   strings (see the [public genesis reference](https://docs.iroha.tech/reference/genesis.html)
   for examples such as `gost3410-2012-256-paramset-a:<hex>`).

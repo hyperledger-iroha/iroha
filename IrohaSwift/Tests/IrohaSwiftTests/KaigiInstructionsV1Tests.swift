@@ -14,7 +14,7 @@ final class KaigiInstructionsV1Tests: XCTestCase {
       host: host,
       title: "Daily standup",
       description: "Engineering sync",
-      maxParticipants: UInt32.max,
+      maxParticipants: NewKaigiV1.maxParticipantsV1,
       gasRatePerMinute: UInt64.max,
       metadata: ["zeta": .bool(true), "alpha": .string("first")],
       scheduledStartMs: UInt64.max,
@@ -259,8 +259,23 @@ final class KaigiInstructionsV1Tests: XCTestCase {
   func testValidationMatchesStatelessRustAdmissionRules() throws {
     let callID = try KaigiIdV1(domainID: "meetings.universal", callName: "validation")
     let host = try account(20)
+    XCTAssertEqual(NewKaigiV1.maxParticipantsV1, 4_096)
+    XCTAssertNoThrow(
+      try NewKaigiV1(
+        id: callID,
+        host: host,
+        maxParticipants: NewKaigiV1.maxParticipantsV1
+      )
+    )
     XCTAssertThrowsError(
       try NewKaigiV1(id: callID, host: host, maxParticipants: 0)
+    )
+    XCTAssertThrowsError(
+      try NewKaigiV1(
+        id: callID,
+        host: host,
+        maxParticipants: NewKaigiV1.maxParticipantsV1 + 1
+      )
     )
     XCTAssertThrowsError(
       try NewKaigiV1(id: callID, host: host, billingAccount: account(21))

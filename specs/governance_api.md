@@ -314,7 +314,11 @@ domain-separated digest. The authenticated
 `GET /v1/gov/parliament/attempts/{governance_attempt_id}` projection exposes
 `terminal_height`, `superseding_head`, and `execution_failure_root` alongside
 the exact reducer payload so clients can distinguish and independently audit
-all three outcomes. Each ordered body-state row also carries nullable
+all three outcomes. One attempt's canonical framed reducer state has an
+authoritative 16 MiB V1 protocol ceiling: reducer admission and both strict and
+emergency-fast snapshot restore count the exact Norito frame before accepting
+it, while Torii retains the same bounded-serialization defense. Each ordered
+body-state row also carries nullable
 `timed_ovn_progress`. It is absent until that body has an active hidden ballot;
 otherwise its exact four fields bind `ballot_attempt_id`, reducer `status`,
 `frozen_survivor_count`, and `accepted_ballot_prefix_count`. Both counts are
@@ -332,11 +336,13 @@ this count-only projection.
 
 `GovernanceParliamentLifecycleTransitionApplied` carries the closed transition
 kind, an optional `no_result_kind`, and an optional typed
-`automatic_outcome`. The seven-variant `ParliamentNoResultKindV1` distinguishes
-public-finding quorum impossibility/deadline expiry from the five private-ballot
-failure classes. Core sets it only when the accepted transition actually
-terminalizes a body without a result; its transition digest binds the submitted
-transition while that separate field records the Core-derived classification.
+`automatic_outcome`. The eight-variant `ParliamentNoResultKindV1` distinguishes
+final sortition retry exhaustion, public-finding quorum impossibility/deadline
+expiry, and the five private-ballot failure classes. Core sets it only when the
+accepted transition terminalizes sortition or a body without a result;
+`SortitionRetriesExhausted` applies before a body instance exists. The
+transition digest binds the submitted transition while that separate field
+records the Core-derived classification.
 Consensus-owned enactment,
 supersession, and execution failure instead set `automatic_outcome` and bind
 its complete evidence with the automatic-outcome digest. Every other event has
@@ -352,6 +358,10 @@ threshold-BLS profile has no proactive share refresh and must be
 rotated before cumulative exposure exceeds `f` distinct shares. The official
 publication manifest validator is a release-tooling gate, not a runtime feature
 switch; no independent audit report or evidence archive is bundled or claimed.
+The BLS12-381 threshold release, pairing-based timed-OVN ballot, and classical
+beacon are not post-quantum; ML-DSA use elsewhere in Iroha does not change that
+claim boundary. A replacement requires a separately versioned, reviewed, and
+consensus-enacted protocol revision.
 The authenticated
 `GET /v1/gov/parliament/ballots/{ballot_attempt_id}/release-context` endpoint
 returns Core's exact opening authorization as public data, including the full
@@ -428,11 +438,16 @@ the app-signed
 ABI 23 proof-only native entry points. Every call supplies an immutable trust
 anchor containing a raw 32-byte network ID, nonzero trusted checkpoint height,
 exact 32-byte checkpoint height-context ID, and exact expected ballot-attempt ID;
-there are no defaults or process-global network values. Before caller-keystore
-seed access, the native verifier canonical-decodes a terminal proof response,
-rejects intermediate pages, verifies the finality chain, fixed casting witness,
-and membership proof against the anchor, replay-validates the embedded Core
-archive, rederives its compact binding, and requires exact binding equality.
+there are no defaults or process-global network values. The proof-page native
+entry point canonical-decodes and authenticates every page without reading the
+keystore seed. An intermediate page must strictly advance the checkpoint,
+contain no casting state, and returns only its authenticated height, context id,
+and `more_available = 1` for durable promotion. A terminal page may leave the
+height unchanged, but must contain the fixed casting witness and membership
+proof; the verifier replay-validates the embedded Core archive, rederives its
+compact binding, and requires exact binding equality. Seed-bearing registration
+and ballot entry points accept terminal pages only, so intermediate pages can
+never authorize secret access.
 Archive-only C and JNI wallet exports have been removed so an untrusted public
 archive cannot remain a callable authorization path. The builders then derive
 purpose-, session-, participant-, survivor-, release-, and choice-separated
@@ -594,6 +609,7 @@ make the current-council read endpoint derive an implicit roster:
 ```toml
 [gov]
   min_enactment_delay = 20
+  parliament_sortition_pulse_delay_blocks = 4
   parliament_invitation_phase_blocks = 3600
   parliament_public_finding_phase_blocks = 3600
   citizenship_asset_id = "79jULkZVMgnbzxBe6NvqeDxVEeEk"
@@ -655,7 +671,10 @@ do not derive weight from a public conviction lock.
 
 `parliament_term_blocks` defines the epoch length for independent council
 persistence. Attempt sortition freezes its own complete eligible-citizen
-snapshot and a future pulse; it does not reuse that epoch council.
+snapshot and the one future pulse at exactly
+`request_height + parliament_sortition_pulse_delay_blocks`; it does not reuse
+that epoch council. The delay is consensus-hashed, nonzero, frozen into the
+attempt, and checked with overflow rejection at admission and restore.
 `parliament_invitation_phase_blocks` fixes the response window;
 `parliament_public_finding_phase_blocks` independently fixes the endorsement
 window from entry into Reflection. Both are nonzero and have no environment
@@ -886,7 +905,10 @@ Governed `SumeragiNposParameters.reconfig.evidence_horizon_blocks` (default
 governance can cancel penalties before they apply. These are governed chain
 values, not local `[sumeragi]` configuration.
 
-VRF penalties are enforced automatically after `activation_lag_blocks` (offenders are jailed). Consensus slashing is applied only after the `slashing_delay_blocks` window unless governance cancels the penalty.
+Legacy VRF participation records and penalty effects are retired; production
+derives no VRF jail action. Automatic delayed slashing applies only to canonical
+Sumeragi-v2 equivocation evidence admitted by a prior committed block, and only
+after the `slashing_delay_blocks` window unless governance cancels the penalty.
 
 Operators and tooling can inspect the bounded audit projection through:
 
@@ -931,8 +953,9 @@ Any script that rotates <i105-account-id>s or applies slashing **must not** atte
 - Prometheus metrics export governance activity:
   - `governance_parliament_transitions_total{transition}` counts accepted
     Parliament transitions using the closed transition-kind vocabulary.
-  - `governance_parliament_no_result_total{class}` counts the seven bounded
-    public-finding/private-ballot `ParliamentNoResultKindV1` classes only.
+  - `governance_parliament_no_result_total{class}` counts the eight bounded
+    sortition/public-finding/private-ballot `ParliamentNoResultKindV1` classes
+    only.
   - `governance_parliament_attempts_by_status{status}` and
     `governance_parliament_attempts_by_stage{stage}` are recomputed from
     committed state at startup and after accepted attempt mutations. These

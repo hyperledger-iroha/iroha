@@ -635,12 +635,16 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             },
             soranet_privacy: A::SoranetPrivacy::default(),
             soranet_vpn: A::SoranetVpn::default(),
-            lane_profile: A::LaneProfile::from_label(
+            lane_profile: A::LaneProfile::parse_label(
                 &defaults::network::lane_profile::default_label(),
-            ),
+            )
+            .expect("default network lane profile must be canonical"),
             require_sm_handshake_match: true,
             require_sm_openssl_preview_match: true,
             idle_timeout: core::time::Duration::from_secs(5),
+            preauth_timeout: defaults::network::PREAUTH_TIMEOUT,
+            preauth_max_connections_per_ip:
+                defaults::network::PREAUTH_MAX_CONNECTIONS_PER_IP,
             reply_writer_flush_timeout: defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
             connect_startup_delay: defaults::network::CONNECT_STARTUP_DELAY,
             dial_timeout: defaults::network::DIAL_TIMEOUT,
@@ -1356,6 +1360,8 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             .parse()
             .expect("valid default governance asset id"),
             parliament_alternate_size: defaults::governance::PARLIAMENT_ALTERNATE_SIZE,
+            parliament_sortition_pulse_delay_blocks:
+                defaults::governance::PARLIAMENT_SORTITION_PULSE_DELAY_BLOCKS,
             parliament_invitation_phase_blocks:
                 defaults::governance::PARLIAMENT_INVITATION_PHASE_BLOCKS,
             parliament_public_finding_phase_blocks:
@@ -1459,8 +1465,6 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             .expect("streaming key material"),
             session_store_dir: PathBuf::from(defaults::streaming::SESSION_STORE_DIR),
             feature_bits: defaults::streaming::FEATURE_BITS,
-            soranet: A::StreamingSoranet::from_defaults(),
-            soravpn: A::StreamingSoravpn::from_defaults(),
             sync: A::StreamingSync::from_defaults(),
             codec: A::StreamingCodec {
                 cabac_mode: A::CabacMode::Disabled,
