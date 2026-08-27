@@ -1675,6 +1675,7 @@ pub(crate) fn validate_rebuilt_kaigi_relay_registry(
     }
     Ok(())
 }
+#[cfg(test)]
 fn validated_kaigi_relay_registry_count(
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<usize, Error> {
@@ -1709,7 +1710,8 @@ fn validated_kaigi_relay_registry_count_with_graph(
                 "Kaigi relay registry key does not match its metadata registration".into(),
             ));
         }
-        let resolved_domain = relay_domain_from_persisted_graph(state_transaction, relay_id, graph)?;
+        let resolved_domain =
+            relay_domain_from_persisted_graph(state_transaction, relay_id, graph)?;
         if &resolved_domain != domain_id {
             return Err(Error::InvariantViolation(
                 "stored Kaigi relay registration is outside its relay's active home domain".into(),
@@ -1739,9 +1741,7 @@ fn ensure_manifest_relays_registered(
             &hop.relay_id,
             &rekey_graph,
         )?
-        .ok_or_else(|| {
-                relay_error("relay manifest references an unregistered relay account")
-            })?;
+        .ok_or_else(|| relay_error("relay manifest references an unregistered relay account"))?;
         if !active_relays.insert(active_relay) {
             return Err(relay_error(
                 "relay manifest must not contain multiple identities from the same active account-id rekey lineage",

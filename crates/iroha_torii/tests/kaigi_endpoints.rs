@@ -62,10 +62,8 @@ fn seed_relay_primary_alias(
         Metadata::default(),
     );
     let mut block = world.block();
-    let mut transaction = block.transaction_without_telemetry(
-        iroha_config::parameters::actual::LaneConfig::default(),
-        0,
-    );
+    let mut transaction = block
+        .transaction_without_telemetry(iroha_config::parameters::actual::LaneConfig::default(), 0);
     transaction
         .account_mut(relay_id)
         .expect("relay account")
@@ -76,12 +74,10 @@ fn seed_relay_primary_alias(
     transaction
         .account_aliases_by_account_mut_for_testing()
         .insert(relay_id.clone(), BTreeSet::from([alias.clone()]));
-    transaction
-        .account_rekey_records_mut_for_testing()
-        .insert(
-            alias.clone(),
-            AccountRekeyRecord::new(alias, relay_id.clone()),
-        );
+    transaction.account_rekey_records_mut_for_testing().insert(
+        alias.clone(),
+        AccountRekeyRecord::new(alias, relay_id.clone()),
+    );
     transaction.smart_contract_state_mut_for_testing().insert(
         iroha_core::sns::record_storage_key(&selector),
         norito::codec::Encode::encode(&lease),

@@ -57214,6 +57214,7 @@ impl StateTransaction<'_, '_> {
         Ok(step)
     }
     /// Execute deterministic pipeline triggers, staging their state changes.
+    #[cfg(test)]
     pub(crate) fn execute_pipeline_triggers(
         &mut self,
         events: impl IntoIterator<Item = PipelineEventBox>,

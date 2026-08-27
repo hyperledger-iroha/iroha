@@ -12056,7 +12056,7 @@ mod evidence_http_tests {
     fn pipeline_status_200_requires_an_exact_payload() {
         let (result, snapshots) =
             captured_pipeline_status(0x22, empty_response(StatusCode::OK), true);
-        result.expect_err("empty 200 response must fail closed");
+        let _ = result.expect_err("empty 200 response must fail closed");
         assert_request_paths(&snapshots, &["/v1/pipeline/transactions/status"]);
         assert_status_scope(&snapshots[0], "global");
     }
@@ -12193,14 +12193,14 @@ mod evidence_http_tests {
         let hash = transaction_hash(0x2f);
         for payload in [
             norito::json!({
-                "hash": hash.to_string(),
+                "hash": (hash.to_string()),
                 "status": { "kind": "Applied", "block_height": 9 },
                 "scope": "global",
                 "resolved_from": "state",
                 "legacy": true,
             }),
             norito::json!({
-                "hash": hash.to_string(),
+                "hash": (hash.to_string()),
                 "status": { "kind": "Applied", "block_height": 9, "legacy": true },
                 "scope": "global",
                 "resolved_from": "state",
@@ -12211,7 +12211,7 @@ mod evidence_http_tests {
                 capture_requests(json_response(StatusCode::OK, &body), || {
                     client_with_base_url(base_url()).get_transaction_status_response_global(hash)
                 });
-            result.expect_err("unknown pipeline status fields must fail closed");
+            let _ = result.expect_err("unknown pipeline status fields must fail closed");
             assert_eq!(snapshots.len(), 1);
         }
     }
@@ -22852,10 +22852,7 @@ mod tests {
         fs,
         io::{Read, Write},
         net::TcpListener,
-        sync::{
-            Arc, Mutex,
-            atomic::{AtomicUsize, Ordering},
-        },
+        sync::{Arc, Mutex},
         time::{Duration, Instant},
     };
     use tempfile::tempdir;
@@ -23299,14 +23296,15 @@ mod tests {
             .expect("encode unbound Hijiri quote fixture");
         let mut duplicate_content_type =
             mk_response(StatusCode::OK, valid_body.clone(), Some(APPLICATION_NORITO));
-        duplicate_content_type
-            .headers_mut()
-            .append("content-type", HeaderValue::from_static(APPLICATION_JSON));
+        duplicate_content_type.headers_mut().append(
+            "content-type",
+            ::http::HeaderValue::from_static(APPLICATION_JSON),
+        );
         let mut success_with_reject_code =
             mk_response(StatusCode::OK, valid_body.clone(), Some(APPLICATION_NORITO));
         success_with_reject_code.headers_mut().insert(
             "x-iroha-reject-code",
-            HeaderValue::from_static("validation_fee_state_inconsistent"),
+            ::http::HeaderValue::from_static("validation_fee_state_inconsistent"),
         );
         let cases = [
             (
@@ -23362,8 +23360,9 @@ mod tests {
                 client.post_validation_fee_hijiri_quote(&request)
             });
             let error = result.expect_err("hostile Hijiri quote response must fail");
+            let error_chain = format!("{error:#}");
             assert!(
-                error.to_string().contains(expected_error),
+                error_chain.contains(expected_error),
                 "unexpected {case} error: {error:#}"
             );
             assert_eq!(
@@ -25285,7 +25284,7 @@ mod tests {
             ("absent expected account", absent_account),
         ] {
             let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-            with_mock_http(
+            let _ = with_mock_http(
                 respond_with(
                     &snapshots,
                     onboarding_current_state_http_response(&response),
@@ -25355,7 +25354,7 @@ mod tests {
             ),
         ] {
             let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-            with_mock_http(respond_with(&snapshots, response), || {
+            let _ = with_mock_http(respond_with(&snapshots, response), || {
                 client.prove_account_onboarding_current_state(&account_id, &alias)
             })
             .expect_err(label);
