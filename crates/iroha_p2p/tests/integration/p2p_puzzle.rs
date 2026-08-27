@@ -1,14 +1,8 @@
 //! Puzzle-gated handshake edge cases for P2P.
 use super::next_port;
 use iroha_config::parameters::{
-    actual::{
-        Network as Config, SoranetHandshake as ActualSoranetHandshake, SoranetPow, SoranetPuzzle,
-    },
+    actual::{Network as Config, SoranetHandshake as ActualSoranetHandshake, SoranetPuzzle},
     defaults::network::{DEFAULT_AEAD_FRAME_OVERHEAD_BYTES, TRUST_GOSSIP},
-};
-use iroha_config_base::WithOrigin;
-use iroha_crypto::soranet::handshake::{
-    DEFAULT_CLIENT_CAPABILITIES, DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_RELAY_CAPABILITIES,
 };
 use iroha_data_model::prelude::{Peer, PeerId};
 use iroha_futures::supervisor::ShutdownSignal;
@@ -38,26 +32,16 @@ impl<'a> norito::core::DecodeFromSlice<'a> for EmptyMsg {
     }
 }
 fn puzzle_handshake(difficulty: u8, memory_kib: u32) -> ActualSoranetHandshake {
-    let mut handshake = ActualSoranetHandshake {
-        descriptor_commit: WithOrigin::inline(DEFAULT_DESCRIPTOR_COMMIT.to_vec()),
-        client_capabilities: WithOrigin::inline(DEFAULT_CLIENT_CAPABILITIES.to_vec()),
-        relay_capabilities: WithOrigin::inline(DEFAULT_RELAY_CAPABILITIES.to_vec()),
-        trust_gossip: true,
-        kem_id: 1,
-        sig_id: 1,
-        resume_hash: None,
-        pow: SoranetPow::default(),
-    };
-    handshake.pow.required = true;
+    let mut handshake = super::mandatory_test_soranet_handshake();
     handshake.pow.difficulty = difficulty;
     handshake.pow.max_future_skew = Duration::from_secs(300);
     handshake.pow.min_ticket_ttl = Duration::from_secs(60);
     handshake.pow.ticket_ttl = Duration::from_secs(120);
-    handshake.pow.puzzle = Some(SoranetPuzzle {
+    handshake.pow.puzzle = SoranetPuzzle {
         memory_kib: NonZeroU32::new(memory_kib).expect("non-zero puzzle memory"),
         time_cost: NonZeroU32::new(2).expect("non-zero time cost"),
         lanes: NonZeroU32::new(1).expect("non-zero lanes"),
-    });
+    };
     handshake
 }
 fn config(addr: iroha_primitives::addr::SocketAddr, handshake: ActualSoranetHandshake) -> Config {
@@ -100,7 +84,7 @@ async fn assert_exact_peers_connect(
     .expect("online peers channel closed while waiting for required-puzzle handshake");
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn matching_required_puzzle_parameters_connect() {
+async fn matching_mandatory_puzzle_parameters_connect() {
     if super::skip_if_no_tcp_bind() {
         return;
     }
@@ -109,16 +93,15 @@ async fn matching_required_puzzle_parameters_connect() {
     let addresses = std::array::from_fn::<_, 4, _>(|_| socket_addr!(127.0.0.1: {next_port()}));
     // Exercise the real Argon2 admission path with a small but valid memory
     // cost so the positive case remains reliable on loaded CI workers.
-    let handshake = puzzle_handshake(1, 4 * 1024);
-    assert!(handshake.pow.required, "test must require puzzle admission");
-    assert!(handshake.pow.puzzle.is_some(), "test must configure Argon2");
     let shutdown = ShutdownSignal::new();
     let mut networks = Vec::with_capacity(key_pairs.len());
     let mut children = Vec::with_capacity(key_pairs.len());
     for (index, (key_pair, address)) in key_pairs.iter().zip(&addresses).enumerate() {
+        let handshake = puzzle_handshake(1, 4 * 1024);
+        assert_eq!(handshake.pow.puzzle.memory_kib.get(), 4 * 1024);
         let (network, child) = NetworkHandle::<EmptyMsg>::start(
             super::p2p_identity_keys(key_pair.clone()),
-            config(address.clone(), handshake.clone()),
+            config(address.clone(), handshake),
             chain,
             None,
             None,

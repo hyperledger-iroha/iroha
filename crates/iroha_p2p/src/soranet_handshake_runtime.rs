@@ -126,6 +126,8 @@ pub(crate) struct SoranetHandshakeRuntime {
     policy: RwLock<Arc<SoranetHandshakeConfig>>,
     shared_state: SoranetHandshakeSharedState,
     owner: SoranetHandshakeOwnerConfig,
+    #[cfg(test)]
+    _test_revocation_dir: Option<tempfile::TempDir>,
 }
 impl SoranetHandshakeRuntime {
     /// Snapshot the policy for one new handshake attempt.
@@ -138,6 +140,18 @@ impl SoranetHandshakeRuntime {
                     "SoraNet handshake policy lock poisoned; refusing new handshakes".to_owned(),
                 )
             })
+    }
+
+    /// Retain an owner-private revocation directory for this test runtime.
+    #[cfg(test)]
+    pub(crate) fn retain_test_revocation_dir(&mut self, dir: tempfile::TempDir) {
+        self._test_revocation_dir = Some(dir);
+    }
+
+    /// Return the owner replay path for reload fixtures that must remain compatible.
+    #[cfg(test)]
+    pub(crate) fn test_replay_state_path(&self) -> String {
+        self.owner.replay_state_path.to_string_lossy().into_owned()
     }
 
     /// Validate and atomically publish a policy that reuses the active owner.
@@ -186,6 +200,8 @@ pub(crate) fn runtime_from_handshake(
         policy: RwLock::new(policy),
         shared_state,
         owner,
+        #[cfg(test)]
+        _test_revocation_dir: None,
     }))
 }
 

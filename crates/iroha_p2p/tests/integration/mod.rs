@@ -10,13 +10,36 @@ use iroha_primitives::addr::SocketAddr as IrohaSocketAddr;
 use std::{
     io::ErrorKind,
     net::{SocketAddr, TcpListener},
-    num::NonZeroUsize,
+    num::{NonZeroU32, NonZeroUsize},
     sync::{
         OnceLock,
         atomic::{AtomicU16, Ordering},
     },
     time::Duration,
 };
+
+/// Build a mandatory, low-cost SoraNet handshake fixture with isolated replay state.
+fn mandatory_test_soranet_handshake() -> SoranetHandshake {
+    // The runtime owns only the path. Persist this owner-private temporary
+    // directory for the ephemeral integration-test process so parallel peers
+    // never share the production relative replay path or its file lock.
+    let revocation_dir = tempfile::tempdir()
+        .expect("test SoraNet revocation directory")
+        .keep();
+    let mut handshake = SoranetHandshake::default();
+    handshake.pow.difficulty = 1;
+    handshake.pow.puzzle.memory_kib =
+        NonZeroU32::new(iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB)
+            .expect("minimum puzzle memory is non-zero");
+    handshake.pow.puzzle.time_cost = NonZeroU32::new(1).unwrap();
+    handshake.pow.puzzle.lanes = NonZeroU32::new(1).unwrap();
+    handshake.pow.revocation_store_path = revocation_dir
+        .join("ticket_revocations.norito")
+        .to_string_lossy()
+        .into_owned()
+        .into();
+    handshake
+}
 
 /// Build the exact fully populated baseline shared by P2P integration cases.
 ///
