@@ -282,6 +282,7 @@ def test_workflow_splits_native_build_from_authenticated_swift_tests() -> None:
     assert "check_mobile_sdk_artifacts.sh --apple-only" in swift
     assert "check_kagemusha_recursive_spend_swift_sdk.sh" in swift
     assert workflow.count(artifact_name) == 2
+    assert '      - "ci/check_authenticated_tool_controller.sh"' in workflow
     for watched_source_seal_input in (
         '".cargo/**"',
         '"codec/**"',

@@ -7,6 +7,7 @@ on:
       - ".github/workflows/promote_kagemusha_v4.yml"
       - "Cargo.lock"
       - "Cargo.toml"
+      - "ci/check_authenticated_tool_controller.sh"
       - "ci/check_connect_norito_bridge_header.sh"
       - "ci/check_kagemusha_*.sh"
       - "ci/check_kagemusha_production_readiness_source_contract.py"
