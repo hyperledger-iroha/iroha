@@ -2117,7 +2117,11 @@ fn exercise_nonproducer_retired_attempt_startup(
     match queue_cut {
         NonproducerReplicaQueueCut::ExactOrdinaryFifo => {
             assert_eq!(
-                fifo_before.into_iter().map(Hash::from).collect::<Vec<_>>(),
+                fifo_before
+                    .iter()
+                    .copied()
+                    .map(Hash::from)
+                    .collect::<Vec<_>>(),
                 payload.entrypoint_hashes
             )
         }
