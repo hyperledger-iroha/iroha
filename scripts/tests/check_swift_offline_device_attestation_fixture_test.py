@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
+import io
 import json
+import os
+import re
 import subprocess
 import sys
+import tarfile
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -218,3 +224,255 @@ def test_workflow_watches_and_executes_the_fixture_contract() -> None:
     ) in workflow
     assert "OfflineDeviceAttestationABI21ParityTests.swift" in swift_gate
     assert "--filter OfflineDeviceAttestationABI21ParityTests" in swift_gate
+
+
+def test_workflow_splits_native_build_from_authenticated_swift_tests() -> None:
+    """The cold Apple build hands off safely before GitHub's six-hour ceiling."""
+
+    workflow = (
+        REPO_ROOT / ".github/workflows/pr_kagemusha_payload_bench.yml"
+    ).read_text(encoding="utf-8")
+    native_match = re.search(
+        r"(?ms)^  swift:\n(?P<body>.*?)(?=^  swift_lifecycle:\n)",
+        workflow,
+    )
+    swift_match = re.search(
+        r"(?ms)^  swift_lifecycle:\n(?P<body>.*?)(?=^  kotlin-java:\n)",
+        workflow,
+    )
+    assert native_match is not None
+    assert swift_match is not None
+    native = native_match.group("body")
+    swift = swift_match.group("body")
+    artifact_name = (
+        "kagemusha-apple-xcframework-${{ github.sha }}-"
+        "${{ github.run_id }}"
+    )
+
+    assert "name: Swift native artifact build" in native
+    assert "timeout-minutes: 360" in native
+    assert "scripts/build_norito_xcframework.sh" in native
+    assert "handoff_sha256: ${{ steps.apple-handoff.outputs.sha256 }}" in native
+    assert "id: apple-handoff" in native
+    assert "COPYFILE_DISABLE=1 /usr/bin/tar -cf" in native
+    assert "NoritoBridge.xcframework NoritoBridge.artifacts.json" in native
+    assert "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" in native
+    assert "compression-level: 0" in native
+    assert "save-if: ${{ false }}" in native
+    assert "overwrite: true" in native
+    assert "github.run_attempt" not in native
+    assert "check_mobile_sdk_artifacts.sh --apple-only" not in native
+    assert "check_kagemusha_recursive_spend_swift_sdk.sh" not in native
+
+    assert "name: Swift lifecycle surface" in swift
+    assert "needs: swift" in swift
+    assert "timeout-minutes: 360" in swift
+    assert "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093" in swift
+    assert 'tarfile.open(fileobj=handle, mode="r:")' in swift
+    assert 'filter="data"' in swift
+    assert '"${{ needs.swift.outputs.handoff_sha256 }}"' in swift
+    assert "digest_before != expected_digest" in swift
+    assert "digest_after != expected_digest" in swift
+    assert "member.sparse is not None" in swift
+    assert 'member.linkname != manifest_target' in swift
+    assert 'os.readlink(manifest) != manifest_target' in swift
+    assert swift.index('run 1.93.1 cargo fetch --locked') < swift.index(
+        'CARGO_NET_OFFLINE=true'
+    )
+    assert "check_mobile_sdk_artifacts.sh --apple-only" in swift
+    assert "check_kagemusha_recursive_spend_swift_sdk.sh" in swift
+    assert workflow.count(artifact_name) == 2
+    for watched_source_seal_input in (
+        '".cargo/**"',
+        '"codec/**"',
+        '"vendor/**"',
+        '"rust-toolchain"',
+        '"scripts/archive_norito_xcframework.py"',
+        '"scripts/check_mobile_sdk_artifact_pin_commit.py"',
+        '"scripts/exec_with_file_lock.py"',
+        '"scripts/package_mobile_sdk_artifacts.sh"',
+        '"scripts/render_norito_bridge_podspec.py"',
+        '"scripts/update_norito_bridge_swift_pins.py"',
+        '"scripts/validate_norito_bridge_xcframework.py"',
+    ):
+        assert f"      - {watched_source_seal_input}" in workflow
+    assert swift.index("actions/download-artifact@") < swift.index(
+        "Restore authenticated Apple artifact handoff"
+    )
+    assert swift.index("Restore authenticated Apple artifact handoff") < swift.index(
+        "check_mobile_sdk_artifacts.sh --apple-only"
+    )
+    assert swift.index("check_mobile_sdk_artifacts.sh --apple-only") < swift.index(
+        "check_kagemusha_recursive_spend_swift_sdk.sh"
+    )
+
+
+def workflow_handoff_restore_program() -> str:
+    """Return the Python program embedded in the handoff restore step."""
+
+    workflow = (
+        REPO_ROOT / ".github/workflows/pr_kagemusha_payload_bench.yml"
+    ).read_text(encoding="utf-8")
+    marker = (
+        '            "$MOBILE_SDK_APPLE_ARTIFACT_DIR" '
+        '"$GITHUB_WORKSPACE" <<\'PY\'\n'
+    )
+    _, separator, remainder = workflow.partition(marker)
+    assert separator == marker
+    program, separator, _ = remainder.partition("\n          PY\n")
+    assert separator == "\n          PY\n"
+    return textwrap.dedent(program)
+
+
+def write_apple_handoff_fixture(
+    archive_path: Path,
+    fixture_root: Path,
+    *,
+    extra_name: str | None = None,
+) -> None:
+    """Write a minimal handoff with every required XCFramework member."""
+
+    xcframework = fixture_root / "NoritoBridge.xcframework"
+    for relative in (
+        "Info.plist",
+        "NoritoBridge.artifacts.json",
+        "ios-arm64/libNoritoBridge.a",
+        "ios-arm64_x86_64-simulator/libNoritoBridge.a",
+        "macos-arm64_x86_64/libNoritoBridge.a",
+    ):
+        path = xcframework / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(f"fixture:{relative}\n".encode())
+    manifest = fixture_root / "NoritoBridge.artifacts.json"
+    manifest.symlink_to("NoritoBridge.xcframework/NoritoBridge.artifacts.json")
+
+    with tarfile.open(archive_path, mode="w", format=tarfile.PAX_FORMAT) as archive:
+        archive.dereference = False
+        archive.add(
+            xcframework,
+            arcname="NoritoBridge.xcframework",
+            recursive=True,
+        )
+        archive.add(
+            manifest,
+            arcname="NoritoBridge.artifacts.json",
+            recursive=False,
+        )
+        if extra_name is not None:
+            payload = b"escape"
+            extra = tarfile.TarInfo(extra_name)
+            extra.size = len(payload)
+            archive.addfile(extra, io.BytesIO(payload))
+
+
+def run_handoff_restore(
+    archive: Path,
+    destination: Path,
+    source_root: Path,
+) -> subprocess.CompletedProcess[str]:
+    """Execute the workflow's isolated restore program against a fixture."""
+
+    return subprocess.run(
+        (
+            sys.executable,
+            "-I",
+            "-S",
+            "-B",
+            "-",
+            str(archive),
+            hashlib.sha256(archive.read_bytes()).hexdigest(),
+            str(destination),
+            str(source_root),
+        ),
+        input=workflow_handoff_restore_program(),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_workflow_handoff_restore_preserves_only_the_manifest_symlink(
+    tmp_path: Path,
+) -> None:
+    """The downloaded tar restores one exact, checker-ready artifact root."""
+
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    fixture_root = tmp_path / "fixture"
+    fixture_root.mkdir()
+    archive = tmp_path / "NoritoBridge.xcframework.tar"
+    write_apple_handoff_fixture(archive, fixture_root)
+    destination = tmp_path / "restored"
+    destination.mkdir()
+
+    completed = run_handoff_restore(archive, destination, source_root)
+
+    assert completed.returncode == 0, completed.stderr
+    manifest = destination / "NoritoBridge.artifacts.json"
+    assert manifest.is_symlink()
+    assert manifest.readlink() == Path(
+        "NoritoBridge.xcframework/NoritoBridge.artifacts.json"
+    )
+    assert not any(
+        path.is_symlink()
+        for path in (destination / "NoritoBridge.xcframework").rglob("*")
+    )
+
+
+def test_workflow_handoff_restore_accepts_the_system_tar_output(
+    tmp_path: Path,
+) -> None:
+    """The exact producer command emits a handoff accepted by the consumer."""
+
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    fixture_root = tmp_path / "fixture"
+    fixture_root.mkdir()
+    seed_archive = tmp_path / "seed.tar"
+    write_apple_handoff_fixture(seed_archive, fixture_root)
+    seed_archive.unlink()
+    archive = tmp_path / "NoritoBridge.xcframework.tar"
+    environment = os.environ.copy()
+    environment["COPYFILE_DISABLE"] = "1"
+    subprocess.run(
+        (
+            "/usr/bin/tar",
+            "-cf",
+            str(archive),
+            "NoritoBridge.xcframework",
+            "NoritoBridge.artifacts.json",
+        ),
+        cwd=fixture_root,
+        env=environment,
+        check=True,
+        capture_output=True,
+    )
+    destination = tmp_path / "restored"
+    destination.mkdir()
+
+    completed = run_handoff_restore(archive, destination, source_root)
+
+    assert completed.returncode == 0, completed.stderr
+    assert (destination / "NoritoBridge.artifacts.json").is_symlink()
+
+
+def test_workflow_handoff_restore_rejects_traversal_before_extraction(
+    tmp_path: Path,
+) -> None:
+    """A transferred tar cannot write outside its fresh artifact directory."""
+
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    fixture_root = tmp_path / "fixture"
+    fixture_root.mkdir()
+    archive = tmp_path / "NoritoBridge.xcframework.tar"
+    write_apple_handoff_fixture(archive, fixture_root, extra_name="../escape")
+    destination = tmp_path / "restored"
+    destination.mkdir()
+
+    completed = run_handoff_restore(archive, destination, source_root)
+
+    assert completed.returncode != 0
+    assert "non-canonical path" in completed.stderr
+    assert list(destination.iterdir()) == []
+    assert not (tmp_path / "escape").exists()
