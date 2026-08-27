@@ -10,6 +10,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "build_norito_xcframework.sh"
+PINS_SCRIPT = ROOT / "scripts" / "update_norito_bridge_swift_pins.py"
 
 
 def _source() -> str:
@@ -164,6 +165,14 @@ def test_ci_handoff_never_enters_the_release_publication_corridor() -> None:
         'bash "$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh"',
         handoff_branch,
     )
+    publish_lock_cleanup = source.index(
+        'rm -f "$PUBLISH_ROOT/.NoritoBridge.publish.lockfile"',
+        handoff_branch,
+    )
+    exact_root_check = source.index(
+        "{entry.name for entry in staged.iterdir()} != expected_entries",
+        publish_lock_cleanup,
+    )
     candidate = source.index(
         'echo "[+] Atomically staged uncertified CI handoff candidate:',
         checker,
@@ -192,12 +201,19 @@ def test_ci_handoff_never_enters_the_release_publication_corridor() -> None:
         validation
         < handoff_branch
         < checker
+        < publish_lock_cleanup
+        < exact_root_check
         < candidate
         < canonical_block
         < canonical_publication
     )
     assert 'assert_bridge_source_seal "pre-handoff artifact verification"' in handoff
     assert 'assert_bridge_source_seal "pre-publication artifact verification"' in handoff
+    assert 'rm -f "$PUBLISH_ROOT/.NoritoBridge.publish.lockfile"' in handoff
+    assert (
+        'PUBLISH_LOCK_NAME = ".NoritoBridge.publish.lockfile"'
+        in PINS_SCRIPT.read_text(encoding="utf-8")
+    )
     assert '"NoritoBridge.xcframework"' in handoff
     assert '"NoritoBridge.artifacts.json"' in handoff
     assert "RENAME_EXCL = 0x00000004" in handoff
