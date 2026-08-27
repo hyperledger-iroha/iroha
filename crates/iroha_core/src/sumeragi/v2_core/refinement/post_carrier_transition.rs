@@ -1,8 +1,11 @@
-/// Extract the sole terminal economic owner from a valid composed state.
+/// Extract the terminal local economic disposition from a valid composed state.
 ///
 /// Commit cleanup leaves the effect owned only by canonical WSV. Ordered and
-/// direct release leave the transaction owned only by ordinary FIFO.
-/// Non-terminal and malformed states have no terminal owner.
+/// direct release leave the transaction owned only by ordinary FIFO. A remote
+/// replica can instead prove that the exact group has no local Queue owner, or
+/// that a pre-existing ordinary FIFO owner was preserved; neither observation
+/// claims FIFO restoration by the release protocol. Non-terminal and malformed
+/// states have no terminal disposition.
 #[allow(dead_code)] // Consumed by the verification harness and refinement tests.
 pub(crate) const fn production_in_flight_first_release_terminal_owner(
     projection: ProductionInFlightFirstReleaseStateProjection,
@@ -22,9 +25,22 @@ pub(crate) const fn production_in_flight_first_release_terminal_owner(
     } else if projection.queue.reservation_state
         == IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_FORGOTTEN
         || projection.queue.reservation_state == IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED
+        || (projection.queue.reservation_state
+            == IN_FLIGHT_FIRST_RELEASE_RESERVATION_REPLICA_QUEUE_FIFO_PRESERVED
+            && projection.release.released_prefix == projection.queue.selected_count)
     {
         Some(ProductionInFlightFirstReleaseTerminalOwnerProjection {
             ordinary_fifo_owner: true,
+            canonical_wsv_owner: false,
+            commit_terminal: false,
+            release_terminal: true,
+        })
+    } else if projection.queue.reservation_state
+        == IN_FLIGHT_FIRST_RELEASE_RESERVATION_REPLICA_QUEUE_ABSENT
+        && projection.release.released_prefix == projection.queue.selected_count
+    {
+        Some(ProductionInFlightFirstReleaseTerminalOwnerProjection {
+            ordinary_fifo_owner: false,
             canonical_wsv_owner: false,
             commit_terminal: false,
             release_terminal: true,
@@ -288,6 +304,32 @@ fn check_derived_production_in_flight_first_release_transition(
             before,
             after,
         },
+    )
+}
+/// Derive and check one nonproducer replica Queue disposition observation.
+///
+/// The caller must consume the Queue's move-only exact-group observation before
+/// invoking this model gate. `false` records complete Queue absence; `true`
+/// records that an exact pre-existing ordinary FIFO owner was preserved. This
+/// action never prepares or completes a Queue release barrier and never marks
+/// FIFO as restored by the release protocol.
+#[must_use]
+pub(crate) fn check_production_in_flight_first_release_observe_replica_queue_release_transition(
+    before: ProductionInFlightFirstReleaseStateProjection,
+    exact_ordinary_fifo_preserved: bool,
+) -> Option<CheckedProductionTransition<ProductionInFlightFirstReleaseTransitionProjection>> {
+    let mut after = before;
+    after.queue.reservation_state = if exact_ordinary_fifo_preserved {
+        IN_FLIGHT_FIRST_RELEASE_RESERVATION_REPLICA_QUEUE_FIFO_PRESERVED
+    } else {
+        IN_FLIGHT_FIRST_RELEASE_RESERVATION_REPLICA_QUEUE_ABSENT
+    };
+    check_derived_production_in_flight_first_release_transition(
+        IN_FLIGHT_FIRST_RELEASE_ACTION_OBSERVE_REPLICA_QUEUE_RELEASE,
+        0,
+        if exact_ordinary_fifo_preserved { 1 } else { 0 },
+        before,
+        after,
     )
 }
 /// Derive and check one `FanoutFromProducer` action.

@@ -479,6 +479,7 @@ impl DurableLiveWalApplyWork {
         };
         Some(LiveLifecycleDecisionApplyReconciliationAuthorityV1 {
             dispatch_key,
+            validate_predecessor_ordinal: self.parent_address.ordinal,
             tag: *tag,
             subject: *subject,
             certificate: certificate.clone(),
@@ -499,6 +500,7 @@ impl DurableLiveWalApplyWork {
             permit,
             self.context(),
             self.address,
+            self.parent_address.ordinal,
             self.digest(),
             &self.admission.bound.effect,
             &self.validated_receipt,

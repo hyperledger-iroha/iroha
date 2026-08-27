@@ -911,9 +911,12 @@ impl LiveLifecycleValidateSuccessorOwnerV1 {
         authority: &LiveLifecycleDecisionApplyReconciliationAuthorityV1,
     ) -> bool {
         let certificate = authority.certificate();
+        let validate_predecessor_ordinal = authority.validate_predecessor_ordinal();
         self.apply_is_authorized
             && self.dispatch_key.owner() == authority.dispatch_key().owner()
-            && self.dispatch_key.lifecycle_ordinal() < authority.dispatch_key().lifecycle_ordinal()
+            && validate_predecessor_ordinal != 0
+            && self.dispatch_key.lifecycle_ordinal() == validate_predecessor_ordinal
+            && validate_predecessor_ordinal < authority.dispatch_key().lifecycle_ordinal()
             && self.round == certificate.proposal_round
             && self.subject == authority.subject()
             && certificate.subject == self.subject

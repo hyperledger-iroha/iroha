@@ -206,10 +206,8 @@ impl Kura {
                 ));
             }
             if let Some(existing) = existing.as_ref()
-                && !matches!(
-                    existing.state,
-                    AutonomousLaneEntrypointClaimStateV1::Released(_)
-                )
+                && !self
+                    .autonomous_lane_entrypoint_claim_is_replaceable_terminal_locked(existing)?
                 && !self
                     .autonomous_lane_entrypoint_claim_is_superseded_by_active_recreation_locked(
                         existing, &incoming,
@@ -286,5 +284,33 @@ impl Kura {
             &capacity_path,
         )?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod autonomous_claim_mutation_peak_tests {
+    use super::AutonomousClaimMutationPeak;
+
+    #[test]
+    fn growing_claim_replacements_account_for_cumulative_prefix_growth() {
+        let mut peak = AutonomousClaimMutationPeak::default();
+        peak.atomic_replace(10, 14).expect("first replacement");
+        peak.atomic_replace(10, 14).expect("second replacement");
+
+        // The second atomic temp overlaps both its old 10-byte main and the
+        // four durable bytes added by the first replacement. A max-single-
+        // write model would report 14 and undercount this 18-byte peak.
+        assert_eq!(peak.additional_peak_bytes().expect("bounded peak"), 18);
+    }
+
+    #[test]
+    fn retry_after_sealed_prefix_only_accounts_for_unsealed_suffix() {
+        let mut peak = AutonomousClaimMutationPeak::default();
+        // The already sealed first member is an idempotent no-op. Only the
+        // remaining raw member needs an atomic replacement on this retry.
+        peak.atomic_replace(10, 14)
+            .expect("unsealed suffix replacement");
+
+        assert_eq!(peak.additional_peak_bytes().expect("bounded peak"), 14);
     }
 }

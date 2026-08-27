@@ -10732,6 +10732,25 @@ pub(crate) struct SerializedV2Runtime<D: RuntimeDriver = SumeragiV2Adapter> {
     fail_closed: bool,
     fail_closed_reason: Option<String>,
 }
+impl SerializedV2Runtime<SumeragiV2Adapter> {
+    /// Borrow the production adapter's exact deferred Decision-WAL Apply source.
+    pub(crate) fn has_exact_pending_live_decision_apply(
+        &self,
+        tag: EventTag,
+        decision_round: wire::ConsensusRound,
+        proposal_round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+        execution_commitment: wire::ExecutionCommitment,
+    ) -> bool {
+        self.driver.has_exact_pending_live_decision_apply(
+            tag,
+            decision_round,
+            proposal_round,
+            subject,
+            execution_commitment,
+        )
+    }
+}
 impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     fn latch_fail_closed(&mut self, reason: impl Into<String>) {
         if self.fail_closed_reason.is_none() {

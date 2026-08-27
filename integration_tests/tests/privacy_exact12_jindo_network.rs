@@ -2,6 +2,7 @@
 //! Four-peer lifecycle, admission, replay, and restart coverage for the
 //! canonical native Jindo direct action.
 use eyre::{Result, WrapErr as _, ensure, eyre};
+use futures_util::TryStreamExt as _;
 use integration_tests::sandbox;
 use iroha::client::Client;
 use iroha_core::{
@@ -20,7 +21,6 @@ use iroha_data_model::{
     },
     metadata::Metadata,
     permission::Permission,
-    prelude::QueryBuilderExt,
     privacy::{
         PrivacyCapabilityLimitationV1, PrivacyCapabilityReadinessV1,
         PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1, PrivacyConsensusLimitsV1,
@@ -28,23 +28,30 @@ use iroha_data_model::{
         PrivacyParameterDigestV1, PrivacyProofV1, PrivacyProposedLifecycleV1,
         PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
     },
-    query::{block::prelude::FindBlocks, transaction::prelude::FindTransactions},
     transaction::{FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionEntrypoint},
 };
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use std::{
-    num::NonZeroU32,
+    num::{NonZeroU32, NonZeroU64},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::time::{Instant, sleep, timeout};
 const JINDO_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0;
+const TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES: i64 = 1024 * 1024 * 1024;
 const SUBMISSION_TIMEOUT: Duration = Duration::from_secs(60);
 const PEER_CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(60);
 const RESTART_TIMEOUT: Duration = Duration::from_secs(60);
-const ACTIVATION_ADVANCE_TIMEOUT: Duration = Duration::from_secs(180);
-const TEST_BLOCK_CADENCE: Duration = Duration::from_millis(100);
+// The signed cadence below advances roughly 300 sequential activation blocks;
+// leave deterministic headroom for healthy one-second production and view churn.
+const ACTIVATION_ADVANCE_TIMEOUT: Duration = Duration::from_secs(900);
+// This release-evidence fixture exercises instrumented four-validator body
+// reconstruction, validation, replay, and restart rather than throughput. Use
+// the released one-second signed cadence so the deterministic Sumeragi view
+// backoff can cover that work without changing the production timer policy.
+const TEST_BLOCK_CADENCE: Duration = Duration::from_secs(1);
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
+const CANONICAL_GENESIS_FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 fn bounded_client(mut client: Client) -> Client {
     client.transaction_status_timeout = SUBMISSION_TIMEOUT;
     client.torii_request_timeout = Duration::from_secs(20);
@@ -114,21 +121,28 @@ fn assert_exact_jindo_row(
     );
     Ok(())
 }
-fn canonical_genesis_hash(client: &Client) -> Result<[u8; 32]> {
-    let blocks = client
-        .query(FindBlocks)
-        .execute_all()
-        .wrap_err("query committed blocks for canonical genesis binding")?;
-    let genesis = blocks
-        .iter()
-        .filter(|block| block.header().prev_block_hash().is_none())
-        .collect::<Vec<_>>();
+async fn canonical_genesis_hash(client: &Client) -> Result<[u8; 32]> {
+    let genesis = timeout(CANONICAL_GENESIS_FETCH_TIMEOUT, async {
+        let mut blocks = client
+            .listen_for_blocks_async(NonZeroU64::MIN)
+            .await
+            .wrap_err("subscribe to canonical block replay from genesis")?;
+        blocks
+            .try_next()
+            .await
+            .wrap_err("read canonical genesis block replay")?
+            .ok_or_else(|| eyre!("canonical block replay ended before genesis"))
+    })
+    .await
+    .map_err(|_| {
+        eyre!("canonical genesis block replay exceeded {CANONICAL_GENESIS_FETCH_TIMEOUT:?}")
+    })??;
     ensure!(
-        genesis.len() == 1,
-        "FindBlocks must contain exactly one canonical genesis block, got {}",
-        genesis.len()
+        genesis.header().height().get() == 1 && genesis.header().prev_block_hash().is_none(),
+        "canonical block replay returned a non-genesis block at height {}",
+        genesis.header().height()
     );
-    let hash = *genesis[0].header().hash().as_ref();
+    let hash = *genesis.header().hash().as_ref();
     ensure!(hash != [0; 32], "canonical genesis hash must be non-zero");
     Ok(hash)
 }
@@ -374,18 +388,29 @@ fn exact_applied_transaction_visible(
     client: &Client,
     transaction: &SignedTransaction,
 ) -> Result<bool> {
-    let expected_hash = transaction.hash_as_entrypoint();
-    let expected_entrypoint = TransactionEntrypoint::External(transaction.clone());
-    let transactions = client
-        .query(FindTransactions::new())
-        .execute_all()
-        .wrap_err("query finalized transactions")?;
-    let Some(committed) = transactions
-        .iter()
-        .find(|committed| committed.entrypoint_hash() == &expected_hash)
+    let signed_hash = transaction.hash();
+    let Some(status) = client
+        .get_transaction_status_response_local(signed_hash)
+        .wrap_err("query exact peer-local transaction status")?
     else {
         return Ok(false);
     };
+    match (status.status.kind.as_str(), status.resolved_from.as_str()) {
+        ("Applied", "state") => {}
+        ("Rejected" | "Expired", "state") => {
+            return Err(eyre!(
+                "canonical privacy transaction reached terminal {} status",
+                status.status.kind
+            ));
+        }
+        _ => return Ok(false),
+    }
+    let expected_hash = transaction.hash_as_entrypoint();
+    let expected_entrypoint = TransactionEntrypoint::External(transaction.clone());
+    let details = client
+        .get_successful_transaction_details(expected_hash)
+        .wrap_err("query exact successful transaction details")?;
+    let committed = &details.transaction;
     ensure!(
         committed.entrypoint() == &expected_entrypoint,
         "entrypoint hash matched different transaction bytes"
@@ -438,7 +463,34 @@ async fn canonical_jindo_direct_action_survives_four_peer_activation_replay_and_
         .with_peers(4)
         .with_auto_populated_trusted_peers()
         .with_block_cadence(TEST_BLOCK_CADENCE)
-        .with_permissioned_consensus();
+        .with_permissioned_consensus()
+        .with_config_layer(|layer| {
+            // Bound disk allocation explicitly for test filesystems and keep
+            // the production handshake at its minimum supported puzzle cost.
+            layer
+                .write(
+                    ["nexus", "storage", "local_budget_bytes"],
+                    TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES,
+                )
+                .write(
+                    [
+                        "network",
+                        "soranet_handshake",
+                        "pow",
+                        "puzzle",
+                        "memory_kib",
+                    ],
+                    i64::from(iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB),
+                )
+                .write(
+                    ["network", "soranet_handshake", "pow", "puzzle", "time_cost"],
+                    1_i64,
+                )
+                .write(
+                    ["network", "soranet_handshake", "pow", "puzzle", "lanes"],
+                    1_i64,
+                );
+        });
     let Some(network) = sandbox::start_network_async_or_skip(builder, context).await? else {
         return Ok(());
     };
@@ -448,7 +500,7 @@ async fn canonical_jindo_direct_action_survives_four_peer_activation_replay_and_
             "Jindo lifecycle test requires exactly four trusted peers"
         );
         let client = bounded_client(network.client());
-        let genesis_hash = canonical_genesis_hash(&client)?;
+        let genesis_hash = canonical_genesis_hash(&client).await?;
         let compiled = compiled_privacy_profile_v1(JINDO_PROTOCOL)
             .wrap_err("load canonical compiled Jindo profile")?;
         let compiled_snapshot: PrivacyCompiledProfileSnapshotV1 = compiled.into();
@@ -752,7 +804,7 @@ async fn canonical_jindo_direct_action_survives_four_peer_activation_replay_and_
         )
         .await?;
         ensure!(
-            canonical_genesis_hash(&bounded_client(restart_peer.client()))? == genesis_hash,
+            canonical_genesis_hash(&bounded_client(restart_peer.client())).await? == genesis_hash,
             "restarted peer derived a different canonical genesis hash"
         );
         println!(

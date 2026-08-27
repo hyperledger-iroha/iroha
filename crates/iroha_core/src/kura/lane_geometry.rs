@@ -10401,9 +10401,214 @@ impl Kura {
                                 )?;
                             }
                         }
+                        source @ AutonomousLifecycleTerminalOutcomeSourceV1::RetiredReplicaQueueDisposition {
+                            retirement_hash,
+                            queue_disposition,
+                        } => {
+                            let view_path = lane_artifacts.join(format!(
+                                "{AUTONOMOUS_LANE_BLOCK_ATTEMPT_VIEW_PREFIX}_{lane_block_height:020}_{:020}.norito",
+                                pointer.proposal_height,
+                            ));
+                            let view_state = self
+                                .read_autonomous_lane_block_view_state_locked(
+                                    &artifact.executable_payload,
+                                    &view_path,
+                                    super::AutonomousLaneBlockViewStateReadMode::MainOnly,
+                                )?
+                                .ok_or_else(|| {
+                                    self.geometry_error(
+                                        ErrorKind::InvalidData,
+                                        "replica terminal outcome has no durable view state",
+                                    )
+                                })?;
+                            let retirement = view_state.retirement.as_ref().ok_or_else(|| {
+                                self.geometry_error(
+                                    ErrorKind::InvalidData,
+                                    "replica terminal outcome has no durable retirement",
+                                )
+                            })?;
+                            if !retirement.matches_payload(&artifact.executable_payload)
+                                || retirement.digest()? != retirement_hash
+                            {
+                                return Err(self.geometry_error(
+                                    ErrorKind::InvalidData,
+                                    "replica terminal outcome differs from its exact retirement",
+                                ));
+                            }
+                            let (_, local_actor) = cursor.binding().local_validator_identity();
+                            if local_actor == cursor.binding().producer_actor_projection() {
+                                return Err(self.geometry_error(
+                                    ErrorKind::InvalidData,
+                                    "producer lifecycle cursor cannot claim a replica Queue disposition",
+                                ));
+                            }
+                            if let Some(active_entry) = active_entry {
+                                self.autonomous_lifecycle_terminal_source_matches_replica_queue_disposition_locked(
+                                    None,
+                                    active_entry,
+                                    &artifact.executable_payload,
+                                    Some(retirement),
+                                    source,
+                                )?;
+                                if require_terminal_lifecycle && outcome.is_complete() {
+                                    self.require_autonomous_lane_entrypoint_claims_replica_complete_locked(
+                                        active_entry,
+                                        &artifact.executable_payload,
+                                        retirement,
+                                        queue_disposition,
+                                        outcome.outcome_hash,
+                                    )?;
+                                }
+                            }
+                        }
                     }
                 }
                 if require_terminal_lifecycle {
+                    if active_entry.is_some() {
+                        let view_path = lane_artifacts.join(format!(
+                            "{AUTONOMOUS_LANE_BLOCK_ATTEMPT_VIEW_PREFIX}_{lane_block_height:020}_{:020}.norito",
+                            pointer.proposal_height,
+                        ));
+                        let view_state = self
+                            .read_autonomous_lane_block_view_state_locked(
+                                &artifact.executable_payload,
+                                &view_path,
+                                super::AutonomousLaneBlockViewStateReadMode::MainOnly,
+                            )?
+                            .ok_or_else(|| {
+                                self.geometry_error(
+                                    ErrorKind::InvalidData,
+                                    "terminal lane attempt has no durable view state",
+                                )
+                            })?;
+                        let retirement = view_state.retirement.as_ref().ok_or_else(|| {
+                            self.geometry_error(
+                                ErrorKind::WouldBlock,
+                                "lane attempt cannot archive before its slot retirement is durable",
+                            )
+                        })?;
+                        if !retirement.matches_payload(&artifact.executable_payload) {
+                            return Err(self.geometry_error(
+                                ErrorKind::InvalidData,
+                                "lane attempt retirement differs from its executable payload",
+                            ));
+                        }
+                        let retirement_hash = retirement.digest()?;
+                        let descriptor = &artifact.executable_payload.origin_proposal.descriptor;
+                        for entrypoint_hash in &artifact.executable_payload.entrypoint_hashes {
+                            let claim_path = Self::autonomous_lane_entrypoint_claim_path(
+                                &self.store_root,
+                                &artifact.executable_payload.network_id,
+                                entrypoint_hash,
+                            );
+                            let claim = Self::decode_autonomous_lane_entrypoint_claim(&claim_path)
+                                .map_err(|message| {
+                                    Self::invalid_lane_artifact_error(claim_path.clone(), message)
+                                })?;
+                            let temp_path =
+                                Self::autonomous_lane_entrypoint_claim_temp_path(&claim_path);
+                            if Self::autonomous_lane_entrypoint_claim_file_exists(&temp_path)? {
+                                return Err(self.geometry_error(
+                                    ErrorKind::WouldBlock,
+                                    "lane attempt cannot archive with a staged successor claim",
+                                ));
+                            }
+                            if !self
+                                .autonomous_lane_entrypoint_claim_path_matches(&claim, &claim_path)
+                            {
+                                return Err(Self::invalid_lane_artifact_error(
+                                    claim_path,
+                                    "prearchive entrypoint claim has a mismatched hash path",
+                                ));
+                            }
+                            let mut expected_old = AutonomousLaneEntrypointClaimV1::new(
+                                &artifact.executable_payload,
+                                *entrypoint_hash,
+                            );
+                            expected_old.state = claim.state;
+                            if claim == expected_old {
+                                match claim.state {
+                                    AutonomousLaneEntrypointClaimStateV1::Released(hash)
+                                        if hash == retirement_hash => {}
+                                    AutonomousLaneEntrypointClaimStateV1::ReplicaReleasedComplete(
+                                        hash,
+                                        queue_disposition,
+                                        terminal_outcome_hash,
+                                    ) if hash == retirement_hash
+                                        && outcome.is_some_and(|(_, outcome)| {
+                                            outcome.is_complete()
+                                                && outcome.outcome_hash == terminal_outcome_hash
+                                                && outcome.source()
+                                                    == AutonomousLifecycleTerminalOutcomeSourceV1::RetiredReplicaQueueDisposition {
+                                                        retirement_hash,
+                                                        queue_disposition,
+                                                    }
+                                        }) => {}
+                                    AutonomousLaneEntrypointClaimStateV1::Active
+                                    | AutonomousLaneEntrypointClaimStateV1::ReleasePending(_)
+                                    | AutonomousLaneEntrypointClaimStateV1::ReplicaReleased(_, _) => {
+                                        return Err(self.geometry_error(
+                                            ErrorKind::WouldBlock,
+                                            "lane attempt has an exact nonreplaceable entrypoint claim",
+                                        ));
+                                    }
+                                    AutonomousLaneEntrypointClaimStateV1::Released(_)
+                                    | AutonomousLaneEntrypointClaimStateV1::ReplicaReleasedComplete(
+                                        ..
+                                    ) => {
+                                        return Err(self.geometry_error(
+                                            ErrorKind::InvalidData,
+                                            "terminal entrypoint claim differs from its retirement or Complete outcome",
+                                        ));
+                                    }
+                                }
+                                continue;
+                            }
+                            if claim.network_id != artifact.executable_payload.network_id
+                                || claim.epoch < artifact.executable_payload.epoch
+                                || claim.entrypoint_hash != *entrypoint_hash
+                                || claim.lane_id != descriptor.lane_id
+                                || claim.dataspace_id != descriptor.dataspace_id
+                                || claim.lane_incarnation != descriptor.lane_incarnation
+                                || claim.lane_block_height != descriptor.lane_block_height
+                                || claim.proposal_height <= descriptor.proposal_height
+                            {
+                                return Err(Self::invalid_lane_artifact_error(
+                                    claim_path,
+                                    "prearchive claim is neither exact nor a monotonic successor",
+                                ));
+                            }
+                            let newer_payload = attempts
+                                .get(&claim.lane_block_height)
+                                .and_then(|attempts_at_height| {
+                                    attempts_at_height.iter().find_map(
+                                        |(newer_pointer, newer_artifact, _, _)| {
+                                            (newer_pointer.proposal_height == claim.proposal_height
+                                                && newer_pointer.network_id == claim.network_id
+                                                && newer_pointer.epoch == claim.epoch)
+                                                .then_some(&newer_artifact.executable_payload)
+                                        },
+                                    )
+                                })
+                                .ok_or_else(|| {
+                                    Self::invalid_lane_artifact_error(
+                                        claim_path.clone(),
+                                        "prearchive successor claim lacks its durable attempt",
+                                    )
+                                })?;
+                            let mut expected_new = AutonomousLaneEntrypointClaimV1::new(
+                                newer_payload,
+                                *entrypoint_hash,
+                            );
+                            expected_new.state = claim.state;
+                            if claim != expected_new {
+                                return Err(Self::invalid_lane_artifact_error(
+                                    claim_path,
+                                    "prearchive successor claim differs from its durable payload",
+                                ));
+                            }
+                        }
+                    }
                     let signed_terminal = matches!(
                         cursor.phase(),
                         AutonomousLifecycleCursorPhaseV1::Terminal { .. }
@@ -10411,16 +10616,25 @@ impl Kura {
                     let complete_canonical = outcome.is_some_and(|(_, outcome)| {
                         outcome.is_complete() && outcome.source().is_canonical_carrier()
                     });
+                    let complete_replica = outcome.is_some_and(|(_, outcome)| {
+                        outcome.is_complete()
+                            && matches!(
+                                outcome.source(),
+                                AutonomousLifecycleTerminalOutcomeSourceV1::RetiredReplicaQueueDisposition {
+                                    ..
+                                }
+                            )
+                    });
                     if outcome.is_some_and(|(_, outcome)| !outcome.is_complete()) {
                         return Err(self.geometry_error(
                             ErrorKind::WouldBlock,
                             "lane retirement is blocked by a Pending autonomous lifecycle terminal outcome",
                         ));
                     }
-                    if !signed_terminal && !complete_canonical {
+                    if !signed_terminal && !complete_canonical && !complete_replica {
                         return Err(self.geometry_error(
                             ErrorKind::WouldBlock,
-                            "lane retirement requires a signed terminal cursor or globally authenticated Complete canonical outcome",
+                            "lane retirement requires a signed terminal cursor or authenticated Complete terminal outcome",
                         ));
                     }
                 }

@@ -2579,6 +2579,8 @@ impl ActivatedProductionLifecycleV1 {
         &mut self,
         _runner: &mut crate::sumeragi::v2_runner::ProductionLifecycleActiveRunnerBorrowV1,
         producer_claim: crate::sumeragi::v2_runner::LifecycleProducerClaimDispositionV1,
+        terminal_finalization_cut_active: bool,
+        finalized_ingress_closed: bool,
         ingress: &FairV2Ingress,
         ingress_oldest_age: Option<Duration>,
         ingress_service_idle_age: Option<Duration>,
@@ -2632,6 +2634,24 @@ impl ActivatedProductionLifecycleV1 {
             Claim::ApplyTerminalSettled => ("ApplyTerminalSettled", None, None, None, None),
             Claim::AwaitingReplayCompletion => ("AwaitingReplayCompletion", None, None, None, None),
         };
+        let executor_ready_to_finish_blockers = self.launched.executor.ready_to_finish_blockers();
+        let executor_ready_to_finish = executor_ready_to_finish_blockers.is_empty();
+        let validate_retry_census = self
+            .launched
+            .executor
+            .durable_validate_retry_finalization_diagnostic();
+        let registry_exactly_covers_finalization_work = self
+            .launched
+            .owner
+            .registry
+            .registry()
+            .exactly_covers_finalization_work(&self.launched.owner.coordinator);
+        let finalization_scheduler = self.launched.owner.finalization_scheduler_diagnostic(
+            self.launched.executor.lifecycle_reducer_fence_observation(),
+        );
+        let store_marker_census = self
+            .launched
+            .verify_published_store_marker_finalization_census();
         let active_lease = self
             .launched
             .owner
@@ -2696,6 +2716,8 @@ impl ActivatedProductionLifecycleV1 {
             height = self.launched.executor.context().height,
             context_id = ?self.launched.executor.context().id(),
             producer_claim_kind,
+            terminal_finalization_cut_active,
+            finalized_ingress_closed,
             ?producer_claim_ordinal,
             ?producer_claim_child_ordinal,
             ?producer_claim_wait_source,
@@ -2707,6 +2729,26 @@ impl ActivatedProductionLifecycleV1 {
             ?ingress_service_idle_age,
             ?last_advance_executor_yield,
             recovered_lifecycle_outputs,
+            executor_ready_to_finish,
+            ?executor_ready_to_finish_blockers,
+            validate_retry_census = %validate_retry_census,
+            registry_exactly_covers_finalization_work,
+            pending_kura_apply_replay = self.launched.pending_kura_apply_replay.is_some(),
+            recovered_local_proposal_attempt = self
+                .launched
+                .recovered_local_proposal_attempt
+                .is_some(),
+            pending_lifecycle_completion_present = self
+                .launched
+                .pending_lifecycle_completion
+                .is_some(),
+            pending_ingress_capacity_present = self.launched.pending_ingress_capacity.is_some(),
+            completion_observer_activation_present = self
+                .launched
+                .completion_observer_activation
+                .is_some(),
+            ?store_marker_census,
+            finalization_scheduler = %finalization_scheduler,
             pending_completion = ?pending_completion,
             pending_capacity_kind = ?pending_capacity_kind,
             pending_capacity_status = ?pending_capacity_status,
@@ -2732,7 +2774,7 @@ impl ActivatedProductionLifecycleV1 {
             ?io,
             ?exact_output,
             fair_selector = %fair_selector,
-            "Sumeragi v2 outer scheduler starvation ownership census"
+            "Sumeragi v2 scheduler/finalization stall ownership census"
         );
     }
 

@@ -1928,6 +1928,21 @@ impl AutonomousLifecycleCursorV1 {
         self.body.binding.local_actor()
     }
 }
+/// Queue disposition durably joined to one nonproducer replica retirement.
+///
+/// This records what Queue's move-only per-hash fence proved at the Kura
+/// terminal sink. `ExactOrdinaryFifo` means the observer preserved an already
+/// admitted FIFO copy; it does not mean the release protocol restored FIFO.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
+pub(crate) enum AutonomousLifecycleReplicaQueueDispositionV1 {
+    /// Every exact entrypoint was absent from all local Queue owner indexes.
+    #[codec(index = 0)]
+    StrictQueueAbsent,
+    /// Every exact entrypoint retained its byte-identical ordinary FIFO owner.
+    #[codec(index = 1)]
+    ExactOrdinaryFifo,
+}
 /// Source-authenticated economic outcome for one exact autonomous attempt.
 ///
 /// The compact source coordinates are never sufficient on their own. Kura
@@ -1949,6 +1964,13 @@ pub(crate) enum AutonomousLifecycleTerminalOutcomeSourceV1 {
     /// Ordered FIFO restoration after an exact durable losing-slot retirement.
     #[codec(index = 1)]
     RetiredRelease { retirement_hash: Hash },
+    /// Local replicated custody ended without using the producer's Queue
+    /// reservation/release ownership corridor.
+    #[codec(index = 2)]
+    RetiredReplicaQueueDisposition {
+        retirement_hash: Hash,
+        queue_disposition: AutonomousLifecycleReplicaQueueDispositionV1,
+    },
 }
 impl AutonomousLifecycleTerminalOutcomeSourceV1 {
     fn validate_structure(&self) -> Result<(), &'static str> {
@@ -1979,6 +2001,14 @@ impl AutonomousLifecycleTerminalOutcomeSourceV1 {
                 return Err("autonomous lifecycle release terminal source has a zero identity");
             }
             Self::RetiredRelease { .. } => {}
+            Self::RetiredReplicaQueueDisposition {
+                retirement_hash, ..
+            } if retirement_hash.as_ref().iter().all(|byte| *byte == 0) => {
+                return Err(
+                    "autonomous lifecycle replica terminal source has a zero retirement identity",
+                );
+            }
+            Self::RetiredReplicaQueueDisposition { .. } => {}
         }
         Ok(())
     }
@@ -1987,6 +2017,16 @@ impl AutonomousLifecycleTerminalOutcomeSourceV1 {
     }
     const fn is_retired_release(&self) -> bool {
         matches!(self, Self::RetiredRelease { .. })
+    }
+    const fn replica_queue_disposition(
+        &self,
+    ) -> Option<AutonomousLifecycleReplicaQueueDispositionV1> {
+        match self {
+            Self::RetiredReplicaQueueDisposition {
+                queue_disposition, ..
+            } => Some(*queue_disposition),
+            Self::CanonicalCarrier { .. } | Self::RetiredRelease { .. } => None,
+        }
     }
 }
 /// Crash-safe publication stage for one exact terminal outcome.
@@ -2113,6 +2153,29 @@ impl AutonomousLifecycleTerminalOutcomeV1 {
                     return Err(
                         "release autonomous lifecycle outcome has the wrong terminal owner",
                     );
+                }
+                if let Some(disposition) = body.source.replica_queue_disposition() {
+                    let exact_fifo = disposition
+                        == AutonomousLifecycleReplicaQueueDispositionV1::ExactOrdinaryFifo;
+                    let expected_reservation_state = if exact_fifo {
+                        IN_FLIGHT_FIRST_RELEASE_RESERVATION_REPLICA_QUEUE_FIFO_PRESERVED
+                    } else {
+                        IN_FLIGHT_FIRST_RELEASE_RESERVATION_REPLICA_QUEUE_ABSENT
+                    };
+                    let (_, local_actor) = body.binding.local_validator_identity();
+                    if local_actor == body.binding.producer_actor_projection()
+                        || projection.decision.release_owner != local_actor
+                        || owner.ordinary_fifo_owner != exact_fifo
+                        || owner.canonical_wsv_owner
+                        || owner.commit_terminal
+                        || !owner.release_terminal
+                        || projection.queue.reservation_state != expected_reservation_state
+                        || projection.release.fifo_restored
+                    {
+                        return Err(
+                            "replica autonomous lifecycle outcome has the wrong terminal Queue disposition",
+                        );
+                    }
                 }
             }
         }
@@ -2849,6 +2912,9 @@ pub(crate) enum AutonomousLifecycleTerminalOutcomeSourceKind {
     CanonicalCarrier,
     /// A losing lane slot durably returned its exact reservations to FIFO.
     RetiredRelease,
+    /// A nonproducer replica durably ended local custody without consuming the
+    /// producer's reservation or release owner.
+    RetiredReplicaQueueDisposition,
 }
 /// Durable stage independently revalidated for one expected terminal outcome.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2995,6 +3061,16 @@ enum AutonomousLaneEntrypointClaimStateV1 {
     /// return to ordinary FIFO.
     #[codec(index = 2)]
     Released(Hash),
+    /// A nonproducer replica proved one exact local Queue disposition before
+    /// advancing this claim. The disposition remains durable across a crash
+    /// until the matching terminal outcome reaches `Complete`.
+    #[codec(index = 3)]
+    ReplicaReleased(Hash, AutonomousLifecycleReplicaQueueDispositionV1),
+    /// The replica Queue disposition is joined to its synced terminal outcome;
+    /// this self-contained claim may survive lane archive and be replaced by a
+    /// successor without reopening retired lane storage.
+    #[codec(index = 4)]
+    ReplicaReleasedComplete(Hash, AutonomousLifecycleReplicaQueueDispositionV1, Hash),
 }
 /// Durable exact-key owner for one autonomous executable entrypoint.
 ///
@@ -3003,7 +3079,10 @@ enum AutonomousLaneEntrypointClaimStateV1 {
 /// blocks. An active claim binds the complete immutable payload identity. A
 /// terminal slot retirement first changes every claim to `ReleasePending`.
 /// Only a durable Queue release barrier permits the second transition to
-/// `Released`; only that state may be replaced by a later payload.
+/// the immediately replaceable `Released` state. Replica observation instead
+/// reaches `ReplicaReleased`; after the matching terminal outcome is synced,
+/// Kura seals it as `ReplicaReleasedComplete`. Only that archive-independent
+/// sealed state may be replaced by a later payload.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct AutonomousLaneEntrypointClaimV1 {
@@ -3068,11 +3147,67 @@ impl AutonomousLaneEntrypointClaimV1 {
         claim.state = AutonomousLaneEntrypointClaimStateV1::Released(retirement_hash);
         claim
     }
+    fn replica_released_for_payload(
+        payload: &LaneExecutablePayloadV1,
+        entrypoint_hash: Hash,
+        retirement_hash: Hash,
+        queue_disposition: AutonomousLifecycleReplicaQueueDispositionV1,
+    ) -> Self {
+        let mut claim = Self::new(payload, entrypoint_hash);
+        claim.state = AutonomousLaneEntrypointClaimStateV1::ReplicaReleased(
+            retirement_hash,
+            queue_disposition,
+        );
+        claim
+    }
+    fn replica_released_complete_for_payload(
+        payload: &LaneExecutablePayloadV1,
+        entrypoint_hash: Hash,
+        retirement_hash: Hash,
+        queue_disposition: AutonomousLifecycleReplicaQueueDispositionV1,
+        terminal_outcome_hash: Hash,
+    ) -> Self {
+        let mut claim = Self::new(payload, entrypoint_hash);
+        claim.state = AutonomousLaneEntrypointClaimStateV1::ReplicaReleasedComplete(
+            retirement_hash,
+            queue_disposition,
+            terminal_outcome_hash,
+        );
+        claim
+    }
     fn retirement_hash(&self) -> Option<Hash> {
         match self.state {
             AutonomousLaneEntrypointClaimStateV1::Active => None,
             AutonomousLaneEntrypointClaimStateV1::ReleasePending(hash)
-            | AutonomousLaneEntrypointClaimStateV1::Released(hash) => Some(hash),
+            | AutonomousLaneEntrypointClaimStateV1::Released(hash)
+            | AutonomousLaneEntrypointClaimStateV1::ReplicaReleased(hash, _)
+            | AutonomousLaneEntrypointClaimStateV1::ReplicaReleasedComplete(hash, _, _) => {
+                Some(hash)
+            }
+        }
+    }
+    fn replica_queue_disposition(&self) -> Option<AutonomousLifecycleReplicaQueueDispositionV1> {
+        match self.state {
+            AutonomousLaneEntrypointClaimStateV1::ReplicaReleased(_, disposition) => {
+                Some(disposition)
+            }
+            AutonomousLaneEntrypointClaimStateV1::ReplicaReleasedComplete(_, disposition, _) => {
+                Some(disposition)
+            }
+            AutonomousLaneEntrypointClaimStateV1::Active
+            | AutonomousLaneEntrypointClaimStateV1::ReleasePending(_)
+            | AutonomousLaneEntrypointClaimStateV1::Released(_) => None,
+        }
+    }
+    fn replica_terminal_outcome_hash(&self) -> Option<Hash> {
+        match self.state {
+            AutonomousLaneEntrypointClaimStateV1::ReplicaReleasedComplete(_, _, outcome_hash) => {
+                Some(outcome_hash)
+            }
+            AutonomousLaneEntrypointClaimStateV1::Active
+            | AutonomousLaneEntrypointClaimStateV1::ReleasePending(_)
+            | AutonomousLaneEntrypointClaimStateV1::Released(_)
+            | AutonomousLaneEntrypointClaimStateV1::ReplicaReleased(_, _) => None,
         }
     }
 }

@@ -6,6 +6,12 @@ enum DecidedLaneRecoveryIngressPreparation {
     LeaderWireRetire,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DecidedLaneRecoveryIngressDrainMode {
+    OpenPreflight,
+    FinalizedClosedPrefix,
+}
+
 /// Dequeue at most one lane-local occurrence while a lifecycle owner blocks ordinary ingress.
 ///
 /// The checked predicate is the entire authority boundary: global V2 traffic, certified Serve,
@@ -108,6 +114,35 @@ fn classify_kura_replica_advert_admission_error(
         }
         error => KuraReplicaAdvertAdmissionError::Fatal(error),
     }
+}
+
+/// Consume one authenticated lane-local occurrence after finalized preflight
+/// without letting the finite closed prefix start new recovery work.
+fn retire_finalized_lane_local_ingress(
+    mut inbound: InboundBlockMessage,
+) -> Result<(), V2RunnerError> {
+    if !inbound.message().is_lane_local() {
+        return Err(V2RunnerError::Service(
+            "finalized lane-local retirement received global ingress".to_owned(),
+        ));
+    }
+    let ownership = inbound.take_ingress_ownership().ok_or_else(|| {
+        V2RunnerError::Service(
+            "finalized lane-local retirement lost fair-ingress ownership".to_owned(),
+        )
+    })?;
+    if !ownership.validate_exact()
+        || !ownership.matches_message(inbound.message())
+        || !ownership.matches_semantic_origin(inbound.sender())
+        || !ownership.matches_reply_routes(inbound.reply_routes())
+        || ownership.leader_wire_token().is_some()
+        || ownership.leader_wire_runtime_receipt().is_some()
+    {
+        return Err(V2RunnerError::Service(
+            "finalized lane-local retirement carried altered fair ownership".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 /// Consume one fixed-small authenticated Kura replica advert without exposing
@@ -279,6 +314,7 @@ struct ProductionDecidedLaneRecoveryDrainCommitter<'a> {
     kura: &'a Kura,
     local_key: &'a KeyPair,
     block_sync_server: &'a mut V2BlockSyncServer,
+    mode: DecidedLaneRecoveryIngressDrainMode,
 }
 
 impl ProductionDecidedLaneRecoveryDrainCommitter<'_> {
@@ -384,6 +420,14 @@ impl ProductionDecidedLaneRecoveryDrainCommitter<'_> {
 impl DecidedLaneRecoveryDrainCommitter for ProductionDecidedLaneRecoveryDrainCommitter<'_> {
     fn commit_lane_local(&mut self) -> Result<(), V2RunnerError> {
         let inbound = self.take_inbound()?;
+        if self.mode == DecidedLaneRecoveryIngressDrainMode::FinalizedClosedPrefix {
+            // Preflight already proved this peer's exact finalized lane
+            // artifact durable. Admitting a historical certificate from the
+            // finite prefix could start a recovery session after ingress is
+            // permanently closed, so retire every remaining lane-local
+            // occurrence without mutating the current-height adapter.
+            return retire_finalized_lane_local_ingress(inbound);
+        }
         let _ = self
             .lane_work
             .accept_lane_message_with_ingress_ownership(inbound, self.active_view);
@@ -449,6 +493,7 @@ fn drain_decided_lane_recovery_ingress(
     kura: &Kura,
     local_key: &KeyPair,
     block_sync_server: &mut V2BlockSyncServer,
+    mode: DecidedLaneRecoveryIngressDrainMode,
 ) -> Result<Option<DecidedLaneRecoveryDrainCommitOutcome>, V2RunnerError> {
     let decided_subject = executor
         .local_proposal_directive()?
@@ -503,6 +548,7 @@ fn drain_decided_lane_recovery_ingress(
         kura,
         local_key,
         block_sync_server,
+        mode,
     };
     let outcome = commit_decided_lane_recovery_drain(authorization, &mut committer)?;
     // Non-Serve global traffic for this replayed terminal height is

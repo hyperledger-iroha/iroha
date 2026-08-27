@@ -957,6 +957,9 @@ impl Kura {
                             } => Some(merge_entry_hash),
                             AutonomousLifecycleTerminalOutcomeSourceV1::RetiredRelease {
                                 ..
+                            }
+                            | AutonomousLifecycleTerminalOutcomeSourceV1::RetiredReplicaQueueDisposition {
+                                ..
                             } => None,
                         });
                     if let Some(entry_hash) = terminal_entry_hash {

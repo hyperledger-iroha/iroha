@@ -584,6 +584,22 @@ impl RecoveredLifecycleSignAdapterCompletionAuthorityV1 {
             outbound_payload,
         }
     }
+
+    /// Build guarded Sign material from the exact registry-projected worker task.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn from_registry_task_for_test(
+        task: RecoveredLifecycleSignTaskV1,
+        signature: Vec<u8>,
+        outbound_payload: Option<EncodedV2Payload>,
+    ) -> Self {
+        Self {
+            key: task.dispatch_key(),
+            tag: task.tag,
+            request: task.request,
+            signature,
+            outbound_payload,
+        }
+    }
 }
 impl RecoveredLifecycleSignWorkerResultV1 {
     const fn dispatch_key(&self) -> RecoveredLifecycleSignDispatchKeyV1 {

@@ -578,6 +578,20 @@ pub(super) fn resolve_from_sources(
             actual: pool.len(),
         });
     }
+    if pool.len() == required {
+        // Sampling entropy cannot change membership when the canonical pool is
+        // already the exact 3f+1 set. Return that set directly so bootstrap
+        // authority does not depend on a beacon that is only needed to narrow
+        // a larger live pool.
+        let mut validators = pool;
+        validators.sort();
+        return Ok(LaneAuthorityCommittee::new(
+            route,
+            authority_height,
+            fault_tolerance,
+            validators,
+        ));
+    }
     let seed = State::lane_relay_committee_seed_from_sources(
         world,
         network_id,

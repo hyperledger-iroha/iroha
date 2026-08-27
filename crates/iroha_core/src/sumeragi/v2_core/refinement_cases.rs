@@ -976,6 +976,89 @@ fn in_flight_first_release_composed_four_stage_release_is_exact_and_terminal() {
     assert!(terminal.release_terminal);
 }
 #[test]
+fn in_flight_first_release_replica_queue_observation_is_exact_and_terminal() {
+    for exact_ordinary_fifo_preserved in [false, true] {
+        let mut state = in_flight_first_release_ready_state();
+        let before = state;
+        state.decision.release_owner = 2;
+        state.decision.release_scope = state.binding_a;
+        state.release.kura_retired = true;
+        state = checked_in_flight_first_release_step(
+            IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_KURA_RETIREMENT,
+            2,
+            0,
+            before,
+            state,
+        );
+        for prefix in 1..=state.queue.selected_count {
+            let before = state;
+            state.release.pending_prefix = prefix;
+            state.history.pending_high_water = prefix;
+            state = checked_in_flight_first_release_step(
+                IN_FLIGHT_FIRST_RELEASE_ACTION_ADVANCE_RELEASE_PENDING,
+                0,
+                0,
+                before,
+                state,
+            );
+        }
+
+        state = check_production_in_flight_first_release_observe_replica_queue_release_transition(
+            state,
+            exact_ordinary_fifo_preserved,
+        )
+        .expect("an exact nonproducer Queue disposition must mint checked evidence")
+        .into_projection()
+        .after;
+        assert_eq!(
+            state.queue.reservation_state,
+            if exact_ordinary_fifo_preserved {
+                IN_FLIGHT_FIRST_RELEASE_RESERVATION_REPLICA_QUEUE_FIFO_PRESERVED
+            } else {
+                IN_FLIGHT_FIRST_RELEASE_RESERVATION_REPLICA_QUEUE_ABSENT
+            }
+        );
+        assert!(!state.release.fifo_restored);
+        assert!(production_in_flight_first_release_terminal_owner(state).is_none());
+
+        for prefix in 1..=state.queue.selected_count {
+            let before = state;
+            state.release.released_prefix = prefix;
+            state.history.released_high_water = prefix;
+            state = checked_in_flight_first_release_step(
+                IN_FLIGHT_FIRST_RELEASE_ACTION_ADVANCE_RELEASED,
+                0,
+                0,
+                before,
+                state,
+            );
+        }
+        assert_eq!(
+            production_in_flight_first_release_terminal_owner(state),
+            Some(ProductionInFlightFirstReleaseTerminalOwnerProjection {
+                ordinary_fifo_owner: exact_ordinary_fifo_preserved,
+                canonical_wsv_owner: false,
+                commit_terminal: false,
+                release_terminal: true,
+            })
+        );
+
+        let mut producer_owned = state;
+        producer_owned.queue.reservation_state = IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE;
+        producer_owned.release.released_prefix = 0;
+        producer_owned.history.released_high_water = 0;
+        producer_owned.decision.release_owner = producer_owned.producer;
+        assert!(
+            check_production_in_flight_first_release_observe_replica_queue_release_transition(
+                producer_owned,
+                exact_ordinary_fifo_preserved,
+            )
+            .is_none(),
+            "a producer-owned release cannot use the replica Queue observation action"
+        );
+    }
+}
+#[test]
 fn in_flight_first_release_snapshot_and_direct_release_are_exactly_aligned() {
     let reserved = in_flight_first_release_reserved_state();
     assert_in_flight_first_release_transport_constructors_fail_closed(reserved);

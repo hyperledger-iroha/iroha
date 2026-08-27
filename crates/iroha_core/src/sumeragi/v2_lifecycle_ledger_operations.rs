@@ -2236,6 +2236,68 @@ impl LifecycleLedgerV1 {
             })
     }
 
+    /// Return the exact Validate predecessor of one unchanged recovered Apply
+    /// carrier after authenticating its complete four-row WAL/body lineage.
+    pub(in crate::sumeragi) fn recovered_decision_apply_validate_predecessor_ordinal(
+        &self,
+        fetch: &AuthenticatedRecoveredWalDecisionFetchProjection,
+        lineage: &RecoveredDecisionApplyCandidateLineageV1,
+        installed_apply_ordinal: u128,
+    ) -> Option<u128> {
+        let projection = RecoveredDecisionApplyCarrierLedgerProjectionV1 { fetch, lineage };
+        self.recovered_decision_apply_validate_predecessor_ordinal_projection(
+            &projection,
+            installed_apply_ordinal,
+        )
+    }
+
+    fn recovered_decision_apply_validate_predecessor_ordinal_projection(
+        &self,
+        projection: &impl RecoveredDecisionApplyStageProjectionV1,
+        installed_apply_ordinal: u128,
+    ) -> Option<u128> {
+        let (staged, apply_ordinal, changed) = self
+            .stage_recovered_decision_apply_projection(projection)
+            .ok()?;
+        (!changed && staged == *self && apply_ordinal == installed_apply_ordinal).then_some(())?;
+
+        let matching = self
+            .records
+            .iter()
+            .filter(|record| projection.names_fetch_record(record))
+            .collect::<Vec<_>>();
+        let [fetch_record] = matching.as_slice() else {
+            return None;
+        };
+        let (DurableContinuationEdge::FetchToStore, store_ordinal) = fetch_record
+            .continuation()
+            .and_then(DurableContinuation::successor_parts)?
+        else {
+            return None;
+        };
+        let record_at = |ordinal| {
+            self.records
+                .binary_search_by_key(&ordinal, LifecycleLedgerRecordV1::ordinal)
+                .ok()
+                .and_then(|index| self.records.get(index))
+        };
+        let store = record_at(store_ordinal)?;
+        let (DurableContinuationEdge::StoreToValidate, validate_ordinal) = store
+            .continuation()
+            .and_then(DurableContinuation::successor_parts)?
+        else {
+            return None;
+        };
+        let validate = record_at(validate_ordinal)?;
+        let (DurableContinuationEdge::ValidateToApply, successor_apply_ordinal) = validate
+            .continuation()
+            .and_then(DurableContinuation::successor_parts)?
+        else {
+            return None;
+        };
+        (successor_apply_ordinal == installed_apply_ordinal).then_some(validate_ordinal)
+    }
+
     /// Authenticate an already terminal recovered Decision body chain.
     ///
     /// This oracle never feeds storage-only recovery: a terminal Apply must

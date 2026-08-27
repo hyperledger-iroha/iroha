@@ -1089,8 +1089,20 @@ fn chunk_effect_executor(
         (wire::PayloadManifest, DurableBodyReceipt),
     >,
 ) -> V2EffectExecutor<SaturatedCompletionRuntime> {
+    chunk_effect_executor_with_exact_ownership(service, recovered, None)
+}
+fn chunk_effect_executor_with_exact_ownership(
+    service: &ProductionV2Services,
+    recovered: BTreeMap<
+        (wire::ConsensusRound, wire::BlockSubject),
+        (wire::PayloadManifest, DurableBodyReceipt),
+    >,
+    exact_effect_ownership: Option<(AdapterEffect, RuntimeEffectOwnership)>,
+) -> V2EffectExecutor<SaturatedCompletionRuntime> {
+    let mut runtime = SaturatedCompletionRuntime::admitting_network_ingress(0, 8);
+    runtime.exact_effect_ownership = exact_effect_ownership;
     V2EffectExecutor::with_runtime(
-        SaturatedCompletionRuntime::new(0, 8),
+        runtime,
         recovered,
         service.context.clone(),
         service.local_peer.clone(),
@@ -1107,7 +1119,6 @@ fn chunk_effect_executor_with_remote_proposal(
     >,
     proposal: wire::Proposal,
 ) -> V2EffectExecutor<SaturatedCompletionRuntime> {
-    let mut runtime = SaturatedCompletionRuntime::new(0, 8);
     let effect = AdapterEffect::FetchBody {
         tag: service.active_tag,
         round: proposal.round,
@@ -1127,16 +1138,7 @@ fn chunk_effect_executor_with_remote_proposal(
     .pop()
     .expect("one productive-chunk Fetch has one exact owner");
     assert!(ownership.bind_authenticated_remote_proposal_replay_for_test(proposal, &effect));
-    runtime.exact_effect_ownership = Some((effect, ownership));
-    V2EffectExecutor::with_runtime(
-        runtime,
-        recovered,
-        service.context.clone(),
-        service.local_peer.clone(),
-        service.local_validator,
-        EffectQueueConfig::default(),
-    )
-    .expect("construct authenticated productive-chunk effect executor")
+    chunk_effect_executor_with_exact_ownership(service, recovered, Some((effect, ownership)))
 }
 #[test]
 fn productive_chunk_waits_for_exact_fetch_before_runtime_handoff() {
@@ -1225,11 +1227,10 @@ fn productive_chunk_waits_for_exact_fetch_before_runtime_handoff() {
     );
     drop(durable_cut);
 
-    let tag = service.active_tag;
     executor
         .consume_effects(
             vec![AdapterEffect::FetchBody {
-                tag,
+                tag: service.active_tag,
                 round: manifest.round,
                 subject: manifest.subject,
                 manifest: Some(manifest),
