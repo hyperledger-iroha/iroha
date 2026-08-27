@@ -173,7 +173,10 @@ jobs:
             echo "C# native release build requires a fresh target directory" >&2
             exit 1
           fi
-          cargo build --locked --release -p connect_norito_bridge --target "$target"
+          # The C# runtime package consumes only the shared library. Avoid the
+          # unused staticlib and rlib final codegen/link work on hosted ARM.
+          cargo rustc --locked --release -p connect_norito_bridge \
+            --target "$target" --lib --crate-type cdylib
 
       - name: Authenticate and stage exact ABI-23 C# Linux ARM bridge
         shell: bash
@@ -242,7 +245,10 @@ jobs:
             echo "C# native release build requires a fresh target directory" >&2
             exit 1
           fi
-          cargo build --locked --release -p connect_norito_bridge --target "$target"
+          # The C# runtime package consumes only the shared library. Avoid the
+          # unused staticlib and rlib final codegen/link work on hosted ARM.
+          cargo rustc --locked --release -p connect_norito_bridge \
+            --target "$target" --lib --crate-type cdylib
 
       - name: Authenticate and stage exact ABI-23 C# Linux ARM bridge
         shell: bash
@@ -312,7 +318,10 @@ jobs:
             echo "C# native release build requires a fresh target directory" >&2
             exit 1
           fi
-          cargo build --locked --release -p connect_norito_bridge --target "$target"
+          # The C# runtime package consumes only the shared library. Avoid the
+          # unused staticlib and rlib final codegen/link work on hosted ARM.
+          cargo rustc --locked --release -p connect_norito_bridge \
+            --target "$target" --lib --crate-type cdylib
 
       - name: Authenticate and stage exact ABI-23 C# Linux ARM bridge
         shell: bash

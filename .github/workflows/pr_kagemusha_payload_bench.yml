@@ -794,6 +794,7 @@ on:
       - "rust-toolchain.toml"
       - "vendor/**"
       - "scripts/tests/check_android_device_lab_slot_test.py"
+      - "scripts/tests/android_apk_authority_fixtures.py"
       - "scripts/tests/capture_android_attestation_status_test.py"
       - "scripts/tests/android_attestation_certificate_profile_fixtures.py"
       - "scripts/tests/android_attestation_certificate_profile_test.py"

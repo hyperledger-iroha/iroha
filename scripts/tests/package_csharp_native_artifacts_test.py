@@ -349,8 +349,12 @@ class CSharpNativePackageTests(unittest.TestCase):
             self.assertIn('if [[ -e target ]]', arm_job)
             self.assertNotIn("CARGO_BUILD_JOBS", arm_job)
             self.assertIn(
-                "cargo build --locked --release -p connect_norito_bridge "
-                '--target "$target"',
+                "cargo rustc --locked --release -p connect_norito_bridge "
+                '\\\n            --target "$target" --lib --crate-type cdylib',
+                arm_job,
+            )
+            self.assertNotIn(
+                "cargo build --locked --release -p connect_norito_bridge",
                 arm_job,
             )
             self.assertIn(
