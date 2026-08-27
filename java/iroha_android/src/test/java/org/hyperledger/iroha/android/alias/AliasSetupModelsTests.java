@@ -751,7 +751,7 @@ public final class AliasSetupModelsTests {
   }
 
   @Test
-  public void feeSponsorProgramNameMatchesRustCanonicality() {
+  public void feeSponsorProgramNameMatchesRustCanonicality() throws Exception {
     final String sponsor = account(0x11);
     new FeeSponsorProgramId(sponsor, String.join("", Collections.nCopies(255, "a")));
     new FeeSponsorProgramId(
